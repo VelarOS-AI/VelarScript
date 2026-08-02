@@ -1,0 +1,78 @@
+import {isBlank} from "velar/text"
+import {CreateTaskHandler, TaskPriority} from "../domain.vel"
+
+export component TaskForm(onCreate: CreateTaskHandler):
+    state title = ""
+    state description = ""
+    state priority: TaskPriority = TaskPriority.normal
+    state error = ""
+
+    def submit():
+        if isBlank(title):
+            error = "Give the task a clear title."
+        else:
+            onCreate({title, description, priority})
+            title = ""
+            description = ""
+            priority = TaskPriority.normal
+            error = ""
+
+    style:
+        .composer {
+            display: grid;
+            grid-template-columns: minmax(180px, 1.4fr) minmax(220px, 2fr) 140px auto;
+            gap: 10px;
+            padding: 14px;
+            border: 1px solid #dce3ef;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 16px 45px rgba(35, 50, 82, 0.08);
+        }
+
+        input, select, button {
+            min-width: 0;
+            min-height: 42px;
+            border-radius: 11px;
+            font: inherit;
+        }
+
+        input, select {
+            border: 1px solid #cfd8e8;
+            padding: 0 12px;
+            color: #172033;
+            background: #fff;
+        }
+
+        button {
+            border: 0;
+            padding: 0 18px;
+            color: #fff;
+            background: #3157d5;
+            font-weight: 750;
+            cursor: pointer;
+        }
+
+        .error {
+            grid-column: 1 / -1;
+            margin: 0;
+            color: #b42318;
+            font-size: 14px;
+        }
+
+        @media (max-width: 820px) {
+            .composer {
+                grid-template-columns: 1fr;
+            }
+        }
+
+    return <form class="composer" on:submit.prevent={submit} aria-label="Create task">
+        <input data-title-input bind:value={title} aria-label="Task title" placeholder="What needs to be done?" />
+        <input data-description-input bind:value={description} aria-label="Task description" placeholder="Add a useful detail" />
+        <select data-priority-input bind:value={priority} aria-label="Priority">
+            <option value={TaskPriority.low}>Low priority</option>
+            <option value={TaskPriority.normal}>Normal priority</option>
+            <option value={TaskPriority.high}>High priority</option>
+        </select>
+        <button data-add-task type="submit">Add task</button>
+        {error != "" ? <p class="error" role="alert">{error}</p> : <></>}
+    </form>

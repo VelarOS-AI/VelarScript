@@ -1,0 +1,11 @@
+import {every} from "velar/browser"
+
+def failIfLeaked():
+    throw Error("Construction timer leaked")
+
+export component Broken:
+    const stopTimer = every(25, failIfLeaked)
+    cleanup:
+        stopTimer()
+    throw Error("Lazy route failed")
+    return <main><h1>This route must not render</h1></main>

@@ -1,0 +1,20 @@
+import {ChartScale, TrafficPoint} from "../chart.vel"
+
+export component TrafficBar(point: TrafficPoint, scale: ChartScale):
+    computed height = scale.heightFor(point.value)
+    computed y = scale.yFor(point.value)
+
+    style:
+        .bar {
+            fill: #2357d9;
+        }
+
+        .label {
+            fill: #60708b;
+            font: 12px Inter, ui-sans-serif, system-ui, sans-serif;
+        }
+
+    return <g data-chart-bar={point.id}>
+        <rect class="bar" x={point.x} y={y} width="24" height={height} rx="5" />
+        <text class="label" x={point.x + 12} y="174" text-anchor="middle">{point.label}</text>
+    </g>

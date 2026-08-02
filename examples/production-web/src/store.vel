@@ -1,0 +1,20 @@
+import {storage} from "velar/storage"
+
+export type Preferences:
+    theme: string
+
+export state theme = "system"
+export computed dark: bool = theme == "dark"
+
+export def setTheme(next: string):
+    theme = next
+
+export def saveTheme(next: string):
+    setTheme(next)
+    storage.set("preferences", {theme: next})
+
+export def toggleTheme():
+    if theme == "dark":
+        setTheme("light")
+    else:
+        setTheme("dark")

@@ -1,0 +1,13 @@
+export def double(value: number) -> number:
+    return value * 2
+
+const greeting = "Hello from VelarScript"
+let count = 1
+count += 1
+
+const result = double(count)
+
+if result == 4:
+    print(greeting)
+else:
+    print("Unexpected result")

@@ -1,0 +1,262 @@
+import {after, copyText, environment, every, frame, location, measure, media, watchMedia, watchOnline, watchVisibility} from "velar/browser"
+import {download, pick, readText} from "velar/files"
+import {database, session} from "velar/storage"
+import {iso, now} from "velar/time"
+import {currentRoute} from "velar/web"
+import {onError} from "velar/app"
+import {publicConfig} from "velar/config"
+import {logger, useSink} from "velar/log"
+import {formBody, http} from "velar/http"
+import {matches} from "velar/text"
+
+type CapabilityStatus:
+    label: string
+
+class CapabilityError(const message: string) extends Error(message):
+    pass
+
+type RuntimeFeatures:
+    recovery: bool
+
+type RuntimeConfig:
+    apiBase: string
+    releaseChannel: string
+    features: RuntimeFeatures
+
+type UploadResponse:
+    fileName: string
+    label: string
+    size: number
+
+let resourceAttempts = 0
+let actionAttempts = 0
+
+async def loadResourceLabel() -> string:
+    resourceAttempts += 1
+    if resourceAttempts == 1:
+        throw CapabilityError("Resource recovery ready")
+    return "resource-ready"
+
+export component WebCapabilities:
+    const initialEnvironment = environment()
+    const initialLocation = location()
+    const initialRoute = currentRoute()
+    const cache = database("release-studio")
+    const config = publicConfig(RuntimeConfig)
+    assert matches(config.releaseChannel, "^[a-z][a-z0-9-]*$"), "Release channel must use a lowercase Web-safe name"
+    const runtimeLog = logger("release-studio")
+    const capabilityNames = Set(["http", "storage", "files"])
+    capabilityNames.add("realtime")
+    resource recoveryResource = loadResourceLabel()
+    computed resourceFailure = recoveryResource.error
+    state online = initialEnvironment.online
+    state visible = initialEnvironment.visible
+    state darkScheme = media("(prefers-color-scheme: dark)")
+    state sessionLabel = "pending"
+    state databaseLabel = "pending"
+    state fileName = "No file selected"
+    state fileText = ""
+    state uploadLabel = "No upload"
+    state clipboardLabel = "Copy status"
+    state layoutWidth = 0
+    state frameReady = false
+    state errorLabel = "pending"
+    state recoveryLabel = "pending"
+    state actionLabel = "pending"
+    state runtimeErrorLabel = "none"
+    state logLabel = "none"
+    state keyboardLabel = "none"
+    state inputLabel = "none"
+    state pointerLabel = "none"
+    state timerLabel = "timer-pending"
+    state timerTicks = 0
+    state renderFails = false
+    let panel: Element? = none
+
+    def onlineChanged(value: bool):
+        online = value
+
+    def visibilityChanged(value: bool):
+        visible = value
+
+    def mediaChanged(value: bool):
+        darkScheme = value
+
+    def sessionChanged(value: CapabilityStatus?, previous: CapabilityStatus?):
+        sessionLabel = value?.label ?? "missing"
+
+    def captureRuntimeError(phase: string, message: string):
+        runtimeErrorLabel = f"{phase}:{message}"
+
+    def captureLog(message: string):
+        logLabel = message
+
+    def captureKey(event: KeyboardEvent):
+        keyboardLabel = event.key
+
+    def captureInput(event: InputEvent):
+        inputLabel = event.inputType
+
+    def capturePointer(event: PointerEvent):
+        pointerLabel = event.pointerType
+
+    def timerReady():
+        timerLabel = "after-ready"
+
+    def timerTick():
+        timerTicks += 1
+
+    def renderStatus() -> string:
+        if renderFails:
+            throw CapabilityError("Render recovery ready")
+        else:
+            return "render-stable"
+
+    def failRender():
+        renderFails = true
+
+    async def failEvent():
+        throw CapabilityError("Event recovery ready")
+
+    action recoverAction():
+        actionAttempts += 1
+        if actionAttempts == 1:
+            throw CapabilityError("Action recovery ready")
+        actionLabel = "action-ready"
+
+    computed actionFailure = recoverAction.error
+
+    const stopOnline = watchOnline(onlineChanged)
+    const stopVisibility = watchVisibility(visibilityChanged)
+    const stopMedia = watchMedia("(prefers-color-scheme: dark)", mediaChanged)
+    const stopReadyTimer = after(25, timerReady)
+    const stopHeartbeat = every(25, timerTick)
+    const stopSession = session.watch("capability", CapabilityStatus, sessionChanged)
+    const stopErrors = onError(report => captureRuntimeError(report.phase, report.error.message))
+    const stopLog = useSink(record => captureLog(record.message))
+
+    async def loadCapabilities():
+        session.set("capability", {label: "session-ready"})
+        await cache.set("capability", {label: "database-ready"})
+        const stored = await cache.get("capability", CapabilityStatus)
+        databaseLabel = stored?.label ?? "missing"
+        await frame()
+        frameReady = true
+        if panel:
+            layoutWidth = measure(panel).width
+
+    async def verifyRecovery():
+        try:
+            throw CapabilityError("Velar recovery ready")
+        catch error:
+            errorLabel = error.message
+        finally:
+            recoveryLabel = "finalized"
+
+    action chooseFile():
+        const selected = await pick({accept: ".txt", multiple: false})
+        const file = selected.get(0)
+        if file != none:
+            fileName = file.name
+            fileText = await readText(file)
+            const body = formBody()
+            body.field("label", "release-studio")
+            body.file("asset", file)
+            const uploaded = await http.post(f"{config.apiBase}/upload", {body: body}).parse(UploadResponse)
+            uploadLabel = f"{uploaded.label}:{uploaded.fileName}:{uploaded.size}"
+
+    action copyStatus():
+        await copyText("Velar Web API 0.6")
+        clipboardLabel = "Copied"
+
+    def saveStatus():
+        download("velar-status.txt", f"{sessionLabel}/{databaseLabel}")
+
+    mounted:
+        await loadCapabilities()
+        await verifyRecovery()
+        runtimeLog.info("Runtime configured")
+
+    cleanup:
+        stopOnline()
+        stopVisibility()
+        stopMedia()
+        stopSession()
+        throw CapabilityError("Cleanup recovery ready")
+        stopReadyTimer()
+        stopHeartbeat()
+        session.set("cleanup", {label: "continued"})
+        stopLog()
+        stopErrors()
+
+    style:
+        .capabilities {
+            display: grid;
+            gap: 12px;
+            padding: 16px;
+            border: 1px solid #42528f;
+            border-radius: 12px;
+            background: #11182e;
+        }
+
+        .summary, .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+        }
+
+        .summary span {
+            color: #bdc7ff;
+        }
+
+        button {
+            padding: 8px 11px;
+            border: 1px solid #5263a5;
+            border-radius: 8px;
+            color: inherit;
+            background: #151c36;
+            cursor: pointer;
+        }
+
+    return <section class="capabilities" ref={panel} aria-label="Web platform capabilities">
+        <strong>Typed browser platform</strong>
+        <div class="summary">
+            <span data-browser>{initialLocation.path}</span>
+            <span data-route>{initialRoute.path}</span>
+            <span data-environment>{online ? "online" : "offline"}/{visible ? "visible" : "hidden"}/{darkScheme ? "dark" : "light"}</span>
+            <span data-session>{sessionLabel}</span>
+            <span data-database>{databaseLabel}</span>
+            <span data-time>{iso(now())}</span>
+            <span data-frame>{frameReady ? "frame-ready" : "frame-pending"}</span>
+            <span data-layout>{layoutWidth > 0 ? "measured" : "pending"}</span>
+            <span data-error>{errorLabel}</span>
+            <span data-recovery>{recoveryLabel}</span>
+            <span data-remainder>{11 % 4}</span>
+            <span data-set>{capabilityNames.size}:{capabilityNames.has("files") ? "set-ready" : "set-missing"}</span>
+            <span data-config>{config.apiBase}:{config.releaseChannel}:{config.features.recovery ? "recovery" : "disabled"}</span>
+            <span data-runtime-error>{runtimeErrorLabel}</span>
+            <span data-resource>{resourceFailure ? resourceFailure.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")}</span>
+            <span data-action>{actionFailure ? actionFailure.message : recoverAction.pending ? "action-pending" : actionLabel}</span>
+            <span data-log>{logLabel}</span>
+            <span data-keyboard-event>{keyboardLabel}</span>
+            <span data-input-event>{inputLabel}</span>
+            <span data-pointer-event>{pointerLabel}</span>
+            <span data-timer>{timerLabel}:{timerTicks > 0 ? "every-ready" : "every-pending"}</span>
+            <span data-render-stable>{renderStatus()}</span>
+        </div>
+        <div class="actions">
+            <input data-event-input aria-label="Native event probe" on:keydown={captureKey} on:input={captureInput} />
+            <button data-pointer-probe type="button" on:pointerdown={capturePointer}>Check pointer event</button>
+            <button type="button" disabled={chooseFile.pending} on:click={chooseFile}>Choose text file</button>
+            <button type="button" on:click={saveStatus}>Download status</button>
+            <button type="button" disabled={copyStatus.pending} on:click={copyStatus}>Copy status</button>
+            <button type="button" data-test-event on:click={failEvent}>Fail event safely</button>
+            <button type="button" data-test-render on:click={failRender}>Fail render safely</button>
+            <button type="button" data-resource-retry on:click={recoveryResource.reload}>Retry resource</button>
+            <button type="button" data-action-retry disabled={recoverAction.pending} on:click={recoverAction}>Run action</button>
+        </div>
+        <span data-file>{fileName}</span>
+        <span data-file-text>{fileText}</span>
+        <span data-upload>{uploadLabel}</span>
+        <span data-clipboard>{clipboardLabel}</span>
+    </section>

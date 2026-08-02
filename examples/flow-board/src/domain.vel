@@ -1,0 +1,93 @@
+import {uuid} from "velar/id"
+import {now} from "velar/time"
+import {isBlank, lower, trim} from "velar/text"
+
+export enum TaskStatus:
+    todo
+    doing
+    done
+
+export enum TaskPriority:
+    low
+    normal
+    high
+
+export enum TaskFilter:
+    all
+    todo
+    doing
+    done
+
+export type Task:
+    id: string
+    title: string
+    description: string
+    status: TaskStatus
+    priority: TaskPriority
+    createdAt: number
+    updatedAt: number
+
+export type BoardData:
+    tasks: List<Task>
+
+export type TaskDraft:
+    title: string
+    description: string
+    priority: TaskPriority
+
+export type TaskIdHandler = (string) -> none
+export type CreateTaskHandler = (TaskDraft) -> none
+
+export def seedTasks() -> List<Task>:
+    return [
+        {id: "seed-design", title: "Finish the component states", description: "Review empty, loading, and error states before handoff.", status: TaskStatus.todo, priority: TaskPriority.high, createdAt: 1785542400000, updatedAt: 1785542400000},
+        {id: "seed-compiler", title: "Validate the new compiler build", description: "Run the browser suite in Chromium, Firefox, and WebKit.", status: TaskStatus.doing, priority: TaskPriority.normal, createdAt: 1785628800000, updatedAt: 1785628800000},
+        {id: "seed-preview", title: "Share the preview with the team", description: "The verified preview is ready for product review.", status: TaskStatus.done, priority: TaskPriority.low, createdAt: 1785715200000, updatedAt: 1785715200000},
+    ]
+
+export def newTask(draft: TaskDraft) -> Task:
+    const {title, description, priority} = draft
+    const timestamp = now()
+    return {
+        id: uuid(),
+        title: trim(title),
+        description: trim(description),
+        status: TaskStatus.todo,
+        priority,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+    }
+
+export def advanceStatus(status: TaskStatus) -> TaskStatus:
+    match status:
+        case TaskStatus.todo:
+            return TaskStatus.doing
+        case TaskStatus.doing:
+            return TaskStatus.done
+        case TaskStatus.done:
+            return TaskStatus.todo
+
+export def moveTask(tasks: List<Task>, id: string) -> List<Task>:
+    const timestamp = now()
+    return tasks.map(task => task.id == id ? {...task, status: advanceStatus(task.status), updatedAt: timestamp} : task)
+
+export def removeTask(tasks: List<Task>, id: string) -> List<Task>:
+    return tasks.filter(task => task.id != id)
+
+def matchesFilter(task: Task, filter: TaskFilter) -> bool:
+    match filter:
+        case TaskFilter.all:
+            return true
+        case TaskFilter.todo:
+            return task.status == TaskStatus.todo
+        case TaskFilter.doing:
+            return task.status == TaskStatus.doing
+        case TaskFilter.done:
+            return task.status == TaskStatus.done
+
+export def filterTasks(tasks: List<Task>, query: string, filter: TaskFilter) -> List<Task>:
+    const needle = lower(trim(query))
+    return tasks.filter(task => matchesFilter(task, filter) and (isBlank(needle) or needle in lower(task.title) or needle in lower(task.description)))
+
+export def countStatus(tasks: List<Task>, status: TaskStatus) -> number:
+    return tasks.filter(task => task.status == status).length

@@ -1,0 +1,16 @@
+{
+  "formatVersion": 1,
+  "entry": "main.vel",
+  "outDir": "dist",
+  "web": {
+    "title": "Velar 0.6 Project",
+    "base": "/legacy/",
+    "security": {
+      "contentSecurityPolicy": true,
+      "connectSources": ["https://api.example.com"]
+    },
+    "deployment": {
+      "spaFallback": true
+    }
+  }
+}

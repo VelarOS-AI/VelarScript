@@ -1,0 +1,17 @@
+import {Head} from "velar/web"
+
+export component About:
+    style:
+        .page {
+            display: grid;
+            gap: 16px;
+            width: min(720px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 64px 0;
+        }
+
+    return <main class="page">
+        <Head title="About · Velar Release Studio" description="About the Velar production application" />
+        <h1>About</h1>
+        <p>A routed Velar application built from independent compiler, Web, package, and Workbench boundaries.</p>
+    </main>

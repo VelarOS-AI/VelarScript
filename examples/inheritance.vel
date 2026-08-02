@@ -1,0 +1,18 @@
+abstract class Entity(const id: string):
+    abstract def describe() -> string
+
+class Player(const id: string, let score: number = 0) extends Entity(id):
+    override def describe() -> string:
+        return f"{self.id}: {self.score}"
+
+    static def guest() -> Player:
+        return Player("guest", 1)
+
+class ValidationError(const field: string, const message: string) extends Error(message):
+    pass
+
+const entity: Entity = Player.guest()
+const error: Error = ValidationError("name", "Required")
+print(entity.describe())
+print(entity is Entity)
+print(error.message)

@@ -1,0 +1,2 @@
+export def greet(name: string) -> string:
+    return f"Hello, {name}"

@@ -1,0 +1,71 @@
+import {Link} from "velar/web"
+import {format} from "velar/time"
+import {Ticket, TicketPriority, TicketStatus} from "../domain.vel"
+
+export component TicketCard(ticket: Ticket):
+    style:
+        article {
+            display: grid;
+            gap: 10px;
+            padding: 16px;
+            border: 1px solid #dce3ec;
+            border-radius: 15px;
+            background: #fff;
+        }
+
+        .meta, .footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .badges {
+            display: flex;
+            gap: 6px;
+        }
+
+        .badge {
+            padding: 4px 7px;
+            border-radius: 999px;
+            color: #536079;
+            background: #edf1f7;
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .urgent {
+            color: #a52828;
+            background: #ffeded;
+        }
+
+        h2, p {
+            margin: 0;
+        }
+
+        h2 {
+            font-size: 17px;
+        }
+
+        p, time {
+            color: #68758a;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        a {
+            color: #3157d5;
+            font-size: 13px;
+            font-weight: 850;
+            text-decoration: none;
+        }
+
+    return <article data-ticket data-ticket-id={ticket.id}>
+        <div class="meta">
+            <div class="badges"><span class="badge">{ticket.status}</span><span class="badge">{ticket.priority}</span>{ticket.urgent ? <span class="badge urgent">Urgent</span> : none}</div>
+            <span class="badge">{ticket.estimate} min</span>
+        </div>
+        <h2 data-ticket-title>{ticket.title}</h2>
+        <p>{ticket.summary}</p>
+        <div class="footer"><p>{ticket.requester} · <time>{format(ticket.updatedAt, "en-US", "UTC")}</time></p><Link to={f"/tickets/{ticket.id}"}>View ticket</Link></div>
+    </article>

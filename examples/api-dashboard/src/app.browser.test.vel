@@ -1,0 +1,19 @@
+import {browser, expect} from "velar/test"
+
+async def test_dashboard_loads_typed_data_and_real_svg():
+    await browser.open("/")
+    await browser.waitForText("[data-dashboard]", "Visitors")
+    expect(await browser.count("[data-metric]")).toBe(3)
+    expect(await browser.namespace("[data-trend-chart]")).toBe("http://www.w3.org/2000/svg")
+    expect(await browser.namespace('[data-chart-bar="mon"] rect')).toBe("http://www.w3.org/2000/svg")
+    expect(await browser.namespace("[data-chart-summary]")).toBe("http://www.w3.org/1999/xhtml")
+    expect(await browser.visible('[data-chart-bar="mon"] rect')).toBe(true)
+    expect(await browser.attribute("[data-trend-chart]", "aria-labelledby")).toBe("traffic-chart-title traffic-chart-description")
+
+async def test_dashboard_resource_reloads_without_replacing_the_chart_contract():
+    await browser.open("/")
+    await browser.waitFor("[data-trend-chart]")
+    await browser.click("[data-refresh]")
+    await browser.waitForText("[data-dashboard]", "Updated: 2026-08-02 09:30")
+    expect(await browser.count("[data-chart-bar]")).toBe(7)
+    expect(await browser.namespace("[data-chart-summary]")).toBe("http://www.w3.org/1999/xhtml")

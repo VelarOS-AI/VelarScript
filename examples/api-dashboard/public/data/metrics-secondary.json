@@ -1,0 +1,5 @@
+{
+  "metrics": [
+    { "id": "latency", "label": "API latency", "value": 184, "trend": -7.2 }
+  ]
+}

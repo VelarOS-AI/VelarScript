@@ -1,0 +1,82 @@
+import {ProjectSummary} from "../data.vel"
+
+def isHealthy(status: string) -> bool:
+    match status:
+        case "Healthy":
+            return true
+        else:
+            return false
+
+export component ProjectList(items: List<ProjectSummary>):
+    style:
+        .projects {
+            display: grid;
+            gap: 10px;
+            padding: 0;
+            list-style: none;
+        }
+
+        .project {
+            overflow: hidden;
+            border-radius: 12px;
+            background: #11182e;
+        }
+
+        .project-summary {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px 18px;
+            padding: 14px 16px;
+        }
+
+        .project-children {
+            display: grid;
+            gap: 8px;
+            margin: 0;
+            padding: 0 10px 10px 26px;
+            list-style: none;
+        }
+
+        .project-children .project {
+            background: #18213d;
+        }
+
+        .progress {
+            grid-column: 1 / -1;
+            height: 5px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #273254;
+        }
+
+        .progress-fill {
+            width: calc(var(--progress) * 1%);
+            height: 100%;
+            background: #8297ff;
+        }
+
+        .status {
+            color: #aab5de;
+        }
+
+        .status.healthy {
+            color: #7de6b2;
+        }
+
+    component ProjectBranch(project: ProjectSummary):
+        return <li class="project" data-project={project.id}>
+            <div class="project-summary">
+            <strong>{project.name}</strong>
+            <span class="status" class:healthy={isHealthy(project.status)}>{project.status}</span>
+            <div class="progress" role="progressbar" aria-label={project.name} aria-valuemin="0" aria-valuemax="100" aria-valuenow={project.progress}>
+                <div class="progress-fill" style:--progress={project.progress}></div>
+            </div>
+            </div>
+            {project.children.length > 0 ? <ul class="project-children">
+                {project.children.map(child => <ProjectBranch key={child.id} project={child} />)}
+            </ul> : none}
+        </li>
+
+    return <ul class="projects" data-project-tree>
+        {items.map(project => <ProjectBranch key={project.id} project={project} />)}
+    </ul>

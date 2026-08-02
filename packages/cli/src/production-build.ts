@@ -1,0 +1,259 @@
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { build, type Plugin } from "esbuild";
+import { projectImportKey, type ProjectResult } from "./project.ts";
+import { standardModuleSource } from "./standard-modules.ts";
+import { VELAR_VERSION, VELAR_WEB_API_VERSION } from "./version.ts";
+import type { StaticDeploymentSummary } from "./static-deployment.ts";
+import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
+
+export interface ProductionBuildResult {
+  readonly entryPath: string;
+  readonly stylesheetPath: string | null;
+  readonly modules: ProductionModuleSummary;
+  readonly dependencies: ProductionDependencySummary;
+  readonly sourceMaps: boolean;
+}
+
+export interface ProductionDependencySummary {
+  readonly velar: readonly string[];
+  readonly javascript: readonly string[];
+}
+
+export interface ProductionModuleSummary {
+  readonly total: number;
+  readonly application: number;
+  readonly packages: readonly {
+    readonly name: string;
+    readonly modules: number;
+  }[];
+}
+
+export const PRODUCTION_MANIFEST_NAME = "velar-build.json";
+
+export interface ProductionBuildManifest {
+  readonly formatVersion: 2;
+  readonly kind: "velar-web-build";
+  readonly apiVersion: string;
+  readonly compiler: {
+    readonly name: "velar";
+    readonly version: string;
+  };
+  readonly buildId: string;
+  readonly sourceMaps: boolean;
+  readonly entry: string;
+  readonly stylesheet: string | null;
+  readonly modules: ProductionModuleSummary;
+  readonly dependencies: ProductionDependencySummary;
+  readonly deployment: StaticDeploymentSummary;
+  readonly assets: readonly {
+    readonly path: string;
+    readonly sizeBytes: number;
+    readonly sha256: string;
+    readonly role: "entry" | "stylesheet" | "source-map" | "html" | "deployment" | "adapter" | "asset";
+  }[];
+}
+
+export async function buildProductionWeb(project: ProjectResult, outputDirectory: string): Promise<ProductionBuildResult> {
+  await mkdir(outputDirectory, { recursive: true });
+  const result = await build({
+    absWorkingDir: project.projectRoot,
+    entryPoints: [project.entryPath],
+    outdir: outputDirectory,
+    bundle: true,
+    splitting: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    minify: true,
+    treeShaking: true,
+    sourcemap: project.webConfig.build.sourceMaps ? "linked" : false,
+    sourcesContent: project.webConfig.build.sourceMaps,
+    legalComments: "none",
+    metafile: true,
+    entryNames: "assets/[name]-[hash]",
+    chunkNames: "assets/chunk-[name]-[hash]",
+    assetNames: "assets/[name]-[hash]",
+    plugins: [velarModules(project)],
+    logLevel: "silent",
+  });
+  const entryOutput = Object.entries(result.metafile.outputs).find(([, output]) => Boolean(output.entryPoint));
+  if (!entryOutput) throw new Error("The production bundler did not emit the Velar entry module");
+  const entryPath = relative(outputDirectory, resolve(project.projectRoot, entryOutput[0])).replaceAll("\\", "/");
+
+  const css = project.modules.map((module) => module.result.css ?? "").filter(Boolean).join("\n");
+  let stylesheetPath: string | null = null;
+  if (css) {
+    const hash = createHash("sha256").update(css).digest("hex").slice(0, 10);
+    stylesheetPath = `assets/styles-${hash}.css`;
+    await mkdir(join(outputDirectory, "assets"), { recursive: true });
+    await writeFile(join(outputDirectory, stylesheetPath), css, "utf8");
+  }
+  return {
+    entryPath,
+    stylesheetPath,
+    modules: moduleSummary(project),
+    dependencies: dependencySummary(project),
+    sourceMaps: project.webConfig.build.sourceMaps,
+  };
+}
+
+export async function writeProductionManifest(
+  outputDirectory: string,
+  build: ProductionBuildResult,
+  deployment: StaticDeploymentSummary,
+): Promise<ProductionBuildManifest> {
+  const paths: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile() && entry.name !== PRODUCTION_MANIFEST_NAME) {
+        paths.push(path);
+        if (paths.length > MAX_PRODUCTION_ASSETS) throw new RangeError(`A production build cannot contain more than ${MAX_PRODUCTION_ASSETS} assets`);
+      }
+    }
+  };
+  await visit(outputDirectory);
+  const assets: ProductionBuildManifest["assets"][number][] = [];
+  for (const path of paths.sort()) {
+    const identity = await fileIdentity(path);
+    const relativePath = relative(outputDirectory, path).replaceAll("\\", "/");
+    assets.push({
+      path: relativePath,
+      sizeBytes: identity.sizeBytes,
+      sha256: identity.sha256,
+      role: assetRole(relativePath, build),
+    });
+  }
+  const buildId = createHash("sha256")
+    .update(assets.map((asset) => `${asset.path}\0${asset.sha256}`).join("\n"))
+    .digest("hex");
+  const manifest: ProductionBuildManifest = {
+    formatVersion: 2,
+    kind: "velar-web-build",
+    apiVersion: VELAR_WEB_API_VERSION,
+    compiler: { name: "velar", version: VELAR_VERSION },
+    buildId,
+    sourceMaps: build.sourceMaps,
+    entry: build.entryPath,
+    stylesheet: build.stylesheetPath,
+    modules: build.modules,
+    dependencies: build.dependencies,
+    deployment,
+    assets,
+  };
+  await writeFile(join(outputDirectory, PRODUCTION_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return manifest;
+}
+
+function dependencySummary(project: ProjectResult): ProductionDependencySummary {
+  const javascript = new Set<string>();
+  for (const module of project.modules) {
+    for (const dependency of module.result.dependencies) {
+      if (!dependency.javascript || dependency.source.startsWith(".") || dependency.source.startsWith("/")) continue;
+      javascript.add(packageNameOf(dependency.source));
+    }
+  }
+  return {
+    velar: project.velarPackages.map((item) => item.name).sort(),
+    javascript: [...javascript].sort(),
+  };
+}
+
+function packageNameOf(source: string): string {
+  const parts = source.split("/");
+  return source.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0] ?? source;
+}
+
+function moduleSummary(project: ProjectResult): ProductionModuleSummary {
+  const packages = project.velarPackages.map((package_) => ({
+    name: package_.name,
+    modules: project.modules.filter((module) => isWithin(package_.root, module.inputPath)).length,
+  })).sort((left, right) => left.name.localeCompare(right.name));
+  const packageModules = packages.reduce((total, package_) => total + package_.modules, 0);
+  return { total: project.modules.length, application: project.modules.length - packageModules, packages };
+}
+
+function isWithin(root: string, path: string): boolean {
+  const pathFromRoot = relative(root, path);
+  return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !pathFromRoot.startsWith("/"));
+}
+
+function assetRole(path: string, build: ProductionBuildResult): ProductionBuildManifest["assets"][number]["role"] {
+  if (path === build.entryPath) return "entry";
+  if (path === build.stylesheetPath) return "stylesheet";
+  if (path === "velar-deploy.json") return "deployment";
+  if (path === "_headers" || path === "_redirects") return "adapter";
+  if (build.sourceMaps && path.startsWith("assets/") && path.endsWith(".map")) return "source-map";
+  if (path.endsWith(".html")) return "html";
+  return "asset";
+}
+
+function velarModules(project: ProjectResult): Plugin {
+  const modulesByPath = new Map<string, ProjectResult["modules"][number]>();
+  for (const module of project.modules) {
+    modulesByPath.set(resolve(module.inputPath), module);
+    try {
+      modulesByPath.set(realpathSync(module.inputPath), module);
+    } catch {
+      // Compilation already reports missing source modules. Keep bundler lookup fail-closed.
+    }
+  }
+  const moduleAt = (path: string): ProjectResult["modules"][number] | undefined => modulesByPath.get(resolve(path));
+  return {
+    name: "velar-modules",
+    setup(context) {
+      context.onLoad({ filter: /\.vel$/, namespace: "file" }, (arguments_) => {
+        const module = moduleAt(arguments_.path);
+        if (!module) return { errors: [{ text: `Velar module '${arguments_.path}' was not compiled` }] };
+        const sourceMap = module.result.sourceMap
+          ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(module.result.sourceMap).toString("base64")}\n`
+          : "";
+        return {
+          contents: `${module.result.code ?? ""}${sourceMap}`,
+          loader: "js",
+          resolveDir: dirname(module.inputPath),
+        };
+      });
+      context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
+      context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
+        const contents = standardModuleSource(arguments_.path, project.webConfig);
+        return contents ? { contents, loader: "js" } : { errors: [{ text: `Unknown Velar standard module '${arguments_.path}'` }] };
+      });
+      context.onResolve({ filter: /^\.\.?\// }, (arguments_) => {
+        const sourceModule = moduleAt(arguments_.importer);
+        if (!sourceModule || !arguments_.path.endsWith(".js")) return null;
+        const targetPath = resolve(dirname(sourceModule.inputPath), arguments_.path.replace(/\.js$/u, ".vel"));
+        const targetModule = moduleAt(targetPath);
+        return targetModule ? { path: targetModule.inputPath } : null;
+      });
+      context.onResolve({ filter: /^[^./]/ }, (arguments_) => {
+        if (arguments_.path.startsWith("velar/")) return null;
+        if (arguments_.path.startsWith("node:")) {
+          return { errors: [{ text: `Node builtin '${arguments_.path}' cannot run in a browser build` }] };
+        }
+        try {
+          const sourceModule = moduleAt(arguments_.importer) ?? null;
+          if (sourceModule) {
+            const velarTarget = project.velarImports.get(projectImportKey(sourceModule.inputPath, arguments_.path));
+            if (velarTarget) {
+              const targetModule = moduleAt(velarTarget);
+              if (!targetModule) return { errors: [{ text: `Velar package module '${arguments_.path}' was not compiled` }] };
+              return { path: targetModule.inputPath };
+            }
+          }
+          const base = sourceModule ? dirname(sourceModule.inputPath) : arguments_.resolveDir || project.projectRoot;
+          const require = createRequire(pathToFileURL(join(base, "__velar_resolve__.js")));
+          return { path: require.resolve(arguments_.path) };
+        } catch (error) {
+          return { errors: [{ text: `Cannot resolve browser import '${arguments_.path}': ${error instanceof Error ? error.message : String(error)}` }] };
+        }
+      });
+    },
+  };
+}

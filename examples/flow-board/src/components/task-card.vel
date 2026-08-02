@@ -1,0 +1,101 @@
+import {format} from "velar/time"
+import {Task, TaskIdHandler, TaskPriority, TaskStatus} from "../domain.vel"
+
+def statusAction(status: TaskStatus) -> string:
+    match status:
+        case TaskStatus.todo:
+            return "Start"
+        case TaskStatus.doing:
+            return "Complete"
+        case TaskStatus.done:
+            return "Reopen"
+
+export component TaskCard(task: Task, onAdvance: TaskIdHandler, onDelete: TaskIdHandler):
+    style:
+        .card {
+            display: grid;
+            gap: 12px;
+            padding: 16px;
+            border: 1px solid #e0e6f0;
+            border-radius: 15px;
+            background: #fff;
+            box-shadow: 0 8px 24px rgba(38, 54, 88, 0.06);
+        }
+
+        .card.high {
+            border-left: 4px solid #e5484d;
+        }
+
+        .card.done {
+            opacity: 0.72;
+        }
+
+        h3, p {
+            margin: 0;
+        }
+
+        h3 {
+            color: #172033;
+            font-size: 16px;
+        }
+
+        .description {
+            color: #5d6880;
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .meta, .actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .priority {
+            padding: 4px 8px;
+            border-radius: 999px;
+            color: #43506a;
+            background: #edf1f8;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: capitalize;
+        }
+
+        time {
+            color: #7d879c;
+            font-size: 11px;
+        }
+
+        button {
+            border: 0;
+            padding: 7px 10px;
+            border-radius: 9px;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .move {
+            color: #2345ae;
+            background: #e9efff;
+        }
+
+        .delete {
+            color: #9f2d2d;
+            background: transparent;
+        }
+
+    return <article class="card" class:high={task.priority == TaskPriority.high} class:done={task.status == TaskStatus.done} data-task data-task-id={task.id}>
+        <h3 data-task-title>{task.title}</h3>
+        <p class="description">{task.description}</p>
+        <div class="meta">
+            <span class="priority">{task.priority}</span>
+            <time>{format(task.updatedAt)}</time>
+        </div>
+        <div class="actions">
+            <button class="move" data-move-task type="button" on:click={() => onAdvance(task.id)}>{statusAction(task.status)}</button>
+            <button class="delete" data-delete-task type="button" aria-label={f"Delete {task.title}"} on:click={() => onDelete(task.id)}>Delete</button>
+        </div>
+    </article>

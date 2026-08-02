@@ -1,0 +1,107 @@
+import {announce} from "velar/web"
+import {clearErrors, errors, focusFirstError, read, reset, setError} from "velar/forms"
+import {isBlank, trim} from "velar/text"
+import {TicketDraft, TicketPriority} from "../domain.vel"
+import {addTicket} from "../store.vel"
+
+export component TicketForm:
+    let form: Element? = none
+
+    def submit():
+        if form:
+            clearErrors(form)
+            const draft = read(form, TicketDraft)
+            const title = trim(draft.title)
+            const requester = trim(draft.requester)
+            if isBlank(title):
+                setError(form, "title", "Add a short issue title")
+            if isBlank(requester):
+                setError(form, "requester", "Add the requester name")
+            if draft.estimate == none:
+                setError(form, "estimate", "Add an estimate in minutes")
+            if errors(form).size > 0:
+                focusFirstError(form)
+            else:
+                assert draft.estimate != none, "Ticket estimate must be present after validation"
+                addTicket({...draft, title, requester, summary: trim(draft.summary)})
+                reset(form)
+                announce("Ticket created")
+
+    style:
+        form {
+            display: grid;
+            gap: 12px;
+            padding: 18px;
+            border: 1px solid #dce3ec;
+            border-radius: 18px;
+            background: #fff;
+            box-shadow: 0 16px 44px rgba(42, 55, 79, 0.07);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr 0.7fr 0.7fr;
+            gap: 10px;
+        }
+
+        label {
+            display: grid;
+            gap: 6px;
+            color: #505d72;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        input, select, textarea {
+            min-height: 42px;
+            border: 1px solid #cfd8e6;
+            border-radius: 10px;
+            padding: 9px 11px;
+            color: #172033;
+            background: #fbfcfe;
+            font: inherit;
+        }
+
+        textarea {
+            min-height: 76px;
+            resize: vertical;
+        }
+
+        .urgent {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .urgent input {
+            min-height: auto;
+        }
+
+        button {
+            justify-self: start;
+            border: 0;
+            border-radius: 10px;
+            padding: 10px 15px;
+            color: #fff;
+            background: #3157d5;
+            font-weight: 850;
+            cursor: pointer;
+        }
+
+        @media (max-width: 820px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+    return <form ref={form} on:submit.prevent={submit} data-ticket-form>
+        <div class="grid">
+            <label>Issue title<input name="title" data-title placeholder="What needs attention?" /></label>
+            <label>Requester<input name="requester" data-requester placeholder="Customer name" /></label>
+            <label>Priority<select name="priority" data-priority><option value={TicketPriority.low}>Low</option><option value={TicketPriority.normal} selected={true}>Normal</option><option value={TicketPriority.high}>High</option></select></label>
+            <label>Estimate<input name="estimate" data-estimate type="number" min="1" placeholder="Minutes" /></label>
+        </div>
+        <label>Summary<textarea name="summary" data-summary placeholder="Add useful context"></textarea></label>
+        <label class="urgent"><input name="urgent" data-urgent type="checkbox" />Mark as urgent</label>
+        <button data-create-ticket type="submit">Create ticket</button>
+    </form>

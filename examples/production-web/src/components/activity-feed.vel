@@ -1,0 +1,38 @@
+import {http} from "velar/http"
+
+type ActivityPayload:
+    message: string
+
+export component ActivityFeed:
+    state message = "Activity has not been refreshed"
+
+    action refresh():
+        const activity = await http.get("data/activity.json").parse(ActivityPayload)
+        message = activity.message
+
+    computed failure = refresh.error
+
+    style:
+        .activity {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: #11182e;
+        }
+
+        button {
+            padding: 8px 12px;
+            border: 0;
+            border-radius: 9px;
+            color: #081022;
+            background: #9dacff;
+            cursor: pointer;
+        }
+
+    return <section class="activity" aria-live="polite">
+        <span data-activity>{failure ? failure.message : message}</span>
+        <button type="button" disabled={refresh.pending} on:click={refresh}>Refresh activity</button>
+    </section>

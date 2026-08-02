@@ -1,0 +1,56 @@
+import {Task, TaskIdHandler, TaskStatus} from "../domain.vel"
+import {TaskCard} from "./task-card.vel"
+
+export component BoardColumn(title: string, status: TaskStatus, tasks: List<Task>, onAdvance: TaskIdHandler, onDelete: TaskIdHandler):
+    const items = tasks.filter(task => task.status == status)
+
+    style:
+        .column {
+            display: grid;
+            align-content: start;
+            gap: 12px;
+            min-width: 0;
+            padding: 12px;
+            border-radius: 18px;
+            background: #eef2f8;
+        }
+
+        .heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 3px 4px 7px;
+        }
+
+        h2 {
+            margin: 0;
+            color: #27314a;
+            font-size: 15px;
+        }
+
+        .count {
+            display: grid;
+            place-items: center;
+            min-width: 26px;
+            height: 26px;
+            border-radius: 999px;
+            color: #526078;
+            background: #fff;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .empty {
+            margin: 0;
+            padding: 30px 12px;
+            border: 1px dashed #c7d0df;
+            border-radius: 13px;
+            color: #7c879b;
+            text-align: center;
+            font-size: 13px;
+        }
+
+    return <section class="column" data-column={status}>
+        <header class="heading"><h2>{title}</h2><span class="count">{items.length}</span></header>
+        {items.length == 0 ? <p class="empty">No matching tasks</p> : <>{items.map(task => <TaskCard key={task.id} task={task} onAdvance={onAdvance} onDelete={onDelete} />)}</>}
+    </section>

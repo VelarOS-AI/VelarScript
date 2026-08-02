@@ -1,0 +1,47 @@
+name: Toolchain release rehearsal
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  toolchain-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Create non-publishing rehearsal
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: npm run release:rehearse -- --output-dir release/toolchain
+      - name: Create strict tagged candidate
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: npm run build:packages && node scripts/release-toolchain.mjs candidate --output-dir release/toolchain
+      - name: Attest packed toolchain
+        uses: actions/attest@v4
+        with:
+          subject-path: release/toolchain/*.tgz
+      - name: Upload verified rehearsal
+        uses: actions/upload-artifact@v5
+        with:
+          name: velar-toolchain-${{ github.sha }}
+          path: release/toolchain/
+          if-no-files-found: error
+          retention-days: 14

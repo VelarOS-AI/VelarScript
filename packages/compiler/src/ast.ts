@@ -1,0 +1,615 @@
+import type { Span } from "./source.ts";
+
+export interface Program {
+  readonly kind: "Program";
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export type Statement =
+  | ImportDeclaration
+  | ExternModuleDeclaration
+  | ComponentDeclaration
+  | StateDeclaration
+  | ComputedDeclaration
+  | ResourceDeclaration
+  | ActionDeclaration
+  | WatchDeclaration
+  | TypeDeclaration
+  | TypeAliasDeclaration
+  | EnumDeclaration
+  | ClassDeclaration
+  | VariableDeclaration
+  | FunctionDeclaration
+  | ReturnStatement
+  | ThrowStatement
+  | AssertStatement
+  | IfStatement
+  | MatchStatement
+  | ForStatement
+  | WhileStatement
+  | BreakStatement
+  | ContinueStatement
+  | TryStatement
+  | PassStatement
+  | AssignmentStatement
+  | ExpressionStatement;
+
+export interface ImportDeclaration {
+  readonly kind: "ImportDeclaration";
+  readonly source: string;
+  readonly javascript: boolean;
+  readonly unsafe: boolean;
+  readonly specifiers: readonly ImportSpecifier[];
+  readonly span: Span;
+}
+
+export interface ImportSpecifier {
+  readonly imported: string;
+  readonly local: string;
+  readonly namespace: boolean;
+  readonly span: Span;
+}
+
+export interface ExternModuleDeclaration {
+  readonly kind: "ExternModuleDeclaration";
+  readonly source: string;
+  readonly functions: readonly ExternFunctionDeclaration[];
+  readonly constants: readonly ExternConstantDeclaration[];
+  readonly classes: readonly ExternClassDeclaration[];
+  readonly span: Span;
+}
+
+export interface ExternFunctionDeclaration {
+  readonly asynchronous: boolean;
+  readonly name: string;
+  readonly parameters: readonly Parameter[];
+  readonly returnType: TypeReference | null;
+  readonly span: Span;
+}
+
+export interface ExternConstantDeclaration {
+  readonly name: string;
+  readonly type: TypeReference;
+  readonly span: Span;
+}
+
+export interface ExternClassDeclaration {
+  readonly name: string;
+  readonly parameters: readonly ClassParameter[];
+  readonly base: string | null;
+  readonly fields: readonly ExternClassFieldDeclaration[];
+  readonly methods: readonly ExternClassMethodDeclaration[];
+  readonly span: Span;
+}
+
+export interface ExternClassFieldDeclaration {
+  readonly static: boolean;
+  readonly mutable: boolean;
+  readonly name: string;
+  readonly type: TypeReference;
+  readonly span: Span;
+}
+
+export interface ExternClassMethodDeclaration extends ExternFunctionDeclaration {
+  readonly static: boolean;
+}
+
+export interface AssertStatement {
+  readonly kind: "AssertStatement";
+  readonly condition: Expression;
+  readonly message: Expression | null;
+  readonly span: Span;
+}
+
+export interface ComponentDeclaration {
+  readonly kind: "ComponentDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly parameters: readonly Parameter[];
+  readonly body: readonly ComponentItem[];
+  readonly span: Span;
+}
+
+export type ComponentItem =
+  | Statement
+  | StateDeclaration
+  | ComputedDeclaration
+  | ResourceDeclaration
+  | ActionDeclaration
+  | WatchDeclaration
+  | MountedBlock
+  | CleanupBlock
+  | StyleBlock;
+
+export interface StateDeclaration {
+  readonly kind: "StateDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly type: TypeReference | null;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+export interface ComputedDeclaration {
+  readonly kind: "ComputedDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly type: TypeReference | null;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+export interface ResourceDeclaration {
+  readonly kind: "ResourceDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly type: TypeReference | null;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+export interface ActionDeclaration {
+  readonly kind: "ActionDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly parameters: readonly Parameter[];
+  readonly returnType: TypeReference | null;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface WatchDeclaration {
+  readonly kind: "WatchDeclaration";
+  readonly expression: Expression;
+  readonly currentName: string | null;
+  readonly previousName: string | null;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface MountedBlock {
+  readonly kind: "MountedBlock";
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface CleanupBlock {
+  readonly kind: "CleanupBlock";
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface StyleBlock {
+  readonly kind: "StyleBlock";
+  readonly global: boolean;
+  readonly css: string;
+  readonly span: Span;
+}
+
+export interface TypeDeclaration {
+  readonly kind: "TypeDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly fields: readonly TypeField[];
+  readonly span: Span;
+}
+
+export interface TypeAliasDeclaration {
+  readonly kind: "TypeAliasDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly target: TypeReference;
+  readonly span: Span;
+}
+
+export interface TypeField {
+  readonly name: string;
+  readonly type: TypeReference;
+  readonly span: Span;
+}
+
+export interface EnumDeclaration {
+  readonly kind: "EnumDeclaration";
+  readonly exported: boolean;
+  readonly name: string;
+  readonly members: readonly EnumMember[];
+  readonly span: Span;
+}
+
+export interface EnumMember {
+  readonly name: string;
+  readonly span: Span;
+}
+
+export interface ClassDeclaration {
+  readonly kind: "ClassDeclaration";
+  readonly exported: boolean;
+  readonly abstract: boolean;
+  readonly name: string;
+  readonly parameters: readonly ClassParameter[];
+  readonly base: ClassBase | null;
+  readonly fields: readonly ClassFieldDeclaration[];
+  readonly initialization: ClassInitBlock | null;
+  readonly getters: readonly ClassGetterDeclaration[];
+  readonly methods: readonly ClassMethodDeclaration[];
+  readonly span: Span;
+}
+
+export interface ClassInitBlock {
+  readonly kind: "ClassInitBlock";
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface ClassBase {
+  readonly name: string;
+  readonly arguments: readonly Expression[];
+  readonly span: Span;
+}
+
+export interface ClassMethodDeclaration extends FunctionDeclaration {
+  readonly abstract: boolean;
+  readonly override: boolean;
+  readonly static: boolean;
+  readonly private: boolean;
+}
+
+export interface ClassGetterDeclaration extends FunctionDeclaration {
+  readonly accessor: true;
+  readonly abstract: boolean;
+  readonly override: boolean;
+  readonly static: boolean;
+  readonly private: boolean;
+}
+
+export interface ClassFieldDeclaration {
+  readonly binding: "const" | "let";
+  readonly static: boolean;
+  readonly private: boolean;
+  readonly name: string;
+  readonly type: TypeReference;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+export interface ClassParameter extends Parameter {
+  readonly binding: "const" | "let" | null;
+  readonly private: boolean;
+}
+
+export interface VariableDeclaration {
+  readonly kind: "VariableDeclaration";
+  readonly binding: "const" | "let";
+  readonly exported: boolean;
+  readonly pattern: BindingPattern;
+  readonly type: TypeReference | null;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+export type BindingPattern = NameBindingPattern | ObjectBindingPattern | ListBindingPattern;
+
+export interface NameBindingPattern {
+  readonly kind: "NameBindingPattern";
+  readonly name: string;
+  readonly span: Span;
+}
+
+export interface ObjectBindingPattern {
+  readonly kind: "ObjectBindingPattern";
+  readonly entries: readonly ObjectBindingEntry[];
+  readonly rest: NameBindingPattern | null;
+  readonly span: Span;
+}
+
+export interface ObjectBindingEntry {
+  readonly property: string;
+  readonly pattern: BindingPattern;
+  readonly span: Span;
+}
+
+export interface ListBindingPattern {
+  readonly kind: "ListBindingPattern";
+  readonly elements: readonly (BindingPattern | null)[];
+  readonly rest: NameBindingPattern | null;
+  readonly span: Span;
+}
+
+export interface FunctionDeclaration {
+  readonly kind: "FunctionDeclaration";
+  readonly exported: boolean;
+  readonly asynchronous: boolean;
+  readonly name: string;
+  readonly parameters: readonly Parameter[];
+  readonly returnType: TypeReference | null;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface Parameter {
+  readonly name: string;
+  readonly type: TypeReference | null;
+  readonly defaultValue: Expression | null;
+  readonly rest: boolean;
+  readonly span: Span;
+}
+
+export interface TypeReference {
+  readonly text: string;
+  readonly span: Span;
+}
+
+export interface ReturnStatement {
+  readonly kind: "ReturnStatement";
+  readonly value: Expression | null;
+  readonly span: Span;
+}
+
+export interface ThrowStatement {
+  readonly kind: "ThrowStatement";
+  readonly value: Expression;
+  readonly span: Span;
+}
+
+export interface IfStatement {
+  readonly kind: "IfStatement";
+  readonly condition: Expression;
+  readonly thenBody: readonly Statement[];
+  readonly elseBody: readonly Statement[] | null;
+  readonly span: Span;
+}
+
+export interface MatchStatement {
+  readonly kind: "MatchStatement";
+  readonly value: Expression;
+  readonly cases: readonly MatchCase[];
+  readonly elseBody: readonly Statement[] | null;
+  readonly span: Span;
+}
+
+export interface MatchCase {
+  readonly values: readonly MatchValue[];
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export type MatchValue = LiteralExpression | MemberExpression;
+
+export interface ForStatement {
+  readonly kind: "ForStatement";
+  readonly pattern: BindingPattern;
+  readonly iterable: Expression;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface WhileStatement {
+  readonly kind: "WhileStatement";
+  readonly condition: Expression;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface BreakStatement {
+  readonly kind: "BreakStatement";
+  readonly span: Span;
+}
+
+export interface ContinueStatement {
+  readonly kind: "ContinueStatement";
+  readonly span: Span;
+}
+
+export interface TryStatement {
+  readonly kind: "TryStatement";
+  readonly tryBody: readonly Statement[];
+  readonly catchName: string | null;
+  readonly catchBody: readonly Statement[] | null;
+  readonly finallyBody: readonly Statement[] | null;
+  readonly span: Span;
+}
+
+export interface PassStatement {
+  readonly kind: "PassStatement";
+  readonly span: Span;
+}
+
+export interface AssignmentStatement {
+  readonly kind: "AssignmentStatement";
+  readonly target: AssignmentTarget;
+  readonly operator: "=" | "+=" | "-=" | "*=" | "/=" | "%=";
+  readonly value: Expression;
+  readonly span: Span;
+}
+
+export type AssignmentTarget = IdentifierExpression | MemberExpression | IndexExpression;
+
+export interface ExpressionStatement {
+  readonly kind: "ExpressionStatement";
+  readonly expression: Expression;
+  readonly span: Span;
+}
+
+export type Expression =
+  | LiteralExpression
+  | FStringExpression
+  | IdentifierExpression
+  | SuperExpression
+  | DynamicImportExpression
+  | ListExpression
+  | ObjectExpression
+  | SpreadExpression
+  | UnaryExpression
+  | BinaryExpression
+  | ComparisonChainExpression
+  | ConditionalExpression
+  | IsExpression
+  | ArrowFunctionExpression
+  | CallExpression
+  | MemberExpression
+  | IndexExpression
+  | JSXElementExpression;
+
+export interface LiteralExpression {
+  readonly kind: "LiteralExpression";
+  readonly value: string | number | boolean | null;
+  readonly raw: string;
+  readonly span: Span;
+}
+
+export interface FStringExpression {
+  readonly kind: "FStringExpression";
+  readonly parts: readonly FStringPart[];
+  readonly span: Span;
+}
+
+export type FStringPart =
+  | { readonly kind: "text"; readonly value: string }
+  | { readonly kind: "expression"; readonly value: Expression };
+
+export interface IdentifierExpression {
+  readonly kind: "IdentifierExpression";
+  readonly name: string;
+  readonly span: Span;
+}
+
+export interface SuperExpression {
+  readonly kind: "SuperExpression";
+  readonly span: Span;
+}
+
+export interface DynamicImportExpression {
+  readonly kind: "DynamicImportExpression";
+  readonly source: string;
+  readonly sourceSpan: Span;
+  readonly span: Span;
+}
+
+export interface ListExpression {
+  readonly kind: "ListExpression";
+  readonly elements: readonly Expression[];
+  readonly span: Span;
+}
+
+export interface ObjectExpression {
+  readonly kind: "ObjectExpression";
+  readonly properties: readonly ObjectEntry[];
+  readonly span: Span;
+}
+
+export type ObjectEntry = ObjectProperty | ObjectSpread;
+
+export interface ObjectProperty {
+  readonly kind: "ObjectProperty";
+  readonly name: string;
+  readonly value: Expression;
+  readonly span: Span;
+}
+
+export interface ObjectSpread {
+  readonly kind: "ObjectSpread";
+  readonly value: Expression;
+  readonly span: Span;
+}
+
+export interface SpreadExpression {
+  readonly kind: "SpreadExpression";
+  readonly value: Expression;
+  readonly span: Span;
+}
+
+export interface UnaryExpression {
+  readonly kind: "UnaryExpression";
+  readonly operator: "not" | "+" | "-" | "await";
+  readonly operand: Expression;
+  readonly span: Span;
+}
+
+export interface BinaryExpression {
+  readonly kind: "BinaryExpression";
+  readonly left: Expression;
+  readonly operator: "??" | "or" | "and" | "in" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "**" | "/" | "%";
+  readonly right: Expression;
+  readonly span: Span;
+}
+
+export interface ComparisonChainExpression {
+  readonly kind: "ComparisonChainExpression";
+  readonly operands: readonly Expression[];
+  readonly operators: readonly ("==" | "!=" | "<" | "<=" | ">" | ">=")[];
+  readonly span: Span;
+}
+
+export interface ConditionalExpression {
+  readonly kind: "ConditionalExpression";
+  readonly condition: Expression;
+  readonly thenValue: Expression;
+  readonly elseValue: Expression;
+  readonly span: Span;
+}
+
+export interface IsExpression {
+  readonly kind: "IsExpression";
+  readonly value: Expression;
+  readonly type: TypeReference;
+  readonly span: Span;
+}
+
+export interface ArrowFunctionExpression {
+  readonly kind: "ArrowFunctionExpression";
+  readonly asynchronous: boolean;
+  readonly parameters: readonly Parameter[];
+  readonly body: Expression;
+  readonly span: Span;
+}
+
+export interface CallExpression {
+  readonly kind: "CallExpression";
+  readonly callee: Expression;
+  readonly arguments: readonly Expression[];
+  readonly span: Span;
+}
+
+export interface MemberExpression {
+  readonly kind: "MemberExpression";
+  readonly object: Expression;
+  readonly property: string;
+  readonly optional: boolean;
+  readonly span: Span;
+}
+
+export interface IndexExpression {
+  readonly kind: "IndexExpression";
+  readonly object: Expression;
+  readonly index: Expression;
+  readonly span: Span;
+}
+
+export interface JSXElementExpression {
+  readonly kind: "JSXElementExpression";
+  readonly tag: string;
+  readonly attributes: readonly JSXAttribute[];
+  readonly children: readonly JSXChild[];
+  readonly span: Span;
+}
+
+export interface JSXAttribute {
+  readonly name: string;
+  readonly value: string | Expression | null;
+  readonly span: Span;
+}
+
+export type JSXChild = JSXText | JSXExpressionChild | JSXElementExpression;
+
+export interface JSXText {
+  readonly kind: "JSXText";
+  readonly value: string;
+  readonly span: Span;
+}
+
+export interface JSXExpressionChild {
+  readonly kind: "JSXExpressionChild";
+  readonly expression: Expression;
+  readonly span: Span;
+}

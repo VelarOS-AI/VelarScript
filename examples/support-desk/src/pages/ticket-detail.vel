@@ -1,0 +1,153 @@
+import {Head, Link, RouteContext, announce} from "velar/web"
+import {closeDialog, dialogResult, focus, frame, showDialog} from "velar/browser"
+import {loadTickets, resolveTicket, ticketById} from "../store.vel"
+
+export component TicketDetail(route: RouteContext):
+    const routeId = route.params.get("id")
+    assert routeId != none, "Ticket detail route requires an id parameter"
+    const id = routeId
+    let confirmDialog: DialogElement? = none
+    let resolveButton: Element? = none
+    state resolution = ""
+    resource catalog = loadTickets()
+    computed ticket = ticketById(id)
+    computed loadFailure = catalog.error
+
+    def askResolve():
+        if confirmDialog:
+            showDialog(confirmDialog)
+
+    def cancelResolve():
+        if confirmDialog:
+            closeDialog(confirmDialog, "cancelled")
+        if resolveButton:
+            focus(resolveButton, true)
+
+    async def confirmResolve():
+        resolveTicket(id)
+        if confirmDialog:
+            closeDialog(confirmDialog, "resolved")
+            resolution = dialogResult(confirmDialog)
+        announce("Ticket resolved")
+        await frame()
+        if resolveButton:
+            focus(resolveButton, true)
+
+    style:
+        .page {
+            display: grid;
+            gap: 18px;
+            width: min(760px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 44px 0;
+        }
+
+        article, .missing, .loading {
+            display: grid;
+            gap: 14px;
+            padding: 24px;
+            border: 1px solid #dce3ec;
+            border-radius: 18px;
+            background: #fff;
+        }
+
+        h1, p {
+            margin: 0;
+        }
+
+        p {
+            color: #667389;
+            line-height: 1.6;
+        }
+
+        a {
+            color: #3157d5;
+            font-weight: 850;
+            text-decoration: none;
+        }
+
+        button {
+            justify-self: start;
+            border: 0;
+            border-radius: 10px;
+            padding: 10px 14px;
+            color: #fff;
+            background: #3157d5;
+            font-weight: 850;
+            cursor: pointer;
+        }
+
+        dialog {
+            width: min(420px, calc(100% - 32px));
+            border: 1px solid #d3dbea;
+            border-radius: 16px;
+            padding: 22px;
+            color: #172033;
+            background: #fff;
+            box-shadow: 0 24px 80px rgba(35, 48, 77, 0.28);
+        }
+
+        dialog[open] {
+            display: grid;
+            gap: 14px;
+        }
+
+        .dialog-actions {
+            display: flex;
+            justify-content: end;
+            gap: 10px;
+        }
+
+        .dialog-actions .secondary {
+            color: #42506a;
+            background: #edf1f7;
+        }
+
+        .visually-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+    return <main class="page" data-ticket-detail>
+        <Link to="/">← Back to inbox</Link>
+        <section if={catalog.loading} class="loading" aria-busy="true">
+            <Head title="Loading ticket · SupportDesk" />
+            <p>Loading ticket…</p>
+        </section>
+        <section else-if={loadFailure} class="missing" role="alert">
+            <Head title="Ticket unavailable · SupportDesk" />
+            <h1>Ticket unavailable</h1>
+            <p>{loadFailure.message}</p>
+            <button type="button" on:click={catalog.reload}>Retry</button>
+        </section>
+        <article else-if={ticket}>
+            <Head title={f"{ticket.title} · SupportDesk"} />
+            <p>{ticket.requester} · {ticket.priority} priority</p>
+            <h1>{ticket.title}</h1>
+            <p>{ticket.summary}</p>
+            <p data-route-id>Route ID: {id}</p>
+            <p data-detail-status>Status: {ticket.status}</p>
+            <button ref={resolveButton} data-resolve type="button" on:click={askResolve}>Resolve ticket</button>
+            <span class="visually-hidden" data-dialog-result>{resolution}</span>
+            <dialog ref={confirmDialog} data-resolve-dialog aria-labelledby="resolve-dialog-title">
+                <h2 id="resolve-dialog-title">Resolve this ticket?</h2>
+                <p>The ticket remains available in the inbox after its status changes.</p>
+                <div class="dialog-actions">
+                    <button class="secondary" data-cancel-resolve type="button" on:click={cancelResolve}>Cancel</button>
+                    <button data-confirm-resolve type="button" on:click={confirmResolve}>Resolve</button>
+                </div>
+            </dialog>
+        </article>
+        <section else class="missing" role="alert">
+            <Head title="Ticket not found · SupportDesk" />
+            <h1>Ticket not found</h1>
+            <p>The route parameter does not match a known ticket.</p>
+        </section>
+    </main>

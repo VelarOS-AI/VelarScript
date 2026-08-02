@@ -1,0 +1,30 @@
+import {expect} from "velar/test"
+import {deepEqual} from "velar/json"
+import {TaskDraft, TaskFilter, TaskPriority, TaskStatus, advanceStatus, countStatus, filterTasks, moveTask, newTask, seedTasks} from "./domain.vel"
+
+def test_task_workflow_uses_finite_states():
+    expect(advanceStatus(TaskStatus.todo)).toBe(TaskStatus.doing)
+    expect(advanceStatus(TaskStatus.doing)).toBe(TaskStatus.done)
+    expect(advanceStatus(TaskStatus.done)).toBe(TaskStatus.todo)
+
+def test_board_transformations_are_immutable_and_typed():
+    const tasks = seedTasks()
+    const moved = moveTask(tasks, "seed-design")
+    expect(tasks[0].status).toBe(TaskStatus.todo)
+    expect(moved[0].status).toBe(TaskStatus.doing)
+    expect(countStatus(moved, TaskStatus.doing)).toBe(2)
+    expect(filterTasks(tasks, "compiler", TaskFilter.all)).toHaveLength(1)
+    expect(filterTasks(tasks, "", TaskFilter.done)).toHaveLength(1)
+    expect(TaskPriority.is(TaskPriority.high)).toBe(true)
+    expect(deepEqual(tasks, seedTasks())).toBe(true)
+    expect(deepEqual(tasks, moved)).toBe(false)
+
+def test_task_draft_uses_named_record_fields():
+    const title = "  Record-first task  "
+    const description = "  No positional arguments  "
+    const priority = TaskPriority.high
+    const draft: TaskDraft = {title, description, priority}
+    const task = newTask(draft)
+    expect(task.title).toBe("Record-first task")
+    expect(task.description).toBe("No positional arguments")
+    expect(task.priority).toBe(TaskPriority.high)

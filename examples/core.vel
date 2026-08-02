@@ -1,0 +1,57 @@
+type User:
+    id: string
+    name: string
+    avatar: string?
+
+class Player(const name: string, let score: number = 0):
+    def addScore(points: number):
+        self.score += points
+
+    def label() -> string:
+        return f"{self.name}: {self.score}"
+
+def activeNames(users: List<User>) -> List<string>:
+    return users.map(user => user.name)
+
+const raw = {
+    id: "user-1",
+    name: "Ada",
+    avatar: none,
+}
+
+const user = User.parse(raw)
+const {name: displayName} = user
+const users = [user]
+const names = activeNames(users)
+const firstName = names[0]
+const totalNameLength = names.map(name => name.length).reduce((total, length) => total + length, 0)
+
+const scores = Map()
+scores.set(user.id, 10)
+const savedScore = scores.get(user.id)
+
+const player = Player(user.name)
+player.addScore(savedScore ?? 0)
+
+if raw is User:
+    print(player.label())
+
+print(f"{displayName}: {str(totalNameLength)}")
+
+for current in users:
+    print(current.name)
+
+for id in scores:
+    print(id)
+
+let index = 0
+while index < users.length:
+    print(users[index].name)
+    index += 1
+
+try:
+    print(firstName)
+catch error:
+    print(error.message)
+finally:
+    print("done")

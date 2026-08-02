@@ -1,0 +1,40 @@
+import {browser, expect} from "velar/test"
+
+async def reset():
+    await browser.open("/")
+    await browser.click("[data-reset-board]")
+    await browser.waitForText("[data-results]", "3 of 3 tasks shown")
+    expect(await browser.text("[data-board-state]")).toBe("Sample")
+
+async def test_flow_board_crud_and_persistence():
+    await reset()
+    expect(await browser.count("[data-task]")).toBe(3)
+    await browser.fill("[data-title-input]", "Write launch notes")
+    await browser.fill("[data-description-input]", "Explain the user-facing changes")
+    await browser.click("[data-add-task]")
+    await browser.waitForText("[data-board]", "Write launch notes")
+    expect(await browser.count("[data-task]")).toBe(4)
+    expect(await browser.text("[data-board-state]")).toBe("Modified")
+    await browser.click('[data-task-id]:has-text("Write launch notes") [data-move-task]')
+    await browser.waitForText('[data-column="doing"]', "Write launch notes")
+    await browser.reload()
+    await browser.waitForText('[data-column="doing"]', "Write launch notes")
+    await browser.click('[data-task-id]:has-text("Write launch notes") [data-delete-task]')
+    await browser.waitForText("[data-results]", "3 of 3 tasks shown")
+    expect(await browser.count("[data-task]")).toBe(3)
+    expect(await browser.text("[data-board-state]")).toBe("Sample")
+
+async def test_search_and_lazy_analytics_route():
+    await reset()
+    await browser.fill("[data-search]", "compiler")
+    await browser.waitForText("[data-results]", "1 of 3 tasks shown")
+    expect(await browser.count("[data-task]")).toBe(1)
+    await browser.fill("[data-search]", "")
+    await browser.select("[data-status-filter]", "done")
+    await browser.waitForText("[data-results]", "1 of 3 tasks shown")
+    expect(await browser.text('[data-column="done"] [data-task-title]')).toBe("Share the preview with the team")
+    await browser.click('a[href="/analytics"]')
+    await browser.waitForText("h1", "Project pulse")
+    expect(await browser.text("[data-completion]")).toBe("33%")
+    expect(await browser.text("[data-progress-label]")).toBe("Getting started")
+    expect(await browser.currentPath()).toBe("/analytics")

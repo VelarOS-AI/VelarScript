@@ -1,0 +1,1 @@
+export const MAX_VELAR_SOURCE_CODE_UNITS = 4 * 1024 * 1024;

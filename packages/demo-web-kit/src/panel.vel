@@ -1,0 +1,19 @@
+export component PanelFrame(title: string, children: WebNode):
+    style:
+        .panel {
+            display: grid;
+            gap: 12px;
+            padding: 20px;
+            border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+            border-radius: 14px;
+        }
+
+        .panel-title {
+            margin: 0;
+            font-size: 1.1rem;
+        }
+
+    return <section class="panel">
+        <h2 class="panel-title">{title}</h2>
+        {children}
+    </section>

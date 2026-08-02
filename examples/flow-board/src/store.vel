@@ -1,0 +1,38 @@
+import {storage} from "velar/storage"
+import {deepEqual} from "velar/json"
+import {BoardData, Task, TaskDraft, TaskFilter, TaskStatus, countStatus, filterTasks, moveTask as moveInList, newTask, removeTask as removeFromList, seedTasks} from "./domain.vel"
+
+const boardStorage = storage.scope("flow-board")
+const baseline = seedTasks()
+const initial: BoardData = {tasks: baseline}
+const persisted = boardStorage.get("board", BoardData, initial)
+
+export state tasks: List<Task> = persisted.tasks
+export state query = ""
+export state filter: TaskFilter = TaskFilter.all
+export computed visibleTasks: List<Task> = filterTasks(tasks, query, filter)
+export computed todoCount: number = countStatus(tasks, TaskStatus.todo)
+export computed doingCount: number = countStatus(tasks, TaskStatus.doing)
+export computed doneCount: number = countStatus(tasks, TaskStatus.done)
+export computed changed: bool = not deepEqual(tasks, baseline)
+
+def persist():
+    boardStorage.set("board", {tasks})
+
+export def addTask(draft: TaskDraft):
+    tasks = [...tasks, newTask(draft)]
+    persist()
+
+export def advanceTask(id: string):
+    tasks = moveInList(tasks, id)
+    persist()
+
+export def deleteTask(id: string):
+    tasks = removeFromList(tasks, id)
+    persist()
+
+export def resetBoard():
+    tasks = seedTasks()
+    query = ""
+    filter = TaskFilter.all
+    persist()

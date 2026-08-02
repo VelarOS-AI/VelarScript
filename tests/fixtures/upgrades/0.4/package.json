@@ -1,0 +1,7 @@
+{
+  "name": "velar-upgrade-04",
+  "private": true,
+  "devDependencies": {
+    "@velarscript/cli": "0.4.0"
+  }
+}

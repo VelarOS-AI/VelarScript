@@ -1,0 +1,58 @@
+import {clearError, focusFirstError, setError} from "velar/forms"
+import {frame} from "velar/browser"
+import {findMatch} from "velar/text"
+import {announce} from "velar/web"
+
+export component Newsletter:
+    state email = ""
+    let form: Element? = none
+
+    action submit():
+        if form:
+            const domain = findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups[0]
+            if email == "":
+                setError(form, "email", "Email is required")
+                focusFirstError(form)
+                announce("Email is required", "assertive")
+            else if domain == none:
+                setError(form, "email", "Enter a complete email address")
+                focusFirstError(form)
+                announce("Email is incomplete", "assertive")
+            else:
+                await frame()
+                clearError(form, "email")
+                announce("Subscription ready")
+
+    computed submitFailure = submit.error
+
+    style:
+        form {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+        }
+
+        label {
+            grid-column: 1 / -1;
+            color: #aab5de;
+        }
+
+        input, button {
+            min-width: 0;
+            padding: 10px 12px;
+            border: 1px solid #42528f;
+            border-radius: 9px;
+        }
+
+        button {
+            color: #081022;
+            background: #9dacff;
+            cursor: pointer;
+        }
+
+    return <form ref={form} on:submit.prevent={submit} aria-busy={submit.pending}>
+        <label for="newsletter-email">Release newsletter</label>
+        <input id="newsletter-email" name="email" type="email" bind:value={email} />
+        <button type="submit" disabled={submit.pending}>Subscribe</button>
+        {submitFailure ? <p role="alert">{submitFailure.message}</p> : none}
+    </form>

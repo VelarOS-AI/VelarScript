@@ -1,0 +1,30 @@
+{
+  "formatVersion": 1,
+  "entry": "src/main.vel",
+  "outDir": "dist",
+  "publicDir": "public",
+  "web": {
+    "title": "Velar Release Studio",
+    "base": "/app/",
+    "publicConfig": {
+      "apiBase": "/api",
+      "releaseChannel": "preview",
+      "canonicalUrl": "https://velar.example/app/",
+      "socialImage": "/app/share.svg",
+      "features": {
+        "recovery": true
+      }
+    },
+    "build": {
+      "sourceMaps": true
+    },
+    "security": {
+      "contentSecurityPolicy": true,
+      "connectSources": [],
+      "imageSources": []
+    },
+    "deployment": {
+      "spaFallback": true
+    }
+  }
+}

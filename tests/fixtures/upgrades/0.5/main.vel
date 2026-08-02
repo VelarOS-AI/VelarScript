@@ -1,0 +1,4 @@
+component App:
+    return <main><h1>Velar 0.5 Project</h1></main>
+
+mount(<App />, "#app")

@@ -1,0 +1,8 @@
+{
+  "entry": "main.vel",
+  "outDir": "dist",
+  "web": {
+    "title": "Velar 0.3 Project",
+    "base": "/"
+  }
+}

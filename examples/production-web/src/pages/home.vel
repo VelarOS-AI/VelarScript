@@ -1,0 +1,106 @@
+import {Head} from "velar/web"
+import {publicConfig} from "velar/config"
+import {Panel, StatusBadge} from "@velarscript/demo-web-kit"
+import js {NumberFormatter as PackageFormatter, formatter} from "@velarscript/demo-format/number"
+import {dark, theme, toggleTheme} from "../store.vel"
+import {projectCount, projects} from "../data.vel"
+import {ActivityFeed} from "../components/activity-feed.vel"
+import {Metrics} from "../components/metrics.vel"
+import {Newsletter} from "../components/newsletter.vel"
+import {ProjectList} from "../components/project-list.vel"
+import {WebCapabilities} from "../components/web-capabilities.vel"
+
+type PreviewFeatures:
+    recovery: bool
+
+type PreviewConfig:
+    apiBase: string
+    releaseChannel: string
+    canonicalUrl: string
+    socialImage: string
+    features: PreviewFeatures
+
+const previewConfig = publicConfig(PreviewConfig)
+
+def formattedSamples() -> string:
+    let labels = []
+    formatter.visit([1.5, 2.5], label => labels.append(label))
+    return f"{formatter.locale}: {labels[0]} / {labels[1]}"
+
+def classFormattedSamples() -> string:
+    const packageFormatter: PackageFormatter = PackageFormatter.standard()
+    packageFormatter.maximumFractionDigits = 1
+    let labels = []
+    packageFormatter.visit([3.5, 4.5], label => labels.append(label))
+    return f"{PackageFormatter.category}/{packageFormatter.locale}: {labels[0]} / {labels[1]}"
+
+export component Home:
+    style:
+        .page {
+            display: grid;
+            gap: 22px;
+            width: min(1040px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 40px 0 64px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        h1, p {
+            margin: 0;
+        }
+
+        .eyebrow {
+            color: #9dacff;
+            font-weight: 700;
+        }
+
+        .actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        button {
+            padding: 9px 12px;
+            border: 1px solid #5263a5;
+            border-radius: 9px;
+            color: inherit;
+            background: #151c36;
+            cursor: pointer;
+        }
+
+        button.active {
+            border-color: #9dacff;
+        }
+
+        a {
+            color: #bdc7ff;
+        }
+
+    return <main class="page">
+        <Head title="Velar Release Studio" description="Velar 0.8 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
+        <header class="header">
+            <div>
+                <p class="eyebrow">Velar 0.8 · Web API 0.6</p>
+                <h1>Velar Release Studio</h1>
+            </div>
+            <nav class="actions" aria-label="Primary navigation">
+                <StatusBadge theme={theme} />
+                <button class:active={dark} on:click={toggleTheme}>Toggle theme</button>
+            </nav>
+        </header>
+        <Metrics projects={projectCount()} />
+        <Panel title="Release readiness">
+            <ProjectList items={projects} />
+            <ActivityFeed />
+            <WebCapabilities />
+            <p data-format>Safe JS package value: {formatter.format(42, "items")} · {formattedSamples()} · class {classFormattedSamples()}</p>
+            <Newsletter />
+        </Panel>
+    </main>

@@ -1,0 +1,50 @@
+export type ProjectSummary:
+    id: string
+    name: string
+    status: string
+    progress: number
+    children: List<ProjectSummary>
+
+export const projects: List<ProjectSummary> = [
+    {
+        id: "compiler",
+        name: "Velar Compiler",
+        status: "Healthy",
+        progress: 92,
+        children: [
+            {id: "parser", name: "Parser", status: "Healthy", progress: 96, children: []},
+            {id: "emitter", name: "JavaScript Emitter", status: "Healthy", progress: 91, children: []},
+        ],
+    },
+    {
+        id: "web",
+        name: "Velar Web",
+        status: "Healthy",
+        progress: 84,
+        children: [
+            {id: "web-runtime", name: "Web Runtime", status: "Healthy", progress: 88, children: []},
+            {id: "web-tooling", name: "Web Tooling", status: "Integrating", progress: 80, children: []},
+        ],
+    },
+    {
+        id: "workbench",
+        name: "Workbench Host",
+        status: "Integrating",
+        progress: 76,
+        children: [
+            {id: "velar-integration", name: "Velar Integration", status: "Healthy", progress: 82, children: []},
+        ],
+    },
+]
+
+def countProject(project: ProjectSummary) -> number:
+    let total = 1
+    for child in project.children:
+        total += countProject(child)
+    return total
+
+export def projectCount() -> number:
+    let total = 0
+    for project in projects:
+        total += countProject(project)
+    return total

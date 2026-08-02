@@ -1,0 +1,33 @@
+{
+  "name": "velarscript-workspace",
+  "version": "0.9.0-dev",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build:packages": "npm run build --workspace @velarscript/compiler && npm run build --workspace @velarscript/cli",
+    "check": "npm run build:packages && tsc -p tsconfig.json",
+    "test": "npm run build:packages && node --test --test-concurrency=1 tests/*.test.ts tests/ci.acceptance.ts tests/release.acceptance.ts && node packages/cli/src/cli.ts test examples/flow-board && node packages/cli/src/cli.ts test examples/support-desk && node packages/cli/src/cli.ts test examples/api-dashboard",
+    "test:browser": "npm run build:packages && node tests/browser.acceptance.ts && node packages/cli/src/cli.ts test examples/production-web --browser all && node packages/cli/src/cli.ts test examples/flow-board --browser all && node packages/cli/src/cli.ts test examples/support-desk --browser all && node packages/cli/src/cli.ts test examples/api-dashboard --browser all && node tests/installed-browser.acceptance.ts",
+    "test:packages": "npm run build:packages && node tests/package.acceptance.ts",
+    "release:rehearse": "npm run build:packages && node scripts/release-toolchain.mjs rehearse",
+    "release:verify": "node scripts/release-toolchain.mjs verify",
+    "preview:prepare": "npm run build:packages && node scripts/prepare-external-preview.mjs",
+    "velar": "npm run build:packages --silent && node packages/cli/dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VelarOS-AI/VelarScript.git"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "playwright": "^1.58.2",
+    "typescript": "^7.0.2"
+  }
+}

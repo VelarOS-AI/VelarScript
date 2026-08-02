@@ -1,0 +1,32 @@
+import {TicketDraft, TicketFilter, TicketPriority, TicketSort, TicketStatus, createTicket, pageTickets, resolveTicket, selectTickets} from "./domain.vel"
+
+const sample = [
+    {id: "one", title: "Login issue", requester: "Ada", summary: "Cannot sign in", status: TicketStatus.open, priority: TicketPriority.high, urgent: true, estimate: 30, updatedAt: 20},
+    {id: "two", title: "Export issue", requester: "Linus", summary: "Missing row", status: TicketStatus.resolved, priority: TicketPriority.low, urgent: false, estimate: 15, updatedAt: 10},
+]
+
+def test_ticket_selection_and_pagination():
+    const selected = selectTickets(sample, "ada", TicketFilter.all, TicketSort.recent)
+    if selected.length != 1:
+        throw Error("expected one requester match")
+    if pageTickets(sample, 2, 1)[0].id != "two":
+        throw Error("expected second page")
+
+def test_ticket_resolution_is_immutable():
+    const resolved = resolveTicket(sample, "one")
+    if sample[0].status != TicketStatus.open:
+        throw Error("source list changed")
+    if resolved[0].status != TicketStatus.resolved:
+        throw Error("resolved status missing")
+
+def test_ticket_draft_crosses_the_domain_boundary():
+    const title = "  Checkout failure  "
+    const requester = "  Grace  "
+    const summary = "  Card declined  "
+    const priority = TicketPriority.high
+    const urgent = true
+    const estimate = 45
+    const draft: TicketDraft = {title, requester, summary, priority, urgent, estimate}
+    const ticket = createTicket(draft)
+    if ticket.title != "Checkout failure" or ticket.requester != "Grace" or ticket.estimate != 45:
+        throw Error("record draft was not normalized")

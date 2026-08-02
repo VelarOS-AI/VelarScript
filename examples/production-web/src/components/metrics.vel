@@ -1,0 +1,41 @@
+export component MetricCard(label: string, value: string):
+    style:
+        .metric {
+            display: grid;
+            gap: 6px;
+            padding: 18px;
+            border: 1px solid #42528f;
+            border-radius: 14px;
+            background: #151c36;
+        }
+
+        .label {
+            color: #aab5de;
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .value {
+            font-size: 1.6rem;
+            font-weight: 720;
+        }
+
+    return <article class="metric">
+        <span class="label">{label}</span>
+        <strong class="value">{value}</strong>
+    </article>
+
+export component Metrics(projects: number):
+    style:
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+    return <section class="metrics" aria-label="Project metrics">
+        <MetricCard label="Projects" value={str(projects)} />
+        <MetricCard label="Browser engines" value="3" />
+        <MetricCard label="Web API" value="0.6" />
+    </section>

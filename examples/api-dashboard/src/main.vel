@@ -1,0 +1,196 @@
+import js {formatValue} from "@velarscript/demo-format"
+import {map as mapAsync} from "velar/async"
+import {flatten} from "velar/collections"
+import {http} from "velar/http"
+import {lazy} from "velar/web"
+import {ChartScale, TrafficPoint} from "./chart.vel"
+
+const TrafficBar = lazy(() => import("./components/traffic-bar.vel"), "TrafficBar")
+
+type Metric:
+    id: string
+    label: string
+    value: number
+    trend: number
+
+type DashboardSummary:
+    updatedAt: string
+    traffic: List<TrafficPoint>
+    trafficMax: number
+    peakLabel: string
+
+type MetricFeed:
+    metrics: List<Metric>
+
+type DashboardData:
+    updatedAt: string
+    metrics: List<Metric>
+    traffic: List<TrafficPoint>
+    trafficMax: number
+    peakLabel: string
+
+async def loadDashboard() -> DashboardData:
+    const summary = await http.get("/data/dashboard.json").parse(DashboardSummary)
+    const metricGroups = await mapAsync(
+        ["/data/metrics-primary.json", "/data/metrics-secondary.json"],
+        async source => (await http.get(source).parse(MetricFeed)).metrics,
+        2,
+    )
+    return {
+        updatedAt: summary.updatedAt,
+        metrics: flatten(metricGroups),
+        traffic: summary.traffic,
+        trafficMax: summary.trafficMax,
+        peakLabel: summary.peakLabel,
+    }
+
+component MetricCard(metric: Metric):
+    computed improving = metric.trend >= 0
+
+    style:
+        .metric {
+            padding: 20px;
+            border: 1px solid #dbe4f0;
+            border-radius: 16px;
+            background: white;
+            box-shadow: 0 12px 30px #2030500d;
+        }
+
+        .value {
+            margin: 8px 0;
+            font-size: 32px;
+            font-weight: 750;
+        }
+
+        .trend {
+            color: #c03d53;
+        }
+
+        .trend.improving {
+            color: #16865f;
+        }
+
+    return <article class="metric" data-metric={metric.id}>
+        <span>{metric.label}</span>
+        <div class="value">{formatValue(metric.value)}</div>
+        <div class="trend" class:improving={improving}>{metric.trend >= 0 ? "+" : ""}{metric.trend}%</div>
+    </article>
+
+component ChartSummary(peakLabel: string):
+    style:
+        .chart-summary {
+            display: grid;
+            gap: 3px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: #eaf0ff;
+            color: #172033;
+            font: 11px Inter, ui-sans-serif, system-ui, sans-serif;
+        }
+
+    return <foreignObject x="218" y="12" width="120" height="54">
+        <div class="chart-summary" data-chart-summary>
+            <span>Peak traffic</span>
+            <strong>{peakLabel}</strong>
+        </div>
+    </foreignObject>
+
+component TrafficChart(points: List<TrafficPoint>, maxValue: number, peakLabel: string):
+    const scale = ChartScale(maxValue)
+
+    style:
+        .chart-shell {
+            margin-top: 22px;
+            padding: 22px;
+            border: 1px solid #dbe4f0;
+            border-radius: 16px;
+            background: white;
+        }
+
+        .chart {
+            display: block;
+            width: 100%;
+            height: auto;
+            min-height: 220px;
+        }
+
+    return <section class="chart-shell" aria-labelledby="traffic-heading">
+        <h2 id="traffic-heading">Weekly traffic</h2>
+        <svg class="chart" data-trend-chart role="img" aria-labelledby="traffic-chart-title traffic-chart-description" viewBox="0 0 360 190">
+            <title id="traffic-chart-title">Weekly visitor traffic</title>
+            <desc id="traffic-chart-description">A bar chart of visitors from Monday through Sunday.</desc>
+            <line x1="12" y1={scale.top} x2="348" y2={scale.top} stroke="#e6ecf4" />
+            <line x1="12" y1={scale.baseline} x2="348" y2={scale.baseline} stroke="#cbd6e5" />
+            {points.map(point => <TrafficBar key={point.id} point={point} scale={scale} />)}
+            <ChartSummary peakLabel={peakLabel} />
+        </svg>
+    </section>
+
+component Dashboard:
+    resource dashboard: DashboardData = loadDashboard()
+    computed payload = dashboard.value
+    computed failure = dashboard.error
+
+    style global:
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: #f3f6fb;
+            color: #172033;
+            font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        }
+
+    style:
+        .dashboard {
+            width: min(980px, calc(100% - 32px));
+            margin: 48px auto;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .toolbar button {
+            border: 0;
+            border-radius: 10px;
+            padding: 10px 14px;
+            background: #2357d9;
+            color: white;
+            cursor: pointer;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 16px;
+            margin-top: 22px;
+        }
+
+        .status.error {
+            color: #c03d53;
+        }
+
+    return <main class="dashboard" data-dashboard>
+        <header class="toolbar">
+            <div>
+                <h1>Velar Metrics</h1>
+                <p>Updated: {payload ? payload.updatedAt : "not yet"}</p>
+            </div>
+            <button data-refresh type="button" disabled={dashboard.loading} on:click={dashboard.reload}>Refresh</button>
+        </header>
+        <p if={dashboard.loading} class="status" aria-busy="true">Loading dashboard...</p>
+        <p else-if={failure} class="status" class:error={true} role="alert">{failure.message}</p>
+        <p else class="status"></p>
+        <section class="grid" aria-label="Current metrics">
+            {payload ? payload.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />) : <></>}
+        </section>
+        {payload ? <TrafficChart points={payload.traffic} maxValue={payload.trafficMax} peakLabel={payload.peakLabel} /> : none}
+    </main>
+
+mount(<Dashboard />, "#app")

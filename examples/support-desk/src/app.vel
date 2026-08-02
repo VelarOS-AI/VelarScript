@@ -1,0 +1,78 @@
+import {Link, NavLink, Router, route} from "velar/web"
+import {TicketDetail} from "./pages/ticket-detail.vel"
+import {TicketsPage} from "./pages/tickets.vel"
+
+component MissingPage:
+    return <main role="alert"><h1>Page not found</h1><Link to="/">Return to inbox</Link></main>
+
+const routes = [route("/", TicketsPage), route("/tickets/:id", TicketDetail)]
+
+export component App:
+    style global:
+        :root {
+            color-scheme: light;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #172033;
+            background: #f5f7fb;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: radial-gradient(circle at 12% -10%, #e0e8ff 0, transparent 30rem), #f5f7fb;
+        }
+
+        button, input, select, textarea {
+            font: inherit;
+        }
+
+    style:
+        .shell {
+            min-height: 100vh;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 62px;
+            padding: 0 max(20px, calc((100vw - 1100px) / 2));
+            border-bottom: 1px solid rgba(205, 214, 230, 0.85);
+            background: rgba(245, 247, 251, 0.9);
+            backdrop-filter: blur(14px);
+        }
+
+        header a {
+            color: #172033;
+            font-weight: 900;
+            letter-spacing: -0.03em;
+            text-decoration: none;
+        }
+
+        header > a {
+            margin-right: auto;
+        }
+
+        header nav a {
+            padding: 7px 10px;
+            border-radius: 9px;
+            color: #68758a;
+            font-size: 13px;
+            letter-spacing: 0;
+        }
+
+        header nav a[aria-current="page"] {
+            color: #2449c4;
+            background: #e5eaff;
+        }
+
+        header span {
+            color: #68758a;
+            font-size: 13px;
+            font-weight: 750;
+        }
+
+    return <div class="shell"><header><Link to="/">SupportDesk</Link><nav data-primary aria-label="Primary navigation"><NavLink to="/" exact={true}>Inbox</NavLink></nav><span>Customer operations</span></header><Router routes={routes} fallback={MissingPage} /></div>

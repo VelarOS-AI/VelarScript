@@ -1,0 +1,21 @@
+{
+  "formatVersion": 1,
+  "entry": "src/main.vel",
+  "outDir": "dist",
+  "publicDir": "public",
+  "web": {
+    "title": "FlowBoard",
+    "base": "/",
+    "build": {
+      "sourceMaps": true
+    },
+    "security": {
+      "contentSecurityPolicy": true,
+      "connectSources": [],
+      "imageSources": []
+    },
+    "deployment": {
+      "spaFallback": true
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@velarscript/cli",
+  "version": "0.9.0-dev",
+  "description": "The VelarScript command-line compiler, dev server, test runner, and language server.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node ../../scripts/clean-package-dist.mjs",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "velar": "./dist/cli.js"
+  },
+  "dependencies": {
+    "@velarscript/compiler": "0.9.0-dev",
+    "esbuild": "^0.28.1",
+    "playwright": "^1.58.2"
+  }
+}

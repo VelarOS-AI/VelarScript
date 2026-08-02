@@ -1,0 +1,358 @@
+# VelarScript Core Standard Library
+
+Status: Standard API 0.4
+Compiler: Velar 0.9
+Runtime: existing JavaScript engine; no separate VM
+
+## Contract
+
+The Core library combines the most useful everyday parts of Python and modern
+JavaScript behind a small explicit Velar surface. It is not a copy of either
+standard library.
+
+- Every capability is imported from an official `velar/*` module. Nothing
+  patches JavaScript prototypes or creates new global names.
+- Collection transforms return new lists and maps unless their name explicitly
+  describes another result. JavaScript reference identity and `number`
+  semantics remain unchanged.
+- Missing collection and parsing results use `none`, never source-level
+  `undefined`.
+- The compiler preserves element, callback-result, map, optional, runtime data,
+  and Promise result types through built-ins. This inference is internal; Velar
+  does not expose user-defined generic syntax.
+- Runtime validation is explicit. Argument mistakes that can be proven
+  statically are diagnostics; dynamic misuse throws `TypeError` or
+  `RangeError`.
+- Every API that requires `List<T>` enforces the same dense, field-free,
+  data-element List boundary used by the language runtime. Sparse JavaScript
+  arrays, arrays carrying hidden/extra fields, and accessor-backed elements do
+  not become valid Lists through a library call; validation never invokes an
+  element getter.
+- Core conversion is deliberately asymmetric and small: `str(value)` performs
+  explicit display conversion, while `number(text) -> number?` strictly parses
+  one complete finite decimal. JavaScript `Boolean`, `Number`, and `String`
+  globals are not source bindings, so truthiness, empty-string-to-zero, partial
+  parsing, and `NaN` do not re-enter through ambient coercion.
+- Core Node builds copy only imported official modules beside the generated
+  output. Web builds bundle and tree-shake the same module implementations.
+- Resource-producing APIs are bounded contracts, not best-effort host calls.
+  A List contains at most 1,000,000 items; text and encoded JSON are limited to
+  16 MiB; JSON data contains at most 1,000,000 values and 128 nested
+  collections. List spread, `Set`/`Map` construction, and collection mutation
+  preserve the 1,000,000-item invariant; an update to an existing Set value or
+  Map key remains valid at the ceiling, while growth fails with `RangeError`.
+  Dynamic misuse fails before a native capability is invoked.
+
+## `velar/collections`
+
+Python-style iteration helpers and explicit functional collection operations.
+Core Lists use the same direct vocabulary: `append(value)` adds one item,
+`extend(values)` adds a typed List atomically, and `slice(...)` returns a copy.
+The JavaScript-specific variadic `push` surface is not part of Velar source.
+
+| Export | Behavior |
+| --- | --- |
+| `range` | Stop-exclusive numeric range with optional start and step; step cannot be zero or too small to advance at the current magnitude. |
+| `enumerate` | Returns `{index, value}` entries, with an optional integer start. |
+| `zip` | Pairs two lists as `{first, second}` up to the shorter length. |
+| `unique` | Keeps the first value for each JavaScript `Set` identity. |
+| `chunk` | Splits a list into positive-sized list chunks. |
+| `flatten` | Flattens exactly one list level. |
+| `compact` | Removes `none` and narrows the result element type. |
+| `reverse` | Returns a reversed copy. |
+| `take`, `drop` | Select or skip a non-negative number of values; direct positional windows normally use the typed `List.slice` method. |
+| `first`, `last` | Return the boundary value or `none`. |
+| `find`, `findIndex` | Find a matching value or its index; a missing value is `none`, a missing index is `-1`. |
+| `contains`, `count` | Test or count the same strict value/reference matches as Velar `==`. |
+| `any`, `all` | Evaluate an explicit boolean predicate for list values; dynamic callbacks cannot reintroduce truthiness. |
+| `partition` | Returns `{matches, rest}` without changing source order. |
+| `groupBy` | Groups values in a `Map` keyed by the callback result. |
+| `keyBy` | Builds a `Map` whose last value wins for a repeated key. |
+| `countBy` | Counts callback keys in a `Map`. |
+| `sortBy` | Returns a stable key-sorted copy in either direction; keys are all strings or all non-NaN numbers. |
+| `minBy`, `maxBy` | Return the value with the smallest/largest uniform string/number callback key, or `none`. |
+| `sum` | Adds a `List<number>` from zero. |
+| `join` | Joins a `List<string>` with an optional separator. |
+| `repeat` | Returns a list containing a value a non-negative number of times. |
+
+```velar
+import {enumerate, groupBy, range} from "velar/collections"
+
+const pages = enumerate(range(1, 4), 10)
+const byRole = groupBy(users, user => user.role)
+```
+
+Ordering never uses JavaScript's mixed-type relational coercion. The compiler
+rejects known boolean/record/optional/mixed key results, dynamic keys are
+checked before comparison, and equal-key input order is retained even for
+descending sorts. `find`, `findIndex`, `partition`, `any`, and `all` require an
+actual `bool` result at dynamic boundaries.
+
+## `velar/text`
+
+String operations are functions so their coercion and naming rules stay
+explicit: `trim`, `trimStart`, `trimEnd`, `lower`, `upper`, `capitalize`,
+`title`, `startsWith`, `endsWith`, `includes`, `split`, `replace`,
+`replaceAll`, `repeat`, `padStart`, `padEnd`, `lines`, `words`, `slug`,
+`truncate`, `indent`, `dedent`, `normalizeWhitespace`, `isBlank`, and
+`escapeHtml`. Stateless pattern operations are `matches`, `findMatch`,
+`findMatches`, `replaceMatches`, and `splitPattern`.
+
+`title` treats separators as word boundaries. `truncate` reserves room for its
+suffix. `slug` lowercases Unicode text, removes punctuation, and joins word
+runs with `-`; it does not transliterate non-Latin text. `escapeHtml` escapes
+text for HTML content and attribute contexts but does not mark it as trusted
+HTML.
+
+Pattern expressions use the host JavaScript pattern syntax in Unicode mode.
+Each operation creates a fresh pattern; source code never receives `RegExp` or
+its mutable `lastIndex`. Options are one typed record containing only optional
+`ignoreCase`, `multiline`, and `dotAll` booleans. `findMatch` returns
+`{value, index, groups}` or `none`; `findMatches` returns all such records and
+normalizes an unmatched capture to `none`. `replaceMatches` replaces every
+match with one literal string, and `splitPattern` omits capture groups from the
+result. Invalid patterns throw `TypeError` at the Velar boundary.
+
+Pattern source is limited to 4,096 code units, pattern input/output text to
+16 MiB, and list-producing pattern operations to 1,000,000 results. Patterns
+are application code, not a sandbox for executing arbitrary user-supplied
+regular expressions; applications that accept search text should use the
+literal `includes`/`startsWith`/`endsWith` operations unless they deliberately
+own a pattern grammar.
+
+Text counts used by `repeat`, `padStart`, `padEnd`, and `truncate` are
+non-negative safe integers; native string-to-number coercion is not exposed.
+Dynamic pattern options must be plain enumerable data fields, so getters,
+symbols, and class instances are rejected without hidden evaluation.
+
+```velar
+import {findMatch, matches, splitPattern} from "velar/text"
+
+const valid = matches("Velar 42", "^velar [0-9]+$", {ignoreCase: true})
+const ticket = findMatch("ticket-42", "[0-9]+")
+const fields = splitPattern("one, two; three", " *[,;] *")
+```
+
+## `velar/math`
+
+The module exposes JavaScript Number mathematics without claiming Python
+integer or decimal behavior. Every public operation nevertheless requires an
+actual `number` at runtime; native `Math.*` coercion cannot turn `"2"`, `[]`,
+or another dynamic JavaScript value into a Velar number.
+
+| Group | Exports |
+| --- | --- |
+| Constants | `pi`, `e`, `tau`, `infinity` |
+| Bounds and rounding | `abs`, `min`, `max`, `clamp`, `sign`, `round`, `floor`, `ceil`, `trunc` |
+| Powers and logarithms | `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10` |
+| Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians` |
+| Numeric helpers | `hypot`, `random`, `randomInt`, `isFinite`, `isInteger`, `gcd`, `lcm` |
+
+`round(value, digits)` supports an optional decimal-place count from -308
+through 308 without the former multiply-and-divide overflow for large finite
+values. `randomInt` uses an inclusive lower and exclusive upper safe-integer
+bound; with one argument its lower bound is zero. `gcd` and `lcm` likewise own
+safe integers, and `lcm` rejects an inexact result. Randomness is the host
+JavaScript runtime's `Math.random` and is not cryptographically secure.
+
+## `velar/json`
+
+| Export | Behavior |
+| --- | --- |
+| `parse` | Parses JSON; an optional Velar `type` validates and types the result. |
+| `tryParse` | Returns a validated value, an explicit fallback, or `none`. |
+| `stringify` | Strictly serializes JSON data with an optional compact/indent setting. |
+| `stableStringify` | Strictly serializes while recursively ordering record keys. |
+| `clone` | Strictly JSON-clones a value and optionally validates the result with a Velar `type`. |
+| `isSerializable` | Reports whether a value is losslessly representable as JSON data. |
+| `deepEqual` | Recursively compares Velar records and Lists, Map values with native key identity, and Sets with native membership; non-data objects keep reference identity and distinct cycles safely compare false. |
+
+```velar
+import {deepEqual, parse as parseJson} from "velar/json"
+
+type User:
+    id: string
+    name: string
+
+const user = parseJson(source, User)
+const unchanged = deepEqual(user, previousUser)
+```
+
+The second argument is the existing runtime form of a record `type`, a runtime
+transparent alias, or an `enum`; there is no parallel schema declaration. The
+compiler registers those frozen Type values under one shared runtime identity,
+including when they cross module boundaries. `parse`, `tryParse`, and `clone`
+check that identity before parsing or cloning and never inspect an arbitrary
+object's `is` or `parse` fields as permission to skip validation.
+
+JSON data is deliberately narrower than arbitrary JavaScript values: it
+contains finite numbers, strings, booleans, `none`, dense Lists, and plain
+records recursively. Map, Set, class instances, functions, sparse Lists,
+accessor/symbol fields, non-finite numbers, and cyclic graphs are rejected
+instead of inheriting `JSON.stringify`'s silent field omission or `{}` / `null`
+substitution. Known unsupported Velar types fail checking; `unknown` and unsafe
+JavaScript values are validated at runtime. Repeated references are allowed
+when the graph is acyclic. Indentation is `false`, `true` (two spaces), or an
+integer from 0 through 10.
+
+Parsing and encoded output are limited to 16 MiB. Validation stops beyond
+1,000,000 values or 128 nested collections, checks array data descriptors
+without invoking getters, and estimates pretty-print expansion before calling
+the host serializer.
+
+## `velar/async`
+
+| Export | Behavior |
+| --- | --- |
+| `sleep` | Resolves after a non-negative millisecond duration. |
+| `all`, `race` | Typed Promise-list equivalents of JavaScript `Promise.all` and `Promise.race`. |
+| `timeout` | Rejects if a Promise does not settle before a duration; accepts an optional message. |
+| `retry` | Runs a zero-argument sync/async task again after failure, up to the retry count. |
+| `map` | Maps a list with a sync/async worker and optional positive concurrency limit while preserving result order. |
+| `series` | Runs a list of zero-argument sync/async tasks sequentially. |
+
+These helpers use the host Promise queue. They do not create threads, cancel a
+Promise, or replace the JavaScript event loop. Their List arguments use the
+same dense List validation as collection helpers; concurrency counts are
+positive safe integers. Retry attempts are positive safe integers and timeout
+messages remain real strings at dynamic boundaries. `all` and `race` may start
+at most 10,000 operations at once, `map` concurrency is at most 1,024, retry is
+at most 10,000 attempts, and timer durations stay within the signed 32-bit host
+timer range.
+
+Short asynchronous workers use the language's expression arrow directly, for
+example `await map(urls, async url => await load(url))`. Its inferred result is
+`Promise<T>`; ordinary synchronous callbacks and named `async def` workflows
+remain available for expression and block bodies respectively. All async forms
+share native Promise adoption: a named async worker declared `-> T` may return
+either `T` or another `Promise<T>` without adding `return await` merely to
+satisfy the checker.
+
+## `velar/url`
+
+| Export | Behavior |
+| --- | --- |
+| `parse` | Returns `href`, protocol/host fields, path, query `Map`, hash, and origin; accepts an optional base. |
+| `join` | Joins one or more string URL/path segments without duplicate separators while preserving a leading `scheme://`. |
+| `query`, `parseQuery` | Convert an object/Map to a query string or a query string to `Map<string, string>`. |
+| `withQuery`, `withHash` | Return a URL/path with a replaced query or hash. |
+| `isExternal` | Compares a URL with an optional base/current location origin. |
+| `encode`, `decode` | Encode or decode one URL component. |
+| `normalize` | Resolve and normalize a URL/path with an optional base. |
+
+Query names are strings. Values are explicit string/number/bool scalars,
+`none`, or dense Lists of those scalars; records/classes/functions are rejected
+instead of becoming `"[object Object]"`. `none` values are omitted, List values
+produce repeated keys, and duplicate parsed keys keep their last value in the
+returned `Map`. URL text operations validate actual strings at dynamic
+boundaries rather than inheriting JavaScript `String(...)` coercion. URL text
+and encoded query output are limited to 2 MiB; query maps contain at most
+100,000 fields.
+
+## `velar/time`
+
+Time values are Unix epoch milliseconds, matching the host JavaScript runtime
+without exposing mutable `Date` objects.
+
+| Export | Behavior |
+| --- | --- |
+| `now` | Current Unix epoch milliseconds. |
+| `monotonic` | Monotonic milliseconds for elapsed-time measurement. |
+| `parse` | Parse deterministic ISO `YYYY-MM-DD` or a `T` datetime with `Z`/numeric offset to epoch milliseconds; return `none` for invalid text. |
+| `iso` | Format epoch milliseconds as an ISO 8601 UTC string; defaults to `now()`. |
+| `format` | Locale-format a time with optional locale and time-zone strings. |
+| `date` | Construct local epoch milliseconds from strict year, month, day, and optional time fields. |
+| `utc` | Construct UTC epoch milliseconds from the same strict fields. |
+| `parts` | Return numeric year through millisecond parts in local time or an explicit time zone. |
+
+`date` and `utc` reject out-of-range or nonexistent calendar values instead of
+using JavaScript `Date` rollover (`2024-02-31` never becomes March). Years are
+0 through 9999 and do not receive JavaScript's special 1900 offset for 0–99.
+`parse` accepts date-only ISO as UTC midnight; a datetime must include `Z` or a
+numeric offset, which keeps results identical across JavaScript engines and
+host time zones. Non-ISO/native locale text is deliberately unsupported.
+Locale and named-time-zone arguments must be actual strings.
+
+```velar
+import {iso, now, parts, utc} from "velar/time"
+
+const launched = utc(2026, 8, 1)
+print(iso(launched))
+print(parts(now(), "UTC").year)
+```
+
+Months are one-based. ISO parsing is owned and deterministic; locale formatting
+and named-time-zone projection still use the host internationalization data.
+Velar does not invent a second timezone database or datetime object model.
+ISO input longer than 64 characters is invalid without entering the matching
+engine. Locale and time-zone names are limited to 1,024 characters before the
+host internationalization API is called.
+
+## `velar/id`
+
+`uuid()` returns a cryptographically secure host UUID. It delegates to the
+existing JavaScript host's `crypto.randomUUID()` and fails explicitly when that
+capability is unavailable or returns a non-canonical result; it never falls
+back to timestamps or `Math.random`. `isUuid(value)` checks canonical UUID text
+without changing it and rejects non-36-character input before pattern matching.
+
+```velar
+import {isUuid, uuid} from "velar/id"
+
+const taskId = uuid()
+print(isUuid(taskId))
+```
+
+## `velar/log`
+
+Structured logging replaces direct source-level access to `console` while
+remaining on the existing JavaScript runtime.
+
+```velar
+import {logger, setLevel, useSink} from "velar/log"
+
+component BuildStatus:
+    const buildLog = logger("build")
+    const stopCapture = useSink(record => sendRecord(record.message))
+
+    mounted:
+        setLevel("debug")
+        buildLog.info("Compilation ready")
+
+    cleanup:
+        stopCapture()
+
+    return <p>Ready</p>
+```
+
+- `log` is the unscoped logger; `logger(scope, fields=Map())` creates a scoped
+  logger with optional base fields. Scope/message/field names remain actual
+  strings at dynamic boundaries; logging never calls ambient `String(...)` on
+  invalid input.
+- Loggers provide `debug`, `info`, `warn`, and `error`. Fields are
+  `Map<string, unknown>` values; `error` optionally receives an `Error` and
+  additional fields.
+- `setLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`; `level`
+  returns the current threshold.
+- `useSink(callback)` redirects records while at least one custom sink exists
+  and returns an explicit cleanup function. A record contains timestamp, level,
+  scope, message, fields, and optional error.
+- Each sink receives its own fields snapshot, so mutation inside one callback
+  cannot rewrite what another sink observes. The optional error is either an
+  actual `Error` or `none`.
+- One logger accepts at most 1,000 merged fields, field names are limited to
+  1,024 characters, messages to 64 KiB, scopes to 1,024 characters, and an
+  application may install at most 1,000 sinks. These limits are checked before
+  dispatch; native Map iteration is used without invoking subclass overrides.
+- Without a custom sink, the runtime writes through the host console internally.
+  Velar source still receives no `console` global. Sink failures fall back to
+  the internal host logger and cannot recursively invoke the failing sink.
+- Velar never uploads logs or telemetry automatically.
+
+## Deliberate omissions
+
+Standard API 0.4 does not copy Node-only filesystem/process APIs, Python's OS,
+subprocess, reflection, pickle, or import machinery, or JavaScript's legacy
+prototype surface. Browser capabilities remain in independently versioned Web
+modules. Canvas and game development remain a later `velar/game` package built
+on the Web platform, not part of the language runtime.

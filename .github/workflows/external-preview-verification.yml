@@ -1,0 +1,53 @@
+name: External preview verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_url:
+        description: HTTPS origin serving the exact Release Studio build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  verify-external-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Prepare the exact root Netlify preview
+        run: node scripts/prepare-external-preview.mjs --output-dir release/external-preview/site
+      - name: Verify hosted bytes and deployment behavior
+        env:
+          VELAR_DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+        run: |
+          mkdir -p release/external-preview
+          node packages/cli/dist/cli.js verify-deployment release/external-preview/site --json > release/external-preview/velar-deployment-verification.json
+          cp release/external-preview/site/velar-build.json release/external-preview/velar-build.json
+          cp release/external-preview/site/velar-deploy.json release/external-preview/velar-deploy.json
+          node -e "JSON.parse(require('node:fs').readFileSync('release/external-preview/velar-deployment-verification.json', 'utf8'))"
+      - name: Attest external-preview evidence
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            release/external-preview/velar-deployment-verification.json
+            release/external-preview/velar-build.json
+            release/external-preview/velar-deploy.json
+      - name: Upload external-preview evidence
+        uses: actions/upload-artifact@v5
+        with:
+          name: velar-external-preview-${{ github.sha }}
+          path: release/external-preview/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,36 @@
+export component Counter(start: number = 0):
+    state count = start
+    computed doubled = count * 2
+
+    def increment():
+        count += 1
+
+    watch count as current, previous:
+        print(f"{previous} -> {current}")
+
+    mounted:
+        print("counter mounted")
+
+    cleanup:
+        print("counter cleanup")
+
+    style:
+        .counter {
+            border: 0;
+            border-radius: 10px;
+            padding: 10px 14px;
+        }
+
+        .counter.active {
+            color: #2563eb;
+        }
+
+    return <button
+        class="counter"
+        class:active={count > 0}
+        on:click={increment}
+    >
+        Count: {count}, Double: {doubled}
+    </button>
+
+mount(<Counter start={1} />, "#app")

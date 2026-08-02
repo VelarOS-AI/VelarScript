@@ -1,0 +1,60 @@
+import {ceil, isInteger, max, min} from "velar/math"
+import {http} from "velar/http"
+import {storage} from "velar/storage"
+import {DeskData, Ticket, TicketCatalog, TicketDraft, TicketFilter, TicketSort, createTicket, findTicket as findInList, pageTickets, resolveTicket as resolveInList, selectTickets} from "./domain.vel"
+
+const deskStorage = storage.scope("support-desk")
+const initial: DeskData = deskStorage.get("desk", DeskData, {tickets: []})
+const pageSize = 4
+
+export state tickets: List<Ticket> = initial.tickets
+export state query = ""
+export state filter: TicketFilter = TicketFilter.all
+export state sort: TicketSort = TicketSort.recent
+export state page = 1
+export computed selectedTickets: List<Ticket> = selectTickets(tickets, query, filter, sort)
+export computed visibleTickets: List<Ticket> = pageTickets(selectedTickets, page, pageSize)
+export computed totalPages: number = max(1, ceil(selectedTickets.length / pageSize))
+
+def persist():
+    deskStorage.set("desk", {tickets})
+
+def clampPage():
+    page = min(max(1, page), totalPages)
+
+export async def loadTickets() -> List<Ticket>:
+    if tickets.length > 0:
+        return tickets
+    const catalog = await http.get("/data/tickets.json", {cache: "no-store"}).parse(TicketCatalog)
+    tickets = catalog.tickets
+    clampPage()
+    persist()
+    return tickets
+
+export def addTicket(draft: TicketDraft):
+    tickets = [...tickets, createTicket(draft)]
+    page = 1
+    persist()
+
+export def resolveTicket(id: string):
+    tickets = resolveInList(tickets, id)
+    persist()
+
+export def ticketById(id: string) -> Ticket?:
+    return findInList(tickets, id)
+
+export def nextPage():
+    if page < totalPages:
+        page += 1
+
+export def previousPage():
+    if page > 1:
+        page -= 1
+
+export def setPage(next: number):
+    if not isInteger(next) or next < 1:
+        page = 1
+    else:
+        page = next
+        if tickets.length > 0:
+            clampPage()

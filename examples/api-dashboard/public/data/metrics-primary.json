@@ -1,0 +1,6 @@
+{
+  "metrics": [
+    { "id": "visitors", "label": "Visitors", "value": 12840, "trend": 12.4 },
+    { "id": "orders", "label": "Orders", "value": 936, "trend": 4.8 }
+  ]
+}

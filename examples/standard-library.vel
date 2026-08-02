@@ -1,0 +1,29 @@
+import {groupBy, range, sum} from "velar/collections"
+import {title} from "velar/text"
+import {round, pi} from "velar/math"
+import {parse as parseJson} from "velar/json"
+import {sleep} from "velar/async"
+import {withQuery} from "velar/url"
+import {iso, utc} from "velar/time"
+
+type User:
+    name: string
+    role: string
+
+const users: List<User> = [
+    {name: "Ada", role: "admin"},
+    {name: "Lin", role: "member"},
+    {name: "Bea", role: "admin"},
+]
+
+const grouped = groupBy(users, user => user.role)
+const parsed = parseJson("{\"name\":\"Nova\",\"role\":\"admin\"}", User)
+
+await sleep(1)
+print(title("velar standard library"))
+print(grouped.get("admin")?.length ?? 0)
+print(sum(range(1, 5)))
+print(round(pi, 2))
+print(parsed.name)
+print(withQuery("/users", {role: "admin"}))
+print(iso(utc(2026, 8, 1)))

@@ -1,0 +1,195 @@
+import {countBy, sortBy} from "velar/collections"
+import {round} from "velar/math"
+import {format} from "velar/time"
+import {Head, Link} from "velar/web"
+import {Task} from "../domain.vel"
+import {doingCount, doneCount, tasks, todoCount} from "../store.vel"
+
+type MetricValue = string | number
+
+def metricText(value: MetricValue) -> string:
+    if value is number:
+        return str(value)
+    else:
+        return value
+
+def completion(total: number, done: number) -> number:
+    if total == 0:
+        return 0
+    return round(done / total * 100)
+
+def progressLabel(progress: number) -> string:
+    if progress == 100:
+        return "Complete"
+    else if progress >= 50:
+        return "On track"
+    else if progress > 0:
+        return "Getting started"
+    else:
+        return "Not started"
+
+def lastUpdated(values: List<Task>) -> string:
+    if values.length == 0:
+        return "No activity yet"
+    const ordered = sortBy(values, task => task.updatedAt, true)
+    const latest = ordered.get(0)
+    assert latest != none, "A non-empty task list must have a latest task"
+    return format(latest.updatedAt)
+
+export component Analytics:
+    computed progress = completion(tasks.length, doneCount)
+    computed progressState = progressLabel(progress)
+    computed priorityRows = countBy(tasks, task => task.priority).entries()
+    const recent = sortBy(tasks, task => task.updatedAt, true)
+
+    style:
+        .page {
+            display: grid;
+            gap: 24px;
+            width: min(980px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 42px 0 64px;
+        }
+
+        .back {
+            color: #3157d5;
+            font-weight: 750;
+            text-decoration: none;
+        }
+
+        h1, h2, p {
+            margin: 0;
+        }
+
+        h1 {
+            color: #15203a;
+            font-size: 42px;
+            letter-spacing: -0.04em;
+        }
+
+        .lead {
+            margin-top: 8px;
+            color: #6e798d;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+
+        .metric, .activity, .priorities {
+            border: 1px solid #dce3ef;
+            border-radius: 18px;
+            background: #fff;
+            box-shadow: 0 12px 34px rgba(35, 50, 82, 0.06);
+        }
+
+        .metric {
+            display: grid;
+            gap: 7px;
+            padding: 18px;
+        }
+
+        .metric strong {
+            color: #172033;
+            font-size: 30px;
+        }
+
+        .metric span {
+            color: #748097;
+            font-size: 13px;
+        }
+
+        .progress {
+            grid-column: 1 / -1;
+            height: 9px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #e8edf5;
+        }
+
+        .fill {
+            width: calc(var(--progress) * 1%);
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #3157d5, #5c7df0);
+        }
+
+        .activity {
+            display: grid;
+            gap: 14px;
+            padding: 20px;
+        }
+
+        .priorities {
+            display: grid;
+            gap: 12px;
+            padding: 20px;
+        }
+
+        .priority-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .priority {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px;
+            border-radius: 12px;
+            color: #46516a;
+            background: #f1f4f9;
+            text-transform: capitalize;
+        }
+
+        .activity ol {
+            display: grid;
+            gap: 10px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .activity li {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            padding-top: 10px;
+            border-top: 1px solid #edf0f5;
+            color: #313c54;
+        }
+
+        .activity time {
+            color: #818b9d;
+            font-size: 12px;
+        }
+
+        @media (max-width: 720px) {
+            .metrics {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+    return <main class="page" data-analytics>
+        <Head title="FlowBoard analytics" description="Project flow and recent task activity" themeColor="#f6f8fc" />
+        <Link to="/">← Back to board</Link>
+        <header><h1>Project pulse</h1><p class="lead">A compact view of throughput and the work that changed most recently.</p></header>
+        <section class="metrics" aria-label="Project metrics">
+            <article class="metric"><strong>{metricText(tasks.length)}</strong><span>Total tasks</span></article>
+            <article class="metric"><strong>{metricText(todoCount)}</strong><span>Waiting</span></article>
+            <article class="metric"><strong>{metricText(doingCount)}</strong><span>In progress</span></article>
+            <article class="metric"><strong data-completion>{metricText(f"{progress}%")}</strong><span data-progress-label>{progressState}</span></article>
+            <div class="progress" role="progressbar" aria-label="Completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><div class="fill" style:--progress={progress}></div></div>
+        </section>
+        <section class="activity">
+            <div><h2>Recent activity</h2><p>{lastUpdated(tasks)}</p></div>
+            <ol>{recent.map(task => <li key={task.id}><span>{task.title}</span><time>{format(task.updatedAt)}</time></li>)}</ol>
+        </section>
+        <section class="priorities">
+            <h2>Priority mix</h2>
+            <div class="priority-grid">{priorityRows.map(entry => <article class="priority" key={entry.key}><span>{entry.key}</span><strong>{entry.value}</strong></article>)}</div>
+        </section>
+    </main>
