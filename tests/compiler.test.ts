@@ -1379,6 +1379,40 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
   assertDevServerExit(exitCode, errors);
 });
 
+test("dev server polling watcher reports project changes without native file events", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-dev-polling-"));
+  const mainPath = join(directory, "main.vel");
+  const preloadPath = join(directory, "force-windows-platform.mjs");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ entry: "main.vel" }), "utf8");
+  await writeFile(mainPath, "component App:\n    return <main>Before</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+  await writeFile(preloadPath, "Object.defineProperty(process, 'platform', {value: 'win32'});\n", "utf8");
+  const child = spawn(process.execPath, [
+    "--import",
+    pathToFileURL(preloadPath).href,
+    "packages/cli/src/cli.ts",
+    "dev",
+    directory,
+    "--port",
+    "42882",
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  const waitForOutput = async (pattern: RegExp): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (!pattern.test(output) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(output, pattern);
+  };
+
+  await waitForOutput(/Velar dev server:/u);
+  await writeFile(mainPath, "component App:\n    return <main>After</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+  await waitForOutput(/Velar app rebuilt in/u);
+  const javascript = await (await fetch("http://127.0.0.1:42882/main.js")).text();
+  assert.match(javascript, /After/u);
+  child.kill("SIGTERM");
+  const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
+});
+
 test("dev server exposes incremental compilation status and reuses unaffected modules", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dev-incremental-"));
   const mainPath = join(directory, "main.vel");

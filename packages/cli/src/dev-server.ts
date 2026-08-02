@@ -1,6 +1,6 @@
-import { createReadStream, readdirSync, watch, type FSWatcher } from "node:fs";
+import { createReadStream, readdirSync, statSync, watch } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { formatDiagnostic } from "@velarscript/compiler";
 import { compileProject, type ProjectResult } from "./project.ts";
@@ -226,64 +226,57 @@ function watchDirectoryTree(
     return watch(root, { recursive: true }, (event, fileName) => listener(event, fileName === null ? null : String(fileName)));
   }
 
-  const watchers = new Map<string, FSWatcher>();
-  let closed = false;
-  let synchronizing = false;
-  const synchronize = (): void => {
-    if (closed || synchronizing) return;
-    synchronizing = true;
-    const directories = new Set<string>();
-    const pending = [root];
-    while (pending.length > 0) {
-      const directory = pending.pop()!;
-      if (directories.has(directory)) continue;
-      directories.add(directory);
-      try {
-        for (const entry of readdirSync(directory, { withFileTypes: true })) {
-          if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name === "node_modules" || entry.name === ".git") continue;
-          const child = resolve(directory, entry.name);
-          if (!excludedDirectories.has(child)) pending.push(child);
-        }
-      } catch {
-        directories.delete(directory);
-      }
+  let snapshot = snapshotDirectoryTree(root, excludedDirectories);
+  const timer = setInterval(() => {
+    const next = snapshotDirectoryTree(root, excludedDirectories);
+    for (const [path, signature] of next) {
+      if (snapshot.get(path) !== signature) listener(snapshot.has(path) ? "change" : "rename", path);
     }
-    for (const [directory, watcher] of watchers) {
-      if (directories.has(directory)) continue;
-      watcher.close();
-      watchers.delete(directory);
+    for (const path of snapshot.keys()) {
+      if (!next.has(path)) listener("rename", path);
     }
-    for (const directory of directories) {
-      if (watchers.has(directory)) continue;
-      try {
-        const watcher = watch(directory, (event, fileName) => {
-          const name = fileName === null ? null : String(fileName);
-          if (name === null) listener(event, null);
-          else {
-            const absolute = isAbsolute(name) ? name : resolve(directory, name);
-            listener(event, relative(root, absolute).replaceAll("\\", "/"));
-          }
-          if (event === "rename") synchronize();
-        });
-        watcher.on("error", () => {
-          watcher.close();
-          watchers.delete(directory);
-        });
-        watchers.set(directory, watcher);
-      } catch {
-        // A directory can disappear between discovery and watch registration.
-      }
-    }
-    synchronizing = false;
-  };
-  synchronize();
+    snapshot = next;
+  }, 80);
+  timer.unref();
   return {
     close(): void {
-      closed = true;
-      for (const watcher of watchers.values()) watcher.close();
-      watchers.clear();
+      clearInterval(timer);
+      snapshot.clear();
     },
   };
+}
+
+function snapshotDirectoryTree(root: string, excludedDirectories: ReadonlySet<string>): Map<string, string> {
+  const files = new Map<string, string>();
+  const pending: Array<{ readonly absolute: string; readonly relative: string }> = [{ absolute: root, relative: "" }];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(directory.absolute, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const absolute = resolve(directory.absolute, entry.name);
+      const relative = directory.relative ? `${directory.relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules" && entry.name !== ".git" && !excludedDirectories.has(absolute)) {
+          pending.push({ absolute, relative });
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        const stats = statSync(absolute, { bigint: true });
+        files.set(relative, `${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`);
+      } catch {
+        // A file can disappear between discovery and metadata inspection.
+      }
+    }
+  }
+  return files;
 }
 
 async function compileSnapshot(
