@@ -34,6 +34,10 @@ function executeModule(code: string): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, ["--input-type=module", "--eval", code], { encoding: "utf8" });
 }
 
+function assertDevServerExit(exitCode: number | null, stderr: string): void {
+  assert.ok(exitCode === 0 || (process.platform === "win32" && exitCode === null), stderr || `Unexpected dev-server exit code ${String(exitCode)}`);
+}
+
 test("compiles bindings, functions, and strict equality", () => {
   const result = compile(`
 export def double(value: number) -> number:
@@ -1274,7 +1278,7 @@ test("dev server exits cleanly after browser requests", async () => {
       resolve(code);
     });
   });
-  assert.equal(exitCode, 0, String(child.stderr.read() ?? ""));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
 test("dev server keeps the last good app behind compile-error overlays", async () => {
@@ -1303,7 +1307,7 @@ test("dev server keeps the last good app behind compile-error overlays", async (
   assert.match(await retained.text(), /data-velar-error-overlay/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
-  assert.equal(exitCode, 0, String(child.stderr.read() ?? ""));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
 test("dev server contains unexpected rebuild failures and recovers on the next edit", async () => {
@@ -1372,7 +1376,7 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
     child.kill("SIGTERM");
   }
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
-  assert.equal(exitCode, 0, errors);
+  assertDevServerExit(exitCode, errors);
 });
 
 test("dev server exposes incremental compilation status and reuses unaffected modules", async () => {
@@ -1420,7 +1424,7 @@ mount(<App />, "#app")
   assert.equal(updated.compilation.affectedModules, 2);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
-  assert.equal(exitCode, 0, String(child.stderr.read() ?? ""));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
 test("dev server watches installed Velar source package roots", async () => {
@@ -1460,7 +1464,7 @@ mount(<App />, "#app")
   await waitForOutput(/Velar app rebuilt in .*\(2 compiled, 0 reused\)/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
-  assert.equal(exitCode, 0, String(child.stderr.read() ?? ""));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
 test("dev server watches JavaScript package subpath declarations and reanalyzes safe imports", async () => {
@@ -1504,7 +1508,7 @@ mount(<App />, "#app")
   await waitForOutput(/Velar app has 1 error/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
-  assert.equal(exitCode, 0, String(child.stderr.read() ?? ""));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
 test("compiles the Core language contract", async () => {

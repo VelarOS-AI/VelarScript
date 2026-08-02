@@ -169,9 +169,9 @@ export async function compileProjectEntries(
         : "Relative VelarScript imports cannot escape the entry source directory" });
       continue;
     }
-    const relativePath = pendingModule.package
+    const relativePath = normalizeModulePath(pendingModule.package
       ? join("__velar_packages__", pendingModule.package.name, pathWithinBoundary)
-      : relative(sourceRoot, inputPath);
+      : relative(sourceRoot, inputPath));
     const inspection = inspectModule(text, { path: inputPath });
     loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package });
 
@@ -499,6 +499,10 @@ function packageNameOf(source: string): string {
 
 function escapesRoot(relativePath: string): boolean {
   return relativePath === ".." || relativePath.startsWith("../") || relativePath.startsWith("..\\") || isAbsolute(relativePath);
+}
+
+function normalizeModulePath(path: string): string {
+  return path.replaceAll("\\", "/");
 }
 
 function importInterface(

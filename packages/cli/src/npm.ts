@@ -1,6 +1,6 @@
 import { access, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ProjectResult } from "./project.ts";
 import { readBoundedText } from "./bounded-text.ts";
@@ -80,7 +80,8 @@ export async function npmAsset(packages: readonly BrowserNpmPackage[], pathname:
   const relativePath = pathname.slice(package_.route.length);
   if (!relativePath || relativePath.split("/").includes("..")) return null;
   const path = resolve(package_.root, relativePath);
-  if (path !== package_.root && !path.startsWith(`${package_.root}/`)) return null;
+  const unresolvedFromRoot = relative(package_.root, path);
+  if (!unresolvedFromRoot || unresolvedFromRoot === ".." || unresolvedFromRoot.startsWith(`..${sep}`) || isAbsolute(unresolvedFromRoot)) return null;
   try {
     const [rootPath, assetPath] = await Promise.all([realpath(package_.root), realpath(path)]);
     const assetFromRoot = relative(rootPath, assetPath);

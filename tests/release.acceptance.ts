@@ -4,9 +4,10 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { prepareExternalPreview } from "../scripts/prepare-external-preview.mjs";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 test("publication rehearsal emits reproducible verified package identities without publishing", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "velar-release-rehearsal-"));

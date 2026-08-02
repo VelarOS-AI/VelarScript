@@ -1,6 +1,6 @@
-import { createReadStream, watch, type FSWatcher } from "node:fs";
+import { createReadStream, readdirSync, watch, type FSWatcher } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { formatDiagnostic } from "@velarscript/compiler";
 import { compileProject, type ProjectResult } from "./project.ts";
@@ -19,6 +19,10 @@ interface Snapshot {
   readonly notices: readonly string[];
 }
 
+interface DirectoryTreeWatcher {
+  close(): void;
+}
+
 export async function runDevServer(config: VelarProjectConfig, port: number): Promise<void> {
   let snapshot = await compileSnapshot(config);
   let compiling: Promise<void> | null = null;
@@ -28,7 +32,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   let dirtyRevision = 0;
   const dirtyPaths = new Set<string>();
   const clients = new Set<ServerResponse>();
-  const packageWatchers = new Map<string, FSWatcher>();
+  const packageWatchers = new Map<string, DirectoryTreeWatcher>();
   const scheduleRebuild = (): void => {
     if (rebuildTimer) clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(() => void rebuild(), 40);
@@ -45,9 +49,9 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     }
     for (const root of roots) {
       if (packageWatchers.has(root)) continue;
-      packageWatchers.set(root, watch(root, { recursive: true }, (_event, fileName) => {
+      packageWatchers.set(root, watchDirectoryTree(root, (_event, fileName) => {
         if (!fileName) return;
-        const name = String(fileName);
+        const name = fileName;
         const declarationChanged = /\.d\.[cm]?ts$/u.test(name);
         if (!/\.(?:vel|[cm]?js)$/u.test(name) && !declarationChanged && name !== "package.json") return;
         const path = resolve(root, name);
@@ -183,14 +187,14 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   });
 
   syncPackageWatchers(snapshot.project, snapshot.npmPackages);
-  const watcher = watch(config.root, { recursive: true }, (_event, fileName) => {
+  const watcher = watchDirectoryTree(config.root, (_event, fileName) => {
     if (!fileName?.endsWith(".vel") && !fileName?.startsWith(relativePublic(config))) return;
     dirtyRevision += 1;
     if (fileName.endsWith(".vel")) {
       dirtyPaths.add(resolve(config.root, fileName));
     }
     scheduleRebuild();
-  });
+  }, new Set([config.outDir]));
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve());
@@ -211,6 +215,75 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
   await new Promise<void>((resolve) => server.once("close", resolve));
+}
+
+function watchDirectoryTree(
+  root: string,
+  listener: (event: string, fileName: string | null) => void,
+  excludedDirectories: ReadonlySet<string> = new Set(),
+): DirectoryTreeWatcher {
+  if (process.platform !== "win32") {
+    return watch(root, { recursive: true }, (event, fileName) => listener(event, fileName === null ? null : String(fileName)));
+  }
+
+  const watchers = new Map<string, FSWatcher>();
+  let closed = false;
+  let synchronizing = false;
+  const synchronize = (): void => {
+    if (closed || synchronizing) return;
+    synchronizing = true;
+    const directories = new Set<string>();
+    const pending = [root];
+    while (pending.length > 0) {
+      const directory = pending.pop()!;
+      if (directories.has(directory)) continue;
+      directories.add(directory);
+      try {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name === "node_modules" || entry.name === ".git") continue;
+          const child = resolve(directory, entry.name);
+          if (!excludedDirectories.has(child)) pending.push(child);
+        }
+      } catch {
+        directories.delete(directory);
+      }
+    }
+    for (const [directory, watcher] of watchers) {
+      if (directories.has(directory)) continue;
+      watcher.close();
+      watchers.delete(directory);
+    }
+    for (const directory of directories) {
+      if (watchers.has(directory)) continue;
+      try {
+        const watcher = watch(directory, (event, fileName) => {
+          const name = fileName === null ? null : String(fileName);
+          if (name === null) listener(event, null);
+          else {
+            const absolute = isAbsolute(name) ? name : resolve(directory, name);
+            listener(event, relative(root, absolute).replaceAll("\\", "/"));
+          }
+          if (event === "rename") synchronize();
+        });
+        watcher.on("error", () => {
+          watcher.close();
+          watchers.delete(directory);
+        });
+        watchers.set(directory, watcher);
+      } catch {
+        // A directory can disappear between discovery and watch registration.
+      }
+    }
+    synchronizing = false;
+  };
+  synchronize();
+  return {
+    close(): void {
+      closed = true;
+      for (const watcher of watchers.values()) watcher.close();
+      watchers.clear();
+    },
+  };
 }
 
 async function compileSnapshot(
