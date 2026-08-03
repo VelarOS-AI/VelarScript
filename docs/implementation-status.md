@@ -506,8 +506,9 @@ matrix in [0.8-acceptance.md](0.8-acceptance.md) and hardening matrix in
 
 The internal 0.7A–0.7G, 0.8A–0.8F, 0.9A–0.9AB, and 1.0A–1.0L engineering
 sequences are complete. Apache-2.0 now covers the repository and packed
-toolchain packages. The next evidence stage requires a stable source identity,
-an external preview, and later
+toolchain packages. Public commit `0faf7d5`, draft PR #1, and the independent
+Website repository now provide the first attributable source identities. The
+next evidence stage requires review and merge, an external preview, and later
 publication. Compiler, language server, and the independently packaged
 Workbench contribution continue on the delivery axis defined in
 [workbench-integration.md](workbench-integration.md).

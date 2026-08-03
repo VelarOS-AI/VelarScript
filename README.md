@@ -28,7 +28,11 @@ project.
 
 Velar 0.9AB has completed the internal application-scale language-and-Web
 sequence, and the requirement-by-requirement 1.0 internal engineering audit is
-complete. Publication and external deployment are deliberately deferred. Its first pass
+complete. The audited development source is published through
+[draft PR #1](https://github.com/VelarOS-AI/VelarScript/pull/1), and the
+[official Website source](https://github.com/VelarOS-AI/VelarScript-Website)
+is a separate Apache-2.0 project that dogfoods the packed toolchain. npm
+publication and hosted deployment remain deliberately deferred. The audit's first pass
 closes the ordinary new-project workflow: generated applications now contain a
 separate app module, a real Core test, a browser test, project-wide format
 scripts, and an installed-package acceptance that uses only those generated
@@ -65,7 +69,8 @@ complete supported Web attributes/directives, and typed object literals
 complete their missing record fields. Value expressions immediately return to
 ordinary lexical completion. This is internal readiness
 evidence, not a public production claim: hosted preview observation, independent
-users, a stable version/tag, a matching remote, and publish authority remain
+users, review and merge of the development source, a stable version/tag, and
+publish authority remain
 external.
 
 Failure containment is now a retained gate rather than an assumption. Compile,
