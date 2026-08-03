@@ -1,6 +1,6 @@
 # Implementation Status
 
-Status: 1.0 internal engineering audit complete; external preview and release work deferred
+Status: 1.0 internal engineering audit and official Website deployment complete; independent-use and stable-release work remains
 
 Velar Compiler has been rebuilt from zero against the current language charter.
 The language-to-browser loop now includes compiler-owned semantic tooling,
@@ -502,14 +502,20 @@ matrix in [0.8-acceptance.md](0.8-acceptance.md) and hardening matrix in
 [0.7-acceptance.md](0.7-acceptance.md) and broader exit criteria in
 [production-readiness.md](production-readiness.md).
 
-## Current stage: authorized external preview preparation
+## Current stage: official dogfood deployment and independent-use preparation
 
 The internal 0.7A–0.7G, 0.8A–0.8F, 0.9A–0.9AB, and 1.0A–1.0L engineering
 sequences are complete. Apache-2.0 now covers the repository and packed
-toolchain packages. Public commit `0faf7d5`, draft PR #1, and the independent
-Website repository now provide the first attributable source identities. The
-next evidence stage requires review and merge, an external preview, and later
-publication. Compiler, language server, and the independently packaged
+toolchain packages. VelarScript commit
+`d80c62c932f59db4e219d10dd9fb390344b6ece2` and Website commit
+`7226b45f706d9ac3c28e6ab3ffb2f5946fc8f097` provide merged attributable source
+identities. The Website is live at <https://velarscript.velaros.cn>; the remote
+verifier accepted build ID
+`29fec4d393a30ebd33c459145762681d9b126c3d5bf208addb759c9766873bf7`
+with 7 files, 3 routes, and 53 header checks, and real Chrome navigation passed.
+The next evidence stage is independent application use and compatibility
+feedback, followed by a separately authorized stable release. Compiler,
+language server, and the independently packaged
 Workbench contribution continue on the delivery axis defined in
 [workbench-integration.md](workbench-integration.md).
 
@@ -769,9 +775,9 @@ then proves recovery plus convergence after 64 rapid writes. Incremental
 sessions separately remove and restore a dependency while retaining the exact
 compiled result for an unrelated module.
 
-External preview feedback is still required before a production-ready claim.
-The first public repository/tag, npm publication, and preview deployment remain
-explicitly deferred external mutations.
+Independent application feedback is still required before a production-ready
+claim. The public repositories and first official deployment now exist; a
+stable tag and npm publication remain explicitly deferred external mutations.
 
 `velar/game` remains deferred until the production Web platform is usable and
 stable. It will be a Canvas-oriented package, not a second language runtime.
