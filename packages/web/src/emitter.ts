@@ -1,14 +1,15 @@
 import type {
-  AssignmentStatement,
-  ComponentDeclaration,
   Expression,
-  JSXAttribute,
-  JSXElementExpression,
   Program,
   Statement,
-} from "./ast.ts";
-import type { LoweringHints } from "./analyzer.ts";
-import { JavaScriptEmitter } from "./emitter.ts";
+  LoweringHints,
+} from "@velarscript/compiler/extension";
+import { JavaScriptEmitter } from "@velarscript/compiler/extension";
+
+type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
+type ComponentDeclaration = Extract<Statement, { readonly kind: "ComponentDeclaration" }>;
+type JSXElementExpression = Extract<Expression, { readonly kind: "JSXElementExpression" }>;
+type JSXAttribute = JSXElementExpression["attributes"][number];
 
 export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private readonly reactive = new Map<string, "state" | "computed">();
@@ -42,6 +43,63 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   protected override additionalHelpers(program: Program): readonly string[] {
     return this.webOutput ? [WEB_RUNTIME] : [];
+  }
+
+  protected override visitExtensionRuntimeExpression(expression: Expression, visitExpression: (expression: Expression) => void): boolean {
+    if (expression.kind !== "JSXElementExpression") return false;
+    expression.attributes.forEach((attribute) => {
+      if (typeof attribute.value !== "string" && attribute.value) visitExpression(attribute.value);
+    });
+    expression.children.forEach((child) => {
+      if (child.kind === "JSXExpressionChild") visitExpression(child.expression);
+      else if (child.kind === "JSXElementExpression") visitExpression(child);
+    });
+    return true;
+  }
+
+  protected override visitExtensionRuntimeStatement(
+    statement: Statement,
+    visitExpression: (expression: Expression) => void,
+    visitStatement: (statement: Statement) => void,
+  ): boolean {
+    if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration" || statement.kind === "ResourceDeclaration") {
+      visitExpression(statement.initializer);
+      return true;
+    }
+    if (statement.kind === "ActionDeclaration") {
+      statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
+      statement.body.forEach(visitStatement);
+      return true;
+    }
+    if (statement.kind === "WatchDeclaration") {
+      visitExpression(statement.expression);
+      statement.body.forEach(visitStatement);
+      return true;
+    }
+    if (statement.kind !== "ComponentDeclaration") return false;
+    statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
+    statement.body.forEach((item) => {
+      if (item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration" || item.kind === "ResourceDeclaration") visitExpression(item.initializer);
+      else if (item.kind === "ActionDeclaration") {
+        item.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
+        item.body.forEach(visitStatement);
+      } else if (item.kind === "WatchDeclaration") {
+        visitExpression(item.expression);
+        item.body.forEach(visitStatement);
+      } else if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") item.body.forEach(visitStatement);
+      else if (item.kind !== "StyleBlock") visitStatement(item);
+    });
+    return true;
+  }
+
+  protected override extensionExpressionContainsDirectAwait(expression: Expression): boolean | undefined {
+    if (expression.kind !== "JSXElementExpression") return undefined;
+    return expression.attributes.some((attribute) => typeof attribute.value !== "string"
+      && attribute.value !== null
+      && this.expressionContainsDirectAwait(attribute.value))
+      || expression.children.some((child) => child.kind === "JSXExpressionChild"
+        ? this.expressionContainsDirectAwait(child.expression)
+        : child.kind === "JSXElementExpression" && this.expressionContainsDirectAwait(child));
   }
 
   protected override emitStatement(statement: Statement, depth: number): string {

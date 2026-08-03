@@ -166,7 +166,7 @@ export component WebCapabilities:
             uploadLabel = f"{uploaded.label}:{uploaded.fileName}:{uploaded.size}"
 
     action copyStatus():
-        await copyText("Velar Web API 0.6")
+        await copyText("Velar Web API 0.8")
         clipboardLabel = "Copied"
 
     def saveStatus():

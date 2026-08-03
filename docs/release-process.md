@@ -2,9 +2,10 @@
 
 Status: Velar 0.9 release contract retained but execution deferred
 
-Velar builds the compiler and CLI into two independently installable npm
-packages, but treats them as one version-locked release set. The CLI must pin
-the exact compiler version.
+Velar builds the compiler, official Web framework, project creator, and CLI into four
+independently installable npm packages, but treats them as one version-locked
+release set. Web pins the exact compiler version; CLI pins compiler and creator
+while loading Web only when a project explicitly declares `@velarscript/web`.
 
 ## Rehearsal
 
@@ -13,9 +14,9 @@ npm run release:rehearse
 npm run release:verify -- release/rehearsal
 ```
 
-A rehearsal runs `npm pack` for both workspaces and writes:
+A rehearsal runs `npm pack` for all four workspaces and writes:
 
-- the two package tarballs;
+- the four package tarballs;
 - `SHA256SUMS`;
 - `velar-toolchain-release.json` containing package name, version, filename,
   byte size, SHA-256, npm integrity, source-tree identity, and publication
@@ -38,8 +39,8 @@ Candidate mode fails unless all of these are true:
 - Git has a committed, clean `HEAD`;
 - `HEAD` has exactly the `v<version>` tag;
 - `origin` matches package repository metadata;
-- both packages have an explicit publishable license;
-- CLI and compiler versions/dependencies match exactly.
+- all four packages have an explicit publishable license;
+- compiler, Web, creator, and CLI versions/dependencies match exactly.
 
 The GitHub rehearsal workflow adds an OIDC artifact attestation to the packed
 tarballs and uploads them as workflow artifacts. It deliberately contains no
@@ -48,7 +49,7 @@ separate, explicit release action. npm trusted publishing/provenance must be
 configured against the final public repository before that action is added.
 
 Application artifacts have a separate integrity boundary. `velar verify`
-recomputes the format-2 build inventory and `buildId`, while `velar preview`
+recomputes the format-3 framework-build inventory and `buildId`, while `velar preview`
 serves only a verified directory. This proves local self-consistency, not
 publisher authenticity; the external release pipeline must sign or attest the
 application manifest when authenticated application releases are introduced.

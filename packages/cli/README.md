@@ -6,22 +6,52 @@ server for VelarScript. The language server and project graph are compiler-owned
 editors, including the injected VelarOS Workbench contribution, consume them as
 independent clients. Requires Node.js 24 or later.
 
-```sh
-npx @velarscript/cli create my-app
-cd my-app
-npm install
-npx velar format --check
-npx velar test
-npx velar dev
-```
+Application framework behavior is injected. For each project extension the CLI
+loads its compiler entry and optional host entry, validates the versioned host
+protocol, then supplies generic filesystem, bundling, development transport,
+preview, and browser-driver services. `@velarscript/cli` neither depends on
+`@velarscript/web` nor owns its HTML, CSP, lifecycle, or runtime APIs.
 
 ```sh
-npx velar test --browser
-npx velar build
-npx velar verify
-npx velar preview
-npx velar verify-deployment --url https://preview.example.com
-npx velar verify-deployment --url https://preview.example.com --json
+npx @velarscript/cli create my-app
+npx @velarscript/cli create product-docs --template docs
+npx @velarscript/cli create design-kit --template component
+cd my-app
+npm install
+npm exec velar -- format --check
+npm exec velar -- test
+npm exec velar -- dev
+```
+
+Project creation delegates to the exact matching `create-velar` package, the
+same implementation used by `npm create velar@latest`. Available templates are
+`web`, `docs`, `library`, and `component`; creation never installs or initializes Git.
+
+Velar deliberately uses npm as its package registry, resolver, installer, and
+lockfile authority. After the initial `npm install`, the project-aware commands
+provide a smaller everyday surface:
+
+```sh
+npm exec velar -- install
+npm exec velar -- add chart-library
+npm exec velar -- add test-helper --dev
+npm exec velar -- remove chart-library
+npm exec velar -- update
+```
+
+`add` accepts npm registry names and versions, not paths, Git URLs, aliases, or
+raw npm flags. Packages that publish `velar.extension` metadata are also added
+to `velar.json`; removal deletes that declaration and its owned manifest field.
+The npm operation remains authoritative for `package.json`, `package-lock.json`,
+and `node_modules`, while Velar atomically owns only its project manifest.
+
+```sh
+npm exec velar -- test --browser
+npm exec velar -- build
+npm exec velar -- verify
+npm exec velar -- preview
+npm exec velar -- verify-deployment --url https://preview.example.com
+npm exec velar -- verify-deployment --url https://preview.example.com --json
 ```
 
 `verify-deployment` compares the verified local output to the served HTTPS

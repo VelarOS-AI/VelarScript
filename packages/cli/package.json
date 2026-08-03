@@ -11,6 +11,7 @@
   "scripts": {
     "clean": "node ../../scripts/clean-package-dist.mjs",
     "build": "npm run clean && tsc -p tsconfig.build.json",
+    "postbuild": "node ../../scripts/mark-package-bin.mjs dist/cli.js",
     "prepack": "npm run build"
   },
   "engines": {
@@ -29,6 +30,7 @@
   },
   "dependencies": {
     "@velarscript/compiler": "0.9.0-dev",
+    "create-velar": "0.9.0-dev",
     "esbuild": "^0.28.1",
     "playwright": "^1.58.2"
   }

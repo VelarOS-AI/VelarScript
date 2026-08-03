@@ -233,6 +233,7 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
       ? isAssignable(expected.rest, actual.rest, environment, new Set(seen))
       : !actual.rest && !expected.rest;
     return actual.parameters.length === expected.parameters.length
+      && actual.requiredParameters <= expected.requiredParameters
       && actual.parameters.every((parameter, index) => isAssignable(expected.parameters[index] ?? unknownType, parameter, environment, new Set(seen)))
       && restAssignable
       && isAssignable(actual.result, expected.result, environment, seen);
@@ -265,7 +266,7 @@ function typeIdentityKey(type: ValueType): string {
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind}:${type.parameters.map(typeIdentityKey).join(",")}:${type.rest ? typeIdentityKey(type.rest) : ""}:${typeIdentityKey(type.result)}`;
+      return `${type.kind}:${type.requiredParameters}:${type.parameters.map(typeIdentityKey).join(",")}:${type.rest ? typeIdentityKey(type.rest) : ""}:${typeIdentityKey(type.result)}`;
     case "componentConstructor":
       return `component:${type.name}`;
     case "union":
@@ -333,7 +334,12 @@ export function describeType(type: ValueType): string {
     case "action":
     case "intrinsic":
       return `${type.kind === "action" ? "action " : ""}(${[
-        ...type.parameters.map(describeType),
+        ...type.parameters.map((parameter, index) => {
+          const described = describeType(parameter);
+          return index >= type.requiredParameters
+            ? `${described} = default`
+            : described;
+        }),
         ...(type.rest ? [`...${describeType(type.rest)}`] : []),
       ].join(", ")}) -> ${describeType(type.result)}`;
     case "union":

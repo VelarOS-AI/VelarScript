@@ -1,9 +1,31 @@
 # VelarScript
 
+[![Velar CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
+
 VelarScript is a clean, Web-first language compiled by the Velar Compiler to
 modern JavaScript, CSS, and Web assets. It keeps the JavaScript runtime and
 replaces the source surface with a smaller Python/JavaScript blend designed for
 Web applications.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the compiler/framework boundary and
+validation workflow. Security-sensitive reports belong in GitHub's private
+security-advisory flow described in [SECURITY.md](SECURITY.md), not a public
+issue.
+
+```sh
+npm create velar@latest my-app
+cd my-app
+npm install
+npm run dev
+```
+
+Use `-- --template docs` for a routed documentation site,
+`-- --template library` for a Core `.vel` source package, or
+`-- --template component` for a reusable Web component package. The same
+templates are available through `velar create` once the CLI is installed.
+Velar keeps npm as the registry and lockfile authority; after bootstrap,
+`velar install`, `velar add`, `velar remove`, and `velar update` provide the
+project-aware dependency surface.
 
 This repository was rebuilt from zero. It does not retain source code, Git
 history, architecture, or language semantics from the former VelarScript
@@ -13,7 +35,11 @@ project.
 
 Velar 0.9AB has completed the internal application-scale language-and-Web
 sequence, and the requirement-by-requirement 1.0 internal engineering audit is
-complete. Publication and external deployment are deliberately deferred. Its first pass
+complete. The audited development source is published through
+[draft PR #1](https://github.com/VelarOS-AI/VelarScript/pull/1), and the
+[official Website source](https://github.com/VelarOS-AI/VelarScript-Website)
+is a separate Apache-2.0 project that dogfoods the packed toolchain. npm
+publication and hosted deployment remain deliberately deferred. The audit's first pass
 closes the ordinary new-project workflow: generated applications now contain a
 separate app module, a real Core test, a browser test, project-wide format
 scripts, and an installed-package acceptance that uses only those generated
@@ -50,7 +76,8 @@ complete supported Web attributes/directives, and typed object literals
 complete their missing record fields. Value expressions immediately return to
 ordinary lexical completion. This is internal readiness
 evidence, not a public production claim: hosted preview observation, independent
-users, a stable version/tag, a matching remote, and publish authority remain
+users, review and merge of the development source, a stable version/tag, and
+publish authority remain
 external.
 
 Failure containment is now a retained gate rather than an assumption. Compile,
@@ -362,7 +389,7 @@ configuration, structured leveled logging, lazy root mounting, last-valid-DOM
 retention, async mounted blocks, and failure-tolerant cleanup.
 0.7C adds project-owned `.browser.test.vel` suites through
 `velar test --browser`, a generated-project test, packed-CLI browser execution,
-a root-base Netlify deployment adapter, 0.3–0.6 upgrade fixtures, and repeated
+a root-base Netlify deployment adapter, clean format-2 project contracts, and repeated
 route/cleanup production soak. 0.7D closes the production-artifact loop with strict
 `velar verify` integrity checks and `velar preview`, which refuses to serve an
 unverified or modified build. External preview and release authority remain
@@ -387,22 +414,28 @@ cross-module inherited-member analysis. 0.6B adds the independently versioned
 Core Standard API, and 0.6C establishes its initial surface. Standard API 0.4
 now contains 133 exports across collections, text, math, JSON, async, URL,
 time, secure IDs, and structured logging modules. Compiler-owned
-lightweight polymorphic inference replaces user-facing generics. The compiler
-and CLI build
-reproducible, version-locked JavaScript plus `.d.ts` tarballs with SHA-256 and
-source identity, while rehearsal and strict candidate modes remain incapable
-of silently publishing. GitHub CI covers Node 24 on Linux, macOS, and Windows
-plus development and production Web flows in three browser engines.
+lightweight polymorphic inference replaces user-facing generics. The compiler,
+official `@velarscript/web` framework, project creator, and CLI build reproducible,
+version-locked JavaScript plus `.d.ts` tarballs with SHA-256 and source
+identity, while rehearsal and strict candidate modes remain incapable of
+silently publishing. GitHub CI covers Node 24 on Linux, macOS, and Windows plus
+development and production Web flows in three browser engines.
 
 Velar source libraries use npm itself: a package publishes `.vel` source with
 `package.json` `velar.entry`, and the compiler checks and bundles that source as
-part of the application graph. Development builds provide compile/runtime
+part of the application graph. Compiler/framework packages opt into automatic
+project activation through generic `velar.extension` metadata. The CLI passes
+registry package operations to npm without a shell, leaves dependency and lock
+ownership there, and atomically changes only `velar.json` extension fields.
+Development builds provide compile/runtime
 overlays, `.vel` stack mapping, full-graph hot invalidation, and a
 machine-readable status endpoint. Production builds use isolated staging,
 emit hashed assets, strict CSP metadata, static-host fallback/header/cache
-contracts, and deterministic format-2 build identity with SHA-256 identities.
+contracts, and deterministic format-3 framework build identity with SHA-256
+identities. The manifest records the framework package, capability, target,
+host-protocol version, API version, and framework artifact kind.
 
-The stable Web API is independently versioned at 0.6. Ten explicit Web
+The stable Web API is independently versioned at 0.8. Ten explicit Web
 modules provide base-aware routing and metadata, typed HTTP, local/session/
 IndexedDB persistence, accessible forms, browser environment helpers,
 cross-browser files, WebSocket/SSE realtime connections, typed tests,
@@ -411,8 +444,8 @@ Implicit browser globals are rejected in ordinary Velar source and diagnostics
 lead to these modules or an explicit JavaScript boundary. The 15-module Release
 Studio passes Chromium, Firefox, and WebKit against both the development server
 and the CSP-enabled static production build. Packed toolchains also run through
-the real generic Workbench LSP host. The 0.6 language and API implementation is
-the foundation now being hardened toward production use in 0.7.
+the real generic Workbench LSP host. The 0.6 language baseline and Web API 0.8
+are the foundation now being hardened toward production use.
 `velar/game`, SSR/server execution, a custom package registry, and a custom
 debug protocol remain deferred.
 
@@ -457,17 +490,18 @@ node dist/core.js
 Run a Web application with live recompilation:
 
 ```sh
-npm run velar -- dev examples/todo/main.vel
+npm run velar -- dev examples/todo
 ```
 
 A normal project uses `velar.json`, so commands need no entry argument:
 
 ```json
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
+  "extensions": ["@velarscript/web"],
   "web": {
     "title": "My Velar App",
     "base": "/",
@@ -491,15 +525,20 @@ npm run velar -- verify-deployment examples/production-web --url https://preview
 npm run preview:prepare
 ```
 
-Create a new project or inspect an older project before upgrading it:
+Create and validate a new project:
 
 ```sh
 npm run velar -- create my-app
 npm run velar -- format my-app --check
 npm run velar -- test my-app
-npm run velar -- upgrade my-app --check
-npm run velar -- upgrade my-app
 ```
+
+Format 2 is a clean break: Core projects declare `"extensions": []`; Web
+projects install and declare `@velarscript/web`. Legacy manifests are rejected
+instead of upgraded implicitly or through a compatibility command.
+The project loader discovers the package's independent `/compiler` and `/host`
+entries. Web owns HTML, CSP, reload, deployment projection, and browser-test
+metadata; CLI owns only generic host mechanics.
 
 Build a Web application:
 
@@ -543,6 +582,8 @@ A reusable Velar package publishes source through ordinary npm metadata:
 
 Applications import it normally: `import {Button} from "my-velar-library"`.
 Package-relative `.vel` imports are confined to the package root.
+Reusable Web components follow the same source-package path with an explicit
+Web peer contract; see [docs/component-packages.md](docs/component-packages.md).
 
 Start the language server used by VelarOS Workbench:
 

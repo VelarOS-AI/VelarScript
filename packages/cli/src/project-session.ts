@@ -61,7 +61,14 @@ export class VelarProjectSessions {
       files,
       config.entryPath,
       contents,
-      { sourceRoot: config.root, projectRoot: config.root, publicRoot: config.publicDir, web: config.web },
+      {
+        sourceRoot: config.root,
+        projectRoot: config.root,
+        publicRoot: config.publicDir,
+        extensions: config.compilerExtensions,
+        extensionConfig: config.extensionConfig,
+        framework: config.framework,
+      },
       state.project,
       changed,
     );
@@ -87,7 +94,13 @@ function configKey(config: VelarProjectConfig): string {
     entryPath: config.entryPath,
     outDir: config.outDir,
     publicDir: config.publicDir,
-    web: config.web,
+    extensions: config.extensions,
+    extensionConfig: [...config.extensionConfig],
+    framework: config.framework ? {
+      id: config.framework.host.id,
+      protocolVersion: config.framework.host.protocolVersion,
+      apiVersion: config.framework.host.apiVersion,
+    } : null,
   });
 }
 

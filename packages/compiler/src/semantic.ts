@@ -1,14 +1,11 @@
 import type {
-  ActionDeclaration,
   BindingPattern,
-  ComponentItem,
   Expression,
   FunctionDeclaration,
   ImportDeclaration,
   Program,
   Statement,
   TypeReference,
-  WatchDeclaration,
 } from "./ast.ts";
 import type { SourceText, Span } from "./source.ts";
 import { describeType, type ValueType } from "./types.ts";
@@ -119,6 +116,47 @@ export interface SemanticIndex {
   readonly expressions: readonly SemanticExpression[];
 }
 
+export interface SemanticDeclareOptions {
+  readonly exported?: boolean;
+  readonly mutable?: boolean;
+  readonly lexical?: boolean;
+  readonly container?: string;
+  readonly explicitType?: string;
+  readonly static?: boolean;
+  readonly documentationStart?: number;
+  readonly private?: boolean;
+}
+
+export interface SemanticFunctionLike {
+  readonly name: string;
+  readonly parameters: FunctionDeclaration["parameters"];
+  readonly returnType: FunctionDeclaration["returnType"];
+  readonly body: FunctionDeclaration["body"];
+  readonly span: Span;
+}
+
+export interface SemanticExtensionContext {
+  readonly declare: (owner: object, name: string, kind: SemanticSymbolKind, declarationSpan: Span, selectionSpan: Span, options?: SemanticDeclareOptions) => SemanticSymbol;
+  readonly hasDeclaration: (owner: object) => boolean;
+  readonly nameSpan: (span: Span, name: string, from?: number) => Span;
+  readonly typeReferences: (type: TypeReference | null) => void;
+  readonly reference: (name: string, span: Span, write?: boolean) => void;
+  readonly recordMemberReference: (name: string, span: Span, owner: ValueType, syntax: SemanticMemberReference["syntax"], shorthand?: boolean) => void;
+  readonly jsxAttributeOwner: (span: Span, name: string) => ValueType | undefined;
+  readonly enterScope: (span: Span) => void;
+  readonly exitScope: () => void;
+  readonly visitExpression: (expression: Expression) => void;
+  readonly visitStatement: (statement: Statement) => void;
+  readonly visitBlock: (body: readonly Statement[], fallbackSpan: Span) => void;
+  readonly visitFunction: (statement: SemanticFunctionLike) => void;
+}
+
+export interface CompilerSemanticExtension {
+  readonly predeclare?: (statement: Statement, context: SemanticExtensionContext) => boolean;
+  readonly visitExpression?: (expression: Expression, context: SemanticExtensionContext) => boolean;
+  readonly visitStatement?: (statement: Statement, context: SemanticExtensionContext) => boolean;
+}
+
 interface Scope extends SemanticScope {
   readonly bindings: Map<string, SemanticSymbol>;
 }
@@ -142,6 +180,7 @@ export function buildSemanticIndex(
   jsxAttributeOwners: ReadonlyMap<string, ValueType> = new Map(),
   expressionContexts: ReadonlyMap<string, ValueType> = new Map(),
   expressionContextMembers: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
+  semanticExtensions: readonly CompilerSemanticExtension[] = [],
 ): SemanticIndex {
   const symbols: SemanticSymbol[] = [];
   const references: SemanticReference[] = [];
@@ -166,6 +205,7 @@ export function buildSemanticIndex(
     return described;
   };
   const declarations = new WeakMap<object, SemanticSymbol>();
+  let extensionContext: SemanticExtensionContext;
   let nextScopeId = 1;
 
   const currentScope = (): Scope => scopes.at(-1)!;
@@ -297,9 +337,9 @@ export function buildSemanticIndex(
         }
         case "ClassDeclaration": declare(statement, statement.name, "class", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
         case "FunctionDeclaration": declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
-        case "ActionDeclaration": declare(statement, statement.name, "action", statement.span, nameSpan(statement.span, statement.name), false); break;
-        case "ComponentDeclaration": declare(statement, statement.name, "component", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
-        default: break;
+        default:
+          for (const extension of semanticExtensions) if (extension.predeclare?.(statement, extensionContext)) break;
+          break;
       }
     }
   };
@@ -373,6 +413,7 @@ export function buildSemanticIndex(
         } : {}),
       });
     }
+    for (const extension of semanticExtensions) if (extension.visitExpression?.(expression, extensionContext)) return;
     switch (expression.kind) {
       case "IdentifierExpression": reference(expression.name, expression.span, write); break;
       case "SuperExpression": break;
@@ -435,31 +476,12 @@ export function buildSemanticIndex(
         break;
       }
       case "IndexExpression": visitExpression(expression.object); visitExpression(expression.index); break;
-      case "JSXElementExpression":
-        if (/^[A-Z]/u.test(expression.tag)) reference(expression.tag, { start: expression.span.start + 1, end: expression.span.start + 1 + expression.tag.length });
-        for (const attribute of expression.attributes) {
-          const owner = jsxAttributeOwners.get(`${attribute.span.start}:${attribute.name}`);
-          if (owner) {
-            recordMemberReference(
-              attribute.name,
-              { start: attribute.span.start, end: attribute.span.start + attribute.name.length },
-              owner,
-              "jsx-prop",
-            );
-          }
-          if (attribute.value && typeof attribute.value !== "string") visitExpression(attribute.value);
-        }
-        for (const child of expression.children) {
-          if (child.kind === "JSXExpressionChild") visitExpression(child.expression);
-          else if (child.kind === "JSXElementExpression") visitExpression(child);
-        }
-        break;
       case "LiteralExpression": break;
     }
   };
 
   const visitFunction = (
-    statement: FunctionDeclaration | ActionDeclaration,
+    statement: SemanticFunctionLike,
     method = false,
     container?: string,
     memberKind: "field" | "method" = "method",
@@ -490,23 +512,6 @@ export function buildSemanticIndex(
     exitScope();
   };
 
-  const visitWatch = (statement: WatchDeclaration): void => {
-    visitExpression(statement.expression);
-    enterScope(statement.span);
-    let cursor = statement.expression.span.end;
-    if (statement.currentName) {
-      const selection = nameSpan(statement.span, statement.currentName, cursor);
-      declare({ statement, role: "current" }, statement.currentName, "watch-value", statement.span, selection);
-      cursor = selection.end;
-    }
-    if (statement.previousName) {
-      const selection = nameSpan(statement.span, statement.previousName, cursor);
-      declare({ statement, role: "previous" }, statement.previousName, "watch-value", statement.span, selection);
-    }
-    for (const child of statement.body) visitStatement(child);
-    exitScope();
-  };
-
   const visitBlock = (body: readonly Statement[], fallbackSpan: Span): void => {
     const scopeSpan = body.length > 0
       ? { start: body[0]!.span.start, end: body.at(-1)!.span.end }
@@ -516,15 +521,8 @@ export function buildSemanticIndex(
     exitScope();
   };
 
-  const visitComponentItems = (body: readonly ComponentItem[]): void => {
-    for (const item of body) {
-      if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") visitBlock(item.body, item.span);
-      else if (item.kind === "StyleBlock") continue;
-      else visitStatement(item);
-    }
-  };
-
   const visitStatement = (statement: Statement): void => {
+    for (const extension of semanticExtensions) if (extension.visitStatement?.(statement, extensionContext)) return;
     switch (statement.kind) {
       case "ImportDeclaration": break;
       case "ExternModuleDeclaration":
@@ -622,39 +620,11 @@ export function buildSemanticIndex(
         for (const getter of statement.getters) visitFunction(getter, true, statement.name, "field", getter.returnType?.text);
         for (const method of statement.methods) visitFunction(method, true, statement.name);
         break;
-      case "ComponentDeclaration":
-        enterScope(statement.span);
-        for (const parameter of statement.parameters) {
-          if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-          typeReferences(parameter.type);
-          declare(parameter, parameter.name, "parameter", parameter.span, { start: parameter.span.start, end: parameter.span.start + parameter.name.length }, false, false, true, statement.name);
-        }
-        visitComponentItems(statement.body);
-        exitScope();
-        break;
       case "VariableDeclaration":
         visitExpression(statement.initializer);
         typeReferences(statement.type);
         visitPattern(statement.pattern, "variable", statement.pattern.span, statement.binding === "let", statement.exported, statement.span.start);
         break;
-      case "StateDeclaration":
-      case "ComputedDeclaration": {
-        visitExpression(statement.initializer);
-        typeReferences(statement.type);
-        const kind = statement.kind === "StateDeclaration" ? "state" : "computed";
-        declare(statement, statement.name, kind, statement.span, nameSpan(statement.span, statement.name), statement.exported, kind === "state");
-        break;
-      }
-      case "ResourceDeclaration":
-        visitExpression(statement.initializer);
-        typeReferences(statement.type);
-        declare(statement, statement.name, "resource", statement.span, nameSpan(statement.span, statement.name));
-        break;
-      case "ActionDeclaration":
-        if (!declarations.has(statement)) declare(statement, statement.name, "action", statement.span, nameSpan(statement.span, statement.name));
-        visitFunction(statement);
-        break;
-      case "WatchDeclaration": visitWatch(statement); break;
       case "FunctionDeclaration":
         if (!declarations.has(statement)) declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported);
         visitFunction(statement);
@@ -701,6 +671,40 @@ export function buildSemanticIndex(
       case "ContinueStatement":
       case "PassStatement": break;
     }
+  };
+
+  extensionContext = {
+    declare(owner, name, kind, declarationSpan, selectionSpan, options = {}) {
+      return declare(
+        owner,
+        name,
+        kind,
+        declarationSpan,
+        selectionSpan,
+        options.exported ?? false,
+        options.mutable ?? false,
+        options.lexical ?? true,
+        options.container,
+        options.explicitType,
+        options.static ?? false,
+        {
+          ...(options.documentationStart === undefined ? {} : { documentationStart: options.documentationStart }),
+          ...(options.private === undefined ? {} : { private: options.private }),
+        },
+      );
+    },
+    hasDeclaration: (owner) => declarations.has(owner),
+    nameSpan,
+    typeReferences,
+    reference,
+    recordMemberReference,
+    jsxAttributeOwner: (attributeSpan, name) => jsxAttributeOwners.get(`${attributeSpan.start}:${name}`),
+    enterScope,
+    exitScope,
+    visitExpression: (expression) => visitExpression(expression),
+    visitStatement,
+    visitBlock,
+    visitFunction: (statement) => visitFunction(statement),
   };
 
   predeclareTopLevel();

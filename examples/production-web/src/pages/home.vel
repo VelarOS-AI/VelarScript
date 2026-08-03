@@ -87,7 +87,7 @@ export component Home:
         <Head title="Velar Release Studio" description="Velar 0.8 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
         <header class="header">
             <div>
-                <p class="eyebrow">Velar 0.8 · Web API 0.6</p>
+                <p class="eyebrow">Velar 0.9 · Web API 0.8</p>
                 <h1>Velar Release Studio</h1>
             </div>
             <nav class="actions" aria-label="Primary navigation">

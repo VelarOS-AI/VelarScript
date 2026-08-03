@@ -15,8 +15,8 @@ velar preview --port 4173
 velar verify-deployment --url https://preview.example.com
 ```
 
-`verify` requires exact equality between the output file tree and the format-2
-asset inventory, rejects symbolic links and unsafe/duplicate paths, checks
+`verify` requires exact equality between the output file tree and the format-3
+framework-build asset inventory, rejects symbolic links and unsafe/duplicate paths, checks
 every size and SHA-256, recomputes `buildId`, and cross-checks entry,
 stylesheet, deployment, CSP, cache, fallback, and adapter contracts. `preview`
 always runs this verification first. It applies the declared base and headers,
@@ -59,14 +59,14 @@ output directories differ.
 
 ## Generated deployment files
 
-- `index.html`: compiler-owned HTML entry with production CSP metadata.
+- `index.html`: framework-host-owned HTML entry with production CSP metadata.
 - `404.html`: optional SPA fallback copy for simple static hosts.
-- `velar-deploy.json`: provider-neutral base path, fallback, header, and cache
-  contract.
-- `velar-build.json`: format version 2 build identity and hashes for every
-  emitted file, including the deployment files.
+- `velar-deploy.json`: format version 2 provider-neutral base path, framework
+  identity, fallback, header, and cache contract.
+- `velar-build.json`: format version 3 build identity, framework/host-protocol
+  identity, and hashes for every emitted file, including deployment files.
 - `assets/*`: content-hashed JavaScript, CSS, and maps.
-- `_headers` and `_redirects`: compiler-owned files when the explicit Netlify
+- `_headers` and `_redirects`: CLI deployment-adapter files when the explicit Netlify
   adapter is selected.
 
 `web.publicConfig` is validated and compiled into the content-hashed JavaScript
@@ -95,7 +95,7 @@ Root-base applications may select the first concrete adapter:
 }
 ```
 
-The compiler translates every header rule to Netlify's `_headers` syntax. Its
+The CLI deployment adapter translates every framework-projected header rule to Netlify's `_headers` syntax. Its
 redirects first map a nonexistent `/assets/*` request to `404.html` with status
 404, then apply `/* /index.html 200` as the SPA rewrite. Netlify's documented
 shadowing keeps existing assets available while preventing a missing script
@@ -141,8 +141,8 @@ Additional origins are configured structurally:
 Only secure origin values are accepted. Paths, credentials, queries, hashes,
 and arbitrary CSP fragments fail configuration loading.
 
-The compiler owns `index.html`, `404.html`, `velar-build.json`,
-`velar-deploy.json`, `_headers`, and `_redirects`. Files with those names in
+The framework/CLI production pipeline reserves `index.html`, `404.html`,
+`velar-build.json`, `velar-deploy.json`, `_headers`, and `_redirects`. Files with those names in
 `publicDir` fail the build rather than overriding the security boundary. Public
 symbolic links are also rejected so a build cannot copy files outside the
 declared asset root.

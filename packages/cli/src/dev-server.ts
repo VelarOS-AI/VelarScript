@@ -3,16 +3,17 @@ import { createServer, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { formatDiagnostic } from "@velarscript/compiler";
+import type { FrameworkHostArtifacts } from "@velarscript/compiler/framework-host";
 import { compileProject, type ProjectResult } from "./project.ts";
-import { createWebArtifacts, moduleOutput, publicAsset, type WebArtifacts } from "./web.ts";
+import { createFrameworkArtifacts, frameworkBase } from "./framework-host.ts";
+import { moduleOutput, publicAsset } from "./module-assets.ts";
 import { npmAsset, resolveBrowserNpm, type BrowserNpmPackage } from "./npm.ts";
 import type { VelarProjectConfig } from "./config.ts";
 import { standardModuleAsset } from "./standard-modules.ts";
-import { VELAR_WEB_API_VERSION } from "./version.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
-  readonly web: WebArtifacts | null;
+  readonly artifacts: FrameworkHostArtifacts | null;
   readonly errors: readonly string[];
   readonly npmPackages: readonly BrowserNpmPackage[];
   readonly compilation: ProjectResult["stats"];
@@ -24,6 +25,9 @@ interface DirectoryTreeWatcher {
 }
 
 export async function runDevServer(config: VelarProjectConfig, port: number): Promise<void> {
+  if (!config.framework) throw new Error("The project does not declare an application framework host");
+  const framework = config.framework;
+  const base = frameworkBase(framework);
   let snapshot = await compileSnapshot(config);
   let compiling: Promise<void> | null = null;
   let revision = 0;
@@ -68,7 +72,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     const rebuildRevision = dirtyRevision;
     compiling = compileSnapshot(config, previous, dirtyPaths).then((next) => {
       syncPackageWatchers(next.project, next.npmPackages);
-      snapshot = next.errors.length > 0 && snapshot.web
+      snapshot = next.errors.length > 0 && snapshot.artifacts
         ? { ...snapshot, errors: next.errors, notices: next.notices, compilation: next.project.stats }
         : next;
       if (next.errors.length === 0 && dirtyRevision === rebuildRevision) {
@@ -106,7 +110,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     try { url = new URL(request.url ?? "/", "http://127.0.0.1"); }
     catch { send(response, 400, "Bad request path\n", "text/plain; charset=utf-8"); return; }
     const pathname = url.pathname;
-    const routedPath = stripBase(pathname, config.web.base);
+    const routedPath = stripBase(pathname, base);
     if (routedPath === "/__velar/events") {
       if (request.method === "HEAD") { response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" }).end(); return; }
       if (clients.size >= 64) { send(response, 503, "Too many development event clients\n", "text/plain; charset=utf-8"); return; }
@@ -116,7 +120,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
         Connection: "keep-alive",
       });
       response.write("event: ready\ndata: connected\n\n");
-      if (snapshot.errors.length > 0 && snapshot.web) {
+      if (snapshot.errors.length > 0 && snapshot.artifacts) {
         response.write(`event: reload\ndata: ${JSON.stringify({ revision, errors: snapshot.errors })}\n\n`);
       }
       clients.add(response);
@@ -128,16 +132,18 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       const line = Number(url.searchParams.get("line"));
       const column = Number(url.searchParams.get("column"));
       const mapped = file && Number.isInteger(line) && Number.isInteger(column)
-        ? mapSourcePosition(snapshot.project, stripBase(file, config.web.base), line, column)
+        ? mapSourcePosition(snapshot.project, stripBase(file, base), line, column)
         : null;
       send(response, mapped ? 200 : 404, JSON.stringify(mapped ?? { error: "Source position was not mapped" }), "application/json; charset=utf-8");
       return;
     }
     if (routedPath === "/__velar/status") {
       send(response, 200, JSON.stringify({
-        apiVersion: VELAR_WEB_API_VERSION,
+        framework: framework.host.id,
+        protocolVersion: framework.host.protocolVersion,
+        apiVersion: framework.host.apiVersion,
         revision,
-        ready: snapshot.errors.length === 0 && snapshot.web !== null,
+        ready: snapshot.errors.length === 0 && snapshot.artifacts !== null,
         errors: snapshot.errors,
         notices: snapshot.notices,
         compilation: snapshot.compilation,
@@ -146,17 +152,17 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       return;
     }
     if (routedPath === "/" || routedPath === "/index.html") {
-      if (snapshot.errors.length > 0 && !snapshot.web) {
-        send(response, 500, errorPage(snapshot.errors, withBase(config.web.base, "__velar/events")), "text/html; charset=utf-8");
-      } else if (snapshot.web) {
-        send(response, 200, snapshot.web.html, "text/html; charset=utf-8");
+      if (snapshot.errors.length > 0 && !snapshot.artifacts) {
+        send(response, 500, framework.host.createErrorDocument({ config: framework.config, errors: snapshot.errors }), "text/html; charset=utf-8");
+      } else if (snapshot.artifacts) {
+        send(response, 200, snapshot.artifacts.html, "text/html; charset=utf-8");
       } else {
-        send(response, 400, errorPage(["The entry does not contain a Velar Web application."], withBase(config.web.base, "__velar/events")), "text/html; charset=utf-8");
+        send(response, 400, framework.host.createErrorDocument({ config: framework.config, errors: ["The framework host did not create an application entry."] }), "text/html; charset=utf-8");
       }
       return;
     }
-    if (routedPath === "/styles.css" && snapshot.web) {
-      send(response, 200, snapshot.web.css, "text/css; charset=utf-8");
+    if (routedPath === "/styles.css" && snapshot.artifacts) {
+      send(response, 200, snapshot.artifacts.css, "text/css; charset=utf-8");
       return;
     }
     const module = moduleOutput(snapshot.project, routedPath, url.searchParams.get("velar"));
@@ -164,7 +170,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       send(response, 200, module.body, module.contentType);
       return;
     }
-    const standard = standardModuleAsset(routedPath, config.web);
+    const standard = standardModuleAsset(routedPath, config.extensionConfig, config.compilerExtensions);
     if (standard) {
       send(response, 200, standard, "text/javascript; charset=utf-8");
       return;
@@ -179,8 +185,8 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       await sendFile(response, asset, request.method === "HEAD");
       return;
     }
-    if (snapshot.web && request.method === "GET" && request.headers.accept?.includes("text/html")) {
-      send(response, 200, snapshot.web.html, "text/html; charset=utf-8");
+    if (snapshot.artifacts && request.method === "GET" && request.headers.accept?.includes("text/html")) {
+      send(response, 200, snapshot.artifacts.html, "text/html; charset=utf-8");
       return;
     }
     send(response, 404, "Not found\n", "text/plain; charset=utf-8");
@@ -199,7 +205,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve());
   });
-  const url = `http://127.0.0.1:${port}${config.web.base}`;
+  const url = `http://127.0.0.1:${port}${base}`;
   process.stdout.write(`Velar dev server: ${url}\n`);
   if (snapshot.errors.length > 0) process.stdout.write(`${snapshot.errors.join("\n\n")}\n`);
 
@@ -287,7 +293,13 @@ async function compileSnapshot(
   const project = await compileProject(
     config.entryPath,
     new Map(),
-    { projectRoot: config.root, publicRoot: config.publicDir, web: config.web },
+    {
+      projectRoot: config.root,
+      publicRoot: config.publicDir,
+      extensions: config.compilerExtensions,
+      extensionConfig: config.extensionConfig,
+      framework: config.framework,
+    },
     previous,
     changedPaths,
   );
@@ -300,7 +312,7 @@ async function compileSnapshot(
   const notices = project.notices.map((notice) => `${notice.path}: ${notice.message}`);
   return {
     project,
-    web: errors.length === 0 ? createWebArtifacts(project, true, npm.imports) : null,
+    artifacts: errors.length === 0 ? createFrameworkArtifacts(project, true, npm.imports) : null,
     errors,
     npmPackages: npm.packages,
     compilation: project.stats,
@@ -338,11 +350,6 @@ async function sendFile(
   if (head) { response.end(); return; }
   try { await pipeline(createReadStream(asset.path), response); }
   catch (error) { if (!response.destroyed) response.destroy(error instanceof Error ? error : new Error(String(error))); }
-}
-
-function errorPage(errors: readonly string[], eventsUrl: string): string {
-  const escaped = errors.join("\n\n").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-  return `<!doctype html><html><head><meta charset="UTF-8"><title>Velar build error</title><style>body{font:15px/1.55 ui-monospace,monospace;margin:0;padding:32px;background:#171717;color:#fee2e2}pre{white-space:pre-wrap}</style></head><body><h1>Velar build error</h1><pre>${escaped}</pre><script>new EventSource(${JSON.stringify(eventsUrl)}).addEventListener("reload",(event)=>{if(JSON.parse(event.data).errors.length===0)location.reload()})</script></body></html>`;
 }
 
 interface SourceMapShape {
@@ -416,8 +423,4 @@ function decodeVlqSegment(value: string): number[] {
 function relativePath(root: string, path: string): string {
   const normalized = path.startsWith(root) ? path.slice(root.length).replace(/^[/\\]+/u, "") : path;
   return normalized.replaceAll("\\", "/");
-}
-
-function withBase(base: string, path: string): string {
-  return `${base}${path.replace(/^\/+/, "")}`;
 }

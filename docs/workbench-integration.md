@@ -11,11 +11,15 @@ the compiler and language server remain the semantic authority.
   Velar protocol. It owns only generic language-contribution and stdio LSP
   host contracts.
 - The separately packaged Workbench Velar contribution is injected by the app
-  and supplies `.vel` association, syntax coloring, indentation presentation,
+  and supplies `.vel` association, Core syntax coloring, indentation presentation,
   `velar.json` detection, generic check/format/format-check/dev/Core-test/browser-test/build/verify/
-  preview/deployed-site-verification/project-upgrade-check command metadata,
+  preview/deployed-site-verification/project-check command metadata,
   the LSP descriptor, and
   protocol compatibility declaration.
+- The Workbench contribution contains no Web keyword, type, JSX directive, or
+  module table. A format-v2 project that declares `@velarscript/web` receives
+  those editor semantics from the project-local compiler extension through LSP
+  completion and semantic tokens.
 - `velar lsp` owns diagnostics, completion, hover, formatting, definition,
   references, same-document symbol highlights, safe rename, document symbols,
   signature help, inferred-type inlay hints, and all future semantic features.
@@ -209,27 +213,28 @@ the compiler and language server remain the semantic authority.
   Workbench refuses an incompatible protocol instead of silently degrading.
 - Protocol version: `1`.
 - Standard and Web API versioning are independent of the compiler and LSP
-  transport versions. Velar `0.9.0-dev` uses Standard API `0.4`, Web API `0.6`, and
+  transport versions. Velar `0.9.0-dev` uses Standard API `0.4`, Web API `0.7`, and
   protocol `1`, so Workbench requires no Velar-specific host change; new module
   names, signatures, and diagnostics flow through the compiler-owned LSP.
 
 Workbench first resolves `velar` from the project-local `node_modules/.bin`,
 then from `PATH`. This keeps every project tied to its own compiler toolchain.
-Published compiler/CLI packages contain emitted JavaScript and `.d.ts` files;
+Published compiler/Web/creator/CLI packages contain emitted JavaScript and `.d.ts` files;
 Workbench invokes the local CLI executable and does not depend on its source
 layout.
 The editor never imports or embeds `@velarscript/compiler`; the compiler never
 depends on Workbench.
 
-The cross-repository installed-toolchain gate packs the compiler and CLI,
-installs both tarballs into a temporary Velar project, and asks the real generic
+The cross-repository installed-toolchain gate packs the compiler, Web framework, creator, and CLI,
+installs the complete release set into a temporary Velar project, and asks the real generic
 Workbench language host for diagnostics, completion, signature help,
 inferred-type hints, same-document symbol highlights, semantic tokens, and safe
 code actions. It checks that an inferred `List<number>` is
 displayed, an explicit `TreeNode` annotation is not duplicated, a resource
 handle is not mislabeled as a source annotation, and all uses of a local record
 binding are highlighted, `[1, 2, 3].slice(...)` reports its second active
-parameter, and `route.params.get(...)` exposes checked Map members and its
+parameter and its compiler-owned `slice(number = default, number = default)`
+label, and `route.params.get(...)` exposes checked Map members and its
 `get(string) -> string?` signature. The installed sample also hovers the nested
 `params` field and navigates `tree.children` to the local `TreeNode` field
 declaration, then renames that recursive record field across its declaration,
@@ -272,7 +277,7 @@ owning a Velar comment parser or documentation store.
 Together this proves that local binary discovery, stdio
 transport, protocol negotiation, and standard semantic mapping work without a
 source-tree link in either direction. Before installation, Workbench validates
-the release format, exact compiler/CLI set, canonical package paths, byte sizes,
+the release format, exact compiler/Web/creator/CLI set, canonical package paths, byte sizes,
 and SHA-256 values itself rather than trusting a shared source checkout.
 
 ## Joint delivery gate

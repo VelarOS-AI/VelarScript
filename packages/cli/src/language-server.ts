@@ -57,17 +57,8 @@ const semanticTokenTypes = ["type", "class", "enum", "enumMember", "function", "
 const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
 
 const keywordDocumentation = new Map<string, string>([
-  ["component", "Declares a compiler-managed Web component that initializes once."],
-  ["state", "Declares writable reactive state at module or component scope."],
-  ["computed", "Declares a lazy cached value derived from module or component state."],
-  ["resource", "Declares component-owned asynchronous data with reactive value, loading, ready, error, and reload fields."],
-  ["action", "Declares a component-owned asynchronous operation with reactive pending and error fields."],
   ["assert", "Requires a boolean or optional invariant and narrows stable values in following statements."],
-  ["watch", "Runs a block after a watched expression changes and DOM updates commit."],
-  ["mounted", "Runs once after the component DOM is inserted."],
-  ["cleanup", "Runs once before the component and its owned resources are destroyed."],
   ["init", "Runs synchronous construction logic once after a class instance is initialized."],
-  ["style", "Declares component-scoped CSS; use `style global:` for global CSS."],
   ["type", "Declares one data shape used for static checking and runtime validation."],
   ["enum", "Declares a finite set of string-backed values for application states."],
   ["abstract", "Marks a class, instance method, or getter as an incomplete behavior contract."],
@@ -83,7 +74,6 @@ const keywordDocumentation = new Map<string, string>([
   ["const", "Declares an initialized binding that cannot be rebound."],
   ["let", "Declares an initialized binding that can be rebound."],
   ["none", "The only empty value in ordinary VelarScript source."],
-  ["tick", "Returns a promise that resolves after scheduled DOM work commits."],
 ]);
 
 const builtinTypeDocumentation = new Map<string, string>([
@@ -91,29 +81,17 @@ const builtinTypeDocumentation = new Map<string, string>([
   ["number", "A JavaScript number type; number(text) strictly parses complete finite decimal text and returns number?."],
   ["bool", "The `true` or `false` boolean type."],
   ["unknown", "An unchecked boundary value that must be validated before ordinary use."],
-  ["WebNode", "A value that can be rendered as component or JSX children."],
-  ["Element", "A general native element reference obtained through JSX `ref`."],
-  ["InputElement", "A native input, select, or textarea reference obtained through JSX `ref`."],
-  ["CanvasElement", "A native canvas reference obtained through JSX `ref`."],
-  ["DialogElement", "A native dialog reference obtained from `<dialog ref={value}>` and operated through `velar/browser`."],
-  ["Event", "A restricted Web event value exposed to Velar event handlers."],
   ["List", "An ordered JavaScript array with one checked element type."],
   ["Map", "An insertion-ordered JavaScript Map with checked key and value types."],
   ["Set", "An insertion-ordered JavaScript Set with one checked element type."],
   ["Promise", "A JavaScript Promise with one checked resolved-value type."],
 ]);
 
-const completionItems = [
-  ...["const", "let", "def", "async", "await", "component", "state", "computed", "resource", "action", "watch", "mounted", "cleanup", "style", "type", "enum", "abstract", "class", "init", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "none", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
+const coreCompletionItems = [
+  ...["const", "let", "def", "async", "await", "type", "enum", "abstract", "class", "init", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "none", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
-  { label: "mount", kind: 3, detail: "mount(node, target) -> none" },
-  { label: "tick", kind: 3, detail: "tick() -> Promise<none>" },
   { label: "str", kind: 3, detail: "str(value) -> string" },
   { label: "print", kind: 3, detail: "print(value) -> none" },
-  { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
-  { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
-  { label: "on:click", kind: 10, detail: "DOM click handler" },
-  { label: "on:submit.prevent", kind: 10, detail: "DOM event with a preventDefault modifier" },
   { label: "velar/collections", kind: 9, detail: "Typed collection transforms and Python-style iteration helpers" },
   { label: "velar/text", kind: 9, detail: "Unicode-aware text normalization and formatting helpers" },
   { label: "velar/math", kind: 9, detail: "Numeric constants, transforms, and random helpers" },
@@ -123,19 +101,31 @@ const completionItems = [
   { label: "velar/time", kind: 9, detail: "Timestamps, ISO values, formatting, and date-part helpers" },
   { label: "velar/id", kind: 9, detail: "Secure host UUID generation and validation" },
   { label: "velar/log", kind: 9, detail: "Structured leveled logging with scoped loggers and replaceable sinks" },
-  { label: "velar/app", kind: 9, detail: "Application error reports and explicit handler ownership" },
-  { label: "velar/config", kind: 9, detail: "Validated manifest-declared public application configuration" },
-  { label: "velar/web", kind: 9, detail: "Typed routing, navigation, metadata, and announcements" },
-  { label: "velar/forms", kind: 9, detail: "Form values, pending state, and accessible field errors" },
-  { label: "velar/http", kind: 9, detail: "Typed HTTP responses, runtime parsing, timeout, and cancellation" },
-  { label: "velar/storage", kind: 9, detail: "Typed local, session, scoped, observed, and IndexedDB storage" },
-  { label: "velar/browser", kind: 9, detail: "Browser state, cancellable timers, clipboard, media, visibility, layout, and frames" },
-  { label: "velar/files", kind: 9, detail: "Cross-browser file selection, reading, and downloads" },
-  { label: "velar/realtime", kind: 9, detail: "WebSocket and server-sent event connections" },
   { label: "velar/test", kind: 9, detail: "Typed deep, collection, error, and Promise assertions" },
-  { label: "class:", kind: 10, detail: "Reactive class directive" },
-  { label: "style:", kind: 10, detail: "Reactive style property directive" },
 ];
+
+function completionItemsFor(project: ProjectResult | null): readonly { readonly label: string; readonly kind: number; readonly detail?: string }[] {
+  if (!project) return coreCompletionItems;
+  return [
+    ...coreCompletionItems,
+    ...project.compilerExtensions.flatMap((extension) => [
+      ...(extension.editor?.completions ?? []),
+      ...Object.entries(extension.editor?.typeDocumentation ?? {}).map(([label, detail]) => ({ label, kind: 7, detail })),
+    ]),
+  ];
+}
+
+function extensionDocumentation(
+  project: ProjectResult | null,
+  kind: "keywordDocumentation" | "typeDocumentation",
+  word: string,
+): string | undefined {
+  for (const extension of project?.compilerExtensions ?? []) {
+    const documentation = extension.editor?.[kind]?.[word];
+    if (documentation) return documentation;
+  }
+  return undefined;
+}
 
 export async function runLanguageServer(): Promise<void> {
   const documents = new Map<string, TextDocument>();
@@ -318,7 +308,7 @@ export async function runLanguageServer(): Promise<void> {
         const semanticLabels = new Set(semanticItems.map((item) => item.label));
         const items = completionContext !== "ordinary"
           ? semanticItems
-          : [...semanticItems, ...completionItems.filter((item) => !semanticLabels.has(item.label))].slice(0, MAX_LSP_RESULT_ITEMS);
+          : [...semanticItems, ...completionItemsFor(project).filter((item) => !semanticLabels.has(item.label))].slice(0, MAX_LSP_RESULT_ITEMS);
         respond(message.id, { isIncomplete: false, items });
         break;
       }
@@ -606,7 +596,7 @@ async function hover(document: TextDocument, position: Position, project: Projec
     const documentation = symbol.documentation ? `\n\n${symbol.documentation}` : "";
     return { contents: { kind: "markdown", value: clipLspText(`\`\`${declaration} ${symbol.name}${type}\`\`${documentation}`) } };
   }
-  const keyword = keywordDocumentation.get(word);
+  const keyword = keywordDocumentation.get(word) ?? extensionDocumentation(project, "keywordDocumentation", word);
   if (keyword) return { contents: { kind: "markdown", value: `\`\`${word}\`\`\n\n${keyword}` } };
   const expression = path && project ? projectExpressionAt(project, path, offset) : null;
   if (expression?.memberName) {
@@ -621,7 +611,7 @@ async function hover(document: TextDocument, position: Position, project: Projec
     const documentation = member.documentation ? `\n\n${member.documentation}` : "";
     return { contents: { kind: "markdown", value: clipLspText(`\`\`${member.kind} ${member.name}${type}\`\`${documentation}`) } };
   }
-  const builtinType = builtinTypeDocumentation.get(word);
+  const builtinType = builtinTypeDocumentation.get(word) ?? extensionDocumentation(project, "typeDocumentation", word);
   if (builtinType) return { contents: { kind: "markdown", value: `\`\`${word}\`\`\n\n${builtinType}` } };
   return null;
 }

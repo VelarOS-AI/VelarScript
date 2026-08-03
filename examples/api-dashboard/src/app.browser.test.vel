@@ -1,4 +1,5 @@
-import {browser, expect} from "velar/test"
+import {expect} from "velar/test"
+import {browser} from "velar/web-test"
 
 async def test_dashboard_loads_typed_data_and_real_svg():
     await browser.open("/")

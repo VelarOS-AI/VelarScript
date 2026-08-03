@@ -7,16 +7,26 @@ import { pathToFileURL } from "node:url";
 import { build, type Plugin } from "esbuild";
 import { projectImportKey, type ProjectResult } from "./project.ts";
 import { standardModuleSource } from "./standard-modules.ts";
-import { VELAR_VERSION, VELAR_WEB_API_VERSION } from "./version.ts";
+import { VELAR_VERSION } from "./version.ts";
 import type { StaticDeploymentSummary } from "./static-deployment.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 
 export interface ProductionBuildResult {
+  readonly framework: ProductionFrameworkIdentity;
   readonly entryPath: string;
   readonly stylesheetPath: string | null;
   readonly modules: ProductionModuleSummary;
   readonly dependencies: ProductionDependencySummary;
   readonly sourceMaps: boolean;
+}
+
+export interface ProductionFrameworkIdentity {
+  readonly id: string;
+  readonly capability: string;
+  readonly target: "browser";
+  readonly protocolVersion: number;
+  readonly apiVersion: string;
+  readonly artifactKind: string;
 }
 
 export interface ProductionDependencySummary {
@@ -36,9 +46,9 @@ export interface ProductionModuleSummary {
 export const PRODUCTION_MANIFEST_NAME = "velar-build.json";
 
 export interface ProductionBuildManifest {
-  readonly formatVersion: 2;
-  readonly kind: "velar-web-build";
-  readonly apiVersion: string;
+  readonly formatVersion: 3;
+  readonly kind: "velar-framework-build";
+  readonly framework: ProductionFrameworkIdentity;
   readonly compiler: {
     readonly name: "velar";
     readonly version: string;
@@ -58,7 +68,9 @@ export interface ProductionBuildManifest {
   }[];
 }
 
-export async function buildProductionWeb(project: ProjectResult, outputDirectory: string): Promise<ProductionBuildResult> {
+export async function buildProductionFramework(project: ProjectResult, outputDirectory: string): Promise<ProductionBuildResult> {
+  const framework = project.framework;
+  if (!framework) throw new Error("A production application build requires a framework host");
   await mkdir(outputDirectory, { recursive: true });
   const result = await build({
     absWorkingDir: project.projectRoot,
@@ -71,8 +83,8 @@ export async function buildProductionWeb(project: ProjectResult, outputDirectory
     target: "es2022",
     minify: true,
     treeShaking: true,
-    sourcemap: project.webConfig.build.sourceMaps ? "linked" : false,
-    sourcesContent: project.webConfig.build.sourceMaps,
+    sourcemap: framework.host.sourceMaps(framework.config) ? "linked" : false,
+    sourcesContent: framework.host.sourceMaps(framework.config),
     legalComments: "none",
     metafile: true,
     entryNames: "assets/[name]-[hash]",
@@ -94,11 +106,19 @@ export async function buildProductionWeb(project: ProjectResult, outputDirectory
     await writeFile(join(outputDirectory, stylesheetPath), css, "utf8");
   }
   return {
+    framework: {
+      id: framework.host.id,
+      capability: framework.host.capability,
+      target: framework.host.target,
+      protocolVersion: framework.host.protocolVersion,
+      apiVersion: framework.host.apiVersion,
+      artifactKind: framework.host.artifactKind,
+    },
     entryPath,
     stylesheetPath,
     modules: moduleSummary(project),
     dependencies: dependencySummary(project),
-    sourceMaps: project.webConfig.build.sourceMaps,
+    sourceMaps: framework.host.sourceMaps(framework.config),
   };
 }
 
@@ -134,9 +154,9 @@ export async function writeProductionManifest(
     .update(assets.map((asset) => `${asset.path}\0${asset.sha256}`).join("\n"))
     .digest("hex");
   const manifest: ProductionBuildManifest = {
-    formatVersion: 2,
-    kind: "velar-web-build",
-    apiVersion: VELAR_WEB_API_VERSION,
+    formatVersion: 3,
+    kind: "velar-framework-build",
+    framework: build.framework,
     compiler: { name: "velar", version: VELAR_VERSION },
     buildId,
     sourceMaps: build.sourceMaps,
@@ -222,7 +242,7 @@ function velarModules(project: ProjectResult): Plugin {
       });
       context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
       context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
-        const contents = standardModuleSource(arguments_.path, project.webConfig);
+        const contents = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
         return contents ? { contents, loader: "js" } : { errors: [{ text: `Unknown Velar standard module '${arguments_.path}'` }] };
       });
       context.onResolve({ filter: /^\.\.?\// }, (arguments_) => {

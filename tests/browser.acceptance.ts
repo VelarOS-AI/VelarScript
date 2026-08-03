@@ -41,7 +41,7 @@ try {
     notices: readonly string[];
     compilation: { moduleCount: number; compiledModules: number };
   };
-  assert.equal(status.apiVersion, "0.6");
+  assert.equal(status.apiVersion, "0.8");
   assert.equal(status.ready, true);
   assert.deepEqual(status.notices, []);
   assert.ok(status.compilation.moduleCount >= 5);

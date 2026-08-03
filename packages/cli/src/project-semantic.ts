@@ -51,58 +51,14 @@ export interface ProjectSemanticToken {
   readonly modifiers: readonly ProjectSemanticTokenModifier[];
 }
 
-export type ProjectCompletionContext = "ordinary" | "member" | "jsx-tag" | "component-attribute" | "native-attribute" | "object-field";
-
-const nativeJsxTags = [
-  "a", "article", "aside", "button", "canvas", "dialog", "div", "footer", "form", "h1", "h2", "h3",
-  "header", "img", "input", "label", "li", "main", "nav", "option", "p", "section", "select", "span",
-  "strong", "textarea", "ul",
-] as const;
-
-const nativeSvgTags = [
-  "svg", "g", "defs", "symbol", "use", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
-  "text", "tspan", "title", "desc", "clipPath", "mask", "pattern", "linearGradient", "radialGradient", "stop",
-  "filter", "foreignObject",
-] as const;
-
-const svgElementNames = new Set<string>(nativeSvgTags);
-
-const jsxControlCompletions: readonly ProjectCompletion[] = [
-  { label: "key", detail: "stable JSX list key", kind: "field" },
-  { label: "if", detail: "conditional JSX branch", kind: "field" },
-  { label: "else-if", detail: "conditional JSX branch", kind: "field" },
-  { label: "else", detail: "conditional JSX fallback", kind: "field" },
-];
-
-const nativeJsxCompletions: readonly ProjectCompletion[] = [
-  ...jsxControlCompletions,
-  ...["id", "class", "title", "role", "aria-label", "aria-labelledby", "ref"].map((label) => ({ label, detail: "native Web attribute", kind: "field" as const })),
-  ...["on:click", "on:input", "on:change", "on:keydown", "on:submit.prevent"].map((label) => ({ label, detail: "typed native Web event", kind: "field" as const })),
-  { label: "bind:value", detail: "two-way string/number form binding", kind: "field" },
-  { label: "bind:checked", detail: "two-way boolean form binding", kind: "field" },
-  { label: "class:", detail: "reactive class directive", kind: "field" },
-  { label: "style:", detail: "reactive style directive", kind: "field" },
-  { label: "unsafe:html", detail: "explicit unsafe HTML boundary", kind: "field" },
-];
-
-const nativeSvgCompletions: readonly ProjectCompletion[] = [
-  ...["viewBox", "preserveAspectRatio", "d", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
-    "width", "height", "points", "transform", "fill", "stroke", "stroke-width", "text-anchor", "href"]
-    .map((label) => ({ label, detail: "native SVG attribute", kind: "field" as const })),
-  { label: "aria-hidden", detail: "explicit decorative SVG", kind: "field" },
-];
+export type ProjectCompletionContext = "ordinary" | "member" | "object-field" | `extension:${string}`;
 
 export interface ProjectRename {
   readonly edits: readonly ProjectTextEdit[];
   readonly placeholder: string;
 }
 
-export type ProjectRenameFailure =
-  | "No renameable Velar symbol at this position"
-  | "The new name is not a valid Velar identifier"
-  | "The new name is reserved by Velar"
-  | "The new name collides with another declaration"
-  | "The JSX children prop cannot be renamed";
+export type ProjectRenameFailure = string;
 
 interface LocalTarget {
   readonly kind: "local";
@@ -124,10 +80,14 @@ interface MemberTarget {
 }
 
 const reservedNames = new Set([
-  "abstract", "and", "as", "async", "await", "break", "catch", "class", "cleanup", "component", "computed", "const", "continue",
-  "def", "else", "export", "extends", "false", "finally", "for", "from", "if", "import", "in", "is", "js", "let", "mounted",
-  "match", "case", "enum", "none", "not", "or", "override", "pass", "private", "resource", "action", "return", "state", "static", "style", "super", "throw", "assert", "true", "try", "type", "unsafe", "watch", "while",
+  "abstract", "and", "as", "async", "await", "break", "case", "catch", "class", "const", "continue",
+  "def", "else", "enum", "export", "extends", "extern", "false", "finally", "for", "from", "if", "import", "in", "is", "js", "let",
+  "match", "module", "none", "not", "or", "override", "pass", "private", "return", "static", "super", "throw", "assert", "true", "try", "type", "unsafe", "while",
 ]);
+
+function reservedName(project: ProjectResult, name: string): boolean {
+  return reservedNames.has(name) || project.compilerExtensions.some((extension) => Object.hasOwn(extension.lexical?.keywords ?? {}, name));
+}
 
 export function projectDefinitionAt(project: ProjectResult, path: string, offset: number): ProjectLocation | null {
   const module = moduleAt(project, path);
@@ -184,7 +144,7 @@ export function projectPrepareRenameAt(project: ProjectResult, path: string, off
   }
   const member = accessibleMemberTargetAt(project, module, offset);
   if (member) {
-    if (!renameableMember(member)) return null;
+    if (extensionRenameProtection(project, member) || !renameableMember(member)) return null;
     const selection = wordSpanAt(module.result.source.text, offset) ?? member.symbol.selectionSpan;
     return { edits: [{ path: module.inputPath, span: selection }], placeholder: member.symbol.name };
   }
@@ -201,7 +161,7 @@ export function projectRenameAt(
   newName: string,
 ): ProjectRename | ProjectRenameFailure {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(newName)) return "The new name is not a valid Velar identifier";
-  if (reservedNames.has(newName)) return "The new name is reserved by Velar";
+  if (reservedName(project, newName)) return "The new name is reserved by Velar";
   const module = moduleAt(project, path);
   if (!module) return "No renameable Velar symbol at this position";
   const enumMember = enumMemberTargetAt(project, module, offset);
@@ -212,7 +172,8 @@ export function projectRenameAt(
   }
   const member = accessibleMemberTargetAt(project, module, offset);
   if (member) {
-    if (protectedComponentProp(member)) return "The JSX children prop cannot be renamed";
+    const protection = extensionRenameProtection(project, member);
+    if (protection) return protection;
     if (!renameableMember(member)) return "No renameable Velar symbol at this position";
     if (member.symbol.name === newName) return { edits: [], placeholder: member.symbol.name };
     if (memberRenameCollides(project, member, newName)) return "The new name collides with another declaration";
@@ -328,26 +289,8 @@ export function projectMemberSymbolAt(project: ProjectResult, path: string, offs
 export function projectCompletionsAt(project: ProjectResult, path: string, offset: number): readonly ProjectCompletion[] {
   const module = moduleAt(project, path);
   if (!module) return [];
-  const jsxTag = jsxTagContextAt(module.result.source.text, offset);
-  if (jsxTag) {
-    const components = semanticVisibleSymbolsAt(module.result.semanticIndex, offset).filter((symbol) => symbol.kind === "component"
-      || (symbol.kind === "import" && symbol.type?.startsWith("component "))).map((symbol) => {
-      const resolved = projectSymbolAt(project, module.inputPath, symbol.selectionSpan.start) ?? symbol;
-      return {
-        label: symbol.name,
-        detail: symbol.type ?? "component",
-        kind: symbol.kind,
-        ...(resolved.documentation ? { documentation: resolved.documentation } : {}),
-      };
-    });
-    return [
-      ...components,
-      ...nativeJsxTags.map((label) => ({ label, detail: "native Web element", kind: "component" as const })),
-      ...nativeSvgTags.map((label) => ({ label, detail: "native SVG element", kind: "component" as const })),
-    ]
-      .filter((item, index, items) => item.label.startsWith(jsxTag.prefix)
-        && items.findIndex((candidate) => candidate.label === item.label) === index);
-  }
+  const extensionCompletion = extensionCompletionAt(project, module, offset);
+  if (extensionCompletion) return extensionCompletion.completions;
   const memberAccess = memberAccessAt(module.result.source.text, offset);
   if (memberAccess) {
     const owner = memberAccess.ownerOffset === null ? null : projectSymbolAt(project, module.inputPath, memberAccess.ownerOffset);
@@ -367,26 +310,6 @@ export function projectCompletionsAt(project: ProjectResult, path: string, offse
         ...(declared?.symbol.documentation ? { documentation: declared.symbol.documentation } : {}),
       };
     });
-  }
-  const jsx = jsxAttributeContextAt(module.result.source.text, offset);
-  if (jsx) {
-    const common = jsx.component
-      ? jsxControlCompletions
-      : svgElementNames.has(jsx.tag)
-        ? [...nativeJsxCompletions, ...nativeSvgCompletions]
-        : nativeJsxCompletions;
-    const componentTarget = jsx.component ? targetAt(project, module, jsx.tagOffset, "definition") : null;
-    const component = componentTarget?.symbol.members.map((member) => {
-      const declared = findDeclaredMember(project, componentTarget, member.name, false, new Set());
-      return {
-        label: member.name,
-        detail: member.type,
-        kind: member.kind,
-        ...(declared?.symbol.documentation ? { documentation: declared.symbol.documentation } : {}),
-      };
-    }) ?? [];
-    return [...component, ...common].filter((item, index, items) => !jsx.used.has(item.label)
-      && items.findIndex((candidate) => candidate.label === item.label) === index);
   }
   const object = objectFieldContextAt(module.result.semanticIndex, module.result.source.text, offset);
   if (object) {
@@ -436,21 +359,52 @@ export function projectCompletionContextAt(project: ProjectResult, path: string,
   const module = moduleAt(project, path);
   if (!module) return "ordinary";
   const source = module.result.source.text;
-  if (jsxTagContextAt(source, offset)) return "jsx-tag";
+  const extension = extensionCompletionAt(project, module, offset);
+  if (extension) return `extension:${extension.extensionId}:${extension.context}`;
   if (memberAccessAt(source, offset)) return "member";
-  const jsx = jsxAttributeContextAt(source, offset);
-  if (jsx) return jsx.component ? "component-attribute" : "native-attribute";
   if (objectFieldContextAt(module.result.semanticIndex, source, offset)) return "object-field";
   return "ordinary";
 }
 
-function jsxTagContextAt(source: string, offset: number): { readonly prefix: string } | null {
-  const end = Math.min(Math.max(0, offset), source.length);
-  const before = source.slice(0, end);
-  const opening = before.lastIndexOf("<");
-  if (opening < 0 || before.lastIndexOf(">") > opening) return null;
-  const match = /^<\/?([A-Za-z0-9_]*)$/u.exec(source.slice(opening, end));
-  return match ? { prefix: match[1]! } : null;
+function extensionCompletionAt(project: ProjectResult, module: ProjectModule, offset: number): {
+  readonly extensionId: string;
+  readonly context: string;
+  readonly completions: readonly ProjectCompletion[];
+} | null {
+  const extensions = project.compilerExtensions.filter((extension) => extension.editor?.project?.complete);
+  if (extensions.length === 0) return null;
+  const visibleSymbols = semanticVisibleSymbolsAt(module.result.semanticIndex, offset).map((symbol) => {
+    const resolved = projectSymbolAt(project, module.inputPath, symbol.selectionSpan.start) ?? symbol;
+    return {
+      label: symbol.name,
+      detail: symbol.type ?? symbol.kind,
+      kind: symbol.kind,
+      ...(resolved.documentation ? { documentation: resolved.documentation } : {}),
+    };
+  });
+  const membersAt = (memberOffset: number): readonly ProjectCompletion[] => {
+    const target = targetAt(project, module, memberOffset, "definition");
+    if (!target) return [];
+    return target.symbol.members.map((member) => {
+      const declared = findDeclaredMember(project, target, member.name, false, new Set());
+      return {
+        label: member.name,
+        detail: member.type,
+        kind: member.kind,
+        ...(declared?.symbol.documentation ? { documentation: declared.symbol.documentation } : {}),
+      };
+    });
+  };
+  for (const extension of extensions) {
+    const result = extension.editor!.project!.complete!({
+      source: module.result.source.text,
+      offset,
+      visibleSymbols,
+      membersAt,
+    });
+    if (result) return { extensionId: extension.id, context: result.context, completions: result.completions };
+  }
+  return null;
 }
 
 function objectFieldContextAt(index: SemanticIndex, source: string, offset: number): {
@@ -489,48 +443,6 @@ function objectFieldContextAt(index: SemanticIndex, source: string, offset: numb
     if (match) used.add(match[1]!);
   }
   return { expression, used };
-}
-
-function jsxAttributeContextAt(source: string, offset: number): {
-  readonly component: boolean;
-  readonly tag: string;
-  readonly tagOffset: number;
-  readonly used: ReadonlySet<string>;
-} | null {
-  const end = Math.min(Math.max(0, offset), source.length);
-  const before = source.slice(0, end);
-  const opening = before.lastIndexOf("<");
-  if (opening < 0 || before.lastIndexOf(">") > opening || source[opening + 1] === "/") return null;
-  const fragment = source.slice(opening, end);
-  const tag = /^<([A-Za-z][A-Za-z0-9_]*)\b/u.exec(fragment);
-  if (!tag) return null;
-  const attributesStart = tag[0].length;
-  let quote: string | null = null;
-  let depth = 0;
-  let escaped = false;
-  let visible = "";
-  for (const character of fragment.slice(attributesStart)) {
-    if (quote) {
-      visible += " ";
-      if (!escaped && character === quote) quote = null;
-      escaped = !escaped && character === "\\";
-      if (character !== "\\") escaped = false;
-      continue;
-    }
-    if (character === "\"" || character === "'") { quote = character; visible += " "; continue; }
-    if (character === "{") { depth += 1; visible += " "; continue; }
-    if (character === "}") { depth = Math.max(0, depth - 1); visible += " "; continue; }
-    visible += depth === 0 ? character : " ";
-  }
-  if (quote || depth > 0) return null;
-  const used = new Set<string>();
-  for (const match of visible.matchAll(/([A-Za-z_][A-Za-z0-9_.:-]*)\s*(?==|\s|$)/gu)) used.add(match[1]!);
-  return {
-    component: /^[A-Z]/u.test(tag[1]!),
-    tag: tag[1]!,
-    tagOffset: opening + 1,
-    used,
-  };
 }
 
 function memberAccessAt(source: string, offset: number): { readonly ownerOffset: number | null; readonly ownerEnd: number } | null {
@@ -744,17 +656,27 @@ function renameableMember(target: MemberTarget): boolean {
   if (!target.symbol.container) return false;
   if (target.symbol.kind === "method") return true;
   if (target.symbol.kind === "parameter") {
-    return !protectedComponentProp(target)
-      && target.module.result.semanticIndex.symbols.some((symbol) => symbol.kind === "component" && symbol.name === target.symbol.container);
+    return target.module.result.semanticIndex.symbols.some((symbol) => symbol.kind === "component" && symbol.name === target.symbol.container);
   }
   if (target.symbol.kind !== "field") return false;
   return target.module.result.semanticIndex.symbols.some((symbol) => (symbol.kind === "type" || symbol.kind === "class")
     && symbol.name === target.symbol.container);
 }
 
-function protectedComponentProp(target: MemberTarget): boolean {
-  return target.symbol.kind === "parameter" && target.symbol.container !== undefined && target.symbol.name === "children"
-    && target.module.result.semanticIndex.symbols.some((symbol) => symbol.kind === "component" && symbol.name === target.symbol.container);
+function extensionRenameProtection(project: ProjectResult, target: MemberTarget): string | null {
+  const containerKind = target.symbol.container
+    ? target.module.result.semanticIndex.symbols.find((symbol) => symbol.name === target.symbol.container)?.kind ?? null
+    : null;
+  for (const extension of project.compilerExtensions) {
+    const message = extension.editor?.project?.protectRename?.({
+      name: target.symbol.name,
+      kind: target.symbol.kind,
+      container: target.symbol.container ?? null,
+      containerKind,
+    });
+    if (message) return message;
+  }
+  return null;
 }
 
 function memberRenameCollides(project: ProjectResult, target: MemberTarget, newName: string): boolean {

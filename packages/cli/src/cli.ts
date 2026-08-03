@@ -4,23 +4,23 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:f
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { formatDiagnostic, formatSource } from "@velarscript/compiler";
 import type { CompileResult } from "@velarscript/compiler";
+import { createVelarProject, parseCreateArguments } from "create-velar";
 import { compileProject, projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { runDevServer } from "./dev-server.ts";
-import { createWebArtifacts } from "./web.ts";
+import { createFrameworkArtifacts } from "./framework-host.ts";
 import { runLanguageServer } from "./language-server.ts";
-import { resolveBrowserNpm } from "./npm.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
-import { standardModuleRoute, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
 import { runBrowserTests, type BrowserEngineSelection } from "./browser-test-runner.ts";
-import { buildProductionWeb, writeProductionManifest } from "./production-build.ts";
+import { buildProductionFramework, writeProductionManifest } from "./production-build.ts";
 import { VELAR_VERSION } from "./version.ts";
-import { createVelarProject, upgradeVelarProject } from "./project-lifecycle.ts";
 import { copyPublicAssets, writeStaticDeployment } from "./static-deployment.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { runProductionPreview } from "./preview-server.ts";
 import { createDeploymentVerificationReport, verifyRemoteDeployment } from "./deployment-verifier.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile } from "./source-limits.ts";
+import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
 
 
 interface CommandArguments {
@@ -104,13 +104,14 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
 
   if (command === "create") {
-    if (rest.length !== 1 || rest[0]?.startsWith("--")) {
-      process.stderr.write("velar create: expected one project directory\n");
+    const parsed = parseCreateArguments(rest);
+    if (typeof parsed === "string") {
+      process.stderr.write(`velar create: ${parsed}\n`);
       return 2;
     }
     try {
-      const root = await createVelarProject(rest[0]!);
-      process.stdout.write(`Created Velar project -> ${root}\n`);
+      const result = await createVelarProject(parsed.directory, { template: parsed.template });
+      process.stdout.write(`Created Velar ${result.template} project -> ${result.root}\n`);
       return 0;
     } catch (error) {
       process.stderr.write(`velar create: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -118,22 +119,18 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
   }
 
-  if (command === "upgrade") {
-    const parsed = parseUpgradeArguments(rest);
+  if (command === "install" || command === "add" || command === "remove" || command === "update") {
+    const parsed = parseDependencyArguments(command, rest);
     if (typeof parsed === "string") {
-      process.stderr.write(`velar upgrade: ${parsed}\n`);
+      process.stderr.write(`velar ${command}: ${parsed}\n`);
       return 2;
     }
     try {
-      const result = await upgradeVelarProject(parsed.input, parsed.check);
-      if (result.changed && parsed.check) {
-        process.stderr.write(`${result.manifestPath} requires a formatVersion upgrade\n`);
-        return 1;
-      }
-      process.stdout.write(result.changed ? `Upgraded ${result.manifestPath}\n` : `${result.manifestPath} is current\n`);
+      const result = await runDependencyCommand(command, parsed);
+      process.stdout.write(dependencyResultMessage(command, result.root, result.packages, result.activatedExtensions, result.removedExtensions));
       return 0;
     } catch (error) {
-      process.stderr.write(`velar upgrade: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar ${command}: ${error instanceof Error ? error.message : String(error)}\n`);
       return 1;
     }
   }
@@ -146,7 +143,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     try {
       const verified = await verifyProductionBuild(input);
-      process.stdout.write(`Verified production Web build ${verified.manifest.buildId} -> ${verified.directory}\n`);
+      process.stdout.write(`Verified production ${verified.manifest.framework.capability} build ${verified.manifest.buildId} -> ${verified.directory}\n`);
       return 0;
     } catch (error) {
       process.stderr.write(`velar verify: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -188,7 +185,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
         process.stdout.write(`${JSON.stringify(createDeploymentVerificationReport(verified, deployment), null, 2)}\n`);
       } else {
         process.stdout.write(
-          `Verified deployed Web build ${deployment.buildId} at ${deployment.url} `
+          `Verified deployed ${verified.manifest.framework.capability} build ${deployment.buildId} at ${deployment.url} `
           + `(${deployment.checkedFiles} files, ${deployment.checkedRoutes} routes, ${deployment.checkedHeaders} headers)\n`,
         );
       }
@@ -265,11 +262,12 @@ async function main(arguments_: readonly string[]): Promise<number> {
     let projectConfig: VelarProjectConfig;
     try {
       projectConfig = await resolveVelarProject(parsed.input);
+      if (!projectConfig.framework) throw new Error("the project does not declare an application framework host");
+      await runDevServer(projectConfig, parsed.port);
     } catch (error) {
       process.stderr.write(`velar dev: ${error instanceof Error ? error.message : String(error)}\n`);
       return 1;
     }
-    await runDevServer(projectConfig, parsed.port);
     return 0;
   }
 
@@ -351,21 +349,26 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
 
   const outputDirectory = parsed.outputDirectory ? resolve(parsed.outputDirectory) : projectConfig.outDir;
-  if (project.modules.some((module) => module.result.web)) {
+  if (project.framework) {
     const parent = dirname(outputDirectory);
     await mkdir(parent, { recursive: true });
     const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
     try {
       await copyPublicAssets(project.publicRoot, staging);
-      const production = await buildProductionWeb(project, staging);
-      const web = createWebArtifacts(project, false, {}, {
+      const production = await buildProductionFramework(project, staging);
+      const artifacts = createFrameworkArtifacts(project, false, {}, {
         entryPath: production.entryPath,
         stylesheetPath: production.stylesheetPath,
         includeStandardImports: false,
       });
-      if (!web) throw new Error("A production Web build did not create an HTML entry");
-      await writeFile(join(staging, "index.html"), web.html, "utf8");
-      const deployment = await writeStaticDeployment(staging, web.html, project.webConfig);
+      if (!artifacts) throw new Error("The framework host did not create an application entry");
+      await writeFile(join(staging, "index.html"), artifacts.html, "utf8");
+      const deployment = await writeStaticDeployment(
+        staging,
+        artifacts.html,
+        project.framework.host.staticDeployment(project.framework.config),
+        production.framework,
+      );
       await writeProductionManifest(staging, production, deployment);
       await rm(outputDirectory, { recursive: true, force: true });
       await rename(staging, outputDirectory);
@@ -374,7 +377,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stderr.write(`velar build: ${error instanceof Error ? error.message : String(error)}\n`);
       return 1;
     }
-    process.stdout.write(`Built production Web app -> ${outputDirectory}\n`);
+    process.stdout.write(`Built production ${project.framework.host.displayName} app -> ${outputDirectory}\n`);
     return 0;
   }
   for (const module of project.modules) {
@@ -383,35 +386,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
     await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module));
   }
   await writeNodeStandardModules(outputDirectory, project);
-  const npm = project.modules.some((module) => module.result.web)
-    ? await resolveBrowserNpm(project)
-    : { packages: [], imports: {}, failures: [] };
-  if (npm.failures.length > 0) {
-    process.stderr.write(`${npm.failures.join("\n")}\n`);
-    return 1;
-  }
-  const web = createWebArtifacts(project, false, npm.imports);
-  if (web) {
-    await writeFile(join(outputDirectory, "index.html"), web.html, "utf8");
-    if (web.css) await writeFile(join(outputDirectory, "styles.css"), web.css, "utf8");
-    for (const [source, code] of standardModuleSources) {
-      const outputPath = join(outputDirectory, standardModuleRoute(source));
-      await mkdir(dirname(outputPath), { recursive: true });
-      await writeFile(outputPath, standardModuleSource(source, project.webConfig) ?? code, "utf8");
-    }
-    await copyPublicAssets(project.publicRoot, outputDirectory);
-    for (const package_ of npm.packages) {
-      throw new Error(`Unoptimized Web package copy is unsupported for '${package_.route}'; use a production project build`);
-    }
-  }
   process.stdout.write(`Built ${project.modules.length} module${project.modules.length === 1 ? "" : "s"} -> ${outputDirectory}\n`);
   return 0;
 }
 
 async function writeNodeStandardModules(outputRoot: string, project: ProjectResult): Promise<void> {
+  const sources = standardModuleSources(project.compilerExtensions);
   const used = new Set(project.modules.flatMap((module) => module.result.dependencies
     .map((dependency) => dependency.source)
-    .filter((source) => standardModuleSources.has(source))));
+    .filter((source) => sources.has(source))));
   if (used.size === 0) return;
   const packageRoot = join(outputRoot, "node_modules", "velar");
   await mkdir(packageRoot, { recursive: true });
@@ -419,7 +402,7 @@ async function writeNodeStandardModules(outputRoot: string, project: ProjectResu
   for (const source of [...used].sort()) {
     const name = source.slice("velar/".length);
     exports[`./${name}`] = `./${name}.js`;
-    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, project.webConfig)!, "utf8");
+    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, project.extensionConfig, project.compilerExtensions)!, "utf8");
   }
   await writeFile(join(packageRoot, "package.json"), `${JSON.stringify({ name: "velar", private: true, type: "module", exports }, null, 2)}\n`, "utf8");
 }
@@ -606,23 +589,13 @@ function parseDeploymentVerificationArguments(arguments_: readonly string[]): De
   return { input, url, json };
 }
 
-function parseUpgradeArguments(arguments_: readonly string[]): { readonly input: string | null; readonly check: boolean } | string {
-  let input: string | null = null;
-  let check = false;
-  for (const argument of arguments_) {
-    if (argument === "--check") check = true;
-    else if (argument.startsWith("--")) return `unknown option '${argument}'`;
-    else if (input) return `unexpected extra input '${argument}'`;
-    else input = argument;
-  }
-  return { input, check };
-}
-
 function compileConfiguredProject(config: VelarProjectConfig) {
   return compileProject(config.entryPath, new Map(), {
     projectRoot: config.root,
     publicRoot: config.publicDir,
-    web: config.web,
+    extensions: config.compilerExtensions,
+    extensionConfig: config.extensionConfig,
+    framework: config.framework,
   });
 }
 
@@ -662,8 +635,11 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "",
     "Usage:",
     "  velar check [entry.vel | project-directory]",
-    "  velar create <project-directory>",
-    "  velar upgrade [project-directory] [--check]",
+    "  velar create <project-directory> [--template <web|docs|library|component>]",
+    "  velar install",
+    "  velar add <package[@version]>... [--dev]",
+    "  velar remove <package>...",
+    "  velar update [package...]",
     "  velar dev [entry.vel | project-directory] [--port <port>]",
     "  velar build [entry.vel | project-directory] [--out-dir <directory>]",
     "  velar verify [project-directory | build-directory]",
@@ -680,17 +656,20 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 }
 
 const commandNames = new Set([
-  "check", "create", "upgrade", "dev", "build", "verify", "preview",
+  "check", "create", "install", "add", "remove", "update", "dev", "build", "verify", "preview",
   "verify-deployment", "test", "format", "lsp",
 ]);
 
 function printCommandHelp(command: string, output: NodeJS.WritableStream = process.stdout): void {
   const details: Readonly<Record<string, readonly string[]>> = {
     check: ["Usage: velar check [entry.vel | project-directory]", "Type-checks the whole resolved project without writing build output."],
-    create: ["Usage: velar create <project-directory>", "Creates a versioned Web project, Core test, browser test, and npm scripts."],
-    upgrade: ["Usage: velar upgrade [project-directory] [--check]", "Upgrades an older manifest, or reports required changes without writing with --check."],
+    create: ["Usage: velar create <project-directory> [--template <web|docs|library|component>]", "Creates a transactional Web app, documentation site, Core source library, or Web component source package without installing dependencies."],
+    install: ["Usage: velar install", "Installs the current Velar project's declared dependencies through npm, then validates the project."],
+    add: ["Usage: velar add <package[@version]>... [--dev]", "Adds npm registry packages and activates packages that declare velar.extension metadata."],
+    remove: ["Usage: velar remove <package>...", "Removes npm packages and their extension-owned Velar project configuration."],
+    update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Runs the development server; the default port is 5173."],
-    build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated production Web output or JavaScript modules."],
+    build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated framework application output or JavaScript modules."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],
     preview: ["Usage: velar preview [project-directory | build-directory] [--port <1-65535>]", "Serves only a verified production build; the default port is 4173."],
     "verify-deployment": ["Usage: velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]", "Compares verified local bytes, routes, MIME types, and headers with an HTTPS deployment."],
@@ -699,6 +678,24 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     lsp: ["Usage: velar lsp", "Runs the stdio language server for an editor host."],
   };
   output.write(["Velar Compiler", "", ...(details[command] ?? []), ""].join("\n"));
+}
+
+function dependencyResultMessage(
+  action: DependencyAction,
+  root: string,
+  packages: readonly string[],
+  activated: readonly string[],
+  removed: readonly string[],
+): string {
+  if (action === "install") return `Installed and validated Velar project dependencies -> ${root}\n`;
+  const names = packages.length > 0 ? packages.join(", ") : "all direct dependencies";
+  const detail = activated.length > 0
+    ? `; activated extensions: ${activated.join(", ")}`
+    : removed.length > 0
+      ? `; removed extensions: ${removed.join(", ")}`
+      : "";
+  const verb = action === "add" ? "Added" : action === "remove" ? "Removed" : "Updated";
+  return `${verb} ${names}${detail} -> ${root}\n`;
 }
 
 try {

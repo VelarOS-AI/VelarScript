@@ -1,11 +1,8 @@
 import type {
-  ActionDeclaration,
   ArrowFunctionExpression,
   AssignmentStatement,
   BindingPattern,
   ClassDeclaration,
-  ComponentDeclaration,
-  ComponentItem,
   Expression,
   ExternClassDeclaration,
   ExternFunctionDeclaration,
@@ -18,6 +15,7 @@ import type {
   TypeReference,
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import type { CompilerAnalysisExtension } from "./extension.ts";
 import type { Span } from "./source.ts";
 import {
   anyType,
@@ -53,21 +51,14 @@ interface MemberNarrowing {
   readonly frame: number;
 }
 
-function jsxMapExpression(expression: Expression): (Extract<Expression, { kind: "ArrowFunctionExpression" }> & { readonly body: Extract<Expression, { kind: "JSXElementExpression" }> }) | null {
-  if (expression.kind !== "CallExpression" || expression.callee.kind !== "MemberExpression" || expression.callee.property !== "map") return null;
-  const callback = expression.arguments[0];
-  return callback?.kind === "ArrowFunctionExpression" && !callback.asynchronous && callback.body.kind === "JSXElementExpression"
-    ? callback as typeof callback & { readonly body: Extract<Expression, { kind: "JSXElementExpression" }> }
-    : null;
-}
-
-function containsPromise(type: ValueType): boolean {
-  if (type.kind === "promise") return true;
-  if (type.kind === "optional") return containsPromise(type.inner);
-  if (type.kind === "list" || type.kind === "set") return containsPromise(type.element);
-  if (type.kind === "map") return containsPromise(type.key) || containsPromise(type.value);
-  if (type.kind === "union") return type.members.some(containsPromise);
-  return false;
+interface AnalyzableFunctionDeclaration {
+  readonly kind: string;
+  readonly name: string;
+  readonly parameters: FunctionDeclaration["parameters"];
+  readonly returnType: FunctionDeclaration["returnType"];
+  readonly body: FunctionDeclaration["body"];
+  readonly span: Span;
+  readonly asynchronous?: boolean;
 }
 
 function continuesOptionalChain(expression: Expression): boolean {
@@ -81,28 +72,6 @@ function continuesOptionalChain(expression: Expression): boolean {
     return continuesOptionalChain(expression.callee);
   }
   return false;
-}
-
-function hasAccessibleJsxContent(expression: Extract<Expression, { kind: "JSXElementExpression" }>): boolean {
-  return expression.children.some((child) => {
-    if (child.kind === "JSXText") return child.value.trim().length > 0;
-    if (child.kind === "JSXExpressionChild") return true;
-    return hasAccessibleJsxContent(child) || child.tag.length > 0;
-  });
-}
-
-function hasAccessibleSvgName(expression: Extract<Expression, { kind: "JSXElementExpression" }>): boolean {
-  const named = expression.attributes.some((attribute) => {
-    if (attribute.name !== "aria-label" && attribute.name !== "aria-labelledby") return false;
-    if (attribute.value === null) return false;
-    return typeof attribute.value !== "string" || attribute.value.trim().length > 0;
-  });
-  if (named) return true;
-  const hidden = expression.attributes.find((attribute) => attribute.name === "aria-hidden");
-  if (hidden?.value === "true" || (hidden?.value && typeof hidden.value !== "string"
-    && hidden.value.kind === "LiteralExpression" && hidden.value.value === true)) return true;
-  return expression.children.some((child) => child.kind === "JSXElementExpression"
-    && child.tag === "title" && hasAccessibleJsxContent(child));
 }
 
 export interface ClassField {
@@ -168,18 +137,11 @@ export interface AnalysisContext {
   readonly classes?: ReadonlyMap<string, ClassInfo>;
 }
 
-const primitiveNames = new Set(["string", "number", "bool", "none", "unknown", "WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Event", "KeyboardEvent", "PointerEvent", "InputEvent"]);
+const corePrimitiveNames = new Set(["string", "number", "bool", "none", "unknown"]);
 const reservedBindings = new Set(["Map", "Set", "Error", "number", "print", "self", "str"]);
-const jsxControlAttributes = new Set(["if", "else-if", "else"]);
 const memberNarrowingPrefix = "\u0000member:";
-const wrappedGlobalGuidance = new Map([
+const coreGlobalGuidance = new Map([
   ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
-  ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
-  ["window", "Use velar/browser or an explicit JavaScript boundary instead of the untyped window global"],
-  ["navigator", "Use velar/browser instead of the navigator global"],
-  ["location", "Use velar/browser location() or velar/web navigation instead of the location global"],
-  ["history", "Use velar/web navigation instead of the history global"],
-  ["fetch", "Use velar/http instead of the raw fetch global"],
   ["JSON", "Use velar/json instead of the JSON global"],
   ["Math", "Use velar/math instead of the Math global"],
   ["Date", "Use velar/time instead of the Date global"],
@@ -189,7 +151,7 @@ const wrappedGlobalGuidance = new Map([
 ]);
 
 export class Analyzer implements TypeEnvironment {
-  private readonly diagnostics: Diagnostic[] = [];
+  protected readonly diagnostics: Diagnostic[] = [];
   private readonly scopes: Map<string, Binding>[] = [new Map()];
   private readonly memberNarrowings: Map<string, MemberNarrowing>[] = [new Map()];
   private readonly namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -212,8 +174,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly optionalCallees = new Set<number>();
   private readonly presenceConditions = new Set<number>();
   private readonly optionalNegations = new Set<number>();
-  private readonly reactiveBindings = new Map<string, "state" | "computed">();
-  private readonly enumValueBindings = new Map<number, string>();
+  protected readonly reactiveBindings = new Map<string, "state" | "computed">();
+  protected readonly enumValueBindings = new Map<number, string>();
   private readonly exhaustiveMatches = new Set<number>();
   private readonly membershipChecks = new Map<number, "includes" | "has">();
   private readonly formReads = new Map<number, readonly FormReadField[]>();
@@ -225,7 +187,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly semanticExpressionOwners = new Map<string, ValueType>();
   private readonly semanticObjectPropertyOwners = new Map<string, ValueType>();
   private readonly semanticBindingEntryOwners = new Map<string, ValueType>();
-  private readonly semanticJsxAttributeOwners = new Map<string, ValueType>();
+  protected readonly semanticJsxAttributeOwners = new Map<string, ValueType>();
   private readonly semanticExpressionContexts = new Map<string, ValueType>();
   private readonly semanticExpressionContextMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly privateFields = new Map<string, Map<string, ClassField>>();
@@ -239,13 +201,16 @@ export class Analyzer implements TypeEnvironment {
   private parameterDefaultDepth = 0;
   private loopDepth = 0;
   private currentClass: string | null = null;
-  private componentStates: Set<string> | null = null;
-  private mountedDepth = 0;
   private classFieldInitializerDepth = 0;
-  private classInitDepth = 0;
-  private flowFrameDepth = 0;
+  protected classInitDepth = 0;
+  protected flowFrameDepth = 0;
+  private readonly primitiveNames = new Set(corePrimitiveNames);
+  private readonly extensionGlobals = new Map<string, ValueType>();
+  private readonly globalGuidance = new Map(coreGlobalGuidance);
+  private readonly analysisExtensions: readonly CompilerAnalysisExtension[];
 
-  constructor(context: AnalysisContext = {}) {
+  constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
+    this.analysisExtensions = extensions;
     this.classes.set("Error", {
       parameters: [stringType],
       requiredParameters: 0,
@@ -271,6 +236,11 @@ export class Analyzer implements TypeEnvironment {
     for (const [name, type] of context.typeAliases ?? []) this.typeAliases.set(name, type);
     for (const [name, members] of context.enums ?? []) this.enums.set(name, members);
     for (const [name, info] of context.classes ?? []) this.classes.set(name, info);
+    for (const extension of extensions) {
+      for (const name of extension.primitiveTypes ?? []) this.primitiveNames.add(name);
+      for (const [name, type] of extension.globals ?? []) this.extensionGlobals.set(name, type);
+      for (const [name, guidance] of extension.globalGuidance ?? []) this.globalGuidance.set(name, guidance);
+    }
   }
 
   private readonly importBindings: ReadonlyMap<string, ValueType>;
@@ -340,8 +310,7 @@ export class Analyzer implements TypeEnvironment {
       } else if (statement.kind === "FunctionDeclaration") {
         this.declareBinding(statement.name, false, this.functionType(statement), statement.span);
         this.predeclared.add(statement);
-      } else if (statement.kind === "ComponentDeclaration") {
-        this.declareBinding(statement.name, false, this.componentType(statement), statement.span);
+      } else if (this.predeclareExtensionStatement(statement)) {
         this.predeclared.add(statement);
       }
     }
@@ -470,7 +439,35 @@ export class Analyzer implements TypeEnvironment {
   }
 
   fieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
-    return this.namedTypes.get(name) ?? webTypeFields(name);
+    return this.namedTypes.get(name) ?? this.extensionFieldsOf(name);
+  }
+
+  protected predeclareExtensionStatement(_statement: Statement): boolean {
+    return false;
+  }
+
+  protected analyzeExtensionStatement(_statement: Statement): boolean {
+    return false;
+  }
+
+  protected inferExtensionExpression(_expression: Expression, _contextualType: ValueType): ValueType | undefined {
+    return undefined;
+  }
+
+  protected extensionFieldsOf(_name: string): ReadonlyMap<string, ValueType> | null {
+    return null;
+  }
+
+  protected invalidExtensionAwaitContext(): boolean {
+    return false;
+  }
+
+  protected isTopLevelScope(): boolean {
+    return this.scopes.length === 1;
+  }
+
+  protected isPredeclared(statement: object): boolean {
+    return this.predeclared.has(statement);
   }
 
   isSubclassOf(actual: string, expected: string): boolean {
@@ -535,7 +532,7 @@ export class Analyzer implements TypeEnvironment {
     for (const name of declarations.keys()) expand({ kind: "named", name });
   }
 
-  private expandAliases(type: ValueType, seen: ReadonlySet<string> = new Set()): ValueType {
+  protected expandAliases(type: ValueType, seen: ReadonlySet<string> = new Set()): ValueType {
     if (type.kind === "named" && this.typeAliases.has(type.name)) {
       if (seen.has(type.name)) return unknownType;
       return this.expandAliases(this.typeAliases.get(type.name)!, new Set([...seen, type.name]));
@@ -673,7 +670,8 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private analyzeStatement(statement: Statement): void {
+  protected analyzeStatement(statement: Statement): void {
+    if (this.analyzeExtensionStatement(statement)) return;
     switch (statement.kind) {
       case "ImportDeclaration":
         if (!this.predeclared.has(statement)) {
@@ -779,9 +777,6 @@ export class Analyzer implements TypeEnvironment {
         }
         for (const declaration of statement.constants) this.validateType(this.resolveExternAnnotation(declaration.type, statement.source, new Set(statement.classes.map((item) => item.name))), declaration.span);
         break;
-      case "ComponentDeclaration":
-        this.analyzeComponent(statement);
-        break;
       case "TypeDeclaration":
         this.analyzeTypeDeclaration(statement);
         break;
@@ -814,47 +809,6 @@ export class Analyzer implements TypeEnvironment {
         if (statement.type) this.validateType(declared, statement.type.span);
         this.requireAssignable(actual, declared, statement.initializer.span);
         this.declarePattern(statement.pattern, statement.binding === "let", declared);
-        break;
-      }
-      case "StateDeclaration":
-      case "ComputedDeclaration": {
-        if (this.scopes.length !== 1) {
-          this.diagnostics.push(diagnostic("VEL3010", `'${statement.kind === "StateDeclaration" ? "state" : "computed"}' is only valid at module or component scope`, statement.span));
-          break;
-        }
-        const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
-        if (statement.kind === "ComputedDeclaration") this.flowFrameDepth += 1;
-        const actual = this.inferExpression(statement.initializer, annotated ?? unknownType);
-        if (statement.kind === "ComputedDeclaration") this.flowFrameDepth -= 1;
-        const declared = annotated ?? actual;
-        if (statement.type) this.validateType(declared, statement.type.span);
-        this.requireAssignable(actual, declared, statement.initializer.span);
-        const kind = statement.kind === "StateDeclaration" ? "state" : "computed";
-        this.declareBinding(statement.name, kind === "state", declared, statement.span);
-        this.reactiveBindings.set(statement.name, kind);
-        break;
-      }
-      case "ResourceDeclaration":
-        this.diagnostics.push(diagnostic("VEL3012", "'resource' is only valid at component scope", statement.span));
-        this.analyzeResourceDeclaration(statement);
-        break;
-      case "ActionDeclaration":
-        this.diagnostics.push(diagnostic("VEL3013", "'action' is only valid at component scope", statement.span));
-        this.analyzeActionDeclaration(statement);
-        break;
-      case "WatchDeclaration": {
-        if (this.scopes.length !== 1) {
-          this.diagnostics.push(diagnostic("VEL3010", "'watch' is only valid at module or component scope", statement.span));
-          break;
-        }
-        this.flowFrameDepth += 1;
-        const watched = this.inferExpression(statement.expression);
-        this.enterScope();
-        if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
-        if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
-        for (const child of statement.body) this.analyzeStatement(child);
-        this.exitScope();
-        this.flowFrameDepth -= 1;
         break;
       }
       case "FunctionDeclaration":
@@ -1410,11 +1364,13 @@ export class Analyzer implements TypeEnvironment {
     return [...missing].sort();
   }
 
-  private analyzeFunctionDeclaration(
-    statement: FunctionDeclaration | ActionDeclaration,
+  protected analyzeFunctionDeclaration(
+    statement: AnalyzableFunctionDeclaration,
     className: string | null,
     method = false,
     declareSelf = Boolean(className),
+    forceAsynchronous = false,
+    declarationKind = "accessor" in statement ? "Getter" : "Function",
   ): void {
     const outerClassInitDepth = this.classInitDepth;
     if (!method && !className && !this.predeclared.has(statement)) {
@@ -1427,7 +1383,7 @@ export class Analyzer implements TypeEnvironment {
     this.loopDepth = 0;
     const previousClass = this.currentClass;
     this.currentClass = className ?? previousClass;
-    const asynchronous = statement.kind === "ActionDeclaration" || statement.asynchronous;
+    const asynchronous = forceAsynchronous || statement.asynchronous === true;
     this.asynchronousFunctions.push(asynchronous);
     const declaredReturn = this.resolveResult(statement.returnType);
     if (statement.returnType) this.validateType(declaredReturn, statement.returnType.span);
@@ -1452,7 +1408,6 @@ export class Analyzer implements TypeEnvironment {
       this.analyzeStatement(child);
     }
     if (statement.returnType && expectedReturn.kind !== "none" && !this.blockAlwaysReturns(statement.body)) {
-      const declarationKind = statement.kind === "ActionDeclaration" ? "Action" : "accessor" in statement ? "Getter" : "Function";
       this.diagnostics.push(diagnostic("VEL4006", `${declarationKind} '${statement.name}' can finish without returning ${describeType(expectedReturn)}`, statement.span));
     }
     this.returnTypes.pop();
@@ -1465,7 +1420,7 @@ export class Analyzer implements TypeEnvironment {
     this.classInitDepth = outerClassInitDepth;
   }
 
-  private analyzeBlock(statements: readonly Statement[], narrowed: ReadonlyMap<string, ValueType> = new Map()): void {
+  protected analyzeBlock(statements: readonly Statement[], narrowed: ReadonlyMap<string, ValueType> = new Map()): void {
     this.enterScope();
     this.applyNarrowings(narrowed, statements[0]?.span ?? { start: 0, end: 0 });
     for (const statement of statements) {
@@ -1552,7 +1507,7 @@ export class Analyzer implements TypeEnvironment {
     this.requireAssignable(valueType, targetType, statement.value.span);
   }
 
-  private inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
+  protected inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     const type = this.inferExpressionType(expression, contextualType);
     this.recordSemanticExpression(expression, type);
     return type;
@@ -1577,6 +1532,8 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private inferExpressionType(expression: Expression, contextualType: ValueType = unknownType): ValueType {
+    const extensionType = this.inferExtensionExpression(expression, contextualType);
+    if (extensionType) return extensionType;
     switch (expression.kind) {
       case "LiteralExpression":
         return expression.value === null ? noneType : typeof expression.value === "string" ? stringType : typeof expression.value === "number" ? numberType : boolType;
@@ -1590,7 +1547,7 @@ export class Analyzer implements TypeEnvironment {
       case "IdentifierExpression": {
         const binding = this.lookup(expression.name) ?? this.builtin(expression.name);
         if (!binding) {
-          const guidance = wrappedGlobalGuidance.get(expression.name);
+          const guidance = this.globalGuidance.get(expression.name);
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
         }
@@ -1663,8 +1620,8 @@ export class Analyzer implements TypeEnvironment {
             this.diagnostics.push(diagnostic("VEL4007", "'await' cannot be used directly in a class init block", expression.span));
           }
           const invalidFunctionAwait = this.functionDepth > 0 && !this.asynchronousFunctions.at(-1);
-          const invalidComponentAwait = this.functionDepth === 0 && this.componentStates !== null && this.mountedDepth === 0;
-          if (this.parameterDefaultDepth === 0 && this.classInitDepth === 0 && (invalidFunctionAwait || invalidComponentAwait)) {
+          const invalidExtensionAwait = this.functionDepth === 0 && this.invalidExtensionAwaitContext();
+          if (this.parameterDefaultDepth === 0 && this.classInitDepth === 0 && (invalidFunctionAwait || invalidExtensionAwait)) {
             this.diagnostics.push(diagnostic("VEL4007", "'await' can only be used in an async function, mounted block, or at module scope", expression.span));
           }
           const awaited = this.expandAliases(operand);
@@ -1745,8 +1702,8 @@ export class Analyzer implements TypeEnvironment {
         }
         return object.kind === "any" ? anyType : unknownType;
       }
-      case "JSXElementExpression":
-        return this.inferJsx(expression);
+      default:
+        return unknownType;
     }
   }
 
@@ -1817,14 +1774,14 @@ export class Analyzer implements TypeEnvironment {
     );
   }
 
-  private inferParameterDefault(expression: Expression, contextualType: ValueType = unknownType): ValueType {
+  protected inferParameterDefault(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     this.parameterDefaultDepth += 1;
     const result = this.inferExpression(expression, contextualType);
     this.parameterDefaultDepth -= 1;
     return result;
   }
 
-  private resolvedAsyncResult(type: ValueType): ValueType {
+  protected resolvedAsyncResult(type: ValueType): ValueType {
     const expanded = this.expandAliases(type);
     const resolved = resolvedAsyncType(expanded);
     return sameType(expanded, resolved) ? type : resolved;
@@ -2021,84 +1978,28 @@ export class Analyzer implements TypeEnvironment {
       return unknownType;
     };
 
+    for (const extension of this.analysisExtensions) {
+      const result = extension.inferIntrinsic?.({
+        intrinsic,
+        arguments: arguments_,
+        callSpan,
+        arity,
+        inferAt,
+        callbackAt,
+        runtimeTypeAt,
+        typeError: (message, errorSpan) => this.typeError(message, errorSpan),
+        isAssignable: (actual, expected) => isAssignable(actual, expected, this),
+        expandAliases: (type) => this.expandAliases(type),
+        jsonSerializable: (type) => this.jsonSerializable(type),
+        isHttpFormBody: (type) => this.isHttpFormBody(type),
+        declaredFieldsOf: (name) => this.namedTypes.get(name) ?? null,
+        formReadField: (name, type, fieldSpan) => this.formReadField(name, type, fieldSpan),
+        recordFormRead: (spanStart, fields) => this.formReads.set(spanStart, fields),
+      });
+      if (result) return result;
+    }
+
     switch (intrinsic.name) {
-      case "web.route": {
-        arity(2, 2);
-        inferAt(0, stringType);
-        const component = inferAt(1);
-        const path = arguments_[0];
-        if (path?.kind === "LiteralExpression" && typeof path.value === "string") {
-          this.checkRoutePath(path.value, path.span);
-        }
-        this.checkRouteComponent(component, arguments_[1]?.span ?? callSpan, "A route");
-        return { kind: "object", fields: new Map([["path", stringType], ["component", anyType]]) };
-      }
-      case "web.lazy": {
-        arity(2, 4);
-        const loader = inferAt(0);
-        inferAt(1, stringType);
-        const loadingFallback = inferAt(2);
-        const failedFallback = inferAt(3);
-        const loaderExpression = arguments_[0];
-        if (loaderExpression?.kind !== "ArrowFunctionExpression"
-          || loaderExpression.parameters.length !== 0
-          || loaderExpression.body.kind !== "DynamicImportExpression") {
-          this.typeError("A lazy loader must be written as () => import(\"./module.vel\")", loaderExpression?.span ?? callSpan);
-          return anyType;
-        }
-        if (loader.kind !== "function" && loader.kind !== "any") {
-          if (arguments_[0]) this.typeError(`Expected a module loader, received ${describeType(loader)}`, arguments_[0]!.span);
-          return anyType;
-        }
-        if (loader.kind === "any") return anyType;
-        if (loader.parameters.length !== 0) {
-          this.typeError("A lazy module loader cannot receive parameters", arguments_[0]?.span ?? callSpan);
-        }
-        const moduleType = loader.result.kind === "promise" ? loader.result.value : null;
-        if (!moduleType) {
-          this.typeError("A lazy module loader must return import(\"./module.vel\")", arguments_[0]?.span ?? callSpan);
-          return anyType;
-        }
-        const name = arguments_[1]?.kind === "LiteralExpression" && typeof arguments_[1].value === "string"
-          ? arguments_[1].value
-          : null;
-        if (!name) {
-          this.typeError("A lazy component export name must be a string literal", arguments_[1]?.span ?? callSpan);
-          return anyType;
-        }
-        if (moduleType.kind !== "object") {
-          this.typeError("A lazy loader must load a checked Velar module", arguments_[0]?.span ?? callSpan);
-          return anyType;
-        }
-        const exported = moduleType.fields.get(name);
-        if (!exported) {
-          this.typeError(`Dynamically imported module has no export named '${name}'`, arguments_[1]?.span ?? callSpan);
-          return anyType;
-        }
-        if (exported.kind !== "componentConstructor") {
-          this.typeError(`Dynamic export '${name}' is ${describeType(exported)}, not a component`, arguments_[1]?.span ?? callSpan);
-          return anyType;
-        }
-        if (arguments_[2] && loadingFallback.kind !== "none" && loadingFallback.kind !== "any") {
-          if (loadingFallback.kind !== "componentConstructor") {
-            this.typeError("A lazy loading fallback must be a component", arguments_[2]!.span);
-          } else if (loadingFallback.requiredProps.size > 0) {
-            this.typeError("A lazy loading fallback cannot require props", arguments_[2]!.span);
-          }
-        }
-        if (arguments_[3] && failedFallback.kind !== "none" && failedFallback.kind !== "any") {
-          if (failedFallback.kind !== "componentConstructor") {
-            this.typeError("A lazy failure fallback must be a component accepting error: Error", arguments_[3]!.span);
-          } else {
-            const error = failedFallback.props.get("error");
-            if (!error || !isAssignable({ kind: "class", name: "Error" }, error, this)
-              || [...failedFallback.requiredProps].some((prop) => prop !== "error")) {
-              this.typeError("A lazy failure fallback must accept error: Error and require no other props", arguments_[3]!.span);
-            }
-          }
-        }
-        return exported;
-      }
       case "collections.enumerate": {
         arity(1, 2);
         const { element } = listAt(0);
@@ -2258,86 +2159,6 @@ export class Analyzer implements TypeEnvironment {
           this.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(original)}`, arguments_[0]!.span);
         }
         return arguments_[1] ? runtimeTypeAt(1) : original;
-      }
-      case "http.parse": {
-        arity(1, 1);
-        return { kind: "promise", value: runtimeTypeAt(0) };
-      }
-      case "http.request": {
-        arity();
-        let options: ValueType | null = null;
-        for (const [index, expected] of intrinsic.parameters.entries()) {
-          const actual = inferAt(index, expected);
-          if (index === intrinsic.parameters.length - 1 && arguments_[index]) options = actual;
-        }
-        const fields = options?.kind === "object" ? options.fields : null;
-        const body = fields?.get("body");
-        if (body && !this.isHttpFormBody(body) && this.jsonSerializable(body) === false) {
-          const optionsExpression = arguments_[intrinsic.parameters.length - 1];
-          const bodyExpression = optionsExpression?.kind === "ObjectExpression"
-            ? optionsExpression.properties.find((property) => property.kind === "ObjectProperty" && property.name === "body")?.value
-            : null;
-          this.typeError(`HTTP JSON bodies accept only records, Lists, enums, primitives, and optionals; received ${describeType(body)}`, bodyExpression?.span ?? optionsExpression?.span ?? callSpan);
-        }
-        return intrinsic.result;
-      }
-      case "realtime.sendJson": {
-        arity(1, 1);
-        const value = inferAt(0);
-        if (this.jsonSerializable(value) === false && arguments_[0]) {
-          this.typeError(`Realtime JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, arguments_[0]!.span);
-        }
-        return noneType;
-      }
-      case "config.public": {
-        arity(1, 1);
-        return runtimeTypeAt(0);
-      }
-      case "storage.get": {
-        arity(2, 3);
-        inferAt(0, stringType);
-        const parsed = runtimeTypeAt(1);
-        if (arguments_[2]) {
-          inferAt(2, parsed);
-          return parsed;
-        }
-        return optionalOf(parsed);
-      }
-      case "storage.databaseGet": {
-        arity(2, 3);
-        inferAt(0, stringType);
-        const parsed = runtimeTypeAt(1);
-        if (arguments_[2]) {
-          inferAt(2, parsed);
-          return { kind: "promise", value: parsed };
-        }
-        return { kind: "promise", value: optionalOf(parsed) };
-      }
-      case "storage.watch": {
-        arity(3, 3);
-        inferAt(0, stringType);
-        const parsed = runtimeTypeAt(1);
-        callbackAt(2, [optionalOf(parsed), optionalOf(parsed)], unknownType);
-        return { kind: "function", parameters: [], requiredParameters: 0, result: noneType };
-      }
-      case "forms.read": {
-        arity(2, 2);
-        inferAt(0, { kind: "named", name: "Element" });
-        const parsed = runtimeTypeAt(1);
-        if (parsed.kind === "any" || parsed.kind === "unknown") return parsed;
-        const expanded = this.expandAliases(parsed);
-        const fields = expanded.kind === "named" ? this.namedTypes.get(expanded.name) : null;
-        if (!fields) {
-          this.typeError("Form reading requires a record declared with 'type Name:'", arguments_[1]?.span ?? callSpan);
-          return parsed;
-        }
-        const descriptors: FormReadField[] = [];
-        for (const [name, field] of fields) {
-          const descriptor = this.formReadField(name, field, arguments_[1]?.span ?? callSpan);
-          if (descriptor) descriptors.push(descriptor);
-        }
-        if (descriptors.length === fields.size) this.formReads.set(callSpan.start, descriptors);
-        return parsed;
       }
       case "async.all":
       case "async.race": {
@@ -2894,414 +2715,6 @@ export class Analyzer implements TypeEnvironment {
     };
   }
 
-  private componentType(statement: ComponentDeclaration): ValueType {
-    return {
-      kind: "componentConstructor",
-      name: statement.name,
-      props: new Map(statement.parameters.map((parameter) => [parameter.name, this.resolveAnnotation(parameter.type)])),
-      requiredProps: new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
-    };
-  }
-
-  private analyzeResourceDeclaration(statement: Extract<Statement, { kind: "ResourceDeclaration" }>): void {
-    const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
-    if (statement.type) this.validateType(annotated!, statement.type.span);
-    const expected: ValueType = annotated ? { kind: "promise", value: annotated } : unknownType;
-    const actual = this.inferExpression(statement.initializer, expected);
-    let value = annotated ?? unknownType;
-    if (actual.kind === "promise") {
-      if (annotated) this.requireAssignable(actual.value, annotated, statement.initializer.span);
-      else value = actual.value;
-    } else if (actual.kind === "any") {
-      value = annotated ?? anyType;
-    } else {
-      this.diagnostics.push(diagnostic("VEL4016", `A resource initializer must return Promise<T>, received ${describeType(actual)}`, statement.initializer.span));
-    }
-    const fields = new Map<string, ValueType>([
-      ["value", value.kind === "none" ? noneType : optionalOf(value)],
-      ["loading", boolType],
-      ["ready", boolType],
-      ["error", optionalOf({ kind: "class", name: "Error" })],
-      ["reload", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: noneType } }],
-    ]);
-    this.declareBinding(statement.name, false, { kind: "object", fields }, statement.span);
-  }
-
-  private actionType(statement: ActionDeclaration): ValueType {
-    const declaredResult = this.resolvedAsyncResult(this.resolveResult(statement.returnType));
-    const callValue = declaredResult.kind === "none" ? noneType : optionalOf(declaredResult);
-    const rest = statement.parameters.find((parameter) => parameter.rest);
-    return {
-      kind: "action",
-      parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveAnnotation(parameter.type)),
-      requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-      ...(rest ? { rest: this.resolveAnnotation(rest.type) } : {}),
-      result: { kind: "promise", value: callValue },
-    };
-  }
-
-  private analyzeActionDeclaration(statement: ActionDeclaration): void {
-    this.declareBinding(statement.name, false, this.actionType(statement), statement.span);
-    this.analyzeFunctionDeclaration(statement, null, true);
-  }
-
-  private analyzeComponent(statement: ComponentDeclaration): void {
-    const outerClassInitDepth = this.classInitDepth;
-    if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, this.componentType(statement), statement.span);
-    this.enterScope();
-    this.flowFrameDepth += 1;
-    const previousStates = this.componentStates;
-    this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
-    for (const parameter of statement.parameters) {
-      const type = this.resolveAnnotation(parameter.type);
-      if (parameter.type) this.validateType(type, parameter.type.span);
-      if (parameter.defaultValue) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-      this.declareBinding(parameter.name, false, type, parameter.span);
-    }
-    this.classInitDepth = 0;
-    let renders = 0;
-    let mounted = 0;
-    let cleanup = 0;
-    for (const item of statement.body) {
-      if (item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration") {
-        const annotated = item.type ? this.resolveAnnotation(item.type) : null;
-        if (item.kind === "ComputedDeclaration") this.flowFrameDepth += 1;
-        const actual = this.inferExpression(item.initializer, annotated ?? unknownType);
-        if (item.kind === "ComputedDeclaration") this.flowFrameDepth -= 1;
-        const declared = annotated ?? actual;
-        if (item.type) this.validateType(declared, item.type.span);
-        this.requireAssignable(actual, declared, item.initializer.span);
-        this.declareBinding(item.name, item.kind === "StateDeclaration", declared, item.span);
-      } else if (item.kind === "ResourceDeclaration") {
-        this.flowFrameDepth += 1;
-        this.analyzeResourceDeclaration(item);
-        this.flowFrameDepth -= 1;
-      } else if (item.kind === "ActionDeclaration") {
-        this.analyzeActionDeclaration(item);
-      } else if (item.kind === "WatchDeclaration") {
-        this.flowFrameDepth += 1;
-        const watched = this.inferExpression(item.expression);
-        this.enterScope();
-        if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
-        if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
-        for (const child of item.body) this.analyzeStatement(child);
-        this.exitScope();
-        this.flowFrameDepth -= 1;
-      } else if (item.kind === "MountedBlock") {
-        mounted += 1;
-        this.mountedDepth += 1;
-        this.flowFrameDepth += 1;
-        this.analyzeBlock(item.body);
-        this.flowFrameDepth -= 1;
-        this.mountedDepth -= 1;
-      } else if (item.kind === "CleanupBlock") {
-        cleanup += 1;
-        this.flowFrameDepth += 1;
-        this.analyzeBlock(item.body);
-        this.flowFrameDepth -= 1;
-      } else if (item.kind === "StyleBlock") {
-        // CSS analysis is owned by the Web style pass.
-      } else if (item.kind === "ReturnStatement") {
-        renders += 1;
-        this.flowFrameDepth += 1;
-        const rendered = item.value ? this.inferExpression(item.value) : noneType;
-        this.flowFrameDepth -= 1;
-        if (rendered.kind !== "node" && rendered.kind !== "any") this.typeError("A component must return JSX", item.span);
-      } else {
-        this.analyzeStatement(item);
-      }
-    }
-    if (renders !== 1) this.diagnostics.push(diagnostic("VEL5008", `Component '${statement.name}' must have exactly one top-level return`, statement.span));
-    if (mounted > 1) this.diagnostics.push(diagnostic("VEL5009", `Component '${statement.name}' has more than one mounted block`, statement.span));
-    if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
-    this.componentStates = previousStates;
-    this.flowFrameDepth -= 1;
-    this.exitScope();
-    this.classInitDepth = outerClassInitDepth;
-  }
-
-  private inferJsx(expression: Extract<Expression, { kind: "JSXElementExpression" }>, controlHandled = false): ValueType {
-    const attributes = new Map(expression.attributes.map((attribute) => [attribute.name, attribute]));
-    const controls = expression.attributes.filter((attribute) => jsxControlAttributes.has(attribute.name));
-    if (attributes.size !== expression.attributes.length) {
-      this.diagnostics.push(diagnostic("VEL5014", `JSX element '${expression.tag}' has duplicate attributes`, expression.span));
-    }
-    if (controls.length > 1) {
-      this.diagnostics.push(diagnostic("VEL5029", "A JSX branch can have only one of 'if', 'else-if', or 'else'", expression.span));
-    }
-    if (!controlHandled && controls.length > 0) {
-      this.diagnostics.push(diagnostic("VEL5029", `JSX '${controls[0]!.name}' must be part of an adjacent child branch sequence`, controls[0]!.span));
-    }
-    if (expression.tag && !/^[A-Z]/u.test(expression.tag)) {
-      for (const attribute of expression.attributes) {
-        if (!jsxControlAttributes.has(attribute.name)) this.analyzeNativeJsxAttribute(expression, attribute);
-      }
-      if (attributes.has("unsafe:html") && expression.children.length > 0) {
-        this.diagnostics.push(diagnostic("VEL5015", "unsafe:html cannot be combined with JSX children", expression.span));
-      }
-      if (expression.tag === "img" && !attributes.has("alt")) {
-        this.diagnostics.push(diagnostic("VEL5016", "An img element requires an alt attribute", expression.span));
-      }
-      if (expression.tag === "button" && !attributes.has("aria-label") && !attributes.has("aria-labelledby") && !hasAccessibleJsxContent(expression)) {
-        this.diagnostics.push(diagnostic("VEL5026", "A button requires text content, aria-label, or aria-labelledby", expression.span));
-      }
-      if (expression.tag === "svg" && !hasAccessibleSvgName(expression)) {
-        this.diagnostics.push(diagnostic("VEL5030", "An svg element requires a non-empty title, aria-label, aria-labelledby, or aria-hidden='true'", expression.span));
-      }
-      if (expression.tag === "a" && !attributes.has("href")) {
-        this.diagnostics.push(diagnostic("VEL5027", "A native anchor requires href; use a button for actions", expression.span));
-      }
-      const target = attributes.get("target")?.value;
-      const relation = attributes.get("rel")?.value;
-      if (expression.tag === "a" && target === "_blank" && (typeof relation !== "string" || !relation.split(/\s+/u).includes("noopener"))) {
-        this.diagnostics.push(diagnostic("VEL5028", "An anchor with target='_blank' requires rel='noopener'", expression.span));
-      }
-    }
-    for (let index = 0; index < expression.children.length;) {
-      const child = expression.children[index]!;
-      if (child.kind === "JSXExpressionChild") {
-        const childType = this.inferExpression(child.expression);
-        if (containsPromise(this.expandAliases(childType))) {
-          this.diagnostics.push(diagnostic("VEL5031", "JSX cannot render a Promise; await it before rendering", child.expression.span));
-        }
-        const list = jsxMapExpression(child.expression);
-        if (list && !list.body.attributes.some((attribute) => attribute.name === "key")) {
-          this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", list.body.span));
-        }
-        index += 1;
-      }
-      else if (child.kind === "JSXText") {
-        index += 1;
-      }
-      else {
-        const control = child.attributes.find((attribute) => jsxControlAttributes.has(attribute.name));
-        if (control?.name === "if") {
-          let rejected = this.inferJsxConditionalBranch(child, control);
-          let cursor = index + 1;
-          let sawElse = false;
-          while (cursor < expression.children.length) {
-            const next = expression.children[cursor]!;
-            if (next.kind === "JSXText" && next.value.trim().length === 0) {
-              cursor += 1;
-              continue;
-            }
-            if (next.kind !== "JSXElementExpression") break;
-            const nextControl = next.attributes.find((attribute) => jsxControlAttributes.has(attribute.name));
-            if (!nextControl || (nextControl.name !== "else-if" && nextControl.name !== "else") || sawElse) break;
-            rejected = this.inferJsxConditionalBranch(next, nextControl, rejected);
-            sawElse = nextControl.name === "else";
-            cursor += 1;
-          }
-          index = cursor;
-        } else if (control) {
-          this.diagnostics.push(diagnostic("VEL5029", `JSX '${control.name}' requires an adjacent preceding 'if' branch`, control.span));
-          this.inferJsxConditionalBranch(child, control);
-          index += 1;
-        } else {
-          this.inferJsx(child);
-          index += 1;
-        }
-      }
-    }
-    if (/^[A-Z]/u.test(expression.tag)) {
-      const binding = this.lookup(expression.tag);
-      if (!binding || binding.type.kind !== "componentConstructor") {
-        this.diagnostics.push(diagnostic("VEL5011", `Unknown component '${expression.tag}'`, expression.span));
-        return { kind: "node" };
-      }
-      const provided = new Set(expression.attributes.filter((attribute) => attribute.name !== "key" && !jsxControlAttributes.has(attribute.name)).map((attribute) => attribute.name));
-      const hasChildren = expression.children.some((child) => child.kind !== "JSXText" || child.value.trim().length > 0);
-      if (hasChildren && provided.has("children")) {
-        this.diagnostics.push(diagnostic("VEL5014", `Component '${expression.tag}' receives children both as a prop and as JSX content`, expression.span));
-      } else if (hasChildren && !binding.type.props.has("children")) {
-        this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children`, expression.span));
-      } else if (hasChildren) {
-        provided.add("children");
-        this.requireAssignable({ kind: "node" }, binding.type.props.get("children")!, expression.span);
-      }
-      for (const required of binding.type.requiredProps) if (!provided.has(required)) this.diagnostics.push(diagnostic("VEL5012", `Component '${expression.tag}' requires prop '${required}'`, expression.span));
-      for (const attribute of expression.attributes) {
-        if (jsxControlAttributes.has(attribute.name)) continue;
-        if (attribute.name === "key") {
-          const key = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-          if (key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
-          continue;
-        }
-        const expected = binding.type.props.get(attribute.name);
-        if (!expected) {
-          this.diagnostics.push(diagnostic("VEL5013", `Component '${expression.tag}' has no prop '${attribute.name}'`, attribute.span));
-          continue;
-        }
-        this.semanticJsxAttributeOwners.set(`${attribute.span.start}:${attribute.name}`, {
-          ...binding.type,
-          name: expression.tag,
-        });
-        const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-        if (binding.type.intrinsic === "web.router" && attribute.name === "fallback"
-          && actual.kind !== "none" && actual.kind !== "any") {
-          this.checkRouteComponent(actual, attribute.span, "A Router fallback");
-        }
-        this.requireAssignable(actual, expected, attribute.span);
-      }
-    }
-    return { kind: "node" };
-  }
-
-  private checkRouteComponent(type: ValueType, span: Span, subject: string): void {
-    if (type.kind !== "componentConstructor") {
-      if (type.kind !== "any") this.typeError(`${subject} requires a component, received ${describeType(type)}`, span);
-      return;
-    }
-    const unsupported = [...type.requiredProps].filter((name) => name !== "route");
-    if (unsupported.length > 0) {
-      this.typeError(`${subject} component cannot require props other than route: ${unsupported.join(", ")}`, span);
-    }
-    const routeProp = type.props.get("route");
-    if (routeProp && !isAssignable({ kind: "named", name: "RouteContext" }, routeProp, this)) {
-      this.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, span);
-    }
-  }
-
-  private checkRoutePath(path: string, span: Span): void {
-    if (!path.startsWith("/")) this.typeError("A route path must start with '/'", span);
-    if (path.includes("?") || path.includes("#")) this.typeError("A route path describes only a pathname; read query and hash from RouteContext", span);
-    if (path.includes("\\")) this.typeError("A route path cannot contain a backslash", span);
-    if (path.length > 1 && path.endsWith("/")) this.typeError("A route path cannot end with '/'; matching already accepts one trailing slash", span);
-    const segments = path.split("/").slice(1);
-    const parameters = new Set<string>();
-    for (const [index, segment] of segments.entries()) {
-      if (segment.length === 0 && path !== "/") this.typeError("A route path cannot contain an empty segment", span);
-      if (segment === "*") {
-        if (index !== segments.length - 1) this.typeError("A route wildcard must be the final segment", span);
-        if (parameters.has("wildcard")) this.typeError("A route parameter named 'wildcard' conflicts with the '*' capture", span);
-        parameters.add("wildcard");
-        continue;
-      }
-      if (segment.includes("*")) this.typeError("A route wildcard must occupy its whole final segment", span);
-      if (!segment.startsWith(":")) continue;
-      const name = segment.slice(1);
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) this.typeError("A route parameter requires a valid name", span);
-      else if (parameters.has(name)) this.typeError(`Route parameter '${name}' is repeated`, span);
-      parameters.add(name);
-    }
-  }
-
-  private inferJsxConditionalBranch(
-    expression: Extract<Expression, { kind: "JSXElementExpression" }>,
-    control: Extract<Expression, { kind: "JSXElementExpression" }>["attributes"][number],
-    inherited: ReadonlyMap<string, ValueType> = new Map(),
-  ): ReadonlyMap<string, ValueType> {
-    this.enterScope();
-    this.applyNarrowings(inherited, expression.span);
-    if (control.name === "else") {
-      if (control.value !== null) this.diagnostics.push(diagnostic("VEL5029", "JSX 'else' does not accept a value", control.span));
-      this.inferJsx(expression, true);
-      this.exitScope();
-      return inherited;
-    }
-    if (control.value === null || typeof control.value === "string") {
-      this.diagnostics.push(diagnostic("VEL5029", `JSX '${control.name}' requires an expression value`, control.span));
-      this.inferJsx(expression, true);
-      this.exitScope();
-      return inherited;
-    }
-    const condition = this.inferExpression(control.value);
-    this.requireCondition(condition, control.value);
-    const narrowed = this.narrowingFor(control.value, condition);
-    this.enterScope();
-    this.applyNarrowings(narrowed, expression.span);
-    this.inferJsx(expression, true);
-    this.exitScope();
-    const rejected = new Map(inherited);
-    for (const [key, type] of this.negativeNarrowingFor(control.value)) rejected.set(key, type);
-    this.exitScope();
-    return rejected;
-  }
-
-  private analyzeNativeJsxAttribute(expression: Extract<Expression, { kind: "JSXElementExpression" }>, attribute: Extract<Expression, { kind: "JSXElementExpression" }>["attributes"][number]): void {
-    const value = attribute.value;
-    const eventName = attribute.name.startsWith("on:") ? attribute.name.slice(3).split(".")[0] ?? "" : "";
-    const expectedEvent = eventName ? webEventType(eventName) : null;
-    const eventHandlerType: ValueType | null = expectedEvent ? {
-      kind: "function",
-      parameters: [expectedEvent],
-      requiredParameters: 1,
-      result: unknownType,
-    } : null;
-    const inferred = typeof value === "string"
-      ? stringType
-      : value
-        ? this.inferExpression(value, eventHandlerType ?? unknownType)
-        : boolType;
-    if (attribute.name === "bind:value") {
-      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression"
-        || (!this.componentStates?.has(value.name) && this.reactiveBindings.get(value.name) !== "state")) {
-        this.diagnostics.push(diagnostic("VEL5019", "bind:value requires a writable state name", attribute.span));
-      } else {
-        if (!["input", "textarea", "select"].includes(expression.tag)) {
-          this.diagnostics.push(diagnostic("VEL5019", `bind:value is not valid on <${expression.tag}>`, attribute.span));
-        }
-        const numeric = expression.tag === "input" && expression.attributes.some((item) => item.name === "type" && item.value === "number");
-        this.requireAssignable(inferred, numeric ? numberType : stringType, attribute.span);
-        if (!numeric && inferred.kind === "enum") this.enumValueBindings.set(attribute.span.start, inferred.name);
-      }
-    } else if (attribute.name === "bind:checked") {
-      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression"
-        || (!this.componentStates?.has(value.name) && this.reactiveBindings.get(value.name) !== "state")) {
-        this.diagnostics.push(diagnostic("VEL5019", "bind:checked requires a writable state name", attribute.span));
-      } else {
-        if (expression.tag !== "input") this.diagnostics.push(diagnostic("VEL5019", `bind:checked is not valid on <${expression.tag}>`, attribute.span));
-        this.requireAssignable(inferred, boolType, attribute.span);
-      }
-    } else if (attribute.name === "ref") {
-      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || !this.lookup(value.name)?.mutable) {
-        this.diagnostics.push(diagnostic("VEL5020", "ref requires a mutable let binding", attribute.span));
-      } else {
-        const bindingType = this.lookup(value.name)!.type;
-        const target = nonOptional(bindingType);
-        const expected = expression.tag === "canvas"
-          ? "CanvasElement"
-          : expression.tag === "dialog"
-            ? "DialogElement"
-            : ["input", "select", "textarea"].includes(expression.tag)
-              ? "InputElement"
-              : "Element";
-        if (bindingType.kind !== "any" && bindingType.kind !== "optional") {
-          this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element? so cleanup can restore none`, attribute.span));
-        } else if (target.kind !== "any" && (target.kind !== "named" || (target.name !== expected && target.name !== "Element"))) {
-          this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element?`, attribute.span));
-        }
-      }
-    } else if (attribute.name.startsWith("on:")) {
-      const [event, ...modifiers] = attribute.name.slice(3).split(".");
-      const supported = new Set(["prevent", "stop", "once", "capture", "self"]);
-      if (!event) this.diagnostics.push(diagnostic("VEL5025", "An event directive requires an event name", attribute.span));
-      for (const modifier of modifiers) {
-        if (!supported.has(modifier)) this.diagnostics.push(diagnostic("VEL5025", `Unknown event modifier '${modifier}'`, attribute.span));
-      }
-      if (new Set(modifiers).size !== modifiers.length) this.diagnostics.push(diagnostic("VEL5025", "Event modifiers cannot be repeated", attribute.span));
-      if (inferred.kind !== "function" && inferred.kind !== "action" && inferred.kind !== "intrinsic" && inferred.kind !== "any" && inferred.kind !== "unknown") {
-        this.diagnostics.push(diagnostic("VEL5021", `Event '${event}' requires a function`, attribute.span));
-      } else if (inferred.kind === "function" || inferred.kind === "action" || inferred.kind === "intrinsic") {
-        if (inferred.rest || inferred.parameters.length > 1) {
-          this.diagnostics.push(diagnostic("VEL5021", `Event '${event}' handlers accept zero parameters or one ${describeType(expectedEvent ?? { kind: "named", name: "Event" })} parameter`, attribute.span));
-        } else if (inferred.parameters.length === 1 && expectedEvent && !isAssignable(expectedEvent, inferred.parameters[0]!, this)) {
-          this.diagnostics.push(diagnostic("VEL5021", `Event '${event}' provides ${describeType(expectedEvent)}, not ${describeType(inferred.parameters[0]!)}`, attribute.span));
-        }
-      }
-    } else if (attribute.name.startsWith("class:")) {
-      this.requireAssignable(inferred, boolType, attribute.span);
-    } else if (attribute.name === "key") {
-      if (inferred.kind !== "string" && inferred.kind !== "number" && inferred.kind !== "enum" && inferred.kind !== "any") {
-        this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
-      }
-    }
-    if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
-      && !expression.attributes.some((item) => item.name === "role")) {
-      this.diagnostics.push(diagnostic("VEL5023", `Clickable <${expression.tag}> requires an explicit role`, expression.span));
-    }
-  }
-
   private externFunctionType(
     statement: ExternFunctionDeclaration,
     resolve: (reference: TypeReference | null) => ValueType = (reference) => this.resolveAnnotation(reference),
@@ -3365,11 +2778,11 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
-  private narrowingFor(expression: Expression, knownType?: ValueType): ReadonlyMap<string, ValueType> {
+  protected narrowingFor(expression: Expression, knownType?: ValueType): ReadonlyMap<string, ValueType> {
     return this.conditionNarrowing(expression, true, knownType);
   }
 
-  private negativeNarrowingFor(expression: Expression): ReadonlyMap<string, ValueType> {
+  protected negativeNarrowingFor(expression: Expression): ReadonlyMap<string, ValueType> {
     return this.conditionNarrowing(expression, false);
   }
 
@@ -3450,14 +2863,14 @@ export class Analyzer implements TypeEnvironment {
     return result;
   }
 
-  private requireCondition(type: ValueType, condition: Expression): void {
+  protected requireCondition(type: ValueType, condition: Expression): void {
     if (type.kind === "optional") this.presenceConditions.add(condition.span.start);
     if (type.kind !== "bool" && type.kind !== "optional" && type.kind !== "any") {
       this.typeError(`Condition must be bool or optional, received ${describeType(type)}`, condition.span);
     }
   }
 
-  private requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): void {
+  protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): void {
     if (!isAssignable(actual, expected, this)) {
       this.typeError(`Cannot assign ${describeType(actual)} to ${describeType(expected)}`, valueSpan);
     }
@@ -3524,11 +2937,11 @@ export class Analyzer implements TypeEnvironment {
     return statuses.some((status) => status === null) ? null : true;
   }
 
-  private resolveAnnotation(reference: TypeReference | null): ValueType {
+  protected resolveAnnotation(reference: TypeReference | null): ValueType {
     return reference ? this.resolveNamedClasses(this.expandAliases(parseType(reference.text))) : unknownType;
   }
 
-  private resolveResult(reference: TypeReference | null): ValueType {
+  protected resolveResult(reference: TypeReference | null): ValueType {
     return reference ? this.resolveAnnotation(reference) : noneType;
   }
 
@@ -3575,10 +2988,10 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
-  private validateType(type: ValueType, typeSpan: Span): void {
+  protected validateType(type: ValueType, typeSpan: Span): void {
     if (type.kind === "any") {
       this.typeError("'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript", typeSpan);
-    } else if (type.kind === "named" && !this.namedTypes.has(type.name) && !this.classes.has(type.name) && !this.enums.has(type.name) && !primitiveNames.has(type.name)) {
+    } else if (type.kind === "named" && !this.namedTypes.has(type.name) && !this.classes.has(type.name) && !this.enums.has(type.name) && !this.primitiveNames.has(type.name)) {
       this.typeError(`Unknown type '${type.name}'`, typeSpan);
     } else if (type.kind === "optional") {
       this.validateType(type.inner, typeSpan);
@@ -3602,7 +3015,7 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private typeError(message: string, errorSpan: Span): void {
+  protected typeError(message: string, errorSpan: Span): void {
     this.diagnostics.push(diagnostic("VEL4001", message, errorSpan));
   }
 
@@ -3638,16 +3051,14 @@ export class Analyzer implements TypeEnvironment {
       ["number", { kind: "function", parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) }],
       ["str", { kind: "function", parameters: [anyType], requiredParameters: 1, result: stringType }],
       ["print", { kind: "function", parameters: [anyType], requiredParameters: 1, result: noneType }],
-      ["mount", { kind: "function", parameters: [{ kind: "node" }, anyType], requiredParameters: 2, result: noneType }],
-      ["tick", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: noneType } }],
     ]);
-    const type = functions.get(name)
+    const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" ? { kind: "classConstructor", name: "Error" } satisfies ValueType : null)
       ?? (name === "Map" || name === "Set" ? anyType : null);
     return type ? { mutable: false, type, declaredType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
   }
 
-  private declareBinding(name: string, mutable: boolean, type: ValueType, declarationSpan: Span, internal = false): void {
+  protected declareBinding(name: string, mutable: boolean, type: ValueType, declarationSpan: Span, internal = false): void {
     if (!internal && reservedBindings.has(name)) {
       this.diagnostics.push(diagnostic("VEL3007", `'${name}' is a reserved Core binding`, declarationSpan));
       return;
@@ -3818,7 +3229,7 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private lookup(name: string): Binding | null {
+  protected lookup(name: string): Binding | null {
     for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
       const binding = this.scopes[index]?.get(name);
       if (binding) {
@@ -3830,7 +3241,7 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  private applyNarrowings(narrowed: ReadonlyMap<string, ValueType>, narrowingSpan: Span): void {
+  protected applyNarrowings(narrowed: ReadonlyMap<string, ValueType>, narrowingSpan: Span): void {
     const memberScope = this.memberNarrowings.at(-1)!;
     for (const [key, type] of narrowed) {
       if (key.startsWith(memberNarrowingPrefix)) {
@@ -3892,82 +3303,13 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  private enterScope(): void {
+  protected enterScope(): void {
     this.scopes.push(new Map());
     this.memberNarrowings.push(new Map());
   }
 
-  private exitScope(): void {
+  protected exitScope(): void {
     this.scopes.pop();
     this.memberNarrowings.pop();
   }
-}
-
-function webTypeFields(name: string): ReadonlyMap<string, ValueType> | null {
-  const functionType = (parameters: readonly ValueType[], result: ValueType): ValueType => ({ kind: "function", parameters, requiredParameters: parameters.length, result });
-  const eventFields = (): Map<string, ValueType> => new Map([
-    ["type", stringType],
-    ["defaultPrevented", boolType],
-    ["preventDefault", functionType([], noneType)],
-    ["stopPropagation", functionType([], noneType)],
-  ]);
-  if (name === "Event") return eventFields();
-  if (name === "KeyboardEvent") return new Map([
-    ...eventFields(),
-    ["key", stringType],
-    ["code", stringType],
-    ["repeat", boolType],
-    ["altKey", boolType],
-    ["ctrlKey", boolType],
-    ["metaKey", boolType],
-    ["shiftKey", boolType],
-  ]);
-  if (name === "PointerEvent") return new Map([
-    ...eventFields(),
-    ["pointerId", numberType],
-    ["pointerType", stringType],
-    ["pressure", numberType],
-    ["button", numberType],
-    ["buttons", numberType],
-    ["clientX", numberType],
-    ["clientY", numberType],
-    ["movementX", numberType],
-    ["movementY", numberType],
-    ["altKey", boolType],
-    ["ctrlKey", boolType],
-    ["metaKey", boolType],
-    ["shiftKey", boolType],
-  ]);
-  if (name === "InputEvent") return new Map([
-    ...eventFields(),
-    ["data", optionalOf(stringType)],
-    ["inputType", stringType],
-    ["isComposing", boolType],
-  ]);
-  if (name === "Element" || name === "InputElement" || name === "CanvasElement" || name === "DialogElement") {
-    const fields = new Map<string, ValueType>([
-      ["focus", functionType([], noneType)],
-      ["remove", functionType([], noneType)],
-    ]);
-    if (name === "InputElement") {
-      fields.set("value", stringType);
-      fields.set("checked", boolType);
-    }
-    if (name === "CanvasElement") {
-      fields.set("width", numberType);
-      fields.set("height", numberType);
-      fields.set("getContext", functionType([stringType], anyType));
-    }
-    return fields;
-  }
-  return null;
-}
-
-function webEventType(name: string): ValueType {
-  if (name === "keydown" || name === "keyup" || name === "keypress") return { kind: "named", name: "KeyboardEvent" };
-  if (["click", "pointerdown", "pointerup", "pointermove", "pointercancel", "pointerover", "pointerout", "pointerenter", "pointerleave"].includes(name)) {
-    return { kind: "named", name: "PointerEvent" };
-  }
-  if (name === "beforeinput" || name === "input") return { kind: "named", name: "InputEvent" };
-  return { kind: "named", name: "Event" };
 }

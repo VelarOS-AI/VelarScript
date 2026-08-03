@@ -4,6 +4,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 import { pathToFileURL } from "node:url";
 import type { ProjectResult } from "./project.ts";
 import { readBoundedText } from "./bounded-text.ts";
+import { frameworkBase } from "./framework-host.ts";
 
 const MAX_BROWSER_NPM_PACKAGES = 4096;
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
@@ -23,6 +24,7 @@ export interface BrowserNpmResolution {
 }
 
 export async function resolveBrowserNpm(project: ProjectResult): Promise<BrowserNpmResolution> {
+  const base = frameworkBase(project.framework);
   const specifiers = new Set(project.modules.flatMap((module) => module.result.dependencies
     .filter((dependency) => dependency.javascript && !dependency.source.startsWith(".") && !dependency.source.startsWith("/"))
     .map((dependency) => dependency.source)));
@@ -55,7 +57,7 @@ export async function resolveBrowserNpm(project: ProjectResult): Promise<Browser
       const route = `/@npm/${name}/`;
       const entryRoute = `${route}${relative(root, entry).split("\\").join("/")}`;
       packages.set(name, { name, root, route, entryRoute });
-      imports[specifier] = withBase(project.webConfig.base, entryRoute);
+      imports[specifier] = withBase(base, entryRoute);
     } catch (error) {
       failures.push(`Cannot resolve browser npm import '${specifier}': ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -67,7 +69,7 @@ export async function resolveBrowserNpm(project: ProjectResult): Promise<Browser
       continue;
     }
     imports[package_.name] = withBase(
-      project.webConfig.base,
+      base,
       `/${entry.relativePath.replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`,
     );
   }

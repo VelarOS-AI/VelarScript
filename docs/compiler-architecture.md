@@ -7,12 +7,11 @@ and incremental pipeline implemented
 
 ```text
 .vel source
--> indentation-aware lexer
--> source-spanned Core + Web AST
--> scope and lightweight type analysis
--> Web validation and lowering hints
--> readable ESM JavaScript + native DOM operations
--> extracted scoped/global CSS + Web assets
+-> Core lexer plus an extension-selected parser when a framework owns syntax
+-> source-spanned internal syntax carriers
+-> extension-selected analysis, semantic indexing, intrinsic typing, dependency inspection, and module-interface contribution
+-> extension-selected JavaScript emitter
+-> readable ESM JavaScript and optional extension artifacts
 -> development source maps / explicitly enabled production source maps
 ```
 
@@ -87,33 +86,71 @@ replacing JavaScript identity, insertion order, or membership semantics.
 
 ## Package ownership
 
-- `packages/compiler` owns source text, diagnostics, AST, parsing, Core/Web
-  analysis, JavaScript/DOM/CSS emission, formatting, and source maps.
-- `packages/cli` owns `velar.json`, commands, filesystem graphs, official
-  Standard/Web modules, explicit public-config validation, test discovery,
+- `packages/compiler` owns the Core language, source text, diagnostics,
+  extension host, Core analysis, Core JavaScript emission, formatting, and
+  source maps. Component, JSX, reactivity, lifecycle, CSS, DOM lowering, and
+  Web types are not active Core language features. Its extension protocol has
+  explicit parser, analyzer, semantic-index, intrinsic-analysis,
+  dependency-inspection, public-interface, module, emitter, lexical-editor, and
+  contextual project-editor seams;
+  loading lexical keywords alone can never silently activate Web semantics.
+  Its `framework-host` subpath is a platform-neutral tooling ABI containing
+  only protocol types and a version constant; it does not implement HTML,
+  filesystem access, servers, bundling, browser automation, or framework
+  behavior.
+- `packages/web` owns component/JSX syntax activation, reactive and lifecycle
+  analysis, semantic symbols/references, Web intrinsic typing, project graph
+  traversal, exported component/reactive interfaces, DOM/CSS emission, Web
+  type/global guidance, Web standard modules, browser runtime, `web` manifest
+  validation, JSX/native-element completion and rename protection, and the
+  separate `@velarscript/web/host` implementation. That host owns application
+  and compile-error HTML documents, the development reload client, CSP
+  construction, static-deployment projection, source-map policy, base URL, and
+  browser-test contract. It
+  depends on the neutral compiler extension contract, not CLI orchestration or
+  an editor host.
+- `packages/create` owns transactional project creation and the complete
+  `web`, `docs`, `library`, and `component` template inventory. The component
+  template is an ordinary Web source package with a separate preview entry, not
+  a compiler extension. Creator code has no compiler, browser, CLI, or editor
+  dependency.
+- `packages/cli` owns the format-2 manifest shell, extension resolution,
+  commands, the npm-backed project dependency workflow, filesystem graphs, the
+  Core Standard modules, test discovery,
   optimized production bundling, the dev server, hot
-  replacement, and the language server.
+  replacement transport, browser driver, verification, and the language
+  server. For every declared extension it may load an optional `/host` export,
+  validates framework-host protocol version 1 and matching compiler capability,
+  and composes at most one application host. CLI source neither identifies the
+  official Web npm package nor constructs Web HTML/CSP/JSX-editor/lifecycle
+  behavior.
 - VelarOS Workbench owns the generic editor and LSP host. Its default Velar
   contribution owns presentation and connection metadata, but never copies or
   embeds compiler semantics.
 
-The compiler and CLI build as independent npm packages containing emitted
-JavaScript, source maps, and `.d.ts` declarations. The CLI pins the exact
-compiler version. Packed tarballs must install and execute in a clean consumer;
-Workbench is neither bundled into nor imported by either package.
+The compiler, Web framework, creator, and CLI build as independent npm packages
+containing emitted JavaScript, source maps, and `.d.ts` declarations. Web pins
+the exact compiler version. CLI pins the compiler and creator but neither
+depends on nor peers with Web; a Web project installs Web directly.
+Packed tarballs must install and
+execute in a clean consumer; Workbench is neither bundled into nor imported by
+any package.
 
-Project manifests declare `formatVersion: 1`. Creation refuses non-empty
-targets, upgrades are explicit and inspectable, and unknown future versions
-fail closed before compilation.
+Project manifests declare `formatVersion: 2` and a required `extensions` list.
+There is no legacy loader or upgrade command; missing, format-1, and unknown
+future versions fail closed before compilation.
 
-Production Web builds are assembled in a sibling staging directory. Public
+Production framework builds are assembled in a sibling staging directory. Public
 assets are copied through a confined regular-file walker, bundling and all
 manifests finish there, and only then does the complete directory replace the
 previous output. Compiler-owned entry/fallback/manifest names and symbolic
 links fail closed. The deployment manifest is the provider-neutral authority
 for CSP, security headers, cache rules, base paths, and SPA fallback.
 
-The production verifier is the read-side authority for format-2 output. It
+The production verifier is the read-side authority for format-3 framework
+build output and format-2 static-deployment output. Each build records the
+framework package, capability, target, host-protocol version, framework API
+version, and framework artifact kind. It
 requires the physical regular-file tree to equal the manifest inventory,
 recomputes size/SHA-256/build identity, and validates the build/deployment
 relationship before preview binds a port. Browser-project tests call this same
@@ -129,7 +166,7 @@ content hashes and source maps reproducible across output locations. Linked
 production maps are disabled by default and remain an explicit manifest input.
 
 Release packaging is outside compiler semantics. A repository script builds
-both npm packages, records source and tarball identities, verifies every
+all four npm packages, records source and tarball identities, verifies every
 SHA-256, and refuses candidate status without a clean exact tag, matching
 remote, stable version, and publishable license. It contains no publish step.
 

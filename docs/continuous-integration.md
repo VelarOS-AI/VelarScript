@@ -9,7 +9,7 @@ The repository defines three GitHub Actions workflows:
   Chromium, Firefox, and WebKit dependencies and runs both development-server
   and CSP-enabled production browser matrices, the project-owned
   `.browser.test.vel` suite in all engines, and the same generated browser test
-  through packed installed compiler/CLI tarballs. Browser-project execution
+  through packed installed compiler/Web/creator/CLI tarballs. Browser-project execution
   first verifies the exact production asset inventory and uses the public
   preview server.
 - Hosted-deployment acceptance runs the public remote verifier against root and

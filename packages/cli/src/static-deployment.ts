@@ -1,8 +1,9 @@
-import { cp, lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import type { VelarWebConfig } from "./config.ts";
+import type { FrameworkStaticDeployment } from "@velarscript/compiler/framework-host";
 import { MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
-import { VELAR_VERSION, VELAR_WEB_API_VERSION } from "./version.ts";
+import { VELAR_VERSION } from "./version.ts";
+import type { ProductionFrameworkIdentity } from "./production-build.ts";
 
 export const STATIC_DEPLOYMENT_MANIFEST_NAME = "velar-deploy.json";
 export const STATIC_FALLBACK_NAME = "404.html";
@@ -25,10 +26,10 @@ export interface StaticDeploymentSummary {
 }
 
 export interface StaticDeploymentManifest {
-  readonly formatVersion: 1;
+  readonly formatVersion: 2;
   readonly kind: "velar-static-deployment";
   readonly compiler: { readonly name: "velar"; readonly version: string };
-  readonly apiVersion: string;
+  readonly framework: ProductionFrameworkIdentity;
   readonly base: string;
   readonly spaFallback: { readonly source: "index.html"; readonly fallback: typeof STATIC_FALLBACK_NAME } | null;
   readonly headers: readonly {
@@ -43,24 +44,6 @@ export interface StaticDeploymentManifest {
     readonly name: "netlify";
     readonly files: readonly (typeof NETLIFY_HEADERS_NAME | typeof NETLIFY_REDIRECTS_NAME)[];
   } | null;
-}
-
-export function contentSecurityPolicy(config: VelarWebConfig, includeFrameAncestors = false): string {
-  const connect = ["'self'", ...config.security.connectSources].join(" ");
-  const images = ["'self'", "data:", ...config.security.imageSources].join(" ");
-  return [
-    "default-src 'none'",
-    "base-uri 'none'",
-    "object-src 'none'",
-    "script-src 'self'",
-    "style-src 'self'",
-    "style-src-attr 'unsafe-inline'",
-    `img-src ${images}`,
-    `connect-src ${connect}`,
-    "font-src 'self'",
-    "form-action 'self'",
-    ...(includeFrameAncestors ? ["frame-ancestors 'none'"] : []),
-  ].join("; ");
 }
 
 export async function copyPublicAssets(publicRoot: string, outputDirectory: string): Promise<void> {
@@ -101,7 +84,8 @@ async function copySafe(source: string, destination: string, publicRoot: string,
 export async function writeStaticDeployment(
   outputDirectory: string,
   html: string,
-  config: VelarWebConfig,
+  config: FrameworkStaticDeployment,
+  framework: ProductionFrameworkIdentity,
 ): Promise<StaticDeploymentSummary> {
   const securityHeaders: Record<string, string> = {
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -109,8 +93,8 @@ export async function writeStaticDeployment(
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
   };
-  if (config.security.contentSecurityPolicy) {
-    securityHeaders["Content-Security-Policy"] = contentSecurityPolicy(config, true);
+  if (config.contentSecurityPolicy) {
+    securityHeaders["Content-Security-Policy"] = config.contentSecurityPolicy;
   }
   const basePattern = `${config.base}*`;
   const documentPaths = [
@@ -118,15 +102,15 @@ export async function writeStaticDeployment(
     `${config.base}index.html`,
     `${config.base}velar-build.json`,
     `${config.base}${STATIC_DEPLOYMENT_MANIFEST_NAME}`,
-    ...(config.deployment.spaFallback ? [`${config.base}${STATIC_FALLBACK_NAME}`] : []),
+    ...(config.spaFallback ? [`${config.base}${STATIC_FALLBACK_NAME}`] : []),
   ];
   const contract: Omit<StaticDeploymentManifest, "adapter"> = {
-    formatVersion: 1,
+    formatVersion: 2,
     kind: "velar-static-deployment",
     compiler: { name: "velar", version: VELAR_VERSION },
-    apiVersion: VELAR_WEB_API_VERSION,
+    framework,
     base: config.base,
-    spaFallback: config.deployment.spaFallback ? { source: "index.html", fallback: STATIC_FALLBACK_NAME } : null,
+    spaFallback: config.spaFallback ? { source: "index.html", fallback: STATIC_FALLBACK_NAME } : null,
     headers: [
       { path: basePattern, values: securityHeaders },
       { path: `${config.base}assets/*`, values: { "Cache-Control": "public, max-age=31536000, immutable" } },
@@ -134,20 +118,20 @@ export async function writeStaticDeployment(
     ],
     caching: { assets: "public, max-age=31536000, immutable", documents: "no-cache" },
   };
-  const adapterFiles = config.deployment.adapter === "netlify"
+  const adapterFiles = config.adapter === "netlify"
     ? await writeNetlifyAdapter(outputDirectory, contract)
     : null;
   const manifest: StaticDeploymentManifest = {
     ...contract,
     adapter: adapterFiles ? { name: "netlify", files: adapterFiles } : null,
   };
-  if (config.deployment.spaFallback) await writeFile(join(outputDirectory, STATIC_FALLBACK_NAME), html, "utf8");
+  if (config.spaFallback) await writeFile(join(outputDirectory, STATIC_FALLBACK_NAME), html, "utf8");
   await writeFile(join(outputDirectory, STATIC_DEPLOYMENT_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   return {
     manifest: STATIC_DEPLOYMENT_MANIFEST_NAME,
-    fallback: config.deployment.spaFallback ? STATIC_FALLBACK_NAME : null,
-    contentSecurityPolicy: config.security.contentSecurityPolicy,
-    adapter: config.deployment.adapter,
+    fallback: config.spaFallback ? STATIC_FALLBACK_NAME : null,
+    contentSecurityPolicy: config.contentSecurityPolicy !== null,
+    adapter: config.adapter,
   };
 }
 
