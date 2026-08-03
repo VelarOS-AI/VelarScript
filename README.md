@@ -1,9 +1,16 @@
 # VelarScript
 
+[![Velar CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
+
 VelarScript is a clean, Web-first language compiled by the Velar Compiler to
 modern JavaScript, CSS, and Web assets. It keeps the JavaScript runtime and
 replaces the source surface with a smaller Python/JavaScript blend designed for
 Web applications.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the compiler/framework boundary and
+validation workflow. Security-sensitive reports belong in GitHub's private
+security-advisory flow described in [SECURITY.md](SECURITY.md), not a public
+issue.
 
 ```sh
 npm create velar@latest my-app
