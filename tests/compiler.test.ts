@@ -70,7 +70,10 @@ function standardModuleSource(source: string, web: { readonly base: string; read
 }
 
 function executeModule(code: string): ReturnType<typeof spawnSync> {
-  return spawnSync(process.execPath, ["--input-type=module", "--eval", code], { encoding: "utf8" });
+  return spawnSync(process.execPath, ["--input-type=module"], {
+    encoding: "utf8",
+    input: code,
+  });
 }
 
 function assertDevServerExit(exitCode: number | null, stderr: string): void {
