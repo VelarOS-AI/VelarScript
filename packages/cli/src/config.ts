@@ -1,39 +1,41 @@
 import { readFile, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { CompilerExtension } from "@velarscript/compiler";
+import {
+  VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
+  type FrameworkHostExtension,
+} from "@velarscript/compiler/framework-host";
 
-export interface VelarWebConfig {
-  readonly title: string;
-  readonly base: string;
-  readonly publicConfig: Readonly<Record<string, unknown>>;
-  readonly build: VelarWebBuildConfig;
-  readonly security: VelarWebSecurityConfig;
-  readonly deployment: VelarWebDeploymentConfig;
-}
-
-export interface VelarWebBuildConfig {
-  readonly sourceMaps: boolean;
-}
-
-export interface VelarWebSecurityConfig {
-  readonly contentSecurityPolicy: boolean;
-  readonly connectSources: readonly string[];
-  readonly imageSources: readonly string[];
-}
-
-export interface VelarWebDeploymentConfig {
-  readonly spaFallback: boolean;
-  readonly adapter: "neutral" | "netlify";
+export interface ResolvedFrameworkHost {
+  readonly host: FrameworkHostExtension;
+  readonly config: unknown;
 }
 
 export interface VelarProjectConfig {
   readonly formatVersion: number;
-  readonly needsUpgrade: boolean;
   readonly root: string;
   readonly manifestPath: string | null;
   readonly entryPath: string;
   readonly outDir: string;
   readonly publicDir: string;
-  readonly web: VelarWebConfig;
+  readonly extensions: readonly string[];
+  readonly compilerExtensions: readonly CompilerExtension[];
+  readonly extensionConfig: ReadonlyMap<string, unknown>;
+  readonly framework: ResolvedFrameworkHost | null;
+}
+
+interface ProjectExtension {
+  readonly id: string;
+  readonly manifestKey: string;
+  readonly parse: (value: unknown, manifestPath: string) => unknown;
+}
+
+interface LoadedExtensions {
+  readonly compiler: readonly CompilerExtension[];
+  readonly project: readonly ProjectExtension[];
+  readonly hosts: readonly FrameworkHostExtension[];
 }
 
 interface ManifestShape {
@@ -41,10 +43,10 @@ interface ManifestShape {
   readonly entry?: unknown;
   readonly outDir?: unknown;
   readonly publicDir?: unknown;
-  readonly web?: unknown;
+  readonly extensions?: unknown;
 }
 
-export const CURRENT_PROJECT_FORMAT_VERSION = 1;
+export const CURRENT_PROJECT_FORMAT_VERSION = 2;
 
 export async function resolveVelarProject(input: string | null, cwd = process.cwd()): Promise<VelarProjectConfig> {
   const explicit = input ? resolve(cwd, input) : null;
@@ -79,10 +81,8 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     throw new Error(`Cannot read ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`${manifestPath} must contain a JSON object`);
-  knownFields(manifest as Record<string, unknown>, new Set(["formatVersion", "entry", "outDir", "publicDir", "web"]), "project", manifestPath);
-  const formatVersion = manifest.formatVersion === undefined
-    ? CURRENT_PROJECT_FORMAT_VERSION
-    : integerField(manifest.formatVersion, "formatVersion");
+  if (manifest.formatVersion === undefined) throw new Error(`${manifestPath}: 'formatVersion' is required; this compiler does not load legacy project formats`);
+  const formatVersion = integerField(manifest.formatVersion, "formatVersion");
   if (formatVersion !== CURRENT_PROJECT_FORMAT_VERSION) {
     throw new Error(`${manifestPath}: unsupported formatVersion ${formatVersion}; this compiler supports ${CURRENT_PROJECT_FORMAT_VERSION}`);
   }
@@ -91,17 +91,31 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   if (extname(entry) !== ".vel") throw new Error(`${manifestPath}: 'entry' must point to a .vel file`);
   const outDir = resolveProjectPath(root, stringField(manifest.outDir, "outDir", "dist"), "outDir");
   const publicDir = resolveProjectPath(root, stringField(manifest.publicDir, "publicDir", "public"), "publicDir");
-  const web = webConfig(manifest.web, manifestPath);
+  const extensions = extensionList(manifest.extensions, manifestPath);
+  const loadedExtensions = await loadExtensions(root, extensions, manifestPath);
+  knownFields(
+    manifest as Record<string, unknown>,
+    new Set(["formatVersion", "entry", "outDir", "publicDir", "extensions", ...loadedExtensions.project.map((extension) => extension.manifestKey)]),
+    "project",
+    manifestPath,
+  );
+  const extensionConfig = new Map(loadedExtensions.project.map((extension) => [
+    extension.id,
+    extension.parse((manifest as Record<string, unknown>)[extension.manifestKey], manifestPath),
+  ]));
+  const framework = resolveFrameworkHost(loadedExtensions, extensionConfig, manifestPath);
   assertProjectPaths(root, entry, outDir, publicDir, manifestPath);
   return {
     formatVersion,
-    needsUpgrade: manifest.formatVersion === undefined,
     root,
     manifestPath,
     entryPath: entry,
     outDir,
     publicDir,
-    web,
+    extensions,
+    compilerExtensions: loadedExtensions.compiler,
+    extensionConfig,
+    framework,
   };
 }
 
@@ -109,21 +123,124 @@ function legacyProject(entryPath: string): VelarProjectConfig {
   const root = dirname(entryPath);
   return {
     formatVersion: CURRENT_PROJECT_FORMAT_VERSION,
-    needsUpgrade: false,
     root,
     manifestPath: null,
     entryPath,
     outDir: join(root, "dist"),
     publicDir: join(root, "public"),
-    web: {
-      title: "Velar App",
-      base: "/",
-      publicConfig: {},
-      build: { sourceMaps: false },
-      security: { contentSecurityPolicy: true, connectSources: [], imageSources: [] },
-      deployment: { spaFallback: true, adapter: "neutral" },
-    },
+    extensions: [],
+    compilerExtensions: [],
+    extensionConfig: new Map(),
+    framework: null,
   };
+}
+
+function extensionList(value: unknown, manifestPath: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${manifestPath}: 'extensions' must be a list of installed package names`);
+  }
+  if (value.length > 16) throw new Error(`${manifestPath}: a project cannot load more than 16 compiler extensions`);
+  const names = value.map((item) => {
+    if (typeof item !== "string" || !/^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u.test(item)) {
+      throw new Error(`${manifestPath}: compiler extension names must be npm package names`);
+    }
+    return item;
+  });
+  if (new Set(names).size !== names.length) throw new Error(`${manifestPath}: compiler extensions cannot be repeated`);
+  return Object.freeze(names);
+}
+
+async function loadExtensions(root: string, names: readonly string[], manifestPath: string): Promise<LoadedExtensions> {
+  const require = createRequire(join(root, "package.json"));
+  const compiler: CompilerExtension[] = [];
+  const project: ProjectExtension[] = [];
+  const hosts: FrameworkHostExtension[] = [];
+  for (const name of names) {
+    try {
+      const entry = require.resolve(`${name}/compiler`);
+      const namespace = await import(pathToFileURL(entry).href) as { readonly velarCompilerExtension?: unknown; readonly velarProjectExtension?: unknown };
+      const extension = namespace.velarCompilerExtension as Partial<CompilerExtension> | undefined;
+      if (!extension || extension.id !== name || (extension.createEmitter !== undefined && typeof extension.createEmitter !== "function")) {
+        throw new Error(`'${name}/compiler' does not export a matching velarCompilerExtension`);
+      }
+      compiler.push(extension as CompilerExtension);
+      if (namespace.velarProjectExtension !== undefined) {
+        const projectExtension = namespace.velarProjectExtension as Partial<ProjectExtension>;
+        if (projectExtension.id !== name || typeof projectExtension.manifestKey !== "string" || typeof projectExtension.parse !== "function") {
+          throw new Error(`'${name}/compiler' exports an invalid velarProjectExtension`);
+        }
+        project.push(projectExtension as ProjectExtension);
+      }
+      const host = await loadFrameworkHost(require, name);
+      if (host) hosts.push(validateFrameworkHost(host, extension as CompilerExtension, name));
+    } catch (error) {
+      throw new Error(`${manifestPath}: cannot load compiler extension '${name}': ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (new Set(project.map((extension) => extension.manifestKey)).size !== project.length) {
+    throw new Error(`${manifestPath}: compiler extensions define conflicting project manifest fields`);
+  }
+  return { compiler: Object.freeze(compiler), project: Object.freeze(project), hosts: Object.freeze(hosts) };
+}
+
+async function loadFrameworkHost(require: NodeJS.Require, name: string): Promise<unknown | null> {
+  let entry: string;
+  try {
+    entry = require.resolve(`${name}/host`);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    const message = error instanceof Error ? error.message : String(error);
+    if (code === "ERR_PACKAGE_PATH_NOT_EXPORTED"
+      || (code === "MODULE_NOT_FOUND" && message.includes(`'${name}/host'`))) return null;
+    throw error;
+  }
+  const namespace = await import(pathToFileURL(entry).href) as { readonly velarFrameworkHost?: unknown };
+  if (namespace.velarFrameworkHost === undefined) throw new Error(`'${name}/host' does not export velarFrameworkHost`);
+  return namespace.velarFrameworkHost;
+}
+
+function validateFrameworkHost(value: unknown, compiler: CompilerExtension, name: string): FrameworkHostExtension {
+  const host = value as Partial<FrameworkHostExtension> | null;
+  if (!host || typeof host !== "object") throw new Error(`'${name}/host' exports an invalid framework host`);
+  if (host.protocolVersion !== VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION) {
+    throw new Error(`'${name}/host' uses unsupported framework host protocol ${String(host.protocolVersion)}`);
+  }
+  if (host.id !== name) throw new Error(`'${name}/host' framework identity does not match its package`);
+  if (typeof host.capability !== "string" || !compiler.capabilities?.includes(host.capability)) {
+    throw new Error(`'${name}/host' must bind one capability owned by its compiler extension`);
+  }
+  if (host.target !== "browser" || typeof host.displayName !== "string" || !host.displayName
+    || typeof host.apiVersion !== "string" || !host.apiVersion
+    || typeof host.artifactKind !== "string" || !/^[a-z][a-z0-9-]*$/u.test(host.artifactKind)
+    || typeof host.base !== "function" || typeof host.sourceMaps !== "function"
+    || typeof host.createArtifacts !== "function" || typeof host.createErrorDocument !== "function"
+    || typeof host.staticDeployment !== "function") {
+    throw new Error(`'${name}/host' exports an invalid framework host contract`);
+  }
+  if (compiler.modules?.apiVersion && compiler.modules.apiVersion !== host.apiVersion) {
+    throw new Error(`'${name}/host' API version does not match its compiler extension`);
+  }
+  if (host.browserTests && (typeof host.browserTests.runtimeKey !== "string" || !host.browserTests.runtimeKey
+    || typeof host.browserTests.sourceSuffix !== "string" || !host.browserTests.sourceSuffix.endsWith(".test.vel"))) {
+    throw new Error(`'${name}/host' exports an invalid browser-test contract`);
+  }
+  return Object.freeze(host as FrameworkHostExtension);
+}
+
+function resolveFrameworkHost(
+  extensions: LoadedExtensions,
+  configs: ReadonlyMap<string, unknown>,
+  manifestPath: string,
+): ResolvedFrameworkHost | null {
+  if (extensions.hosts.length > 1) {
+    throw new Error(`${manifestPath}: a project can compose only one application framework host`);
+  }
+  const host = extensions.hosts[0];
+  if (!host) return null;
+  if (!configs.has(host.id)) {
+    throw new Error(`${manifestPath}: framework host '${host.id}' must define a project configuration extension`);
+  }
+  return Object.freeze({ host, config: configs.get(host.id) });
 }
 
 function integerField(value: unknown, field: string): number {
@@ -131,168 +248,17 @@ function integerField(value: unknown, field: string): number {
   return value as number;
 }
 
-function webConfig(value: unknown, manifestPath: string): VelarWebConfig {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-    throw new Error(`${manifestPath}: 'web' must be an object`);
-  }
-  const web = value as {
-    readonly title?: unknown;
-    readonly base?: unknown;
-    readonly publicConfig?: unknown;
-    readonly build?: unknown;
-    readonly security?: unknown;
-    readonly deployment?: unknown;
-  } | undefined;
-  if (web) knownFields(web as Record<string, unknown>, new Set(["title", "base", "publicConfig", "build", "security", "deployment"]), "web", manifestPath);
-  const title = stringField(web?.title, "web.title", "Velar App");
-  let base = stringField(web?.base, "web.base", "/");
-  if (!base.startsWith("/")) throw new Error(`${manifestPath}: 'web.base' must start with '/'`);
-  if (!base.endsWith("/")) base += "/";
-  validateWebBase(base, manifestPath);
-  const deployment = deploymentConfig(web?.deployment, manifestPath);
-  if (deployment.adapter === "netlify" && base !== "/") {
-    throw new Error(`${manifestPath}: 'web.deployment.adapter' netlify currently requires 'web.base' to be '/'`);
-  }
-  return {
-    title,
-    base,
-    publicConfig: publicConfigField(web?.publicConfig, manifestPath),
-    build: buildConfig(web?.build, manifestPath),
-    security: securityConfig(web?.security, manifestPath),
-    deployment,
-  };
-}
-
-function buildConfig(value: unknown, manifestPath: string): VelarWebBuildConfig {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-    throw new Error(`${manifestPath}: 'web.build' must be an object`);
-  }
-  const build = value as { readonly sourceMaps?: unknown } | undefined;
-  if (build) knownFields(build as Record<string, unknown>, new Set(["sourceMaps"]), "web.build", manifestPath);
-  return { sourceMaps: booleanField(build?.sourceMaps, "web.build.sourceMaps", false) };
-}
-
-function publicConfigField(value: unknown, manifestPath: string): Readonly<Record<string, unknown>> {
-  if (value === undefined) return Object.freeze({});
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${manifestPath}: 'web.publicConfig' must be a JSON object`);
-  }
-  const dangerous = new Set(["__proto__", "prototype", "constructor"]);
-  const visit = (item: unknown, path: string): void => {
-    if (item === null || typeof item === "string" || typeof item === "boolean") return;
-    if (typeof item === "number") {
-      if (!Number.isFinite(item)) throw new Error(`${manifestPath}: '${path}' must contain a finite JSON number`);
-      return;
-    }
-    if (Array.isArray(item)) {
-      item.forEach((child, index) => visit(child, `${path}[${index}]`));
-      return;
-    }
-    if (!item || typeof item !== "object") {
-      throw new Error(`${manifestPath}: '${path}' contains a non-JSON value`);
-    }
-    for (const [key, child] of Object.entries(item)) {
-      if (dangerous.has(key)) throw new Error(`${manifestPath}: '${path}' contains reserved key '${key}'`);
-      visit(child, `${path}.${key}`);
-    }
-  };
-  visit(value, "web.publicConfig");
-  const encoded = JSON.stringify(value);
-  if (Buffer.byteLength(encoded, "utf8") > 65_536) {
-    throw new Error(`${manifestPath}: 'web.publicConfig' cannot exceed 64 KiB`);
-  }
-  return JSON.parse(encoded) as Record<string, unknown>;
-}
-
-function securityConfig(value: unknown, manifestPath: string): VelarWebSecurityConfig {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-    throw new Error(`${manifestPath}: 'web.security' must be an object`);
-  }
-  const security = value as {
-    readonly contentSecurityPolicy?: unknown;
-    readonly connectSources?: unknown;
-    readonly imageSources?: unknown;
-  } | undefined;
-  if (security) knownFields(security as Record<string, unknown>, new Set(["contentSecurityPolicy", "connectSources", "imageSources"]), "web.security", manifestPath);
-  return {
-    contentSecurityPolicy: booleanField(security?.contentSecurityPolicy, "web.security.contentSecurityPolicy", true),
-    connectSources: sourceList(security?.connectSources, "web.security.connectSources", new Set(["https:", "wss:"])),
-    imageSources: sourceList(security?.imageSources, "web.security.imageSources", new Set(["https:"])),
-  };
-}
-
-function deploymentConfig(value: unknown, manifestPath: string): VelarWebDeploymentConfig {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-    throw new Error(`${manifestPath}: 'web.deployment' must be an object`);
-  }
-  const deployment = value as { readonly spaFallback?: unknown; readonly adapter?: unknown } | undefined;
-  if (deployment) knownFields(deployment as Record<string, unknown>, new Set(["spaFallback", "adapter"]), "web.deployment", manifestPath);
-  const adapter = stringField(deployment?.adapter, "web.deployment.adapter", "neutral");
-  if (adapter !== "neutral" && adapter !== "netlify") {
-    throw new Error(`'web.deployment.adapter' must be 'neutral' or 'netlify'`);
-  }
-  return {
-    spaFallback: booleanField(deployment?.spaFallback, "web.deployment.spaFallback", true),
-    adapter,
-  };
-}
-
-function booleanField(value: unknown, field: string, fallback: boolean): boolean {
-  if (value === undefined) return fallback;
-  if (typeof value !== "boolean") throw new Error(`'${field}' must be a boolean`);
-  return value;
-}
-
-function sourceList(value: unknown, field: string, protocols: ReadonlySet<string>): readonly string[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new Error(`'${field}' must be a list of secure origins`);
-  }
-  return [...new Set(value.map((item) => {
-    let url: URL;
-    try {
-      url = new URL(item as string);
-    } catch {
-      throw new Error(`'${field}' contains invalid origin '${String(item)}'`);
-    }
-    if (!protocols.has(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-      throw new Error(`'${field}' contains unsupported origin '${String(item)}'`);
-    }
-    return url.origin;
-  }))].sort();
-}
-
 function stringField(value: unknown, field: string, fallback: string): string {
   if (value === undefined) return fallback;
-  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) throw new Error(`'${field}' must be a non-empty string without NUL bytes`);
+  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
+    throw new Error(`'${field}' must be a non-empty string without NUL bytes`);
+  }
   return value;
 }
 
 function knownFields(value: Record<string, unknown>, allowed: ReadonlySet<string>, field: string, manifestPath: string): void {
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) throw new Error(`${manifestPath}: unknown '${field}' field '${key}'`);
-  }
-}
-
-function validateWebBase(base: string, manifestPath: string): void {
-  if (base.includes("?") || base.includes("#") || base.includes("\\")) {
-    throw new Error(`${manifestPath}: 'web.base' must be a canonical URL pathname`);
-  }
-  const segments = base.split("/").slice(1, -1);
-  if (segments.some((segment) => segment.length === 0)) {
-    throw new Error(`${manifestPath}: 'web.base' cannot contain empty path segments`);
-  }
-  for (const segment of segments) {
-    let decoded: string;
-    try { decoded = decodeURIComponent(segment); }
-    catch { throw new Error(`${manifestPath}: 'web.base' contains invalid percent encoding`); }
-    if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) {
-      throw new Error(`${manifestPath}: 'web.base' must use canonical path segments`);
-    }
-  }
-  const parsed = new URL(base, "https://velar.invalid");
-  if (parsed.pathname !== base || parsed.search || parsed.hash) {
-    throw new Error(`${manifestPath}: 'web.base' must be a canonical URL pathname`);
   }
 }
 

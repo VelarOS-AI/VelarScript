@@ -9,7 +9,7 @@ Workbench consumption, base-aware stable Web APIs, incremental dev compilation,
 publishable toolchain packages, project lifecycle management, deliberately
 limited TypeScript declaration consumption, cross-browser automation,
 reproducible release rehearsal, secure static deployment, and production
-observability. The compiler-owned 0.6 language and Web API baseline is complete;
+observability. The compiler-owned 0.6 language baseline and Web API 0.8 are complete;
 0.7 closed the internal reliability, configuration, testing, and release
 rehearsal sequence. 0.8A–0.8E added checked dynamic modules, strict block
 matching, safe multipart uploads, checked rest parameters, and native Set
@@ -177,10 +177,20 @@ coordinates, dynamically chunked component-rendered bars, an HTML `foreignObject
 direct browser namespace assertions.
 The packed LSP and independently installed Workbench gate also complete
 `svg`, `foreignObject`, `viewBox`, and `stroke-width` from the analyzer-owned
-Web context; the generic editor host contains no SVG- or Velar-specific branch.
+Web context. Those JSX tag/attribute contexts and the `children` rename guard
+are now supplied by the Web compiler extension; the generic CLI project-semantic
+layer and editor host contain no SVG-, JSX-, or Velar-specific branch.
 
 ## Complete
 
+- npm-backed project dependency commands cover install, add, remove, and
+  range-respecting update without introducing a Velar registry. Package and
+  lockfile changes remain npm-owned; generic `velar.extension` metadata drives
+  atomic format-2 extension activation and removal, including cleanup of the
+  extension-owned manifest field. Registry arguments are bounded and passed
+  after `--` without a shell, invalid activation restores the prior project
+  manifest, and packed-consumer acceptance performs a real local-file npm
+  install through the installed CLI.
 - Indentation-aware lexer/parser, stable `VEL` diagnostics, formatter, source
   maps, and readable ESM JavaScript generation.
 - Intentional diagnostics for rejected JavaScript legacy surface, including
@@ -303,11 +313,13 @@ Web context; the generic editor host contains no SVG- or Velar-specific branch.
   unsafe HTML, and basic accessibility contracts.
 - `velar.json` plus `velar check`, `build`, `verify`, `preview`, `dev`, `test`,
   `format`, and `lsp`.
-- Project format version 1 plus fail-safe `velar create` and explicit
-  `velar upgrade` / `velar upgrade --check` lifecycle commands.
+- Project format version 2 with an explicit `extensions` list, fail-safe
+  `velar create`, and a clean break that rejects legacy manifests instead of
+  loading or rewriting them.
 - Ten explicit Web modules: `velar/app`, `velar/config`, `velar/web`,
   `velar/http`, `velar/storage`, `velar/forms`, `velar/browser`, `velar/files`,
-  `velar/realtime`, and `velar/test`.
+  `velar/realtime`, and `velar/web-test`; Core assertions remain in
+  `velar/test`.
 - Independently versioned Standard API 0.4 with 133 exports across
   `velar/collections`, `velar/text`, `velar/math`, `velar/json`, `velar/async`,
   `velar/url`, `velar/time`, `velar/id`, and `velar/log`.
@@ -380,14 +392,14 @@ Web context; the generic editor host contains no SVG- or Velar-specific branch.
   document highlights, non-TypeScript inlay hints, structural completion
   triggers, and safe current-file code actions through generic contracts.
   Workbench and the compiler remain independent products.
-- Versioned Velar Web API 0.6 for application error ownership, explicit public
-  configuration, routing/navigation, metadata ownership, HTTP,
+- Versioned Velar Web API 0.8 for application error ownership, bounded stable
+  DOM IDs, explicit public configuration, routing/navigation, metadata ownership, HTTP,
   storage/IndexedDB, forms, browser environment, files, realtime, and tests;
   compiler interfaces and emitted runtime code share one authority.
-- Backward-compatible Web 0.6 route/form completion: runtime-validatable
+- Web 0.8 route/form completion: runtime-validatable
   `RouteContext`, checked route patterns/component props, typed text/number/
   checkbox/multi-value form reads, and owned native reset.
-- Backward-compatible Web 0.6 navigation/dialog completion: application-relative
+- Web 0.8 navigation/dialog completion: application-relative
   `NavLink` activity with `aria-current`, nominal `DialogElement` refs, and
   mounted native modal open/close/result helpers without untyped DOM access.
 - Lazy root mounting surfaces an accessible fatal state; failed dynamic/keyed
@@ -411,13 +423,16 @@ Web context; the generic editor host contains no SVG- or Velar-specific branch.
   recompile only changed modules and reverse dependents.
 - Dynamic watching for installed and workspace Velar npm package roots.
 - Machine-readable development status and deterministic production build
-  identity/module composition/asset roles.
+  identity/module composition/asset roles, including framework package,
+  capability, target, host-protocol version, API version, and artifact kind.
 - Playwright-backed Chromium, Firefox, and WebKit acceptance automation plus a
   121-module application-scale incremental budget.
 - A three-module reusable Velar Web library exercising public data types,
   functions, nested components, children, and scoped CSS.
-- Publishable `@velarscript/compiler` and `@velarscript/cli` JavaScript plus
-  `.d.ts` packages, verified from packed tarballs in a clean npm consumer.
+- Publishable `@velarscript/compiler`, `@velarscript/web`, `create-velar`, and
+  `@velarscript/cli` JavaScript plus `.d.ts` packages, verified from packed
+  tarballs in a clean npm consumer. The creator owns checked `web`, `docs`, and
+  `library` templates shared by npm and CLI entry points.
 - A deliberately limited `.d.ts` bridge for safe JavaScript package imports;
   constants/functions, nested callback parameters, and simple object/interface
   fields, methods, or directly expandable bases map to Velar types. Unsupported
@@ -425,13 +440,13 @@ Web context; the generic editor host contains no SVG- or Velar-specific branch.
   never weakens silently by dropping base fields.
 - Production dependency summaries that distinguish Velar source packages from
   JavaScript packages.
-- Reproducible compiler/CLI release rehearsal with source-tree identity,
+- Reproducible compiler/Web/creator/CLI release rehearsal with source-tree identity,
   SHA-256 checksums, strict tagged-candidate refusal, and no publication path.
 - Linux/macOS/Windows Node 24 CI plus Chromium/Firefox/WebKit development and
   CSP production browser matrices.
 - Isolated static builds with last-good output preservation, reserved-file and
   public-symlink rejection, strict default CSP, SPA fallback, header/cache
-  contract, and format-2 build manifests.
+  contract, format-3 framework build manifests, and format-2 deployment manifests.
 - A 15-module Release Studio exercising typed data, async HTTP, routing and
   metadata, accessible forms/progress, browser state, local/session/IndexedDB
   persistence, file selection/downloads, explicit watcher cleanup, reusable
@@ -452,8 +467,9 @@ Web context; the generic editor host contains no SVG- or Velar-specific branch.
 - A root-base Netlify adapter emits official `_headers` and `_redirects` files
   from the neutral deployment manifest; adapter files are reserved and included
   in build hashes and identity.
-- Fixed 0.3 through 0.6 project fixtures pass current-CLI read-only upgrade
-  checks, explicit upgrade, semantic checking, and production builds.
+- Generated Core and Web projects declare their compiler extensions explicitly;
+  missing, format-1, and unknown future manifests fail closed with no legacy
+  loader or upgrade command.
 - Strict application-build verification rejects missing, extra, modified,
   symlinked, unsafe, duplicated, or structurally inconsistent output while
   recomputing every SHA-256 and `buildId` and cross-checking deployment state.
@@ -616,7 +632,8 @@ current-release gate proves one inferred collection type and one suppressed
 explicit annotation, resource-handle suppression, and exact same-document
 highlights. It also proves a narrowed local, component resource/action/prop,
 checked List members through ordinary completion, a collection-literal
-`slice` signature, `route.params` Map completion/signature/hover, and typed
+`slice` signature, compiler-owned defaultable/nullable parameter labels,
+`route.params` Map completion/signature/hover, and typed
 record-field definition plus multi-site rename navigation. External LSP
 acceptance also proves a component prop definition/hover/reference and
 three-site rename without a Workbench JSX prop table. The packed installed gate
@@ -631,7 +648,7 @@ four-method language-path interface without loading the wider Workspace
 runtime.
 
 The bounded-resource audit now passes its complete internal delivery matrix:
-190 compiler/CLI tests, FlowBoard, SupportDesk, and API Dashboard Core tests, packed consumer
+197 compiler/CLI tests, FlowBoard, SupportDesk, and API Dashboard Core tests, packed consumer
 installation, reproducible non-publishing rehearsal, installed Workbench
 toolchain acceptance, the 9 generic-host tests, and Chromium/Firefox/WebKit
 development plus verified CSP production application suites. The new limits

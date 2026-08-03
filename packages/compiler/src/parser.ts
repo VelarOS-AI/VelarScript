@@ -1,5 +1,4 @@
 import type {
-  ActionDeclaration,
   ArrowFunctionExpression,
   AssignmentStatement,
   BinaryExpression,
@@ -11,10 +10,6 @@ import type {
   ClassMethodDeclaration,
   ClassParameter,
   ComparisonChainExpression,
-  ComponentDeclaration,
-  ComponentItem,
-  ComputedDeclaration,
-  CleanupBlock,
   EnumDeclaration,
   Expression,
   ExternClassDeclaration,
@@ -29,31 +24,25 @@ import type {
   IfStatement,
   ImportDeclaration,
   ImportSpecifier,
-  JSXAttribute,
-  JSXChild,
-  JSXElementExpression,
-  MountedBlock,
   MemberExpression,
   MatchStatement,
   ObjectProperty,
   Parameter,
   Program,
-  ResourceDeclaration,
   Statement,
   TypeDeclaration,
   TypeAliasDeclaration,
   TypeField,
   TypeReference,
   VariableDeclaration,
-  WatchDeclaration,
-  StateDeclaration,
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import type { CompilerLexicalExtension } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
-const memberNameKinds = new Set<TokenKind>(["identifier", ...Object.values(keywordKinds)]);
+const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ...Object.values(keywordKinds)]);
 
 export interface ParseResult {
   readonly program: Program;
@@ -104,11 +93,13 @@ const assignmentOperators: Partial<Record<TokenKind, AssignmentStatement["operat
 
 export class Parser {
   private readonly tokens: readonly Token[];
-  private readonly diagnostics: Diagnostic[] = [];
+  protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
+  protected readonly diagnostics: Diagnostic[] = [];
   private index = 0;
 
-  constructor(tokens: readonly Token[]) {
+  constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[] = []) {
     this.tokens = tokens;
+    this.lexicalExtensions = lexicalExtensions;
   }
 
   parse(): ParseResult {
@@ -147,7 +138,7 @@ export class Parser {
     return { expression, diagnostics: this.diagnostics };
   }
 
-  private parseStatement(): Statement | null {
+  protected parseStatement(): Statement | null {
     const start = this.current().span.start;
 
     if (this.check("import") && this.tokens[this.index + 1]?.kind !== "leftParen") {
@@ -163,11 +154,8 @@ export class Parser {
     const abstract = this.match("abstract");
     const asynchronous = this.match("async");
 
-    if (this.match("component")) {
-      if (abstract) this.diagnostics.push(diagnostic("VEL2013", "Only classes can be declared with 'abstract'", this.previous().span));
-      if (asynchronous) this.diagnostics.push(diagnostic("VEL2013", "Components are not declared with 'async'", this.previous().span));
-      return this.parseComponent(start, exported);
-    }
+    const extensionStatement = this.parseExtensionStatement(start, { exported, abstract, asynchronous });
+    if (extensionStatement !== undefined) return extensionStatement;
 
     if (this.match("def")) {
       if (abstract) this.diagnostics.push(diagnostic("VEL2013", "Only class methods can be declared with 'abstract'", this.previous().span));
@@ -182,29 +170,6 @@ export class Parser {
     if (abstract && !this.check("class")) {
       this.diagnostics.push(diagnostic("VEL2001", "'abstract' must be followed by 'class'", this.previous().span));
       return null;
-    }
-
-    if (this.match("state")) {
-      return this.parseStateDeclaration(start, exported);
-    }
-
-    if (this.match("computed")) {
-      return this.parseComputedDeclaration(start, exported);
-    }
-
-    if (this.match("resource")) {
-      if (exported) this.diagnostics.push(diagnostic("VEL2018", "A resource is component-owned and cannot be exported", this.previous().span));
-      return this.parseResourceDeclaration(start, exported);
-    }
-
-    if (this.match("action")) {
-      if (exported) this.diagnostics.push(diagnostic("VEL2019", "An action is component-owned and cannot be exported", this.previous().span));
-      return this.parseActionDeclaration(start, exported);
-    }
-
-    if (this.match("watch")) {
-      if (exported) this.diagnostics.push(diagnostic("VEL2001", "A watch block cannot be exported", this.previous().span));
-      return this.parseWatchDeclaration(start);
     }
 
     if (this.match("type")) {
@@ -476,6 +441,13 @@ export class Parser {
     return { name: name.value, parameters, base, fields, methods, span: span(start, Math.max(fields.at(-1)?.span.end ?? start, methods.at(-1)?.span.end ?? start, close.span.end)) };
   }
 
+  protected parseExtensionStatement(
+    _start: number,
+    _modifiers: { readonly exported: boolean; readonly abstract: boolean; readonly asynchronous: boolean },
+  ): Statement | null | undefined {
+    return undefined;
+  }
+
   private parseVariable(start: number, exported: boolean): VariableDeclaration {
     const bindingToken = this.advance();
     const pattern = this.parseBindingPattern();
@@ -492,107 +464,6 @@ export class Parser {
       initializer,
       span: span(start, initializer.span.end),
     };
-  }
-
-  private parseStateDeclaration(start: number, exported: boolean): StateDeclaration {
-    const name = this.expect("identifier", "Expected a state name");
-    const type = this.match("colon") ? this.parseTypeReference() : null;
-    this.expect("assign", "Expected '=' after state name");
-    const initializer = this.parseExpression();
-    return { kind: "StateDeclaration", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
-  }
-
-  private parseComputedDeclaration(start: number, exported: boolean): ComputedDeclaration {
-    const name = this.expect("identifier", "Expected a computed name");
-    const type = this.match("colon") ? this.parseTypeReference() : null;
-    this.expect("assign", "Expected '=' after computed name");
-    const initializer = this.parseExpression();
-    return { kind: "ComputedDeclaration", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
-  }
-
-  private parseResourceDeclaration(start: number, exported: boolean): ResourceDeclaration {
-    const name = this.expect("identifier", "Expected a resource name");
-    const type = this.match("colon") ? this.parseTypeReference() : null;
-    this.expect("assign", "Expected '=' after resource name");
-    const initializer = this.parseExpression();
-    return { kind: "ResourceDeclaration", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
-  }
-
-  private parseActionDeclaration(start: number, exported: boolean): ActionDeclaration {
-    const name = this.expect("identifier", "Expected an action name");
-    const parameters = this.parseParameters();
-    const returnType = this.match("arrow") ? this.parseTypeReference() : null;
-    const body = this.parseBlock();
-    const end = body.at(-1)?.span.end ?? returnType?.span.end ?? name.span.end;
-    return { kind: "ActionDeclaration", exported, name: name.value, parameters, returnType, body, span: span(start, end) };
-  }
-
-  private parseWatchDeclaration(start: number): WatchDeclaration {
-    const expression = this.parseExpression();
-    let currentName: string | null = null;
-    let previousName: string | null = null;
-    if (this.match("as")) {
-      currentName = this.expect("identifier", "Expected the current watch value name").value;
-      this.expect("comma", "Expected ',' between watch value names");
-      previousName = this.expect("identifier", "Expected the previous watch value name").value;
-    }
-    const body = this.parseBlock();
-    return { kind: "WatchDeclaration", expression, currentName, previousName, body, span: span(start, body.at(-1)?.span.end ?? expression.span.end) };
-  }
-
-  private parseComponent(start: number, exported: boolean): ComponentDeclaration {
-    const name = this.expect("identifier", "Expected a component name");
-    const parameters = this.check("leftParen") ? this.parseParameters() : [];
-    for (const parameter of parameters) {
-      if (parameter.rest) {
-        this.diagnostics.push(diagnostic("VEL2016", "Components use named props and do not support rest parameters", parameter.span));
-      }
-    }
-    this.expect("colon", "Expected ':' before component body");
-    this.expect("newline", "Expected a newline before component body");
-    this.consumeNewlines();
-    this.expect("indent", "Expected an indented component body");
-    const body: ComponentItem[] = [];
-    this.consumeNewlines();
-
-    while (!this.check("dedent") && !this.check("eof")) {
-      const itemStart = this.current().span.start;
-      let item: ComponentItem | null = null;
-      if (this.match("state")) {
-        item = this.parseStateDeclaration(itemStart, false);
-      } else if (this.match("computed")) {
-        item = this.parseComputedDeclaration(itemStart, false);
-      } else if (this.match("resource")) {
-        item = this.parseResourceDeclaration(itemStart, false);
-      } else if (this.match("action")) {
-        item = this.parseActionDeclaration(itemStart, false);
-      } else if (this.match("watch")) {
-        item = this.parseWatchDeclaration(itemStart);
-      } else if (this.match("mounted")) {
-        const mountedBody = this.parseBlock();
-        item = { kind: "MountedBlock", body: mountedBody, span: span(itemStart, mountedBody.at(-1)?.span.end ?? itemStart) } satisfies MountedBlock;
-      } else if (this.match("cleanup")) {
-        const cleanupBody = this.parseBlock();
-        item = { kind: "CleanupBlock", body: cleanupBody, span: span(itemStart, cleanupBody.at(-1)?.span.end ?? itemStart) } satisfies CleanupBlock;
-      } else if (this.match("style")) {
-        const global = this.match("global");
-        this.expect("colon", "Expected ':' after style");
-        this.expect("newline", "Expected a newline before component CSS");
-        this.consumeNewlines();
-        this.expect("indent", "Expected indented component CSS");
-        const css = this.expect("css", "Expected component CSS");
-        this.consumeNewlines();
-        this.expect("dedent", "Expected the end of component CSS");
-        item = { kind: "StyleBlock", global, css: css.value, span: span(itemStart, css.span.end) };
-      } else {
-        item = this.parseStatement();
-      }
-      if (item) body.push(item);
-      if (this.previous().kind !== "dedent") this.expectStatementEnd();
-      this.consumeNewlines();
-    }
-    const close = this.expect("dedent", "Expected the end of component body");
-    return { kind: "ComponentDeclaration", exported, name: name.value, parameters, body, span: span(start, body.at(-1)?.span.end ?? close.span.end) };
   }
 
   private parseBindingPattern(): BindingPattern {
@@ -665,7 +536,7 @@ export class Parser {
     };
   }
 
-  private parseParameters(): readonly Parameter[] {
+  protected parseParameters(): readonly Parameter[] {
     this.expect("leftParen", "Expected '('");
     const parameters: Parameter[] = [];
     let sawRest = false;
@@ -1152,7 +1023,7 @@ export class Parser {
     return { kind: "TryStatement", tryBody, catchName, catchBody, finallyBody, span: span(start, end) };
   }
 
-  private parseBlock(): readonly Statement[] {
+  protected parseBlock(): readonly Statement[] {
     this.expect("colon", "Expected ':' before an indented block");
     this.expect("newline", "Expected a newline before an indented block");
     this.consumeNewlines();
@@ -1174,7 +1045,7 @@ export class Parser {
     return statements;
   }
 
-  private parseTypeReference(): TypeReference {
+  protected parseTypeReference(): TypeReference {
     const start = this.current().span.start;
     let text = this.parseSingleTypeReference();
     while (this.match("pipe")) {
@@ -1238,7 +1109,7 @@ export class Parser {
     return false;
   }
 
-  private parseExpression(minimumPrecedence = 0): Expression {
+  protected parseExpression(minimumPrecedence = 0): Expression {
     const asynchronousArrow = minimumPrecedence === 0
       && this.check("async")
       && ((this.peekKind(1) === "leftParen" && this.isParenthesizedArrow(1))
@@ -1449,8 +1320,12 @@ export class Parser {
       }
       case "fstring":
         return this.parseFString(token);
-      case "jsx":
-        return this.parseJsx(token);
+      case "jsx": {
+        const extensionExpression = this.parseExtensionExpression(token);
+        if (extensionExpression) return extensionExpression;
+        this.diagnostics.push(diagnostic("VEL2002", "No compiler extension accepts this embedded expression", token.span));
+        return { kind: "LiteralExpression", value: null, raw: "none", span: token.span };
+      }
       case "true":
         return { kind: "LiteralExpression", value: true, raw: token.value, span: token.span };
       case "false":
@@ -1545,13 +1420,8 @@ export class Parser {
       }
 
       const fragment = token.value.slice(index + 1, close).trim();
-      const lexed = new Lexer(fragment).lex();
       const offset = token.span.start + 2 + index + 1;
-      const shiftedTokens = lexed.tokens.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
-      const shiftedDiagnostics = lexed.diagnostics.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
-      const parsed = new Parser(shiftedTokens).parseExpressionFragment();
-      this.diagnostics.push(...shiftedDiagnostics, ...parsed.diagnostics);
-      parts.push({ kind: "expression", value: parsed.expression });
+      parts.push({ kind: "expression", value: this.parseNestedExpression(fragment, offset) });
       index = close + 1;
       textStart = index;
     }
@@ -1563,23 +1433,21 @@ export class Parser {
     return { kind: "FStringExpression", parts, span: token.span };
   }
 
-  private parseJsx(token: Token): JSXElementExpression {
-    const parser = new JsxSourceParser(
-      token.value,
-      token.span.start,
-      (text, offset) => this.parseEmbeddedExpression(text, offset),
-      (item) => this.diagnostics.push(item),
-    );
-    return parser.parse();
+  protected parseExtensionExpression(_token: Token): Expression | undefined {
+    return undefined;
   }
 
-  private parseEmbeddedExpression(fragment: string, offset: number): Expression {
-    const lexed = new Lexer(fragment).lex();
+  protected parseNestedExpression(fragment: string, offset: number): Expression {
+    const lexed = new Lexer(fragment, this.lexicalExtensions).lex();
     const shiftedTokens = lexed.tokens.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
     const shiftedDiagnostics = lexed.diagnostics.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
-    const parsed = new Parser(shiftedTokens).parseExpressionFragment();
+    const parsed = this.createNestedParser(shiftedTokens).parseExpressionFragment();
     this.diagnostics.push(...shiftedDiagnostics, ...parsed.diagnostics);
     return parsed.expression;
+  }
+
+  protected createNestedParser(tokens: readonly Token[]): Parser {
+    return new Parser(tokens, this.lexicalExtensions);
   }
 
   private binaryOperator(token: Token): BinaryExpression["operator"] {
@@ -1608,7 +1476,7 @@ export class Parser {
     return this.check("newline") || this.check("dedent") || this.check("eof");
   }
 
-  private expectStatementEnd(): void {
+  protected expectStatementEnd(): void {
     if (!this.atStatementEnd()) {
       this.diagnostics.push(diagnostic("VEL2003", "Expected the end of a statement", this.current().span));
       this.synchronize();
@@ -1621,13 +1489,13 @@ export class Parser {
     }
   }
 
-  private consumeNewlines(): void {
+  protected consumeNewlines(): void {
     while (this.match("newline")) {
       // Intentionally empty.
     }
   }
 
-  private expect(kind: TokenKind, message: string): Token {
+  protected expect(kind: TokenKind, message: string): Token {
     if (this.check(kind)) {
       return this.advance();
     }
@@ -1643,7 +1511,7 @@ export class Parser {
     return { kind: "identifier", value: "", span: token.span };
   }
 
-  private match(kind: TokenKind): boolean {
+  protected match(kind: TokenKind): boolean {
     if (!this.check(kind)) {
       return false;
     }
@@ -1651,7 +1519,13 @@ export class Parser {
     return true;
   }
 
-  private check(kind: TokenKind): boolean {
+  protected matchExtensionKeyword(value: string): boolean {
+    if (this.current().kind !== "extensionKeyword" || this.current().value !== value) return false;
+    this.advance();
+    return true;
+  }
+
+  protected check(kind: TokenKind): boolean {
     return this.current().kind === kind;
   }
 
@@ -1667,179 +1541,11 @@ export class Parser {
     return token;
   }
 
-  private current(): Token {
+  protected current(): Token {
     return this.tokens[this.index] ?? this.tokens[this.tokens.length - 1]!;
   }
 
-  private previous(): Token {
+  protected previous(): Token {
     return this.tokens[Math.max(0, this.index - 1)] ?? this.current();
-  }
-}
-
-class JsxSourceParser {
-  private index = 0;
-  private readonly voidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-  private readonly text: string;
-  private readonly offset: number;
-  private readonly parseExpression: (text: string, offset: number) => Expression;
-  private readonly report: (item: Diagnostic) => void;
-
-  constructor(
-    text: string,
-    offset: number,
-    parseExpression: (text: string, offset: number) => Expression,
-    report: (item: Diagnostic) => void,
-  ) {
-    this.text = text;
-    this.offset = offset;
-    this.parseExpression = parseExpression;
-    this.report = report;
-  }
-
-  parse(): JSXElementExpression {
-    this.skipWhitespace();
-    return this.parseElement();
-  }
-
-  private parseElement(): JSXElementExpression {
-    const start = this.index;
-    this.expectCharacter("<", "Expected '<' to start JSX");
-    const tag = this.readName();
-    const fragment = !tag && this.peek() === ">";
-    if (!tag && !fragment) this.report(diagnostic("VEL5001", "Expected a JSX tag name or fragment", this.absoluteSpan(start, this.index)));
-    const attributes: JSXAttribute[] = [];
-    let selfClosing = false;
-
-    while (this.index < this.text.length) {
-      this.skipWhitespace();
-      if (this.text.startsWith("/>", this.index)) {
-        this.index += 2;
-        selfClosing = true;
-        break;
-      }
-      if (this.peek() === ">") {
-        this.index += 1;
-        break;
-      }
-      const attributeStart = this.index;
-      const name = this.readAttributeName();
-      if (!name) {
-        this.report(diagnostic("VEL5002", "Expected a JSX attribute", this.absoluteSpan(this.index, this.index + 1)));
-        this.index += 1;
-        continue;
-      }
-      this.skipWhitespace();
-      let value: string | Expression | null = null;
-      if (this.peek() === "=") {
-        this.index += 1;
-        this.skipWhitespace();
-        if (this.peek() === '"' || this.peek() === "'") {
-          value = this.readQuoted();
-        } else if (this.peek() === "{") {
-          const embedded = this.readEmbedded();
-          value = this.parseExpression(embedded.text, this.offset + embedded.start);
-        } else {
-          this.report(diagnostic("VEL5003", "JSX attribute values use quotes or '{...}'", this.absoluteSpan(this.index, this.index + 1)));
-        }
-      }
-      attributes.push({ name, value, span: this.absoluteSpan(attributeStart, this.index) });
-    }
-
-    const children: JSXChild[] = [];
-    if (!selfClosing && !(tag === tag.toLowerCase() && this.voidTags.has(tag))) {
-      while (this.index < this.text.length && !this.text.startsWith("</", this.index)) {
-        if (this.peek() === "<") {
-          children.push(this.parseElement());
-        } else if (this.peek() === "{") {
-          const childStart = this.index;
-          const embedded = this.readEmbedded();
-          children.push({
-            kind: "JSXExpressionChild",
-            expression: this.parseExpression(embedded.text, this.offset + embedded.start),
-            span: this.absoluteSpan(childStart, this.index),
-          });
-        } else {
-          const textStart = this.index;
-          while (this.index < this.text.length && this.peek() !== "<" && this.peek() !== "{") this.index += 1;
-          children.push({ kind: "JSXText", value: this.text.slice(textStart, this.index), span: this.absoluteSpan(textStart, this.index) });
-        }
-      }
-      if (!this.text.startsWith("</", this.index)) {
-        this.report(diagnostic("VEL5004", `JSX ${fragment ? "fragment" : `element '<${tag}>'`} is not closed`, this.absoluteSpan(start, this.index)));
-      } else {
-        this.index += 2;
-        const closing = this.readName();
-        if (closing !== tag) this.report(diagnostic("VEL5005", fragment ? "Expected '</>' to close the JSX fragment" : `Expected '</${tag}>' but received '</${closing}>'`, this.absoluteSpan(this.index - closing.length, this.index)));
-        this.skipWhitespace();
-        this.expectCharacter(">", "Expected '>' after JSX closing tag");
-      }
-    }
-
-    return { kind: "JSXElementExpression", tag, attributes, children, span: this.absoluteSpan(start, this.index) };
-  }
-
-  private readEmbedded(): { text: string; start: number } {
-    this.expectCharacter("{", "Expected '{'");
-    const start = this.index;
-    let depth = 1;
-    let quote = "";
-    while (this.index < this.text.length) {
-      const character = this.text[this.index++]!;
-      if (quote) {
-        if (character === "\\") this.index += 1;
-        else if (character === quote) quote = "";
-      } else if (character === '"' || character === "'" || character === "`") {
-        quote = character;
-      } else if (character === "{") {
-        depth += 1;
-      } else if (character === "}") {
-        depth -= 1;
-        if (depth === 0) return { text: this.text.slice(start, this.index - 1), start };
-      }
-    }
-    this.report(diagnostic("VEL5006", "Unclosed JSX expression", this.absoluteSpan(start - 1, this.index)));
-    return { text: this.text.slice(start), start };
-  }
-
-  private readQuoted(): string {
-    const quote = this.text[this.index++]!;
-    let value = "";
-    while (this.index < this.text.length) {
-      const character = this.text[this.index++]!;
-      if (character === quote) return value;
-      if (character === "\\" && this.index < this.text.length) value += this.text[this.index++]!;
-      else value += character;
-    }
-    this.report(diagnostic("VEL5007", "Unclosed JSX attribute string", this.absoluteSpan(this.index, this.index)));
-    return value;
-  }
-
-  private readName(): string {
-    const start = this.index;
-    while (/[A-Za-z0-9_.:-]/u.test(this.peek())) this.index += 1;
-    return this.text.slice(start, this.index);
-  }
-
-  private readAttributeName(): string {
-    const start = this.index;
-    while (/[A-Za-z0-9_.:-]/u.test(this.peek())) this.index += 1;
-    return this.text.slice(start, this.index);
-  }
-
-  private skipWhitespace(): void {
-    while (/\s/u.test(this.peek())) this.index += 1;
-  }
-
-  private expectCharacter(character: string, message: string): void {
-    if (this.peek() === character) this.index += 1;
-    else this.report(diagnostic("VEL5001", message, this.absoluteSpan(this.index, this.index + 1)));
-  }
-
-  private peek(): string {
-    return this.text[this.index] ?? "\0";
-  }
-
-  private absoluteSpan(start: number, end: number): ReturnType<typeof span> {
-    return span(this.offset + start, this.offset + end);
   }
 }

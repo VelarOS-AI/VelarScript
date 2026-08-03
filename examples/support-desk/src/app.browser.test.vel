@@ -1,4 +1,5 @@
-import {browser, expect} from "velar/test"
+import {expect} from "velar/test"
+import {browser} from "velar/web-test"
 
 async def openDesk():
     await browser.open("/")

@@ -161,7 +161,7 @@ export function createDeploymentVerificationReport(
     build: {
       buildId: deployment.buildId,
       compiler: build.manifest.compiler,
-      apiVersion: build.manifest.apiVersion,
+      apiVersion: build.manifest.framework.apiVersion,
       sourceMaps: typeof build.manifest.sourceMaps === "boolean"
         ? build.manifest.sourceMaps
         : build.manifest.assets.some((asset) => asset.role === "source-map"),

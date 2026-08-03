@@ -1,20 +1,20 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import { chromium, firefox, webkit, type Browser, type BrowserType, type Page } from "playwright";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "./preview-server.ts";
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 export type BrowserEngineSelection = BrowserEngine | "all";
 
-const browserRuntimeKey = Symbol.for("velar.browser.test.v1");
 const browserTypes: Readonly<Record<BrowserEngine, BrowserType>> = { chromium, firefox, webkit };
 
 export async function runBrowserTests(
@@ -22,9 +22,15 @@ export async function runBrowserTests(
   explicitInput: string | null,
   selection: BrowserEngineSelection,
 ): Promise<number> {
-  const files = explicitInput?.endsWith(".browser.test.vel")
+  const contract = config.framework?.host.browserTests;
+  if (!config.framework || !contract) {
+    process.stderr.write("The project framework does not provide browser-test hosting\n");
+    return 1;
+  }
+  const runtimeKey = Symbol.for(contract.runtimeKey);
+  const files = explicitInput?.endsWith(contract.sourceSuffix)
     ? [resolve(explicitInput)]
-    : await discoverBrowserTestFiles(config.root, new Set([config.outDir, config.publicDir]));
+    : await discoverBrowserTestFiles(config.root, new Set([config.outDir, config.publicDir]), contract.sourceSuffix);
   if (files.length === 0) {
     process.stderr.write("No .browser.test.vel files were found\n");
     return 1;
@@ -87,7 +93,7 @@ export async function runBrowserTests(
                 runtimeFailures.push(`${message.type()}: ${message.text()}`);
               }
             });
-            installBrowserRuntime(page, origin, verified.deployment.base);
+            installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
             try {
               if (typeof test !== "function") throw new Error(`Test function '${name}' was not emitted`);
               if (test.length !== 0) throw new Error(`Browser test function '${name}' cannot declare parameters`);
@@ -99,7 +105,7 @@ export async function runBrowserTests(
               failed += 1;
               process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} :: ${name}\n${stackOf(error)}\n`);
             } finally {
-              removeBrowserRuntime();
+              removeBrowserRuntime(runtimeKey);
               await context.close();
             }
           }
@@ -109,7 +115,7 @@ export async function runBrowserTests(
       }
     }
   } finally {
-    removeBrowserRuntime();
+    removeBrowserRuntime(runtimeKey);
     if (server) await server.close();
     await rm(temporary, { recursive: true, force: true });
   }
@@ -126,7 +132,9 @@ async function compileBrowserTest(
     sourceRoot: config.root,
     projectRoot: config.root,
     publicRoot: config.publicDir,
-    web: config.web,
+    extensions: config.compilerExtensions,
+    extensionConfig: config.extensionConfig,
+    framework: config.framework,
     exportTestFunctions: true,
   });
   const errors = [
@@ -137,22 +145,17 @@ async function compileBrowserTest(
     process.stderr.write(`✗ ${relative(config.root, file)}\n${errors.join("\n\n")}\n`);
     return null;
   }
-  for (const module of project.modules) {
-    const output = join(outputRoot, module.relativePath.replace(/\.vel$/u, ".js"));
-    await mkdir(dirname(output), { recursive: true });
-    await writeFile(output, `${module.result.code ?? ""}//# sourceMappingURL=${output.split("/").at(-1)}.map\n`, "utf8");
-    await writeFile(`${output}.map`, module.result.sourceMap ?? "", "utf8");
-  }
+  await writeCompiledTestProject(project, outputRoot);
   const entry = project.modules.find((module) => module.inputPath === file);
   const tests = entry?.result.moduleInterface.testFunctions ?? [];
   if (tests.length === 0) {
     process.stderr.write(`✗ ${relative(config.root, file)} contains no test_* functions\n`);
     return null;
   }
-  return { file, output: join(outputRoot, relative(config.root, file).replace(/\.vel$/u, ".js")), tests };
+  return { file, output: entry ? compiledTestModulePath(project, entry, outputRoot) : join(outputRoot, relative(config.root, file).replace(/\.vel$/u, ".js")), tests };
 }
 
-function installBrowserRuntime(page: Page, origin: string, base: string): void {
+function installBrowserRuntime(page: Page, origin: string, base: string, runtimeKey: symbol): void {
   const locator = (selector: unknown) => page.locator(String(selector));
   const runtime = Object.freeze({
     async open(path = "/") {
@@ -200,11 +203,11 @@ function installBrowserRuntime(page: Page, origin: string, base: string): void {
       return null;
     },
   });
-  (globalThis as unknown as { [key: symbol]: unknown })[browserRuntimeKey] = runtime;
+  (globalThis as unknown as { [key: symbol]: unknown })[runtimeKey] = runtime;
 }
 
-function removeBrowserRuntime(): void {
-  delete (globalThis as unknown as { [key: symbol]: unknown })[browserRuntimeKey];
+function removeBrowserRuntime(runtimeKey: symbol): void {
+  delete (globalThis as unknown as { [key: symbol]: unknown })[runtimeKey];
 }
 
 async function buildProject(config: VelarProjectConfig, outputDirectory: string): Promise<{ readonly ok: boolean; readonly output: string }> {
@@ -227,15 +230,15 @@ async function prepareStandardModules(root: string, config: VelarProjectConfig):
   const packageRoot = join(root, "node_modules", "velar");
   await mkdir(packageRoot, { recursive: true });
   const exports: Record<string, string> = {};
-  for (const [source, fallback] of standardModuleSources) {
+  for (const [source, fallback] of standardModuleSources(config.compilerExtensions)) {
     const name = source.slice("velar/".length);
     exports[`./${name}`] = `./${name}.js`;
-    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, config.web) ?? fallback, "utf8");
+    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, config.extensionConfig, config.compilerExtensions) ?? fallback, "utf8");
   }
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "velar", private: true, type: "module", exports }), "utf8");
 }
 
-async function discoverBrowserTestFiles(root: string, excluded: ReadonlySet<string>): Promise<string[]> {
+async function discoverBrowserTestFiles(root: string, excluded: ReadonlySet<string>, sourceSuffix: string): Promise<string[]> {
   const output: string[] = [];
   const visit = async (directory: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -243,7 +246,7 @@ async function discoverBrowserTestFiles(root: string, excluded: ReadonlySet<stri
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === ".git" || excluded.has(path)) continue;
         await visit(path);
-      } else if (entry.isFile() && entry.name.endsWith(".browser.test.vel")) output.push(path);
+      } else if (entry.isFile() && entry.name.endsWith(sourceSuffix)) output.push(path);
     }
   };
   await visit(root);

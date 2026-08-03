@@ -1,7 +1,8 @@
 import { Analyzer, type AnalysisContext, type ClassInfo } from "./analyzer.ts";
-import type { BindingPattern, ComponentItem, Expression, FunctionDeclaration, Program, Statement, TypeReference } from "./ast.ts";
+import type { BindingPattern, Expression, FunctionDeclaration, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
-import { WebJavaScriptEmitter } from "./web-emitter.ts";
+import { JavaScriptEmitter } from "./emitter.ts";
+import type { CompilerEmitter, CompilerExtension, ModuleInterface } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { Parser } from "./parser.ts";
 import { SourceText } from "./source.ts";
@@ -24,7 +25,8 @@ export { formatDiagnostic, type Diagnostic } from "./diagnostic.ts";
 export { formatSource } from "./formatter.ts";
 export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type SemanticExpression, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, ModuleInterface } from "./extension.ts";
+export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { describeType, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
 
@@ -32,13 +34,14 @@ export interface CompileOptions {
   readonly path?: string;
   readonly analysis?: AnalysisContext;
   readonly exportFunctions?: ReadonlySet<string>;
+  readonly extensions?: readonly CompilerExtension[];
 }
 
 export interface CompileResult {
   readonly code: string | null;
   readonly sourceMap: string | null;
   readonly css: string | null;
-  readonly web: boolean;
+  readonly extensions: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
   readonly source: SourceText;
   readonly dependencies: readonly ModuleDependency[];
@@ -60,16 +63,6 @@ export interface ModuleDependency {
   readonly specifiers: readonly ModuleDependencySpecifier[];
 }
 
-export interface ModuleInterface {
-  readonly exports: ReadonlyMap<string, ValueType>;
-  readonly reactiveExports: ReadonlyMap<string, "state" | "computed">;
-  readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
-  readonly typeAliases: ReadonlyMap<string, ValueType>;
-  readonly enums: ReadonlyMap<string, EnumInfo>;
-  readonly classes: ReadonlyMap<string, ClassInfo>;
-  readonly testFunctions: readonly string[];
-}
-
 export interface ModuleInspection {
   readonly diagnostics: readonly Diagnostic[];
   readonly source: SourceText;
@@ -78,30 +71,39 @@ export interface ModuleInspection {
   readonly semanticIndex: SemanticIndex;
 }
 
-export function inspectModule(text: string, options: Pick<CompileOptions, "path"> = {}): ModuleInspection {
-  const parsed = parseModule(text, options.path ?? "<source>");
+export function inspectModule(text: string, options: Pick<CompileOptions, "path" | "extensions"> = {}): ModuleInspection {
+  const extensions = normalizedExtensions(options.extensions ?? []);
+  const parsed = parseModule(text, options.path ?? "<source>", extensions);
   return {
     diagnostics: parsed.diagnostics,
     source: parsed.source,
-    dependencies: dependenciesOf(parsed.program),
-    moduleInterface: interfaceOf(parsed.program, parsed.source.path),
-    semanticIndex: buildSemanticIndex(parsed.program, parsed.source),
+    dependencies: dependenciesOf(parsed.program, extensions),
+    moduleInterface: interfaceOf(parsed.program, parsed.source.path, extensions),
+    semanticIndex: buildSemanticIndex(parsed.program, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : [])),
   };
 }
 
 export function compile(text: string, options: CompileOptions = {}): CompileResult {
-  const parsed = parseModule(text, options.path ?? "<source>");
+  const extensions = normalizedExtensions(options.extensions ?? []);
+  const parsed = parseModule(text, options.path ?? "<source>", extensions);
   const diagnostics = [...parsed.diagnostics];
-  const analyzer = new Analyzer(options.analysis);
+  const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
+  const analyzerExtensions = extensions.filter((extension) => extension.analyzer);
+  if (analyzerExtensions.length > 1) throw new Error("Only one compiler extension may own semantic analysis");
+  const analyzer = analyzerExtensions[0]?.analyzer?.create(options.analysis ?? {}, analysisExtensions)
+    ?? new Analyzer(options.analysis, analysisExtensions);
   if (diagnostics.length === 0) {
     diagnostics.push(...analyzer.analyze(parsed.program));
   }
 
   diagnostics.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
-  const emitter = new WebJavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions);
+  const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
+  if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
+  const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(analyzer.loweringHints(), options.exportFunctions ?? new Set())
+    ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions);
   const code = diagnostics.length === 0 ? emitter.emit(parsed.program) : null;
   const sourceMap = code === null ? null : emitter.sourceMap(parsed.source);
-  const css = code === null ? null : emitter.css();
+  const css = code === null ? null : emitter.css?.() ?? null;
   const semanticExpressions = analyzer.semanticExpressions();
   const semanticIndex = buildSemanticIndex(
     parsed.program,
@@ -116,21 +118,22 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
     semanticExpressions.jsxAttributeOwners,
     semanticExpressions.contexts,
     semanticExpressions.contextMembers,
+    extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : []),
   );
   return {
     code,
     sourceMap,
     css,
-    web: code !== null && emitter.web(),
+    extensions: extensions.map((extension) => extension.id),
     diagnostics,
     source: parsed.source,
-    dependencies: dependenciesOf(parsed.program),
-    moduleInterface: interfaceOf(parsed.program, parsed.source.path),
+    dependencies: dependenciesOf(parsed.program, extensions),
+    moduleInterface: interfaceOf(parsed.program, parsed.source.path, extensions),
     semanticIndex,
   };
 }
 
-function parseModule(text: string, path: string): { source: SourceText; program: Program; diagnostics: readonly Diagnostic[] } {
+function parseModule(text: string, path: string, extensions: readonly CompilerExtension[]): { source: SourceText; program: Program; diagnostics: readonly Diagnostic[] } {
   if (text.length > MAX_VELAR_SOURCE_CODE_UNITS) {
     const source = new SourceText(path, text, false);
     return {
@@ -145,8 +148,13 @@ function parseModule(text: string, path: string): { source: SourceText; program:
   }
   const source = new SourceText(path, text);
   try {
-    const lexed = new Lexer(text).lex();
-    const parsed = new Parser(lexed.tokens).parse();
+    const lexicalExtensions = extensions.flatMap((extension) => extension.lexical ? [extension.lexical] : []);
+    const lexed = new Lexer(text, lexicalExtensions).lex();
+    const parserExtensions = extensions.filter((extension) => extension.parser);
+    if (parserExtensions.length > 1) throw new Error("Only one compiler extension may own syntax parsing");
+    const parser = parserExtensions[0]?.parser?.create(lexed.tokens, lexicalExtensions)
+      ?? new Parser(lexed.tokens, lexicalExtensions);
+    const parsed = parser.parse();
     return { source, program: parsed.program, diagnostics: [...lexed.diagnostics, ...parsed.diagnostics] };
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
@@ -158,7 +166,23 @@ function parseModule(text: string, path: string): { source: SourceText; program:
   }
 }
 
-function dependenciesOf(program: Program): readonly ModuleDependency[] {
+function normalizedExtensions(extensions: readonly CompilerExtension[]): readonly CompilerExtension[] {
+  const seen = new Set<string>();
+  const capabilities = new Set<string>();
+  for (const extension of extensions) {
+    if (!extension.id || seen.has(extension.id)) throw new Error(`Compiler extension '${extension.id}' is invalid or duplicated`);
+    seen.add(extension.id);
+    for (const capability of extension.capabilities ?? []) {
+      if (!/^[a-z][a-z0-9-]*$/u.test(capability) || capabilities.has(capability)) {
+        throw new Error(`Compiler capability '${capability}' is invalid or has more than one owner`);
+      }
+      capabilities.add(capability);
+    }
+  }
+  return extensions;
+}
+
+function dependenciesOf(program: Program, extensions: readonly CompilerExtension[]): readonly ModuleDependency[] {
   const dependencies: ModuleDependency[] = program.body
     .filter((statement) => statement.kind === "ImportDeclaration")
     .map((statement) => ({
@@ -174,7 +198,14 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
     }));
 
   const dynamicSources = new Set<string>();
+  const dependencyExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
+  const dependencyContext = {
+    visitExpression: (expression: Expression) => visitExpression(expression),
+    visitStatement: (statement: Statement) => visitStatement(statement),
+    visitBlock: (body: readonly Statement[]) => visitBlock(body),
+  };
   const visitExpression = (expression: Expression): void => {
+    for (const extension of dependencyExtensions) if (extension.visitDependencyExpression?.(expression, dependencyContext)) return;
     switch (expression.kind) {
       case "DynamicImportExpression":
         if (!dynamicSources.has(expression.source)) {
@@ -210,13 +241,6 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
       case "CallExpression": visitExpression(expression.callee); for (const argument of expression.arguments) visitExpression(argument); break;
       case "MemberExpression": visitExpression(expression.object); break;
       case "IndexExpression": visitExpression(expression.object); visitExpression(expression.index); break;
-      case "JSXElementExpression":
-        for (const attribute of expression.attributes) if (attribute.value && typeof attribute.value !== "string") visitExpression(attribute.value);
-        for (const child of expression.children) {
-          if (child.kind === "JSXExpressionChild") visitExpression(child.expression);
-          else if (child.kind === "JSXElementExpression") visitExpression(child);
-        }
-        break;
       case "LiteralExpression":
       case "IdentifierExpression":
       case "SuperExpression":
@@ -224,24 +248,9 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
     }
   };
   const visitBlock = (body: readonly Statement[]): void => { for (const statement of body) visitStatement(statement); };
-  const visitComponentItem = (item: ComponentItem): void => {
-    if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") visitBlock(item.body);
-    else if (item.kind !== "StyleBlock") visitStatement(item);
-  };
   const visitStatement = (statement: Statement): void => {
+    for (const extension of dependencyExtensions) if (extension.visitDependencyStatement?.(statement, dependencyContext)) return;
     switch (statement.kind) {
-      case "ComponentDeclaration":
-        for (const parameter of statement.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-        for (const item of statement.body) visitComponentItem(item);
-        break;
-      case "StateDeclaration":
-      case "ComputedDeclaration":
-      case "ResourceDeclaration": visitExpression(statement.initializer); break;
-      case "ActionDeclaration":
-        for (const parameter of statement.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-        visitBlock(statement.body);
-        break;
-      case "WatchDeclaration": visitExpression(statement.expression); visitBlock(statement.body); break;
       case "ClassDeclaration":
         if (statement.base) for (const argument of statement.base.arguments) visitExpression(argument);
         for (const parameter of statement.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
@@ -286,7 +295,7 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
   return dependencies;
 }
 
-function interfaceOf(program: Program, path: string): ModuleInterface {
+function interfaceOf(program: Program, path: string, extensions: readonly CompilerExtension[]): ModuleInterface {
   const classIdentities = new Map<string, string>([["Error", "Error"]]);
   for (const statement of program.body) {
     if (statement.kind === "ClassDeclaration") classIdentities.set(statement.name, `velar:${path}#${statement.name}`);
@@ -331,6 +340,7 @@ function interfaceOf(program: Program, path: string): ModuleInterface {
   const classes = new Map<string, ClassInfo>();
   const exports = new Map<string, ValueType>();
   const reactiveExports = new Map<string, "state" | "computed">();
+  const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
   const testFunctions: string[] = [];
 
   for (const [name, declaration] of aliasDeclarations) typeAliases.set(name, resolve(declaration.target));
@@ -395,17 +405,15 @@ function interfaceOf(program: Program, path: string): ModuleInterface {
     } else if (statement.kind === "FunctionDeclaration") {
       exports.set(statement.name, functionSignature(statement, resolve));
     } else if (statement.kind === "VariableDeclaration") {
-      exportPattern(statement.pattern, statement.type ? resolve(statement.type) : inferPublicExpression(statement.initializer), exports, namedTypes);
-    } else if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration") {
-      exports.set(statement.name, statement.type ? resolve(statement.type) : inferPublicExpression(statement.initializer));
-      reactiveExports.set(statement.name, statement.kind === "StateDeclaration" ? "state" : "computed");
-    } else if (statement.kind === "ComponentDeclaration") {
-      exports.set(statement.name, {
-        kind: "componentConstructor",
-        name: statement.name,
-        props: new Map(statement.parameters.map((parameter) => [parameter.name, resolve(parameter.type)])),
-        requiredProps: new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
-      });
+      exportPattern(statement.pattern, statement.type ? resolve(statement.type) : inferPublicExpression(statement.initializer, inspectionExtensions), exports, namedTypes);
+    } else {
+      const context = {
+        exports,
+        reactiveExports,
+        resolve,
+        inferPublicExpression: (expression: Expression) => inferPublicExpression(expression, inspectionExtensions),
+      };
+      for (const extension of inspectionExtensions) if (extension.contributeInterface?.(statement, context)) break;
     }
   }
   return { exports, reactiveExports, namedTypes, typeAliases, enums, classes, testFunctions };
@@ -444,7 +452,11 @@ function resolveNominals(type: ValueType, classIdentities: ReadonlyMap<string, s
   return type;
 }
 
-function inferPublicExpression(expression: Expression): ValueType {
+function inferPublicExpression(expression: Expression, extensions: readonly NonNullable<CompilerExtension["inspection"]>[]): ValueType {
+  for (const extension of extensions) {
+    const inferred = extension.inferPublicExpression?.(expression);
+    if (inferred) return inferred;
+  }
   switch (expression.kind) {
     case "LiteralExpression":
       return expression.value === null ? noneType : typeof expression.value === "string" ? stringType : typeof expression.value === "number" ? numberType : boolType;
@@ -453,7 +465,7 @@ function inferPublicExpression(expression: Expression): ValueType {
     case "ListExpression": {
       let element = unknownType;
       for (const item of expression.elements) {
-        const type = inferPublicExpression(item.kind === "SpreadExpression" ? item.value : item);
+        const type = inferPublicExpression(item.kind === "SpreadExpression" ? item.value : item, extensions);
         element = mergeTypes(element, item.kind === "SpreadExpression" && type.kind === "list" ? type.element : type);
       }
       return { kind: "list", element };
@@ -461,18 +473,16 @@ function inferPublicExpression(expression: Expression): ValueType {
     case "ObjectExpression": {
       const fields = new Map<string, ValueType>();
       for (const property of expression.properties) {
-        if (property.kind === "ObjectProperty") fields.set(property.name, inferPublicExpression(property.value));
+        if (property.kind === "ObjectProperty") fields.set(property.name, inferPublicExpression(property.value, extensions));
         else {
-          const spread = inferPublicExpression(property.value);
+          const spread = inferPublicExpression(property.value, extensions);
           if (spread.kind === "object") for (const [name, type] of spread.fields) fields.set(name, type);
         }
       }
       return { kind: "object", fields };
     }
     case "SpreadExpression":
-      return inferPublicExpression(expression.value);
-    case "JSXElementExpression":
-      return { kind: "node" };
+      return inferPublicExpression(expression.value, extensions);
     default:
       return unknownType;
   }

@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.ts";
 
 export async function runTests(config: VelarProjectConfig, explicitInput: string | null): Promise<number> {
   const files = explicitInput?.endsWith(".test.vel")
@@ -26,7 +27,9 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
         sourceRoot: config.root,
         projectRoot: config.root,
         publicRoot: config.publicDir,
-        web: config.web,
+        extensions: config.compilerExtensions,
+        extensionConfig: config.extensionConfig,
+        framework: config.framework,
         exportTestFunctions: true,
       });
       const errors = [
@@ -39,12 +42,7 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
         continue;
       }
 
-      for (const module of project.modules) {
-        const output = join(temporary, module.relativePath.replace(/\.vel$/u, ".js"));
-        await mkdir(dirname(output), { recursive: true });
-        await writeFile(output, `${module.result.code ?? ""}//# sourceMappingURL=${output.split("/").at(-1)}.map\n`, "utf8");
-        await writeFile(`${output}.map`, module.result.sourceMap ?? "", "utf8");
-      }
+      await writeCompiledTestProject(project, temporary);
 
       const entry = project.modules.find((module) => module.inputPath === file);
       const tests = entry?.result.moduleInterface.testFunctions ?? [];
@@ -53,7 +51,7 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
         process.stderr.write(`✗ ${relative(config.root, file)} contains no test_* functions\n`);
         continue;
       }
-      const outputEntry = join(temporary, relative(config.root, file).replace(/\.vel$/u, ".js"));
+      const outputEntry = entry ? compiledTestModulePath(project, entry, temporary) : join(temporary, relative(config.root, file).replace(/\.vel$/u, ".js"));
       let namespace: Record<string, unknown>;
       try {
         namespace = await import(`${pathToFileURL(outputEntry).href}?run=${Date.now()}`) as Record<string, unknown>;
@@ -104,10 +102,10 @@ async function prepareStandardModules(root: string, config: VelarProjectConfig):
   const packageRoot = join(root, "node_modules", "velar");
   await mkdir(packageRoot, { recursive: true });
   const exports: Record<string, string> = {};
-  for (const [source, code] of standardModuleSources) {
+  for (const [source, code] of standardModuleSources(config.compilerExtensions)) {
     const name = source.slice("velar/".length);
     exports[`./${name}`] = `./${name}.js`;
-    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, config.web) ?? code, "utf8");
+    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, config.extensionConfig, config.compilerExtensions) ?? code, "utf8");
   }
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "velar", private: true, type: "module", exports }), "utf8");
 }

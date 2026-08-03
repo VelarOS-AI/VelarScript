@@ -2,7 +2,7 @@
 
 Status: internal engineering gate complete; external preview and release evidence pending; do not describe VelarScript as production-ready yet
 
-Production-ready means an ordinary team can create, operate, upgrade, debug,
+Production-ready means an ordinary team can create, operate, evolve, debug,
 test, deploy, and recover a real Velar Web application without depending on
 repository-internal knowledge or unsafe browser globals. A green compiler suite
 alone is not sufficient evidence.
@@ -19,9 +19,9 @@ alone is not sufficient evidence.
 | Browser/deployment compatibility | Chromium, Firefox, and WebKit pass development and CSP production flows; deployment manifest has at least one exercised host adapter | Passing internally: browser matrices pass; root-base Netlify files preserve asset 404 before SPA fallback; `verify-deployment` checks real hosted bytes, MIME, headers, and routes; a live provider run remains external-use evidence |
 | Application artifact integrity | Teams can prove that a production directory exactly matches its build/deployment manifests and run that exact output locally | Passing: `velar verify` checks complete inventory/hash/relationship integrity; hashing and preview delivery stream regular files, production inventory is capped at 100,000 assets, and the same verified server powers browser-project tests |
 | Reproducibility/source disclosure | Identical production inputs produce identical bytes and source code is not published accidentally | Passing: stable virtual Velar inputs remove random-path hashing; cross-directory builds are byte-identical and linked source maps are explicit/off by default |
-| Package/upgrade stability | Packed toolchains install cleanly, exact versions match, compatibility policy is documented, project migrations fail closed, and a previous project upgrades successfully | Passing: packed consumers plus fixed 0.3–0.6 inspect/upgrade/check/build fixtures pass |
+| Package/project stability | Packed toolchains install cleanly, exact versions match, and the project-extension boundary is explicit and fail-closed | Passing: packed consumers create format-v2 Core and Web projects; missing, format-1, and unknown future manifests are rejected without a compatibility loader or upgrade command |
 | Editor independence | Project-local LSP works through the generic Workbench host with diagnostics, completion, navigation, rename, formatting, type hints, occurrence highlights, semantic tokens, code actions, and commands | Current packed-toolchain acceptance and 9/9 focused generic-host tests pass. Completion is lexical/scope-aware and member items come from analyzer-owned signatures rather than a host type table. Selectively indexed checked expressions preserve completion, hover, and active-parameter signatures through collection literals and nested Web chains; JSX tag/attribute and typed object-key positions are context-aware and restore lexical symbols inside values. The installed gate proves collection and route signatures, HTML/component/SVG completion, typed object keys, recursive-record and component-prop refactors, semantic tokens, safe equality fixes, a real npm class, native `ScoreCard` class-body fields plus `init:`, a private history field that appears through `self` but not consumer completion, and a documented read-only `summary` getter delivered as an ordinary property. It also covers comparison-chain `bool` hover/inlay hints, packed `///` documentation in completion/hover, an async arrow with contextual parameter hover plus `Promise` signature help, and a named async function that directly adopts its Promise result. Record/class members navigate across aliases and inheritance, including inherited static declarations; private members instead keep owner-local navigation/refactors. CodeMirror consumes all of this through generic LSP contracts. The host validates tarball hashes independently and injects format/format-check commands without owning language rules. The wider Workbench tree remains mid Platform migration; that unrelated baseline is not Velar evidence. |
-| Release integrity | Stable clean tagged source produces verified reproducible tarballs with license, provenance, and explicit publish authority | Partial: Apache-2.0 is applied to the workspace and both package tarballs; rehearsal/candidate refusal exists; the first committed remote source, stable tag, and public release authority remain external decisions |
+| Release integrity | Stable clean tagged source produces verified reproducible tarballs with license, provenance, and explicit publish authority | Partial: Apache-2.0 is applied to the workspace and all four package tarballs; rehearsal/candidate refusal exists; the first committed remote source, stable tag, and public release authority remain external decisions |
 | External use | More than the repository's own examples are built, deployed, and operated; feedback is converted into compatibility tests | Missing: a reproducible root Netlify candidate, remote verifier, signed-report workflow, and Chromium candidate smoke now exist, but no authorized live deployment or external user evidence exists yet |
 
 ## Completed internal sequence
@@ -30,7 +30,7 @@ alone is not sufficient evidence.
 2. 0.7B: complete — application error recovery/reporting, explicit public
    configuration, and structured logging.
 3. 0.7C: complete — browser-project test command, host-adapter acceptance,
-   upgrade fixtures, and production soak/failure tests.
+   format-v2 project-boundary checks, and production soak/failure tests.
 4. 0.7D: complete — strict application artifact verification and verified
    production preview.
 5. 0.7E: complete — reproducible production bundling and opt-in source maps.
@@ -142,7 +142,7 @@ alone is not sufficient evidence.
 41. 1.0 audit B: complete — bounded compiler/project inputs, standard/Web
     runtime resource contracts, streamed production/deployment bytes,
     realpath-confined npm assets, linear repeated-form accumulation, and
-    hostile-input and host-result regression coverage; 190 compiler/CLI tests,
+    hostile-input and host-result regression coverage; 197 compiler/CLI tests,
     real Core and three-engine application suites, packed installation, non-publishing
     rehearsal, installed Workbench acceptance, and 9 generic-host tests pass.
 42. 1.0 audit C: complete — namespace-correct inline SVG JSX across static,
@@ -206,4 +206,4 @@ alone is not sufficient evidence.
 `velar/game`, SSR/server rendering, WebRTC, WebGPU, service workers/PWA,
 directory handles, and a custom package registry are not required for the first
 production-ready static Web release. They remain separate capabilities and must
-not destabilize the language or Web 0.6 contracts.
+not destabilize the language or Web 0.7 contracts.

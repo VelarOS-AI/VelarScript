@@ -1,13 +1,15 @@
-# Velar Web API 0.6
+# Velar Web API 0.8
 
 Status: stable for the Velar 0.9 internal line
-Runtime: existing browser JavaScript engine; no framework runtime or virtual DOM
+Runtime: existing browser JavaScript engine; no virtual DOM
 
-Velar Web applications use explicit compiler-owned modules instead of implicit
+Velar Web applications install and declare `@velarscript/web`. The extension
+owns JSX, components, reactivity, lifecycle, scoped CSS, Web types, editor
+contributions, and explicit Web modules instead of implicit
 browser globals. The compiler reports `VEL3008` for direct source-level use of
 `console`, `document`, `window`, `navigator`, `location`, `history`, `fetch`,
 `JSON`, `Math`, or `Date` and points to the official module or an explicit
-JavaScript boundary. Additions within API 0.6 must be backward compatible;
+JavaScript boundary. Additions within API 0.8 must be backward compatible;
 removals or semantic changes require a new Web API version.
 
 ## `velar/app`
@@ -93,7 +95,7 @@ const config = publicConfig(RuntimeConfig)
 ## `velar/web`
 
 ```velar
-import {Head, Link, NavLink, RouteContext, Router, announce, back, currentRoute, forward, lazy, navigate, redirect, reload, route} from "velar/web"
+import {Head, Link, NavLink, RouteContext, Router, announce, back, currentRoute, domId, forward, lazy, navigate, redirect, reload, route} from "velar/web"
 
 component PageLoading:
     return <main aria-busy="true">Loading…</main>
@@ -171,6 +173,11 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   `themeColor` for its component lifetime and restores prior values on cleanup.
 - `announce(message, priority="polite")` writes to a compiler-owned live
   region; priority is `polite` or `assertive`.
+- `domId(prefix="velar")` returns an application-local, monotonically unique DOM ID
+  for component setup. It exists for accessible `aria-labelledby`,
+  `aria-describedby`, and label/control relationships without requiring a
+  cryptographic UUID. Prefixes must start with a letter, contain only letters,
+  numbers, `_`, or `-`, and are limited to 64 characters.
 
 Dynamic `Head`, `Router`, `Link`, and `NavLink` prop records accept only their
 documented enumerable data fields. Accessors, symbols, unknown fields, invalid
@@ -457,7 +464,7 @@ created. `readText(file, maxBytes=16777216)` and
 the explicit ceiling is 64 MiB. One picker result is limited to 10,000 files,
 and text downloads are likewise limited to 64 MiB. Directory access,
 persistent file handles, and the File System Access API are deliberately not
-part of Web API 0.6.
+part of Web API 0.8.
 
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque record is registered. Invalid native picker results reject
@@ -509,7 +516,7 @@ component LiveStatus:
   from sibling component `cleanup`; the API does not introduce React-style
   effects or hidden lifecycle behavior.
 
-## `velar/test`
+## Core `velar/test` and Web `velar/web-test`
 
 `expect(value)` provides typed `toBe`, `toEqual`, `toBeTruthy`, `toBeFalsy`,
 `toContain`, `toMatch`, `toHaveLength`, `toThrow`, and `toReject` matchers.
@@ -528,7 +535,8 @@ Browser application tests use a separate `.browser.test.vel` suffix and run
 only through `velar test --browser`:
 
 ```velar
-import {browser, expect} from "velar/test"
+import {expect} from "velar/test"
+import {browser} from "velar/web-test"
 
 async def test_home_page():
     await browser.open("/")
@@ -550,7 +558,7 @@ install.
 
 ## Deliberate boundaries
 
-Web API 0.6 does not define SSR/server execution, workers, service workers/PWA,
+Web API 0.8 does not define SSR/server execution, workers, service workers/PWA,
 WebRTC, WebGPU, directory handles, persistent file handles, or a game runtime.
 JavaScript packages remain available through checked declarations or an
 explicit unsafe boundary when an application needs capabilities outside the
@@ -559,9 +567,14 @@ this Web platform.
 
 ## Compatibility authority
 
-The compiler-owned type interface and emitted runtime source live together in
-`packages/cli/src/standard-modules.ts`. `standardModuleApi()` reports Web API
-`0.6`, compiler tests protect exact names and types, and the Chromium, Firefox,
-and WebKit development/production matrix protects runtime behavior. Workbench
-does not copy these rules; completion and diagnostics arrive through the
-project's installed `velar lsp`.
+The versioned type interface, emitted runtime source, and framework-host
+implementation live together in `@velarscript/web`, under `packages/web`. The
+CLI dynamically loads the project-declared `/compiler` and optional `/host`
+entries. Web owns HTML/CSP/reload/deployment projection and browser-test
+metadata; CLI owns generic routing, filesystem, bundling, transport,
+verification, and browser-driver mechanics.
+`standardModuleApi()` reports Web API `0.7` under the extension ID, and compiler tests protect
+exact names and types, and the Chromium, Firefox, and WebKit
+development/production matrix protects runtime behavior. Workbench does not
+copy these rules; completion and diagnostics arrive through the project's
+installed `velar lsp`.

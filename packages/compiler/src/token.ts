@@ -18,16 +18,7 @@ export type TokenKind =
   | "as"
   | "js"
   | "unsafe"
-  | "component"
-  | "state"
-  | "computed"
-  | "resource"
-  | "action"
-  | "watch"
-  | "mounted"
-  | "cleanup"
-  | "style"
-  | "global"
+  | "extensionKeyword"
   | "extern"
   | "module"
   | "type"
@@ -119,16 +110,6 @@ export const keywordKinds: Readonly<Record<string, TokenKind>> = {
   as: "as",
   js: "js",
   unsafe: "unsafe",
-  component: "component",
-  state: "state",
-  computed: "computed",
-  resource: "resource",
-  action: "action",
-  watch: "watch",
-  mounted: "mounted",
-  cleanup: "cleanup",
-  style: "style",
-  global: "global",
   extern: "extern",
   module: "module",
   type: "type",

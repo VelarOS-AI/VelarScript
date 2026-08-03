@@ -290,6 +290,22 @@ export class JavaScriptEmitter {
     return [];
   }
 
+  protected visitExtensionRuntimeExpression(_expression: Expression, _visitExpression: (expression: Expression) => void): boolean {
+    return false;
+  }
+
+  protected visitExtensionRuntimeStatement(
+    _statement: Statement,
+    _visitExpression: (expression: Expression) => void,
+    _visitStatement: (statement: Statement) => void,
+  ): boolean {
+    return false;
+  }
+
+  protected extensionExpressionContainsDirectAwait(_expression: Expression): boolean | undefined {
+    return undefined;
+  }
+
   private collectDeclarations(program: Program): void {
     for (const statement of program.body) {
       if (statement.kind === "TypeDeclaration" || statement.kind === "TypeAliasDeclaration") {
@@ -306,6 +322,7 @@ export class JavaScriptEmitter {
 
   private collectRuntimeUses(program: Program): void {
     const visitExpression = (expression: Expression): void => {
+      if (this.visitExtensionRuntimeExpression(expression, visitExpression)) return;
       switch (expression.kind) {
         case "FStringExpression":
           for (const part of expression.parts) {
@@ -320,15 +337,6 @@ export class JavaScriptEmitter {
           break;
         case "SpreadExpression":
           visitExpression(expression.value);
-          break;
-        case "JSXElementExpression":
-          expression.attributes.forEach((attribute) => {
-            if (typeof attribute.value !== "string" && attribute.value) visitExpression(attribute.value);
-          });
-          expression.children.forEach((child) => {
-            if (child.kind === "JSXExpressionChild") visitExpression(child.expression);
-            else if (child.kind === "JSXElementExpression") visitExpression(child);
-          });
           break;
         case "UnaryExpression":
           visitExpression(expression.operand);
@@ -386,24 +394,10 @@ export class JavaScriptEmitter {
     };
 
     const visitStatement = (statement: Statement): void => {
+      if (this.visitExtensionRuntimeStatement(statement, visitExpression, visitStatement)) return;
       switch (statement.kind) {
         case "VariableDeclaration": visitExpression(statement.initializer); break;
-        case "StateDeclaration":
-        case "ComputedDeclaration":
-        case "ResourceDeclaration": visitExpression(statement.initializer); break;
-        case "ActionDeclaration": statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); }); statement.body.forEach(visitStatement); break;
-        case "WatchDeclaration": visitExpression(statement.expression); statement.body.forEach(visitStatement); break;
         case "FunctionDeclaration": statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); }); statement.body.forEach(visitStatement); break;
-        case "ComponentDeclaration":
-          statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
-          statement.body.forEach((item) => {
-            if (item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration" || item.kind === "ResourceDeclaration") visitExpression(item.initializer);
-            else if (item.kind === "ActionDeclaration") { item.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); }); item.body.forEach(visitStatement); }
-            else if (item.kind === "WatchDeclaration") { visitExpression(item.expression); item.body.forEach(visitStatement); }
-            else if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") item.body.forEach(visitStatement);
-            else if (item.kind !== "StyleBlock") visitStatement(item);
-          });
-          break;
         case "ClassDeclaration":
           statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
           statement.base?.arguments.forEach(visitExpression);
@@ -479,13 +473,6 @@ export class JavaScriptEmitter {
       case "ImportDeclaration":
         return this.emitImport(statement.source, statement.specifiers, indentation);
       case "ExternModuleDeclaration":
-        return "";
-      case "ComponentDeclaration":
-      case "StateDeclaration":
-      case "ComputedDeclaration":
-      case "ResourceDeclaration":
-      case "ActionDeclaration":
-      case "WatchDeclaration":
         return "";
       case "TypeDeclaration":
         return this.runtimeTypes.has(statement.name) ? this.emitTypeDeclaration(statement, depth) : "";
@@ -598,6 +585,8 @@ export class JavaScriptEmitter {
         return `${indentation}${this.emitExpression(statement.target)} ${statement.operator} ${this.emitExpression(statement.value)};`;
       case "ExpressionStatement":
         return `${indentation}${this.emitExpression(statement.expression)};`;
+      default:
+        return "";
     }
   }
 
@@ -958,7 +947,7 @@ export class JavaScriptEmitter {
         return this.hints.optionalIndexes.has(expression.span.start)
           ? `__velarOptionalIndex(${this.emitExpression(expression.object)}, () => ${this.emitExpression(expression.index)})`
           : `__velarIndex(${this.emitExpression(expression.object)}, ${this.emitExpression(expression.index)})`;
-      case "JSXElementExpression":
+      default:
         return "null";
     }
   }
@@ -992,7 +981,9 @@ export class JavaScriptEmitter {
     return `${asynchronous ? "await " : ""}(${asynchronous ? "async " : ""}() => { ${body.join(" ")} return true; })()`;
   }
 
-  private expressionContainsDirectAwait(expression: Expression): boolean {
+  protected expressionContainsDirectAwait(expression: Expression): boolean {
+    const extensionResult = this.extensionExpressionContainsDirectAwait(expression);
+    if (extensionResult !== undefined) return extensionResult;
     switch (expression.kind) {
       case "UnaryExpression":
         return expression.operator === "await" || this.expressionContainsDirectAwait(expression.operand);
@@ -1022,18 +1013,13 @@ export class JavaScriptEmitter {
       case "IndexExpression":
         return this.expressionContainsDirectAwait(expression.object)
           || this.expressionContainsDirectAwait(expression.index);
-      case "JSXElementExpression":
-        return expression.attributes.some((attribute) => typeof attribute.value !== "string"
-          && attribute.value !== null
-          && this.expressionContainsDirectAwait(attribute.value))
-          || expression.children.some((child) => child.kind === "JSXExpressionChild"
-            ? this.expressionContainsDirectAwait(child.expression)
-            : child.kind === "JSXElementExpression" && this.expressionContainsDirectAwait(child));
       case "ArrowFunctionExpression":
       case "DynamicImportExpression":
       case "LiteralExpression":
       case "IdentifierExpression":
       case "SuperExpression":
+        return false;
+      default:
         return false;
     }
   }

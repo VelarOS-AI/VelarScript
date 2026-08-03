@@ -1,4 +1,5 @@
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import type { CompilerLexicalExtension } from "./extension.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
@@ -12,10 +13,6 @@ const forbiddenSourceIdentifiers = new Map<string, string>([
   ["with", "VelarScript does not expose 'with'"],
   ["arguments", "Use named parameters; VelarScript does not expose 'arguments'"],
   ["schema", "Use 'type'; VelarScript has no separate schema declaration"],
-  ["effect", "Effects are compiler-internal; use watch, mounted, or cleanup"],
-  ["onMount", "Use the component-level 'mounted:' block"],
-  ["onMounted", "Use the component-level 'mounted:' block"],
-  ["on_mount", "Use the component-level 'mounted:' block"],
 ]);
 
 const forbiddenPrototypeMembers = new Set(["prototype", "__proto__"]);
@@ -29,6 +26,10 @@ export interface LexResult {
 
 export class Lexer {
   private readonly text: string;
+  private readonly extensionKeywords = new Map<string, string>();
+  private readonly extensionForbiddenIdentifiers = new Map<string, string>();
+  private readonly jsxEnabled: boolean;
+  private readonly cssEnabled: boolean;
   private readonly tokens: Token[] = [];
   private readonly diagnostics: Diagnostic[] = [];
   private readonly indentStack = [0];
@@ -36,8 +37,20 @@ export class Lexer {
   private atLineStart = true;
   private nesting = 0;
 
-  constructor(text: string) {
+  constructor(text: string, extensions: readonly CompilerLexicalExtension[] = []) {
     this.text = text;
+    for (const extension of extensions) {
+      for (const [keyword, value] of Object.entries(extension.keywords ?? {})) {
+        const existing = this.extensionKeywords.get(keyword);
+        if (existing && existing !== value) throw new Error(`Compiler extensions define conflicting keyword '${keyword}'`);
+        this.extensionKeywords.set(keyword, value);
+      }
+      for (const [name, guidance] of Object.entries(extension.forbiddenIdentifiers ?? {})) {
+        this.extensionForbiddenIdentifiers.set(name, guidance);
+      }
+    }
+    this.jsxEnabled = extensions.some((extension) => extension.jsx === true);
+    this.cssEnabled = extensions.some((extension) => extension.css === true);
   }
 
   lex(): LexResult {
@@ -54,7 +67,7 @@ export class Lexer {
       }
       if (this.atLineStart && this.nesting === 0) {
         this.readIndentation();
-        if (this.isCssBlockStart()) {
+        if (this.cssEnabled && this.isCssBlockStart()) {
           this.readCssBlock();
           continue;
         }
@@ -102,7 +115,7 @@ export class Lexer {
         continue;
       }
 
-      if (character === "<" && this.shouldReadJsx()) {
+      if (this.jsxEnabled && character === "<" && this.shouldReadJsx()) {
         this.readJsx();
         continue;
       }
@@ -297,14 +310,15 @@ export class Lexer {
       this.advance();
     }
     const value = this.text.slice(start, this.index);
-    const forbidden = forbiddenSourceIdentifiers.get(value);
+    const forbidden = forbiddenSourceIdentifiers.get(value) ?? this.extensionForbiddenIdentifiers.get(value);
     const previous = this.tokens.at(-1)?.kind;
     if (forbidden) {
       this.diagnostics.push(diagnostic("VEL1005", forbidden, span(start, this.index)));
     } else if (forbiddenPrototypeMembers.has(value) && (previous === "dot" || previous === "optionalDot")) {
       this.diagnostics.push(diagnostic("VEL1005", "VelarScript does not expose prototype manipulation", span(start, this.index)));
     }
-    this.tokens.push({ kind: keywordKinds[value] ?? "identifier", value, span: span(start, this.index) });
+    const extensionKeyword = this.extensionKeywords.get(value);
+    this.tokens.push({ kind: keywordKinds[value] ?? (extensionKeyword ? "extensionKeyword" : "identifier"), value: extensionKeyword ?? value, span: span(start, this.index) });
   }
 
   private readNumber(): void {
@@ -457,8 +471,8 @@ export class Lexer {
     index -= 1;
     if (beforeIndent[index]?.kind !== "colon") return false;
     index -= 1;
-    if (beforeIndent[index]?.kind === "global") index -= 1;
-    return beforeIndent[index]?.kind === "style";
+    if (beforeIndent[index]?.kind === "extensionKeyword" && beforeIndent[index]?.value === "global") index -= 1;
+    return beforeIndent[index]?.kind === "extensionKeyword" && beforeIndent[index]?.value === "style";
   }
 
   private readCssBlock(): void {

@@ -1,0 +1,23 @@
+# create-velar
+
+The official non-interactive project creator for VelarScript. It is the package
+behind `npm create velar@latest` and shares the same templates with
+`velar create`.
+
+```sh
+npm create velar@latest my-app
+npm create velar@latest my-docs -- --template docs
+npm create velar@latest my-library -- --template library
+npm create velar@latest my-components -- --template component
+```
+
+Available templates are `web`, `docs`, `library`, and `component`. The Core
+library template publishes a reusable `.vel` entry without Web; the component
+template publishes a checked Web component source entry and keeps its preview
+application outside that public entry. `game` is reserved for the future
+official Canvas framework and deliberately fails until that package exists.
+
+Creation is transactional. It refuses non-empty targets and never installs
+dependencies, downloads browsers, initializes Git, or contacts a service.
+The generated README keeps the first `npm install` explicit, then points to the
+installed CLI's npm-backed `velar add`, `remove`, and `update` workflow.

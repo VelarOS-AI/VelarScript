@@ -1,5 +1,6 @@
 import {range} from "velar/collections"
-import {browser, expect} from "velar/test"
+import {expect} from "velar/test"
+import {browser} from "velar/web-test"
 
 async def test_release_studio_recovery():
     await browser.open("/")

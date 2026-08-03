@@ -13,10 +13,18 @@ It compiles to modern JavaScript, CSS, and Web assets and runs on existing brows
 
 VelarScript combines:
 
-- JavaScript's expression model, objects, arrays, modules, asynchronous model, and JSX suitability.
+- JavaScript's expression model, objects, arrays, modules, and asynchronous model.
 - Python's readable blocks, named functions, explicit `self`, and approachable control flow.
 - A small type layer for assistance and boundary validation rather than type-level programming.
-- A compiler-owned Web model for components, state, DOM updates, and scoped CSS.
+- An official `@velarscript/web` extension for JSX, components, state, DOM
+  updates, lifecycle, and scoped CSS.
+
+The Core language and Web framework are separate contracts. Core provides the
+neutral compiler-extension host and framework-host ABI but does not activate or document JSX,
+components, reactivity, lifecycle, DOM types, or CSS as Core syntax. A format-2
+project opts into those features with `"extensions": ["@velarscript/web"]`.
+The Web package's separate host entry owns browser-document, CSP, reload,
+deployment, and browser-test policy; the CLI supplies generic host mechanics.
 
 ## 2. Non-goals
 
@@ -76,7 +84,7 @@ JavaScript contributes:
 - `?.` and `??`
 - inline conditionals with `? :`
 - collection operations such as `map`, `filter`, and `reduce`
-- JSX
+- JSX, when contributed by `@velarscript/web`
 
 Python contributes:
 
@@ -261,6 +269,11 @@ component Choice(label: string, onChoose: (string) -> none):
 
 - Parameter types appear inside parentheses and the result follows `->`.
 - Parameter names are omitted because they do not change assignability.
+- Compiler and LSP display labels append `= default` to a positional parameter
+  that the caller may omit. This is deliberately distinct from `T?`, which
+  means the caller may pass `none`; a defaultable `string` parameter does not
+  become nullable merely because it can be omitted. A parameter that is both
+  nullable and omittable displays both facts, for example `string? = default`.
 - A single final rest element uses `...`, for example
   `(string, ...number) -> bool`.
 - Callback parameters and results are checked for named functions, contextual
@@ -1022,9 +1035,10 @@ VelarScript does not embed arbitrary JavaScript in `.vel` files. Complex
 compatibility code belongs in a separate `.js` adapter imported through
 `import js`.
 
-## 14. JSX
+## 14. `@velarscript/web`: JSX
 
-JSX is a native VelarScript expression and is not React JSX.
+JSX is a native expression contributed by `@velarscript/web`; it is not React
+JSX and is rejected by a Core-only project.
 
 ```velar
 return <main class="page">
@@ -1071,7 +1085,7 @@ return <main class="page">
   that merely looks like SVG but was created as an HTML unknown element is a
   compiler defect, not acceptable compatibility behavior.
 
-## 15. Components and state
+## 15. `@velarscript/web`: components and state
 
 ```velar
 component Counter(start: number = 0):
@@ -1377,10 +1391,11 @@ my-app/
 
 ```json
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
+  "extensions": ["@velarscript/web"],
   "web": {
     "title": "My App",
     "base": "/",
@@ -1405,23 +1420,23 @@ velar test --browser [chromium|firefox|webkit|all]
 velar format [file.vel | project-directory] [--check]
 velar lsp
 velar create
-velar upgrade
 ```
 
 `.test.vel` files are discovered recursively. Top-level functions named
 `test_*` are tests and do not need to be exported. Assertions come from
 `velar/test`. `.browser.test.vel` files are excluded from Core tests and run
-only through `--browser`; they use the restricted typed `browser` controller,
+only through `--browser`; they import the restricted typed `browser` controller
+from `velar/web-test`,
 not raw DOM or Playwright APIs. Each browser test receives a fresh context
 against a real isolated CSP production build.
 
 `velar create` refuses non-empty target directories and creates a minimal
-format-version-1 application with a separate application module, entry point,
+format-version-2 application with a separate application module, entry point,
 Core test, browser test, and project-level formatting scripts. Project-format
 mode recursively owns `.vel` source while excluding `node_modules`, `.git`, the
-public directory, and build output. `velar upgrade --check` is read-only; `velar
-upgrade` explicitly upgrades legacy manifests. Unknown future project format
-versions fail closed. Creation is transactional: all files are completed in a
+public directory, and build output. Legacy and unknown future project format
+versions fail closed; there is no compatibility loader or upgrade command.
+Creation is transactional: all files are completed in a
 sibling staging directory before an absent or verified-empty target is replaced.
 Manifest and nested Web objects reject unknown fields, so misspelled settings do
 not silently fall back; `web.base` is one canonical application pathname.
@@ -1431,8 +1446,9 @@ its defaults. Unexpected top-level arguments return a usage error, while
 unexpected operational failures are normalized without exposing a Node stack as
 the command-line contract.
 
-Official Web modules are explicit imports. Their stable public API version is
-0.6 and is specified in [web-api.md](web-api.md):
+Official Web modules are explicit imports contributed by `@velarscript/web`.
+Their stable public API version is 0.7 and is specified in
+[web-api.md](web-api.md):
 
 - `velar/app`: compiler-owned application error reporting, classification,
   root-mount fallback, last-valid render retention, and explicit handler cleanup.
@@ -1470,7 +1486,8 @@ Official Web modules are explicit imports. Their stable public API version is
   downloads without persistent browser file handles.
 - `velar/realtime`: explicitly closed WebSocket and server-sent-event wrappers;
   `sendJson` shares the strict lossless JSON data boundary.
-- `velar/test`: typed Core assertions plus a restricted project-level browser
+- `velar/test`: typed Core assertions.
+- `velar/web-test`: the Web extension's restricted project-level browser
   controller for production application tests.
 
 Ordinary Velar source does not receive untyped `console`, DOM/window,
@@ -1542,7 +1559,7 @@ VelarScript 0.9 is validated with:
 - A production-style, base-routed Web application using reusable Velar source
   packages, a safely typed JavaScript npm package, Head ownership, accessible
   forms, persistent state, and scoped CSS in Chromium, Firefox, and WebKit.
-- A 121-module incremental compilation budget plus packed compiler/CLI
+- A 121-module incremental compilation budget plus packed compiler/Web/creator/CLI
   installation in a clean npm consumer.
 - A 15-module Release Studio in development and CSP-enabled production across
   Chromium, Firefox, and WebKit.
@@ -1590,14 +1607,16 @@ VelarScript 0.9 is validated with:
 - Standard API 0.4 type/runtime acceptance across collections, text, math,
   JSON, async, URL, time, secure IDs, and structured logging modules, including
   execution from a clean packed CLI consumer.
-- Web API 0.6 type/runtime acceptance across routing, metadata, HTTP,
+- Web API 0.8 type/runtime acceptance across routing, metadata, stable DOM IDs, HTTP,
   storage/IndexedDB, forms, browser helpers, files, WebSocket/SSE, and tests in
   all six development/production browser flows, including explicit public
   configuration and mount/render/event/mounted/cleanup error ownership.
 - Project-level `.browser.test.vel` acceptance through both source and packed
   CLIs, including three browser engines and repeated route/cleanup failure soak.
-- Current-CLI upgrade and production-build acceptance for fixed 0.3, 0.4, 0.5,
-  and 0.6 project fixtures, plus a root-base Netlify adapter artifact contract.
+- Format-v2 Core and Web project acceptance with explicit compiler extensions,
+  legacy/future-version rejection, plus a root-base Netlify adapter artifact
+  contract, format-3 framework build identity, and format-2 static-deployment
+  identity.
 
 Canvas game development is not part of this milestone.
 

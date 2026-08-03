@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build:packages": "npm run build --workspace @velarscript/compiler && npm run build --workspace @velarscript/cli",
+    "build:packages": "npm run build --workspace @velarscript/compiler && npm run build --workspace @velarscript/web && npm run build --workspace create-velar && npm run build --workspace @velarscript/cli",
     "check": "npm run build:packages && tsc -p tsconfig.json",
     "test": "npm run build:packages && node --test --test-concurrency=1 tests/*.test.ts tests/ci.acceptance.ts tests/release.acceptance.ts && node packages/cli/src/cli.ts test examples/flow-board && node packages/cli/src/cli.ts test examples/support-desk && node packages/cli/src/cli.ts test examples/api-dashboard",
     "test:browser": "npm run build:packages && node tests/browser.acceptance.ts && node packages/cli/src/cli.ts test examples/production-web --browser all && node packages/cli/src/cli.ts test examples/flow-board --browser all && node packages/cli/src/cli.ts test examples/support-desk --browser all && node packages/cli/src/cli.ts test examples/api-dashboard --browser all && node tests/installed-browser.acceptance.ts",

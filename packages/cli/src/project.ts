@@ -4,12 +4,13 @@ import {
   inspectModule,
   type AnalysisContext,
   type ClassInfo,
+  type CompilerExtension,
   type CompileResult,
   type EnumInfo,
   type ModuleInspection,
   type ValueType,
 } from "@velarscript/compiler";
-import type { VelarWebConfig } from "./config.ts";
+import type { ResolvedFrameworkHost } from "./config.ts";
 import { isStandardModule, standardModuleInterface } from "./standard-modules.ts";
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./typescript-declarations.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
@@ -42,7 +43,10 @@ export interface ProjectResult {
   readonly sourceRoot: string;
   readonly projectRoot: string;
   readonly publicRoot: string;
-  readonly webConfig: VelarWebConfig;
+  readonly compilerExtensions: readonly CompilerExtension[];
+  readonly extensionConfig: ReadonlyMap<string, unknown>;
+  readonly framework: ResolvedFrameworkHost | null;
+  readonly capabilities: ReadonlySet<string>;
   readonly modules: readonly ProjectModule[];
   readonly failures: readonly ProjectFailure[];
   readonly notices: readonly ProjectNotice[];
@@ -63,7 +67,9 @@ export interface CompileProjectOptions {
   readonly sourceRoot?: string;
   readonly projectRoot?: string;
   readonly publicRoot?: string;
-  readonly web?: VelarWebConfig;
+  readonly extensions?: readonly CompilerExtension[];
+  readonly extensionConfig?: ReadonlyMap<string, unknown>;
+  readonly framework?: ResolvedFrameworkHost | null;
   readonly exportTestFunctions?: boolean;
 }
 
@@ -108,14 +114,10 @@ export async function compileProjectEntries(
   const sourceRoot = resolve(options.sourceRoot ?? dirname(entryPath));
   const projectRoot = resolve(options.projectRoot ?? sourceRoot);
   const publicRoot = resolve(options.publicRoot ?? join(projectRoot, "public"));
-  const webConfig = options.web ?? {
-    title: "Velar App",
-    base: "/",
-    publicConfig: {},
-    build: { sourceMaps: false },
-    security: { contentSecurityPolicy: true, connectSources: [], imageSources: [] },
-    deployment: { spaFallback: true, adapter: "neutral" },
-  };
+  const compilerExtensions = options.extensions ?? [];
+  const extensionConfig = options.extensionConfig ?? new Map<string, unknown>();
+  const framework = options.framework ?? null;
+  const capabilities = new Set(compilerExtensions.flatMap((extension) => extension.capabilities ?? []));
   const initialEntries = [...new Set(entries.map((entry) => resolve(entry)))];
   const pending: PendingModule[] = initialEntries.slice(0, MAX_VELAR_PROJECT_MODULES).map((inputPath) => ({ inputPath, package: null }));
   const scheduled = new Set(pending.map((module) => module.inputPath));
@@ -172,18 +174,18 @@ export async function compileProjectEntries(
     const relativePath = normalizeModulePath(pendingModule.package
       ? join("__velar_packages__", pendingModule.package.name, pathWithinBoundary)
       : relative(sourceRoot, inputPath));
-    const inspection = inspectModule(text, { path: inputPath });
+    const inspection = inspectModule(text, { path: inputPath, extensions: compilerExtensions });
     loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package });
 
     for (const dependency of inspection.dependencies) {
       if (dependency.javascript) continue;
       if (!dependency.source.startsWith(".")) {
-        if (isStandardModule(dependency.source)) continue;
+        if (isStandardModule(dependency.source, compilerExtensions)) continue;
         try {
           const package_ = await resolveVelarSourcePackage(dependency.source, inputPath);
           const existing = velarPackages.get(package_.name);
           if (existing && existing.root !== package_.root) {
-            failures.push({ path: inputPath, message: `Velar package '${package_.name}' resolves to multiple installed versions; use one package instance per Web build` });
+            failures.push({ path: inputPath, message: `Velar package '${package_.name}' resolves to multiple installed versions; use one package instance per application build` });
             continue;
           }
           velarPackages.set(package_.name, package_);
@@ -222,13 +224,14 @@ export async function compileProjectEntries(
       continue;
     }
     compiledModules += 1;
-    const analysis = await createAnalysisContext(module, loaded, velarImports, failures, notices, declarationCache, interfaceCache);
+    const analysis = await createAnalysisContext(module, loaded, velarImports, failures, notices, declarationCache, interfaceCache, compilerExtensions);
     modules.push({
       inputPath: module.inputPath,
       relativePath: module.relativePath,
       result: compile(module.text, {
         path: module.inputPath,
         analysis,
+        extensions: compilerExtensions,
         ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.testFunctions) } : {}),
       }),
     });
@@ -240,7 +243,10 @@ export async function compileProjectEntries(
     sourceRoot,
     projectRoot,
     publicRoot,
-    webConfig,
+    compilerExtensions,
+    extensionConfig,
+    framework,
+    capabilities,
     modules,
     failures: uniqueFailures(failures),
     notices: uniqueNotices(notices),
@@ -303,6 +309,7 @@ async function createAnalysisContext(
   notices: ProjectNotice[],
   declarationCache: Map<string, Promise<TypeScriptDeclarationBridge | null>>,
   interfaceCache: Map<string, ModuleInspection["moduleInterface"]>,
+  compilerExtensions: readonly CompilerExtension[],
 ): Promise<AnalysisContext> {
   const imports = new Map<string, ValueType>();
   const dynamicImports = new Map<string, ValueType>();
@@ -319,7 +326,7 @@ async function createAnalysisContext(
         : null;
       const target = targetPath ? loaded.get(targetPath) : null;
       if (!target) continue;
-      const interface_ = resolvedModuleInterface(target, loaded, velarImports, interfaceCache);
+      const interface_ = resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compilerExtensions);
       if (interface_.reactiveExports.size > 0) {
         failures.push({
           path: module.inputPath,
@@ -370,7 +377,7 @@ async function createAnalysisContext(
       }
       continue;
     }
-    const standard = standardModuleInterface(dependency.source);
+    const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
       importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, typeAliases, enums, classes, failures);
       continue;
@@ -381,7 +388,7 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache), imports, reactiveImports, namedTypes, typeAliases, enums, classes, failures);
+    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compilerExtensions), imports, reactiveImports, namedTypes, typeAliases, enums, classes, failures);
   }
   return { imports, dynamicImports, reactiveImports, namedTypes, typeAliases, enums, classes };
 }
@@ -391,6 +398,7 @@ function resolvedModuleInterface(
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
   cache: Map<string, ModuleInspection["moduleInterface"]>,
+  compilerExtensions: readonly CompilerExtension[],
 ): ModuleInspection["moduleInterface"] {
   const cached = cache.get(module.inputPath);
   if (cached) return cached;
@@ -405,14 +413,14 @@ function resolvedModuleInterface(
 
   for (const dependency of module.inspection.dependencies) {
     if (dependency.javascript) continue;
-    let dependencyInterface = standardModuleInterface(dependency.source);
+    let dependencyInterface = standardModuleInterface(dependency.source, compilerExtensions);
     if (!dependencyInterface) {
       const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
         ? resolve(dirname(module.inputPath), dependency.source)
         : velarImports.get(projectImportKey(module.inputPath, dependency.source));
       const target = targetPath ? loaded.get(targetPath) : null;
       if (!target) continue;
-      dependencyInterface = resolvedModuleInterface(target, loaded, velarImports, cache);
+      dependencyInterface = resolvedModuleInterface(target, loaded, velarImports, cache, compilerExtensions);
     }
     const aliases = new Map(dependency.specifiers
       .filter((specifier) => !specifier.namespace && specifier.imported !== "default")

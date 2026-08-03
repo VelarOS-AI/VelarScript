@@ -20,13 +20,20 @@ export async function verifyProductionBuild(input: string | null, cwd = process.
   const manifestPath = join(directory, PRODUCTION_MANIFEST_NAME);
   const actualFiles = await productionFiles(directory);
   const manifest = await readJson(manifestPath, "production build manifest") as ProductionBuildManifest;
-  if (manifest?.formatVersion !== 2 || manifest?.kind !== "velar-web-build") {
+  if (manifest?.formatVersion !== 3 || manifest?.kind !== "velar-framework-build") {
     throw new Error(`${manifestPath} has an unsupported production build format`);
   }
   if (manifest.compiler?.name !== "velar" || typeof manifest.compiler.version !== "string" || !manifest.compiler.version) {
     throw new Error(`${manifestPath} has invalid compiler identity`);
   }
-  if (typeof manifest.apiVersion !== "string" || !manifest.apiVersion) throw new Error(`${manifestPath} has no Web API version`);
+  const framework = manifest.framework;
+  if (!framework || typeof framework.id !== "string" || !framework.id
+    || typeof framework.capability !== "string" || !/^[a-z][a-z0-9-]*$/u.test(framework.capability)
+    || framework.target !== "browser" || !Number.isInteger(framework.protocolVersion) || framework.protocolVersion < 1
+    || typeof framework.apiVersion !== "string" || !framework.apiVersion
+    || typeof framework.artifactKind !== "string" || !/^[a-z][a-z0-9-]*$/u.test(framework.artifactKind)) {
+    throw new Error(`${manifestPath} has an invalid framework host identity`);
+  }
   if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) throw new Error(`${manifestPath} has no asset inventory`);
   if (manifest.assets.length > MAX_PRODUCTION_ASSETS) throw new Error(`${manifestPath} exceeds the ${MAX_PRODUCTION_ASSETS}-asset production limit`);
 
@@ -132,13 +139,15 @@ function verifyDeploymentManifest(
   assets: ReadonlyMap<string, ProductionBuildManifest["assets"][number]>,
   manifestPath: string,
 ): void {
-  if (deployment?.formatVersion !== 1 || deployment?.kind !== "velar-static-deployment") {
+  if (deployment?.formatVersion !== 2 || deployment?.kind !== "velar-static-deployment") {
     throw new Error(`${manifestPath} references an unsupported static deployment manifest`);
   }
   if (deployment.compiler?.name !== build.compiler.name || deployment.compiler.version !== build.compiler.version) {
     throw new Error(`Production compiler identity differs between build and deployment manifests`);
   }
-  if (deployment.apiVersion !== build.apiVersion) throw new Error(`Web API version differs between build and deployment manifests`);
+  if (!sameFramework(deployment.framework, build.framework)) {
+    throw new Error(`Framework identity differs between build and deployment manifests`);
+  }
   if (typeof deployment.base !== "string" || !deployment.base.startsWith("/") || !deployment.base.endsWith("/")) {
     throw new Error(`Static deployment base must start and end with '/'`);
   }
@@ -192,6 +201,15 @@ function verifyDeploymentManifest(
       }
     }
   }
+}
+
+function sameFramework(left: ProductionBuildManifest["framework"], right: ProductionBuildManifest["framework"]): boolean {
+  return left?.id === right.id
+    && left.capability === right.capability
+    && left.target === right.target
+    && left.protocolVersion === right.protocolVersion
+    && left.apiVersion === right.apiVersion
+    && left.artifactKind === right.artifactKind;
 }
 
 function requireDeploymentHeader(

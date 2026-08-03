@@ -7,7 +7,7 @@ import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
 
 test("application-scale incremental budget recompiles only the reverse dependency closure", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-scale-"));
-  await writeFile(join(directory, "velar.json"), JSON.stringify({ entry: "main.vel" }), "utf8");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
   await writeFile(join(directory, "main.vel"), "import {value} from \"./chain-0.vel\"\nprint(value)\n", "utf8");
 
   const chainLength = 40;
