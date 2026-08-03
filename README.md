@@ -35,11 +35,14 @@ project.
 
 Velar 0.9AB has completed the internal application-scale language-and-Web
 sequence, and the requirement-by-requirement 1.0 internal engineering audit is
-complete. The audited development source is published through
-[draft PR #1](https://github.com/VelarOS-AI/VelarScript/pull/1), and the
+complete. The audited development source is merged on public `main` at commit
+`d80c62c932f59db4e219d10dd9fb390344b6ece2`, and the
 [official Website source](https://github.com/VelarOS-AI/VelarScript-Website)
-is a separate Apache-2.0 project that dogfoods the packed toolchain. npm
-publication and hosted deployment remain deliberately deferred. The audit's first pass
+is a separate Apache-2.0 project that dogfoods the packed toolchain. Its commit
+`7226b45f706d9ac3c28e6ab3ffb2f5946fc8f097` is deployed at
+[velarscript.velaros.cn](https://velarscript.velaros.cn) through the
+provider-neutral static-host contract and has passed the remote deployment
+verifier. npm publication remains deliberately deferred. The audit's first pass
 closes the ordinary new-project workflow: generated applications now contain a
 separate app module, a real Core test, a browser test, project-wide format
 scripts, and an installed-package acceptance that uses only those generated
@@ -74,11 +77,10 @@ positions complete only prefix-matching visible components and a focused native 
 set; component attribute positions complete checked parameters, native tags
 complete supported Web attributes/directives, and typed object literals
 complete their missing record fields. Value expressions immediately return to
-ordinary lexical completion. This is internal readiness
-evidence, not a public production claim: hosted preview observation, independent
-users, review and merge of the development source, a stable version/tag, and
-publish authority remain
-external.
+ordinary lexical completion. This is internal readiness plus official
+dogfood-deployment evidence, not a public production claim: independent users
+and compatibility feedback, a stable version/tag, release-candidate provenance,
+and publish authority remain external.
 
 Failure containment is now a retained gate rather than an assumption. Compile,
 inspect, and format APIs accept a deterministic malformed-input corpus without
