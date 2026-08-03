@@ -152,6 +152,7 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     assert.equal(await page.locator("[data-route]").textContent(), "/");
     assert.match(await page.locator("[data-environment]").textContent() ?? "", /^online\/visible\/(?:dark|light)$/u);
     assert.equal(await page.locator("[data-session]").textContent(), "session-ready");
+    await page.waitForFunction(() => document.querySelector("[data-frame]")?.textContent === "frame-ready");
     assert.equal(await page.locator("[data-frame]").textContent(), "frame-ready");
     assert.equal(await page.locator("[data-layout]").textContent(), "measured");
     assert.equal(await page.locator("[data-error]").textContent(), "Velar recovery ready");
