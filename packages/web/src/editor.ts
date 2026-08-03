@@ -31,10 +31,10 @@ const nativeJsxCompletions: readonly CompilerProjectEditorCompletion[] = [
   ...jsxControlCompletions,
   ...["id", "class", "title", "role", "aria-label", "aria-labelledby", "ref"].map((label) => ({ label, detail: "native Web attribute", kind: "field" as const })),
   ...["on:click", "on:input", "on:change", "on:keydown", "on:submit.prevent"].map((label) => ({ label, detail: "typed native Web event", kind: "field" as const })),
+  { label: "look", detail: "checked Look value", kind: "field" },
   { label: "bind:value", detail: "two-way string/number form binding", kind: "field" },
   { label: "bind:checked", detail: "two-way boolean form binding", kind: "field" },
   { label: "class:", detail: "reactive class directive", kind: "field" },
-  { label: "style:", detail: "reactive style directive", kind: "field" },
   { label: "unsafe:html", detail: "explicit unsafe HTML boundary", kind: "field" },
 ];
 

@@ -743,6 +743,7 @@ function lspSymbolKind(kind: string): number {
     case "enum-member": return 22;
     case "component": return 5;
     case "function":
+    case "style":
     case "action": return 12;
     case "computed": return 14;
     case "state":
@@ -759,6 +760,7 @@ function lspCompletionKind(kind: string): number {
   switch (kind) {
     case "method": return 2;
     case "function":
+    case "style":
     case "action": return 3;
     case "field": return 5;
     case "variable":

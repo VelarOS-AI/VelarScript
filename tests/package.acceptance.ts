@@ -91,7 +91,7 @@ print(answer)
   const framework = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.8' || VELAR_WEB_MODULES.length !== 10 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
+    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.9' || VELAR_WEB_MODULES.length !== 10 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
   ], directory);
   assert.match(framework.stdout, /velar\/app,velar\/config,velar\/web/u);
   const host = await run(process.execPath, [

@@ -10,77 +10,52 @@ component RouteFailed(error: Error):
 const Analytics = lazy(() => import("./pages/analytics.vel"), "Analytics", RouteLoading, RouteFailed)
 const routes = [route("/", Board), route("/analytics", Analytics)]
 
+const shellLook = look:
+    minHeight = 100vh
+    color = rgb(23, 32, 51)
+    background = linearGradient(145deg, rgb(223, 232, 255), rgb(246, 248, 252))
+    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+
+const topbarLook = look:
+    position = sticky
+    zIndex = 10
+    top = 0px
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    minHeight = 62px
+    padding = space(0px, 20px)
+    borderBottom = line(1px, rgba(205, 214, 230, 0.8))
+    background = rgba(246, 248, 252, 0.94)
+    backdropFilter = "blur(16px)"
+
+const brandLook = look:
+    color = rgb(23, 32, 51)
+    fontWeight = 900
+    letterSpacing = -0.03em
+    textDecoration = undecorated
+
+const navLook = look:
+    display = flex
+    gap = 8px
+
+const navLinkLook = look:
+    padding = space(8px, 10px)
+    radius = 9px
+    color = rgb(89, 101, 122)
+    fontSize = 14px
+    fontWeight = 700
+    textDecoration = undecorated
+
+    if @hover:
+        color = rgb(35, 69, 174)
+        background = rgb(232, 237, 250)
+
 export component App:
-    style global:
-        :root {
-            color-scheme: light;
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            color: #172033;
-            background: #f6f8fc;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            background: radial-gradient(circle at 10% -20%, #dfe8ff 0, transparent 32rem), #f6f8fc;
-        }
-
-        button, input, select {
-            font: inherit;
-        }
-
-    style:
-        .shell {
-            min-height: 100vh;
-        }
-
-        .topbar {
-            position: sticky;
-            z-index: 10;
-            top: 0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            min-height: 62px;
-            padding: 0 max(20px, calc((100vw - 1240px) / 2));
-            border-bottom: 1px solid rgba(205, 214, 230, 0.8);
-            background: rgba(246, 248, 252, 0.88);
-            backdrop-filter: blur(16px);
-        }
-
-        .brand {
-            color: #172033;
-            font-weight: 900;
-            letter-spacing: -0.03em;
-            text-decoration: none;
-        }
-
-        nav {
-            display: flex;
-            gap: 8px;
-        }
-
-        nav a {
-            padding: 8px 10px;
-            border-radius: 9px;
-            color: #59657a;
-            font-size: 14px;
-            font-weight: 700;
-            text-decoration: none;
-        }
-
-        nav a:hover {
-            color: #2345ae;
-            background: #e8edfa;
-        }
-
-    return <div class="shell">
-        <header class="topbar">
-            <Link to="/">FlowBoard</Link>
-            <nav aria-label="Primary navigation"><Link to="/">Board</Link><Link to="/analytics">Analytics</Link></nav>
+    return <div class="shell" look={shellLook}>
+        <header class="topbar" look={topbarLook}>
+            <Link look={brandLook} to="/">FlowBoard</Link>
+            <nav look={navLook} aria-label="Primary navigation"><Link look={navLinkLook} to="/">Board</Link><Link look={navLinkLook} to="/analytics">Analytics</Link></nav>
         </header>
         <Router routes={routes} />
     </div>

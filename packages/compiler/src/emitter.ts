@@ -911,16 +911,23 @@ export class JavaScriptEmitter {
             return `${helper}(${[object, ...arguments_].join(", ")})`;
           }
         }
+        const sourceArguments = expression.arguments.map((argument) => this.emitExpression(argument));
+        const namedOrder = this.hints.namedArgumentOrders.get(expression.span.start);
+        const arguments_ = namedOrder
+          ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
+          : sourceArguments;
+        const wrapNamed = (value: string): string => namedOrder
+          ? `((__namedArguments) => ${value})([${sourceArguments.join(", ")}])`
+          : value;
         if (this.hints.optionalCallees.has(expression.span.start)) {
-          const arguments_ = expression.arguments.map((argument) => this.emitExpression(argument)).join(", ");
           const call = expression.callee.kind === "MemberExpression"
-            ? `${this.emitPostfixReceiver(expression.callee.object)}${expression.callee.optional || this.hints.optionalChainMembers.has(expression.callee.span.start) ? "?." : "."}${expression.callee.property}?.(${arguments_})`
-            : `${this.emitPostfixReceiver(expression.callee)}?.(${arguments_})`;
-          return `(${call} ?? null)`;
+            ? `${this.emitPostfixReceiver(expression.callee.object)}${expression.callee.optional || this.hints.optionalChainMembers.has(expression.callee.span.start) ? "?." : "."}${expression.callee.property}?.(${arguments_.join(", ")})`
+            : `${this.emitPostfixReceiver(expression.callee)}?.(${arguments_.join(", ")})`;
+          return wrapNamed(`(${call} ?? null)`);
         }
         if (expression.callee.kind === "MemberExpression" && expression.callee.optional) {
-          const call = `${this.emitPostfixReceiver(expression.callee.object)}?.${expression.callee.property}(${expression.arguments.map((argument) => this.emitExpression(argument)).join(", ")})`;
-          return `(${call} ?? null)`;
+          const call = `${this.emitPostfixReceiver(expression.callee.object)}?.${expression.callee.property}(${arguments_.join(", ")})`;
+          return wrapNamed(`(${call} ?? null)`);
         }
         let callee: string;
         if (expression.callee.kind === "IdentifierExpression" && (expression.callee.name === "Map" || expression.callee.name === "Set")) {
@@ -931,11 +938,10 @@ export class JavaScriptEmitter {
             ? `new ${this.emitExpression(expression.callee)}`
             : this.emitPostfixReceiver(expression.callee);
         }
-        const arguments_ = expression.arguments.map((argument) => this.emitExpression(argument));
         const formRead = this.hints.formReads.get(expression.span.start);
         if (formRead) arguments_.push(JSON.stringify(formRead));
         const call = `${callee}(${arguments_.join(", ")})`;
-        return this.hints.optionalCalls.has(expression.span.start) ? `(${call} ?? null)` : call;
+        return wrapNamed(this.hints.optionalCalls.has(expression.span.start) ? `(${call} ?? null)` : call);
       }
       case "MemberExpression": {
         const property = `${this.hints.privateMembers.has(expression.span.start) ? "#" : ""}${expression.property}`;

@@ -47,6 +47,7 @@ export interface FrameworkHostExtension {
   readonly artifactKind: string;
   readonly base: (config: unknown) => string;
   readonly sourceMaps: (config: unknown) => boolean;
+  readonly prepareStyles?: (config: unknown, styles: string) => string;
   readonly createArtifacts: (input: FrameworkHostArtifactsInput) => FrameworkHostArtifacts;
   readonly createErrorDocument: (input: FrameworkHostErrorDocumentInput) => string;
   readonly staticDeployment: (config: unknown) => FrameworkStaticDeployment;

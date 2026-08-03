@@ -41,7 +41,7 @@ try {
     notices: readonly string[];
     compilation: { moduleCount: number; compiledModules: number };
   };
-  assert.equal(status.apiVersion, "0.8");
+  assert.equal(status.apiVersion, "0.9");
   assert.equal(status.ready, true);
   assert.deepEqual(status.notices, []);
   assert.ok(status.compilation.moduleCount >= 5);
@@ -136,7 +136,7 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     assert.equal(await page.locator("h1").textContent(), "Velar Release Studio");
     assert.equal(new URL(page.url()).pathname, "/app/");
     assert.equal(await page.title(), "Velar Release Studio");
-    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "Velar 0.8 Web platform application");
+    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "Velar 0.9 Web platform application");
     assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://velar.example/app/");
     assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "index,follow");
     assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/app/share.svg");

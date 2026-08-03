@@ -36,160 +36,137 @@ def lastUpdated(values: List<Task>) -> string:
     assert latest != none, "A non-empty task list must have a latest task"
     return format(latest.updatedAt)
 
+const pageLook = look:
+    display = grid
+    gap = 24px
+    width = 100%
+    maxWidth = 980px
+    marginInline = auto
+    padding = edges(42px, 16px, 64px, 16px)
+
+const backLook = look:
+    color = rgb(49, 87, 213)
+    fontWeight = 700
+    textDecoration = undecorated
+
+const titleLook = look:
+    margin = 0
+    color = rgb(21, 32, 58)
+    fontSize = 42px
+    letterSpacing = -0.04em
+
+const leadLook = look:
+    margin = edges(8px, 0px, 0px, 0px)
+    color = rgb(110, 121, 141)
+
+const metricsLook = look:
+    display = grid
+    columns = repeat(4, 1fr)
+    gap = 12px
+
+    if viewport.width <= 720px:
+        columns = repeat(2, 1fr)
+
+const surfaceLook = look:
+    border = line(1px, rgb(220, 227, 239))
+    radius = 18px
+    background = rgb(255, 255, 255)
+    shadow = dropShadow(0px, 12px, 34px, rgba(35, 50, 82, 0.06))
+
+const metricLook = look:
+    ...surfaceLook
+    display = grid
+    gap = 7px
+    padding = 18px
+
+const metricValueLook = look:
+    color = rgb(23, 32, 51)
+    fontSize = 30px
+
+const metricLabelLook = look:
+    color = rgb(116, 128, 151)
+    fontSize = 13px
+
+const progressLook = look:
+    gridColumn = "1 / -1"
+    height = 9px
+    overflow = hidden
+    radius = pill
+    background = rgb(232, 237, 245)
+
+def progressFillLook(progress: number) -> Look:
+    return look:
+        width = progress * 1%
+        height = 100%
+        radius = pill
+        background = linearGradient(90deg, rgb(49, 87, 213), rgb(92, 125, 240))
+
+const sectionLook = look:
+    ...surfaceLook
+    display = grid
+    gap = 14px
+    padding = 20px
+
+const sectionTitleLook = look:
+    margin = 0
+
+const priorityGridLook = look:
+    display = grid
+    columns = repeat(3, 1fr)
+    gap = 10px
+
+const priorityLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    padding = space(12px, 14px)
+    radius = 12px
+    color = rgb(70, 81, 106)
+    background = rgb(241, 244, 249)
+    textCase = capitalize
+
+const activityListLook = look:
+    display = grid
+    gap = 10px
+    margin = 0
+    padding = 0
+    listStyle = gone
+
+const activityItemLook = look:
+    display = flex
+    justifyContent = spaceBetween
+    gap = 16px
+    paddingTop = 10px
+    borderTop = line(1px, rgb(237, 240, 245))
+    color = rgb(49, 60, 84)
+
+const timeLook = look:
+    color = rgb(129, 139, 157)
+    fontSize = 12px
+
 export component Analytics:
     computed progress = completion(tasks.length, doneCount)
     computed progressState = progressLabel(progress)
     computed priorityRows = countBy(tasks, task => task.priority).entries()
     const recent = sortBy(tasks, task => task.updatedAt, true)
 
-    style:
-        .page {
-            display: grid;
-            gap: 24px;
-            width: min(980px, calc(100% - 32px));
-            margin: 0 auto;
-            padding: 42px 0 64px;
-        }
-
-        .back {
-            color: #3157d5;
-            font-weight: 750;
-            text-decoration: none;
-        }
-
-        h1, h2, p {
-            margin: 0;
-        }
-
-        h1 {
-            color: #15203a;
-            font-size: 42px;
-            letter-spacing: -0.04em;
-        }
-
-        .lead {
-            margin-top: 8px;
-            color: #6e798d;
-        }
-
-        .metrics {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 12px;
-        }
-
-        .metric, .activity, .priorities {
-            border: 1px solid #dce3ef;
-            border-radius: 18px;
-            background: #fff;
-            box-shadow: 0 12px 34px rgba(35, 50, 82, 0.06);
-        }
-
-        .metric {
-            display: grid;
-            gap: 7px;
-            padding: 18px;
-        }
-
-        .metric strong {
-            color: #172033;
-            font-size: 30px;
-        }
-
-        .metric span {
-            color: #748097;
-            font-size: 13px;
-        }
-
-        .progress {
-            grid-column: 1 / -1;
-            height: 9px;
-            overflow: hidden;
-            border-radius: 999px;
-            background: #e8edf5;
-        }
-
-        .fill {
-            width: calc(var(--progress) * 1%);
-            height: 100%;
-            border-radius: inherit;
-            background: linear-gradient(90deg, #3157d5, #5c7df0);
-        }
-
-        .activity {
-            display: grid;
-            gap: 14px;
-            padding: 20px;
-        }
-
-        .priorities {
-            display: grid;
-            gap: 12px;
-            padding: 20px;
-        }
-
-        .priority-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 10px;
-        }
-
-        .priority {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 12px 14px;
-            border-radius: 12px;
-            color: #46516a;
-            background: #f1f4f9;
-            text-transform: capitalize;
-        }
-
-        .activity ol {
-            display: grid;
-            gap: 10px;
-            margin: 0;
-            padding: 0;
-            list-style: none;
-        }
-
-        .activity li {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            padding-top: 10px;
-            border-top: 1px solid #edf0f5;
-            color: #313c54;
-        }
-
-        .activity time {
-            color: #818b9d;
-            font-size: 12px;
-        }
-
-        @media (max-width: 720px) {
-            .metrics {
-                grid-template-columns: 1fr 1fr;
-            }
-        }
-
-    return <main class="page" data-analytics>
+    return <main class="page" look={pageLook} data-analytics>
         <Head title="FlowBoard analytics" description="Project flow and recent task activity" themeColor="#f6f8fc" />
-        <Link to="/">← Back to board</Link>
-        <header><h1>Project pulse</h1><p class="lead">A compact view of throughput and the work that changed most recently.</p></header>
-        <section class="metrics" aria-label="Project metrics">
-            <article class="metric"><strong>{metricText(tasks.length)}</strong><span>Total tasks</span></article>
-            <article class="metric"><strong>{metricText(todoCount)}</strong><span>Waiting</span></article>
-            <article class="metric"><strong>{metricText(doingCount)}</strong><span>In progress</span></article>
-            <article class="metric"><strong data-completion>{metricText(f"{progress}%")}</strong><span data-progress-label>{progressState}</span></article>
-            <div class="progress" role="progressbar" aria-label="Completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><div class="fill" style:--progress={progress}></div></div>
+        <Link look={backLook} to="/">← Back to board</Link>
+        <header><h1 look={titleLook}>Project pulse</h1><p class="lead" look={leadLook}>A compact view of throughput and the work that changed most recently.</p></header>
+        <section class="metrics" look={metricsLook} aria-label="Project metrics">
+            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(tasks.length)}</strong><span look={metricLabelLook}>Total tasks</span></article>
+            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(todoCount)}</strong><span look={metricLabelLook}>Waiting</span></article>
+            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(doingCount)}</strong><span look={metricLabelLook}>In progress</span></article>
+            <article class="metric" look={metricLook}><strong look={metricValueLook} data-completion>{metricText(f"{progress}%")}</strong><span look={metricLabelLook} data-progress-label>{progressState}</span></article>
+            <div class="progress" look={progressLook} role="progressbar" aria-label="Completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><div class="fill" look={progressFillLook(progress)}></div></div>
         </section>
-        <section class="activity">
-            <div><h2>Recent activity</h2><p>{lastUpdated(tasks)}</p></div>
-            <ol>{recent.map(task => <li key={task.id}><span>{task.title}</span><time>{format(task.updatedAt)}</time></li>)}</ol>
+        <section class="activity" look={sectionLook}>
+            <div><h2 look={sectionTitleLook}>Recent activity</h2><p>{lastUpdated(tasks)}</p></div>
+            <ol look={activityListLook}>{recent.map(task => <li look={activityItemLook} key={task.id}><span>{task.title}</span><time look={timeLook}>{format(task.updatedAt)}</time></li>)}</ol>
         </section>
-        <section class="priorities">
-            <h2>Priority mix</h2>
-            <div class="priority-grid">{priorityRows.map(entry => <article class="priority" key={entry.key}><span>{entry.key}</span><strong>{entry.value}</strong></article>)}</div>
+        <section class="priorities" look={sectionLook}>
+            <h2 look={sectionTitleLook}>Priority mix</h2>
+            <div class="priority-grid" look={priorityGridLook}>{priorityRows.map(entry => <article class="priority" look={priorityLook} key={entry.key}><span>{entry.key}</span><strong>{entry.value}</strong></article>)}</div>
         </section>
     </main>

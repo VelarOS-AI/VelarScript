@@ -243,6 +243,7 @@ function semanticTokenType(symbol: SemanticSymbol): ProjectSemanticTokenType {
     case "enum-member": return "enumMember";
     case "function":
     case "component":
+    case "style":
     case "action": return "function";
     case "method": return "method";
     case "field": return "property";

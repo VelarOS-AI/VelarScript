@@ -1,15 +1,15 @@
-# Velar Web API 0.8
+# Velar Web API 0.9
 
 Status: stable for the Velar 0.9 internal line
 Runtime: existing browser JavaScript engine; no virtual DOM
 
 Velar Web applications install and declare `@velarscript/web`. The extension
-owns JSX, components, reactivity, lifecycle, scoped CSS, Web types, editor
+owns JSX, components, reactivity, lifecycle, controlled Look values, Web types, editor
 contributions, and explicit Web modules instead of implicit
 browser globals. The compiler reports `VEL3008` for direct source-level use of
 `console`, `document`, `window`, `navigator`, `location`, `history`, `fetch`,
 `JSON`, `Math`, or `Date` and points to the official module or an explicit
-JavaScript boundary. Additions within API 0.8 must be backward compatible;
+JavaScript boundary. Additions within API 0.9 must be backward compatible;
 removals or semantic changes require a new Web API version.
 
 ## `velar/app`
@@ -169,8 +169,9 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   typed snapshot of the current application-relative route. Navigation options
   are a data-only record with boolean `replace`/`scroll` fields and are fully
   validated before history or scrolling changes.
-- `Head` owns `title`, `description`, `canonical`, `robots`, `image`, and
-  `themeColor` for its component lifetime and restores prior values on cleanup.
+- `Head` owns `title`, `description`, `canonical`, `robots`, `image`,
+  `themeColor`, and the document `language` tag for its component lifetime and
+  restores prior values on cleanup.
 - `announce(message, priority="polite")` writes to a compiler-owned live
   region; priority is `polite` or `assertive`.
 - `domId(prefix="velar")` returns an application-local, monotonically unique DOM ID
@@ -464,7 +465,7 @@ created. `readText(file, maxBytes=16777216)` and
 the explicit ceiling is 64 MiB. One picker result is limited to 10,000 files,
 and text downloads are likewise limited to 64 MiB. Directory access,
 persistent file handles, and the File System Access API are deliberately not
-part of Web API 0.8.
+part of Web API 0.9.
 
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque record is registered. Invalid native picker results reject
@@ -558,7 +559,7 @@ install.
 
 ## Deliberate boundaries
 
-Web API 0.8 does not define SSR/server execution, workers, service workers/PWA,
+Web API 0.9 does not define SSR/server execution, workers, service workers/PWA,
 WebRTC, WebGPU, directory handles, persistent file handles, or a game runtime.
 JavaScript packages remain available through checked declarations or an
 explicit unsafe boundary when an application needs capabilities outside the

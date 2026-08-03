@@ -1,16 +1,15 @@
 import {Head} from "velar/web"
 
-export component About:
-    style:
-        .page {
-            display: grid;
-            gap: 16px;
-            width: min(720px, calc(100% - 32px));
-            margin: 0 auto;
-            padding: 64px 0;
-        }
+const pageLook = look:
+    display = grid
+    gap = 16px
+    width = 100%
+    maxWidth = 752px
+    marginInline = auto
+    padding = space(64px, 16px)
 
-    return <main class="page">
+export component About:
+    return <main class="page" look={pageLook}>
         <Head title="About · Velar Release Studio" description="About the Velar production application" />
         <h1>About</h1>
         <p>A routed Velar application built from independent compiler, Web, package, and Workbench boundaries.</p>

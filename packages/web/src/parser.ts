@@ -14,6 +14,9 @@ type ComputedDeclaration = Extract<Statement, { kind: "ComputedDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
 type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type WatchDeclaration = Extract<Statement, { kind: "WatchDeclaration" }>;
+type UnsafeCssImportDeclaration = Extract<Statement, { kind: "UnsafeCssImportDeclaration" }>;
+type LookExpression = Extract<Expression, { kind: "LookExpression" }>;
+type LookEntry = LookExpression["entries"][number];
 type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
 type JSXAttribute = JSXElementExpression["attributes"][number];
 type JSXChild = JSXElementExpression["children"][number];
@@ -57,14 +60,51 @@ export class VelarWebParser extends Parser {
     return undefined;
   }
 
+  protected override parseExtensionImport(start: number): Statement | null | undefined {
+    if (!this.matchExtensionKeyword("css")) return undefined;
+    this.expect("unsafe", "Native CSS is an unsafe boundary; write 'import css unsafe'");
+    const source = this.expect("string", "Expected a relative .css path after 'import css unsafe'");
+    let placement: "before" | "after" = "before";
+    if (this.current().kind === "identifier" && this.current().value === "before") {
+      this.expect("identifier", "Expected 'before'");
+      placement = "before";
+    } else if (this.current().kind === "identifier" && this.current().value === "after") {
+      this.expect("identifier", "Expected 'after'");
+      placement = "after";
+    } else this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS must explicitly declare 'before look' or 'after look'", this.current().span));
+    if (!this.matchExtensionKeyword("look")) {
+      this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS order must end with 'look'", this.current().span));
+    }
+    if ((!source.value.startsWith("./") && !source.value.startsWith("../")) || !source.value.endsWith(".css")) {
+      this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS imports require an explicit relative path ending in '.css'", source.span));
+    }
+    return { kind: "UnsafeCssImportDeclaration", source: source.value, placement, span: span(start, this.previous().span.end) } satisfies UnsafeCssImportDeclaration;
+  }
+
   protected override parseExtensionExpression(token: Token): Expression | undefined {
-    if (token.kind !== "jsx") return undefined;
-    return new JsxSourceParser(
-      token.value,
-      token.span.start,
+    if (token.kind === "jsx") {
+      return new JsxSourceParser(
+        token.value,
+        token.span.start,
+        (text, offset) => this.parseNestedExpression(text, offset),
+        (item) => this.diagnostics.push(item),
+      ).parse();
+    }
+    if (token.kind !== "extensionKeyword" || token.value !== "look") return undefined;
+    this.expect("colon", "Expected ':' after 'look'");
+    this.expect("newline", "Expected a newline before Look entries");
+    this.consumeNewlines();
+    this.expect("indent", "Expected an indented Look block");
+    const block = this.expect("embeddedBlock", "Expected Look entries");
+    this.consumeNewlines();
+    this.expect("dedent", "Expected the end of the Look block");
+    const entries = new LookSourceParser(
+      block.value,
+      block.span.start,
       (text, offset) => this.parseNestedExpression(text, offset),
       (item) => this.diagnostics.push(item),
     ).parse();
+    return { kind: "LookExpression", entries, span: span(token.span.start, block.span.end) };
   }
 
   private parseStateDeclaration(start: number, exported: boolean): StateDeclaration {
@@ -147,16 +187,6 @@ export class VelarWebParser extends Parser {
       } else if (this.matchExtensionKeyword("cleanup")) {
         const body = this.parseBlock();
         item = { kind: "CleanupBlock", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
-      } else if (this.matchExtensionKeyword("style")) {
-        const global = this.matchExtensionKeyword("global");
-        this.expect("colon", "Expected ':' after style");
-        this.expect("newline", "Expected a newline before component CSS");
-        this.consumeNewlines();
-        this.expect("indent", "Expected indented component CSS");
-        const css = this.expect("css", "Expected component CSS");
-        this.consumeNewlines();
-        this.expect("dedent", "Expected the end of component CSS");
-        item = { kind: "StyleBlock", global, css: css.value, span: span(itemStart, css.span.end) };
       } else {
         item = this.parseStatement();
       }
@@ -167,6 +197,202 @@ export class VelarWebParser extends Parser {
     const close = this.expect("dedent", "Expected the end of component body");
     return { kind: "ComponentDeclaration", exported, name: name.value, parameters, body, span: span(start, body.at(-1)?.span.end ?? close.span.end) };
   }
+}
+
+class LookSourceParser {
+  private readonly lines: readonly { indent: number; text: string; start: number; end: number }[];
+  private readonly offset: number;
+  private readonly parseExpression: (text: string, offset: number) => Expression;
+  private readonly report: (item: Diagnostic) => void;
+  private index = 0;
+
+  constructor(
+    text: string,
+    offset: number,
+    parseExpression: (text: string, offset: number) => Expression,
+    report: (item: Diagnostic) => void,
+  ) {
+    this.offset = offset;
+    this.parseExpression = parseExpression;
+    this.report = report;
+    const lines: { indent: number; text: string; start: number; end: number }[] = [];
+    let cursor = 0;
+    for (const raw of text.split("\n")) {
+      const whitespace = /^\s*/u.exec(raw)?.[0] ?? "";
+      const content = raw.slice(whitespace.length).trimEnd();
+      if (content && !content.startsWith("//")) {
+        lines.push({ indent: whitespace.replaceAll("\t", "    ").length, text: content, start: cursor + whitespace.length, end: cursor + raw.length });
+      }
+      cursor += raw.length + 1;
+    }
+    this.lines = lines;
+  }
+
+  parse(): readonly LookEntry[] {
+    if (this.lines.length === 0) {
+      this.report(diagnostic("VEL5038", "A Look block requires at least one entry", span(this.offset, this.offset)));
+      return [];
+    }
+    return this.parseEntries(this.lines[0]!.indent);
+  }
+
+  private parseEntries(indent: number): readonly LookEntry[] {
+    const entries: LookEntry[] = [];
+    while (this.index < this.lines.length) {
+      const line = this.lines[this.index]!;
+      if (line.indent < indent) break;
+      if (line.indent > indent) {
+        this.report(diagnostic("VEL5038", "Unexpected Look indentation", this.lineSpan(line)));
+        this.index += 1;
+        continue;
+      }
+      this.index += 1;
+      if (line.text.startsWith("if ") && line.text.endsWith(":")) {
+        entries.push(this.parseIf(line, indent, "if "));
+        continue;
+      }
+      if (line.text === "else:" || line.text.startsWith("else if ")) {
+        this.report(diagnostic("VEL5038", "Look 'else' must immediately follow an 'if' at the same indentation", this.lineSpan(line)));
+        continue;
+      }
+      const property = /^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/u.exec(line.text);
+      if (property) {
+        const valueText = property[2]!;
+        const valueStart = line.start + line.text.indexOf(valueText);
+        entries.push({
+          kind: "LookProperty",
+          name: property[1]!,
+          value: this.parseExpression(valueText, this.offset + valueStart),
+          span: this.lineSpan(line),
+        });
+        continue;
+      }
+      if (line.text.startsWith("...")) {
+        const valueText = line.text.slice(3).trim();
+        if (!valueText) {
+          this.report(diagnostic("VEL5038", "Look composition requires a value after '...'", this.lineSpan(line)));
+          continue;
+        }
+        entries.push({
+          kind: "LookSpread",
+          value: this.parseExpression(valueText, this.offset + line.start + line.text.indexOf(valueText)),
+          span: this.lineSpan(line),
+        });
+        continue;
+      }
+      const target = /^@([A-Za-z][A-Za-z0-9]*):$/u.exec(line.text)?.[1];
+      if (!target) {
+        this.report(diagnostic("VEL5038", "Look entries use 'property = value', 'if condition:', '@target:', or composition with '...'", this.lineSpan(line)));
+        continue;
+      }
+      const next = this.lines[this.index];
+      if (!next || next.indent <= line.indent) {
+        this.report(diagnostic("VEL5038", `Look target '@${target}' requires an indented body`, this.lineSpan(line)));
+        continue;
+      }
+      const children = this.parseEntries(next.indent);
+      entries.push({ kind: "LookTarget", name: target, entries: children, span: span(this.offset + line.start, children.at(-1)?.span.end ?? this.offset + line.end) });
+    }
+    return entries;
+  }
+
+  private parseIf(
+    line: { indent: number; text: string; start: number; end: number },
+    indent: number,
+    prefix: "if " | "else if ",
+  ): Extract<LookEntry, { kind: "LookIf" }> {
+    const conditionText = line.text.slice(prefix.length, -1).trim();
+    const conditionOffset = this.offset + line.start + line.text.indexOf(conditionText);
+    const condition = this.parseLookCondition(conditionText, conditionOffset);
+    const next = this.lines[this.index];
+    let thenEntries: readonly LookEntry[] = [];
+    if (!next || next.indent <= line.indent) {
+      this.report(diagnostic("VEL5038", "A Look if branch requires an indented body", this.lineSpan(line)));
+    } else {
+      thenEntries = this.parseEntries(next.indent);
+    }
+
+    let elseEntries: readonly LookEntry[] = [];
+    const alternate = this.lines[this.index];
+    if (alternate?.indent === indent && alternate.text.startsWith("else if ") && alternate.text.endsWith(":")) {
+      this.index += 1;
+      elseEntries = [this.parseIf(alternate, indent, "else if ")];
+    } else if (alternate?.indent === indent && alternate.text === "else:") {
+      this.index += 1;
+      const elseBody = this.lines[this.index];
+      if (!elseBody || elseBody.indent <= alternate.indent) {
+        this.report(diagnostic("VEL5038", "A Look else branch requires an indented body", this.lineSpan(alternate)));
+      } else {
+        elseEntries = this.parseEntries(elseBody.indent);
+      }
+    }
+    return {
+      kind: "LookIf",
+      condition,
+      thenEntries,
+      elseEntries,
+      span: span(this.offset + line.start, elseEntries.at(-1)?.span.end ?? thenEntries.at(-1)?.span.end ?? this.offset + line.end),
+    };
+  }
+
+  private parseLookCondition(text: string, absoluteOffset: number): Expression {
+    const hooks = new Map<number, string>();
+    let rewritten = "";
+    let quote = "";
+    for (let index = 0; index < text.length;) {
+      const character = text[index]!;
+      if (quote) {
+        rewritten += character;
+        if (character === "\\" && index + 1 < text.length) {
+          rewritten += text[index + 1]!;
+          index += 2;
+          continue;
+        }
+        if (character === quote) quote = "";
+        index += 1;
+        continue;
+      }
+      if (character === '"' || character === "'") {
+        quote = character;
+        rewritten += character;
+        index += 1;
+        continue;
+      }
+      const match = /^@([A-Za-z][A-Za-z0-9]*)/u.exec(text.slice(index));
+      if (match) {
+        hooks.set(absoluteOffset + index, match[1]!);
+        rewritten += `_${match[1]}`;
+        index += match[0].length;
+        continue;
+      }
+      rewritten += character;
+      index += 1;
+    }
+    const parsed = this.parseExpression(rewritten, absoluteOffset);
+    return replaceLookHooks(parsed, hooks);
+  }
+
+  private lineSpan(line: { start: number; end: number }): Span {
+    return span(this.offset + line.start, this.offset + line.end);
+  }
+}
+
+function replaceLookHooks(expression: Expression, hooks: ReadonlyMap<number, string>): Expression {
+  if (expression.kind === "IdentifierExpression" && hooks.has(expression.span.start)) {
+    return { kind: "LookHookExpression", name: hooks.get(expression.span.start)!, span: expression.span };
+  }
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(visit);
+    if (!value || typeof value !== "object") return value;
+    const record = value as Record<string, unknown>;
+    if (record.kind === "IdentifierExpression" && typeof record.span === "object" && record.span) {
+      const sourceSpan = record.span as Span;
+      const name = hooks.get(sourceSpan.start);
+      if (name) return { kind: "LookHookExpression", name, span: sourceSpan };
+    }
+    return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, key === "span" ? child : visit(child)]));
+  };
+  return visit(expression) as Expression;
 }
 
 class JsxSourceParser {

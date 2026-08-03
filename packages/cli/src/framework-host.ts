@@ -27,9 +27,28 @@ export function createFrameworkArtifacts(
     development,
     entryPath: overrides.entryPath ?? relative(project.sourceRoot, project.entryPath).replace(/\.vel$/u, ".js").replaceAll("\\", "/"),
     stylesheetPath: overrides.stylesheetPath === undefined ? "styles.css" : overrides.stylesheetPath,
-    styles: project.modules.map((module) => module.result.css ?? "").filter(Boolean).join("\n"),
+    styles: projectStyles(project),
     imports: { ...standardImports, ...packageImports },
   });
+}
+
+export function projectStyles(project: ProjectResult): string {
+  const before: string[] = [];
+  const controlled: string[] = [];
+  const after: string[] = [];
+  for (const module of project.modules) {
+    const segments = module.result.styleSegments;
+    if (segments) {
+      if (segments.before) before.push(segments.before);
+      if (segments.controlled) controlled.push(segments.controlled);
+      if (segments.after) after.push(segments.after);
+    } else if (module.result.css) {
+      controlled.push(module.result.css);
+    }
+  }
+  const raw = [...before, ...controlled, ...after].filter(Boolean).join("\n\n");
+  const styles = raw ? `${raw}\n` : "";
+  return project.framework?.host.prepareStyles?.(project.framework.config, styles) ?? styles;
 }
 
 export function frameworkBase(framework: ResolvedFrameworkHost | null): string {

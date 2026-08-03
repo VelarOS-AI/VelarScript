@@ -2,7 +2,7 @@
 
 Velar Metrics is an application-scale dashboard used to validate typed HTTP
 data, concurrent async-arrow data loading, a declared JavaScript package
-boundary, component resources, scoped CSS, native class-body state and
+boundary, component resources, controlled Look values, native class-body state and
 construction invariants, and
 namespace-correct inline SVG JSX.
 

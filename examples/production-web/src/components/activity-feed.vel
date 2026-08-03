@@ -3,6 +3,23 @@ import {http} from "velar/http"
 type ActivityPayload:
     message: string
 
+const activityLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    gap = 16px
+    padding = space(14px, 16px)
+    radius = 12px
+    background = rgb(17, 24, 46)
+
+const buttonLook = look:
+    padding = space(8px, 12px)
+    border = line(0px, transparent)
+    radius = 9px
+    color = rgb(8, 16, 34)
+    background = rgb(157, 172, 255)
+    cursor = pointer
+
 export component ActivityFeed:
     state message = "Activity has not been refreshed"
 
@@ -12,27 +29,7 @@ export component ActivityFeed:
 
     computed failure = refresh.error
 
-    style:
-        .activity {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 14px 16px;
-            border-radius: 12px;
-            background: #11182e;
-        }
-
-        button {
-            padding: 8px 12px;
-            border: 0;
-            border-radius: 9px;
-            color: #081022;
-            background: #9dacff;
-            cursor: pointer;
-        }
-
-    return <section class="activity" aria-live="polite">
+    return <section class="activity" look={activityLook} aria-live="polite">
         <span data-activity>{failure ? failure.message : message}</span>
-        <button type="button" disabled={refresh.pending} on:click={refresh}>Refresh activity</button>
+        <button look={buttonLook} type="button" disabled={refresh.pending} on:click={refresh}>Refresh activity</button>
     </section>

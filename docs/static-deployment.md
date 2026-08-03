@@ -117,8 +117,8 @@ Production HTML and the deployment header contract default to a restrictive
 Content Security Policy: scripts and fonts are same-origin, objects and base
 URLs are disabled, forms remain same-origin, and only explicit secure API/image
 origins may be added. `style-src-attr 'unsafe-inline'` is retained narrowly for
-Velar's runtime `style:` directive; script execution never receives an inline
-escape hatch.
+runtime Look values whose checked properties depend on application state;
+script execution never receives an inline escape hatch.
 
 Additional origins are configured structurally:
 

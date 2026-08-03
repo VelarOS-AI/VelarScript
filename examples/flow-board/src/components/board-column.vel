@@ -1,56 +1,50 @@
 import {Task, TaskIdHandler, TaskStatus} from "../domain.vel"
 import {TaskCard} from "./task-card.vel"
 
+const columnLook = look:
+    display = grid
+    alignContent = start
+    gap = 12px
+    minWidth = 0px
+    padding = 12px
+    radius = 18px
+    background = rgb(238, 242, 248)
+
+const headingLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    padding = edges(3px, 4px, 7px, 4px)
+
+const titleLook = look:
+    margin = 0
+    color = rgb(39, 49, 74)
+    fontSize = 15px
+
+const countLook = look:
+    display = grid
+    placeItems = center
+    minWidth = 26px
+    height = 26px
+    radius = pill
+    color = rgb(82, 96, 120)
+    background = rgb(255, 255, 255)
+    fontSize = 12px
+    fontWeight = 800
+
+const emptyLook = look:
+    margin = 0
+    padding = space(30px, 12px)
+    border = line(1px, rgb(199, 208, 223))
+    radius = 13px
+    color = rgb(124, 135, 155)
+    textAlign = center
+    fontSize = 13px
+
 export component BoardColumn(title: string, status: TaskStatus, tasks: List<Task>, onAdvance: TaskIdHandler, onDelete: TaskIdHandler):
     const items = tasks.filter(task => task.status == status)
 
-    style:
-        .column {
-            display: grid;
-            align-content: start;
-            gap: 12px;
-            min-width: 0;
-            padding: 12px;
-            border-radius: 18px;
-            background: #eef2f8;
-        }
-
-        .heading {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 3px 4px 7px;
-        }
-
-        h2 {
-            margin: 0;
-            color: #27314a;
-            font-size: 15px;
-        }
-
-        .count {
-            display: grid;
-            place-items: center;
-            min-width: 26px;
-            height: 26px;
-            border-radius: 999px;
-            color: #526078;
-            background: #fff;
-            font-size: 12px;
-            font-weight: 800;
-        }
-
-        .empty {
-            margin: 0;
-            padding: 30px 12px;
-            border: 1px dashed #c7d0df;
-            border-radius: 13px;
-            color: #7c879b;
-            text-align: center;
-            font-size: 13px;
-        }
-
-    return <section class="column" data-column={status}>
-        <header class="heading"><h2>{title}</h2><span class="count">{items.length}</span></header>
-        {items.length == 0 ? <p class="empty">No matching tasks</p> : <>{items.map(task => <TaskCard key={task.id} task={task} onAdvance={onAdvance} onDelete={onDelete} />)}</>}
+    return <section class="column" look={columnLook} data-column={status}>
+        <header class="heading" look={headingLook}><h2 look={titleLook}>{title}</h2><span class="count" look={countLook}>{items.length}</span></header>
+        {items.length == 0 ? <p class="empty" look={emptyLook}>No matching tasks</p> : <>{items.map(task => <TaskCard key={task.id} task={task} onAdvance={onAdvance} onDelete={onDelete} />)}</>}
     </section>

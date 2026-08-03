@@ -11,6 +11,7 @@ import type { VelarWebConfig } from "./project-config.ts";
 
 export function createWebArtifacts(input: FrameworkHostArtifactsInput): FrameworkHostArtifacts {
   const config = webConfig(input.config);
+  const styles = input.styles;
   const entryModule = withBase(config.base, input.entryPath);
   const reload = input.development ? `
     <script type="module">
@@ -71,7 +72,7 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
       })
     </script>` : `
     <script type="module" src="${entryModule}"></script>`;
-  const stylesheet = input.stylesheetPath && (input.styles || input.development)
+  const stylesheet = input.stylesheetPath && (styles || input.development)
     ? `\n    <link data-velar-styles rel="stylesheet" href="${withBase(config.base, input.stylesheetPath)}">`
     : "";
   const importMap = Object.keys(input.imports).length > 0
@@ -82,7 +83,7 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
     : "";
   return {
     entryModule,
-    css: input.styles,
+    css: styles,
     html: `<!doctype html>
 <html lang="en">
   <head>
@@ -99,6 +100,8 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
 `,
   };
 }
+
+const WEB_STRUCTURAL_STYLES = ":where(*,*::before,*::after){box-sizing:border-box}\n:where(html,body,#app){min-block-size:100%}\n:where(body){margin:0}\n:where(button,input,textarea,select){font:inherit}";
 
 export function webStaticDeployment(config: unknown): FrameworkStaticDeployment {
   const web = webConfig(config);
@@ -130,6 +133,9 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   },
   sourceMaps(config: unknown) {
     return webConfig(config).build.sourceMaps;
+  },
+  prepareStyles(_config: unknown, styles: string) {
+    return [WEB_STRUCTURAL_STYLES, styles].filter(Boolean).join("\n\n") + "\n";
   },
   createArtifacts: createWebArtifacts,
   createErrorDocument: createWebErrorDocument,

@@ -3,6 +3,78 @@ type Todo:
     title: string
     done: bool
 
+const ink = rgb(23, 32, 51)
+const inkSoft = rgb(116, 129, 152)
+const paper = rgb(244, 247, 251)
+const surface = rgb(255, 255, 255)
+const surfaceSoft = rgb(247, 249, 253)
+const rule = rgb(220, 228, 240)
+const fieldRule = rgb(201, 213, 229)
+const primary = rgb(35, 87, 217)
+const danger = rgb(226, 75, 75)
+
+const pageLook = look:
+    minHeight = 100vh
+    padding = space(64px, 16px)
+    color = ink
+    background = paper
+    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+
+const cardLook = look:
+    width = 100%
+    maxWidth = 680px
+    marginInline = auto
+    padding = 28px
+    border = line(1px, rule)
+    radius = 20px
+    background = surface
+    shadow = dropShadow(0px, 18px, 60px, rgba(31, 58, 95, 0.1))
+
+const composerLook = look:
+    display = grid
+    columns = tracks(1fr, auto)
+    gap = 10px
+
+const inputLook = look:
+    minWidth = 0
+    padding = space(12px, 14px)
+    border = line(1px, fieldRule)
+    radius = 10px
+
+def buttonLook(dangerous: bool = false) -> Look:
+    return look:
+        padding = space(10px, 14px)
+        border = line(0px, transparent)
+        radius = 10px
+        color = surface
+        background = dangerous ? danger : primary
+        cursor = pointer
+
+        if @disabled:
+            cursor = defaultCursor
+            opacity = 0.45
+
+const todosLook = look:
+    display = grid
+    gap = 10px
+    padding = 0
+    listStyle = undecorated
+
+const todoLook = look:
+    display = grid
+    columns = tracks(auto, 1fr, auto)
+    alignItems = center
+    gap = 12px
+    padding = 12px
+    radius = 12px
+    background = surfaceSoft
+
+def titleLook(done: bool) -> Look:
+    return look:
+        if done:
+            color = inkSoft
+            textDecoration = strike
+
 component TodoApp:
     state draft: string = ""
     state todos: List<Todo> = [
@@ -29,99 +101,20 @@ component TodoApp:
     def removeTodo(id: number):
         todos = todos.filter(todo => todo.id != id)
 
-    style global:
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            min-height: 100vh;
-            background: #f4f7fb;
-            color: #172033;
-            font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-        }
-
-    style:
-        .todo-app {
-            width: min(680px, calc(100% - 32px));
-            margin: 64px auto;
-            padding: 28px;
-            border: 1px solid #dce4f0;
-            border-radius: 20px;
-            background: white;
-            box-shadow: 0 18px 60px #1f3a5f18;
-        }
-
-        .composer {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 10px;
-        }
-
-        .composer input {
-            min-width: 0;
-            padding: 12px 14px;
-            border: 1px solid #c9d5e5;
-            border-radius: 10px;
-            font: inherit;
-        }
-
-        button {
-            border: 0;
-            border-radius: 10px;
-            padding: 10px 14px;
-            background: #2357d9;
-            color: white;
-            font: inherit;
-            cursor: pointer;
-        }
-
-        button:disabled {
-            cursor: default;
-            opacity: .45;
-        }
-
-        .todos {
-            display: grid;
-            gap: 10px;
-            padding: 0;
-            list-style: none;
-        }
-
-        .todo {
-            display: grid;
-            grid-template-columns: auto 1fr auto;
-            align-items: center;
-            gap: 12px;
-            padding: 12px;
-            border-radius: 12px;
-            background: #f7f9fd;
-        }
-
-        .todo.done .title {
-            color: #748198;
-            text-decoration: line-through;
-        }
-
-        .remove {
-            background: #e24b4b;
-        }
-
-    return <main class="todo-app">
-            <h1>Velar Todo App</h1>
+    return <main look={pageLook}><section class="todo-app" look={cardLook}>
+        <h1>Velar Todo App</h1>
         <p>{remaining} task(s) remaining</p>
-        <form class="composer">
-            <input aria-label="New task" placeholder="What needs doing?" bind:value={draft} on:keydown={addTodoOnKey} />
-            <button type="button" disabled={draft == ""} on:click={addTodo}>Add task</button>
+        <form class="composer" look={composerLook}>
+            <input look={inputLook} aria-label="New task" placeholder="What needs doing?" bind:value={draft} on:keydown={addTodoOnKey} />
+            <button look={buttonLook()} type="button" disabled={draft == ""} on:click={addTodo}>Add task</button>
         </form>
-        <ul class="todos">
-            {todos.map(todo => <li key={todo.id} class="todo" class:done={todo.done}>
-                <button type="button" on:click={() => toggleTodo(todo.id)}>{todo.done ? "Undo" : "Done"}</button>
-                <span class="title">{todo.title}</span>
-                <button type="button" class="remove" on:click={() => removeTodo(todo.id)}>Remove</button>
+        <ul class="todos" look={todosLook}>
+            {todos.map(todo => <li key={todo.id} class="todo" look={todoLook}>
+                <button look={buttonLook()} type="button" on:click={() => toggleTodo(todo.id)}>{todo.done ? "Undo" : "Done"}</button>
+                <span class="title" look={titleLook(todo.done)}>{todo.title}</span>
+                <button look={buttonLook(dangerous: true)} type="button" class="remove" on:click={() => removeTodo(todo.id)}>Remove</button>
             </li>)}
         </ul>
-    </main>
+    </section></main>
 
 mount(<TodoApp />, "#app")

@@ -1,41 +1,38 @@
+const metricLook = look:
+    display = grid
+    gap = 6px
+    padding = 18px
+    border = line(1px, rgb(66, 82, 143))
+    radius = 14px
+    background = rgb(21, 28, 54)
+
+const labelLook = look:
+    color = rgb(170, 181, 222)
+    fontSize = 0.82rem
+    textCase = uppercase
+    letterSpacing = 0.08em
+
+const valueLook = look:
+    fontSize = 1.6rem
+    fontWeight = 720
+
+const metricsLook = look:
+    display = grid
+    columns = repeat(3, minmax(0px, 1fr))
+    gap = 14px
+
+    if viewport.width <= 640px:
+        columns = tracks(1fr)
+
 export component MetricCard(label: string, value: string):
-    style:
-        .metric {
-            display: grid;
-            gap: 6px;
-            padding: 18px;
-            border: 1px solid #42528f;
-            border-radius: 14px;
-            background: #151c36;
-        }
-
-        .label {
-            color: #aab5de;
-            font-size: 0.82rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-        }
-
-        .value {
-            font-size: 1.6rem;
-            font-weight: 720;
-        }
-
-    return <article class="metric">
-        <span class="label">{label}</span>
-        <strong class="value">{value}</strong>
+    return <article class="metric" look={metricLook}>
+        <span class="label" look={labelLook}>{label}</span>
+        <strong class="value" look={valueLook}>{value}</strong>
     </article>
 
 export component Metrics(projects: number):
-    style:
-        .metrics {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 14px;
-        }
-
-    return <section class="metrics" aria-label="Project metrics">
+    return <section class="metrics" look={metricsLook} aria-label="Project metrics">
         <MetricCard label="Projects" value={str(projects)} />
         <MetricCard label="Browser engines" value="3" />
-        <MetricCard label="Web API" value="0.7" />
+        <MetricCard label="Web API" value="0.9" />
     </section>

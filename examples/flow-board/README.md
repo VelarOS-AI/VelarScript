@@ -1,6 +1,6 @@
 # FlowBoard
 
-FlowBoard is the first independent application used to mature Velar 0.8F. It
+FlowBoard is an independent application used to mature the Velar 0.9 language and Web framework. It
 is a real nine-module project rather than a compiler showcase page.
 
 It exercises:
@@ -9,7 +9,7 @@ It exercises:
 - immutable task creation, movement, deletion, search, and filtering;
 - secure `velar/id` UUID generation;
 - validated local-storage persistence and reload recovery;
-- native JSX, scoped CSS, enum select binding, keyed lists, and accessible UI;
+- native JSX, controlled Look values, enum select binding, keyed lists, and accessible UI;
 - typed Map entry snapshots in a lazy analytics route;
 - transparent callback aliases shared through the domain module without store coupling;
 - one typed `TaskDraft` command record with object shorthand instead of positional creation arguments;

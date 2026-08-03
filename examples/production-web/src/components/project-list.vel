@@ -7,76 +7,63 @@ def isHealthy(status: string) -> bool:
         else:
             return false
 
+const projectsLook = look:
+    display = grid
+    gap = 10px
+    padding = 0
+    listStyle = undecorated
+
+def projectLook(nested: bool) -> Look:
+    return look:
+        overflow = hidden
+        radius = 12px
+        background = nested ? rgb(24, 33, 61) : rgb(17, 24, 46)
+
+const summaryLook = look:
+    display = grid
+    columns = tracks(1fr, auto)
+    gap = space(8px, 18px)
+    padding = space(14px, 16px)
+
+const childrenLook = look:
+    display = grid
+    gap = 8px
+    margin = 0
+    padding = edges(0px, 10px, 10px, 26px)
+    listStyle = undecorated
+
+const progressLook = look:
+    gridColumn = "1 / -1"
+    height = 5px
+    overflow = hidden
+    radius = pill
+    background = rgb(39, 50, 84)
+
+def progressFillLook(progress: number) -> Look:
+    return look:
+        width = progress * 1%
+        height = 100%
+        background = rgb(130, 151, 255)
+
+def statusLook(healthy: bool) -> Look:
+    return look:
+        color = healthy ? rgb(125, 230, 178) : rgb(170, 181, 222)
+
 export component ProjectList(items: List<ProjectSummary>):
-    style:
-        .projects {
-            display: grid;
-            gap: 10px;
-            padding: 0;
-            list-style: none;
-        }
-
-        .project {
-            overflow: hidden;
-            border-radius: 12px;
-            background: #11182e;
-        }
-
-        .project-summary {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 8px 18px;
-            padding: 14px 16px;
-        }
-
-        .project-children {
-            display: grid;
-            gap: 8px;
-            margin: 0;
-            padding: 0 10px 10px 26px;
-            list-style: none;
-        }
-
-        .project-children .project {
-            background: #18213d;
-        }
-
-        .progress {
-            grid-column: 1 / -1;
-            height: 5px;
-            overflow: hidden;
-            border-radius: 999px;
-            background: #273254;
-        }
-
-        .progress-fill {
-            width: calc(var(--progress) * 1%);
-            height: 100%;
-            background: #8297ff;
-        }
-
-        .status {
-            color: #aab5de;
-        }
-
-        .status.healthy {
-            color: #7de6b2;
-        }
-
-    component ProjectBranch(project: ProjectSummary):
-        return <li class="project" data-project={project.id}>
-            <div class="project-summary">
-            <strong>{project.name}</strong>
-            <span class="status" class:healthy={isHealthy(project.status)}>{project.status}</span>
-            <div class="progress" role="progressbar" aria-label={project.name} aria-valuemin="0" aria-valuemax="100" aria-valuenow={project.progress}>
-                <div class="progress-fill" style:--progress={project.progress}></div>
+    component ProjectBranch(project: ProjectSummary, nested: bool = false):
+        return <li class="project" look={projectLook(nested)} data-project={project.id}>
+            <div class="project-summary" look={summaryLook}>
+                <strong>{project.name}</strong>
+                <span class="status" look={statusLook(isHealthy(project.status))}>{project.status}</span>
+                <div class="progress" look={progressLook} role="progressbar" aria-label={project.name} aria-valuemin="0" aria-valuemax="100" aria-valuenow={project.progress}>
+                    <div class="progress-fill" look={progressFillLook(project.progress)}></div>
+                </div>
             </div>
-            </div>
-            {project.children.length > 0 ? <ul class="project-children">
-                {project.children.map(child => <ProjectBranch key={child.id} project={child} />)}
+            {project.children.length > 0 ? <ul class="project-children" look={childrenLook}>
+                {project.children.map(child => <ProjectBranch key={child.id} project={child} nested={true} />)}
             </ul> : none}
         </li>
 
-    return <ul class="projects" data-project-tree>
+    return <ul class="projects" look={projectsLook} data-project-tree>
         {items.map(project => <ProjectBranch key={project.id} project={project} />)}
     </ul>

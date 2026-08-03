@@ -9,7 +9,7 @@ Workbench consumption, base-aware stable Web APIs, incremental dev compilation,
 publishable toolchain packages, project lifecycle management, deliberately
 limited TypeScript declaration consumption, cross-browser automation,
 reproducible release rehearsal, secure static deployment, and production
-observability. The compiler-owned 0.6 language baseline and Web API 0.8 are complete;
+observability. The compiler-owned 0.9 language baseline and Web API 0.9 are complete;
 0.7 closed the internal reliability, configuration, testing, and release
 rehearsal sequence. 0.8A–0.8E added checked dynamic modules, strict block
 matching, safe multipart uploads, checked rest parameters, and native Set
@@ -302,7 +302,8 @@ layer and editor host contain no SVG-, JSX-, or Velar-specific branch.
   and `tick`.
 - JSX fragments and declared children, keyed list reuse, event/resource/action
   disposal, string/number/checked form binding, event modifiers, refs,
-  class/style directives, unsafe HTML opt-in, and component-scoped CSS.
+  stable class bindings, universal Look props, unsafe HTML opt-in, and the
+  controlled Look visual language.
 - Component-only `resource` declarations for typed `Promise<T>` loading with
   reactive value/loading/ready/error state, explicit reload, latest-generation
   ownership, application error reporting, and destruction-safe completion.
@@ -392,7 +393,7 @@ layer and editor host contain no SVG-, JSX-, or Velar-specific branch.
   document highlights, non-TypeScript inlay hints, structural completion
   triggers, and safe current-file code actions through generic contracts.
   Workbench and the compiler remain independent products.
-- Versioned Velar Web API 0.8 for application error ownership, bounded stable
+- Versioned Velar Web API 0.9 for application error ownership, bounded stable
   DOM IDs, explicit public configuration, routing/navigation, metadata ownership, HTTP,
   storage/IndexedDB, forms, browser environment, files, realtime, and tests;
   compiler interfaces and emitted runtime code share one authority.
@@ -428,7 +429,7 @@ layer and editor host contain no SVG-, JSX-, or Velar-specific branch.
 - Playwright-backed Chromium, Firefox, and WebKit acceptance automation plus a
   121-module application-scale incremental budget.
 - A three-module reusable Velar Web library exercising public data types,
-  functions, nested components, children, and scoped CSS.
+  functions, nested components, children, and controlled Look values.
 - Publishable `@velarscript/compiler`, `@velarscript/web`, `create-velar`, and
   `@velarscript/cli` JavaScript plus `.d.ts` packages, verified from packed
   tarballs in a clean npm consumer. The creator owns checked `web`, `docs`, and
@@ -505,14 +506,12 @@ matrix in [0.8-acceptance.md](0.8-acceptance.md) and hardening matrix in
 ## Current stage: official dogfood deployment and independent-use preparation
 
 The internal 0.7A–0.7G, 0.8A–0.8F, 0.9A–0.9AB, and 1.0A–1.0L engineering
-sequences are complete. Apache-2.0 now covers the repository and packed
-toolchain packages. VelarScript commit
-`d80c62c932f59db4e219d10dd9fb390344b6ece2` and Website commit
-`7226b45f706d9ac3c28e6ab3ffb2f5946fc8f097` provide merged attributable source
-identities. The Website is live at <https://velarscript.velaros.cn>; the remote
-verifier accepted build ID
-`29fec4d393a30ebd33c459145762681d9b126c3d5bf208addb759c9766873bf7`
-with 7 files, 3 routes, and 53 header checks, and real Chrome navigation passed.
+sequences are complete. Apache-2.0 covers the repository and packed toolchain
+packages. Public Git history, CI attestations, and generated build manifests
+provide the exact attributable source identities. The Website is delivered at
+<https://velarscript.velaros.cn> through the repository-owned remote verifier;
+exact build IDs and file/header inventories remain in deployment evidence
+instead of becoming stale prose here.
 The next evidence stage is independent application use and compatibility
 feedback, followed by a separately authorized stable release. Compiler,
 language server, and the independently packaged

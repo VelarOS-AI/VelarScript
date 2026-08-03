@@ -33,16 +33,16 @@ project.
 
 ## Current milestone
 
-Velar 0.9AB has completed the internal application-scale language-and-Web
-sequence, and the requirement-by-requirement 1.0 internal engineering audit is
-complete. The audited development source is merged on public `main` at commit
-`d80c62c932f59db4e219d10dd9fb390344b6ece2`, and the
-[official Website source](https://github.com/VelarOS-AI/VelarScript-Website)
-is a separate Apache-2.0 project that dogfoods the packed toolchain. Its commit
-`7226b45f706d9ac3c28e6ab3ffb2f5946fc8f097` is deployed at
-[velarscript.velaros.cn](https://velarscript.velaros.cn) through the
-provider-neutral static-host contract and has passed the remote deployment
-verifier. npm publication remains deliberately deferred. The audit's first pass
+Velar 0.9 has completed the internal application-scale language-and-Web
+sequence, including checked named arguments and the controlled Look visual
+language. The requirement-by-requirement 1.0 internal engineering audit is
+complete. The [official Website source](https://github.com/VelarOS-AI/VelarScript-Website)
+is a separate Apache-2.0 project that dogfoods the packed toolchain and is
+delivered at [velarscript.velaros.cn](https://velarscript.velaros.cn) through
+the provider-neutral static-host contract. Exact source and deployment
+identities live in Git, CI attestations, and the generated build manifest rather
+than being copied into this README. npm publication remains deliberately
+deferred. The audit's first pass
 closes the ordinary new-project workflow: generated applications now contain a
 separate app module, a real Core test, a browser test, project-wide format
 scripts, and an installed-package acceptance that uses only those generated
@@ -240,12 +240,12 @@ message only on failure, and narrow local names or stable fields for following
 statements in the current lexical block. SupportDesk now states its validated
 estimate invariant directly instead of wrapping successful submission in a
 second presence branch.
-0.9M removes position-heavy domain calls without adding Python keyword-argument
-metadata or another declaration system. FlowBoard and SupportDesk pass one
-existing `type` record into creation operations and use JavaScript-style object
-field shorthand such as `{title, description, priority}`. Direct duplicate
-fields and quoted fields without `:` are rejected, while explicit spread then
-override remains available for immutable updates.
+0.9M first reduced position-heavy domain calls with typed records and
+JavaScript-style field shorthand. The completed language surface now also
+supports checked named arguments on ordinary functions, methods, components,
+and constructors. Positional arguments come first, every name must exist and be
+unique, source expressions evaluate from left to right, and the compiler passes
+them in declaration order without adding a runtime keyword-argument object.
 0.9N makes explicit empty-value checks as useful as presence checks. Natural
 JavaScript/Python-shaped conditions such as `value != none` and
 `value == none ... else` now narrow local names and stable record fields in
@@ -437,7 +437,7 @@ contracts, and deterministic format-3 framework build identity with SHA-256
 identities. The manifest records the framework package, capability, target,
 host-protocol version, API version, and framework artifact kind.
 
-The stable Web API is independently versioned at 0.8. Ten explicit Web
+The stable Web API is independently versioned at 0.9. Ten explicit Web
 modules provide base-aware routing and metadata, typed HTTP, local/session/
 IndexedDB persistence, accessible forms, browser environment helpers,
 cross-browser files, WebSocket/SSE realtime connections, typed tests,
@@ -446,7 +446,7 @@ Implicit browser globals are rejected in ordinary Velar source and diagnostics
 lead to these modules or an explicit JavaScript boundary. The 15-module Release
 Studio passes Chromium, Firefox, and WebKit against both the development server
 and the CSP-enabled static production build. Packed toolchains also run through
-the real generic Workbench LSP host. The 0.6 language baseline and Web API 0.8
+the real generic Workbench LSP host. The 0.9 language baseline and Web API 0.9
 are the foundation now being hardened toward production use.
 `velar/game`, SSR/server execution, a custom package registry, and a custom
 debug protocol remain deferred.

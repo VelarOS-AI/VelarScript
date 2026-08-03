@@ -29,7 +29,8 @@ export class Lexer {
   private readonly extensionKeywords = new Map<string, string>();
   private readonly extensionForbiddenIdentifiers = new Map<string, string>();
   private readonly jsxEnabled: boolean;
-  private readonly cssEnabled: boolean;
+  private readonly embeddedBlocks = new Set<string>();
+  private readonly numericSuffixes = new Set<string>();
   private readonly tokens: Token[] = [];
   private readonly diagnostics: Diagnostic[] = [];
   private readonly indentStack = [0];
@@ -48,9 +49,10 @@ export class Lexer {
       for (const [name, guidance] of Object.entries(extension.forbiddenIdentifiers ?? {})) {
         this.extensionForbiddenIdentifiers.set(name, guidance);
       }
+      for (const name of extension.embeddedBlocks ?? []) this.embeddedBlocks.add(name);
+      for (const suffix of extension.numericSuffixes ?? []) this.numericSuffixes.add(suffix);
     }
     this.jsxEnabled = extensions.some((extension) => extension.jsx === true);
-    this.cssEnabled = extensions.some((extension) => extension.css === true);
   }
 
   lex(): LexResult {
@@ -67,8 +69,8 @@ export class Lexer {
       }
       if (this.atLineStart && this.nesting === 0) {
         this.readIndentation();
-        if (this.cssEnabled && this.isCssBlockStart()) {
-          this.readCssBlock();
+        if (this.isEmbeddedBlockStart()) {
+          this.readEmbeddedBlock();
           continue;
         }
       }
@@ -332,7 +334,18 @@ export class Lexer {
         this.advance();
       }
     }
-    this.tokens.push({ kind: "number", value: this.text.slice(start, this.index), span: span(start, this.index) });
+    const numberEnd = this.index;
+    if (this.peek() === "%" && this.numericSuffixes.has("%")) this.advance();
+    else while (this.isIdentifierPart(this.peek())) this.advance();
+    const suffix = this.text.slice(numberEnd, this.index);
+    if (suffix && this.numericSuffixes.has(suffix)) {
+      this.tokens.push({ kind: "unitNumber", value: this.text.slice(start, this.index), span: span(start, this.index) });
+      return;
+    }
+    if (suffix) {
+      this.diagnostics.push(diagnostic("VEL1007", `Unknown numeric unit '${suffix}'`, span(numberEnd, this.index)));
+    }
+    this.tokens.push({ kind: "number", value: this.text.slice(start, numberEnd), span: span(start, numberEnd) });
   }
 
   private readString(quote: string): void {
@@ -463,7 +476,7 @@ export class Lexer {
     this.atLineStart = false;
   }
 
-  private isCssBlockStart(): boolean {
+  private isEmbeddedBlockStart(): boolean {
     if (this.tokens.at(-1)?.kind !== "indent") return false;
     const beforeIndent = this.tokens.slice(0, -1);
     let index = beforeIndent.length - 1;
@@ -471,11 +484,10 @@ export class Lexer {
     index -= 1;
     if (beforeIndent[index]?.kind !== "colon") return false;
     index -= 1;
-    if (beforeIndent[index]?.kind === "extensionKeyword" && beforeIndent[index]?.value === "global") index -= 1;
-    return beforeIndent[index]?.kind === "extensionKeyword" && beforeIndent[index]?.value === "style";
+    return beforeIndent[index]?.kind === "extensionKeyword" && this.embeddedBlocks.has(beforeIndent[index]!.value);
   }
 
-  private readCssBlock(): void {
+  private readEmbeddedBlock(): void {
     const contentIndent = this.indentStack.at(-1) ?? 0;
     const start = this.index;
     const lines: string[] = [];
@@ -505,7 +517,7 @@ export class Lexer {
     }
 
     this.index = cursor;
-    this.tokens.push({ kind: "css", value: lines.join("\n").trimEnd(), span: span(start, cursor) });
+    this.tokens.push({ kind: "embeddedBlock", value: lines.join("\n").trimEnd(), span: span(start, cursor) });
     this.atLineStart = cursor < this.text.length;
   }
 

@@ -19,7 +19,6 @@ import {
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
-
 type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
 type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
@@ -28,6 +27,61 @@ type JSXAttribute = JSXElementExpression["attributes"][number];
 
 const jsxControlAttributes = new Set(["if", "else-if", "else"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
+const LOOK_HOOKS = new Set(["hover", "focus", "focusVisible", "active", "current", "disabled", "checked", "invalid", "open"]);
+const LOOK_TARGETS = new Set(["before", "after", "backdrop", "placeholder", "selection", "marker", "fileSelectorButton"]);
+const LOOK_BUILDERS = new Set(["rgb", "rgba", "hsl", "alpha", "lighten", "darken", "line", "dropShadow", "linearGradient", "asset", "minmax", "repeat", "tracks", "change", "space", "edges", "inset", "min", "max", "clamp"]);
+const LOOK_CONDITION_TERM_LIMIT = 32;
+const LOOK_VALUE_IDENTIFIERS = new Map<string, string>([
+  ["grid", "grid"], ["flex", "flex"], ["block", "block"], ["inline", "inline"], ["inlineFlex", "inline-flex"], ["inlineGrid", "inline-grid"], ["gone", "none"],
+  ["auto", "auto"], ["hidden", "hidden"], ["visible", "visible"], ["scroll", "scroll"], ["pointer", "pointer"], ["defaultCursor", "default"],
+  ["center", "center"], ["start", "start"], ["end", "end"], ["stretch", "stretch"], ["spaceBetween", "space-between"], ["spaceAround", "space-around"],
+  ["spaceEvenly", "space-evenly"], ["wrap", "wrap"], ["nowrap", "nowrap"], ["pill", "9999px"],
+  ["relative", "relative"], ["absolute", "absolute"], ["fixed", "fixed"], ["sticky", "sticky"], ["transparent", "transparent"],
+  ["inherit", "inherit"], ["contain", "contain"], ["currentColor", "currentColor"], ["canvas", "Canvas"], ["canvasText", "CanvasText"],
+  ["ease", "ease"], ["easeIn", "ease-in"], ["easeOut", "ease-out"], ["easeInOut", "ease-in-out"], ["column", "column"], ["row", "row"],
+  ["undecorated", "none"], ["strike", "line-through"], ["uppercase", "uppercase"], ["lowercase", "lowercase"], ["capitalize", "capitalize"], ["ellipsis", "ellipsis"],
+  ["italic", "italic"], ["normal", "normal"],
+  ["noPointer", "none"], ["noSelect", "none"],
+]);
+const LOOK_PROPERTIES = new Set([
+  "display", "position", "columns", "rows", "flow", "gap", "rowGap", "columnGap",
+  "alignItems", "justifyContent", "alignContent", "alignSelf", "justifySelf", "placeItems", "wrap", "zIndex", "gridColumn", "gridRow",
+  "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "aspectRatio",
+  "inset", "top", "right", "bottom", "left",
+  "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock",
+  "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock",
+  "overflow", "overflowX", "overflowY", "objectFit", "visibility", "clip", "clipPath",
+  "background", "backgroundImage", "fill", "stroke", "strokeWidth", "border", "borderTop", "borderRight", "borderBottom", "borderLeft",
+  "radius", "shadow", "outline", "opacity", "content",
+  "color", "font", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "textAlign", "textDecoration", "textCase", "whiteSpace", "textOverflow", "wordBreak", "listStyle",
+  "translateX", "translateY", "scale", "scaleX", "scaleY", "rotate", "transformOrigin",
+  "transition", "transitionDuration", "transitionDelay", "easing", "animation",
+  "cursor", "pointerEvents", "userSelect", "touchAction", "scrollBehavior", "backdropFilter",
+]);
+
+const lookLength: ValueType = { kind: "named", name: "Length" };
+const lookPercentage: ValueType = { kind: "named", name: "Percentage" };
+const lookMetric: ValueType = { kind: "union", members: [numberType, lookLength, lookPercentage] };
+const lookColor: ValueType = { kind: "named", name: "Color" };
+const lookImage: ValueType = { kind: "named", name: "Image" };
+const lookBorder: ValueType = { kind: "named", name: "Border" };
+const lookShadow: ValueType = { kind: "named", name: "Shadow" };
+const lookDuration: ValueType = { kind: "named", name: "Duration" };
+const lookAngle: ValueType = { kind: "named", name: "Angle" };
+const lookTrackList: ValueType = { kind: "named", name: "TrackList" };
+const lookTransition: ValueType = { kind: "named", name: "Transition" };
+const lookSpacing: ValueType = { kind: "named", name: "Spacing" };
+const lookMetricOrSpacing: ValueType = { kind: "union", members: [lookMetric, lookSpacing] };
+const LOOK_PROPERTY_TYPES = new Map<string, ValueType>([
+  ...["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inset", "top", "right", "bottom", "left", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "radius", "fontSize", "letterSpacing", "translateX", "translateY"].map((name) => [name, lookMetricOrSpacing] as const),
+  ["columns", lookTrackList], ["rows", lookTrackList],
+  ["background", { kind: "union", members: [lookColor, lookImage] }], ["backgroundImage", lookImage], ["fill", lookColor], ["stroke", lookColor], ["strokeWidth", lookMetric],
+  ["border", lookBorder], ["borderTop", lookBorder], ["borderRight", lookBorder], ["borderBottom", lookBorder], ["borderLeft", lookBorder], ["outline", lookBorder], ["shadow", lookShadow],
+  ["color", lookColor], ["content", stringType], ["font", stringType],
+  ["opacity", numberType], ["zIndex", numberType], ["fontWeight", numberType], ["aspectRatio", numberType], ["scale", numberType], ["scaleX", numberType], ["scaleY", numberType],
+  ["lineHeight", { kind: "union", members: [numberType, lookLength] }], ["rotate", lookAngle],
+  ["transition", lookTransition], ["transitionDuration", lookDuration], ["transitionDelay", lookDuration], ["animation", stringType], ["backdropFilter", stringType],
+]);
 
 export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
   const { intrinsic, arguments: arguments_, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
@@ -171,6 +225,71 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
   }
 }
 
+function isViewportCondition(expression: Expression): boolean {
+  if (expression.kind !== "BinaryExpression" || !["<", "<=", ">", ">="].includes(expression.operator)) return false;
+  if (expression.left.kind !== "MemberExpression" || expression.left.object.kind !== "IdentifierExpression" || expression.left.object.name !== "viewport") return false;
+  if (expression.left.property !== "width" && expression.left.property !== "height") return false;
+  return expression.right.kind === "UnitLiteralExpression" && ["px", "rem", "em"].includes(expression.right.unit);
+}
+
+function lookConditionTermCount(expression: Expression, negated = false): number {
+  if (expression.kind === "UnaryExpression" && expression.operator === "not") return lookConditionTermCount(expression.operand, !negated);
+  if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")) {
+    const conjunction = (expression.operator === "and") !== negated;
+    const left = lookConditionTermCount(expression.left, negated);
+    const right = lookConditionTermCount(expression.right, negated);
+    const total = conjunction ? left * right : left + right;
+    return Math.min(LOOK_CONDITION_TERM_LIMIT + 1, total);
+  }
+  return 1;
+}
+
+function firstRelativeCssUrl(source: string): string | null {
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//gu, "");
+  const pattern = /url\(\s*(["']?)([^"')]+)\1\s*\)/giu;
+  for (const match of withoutComments.matchAll(pattern)) {
+    const value = match[2]!.trim();
+    if (value.startsWith("/") || value.startsWith("#") || value.startsWith("//") || /^[a-z][a-z0-9+.-]*:/iu.test(value)) continue;
+    return value;
+  }
+  return null;
+}
+
+function isLookNumericType(type: ValueType): boolean {
+  return type.kind === "named" && ["Length", "Percentage", "Duration", "Angle", "Opacity"].includes(type.name);
+}
+
+function isLookMetricPair(left: ValueType, right: ValueType): boolean {
+  return left.kind === "named" && right.kind === "named"
+    && ["Length", "Percentage"].includes(left.name)
+    && ["Length", "Percentage"].includes(right.name);
+}
+
+function containsCssImport(source: string): boolean {
+  let sanitized = "";
+  let quote = "";
+  let blockComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]!;
+    const next = source[index + 1] ?? "";
+    if (blockComment) {
+      if (character === "*" && next === "/") { blockComment = false; sanitized += "  "; index += 1; }
+      else sanitized += character === "\n" ? "\n" : " ";
+      continue;
+    }
+    if (quote) {
+      if (character === "\\") { sanitized += "  "; index += 1; continue; }
+      if (character === quote) quote = "";
+      sanitized += " ";
+      continue;
+    }
+    if (character === "/" && next === "*") { blockComment = true; sanitized += "  "; index += 1; continue; }
+    if (character === "\"" || character === "'") { quote = character; sanitized += " "; continue; }
+    sanitized += character;
+  }
+  return /(^|[;}\s])@import\b/iu.test(sanitized);
+}
+
 function checkRouteComponent(type: ValueType, sourceSpan: Span, subject: string, context: CompilerIntrinsicAnalysisContext): void {
   if (type.kind !== "componentConstructor") {
     if (type.kind !== "any") context.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
@@ -248,12 +367,16 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
   private mountedDepth = 0;
+  private readonly resources: ReadonlyMap<string, string>;
+  private readonly unsafeCssImports = new Set<string>();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
+    this.resources = context.resources ?? new Map();
   }
 
   protected override predeclareExtensionStatement(statement: Statement): boolean {
+    if (statement.kind === "UnsafeCssImportDeclaration") return true;
     if (statement.kind !== "ComponentDeclaration") return false;
     this.declareBinding(statement.name, false, this.componentType(statement), statement.span);
     return true;
@@ -306,13 +429,67 @@ export class VelarWebAnalyzer extends Analyzer {
         }
         this.flowFrameDepth -= 1;
         return true;
+      case "UnsafeCssImportDeclaration": {
+        if (this.unsafeCssImports.has(statement.source)) {
+          this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' is imported more than once; each stylesheet must have one explicit order position`, statement.span));
+        }
+        this.unsafeCssImports.add(statement.source);
+        const source = this.resources.get(statement.source);
+        if (source && containsCssImport(source)) {
+          this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' contains @import; declare every stylesheet with 'import css unsafe' so project order remains visible`, statement.span));
+        }
+        if (source) {
+          const relativeUrl = firstRelativeCssUrl(source);
+          if (relativeUrl) this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' uses relative url(${JSON.stringify(relativeUrl)}); use a project-public /path, data URL, fragment, or absolute URL so extracted asset ownership stays explicit`, statement.span));
+        }
+        return true;
+      }
       default:
         return false;
     }
   }
 
   protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
-    return expression.kind === "JSXElementExpression" ? this.inferJsx(expression) : undefined;
+    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
+      && LOOK_BUILDERS.has(expression.callee.name) && !this.lookup(expression.callee.name)) {
+      this.extensionCalls.set(expression.span.start, expression.callee.name);
+    }
+    if (expression.kind === "IdentifierExpression" && LOOK_VALUE_IDENTIFIERS.has(expression.name) && !this.lookup(expression.name)) {
+      this.extensionLiterals.set(expression.span.start, LOOK_VALUE_IDENTIFIERS.get(expression.name)!);
+    }
+    if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {
+      const operand = this.inferExpression(expression.operand);
+      if (isLookNumericType(operand)) return operand;
+    }
+    if (expression.kind === "BinaryExpression" && ["+", "-", "*", "/"].includes(expression.operator)) {
+      const left = this.inferExpression(expression.left);
+      const right = this.inferExpression(expression.right);
+      if (isLookNumericType(left) || isLookNumericType(right)) {
+        if ((expression.operator === "+" || expression.operator === "-") && describeType(left) === describeType(right)) return left;
+        if ((expression.operator === "+" || expression.operator === "-") && isLookMetricPair(left, right)) return lookLength;
+        if ((expression.operator === "*" || expression.operator === "/") && isLookNumericType(left) && right.kind === "number") return left;
+        if (expression.operator === "*" && left.kind === "number" && isLookNumericType(right)) return right;
+        this.diagnostics.push(diagnostic("VEL5042", `Look unit arithmetic cannot apply '${expression.operator}' to ${describeType(left)} and ${describeType(right)}`, expression.span));
+        return unknownType;
+      }
+    }
+    if (expression.kind === "JSXElementExpression") return this.inferJsx(expression);
+    if (expression.kind === "LookExpression") {
+      this.analyzeLookEntries(expression.entries, false, false, 1);
+      return { kind: "named", name: "Look" };
+    }
+    if (expression.kind === "LookHookExpression") {
+      this.diagnostics.push(diagnostic("VEL5038", `Look hook '@${expression.name}' is only valid inside a Look condition`, expression.span));
+      return boolType;
+    }
+    if (expression.kind === "UnitLiteralExpression") {
+      if (["px", "rem", "em", "vw", "vh", "vmin", "vmax", "fr"].includes(expression.unit)) return { kind: "named", name: "Length" };
+      if (expression.unit === "%") return { kind: "named", name: "Percentage" };
+      if (["ms", "s"].includes(expression.unit)) return { kind: "named", name: "Duration" };
+      if (["deg", "turn"].includes(expression.unit)) return { kind: "named", name: "Angle" };
+      return unknownType;
+    }
+    return undefined;
   }
 
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
@@ -324,10 +501,13 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private componentType(statement: ComponentDeclaration): ValueType {
+    const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.resolveAnnotation(parameter.type)]));
+    if (!props.has("class")) props.set("class", optionalOf(stringType));
+    if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
     return {
       kind: "componentConstructor",
       name: statement.name,
-      props: new Map(statement.parameters.map((parameter) => [parameter.name, this.resolveAnnotation(parameter.type)])),
+      props,
       requiredProps: new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
     };
   }
@@ -363,6 +543,7 @@ export class VelarWebAnalyzer extends Analyzer {
     return {
       kind: "action",
       parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveAnnotation(parameter.type)),
+      parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
       requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
       ...(rest ? { rest: this.resolveAnnotation(rest.type) } : {}),
       result: { kind: "promise", value: callValue },
@@ -389,6 +570,7 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     this.classInitDepth = 0;
     let renders = 0;
+    let renderValue: Expression | null = null;
     let mounted = 0;
     let cleanup = 0;
     for (const item of statement.body) {
@@ -428,10 +610,9 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth += 1;
         this.analyzeBlock(item.body);
         this.flowFrameDepth -= 1;
-      } else if (item.kind === "StyleBlock") {
-        // CSS analysis is owned by the Web style pass.
       } else if (item.kind === "ReturnStatement") {
         renders += 1;
+        renderValue = item.value;
         this.flowFrameDepth += 1;
         const rendered = item.value ? this.inferExpression(item.value) : noneType;
         this.flowFrameDepth -= 1;
@@ -443,10 +624,95 @@ export class VelarWebAnalyzer extends Analyzer {
     if (renders !== 1) this.diagnostics.push(diagnostic("VEL5008", `Component '${statement.name}' must have exactly one top-level return`, statement.span));
     if (mounted > 1) this.diagnostics.push(diagnostic("VEL5009", `Component '${statement.name}' has more than one mounted block`, statement.span));
     if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
+    if (renderValue?.kind === "JSXElementExpression") this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
     this.flowFrameDepth -= 1;
     this.exitScope();
     this.classInitDepth = outerClassInitDepth;
+  }
+
+  private validateComponentHost(render: JSXElementExpression, component: ComponentDeclaration): void {
+    const hosts: JSXAttribute[] = [];
+    const visit = (element: JSXElementExpression): void => {
+      if (!/^[A-Z]/u.test(element.tag)) {
+        for (const attribute of element.attributes) if (attribute.name === "host") hosts.push(attribute);
+      }
+      for (const child of element.children) if (child.kind === "JSXElementExpression") visit(child);
+    };
+    visit(render);
+    if (hosts.length > 1) this.diagnostics.push(diagnostic("VEL5043", `Component '${component.name}' declares more than one host element`, hosts[1]!.span));
+    for (const host of hosts) if (host.value !== null) this.diagnostics.push(diagnostic("VEL5043", "The host directive is a valueless marker", host.span));
+    const directNativeRoot = render.tag !== "" && !/^[A-Z]/u.test(render.tag);
+    const delegatedComponentRoot = /^[A-Z]/u.test(render.tag);
+    if (!directNativeRoot && !delegatedComponentRoot && hosts.length === 0) {
+      this.diagnostics.push(diagnostic("VEL5043", `Component '${component.name}' has multiple roots and must mark exactly one native element with 'host'`, render.span));
+    }
+  }
+
+  private analyzeLookEntries(
+    entries: Extract<Expression, { kind: "LookExpression" }>["entries"],
+    insideTarget: boolean,
+    nested: boolean,
+    inheritedTerms: number,
+  ): void {
+    const seenProperties = new Set<string>();
+    const seenTargets = new Set<string>();
+    for (const entry of entries) {
+      if (entry.kind === "LookSpread") {
+        const type = this.inferExpression(entry.value, { kind: "named", name: "Look" });
+        this.requireAssignable(type, { kind: "named", name: "Look" }, entry.value.span);
+        if (nested) this.diagnostics.push(diagnostic("VEL5044", "Look composition is only valid at the outer level; compose first, then place the result in a condition or target", entry.span));
+        continue;
+      }
+      if (entry.kind === "LookIf") {
+        this.inferLookCondition(entry.condition);
+        const thenTerms = lookConditionTermCount(entry.condition);
+        const elseTerms = lookConditionTermCount(entry.condition, true);
+        if (inheritedTerms * Math.max(thenTerms, elseTerms) > LOOK_CONDITION_TERM_LIMIT) {
+          this.diagnostics.push(diagnostic("VEL5045", `A Look condition may expand to at most ${LOOK_CONDITION_TERM_LIMIT} selector/runtime terms; split this visual decision into ordinary values`, entry.condition.span));
+        }
+        this.analyzeLookEntries(entry.thenEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * thenTerms));
+        this.analyzeLookEntries(entry.elseEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * elseTerms));
+        continue;
+      }
+      if (entry.kind === "LookTarget") {
+        if (!LOOK_TARGETS.has(entry.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look target '@${entry.name}'`, entry.span));
+        if (insideTarget) this.diagnostics.push(diagnostic("VEL5038", "Look targets cannot be nested", entry.span));
+        if (seenTargets.has(entry.name)) this.diagnostics.push(diagnostic("VEL5039", `Look target '@${entry.name}' is defined more than once in the same scope`, entry.span));
+        seenTargets.add(entry.name);
+        this.analyzeLookEntries(entry.entries, true, true, inheritedTerms);
+        continue;
+      }
+      if (!LOOK_PROPERTIES.has(entry.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look property '${entry.name}'`, entry.span));
+      if (seenProperties.has(entry.name)) this.diagnostics.push(diagnostic("VEL5039", `Look property '${entry.name}' is defined more than once in the same scope`, entry.span));
+      seenProperties.add(entry.name);
+      const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? unknownType;
+      const actual = this.inferExpression(entry.value, expected);
+      if (actual.kind !== "none" && expected.kind !== "unknown") this.requireAssignable(actual, expected, entry.value.span);
+    }
+  }
+
+  private inferLookCondition(expression: Expression): ValueType {
+    if (expression.kind === "LookHookExpression") {
+      if (!LOOK_HOOKS.has(expression.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look hook '@${expression.name}'`, expression.span));
+      return boolType;
+    }
+    if (expression.kind === "UnaryExpression" && expression.operator === "not") {
+      const value = this.inferLookCondition(expression.operand);
+      this.requireCondition(value, expression.operand);
+      return boolType;
+    }
+    if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")) {
+      const left = this.inferLookCondition(expression.left);
+      const right = this.inferLookCondition(expression.right);
+      this.requireCondition(left, expression.left);
+      this.requireCondition(right, expression.right);
+      return boolType;
+    }
+    if (isViewportCondition(expression)) return boolType;
+    const type = this.inferExpression(expression);
+    this.requireCondition(type, expression);
+    return boolType;
   }
 
   private inferJsx(expression: JSXElementExpression, controlHandled = false): ValueType {
@@ -532,6 +798,16 @@ export class VelarWebAnalyzer extends Analyzer {
         continue;
       }
       const expected = binding.type.props.get(attribute.name);
+      if (attribute.name === "look") {
+        const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
+        if (!this.isLookInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(actual)}`, attribute.span));
+        continue;
+      }
+      if (attribute.name === "class") {
+        const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
+        if (!this.isClassInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX class requires string, string?, or a list of strings; received ${describeType(actual)}`, attribute.span));
+        continue;
+      }
       if (!expected) {
         this.diagnostics.push(diagnostic("VEL5013", `Component '${expression.tag}' has no prop '${attribute.name}'`, attribute.span));
         continue;
@@ -579,7 +855,12 @@ export class VelarWebAnalyzer extends Analyzer {
     const expectedEvent = eventName ? webEventType(eventName) : null;
     const eventHandlerType: ValueType | null = expectedEvent ? { kind: "function", parameters: [expectedEvent], requiredParameters: 1, result: unknownType } : null;
     const inferred = typeof value === "string" ? stringType : value ? this.inferExpression(value, eventHandlerType ?? unknownType) : boolType;
-    if (attribute.name === "bind:value") {
+    if (attribute.name === "style" || attribute.name.startsWith("style:")) {
+      this.diagnostics.push(diagnostic("VEL5041", "Controlled Velar components do not expose inline style; use a Look or an unsafe CSS import", attribute.span));
+    } else if (attribute.name === "look") {
+      if (!value || typeof value === "string") this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
+      else if (!this.isLookInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(inferred)}`, attribute.span));
+    } else if (attribute.name === "bind:value") {
       if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || (!this.componentStates?.has(value.name) && this.reactiveBindings.get(value.name) !== "state")) {
         this.diagnostics.push(diagnostic("VEL5019", "bind:value requires a writable state name", attribute.span));
       } else {
@@ -624,6 +905,23 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
       && !expression.attributes.some((item) => item.name === "role")) this.diagnostics.push(diagnostic("VEL5023", `Clickable <${expression.tag}> requires an explicit role`, expression.span));
+  }
+
+  private isLookInput(type: ValueType): boolean {
+    if (type.kind === "any" || type.kind === "unknown" || type.kind === "none") return true;
+    if (type.kind === "named") return type.name === "Look";
+    if (type.kind === "optional") return this.isLookInput(type.inner);
+    if (type.kind === "list") return this.isLookInput(type.element);
+    if (type.kind === "union") return type.members.every((member) => this.isLookInput(member));
+    return false;
+  }
+
+  private isClassInput(type: ValueType): boolean {
+    if (type.kind === "any" || type.kind === "unknown" || type.kind === "none" || type.kind === "string") return true;
+    if (type.kind === "optional") return this.isClassInput(type.inner);
+    if (type.kind === "list") return this.isClassInput(type.element);
+    if (type.kind === "union") return type.members.every((member) => this.isClassInput(member));
+    return false;
   }
 
   private checkWebRouteComponent(type: ValueType, sourceSpan: Span, subject: string): void {

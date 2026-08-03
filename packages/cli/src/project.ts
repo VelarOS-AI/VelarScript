@@ -79,6 +79,7 @@ interface LoadedModule {
   readonly text: string;
   readonly inspection: ModuleInspection;
   readonly package: VelarSourcePackage | null;
+  readonly resourceContents: ReadonlyMap<string, string>;
 }
 
 interface PendingModule {
@@ -129,6 +130,7 @@ export async function compileProjectEntries(
   const interfaceCache = new Map<string, ModuleInspection["moduleInterface"]>();
   const velarPackages = new Map<string, VelarSourcePackage>();
   const velarImports = new Map<string, string>();
+  const unsafeCssOwners = new Map<string, string>();
   if (initialEntries.length > MAX_VELAR_PROJECT_MODULES) {
     failures.push({ path: entryPath, message: `A Velar project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
   }
@@ -175,7 +177,37 @@ export async function compileProjectEntries(
       ? join("__velar_packages__", pendingModule.package.name, pathWithinBoundary)
       : relative(sourceRoot, inputPath));
     const inspection = inspectModule(text, { path: inputPath, extensions: compilerExtensions });
-    loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package });
+    const resourceContents = new Map<string, string>();
+    for (const resource of inspection.resources) {
+      if (!resource.source.startsWith(".")) {
+        failures.push({ path: inputPath, message: `Compiler resource '${resource.source}' must use a relative path` });
+        continue;
+      }
+      const target = resolve(dirname(inputPath), resource.source);
+      if (escapesRoot(relative(boundary, target))) {
+        failures.push({ path: inputPath, message: pendingModule.package
+          ? `Resource '${resource.source}' cannot escape Velar package '${pendingModule.package.name}'`
+          : `Resource '${resource.source}' cannot escape the entry source directory` });
+        continue;
+      }
+      if (resource.kind === "unsafe CSS") {
+        const owner = unsafeCssOwners.get(target);
+        if (owner && owner !== inputPath) {
+          failures.push({
+            path: inputPath,
+            message: `Unsafe CSS resource '${resource.source}' is already imported by '${relative(sourceRoot, owner)}'; each raw stylesheet must have one project owner`,
+          });
+          continue;
+        }
+        unsafeCssOwners.set(target, inputPath);
+      }
+      try {
+        resourceContents.set(resource.source, overrides.get(target) ?? await readBoundedText(target, 4 * 1024 * 1024, `${resource.kind} resource '${resource.source}'`));
+      } catch (error) {
+        failures.push({ path: inputPath, message: `Cannot load ${resource.kind} resource '${resource.source}': ${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package, resourceContents });
 
     for (const dependency of inspection.dependencies) {
       if (dependency.javascript) continue;
@@ -232,6 +264,7 @@ export async function compileProjectEntries(
         path: module.inputPath,
         analysis,
         extensions: compilerExtensions,
+        resourceContents: module.resourceContents,
         ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.testFunctions) } : {}),
       }),
     });
@@ -288,6 +321,17 @@ function affectedModules(
   };
   for (const module of loaded.values()) dependencies(module.inputPath, module.inspection.dependencies, velarImports);
   for (const module of previous.modules) dependencies(module.inputPath, module.result.dependencies, previous.velarImports);
+  const resources = (path: string, values: readonly { readonly source: string }[]): void => {
+    for (const resource of values) {
+      if (!resource.source.startsWith(".")) continue;
+      const target = resolve(dirname(path), resource.source);
+      const dependents = reverse.get(target) ?? new Set<string>();
+      dependents.add(path);
+      reverse.set(target, dependents);
+    }
+  };
+  for (const module of loaded.values()) resources(module.inputPath, module.inspection.resources);
+  for (const module of previous.modules) resources(module.inputPath, module.result.resources);
   const pending = [...affected];
   while (pending.length > 0) {
     const path = pending.shift()!;
@@ -318,6 +362,15 @@ async function createAnalysisContext(
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
+  const extensionImports = new Map<string, Map<string, unknown>>();
+  const extensionModules = new Map<string, unknown[]>();
+  for (const loadedModule of loaded.values()) {
+    for (const [extensionId, data] of loadedModule.inspection.moduleInterface.extensionData) {
+      const values = extensionModules.get(extensionId) ?? [];
+      values.push(data);
+      extensionModules.set(extensionId, values);
+    }
+  }
 
   for (const dependency of module.inspection.dependencies) {
     if (dependency.dynamic) {
@@ -379,7 +432,7 @@ async function createAnalysisContext(
     }
     const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
-      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, typeAliases, enums, classes, failures);
+      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, typeAliases, enums, classes, extensionImports, failures);
       continue;
     }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
@@ -388,9 +441,20 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compilerExtensions), imports, reactiveImports, namedTypes, typeAliases, enums, classes, failures);
+    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compilerExtensions), imports, reactiveImports, namedTypes, typeAliases, enums, classes, extensionImports, failures);
   }
-  return { imports, dynamicImports, reactiveImports, namedTypes, typeAliases, enums, classes };
+  return {
+    imports,
+    dynamicImports,
+    reactiveImports,
+    namedTypes,
+    typeAliases,
+    enums,
+    classes,
+    extensionImports,
+    extensionModules,
+    resources: module.resourceContents,
+  };
 }
 
 function resolvedModuleInterface(
@@ -408,7 +472,8 @@ function resolvedModuleInterface(
   const typeAliases = new Map(own.typeAliases);
   const enums = new Map(own.enums);
   const classes = new Map(own.classes);
-  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, namedTypes, typeAliases, enums, classes };
+  const extensionExports = new Map([...own.extensionExports].map(([id, values]) => [id, new Map(values)] as const));
+  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, namedTypes, typeAliases, enums, classes, extensionExports };
   cache.set(module.inputPath, resolved);
 
   for (const dependency of module.inspection.dependencies) {
@@ -523,6 +588,7 @@ function importInterface(
   typeAliases: Map<string, ValueType>,
   enums: Map<string, EnumInfo>,
   classes: Map<string, ClassInfo>,
+  extensionImports: Map<string, Map<string, unknown>>,
   failures: ProjectFailure[],
 ): void {
     const aliases = new Map(dependency.specifiers
@@ -543,6 +609,15 @@ function importInterface(
       const renamed = renameClass(info, aliases);
       classes.set(aliases.get(name) ?? name, renamed);
       if (renamed.identity) classes.set(renamed.identity, renamed);
+    }
+    for (const [extensionId, exportedValues] of interface_.extensionExports) {
+      const importedValues = extensionImports.get(extensionId) ?? new Map<string, unknown>();
+      for (const specifier of dependency.specifiers) {
+        if (specifier.namespace) continue;
+        const value = exportedValues.get(specifier.imported);
+        if (value !== undefined) importedValues.set(specifier.local, value);
+      }
+      if (importedValues.size > 0) extensionImports.set(extensionId, importedValues);
     }
 
     for (const specifier of dependency.specifiers) {
@@ -575,6 +650,7 @@ function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): Cla
   return {
     ...(info.identity ? { identity: info.identity } : {}),
     parameters: info.parameters.map((type) => renameType(type, aliases)),
+    ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
     requiredParameters: info.requiredParameters,
     ...(info.constructorRest ? { constructorRest: renameType(info.constructorRest, aliases) } : {}),
     base: info.base ? aliases.get(info.base) ?? info.base : null,
@@ -615,9 +691,8 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
     case "function":
     case "action":
       return {
-        kind: type.kind,
+        ...type,
         parameters: type.parameters.map((parameter) => renameType(parameter, aliases)),
-        requiredParameters: type.requiredParameters,
         ...(type.rest ? { rest: renameType(type.rest, aliases) } : {}),
         result: renameType(type.result, aliases),
       };

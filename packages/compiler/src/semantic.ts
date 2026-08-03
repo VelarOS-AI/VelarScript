@@ -17,6 +17,7 @@ export type SemanticSymbolKind =
   | "enum-member"
   | "class"
   | "component"
+  | "style"
   | "function"
   | "state"
   | "computed"

@@ -1,19 +1,16 @@
+const panelLook = look:
+    display = grid
+    gap = 12px
+    padding = 20px
+    border = line(1px, alpha(currentColor, 0.2))
+    radius = 14px
+
+const panelTitleLook = look:
+    margin = 0
+    fontSize = 1.1rem
+
 export component PanelFrame(title: string, children: WebNode):
-    style:
-        .panel {
-            display: grid;
-            gap: 12px;
-            padding: 20px;
-            border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
-            border-radius: 14px;
-        }
-
-        .panel-title {
-            margin: 0;
-            font-size: 1.1rem;
-        }
-
-    return <section class="panel">
-        <h2 class="panel-title">{title}</h2>
+    return <section class="panel" look={panelLook}>
+        <h2 class="panel-title" look={panelTitleLook}>{title}</h2>
         {children}
     </section>

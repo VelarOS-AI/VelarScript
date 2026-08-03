@@ -8,7 +8,7 @@ import { VelarWebParser } from "./parser.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
 
-export const VELAR_WEB_API_VERSION = "0.8";
+export const VELAR_WEB_API_VERSION = "0.9";
 
 const anyType: ValueType = { kind: "any" };
 const noneType: ValueType = { kind: "none" };
@@ -20,10 +20,47 @@ const elementType: ValueType = { kind: "named", name: "Element" };
 const inputElementType: ValueType = { kind: "named", name: "InputElement" };
 const canvasElementType: ValueType = { kind: "named", name: "CanvasElement" };
 const dialogElementType: ValueType = { kind: "named", name: "DialogElement" };
+const lengthType: ValueType = { kind: "named", name: "Length" };
+const colorType: ValueType = { kind: "named", name: "Color" };
+const colorInputType: ValueType = colorType;
+const borderType: ValueType = { kind: "named", name: "Border" };
+const shadowType: ValueType = { kind: "named", name: "Shadow" };
+const imageType: ValueType = { kind: "named", name: "Image" };
+const trackType: ValueType = { kind: "named", name: "Track" };
+const trackListType: ValueType = { kind: "named", name: "TrackList" };
+const transitionType: ValueType = { kind: "named", name: "Transition" };
+const durationType: ValueType = { kind: "named", name: "Duration" };
+const angleType: ValueType = { kind: "named", name: "Angle" };
+const spacingType: ValueType = { kind: "named", name: "Spacing" };
+
+function namedFunction(parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
+  return { kind: "function", parameterNames, parameters, requiredParameters, result };
+}
 
 const webGlobals = new Map<string, ValueType>([
   ["mount", { kind: "function", parameters: [nodeType, anyType], requiredParameters: 2, result: noneType }],
   ["tick", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: noneType } }],
+  ...["grid", "flex", "block", "inline", "inlineFlex", "inlineGrid", "gone", "auto", "hidden", "visible", "scroll", "pointer", "defaultCursor", "center", "start", "end", "stretch", "spaceBetween", "spaceAround", "spaceEvenly", "wrap", "nowrap", "pill", "relative", "absolute", "fixed", "sticky", "transparent", "currentColor", "canvas", "canvasText", "inherit", "contain", "ease", "easeIn", "easeOut", "easeInOut", "column", "row", "undecorated", "strike", "uppercase", "lowercase", "capitalize", "ellipsis", "italic", "normal", "noPointer", "noSelect"].map((name) => [name, anyType] as const),
+  ["rgb", namedFunction(["red", "green", "blue"], [numberType, numberType, numberType], colorType)],
+  ["rgba", namedFunction(["red", "green", "blue", "alpha"], [numberType, numberType, numberType, numberType], colorType)],
+  ["hsl", namedFunction(["hue", "saturation", "lightness"], [numberType, numberType, numberType], colorType)],
+  ["alpha", namedFunction(["color", "opacity"], [colorInputType, numberType], colorType)],
+  ["lighten", namedFunction(["color", "amount"], [colorInputType, numberType], colorType)],
+  ["darken", namedFunction(["color", "amount"], [colorInputType, numberType], colorType)],
+  ["line", namedFunction(["width", "color"], [lengthType, colorInputType], borderType)],
+  ["dropShadow", namedFunction(["x", "y", "blur", "color", "spread", "inside"], [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType, 4)],
+  ["linearGradient", namedFunction(["angle", "from", "to"], [angleType, colorInputType, colorInputType], imageType)],
+  ["asset", namedFunction(["path"], [stringType], imageType)],
+  ["minmax", namedFunction(["minimum", "maximum"], [anyType, anyType], trackType)],
+  ["repeat", namedFunction(["count", "size"], [numberType, anyType], trackListType)],
+  ["tracks", { kind: "function", parameters: [], requiredParameters: 0, rest: anyType, result: trackListType }],
+  ["change", namedFunction(["property", "duration", "easing", "delay"], [stringType, durationType, anyType, durationType], transitionType, 2)],
+  ["space", namedFunction(["block", "inline"], [anyType, anyType], spacingType)],
+  ["edges", namedFunction(["top", "right", "bottom", "left"], [anyType, anyType, anyType, anyType], spacingType)],
+  ["inset", namedFunction(["size"], [lengthType], anyType)],
+  ["min", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
+  ["max", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
+  ["clamp", namedFunction(["minimum", "preferred", "maximum"], [lengthType, lengthType, lengthType], lengthType)],
 ]);
 
 function functionType(parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
@@ -232,11 +269,11 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["domId", functionType([stringType], stringType, 0)],
     ["Head", { kind: "componentConstructor", name: "Head", props: new Map<string, ValueType>([
       ["title", stringType], ["description", stringType], ["canonical", stringType], ["robots", stringType],
-      ["image", stringType], ["themeColor", stringType],
+      ["image", stringType], ["themeColor", stringType], ["language", stringType],
     ]), requiredProps: new Set(["title"]) }],
     ["Router", { kind: "componentConstructor", name: "Router", props: new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", anyType]]), requiredProps: new Set(["routes"]), intrinsic: "web.router" }],
-    ["Link", { kind: "componentConstructor", name: "Link", props: new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
-    ["NavLink", { kind: "componentConstructor", name: "NavLink", props: new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
+    ["Link", { kind: "componentConstructor", name: "Link", props: new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
+    ["NavLink", { kind: "componentConstructor", name: "NavLink", props: new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
   ]), new Map(), new Map([["RouteContext", routeContextFields]]))],
   ["velar/http", moduleInterface(new Map([
     ["http", httpType],
@@ -340,7 +377,7 @@ function moduleInterface(
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
 ): ModuleInterface {
-  return { exports, reactiveExports: new Map(), namedTypes, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [] };
+  return { exports, reactiveExports: new Map(), namedTypes, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({
@@ -356,8 +393,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       watch: "watch",
       mounted: "mounted",
       cleanup: "cleanup",
-      style: "style",
-      global: "global",
+      look: "look",
+      css: "css",
     }),
     forbiddenIdentifiers: Object.freeze({
       effect: "Effects are internal to @velarscript/web; use watch, mounted, or cleanup",
@@ -366,7 +403,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       on_mount: "Use the Web extension's component-level 'mounted:' block",
     }),
     jsx: true,
-    css: true,
+    embeddedBlocks: new Set(["look"]),
+    numericSuffixes: new Set(["px", "rem", "em", "%", "vw", "vh", "vmin", "vmax", "fr", "ms", "s", "deg", "turn"]),
   }),
   parser: Object.freeze({
     create(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[]) {
@@ -381,7 +419,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Event", "KeyboardEvent", "PointerEvent", "InputEvent"]),
+    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "Look", "Length", "Percentage", "Color", "Duration", "Angle", "Opacity", "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing"]),
     globals: webGlobals,
     globalGuidance: new Map([
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
@@ -404,7 +442,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       watch: "Runs a block after a watched expression changes and DOM updates commit.",
       mounted: "Runs once after the component DOM is inserted.",
       cleanup: "Runs once before the component and its owned resources are destroyed.",
-      style: "Declares component-scoped CSS; use `style global:` for global CSS.",
+      look: "Builds a typed, composable Web appearance value.",
     }),
     typeDocumentation: Object.freeze({
       WebNode: "A value that can be rendered as component or JSX children.",
@@ -413,9 +451,10 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       CanvasElement: "A native canvas reference obtained through JSX `ref`.",
       DialogElement: "A native dialog reference obtained from `<dialog ref={value}>` and operated through `velar/browser`.",
       Event: "A restricted Web event value exposed to Velar event handlers.",
+      Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),
     completions: Object.freeze([
-      ...["component", "state", "computed", "resource", "action", "watch", "mounted", "cleanup", "style"].map((label) => ({ label, kind: 14 })),
+      ...["component", "state", "computed", "resource", "action", "watch", "mounted", "cleanup", "look"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> none" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<none>" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
@@ -423,7 +462,9 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "on:click", kind: 10, detail: "DOM click handler" },
       { label: "on:submit.prevent", kind: 10, detail: "DOM event with a preventDefault modifier" },
       { label: "class:", kind: 10, detail: "Reactive class directive" },
-      { label: "style:", kind: 10, detail: "Reactive style property directive" },
+      { label: "look={value}", kind: 10, detail: "Apply a typed Look value" },
+      { label: "import css unsafe", kind: 14, detail: "Import native CSS before Look output" },
+      { label: "after look", kind: 14, detail: "Place an unsafe CSS import after Look output" },
       { label: "velar/app", kind: 9, detail: "Application error reports and explicit handler ownership" },
       { label: "velar/config", kind: 9, detail: "Validated manifest-declared public application configuration" },
       { label: "velar/web", kind: 9, detail: "Typed routing, navigation, metadata, and announcements" },
@@ -444,8 +485,13 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       return webModuleSource(specifier, (projectConfig ?? { base: "/" }) as VelarWebRuntimeConfig);
     },
   }),
-  createEmitter(hints: LoweringHints, forcedFunctionExports: ReadonlySet<string>) {
-    return new WebJavaScriptEmitter(hints, forcedFunctionExports);
+  createEmitter(
+    hints: LoweringHints,
+    forcedFunctionExports: ReadonlySet<string>,
+    resourceContents: ReadonlyMap<string, string>,
+    extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  ) {
+    return new WebJavaScriptEmitter(hints, forcedFunctionExports, resourceContents, extensionImports);
   },
 });
 

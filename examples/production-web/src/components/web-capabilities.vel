@@ -37,6 +37,37 @@ async def loadResourceLabel() -> string:
         throw CapabilityError("Resource recovery ready")
     return "resource-ready"
 
+const capabilitiesLook = look:
+    display = grid
+    gap = 12px
+    padding = 16px
+    border = line(1px, rgb(66, 82, 143))
+    radius = 12px
+    background = rgb(17, 24, 46)
+
+const capabilityRowLook = look:
+    display = flex
+    wrap = wrap
+    gap = space(8px, 16px)
+
+const summaryItemLook = look:
+    color = rgb(189, 199, 255)
+
+const actionButtonLook = look:
+    padding = space(8px, 11px)
+    border = line(1px, rgb(82, 99, 165))
+    radius = 8px
+    color = inherit
+    background = rgb(21, 28, 54)
+    cursor = pointer
+
+const eventInputLook = look:
+    padding = space(8px, 11px)
+    border = line(1px, rgb(82, 99, 165))
+    radius = 8px
+    color = inherit
+    background = rgb(21, 28, 54)
+
 export component WebCapabilities:
     const initialEnvironment = environment()
     const initialLocation = location()
@@ -166,7 +197,7 @@ export component WebCapabilities:
             uploadLabel = f"{uploaded.label}:{uploaded.fileName}:{uploaded.size}"
 
     action copyStatus():
-        await copyText("Velar Web API 0.8")
+        await copyText("Velar Web API 0.9")
         clipboardLabel = "Copied"
 
     def saveStatus():
@@ -189,71 +220,42 @@ export component WebCapabilities:
         stopLog()
         stopErrors()
 
-    style:
-        .capabilities {
-            display: grid;
-            gap: 12px;
-            padding: 16px;
-            border: 1px solid #42528f;
-            border-radius: 12px;
-            background: #11182e;
-        }
-
-        .summary, .actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px 16px;
-        }
-
-        .summary span {
-            color: #bdc7ff;
-        }
-
-        button {
-            padding: 8px 11px;
-            border: 1px solid #5263a5;
-            border-radius: 8px;
-            color: inherit;
-            background: #151c36;
-            cursor: pointer;
-        }
-
-    return <section class="capabilities" ref={panel} aria-label="Web platform capabilities">
+    return <section class="capabilities" look={capabilitiesLook} ref={panel} aria-label="Web platform capabilities">
         <strong>Typed browser platform</strong>
-        <div class="summary">
-            <span data-browser>{initialLocation.path}</span>
-            <span data-route>{initialRoute.path}</span>
-            <span data-environment>{online ? "online" : "offline"}/{visible ? "visible" : "hidden"}/{darkScheme ? "dark" : "light"}</span>
-            <span data-session>{sessionLabel}</span>
-            <span data-database>{databaseLabel}</span>
-            <span data-time>{iso(now())}</span>
-            <span data-frame>{frameReady ? "frame-ready" : "frame-pending"}</span>
-            <span data-layout>{layoutWidth > 0 ? "measured" : "pending"}</span>
-            <span data-error>{errorLabel}</span>
-            <span data-recovery>{recoveryLabel}</span>
-            <span data-remainder>{11 % 4}</span>
-            <span data-set>{capabilityNames.size}:{capabilityNames.has("files") ? "set-ready" : "set-missing"}</span>
-            <span data-config>{config.apiBase}:{config.releaseChannel}:{config.features.recovery ? "recovery" : "disabled"}</span>
-            <span data-runtime-error>{runtimeErrorLabel}</span>
-            <span data-resource>{resourceFailure ? resourceFailure.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")}</span>
-            <span data-action>{actionFailure ? actionFailure.message : recoverAction.pending ? "action-pending" : actionLabel}</span>
-            <span data-log>{logLabel}</span>
-            <span data-keyboard-event>{keyboardLabel}</span>
-            <span data-input-event>{inputLabel}</span>
-            <span data-pointer-event>{pointerLabel}</span>
-            <span data-timer>{timerLabel}:{timerTicks > 0 ? "every-ready" : "every-pending"}</span>
-            <span data-render-stable>{renderStatus()}</span>
+        <div class="summary" look={capabilityRowLook}>
+            <span look={summaryItemLook} data-browser>{initialLocation.path}</span>
+            <span look={summaryItemLook} data-route>{initialRoute.path}</span>
+            <span look={summaryItemLook} data-environment>{online ? "online" : "offline"}/{visible ? "visible" : "hidden"}/{darkScheme ? "dark" : "light"}</span>
+            <span look={summaryItemLook} data-session>{sessionLabel}</span>
+            <span look={summaryItemLook} data-database>{databaseLabel}</span>
+            <span look={summaryItemLook} data-time>{iso(now())}</span>
+            <span look={summaryItemLook} data-frame>{frameReady ? "frame-ready" : "frame-pending"}</span>
+            <span look={summaryItemLook} data-layout>{layoutWidth > 0 ? "measured" : "pending"}</span>
+            <span look={summaryItemLook} data-error>{errorLabel}</span>
+            <span look={summaryItemLook} data-recovery>{recoveryLabel}</span>
+            <span look={summaryItemLook} data-remainder>{11 % 4}</span>
+            <span look={summaryItemLook} data-set>{capabilityNames.size}:{capabilityNames.has("files") ? "set-ready" : "set-missing"}</span>
+            <span look={summaryItemLook} data-config>{config.apiBase}:{config.releaseChannel}:{config.features.recovery ? "recovery" : "disabled"}</span>
+            <span look={summaryItemLook} data-runtime-error>{runtimeErrorLabel}</span>
+            <span look={summaryItemLook} data-resource>{resourceFailure ? resourceFailure.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")}</span>
+            <span look={summaryItemLook} data-action>{actionFailure ? actionFailure.message : recoverAction.pending ? "action-pending" : actionLabel}</span>
+            <span look={summaryItemLook} data-log>{logLabel}</span>
+            <span look={summaryItemLook} data-keyboard-event>{keyboardLabel}</span>
+            <span look={summaryItemLook} data-input-event>{inputLabel}</span>
+            <span look={summaryItemLook} data-pointer-event>{pointerLabel}</span>
+            <span look={summaryItemLook} data-timer>{timerLabel}:{timerTicks > 0 ? "every-ready" : "every-pending"}</span>
+            <span look={summaryItemLook} data-render-stable>{renderStatus()}</span>
         </div>
-        <div class="actions">
-            <input data-event-input aria-label="Native event probe" on:keydown={captureKey} on:input={captureInput} />
-            <button data-pointer-probe type="button" on:pointerdown={capturePointer}>Check pointer event</button>
-            <button type="button" disabled={chooseFile.pending} on:click={chooseFile}>Choose text file</button>
-            <button type="button" on:click={saveStatus}>Download status</button>
-            <button type="button" disabled={copyStatus.pending} on:click={copyStatus}>Copy status</button>
-            <button type="button" data-test-event on:click={failEvent}>Fail event safely</button>
-            <button type="button" data-test-render on:click={failRender}>Fail render safely</button>
-            <button type="button" data-resource-retry on:click={recoveryResource.reload}>Retry resource</button>
-            <button type="button" data-action-retry disabled={recoverAction.pending} on:click={recoverAction}>Run action</button>
+        <div class="actions" look={capabilityRowLook}>
+            <input look={eventInputLook} data-event-input aria-label="Native event probe" on:keydown={captureKey} on:input={captureInput} />
+            <button look={actionButtonLook} data-pointer-probe type="button" on:pointerdown={capturePointer}>Check pointer event</button>
+            <button look={actionButtonLook} type="button" disabled={chooseFile.pending} on:click={chooseFile}>Choose text file</button>
+            <button look={actionButtonLook} type="button" on:click={saveStatus}>Download status</button>
+            <button look={actionButtonLook} type="button" disabled={copyStatus.pending} on:click={copyStatus}>Copy status</button>
+            <button look={actionButtonLook} type="button" data-test-event on:click={failEvent}>Fail event safely</button>
+            <button look={actionButtonLook} type="button" data-test-render on:click={failRender}>Fail render safely</button>
+            <button look={actionButtonLook} type="button" data-resource-retry on:click={recoveryResource.reload}>Retry resource</button>
+            <button look={actionButtonLook} type="button" data-action-retry disabled={recoverAction.pending} on:click={recoverAction}>Run action</button>
         </div>
         <span data-file>{fileName}</span>
         <span data-file-text>{fileText}</span>

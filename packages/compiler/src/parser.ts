@@ -143,6 +143,8 @@ export class Parser {
 
     if (this.check("import") && this.tokens[this.index + 1]?.kind !== "leftParen") {
       this.advance();
+      const extensionImport = this.parseExtensionImport(start);
+      if (extensionImport !== undefined) return extensionImport;
       return this.parseImport(start);
     }
 
@@ -445,6 +447,10 @@ export class Parser {
     _start: number,
     _modifiers: { readonly exported: boolean; readonly abstract: boolean; readonly asynchronous: boolean },
   ): Statement | null | undefined {
+    return undefined;
+  }
+
+  protected parseExtensionImport(_start: number): Statement | null | undefined {
     return undefined;
   }
 
@@ -1068,8 +1074,10 @@ export class Parser {
         do {
           const rest = this.match("ellipsis");
           if (sawRest) this.diagnostics.push(diagnostic("VEL2016", "A rest function type parameter must be final", this.current().span));
+          const parameterName = this.check("identifier") && this.peekKind(1) === "colon" ? this.advance().value : null;
+          if (parameterName) this.advance();
           const type = this.parseTypeReference();
-          parameters.push(`${rest ? "..." : ""}${type.text}`);
+          parameters.push(`${rest ? "..." : ""}${parameterName ? `${parameterName}: ` : ""}${type.text}`);
           if (rest) sawRest = true;
         } while (this.match("comma") && !this.check("rightParen"));
       }
@@ -1263,13 +1271,35 @@ export class Parser {
     while (true) {
       if (this.match("leftParen")) {
         const arguments_: Expression[] = [];
+        const argumentNames: (string | null)[] = [];
+        let sawNamed = false;
+        let sawSpread = false;
         if (!this.check("rightParen")) {
           do {
-            arguments_.push(this.parseSpreadExpression());
+            if (this.check("identifier") && this.peekKind(1) === "colon") {
+              const name = this.advance();
+              this.advance();
+              if (sawSpread) this.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
+              sawNamed = true;
+              argumentNames.push(name.value);
+              arguments_.push(this.parseExpression());
+            } else {
+              const argument = this.parseSpreadExpression();
+              if (sawNamed) this.diagnostics.push(diagnostic("VEL2024", "Positional arguments must appear before named arguments", argument.span));
+              if (argument.kind === "SpreadExpression") sawSpread = true;
+              argumentNames.push(null);
+              arguments_.push(argument);
+            }
           } while (this.match("comma") && !this.check("rightParen"));
         }
         const close = this.expect("rightParen", "Expected ')' after arguments");
-        expression = { kind: "CallExpression", callee: expression, arguments: arguments_, span: span(expression.span.start, close.span.end) };
+        expression = {
+          kind: "CallExpression",
+          callee: expression,
+          arguments: arguments_,
+          ...(sawNamed ? { argumentNames } : {}),
+          span: span(expression.span.start, close.span.end),
+        };
         continue;
       }
 
@@ -1298,6 +1328,14 @@ export class Parser {
     switch (token.kind) {
       case "number":
         return { kind: "LiteralExpression", value: Number(token.value), raw: token.value, span: token.span };
+      case "unitNumber": {
+        const match = /^(\d+(?:\.\d+)?)([A-Za-z%]+)$/u.exec(token.value);
+        if (!match) {
+          this.diagnostics.push(diagnostic("VEL2002", "Invalid unit literal", token.span));
+          return { kind: "LiteralExpression", value: 0, raw: "0", span: token.span };
+        }
+        return { kind: "UnitLiteralExpression", value: Number(match[1]), unit: match[2]!, raw: token.value, span: token.span };
+      }
       case "string":
         return { kind: "LiteralExpression", value: token.value, raw: token.value, span: token.span };
       case "import": {
@@ -1324,6 +1362,12 @@ export class Parser {
         const extensionExpression = this.parseExtensionExpression(token);
         if (extensionExpression) return extensionExpression;
         this.diagnostics.push(diagnostic("VEL2002", "No compiler extension accepts this embedded expression", token.span));
+        return { kind: "LiteralExpression", value: null, raw: "none", span: token.span };
+      }
+      case "extensionKeyword": {
+        const extensionExpression = this.parseExtensionExpression(token);
+        if (extensionExpression) return extensionExpression;
+        this.diagnostics.push(diagnostic("VEL2002", `Extension keyword '${token.value}' is not valid in this expression`, token.span));
         return { kind: "LiteralExpression", value: null, raw: "none", span: token.span };
       }
       case "true":

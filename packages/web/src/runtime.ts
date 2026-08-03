@@ -459,25 +459,33 @@ export function currentRoute() {
 }
 
 export function Head(props) {
-  props = __velarOptions(props, "Head props", new Set(["title", "description", "canonical", "robots", "image", "themeColor"]));
-  let { title, description = "", canonical = "", robots = "", image = "", themeColor = "" } = props;
+  props = __velarOptions(props, "Head props", new Set(["title", "description", "canonical", "robots", "image", "themeColor", "language"]));
+  let { title, description = "", canonical = "", robots = "", image = "", themeColor = "", language = "" } = props;
   title = __velarString(title, "Head title");
   description = __velarString(description, "Head description");
   canonical = __velarString(canonical, "Head canonical URL");
   robots = __velarString(robots, "Head robots");
   image = __velarString(image, "Head image");
   themeColor = __velarString(themeColor, "Head theme color");
+  language = __velarString(language, "Head language");
   if (title.length > 4096) throw new RangeError("Head titles cannot exceed 4096 characters");
   if (description.length > 65536) throw new RangeError("Head descriptions cannot exceed 64 KiB");
   if (canonical.length > 2 * 1024 * 1024 || image.length > 2 * 1024 * 1024) throw new RangeError("Head URLs cannot exceed 2 MiB");
   if (robots.length > 4096) throw new RangeError("Head robots cannot exceed 4096 characters");
   if (themeColor.length > 256) throw new RangeError("Head theme colors cannot exceed 256 characters");
+  if (language.length > 256) throw new RangeError("Head language tags cannot exceed 256 characters");
+  if (language && !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/u.test(language)) {
+    throw new TypeError("Head language must be a simple BCP 47 language tag");
+  }
   const node = document.createComment("velar head");
   let previousTitle = "";
+  let previousLanguage = null;
   let restorers = [];
   return component(node, () => {
     previousTitle = document.title;
     document.title = title;
+    previousLanguage = document.documentElement.getAttribute("lang");
+    if (language) document.documentElement.setAttribute("lang", language);
     restorers = [
       ownHead('meta[name="description"]', "meta", "name", "description", "content", description),
       ownHead('link[rel="canonical"]', "link", "rel", "canonical", "href", canonical),
@@ -487,6 +495,10 @@ export function Head(props) {
     ];
   }, () => {
     if (document.title === title) document.title = previousTitle;
+    if (language && document.documentElement.getAttribute("lang") === language) {
+      if (previousLanguage == null) document.documentElement.removeAttribute("lang");
+      else document.documentElement.setAttribute("lang", previousLanguage);
+    }
     for (const restore of restorers.reverse()) restore();
   });
 }
@@ -589,7 +601,7 @@ export function Router(props) {
 }
 
 export function Link(props) {
-  props = __velarOptions(props, "Link props", new Set(["to", "replace", "children"]));
+  props = __velarOptions(props, "Link props", new Set(["to", "replace", "class", "look", "children"]));
   let { to, replace = false, children } = props;
   to = __velarString(to, "Link target");
   if (to.length > 2 * 1024 * 1024) throw new RangeError("Link targets cannot exceed 2 MiB");
@@ -597,6 +609,7 @@ export function Link(props) {
   const external = isExternal(to);
   const href = external ? to : internalHref(to);
   const node = document.createElement("a");
+  const releaseHost = forwardHost(node, props);
   node.href = href;
   append(node, children);
   const clicked = (event) => {
@@ -606,17 +619,17 @@ export function Link(props) {
     event.preventDefault();
     navigate(to, { replace });
   };
-  return component(node, () => node.addEventListener("click", clicked), () => node.removeEventListener("click", clicked));
+  return component(node, () => node.addEventListener("click", clicked), () => { node.removeEventListener("click", clicked); releaseHost(); });
 }
 
 export function NavLink(props) {
-  props = __velarOptions(props, "NavLink props", new Set(["to", "exact", "replace", "children"]));
+  props = __velarOptions(props, "NavLink props", new Set(["to", "exact", "replace", "class", "look", "children"]));
   let { to, exact = false, replace = false, children } = props;
   to = __velarString(to, "NavLink target");
   __velarBool(exact, "NavLink exact");
   __velarBool(replace, "NavLink replace");
   internalHref(to);
-  const linked = Link({ to, replace, children });
+  const linked = Link({ to, replace, class: props.class, look: props.look, children });
   const target = normalizeApplicationPath(new URL(to, "https://velar.invalid").pathname);
   const update = () => {
     const application = applicationPath(location.pathname);
@@ -633,6 +646,22 @@ export function NavLink(props) {
     removeEventListener("popstate", update);
     linked.destroy(false);
   });
+}
+
+function forwardHost(node, props) {
+  const cleanups = [];
+  if (props.class != null) {
+    if (typeof props.class !== "string") throw new TypeError("Link class must be a string");
+    const names = props.class.split(/\s+/).filter(Boolean);
+    node.classList.add(...names);
+    cleanups.push(() => node.classList.remove(...names));
+  }
+  if (props.look != null) {
+    const runtime = globalThis[Symbol.for("velar.runtime.v1")];
+    if (!runtime || typeof runtime.applyLook !== "function") throw new TypeError("Link Look requires the Velar Web runtime");
+    cleanups.push(runtime.applyLook(node, props.look));
+  }
+  return () => { for (const cleanup of cleanups.reverse()) cleanup(); };
 }
 
 function normalizeApplicationPath(path) {
@@ -1682,7 +1711,7 @@ export function socket(url, handlers = {}) {
   value.addEventListener("open", () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "socket:open"));
   value.addEventListener("message", (event) => {
     if (typeof event.data !== "string") {
-      __velarInvokeOwnedCallback(handlers.error, ["Binary WebSocket messages are not supported by Velar Web API 0.8"], "realtime", "socket:error");
+      __velarInvokeOwnedCallback(handlers.error, ["Binary WebSocket messages are not supported by Velar Web API 0.9"], "realtime", "socket:error");
       if (value.readyState < WebSocket.CLOSING) value.close(1003, "Text messages only");
       return;
     }

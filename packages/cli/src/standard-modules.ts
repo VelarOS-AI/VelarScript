@@ -236,7 +236,7 @@ function moduleInterface(
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
 ): ModuleInterface {
-  return { exports, reactiveExports: new Map(), namedTypes, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [] };
+  return { exports, reactiveExports: new Map(), namedTypes, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {

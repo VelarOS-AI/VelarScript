@@ -2,7 +2,7 @@ import { Analyzer, type AnalysisContext, type ClassInfo } from "./analyzer.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
-import type { CompilerEmitter, CompilerExtension, ModuleInterface } from "./extension.ts";
+import type { CompilerEmitter, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { Parser } from "./parser.ts";
 import { SourceText } from "./source.ts";
@@ -25,7 +25,7 @@ export { formatDiagnostic, type Diagnostic } from "./diagnostic.ts";
 export { formatSource } from "./formatter.ts";
 export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, ModuleInterface } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { describeType, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
@@ -35,16 +35,19 @@ export interface CompileOptions {
   readonly analysis?: AnalysisContext;
   readonly exportFunctions?: ReadonlySet<string>;
   readonly extensions?: readonly CompilerExtension[];
+  readonly resourceContents?: ReadonlyMap<string, string>;
 }
 
 export interface CompileResult {
   readonly code: string | null;
   readonly sourceMap: string | null;
   readonly css: string | null;
+  readonly styleSegments: CompilerStyleSegments | null;
   readonly extensions: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
   readonly source: SourceText;
   readonly dependencies: readonly ModuleDependency[];
+  readonly resources: readonly CompilerResourceDependency[];
   readonly moduleInterface: ModuleInterface;
   readonly semanticIndex: SemanticIndex;
 }
@@ -67,6 +70,7 @@ export interface ModuleInspection {
   readonly diagnostics: readonly Diagnostic[];
   readonly source: SourceText;
   readonly dependencies: readonly ModuleDependency[];
+  readonly resources: readonly CompilerResourceDependency[];
   readonly moduleInterface: ModuleInterface;
   readonly semanticIndex: SemanticIndex;
 }
@@ -78,6 +82,7 @@ export function inspectModule(text: string, options: Pick<CompileOptions, "path"
     diagnostics: parsed.diagnostics,
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program, extensions),
+    resources: resourcesOf(parsed.program, extensions),
     moduleInterface: interfaceOf(parsed.program, parsed.source.path, extensions),
     semanticIndex: buildSemanticIndex(parsed.program, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : [])),
   };
@@ -90,8 +95,10 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
   const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
   const analyzerExtensions = extensions.filter((extension) => extension.analyzer);
   if (analyzerExtensions.length > 1) throw new Error("Only one compiler extension may own semantic analysis");
-  const analyzer = analyzerExtensions[0]?.analyzer?.create(options.analysis ?? {}, analysisExtensions)
-    ?? new Analyzer(options.analysis, analysisExtensions);
+  const analysisResources = options.resourceContents ?? options.analysis?.resources;
+  const analysisContext: AnalysisContext = { ...options.analysis, ...(analysisResources ? { resources: analysisResources } : {}) };
+  const analyzer = analyzerExtensions[0]?.analyzer?.create(analysisContext, analysisExtensions)
+    ?? new Analyzer(analysisContext, analysisExtensions);
   if (diagnostics.length === 0) {
     diagnostics.push(...analyzer.analyze(parsed.program));
   }
@@ -99,11 +106,17 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
   diagnostics.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
   const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
   if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
-  const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(analyzer.loweringHints(), options.exportFunctions ?? new Set())
+  const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(
+    analyzer.loweringHints(),
+    options.exportFunctions ?? new Set(),
+    options.resourceContents ?? new Map(),
+    options.analysis?.extensionImports ?? new Map(),
+  )
     ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions);
   const code = diagnostics.length === 0 ? emitter.emit(parsed.program) : null;
   const sourceMap = code === null ? null : emitter.sourceMap(parsed.source);
   const css = code === null ? null : emitter.css?.() ?? null;
+  const styleSegments = code === null ? null : emitter.styleSegments?.() ?? null;
   const semanticExpressions = analyzer.semanticExpressions();
   const semanticIndex = buildSemanticIndex(
     parsed.program,
@@ -124,13 +137,29 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
     code,
     sourceMap,
     css,
+    styleSegments,
     extensions: extensions.map((extension) => extension.id),
     diagnostics,
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program, extensions),
+    resources: resourcesOf(parsed.program, extensions),
     moduleInterface: interfaceOf(parsed.program, parsed.source.path, extensions),
     semanticIndex,
   };
+}
+
+function resourcesOf(program: Program, extensions: readonly CompilerExtension[]): readonly CompilerResourceDependency[] {
+  const output: CompilerResourceDependency[] = [];
+  const seen = new Set<string>();
+  for (const extension of extensions) {
+    for (const resource of extension.inspection?.resources?.(program) ?? []) {
+      const key = `${resource.kind}\0${resource.source}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      output.push(resource);
+    }
+  }
+  return output;
 }
 
 function parseModule(text: string, path: string, extensions: readonly CompilerExtension[]): { source: SourceText; program: Program; diagnostics: readonly Diagnostic[] } {
@@ -342,6 +371,12 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
   const reactiveExports = new Map<string, "state" | "computed">();
   const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
   const testFunctions: string[] = [];
+  const extensionExports = new Map(extensions.map((extension) => [extension.id, new Map<string, unknown>()] as const));
+  const extensionData = new Map<string, unknown>();
+  for (const extension of extensions) {
+    const data = extension.inspection?.moduleData?.(program, path);
+    if (data !== undefined) extensionData.set(extension.id, data);
+  }
 
   for (const [name, declaration] of aliasDeclarations) typeAliases.set(name, resolve(declaration.target));
 
@@ -374,6 +409,7 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
       classes.set(statement.name, {
         identity,
         parameters: statement.parameters.map((parameter) => resolve(parameter.type)),
+        parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
         base: statement.base ? classIdentities.get(statement.base.name) ?? statement.base.name : null,
         abstract: statement.abstract,
@@ -407,16 +443,30 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
     } else if (statement.kind === "VariableDeclaration") {
       exportPattern(statement.pattern, statement.type ? resolve(statement.type) : inferPublicExpression(statement.initializer, inspectionExtensions), exports, namedTypes);
     } else {
-      const context = {
-        exports,
-        reactiveExports,
-        resolve,
-        inferPublicExpression: (expression: Expression) => inferPublicExpression(expression, inspectionExtensions),
-      };
-      for (const extension of inspectionExtensions) if (extension.contributeInterface?.(statement, context)) break;
+      for (const extension of extensions) {
+        if (!extension.inspection) continue;
+        const context = {
+          exports,
+          reactiveExports,
+          extensionExports: extensionExports.get(extension.id)!,
+          resolve,
+          inferPublicExpression: (expression: Expression) => inferPublicExpression(expression, inspectionExtensions),
+        };
+        if (extension.inspection.contributeInterface?.(statement, context)) break;
+      }
     }
   }
-  return { exports, reactiveExports, namedTypes, typeAliases, enums, classes, testFunctions };
+  return {
+    exports,
+    reactiveExports,
+    namedTypes,
+    typeAliases,
+    enums,
+    classes,
+    testFunctions,
+    extensionExports: new Map([...extensionExports].filter(([, values]) => values.size > 0)),
+    extensionData,
+  };
 }
 
 function functionSignature(statement: FunctionDeclaration, resolve: (reference: TypeReference | null) => ValueType): ValueType {
@@ -425,6 +475,7 @@ function functionSignature(statement: FunctionDeclaration, resolve: (reference: 
   return {
     kind: "function",
     parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolve(parameter.type)),
+    parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
     requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
     ...(rest ? { rest: resolve(rest.type) } : {}),
     result: statement.asynchronous ? { kind: "promise", value: resolvedAsyncType(result) } : result,

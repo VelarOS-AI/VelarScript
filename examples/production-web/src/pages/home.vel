@@ -22,6 +22,42 @@ type PreviewConfig:
 
 const previewConfig = publicConfig(PreviewConfig)
 
+const pageLook = look:
+    display = grid
+    gap = 22px
+    width = 100%
+    maxWidth = 1072px
+    marginInline = auto
+    padding = edges(40px, 16px, 64px, 16px)
+
+const headerLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    gap = 16px
+
+const titleLook = look:
+    margin = 0
+
+const eyebrowLook = look:
+    margin = 0
+    color = rgb(157, 172, 255)
+    fontWeight = 700
+
+const actionsLook = look:
+    display = flex
+    alignItems = center
+    gap = 12px
+
+def themeButtonLook(active: bool) -> Look:
+    return look:
+        padding = space(9px, 12px)
+        border = line(1px, active ? rgb(157, 172, 255) : rgb(82, 99, 165))
+        radius = 9px
+        color = inherit
+        background = rgb(21, 28, 54)
+        cursor = pointer
+
 def formattedSamples() -> string:
     let labels = []
     formatter.visit([1.5, 2.5], label => labels.append(label))
@@ -35,64 +71,16 @@ def classFormattedSamples() -> string:
     return f"{PackageFormatter.category}/{packageFormatter.locale}: {labels[0]} / {labels[1]}"
 
 export component Home:
-    style:
-        .page {
-            display: grid;
-            gap: 22px;
-            width: min(1040px, calc(100% - 32px));
-            margin: 0 auto;
-            padding: 40px 0 64px;
-        }
-
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-        }
-
-        h1, p {
-            margin: 0;
-        }
-
-        .eyebrow {
-            color: #9dacff;
-            font-weight: 700;
-        }
-
-        .actions {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        button {
-            padding: 9px 12px;
-            border: 1px solid #5263a5;
-            border-radius: 9px;
-            color: inherit;
-            background: #151c36;
-            cursor: pointer;
-        }
-
-        button.active {
-            border-color: #9dacff;
-        }
-
-        a {
-            color: #bdc7ff;
-        }
-
-    return <main class="page">
-        <Head title="Velar Release Studio" description="Velar 0.8 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
-        <header class="header">
+    return <main class="page" look={pageLook}>
+        <Head title="Velar Release Studio" description="Velar 0.9 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
+        <header class="header" look={headerLook}>
             <div>
-                <p class="eyebrow">Velar 0.9 · Web API 0.8</p>
-                <h1>Velar Release Studio</h1>
+                <p class="eyebrow" look={eyebrowLook}>Velar 0.9 · Web API 0.9</p>
+                <h1 look={titleLook}>Velar Release Studio</h1>
             </div>
-            <nav class="actions" aria-label="Primary navigation">
+            <nav class="actions" look={actionsLook} aria-label="Primary navigation">
                 <StatusBadge theme={theme} />
-                <button class:active={dark} on:click={toggleTheme}>Toggle theme</button>
+                <button class={dark ? "active" : none} look={themeButtonLook(dark)} on:click={toggleTheme}>Toggle theme</button>
             </nav>
         </header>
         <Metrics projects={projectCount()} />

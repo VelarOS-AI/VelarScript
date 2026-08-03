@@ -63,13 +63,31 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
   },
 
   visitExpression(expression: Expression, context: SemanticExtensionContext) {
-    if (expression.kind !== "JSXElementExpression") return false;
-    visitJsx(expression, context);
-    return true;
+    if (expression.kind === "JSXElementExpression") {
+      visitJsx(expression, context);
+      return true;
+    }
+    if (expression.kind === "LookExpression") {
+      const visit = (entries: typeof expression.entries): void => {
+        for (const entry of entries) {
+          if (entry.kind === "LookProperty" || entry.kind === "LookSpread") context.visitExpression(entry.value);
+          else if (entry.kind === "LookIf") {
+            context.visitExpression(entry.condition);
+            visit(entry.thenEntries);
+            visit(entry.elseEntries);
+          } else visit(entry.entries);
+        }
+      };
+      visit(expression.entries);
+      return true;
+    }
+    return expression.kind === "UnitLiteralExpression" || expression.kind === "LookHookExpression";
   },
 
   visitStatement(statement: Statement, context: SemanticExtensionContext) {
     switch (statement.kind) {
+      case "UnsafeCssImportDeclaration":
+        return true;
       case "ComponentDeclaration":
         context.enterScope(statement.span);
         for (const parameter of statement.parameters) {
@@ -86,7 +104,7 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
         }
         for (const item of statement.body) {
           if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") context.visitBlock(item.body, item.span);
-          else if (item.kind !== "StyleBlock") context.visitStatement(item);
+          else context.visitStatement(item);
         }
         context.exitScope();
         return true;

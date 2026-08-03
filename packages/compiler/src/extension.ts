@@ -37,13 +37,21 @@ export interface CompilerEmitter {
   emit(program: Program): string;
   sourceMap(source: SourceText): string;
   css?(): string;
+  styleSegments?(): CompilerStyleSegments;
+}
+
+export interface CompilerStyleSegments {
+  readonly before: string;
+  readonly controlled: string;
+  readonly after: string;
 }
 
 export interface CompilerLexicalExtension {
   readonly keywords?: Readonly<Record<string, string>>;
   readonly forbiddenIdentifiers?: Readonly<Record<string, string>>;
   readonly jsx?: boolean;
-  readonly css?: boolean;
+  readonly embeddedBlocks?: ReadonlySet<string>;
+  readonly numericSuffixes?: ReadonlySet<string>;
 }
 
 export interface CompilerAnalysisExtension {
@@ -131,6 +139,7 @@ export interface CompilerDependencyContext {
 export interface CompilerInterfaceContext {
   readonly exports: Map<string, ValueType>;
   readonly reactiveExports: Map<string, "state" | "computed">;
+  readonly extensionExports: Map<string, unknown>;
   readonly resolve: (reference: TypeReference | null) => ValueType;
   readonly inferPublicExpression: (expression: Expression) => ValueType;
 }
@@ -140,6 +149,13 @@ export interface CompilerInspectionExtension {
   readonly visitDependencyStatement?: (statement: Statement, context: CompilerDependencyContext) => boolean;
   readonly contributeInterface?: (statement: Statement, context: CompilerInterfaceContext) => boolean;
   readonly inferPublicExpression?: (expression: Expression) => ValueType | undefined;
+  readonly resources?: (program: Program) => readonly CompilerResourceDependency[];
+  readonly moduleData?: (program: Program, path: string) => unknown;
+}
+
+export interface CompilerResourceDependency {
+  readonly source: string;
+  readonly kind: string;
 }
 
 export interface CompilerParserFactory {
@@ -158,6 +174,8 @@ export interface ModuleInterface {
   readonly enums: ReadonlyMap<string, EnumInfo>;
   readonly classes: ReadonlyMap<string, ClassInfo>;
   readonly testFunctions: readonly string[];
+  readonly extensionExports: ReadonlyMap<string, ReadonlyMap<string, unknown>>;
+  readonly extensionData: ReadonlyMap<string, unknown>;
 }
 
 export interface CompilerExtension {
@@ -171,5 +189,10 @@ export interface CompilerExtension {
   readonly analyzer?: CompilerAnalyzerFactory;
   readonly semantic?: CompilerSemanticExtension;
   readonly inspection?: CompilerInspectionExtension;
-  createEmitter?(hints: LoweringHints, forcedFunctionExports: ReadonlySet<string>): CompilerEmitter;
+  createEmitter?(
+    hints: LoweringHints,
+    forcedFunctionExports: ReadonlySet<string>,
+    resourceContents: ReadonlyMap<string, string>,
+    extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  ): CompilerEmitter;
 }

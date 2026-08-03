@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build, type Plugin } from "esbuild";
+import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
 import { standardModuleSource } from "./standard-modules.ts";
 import { VELAR_VERSION } from "./version.ts";
@@ -97,7 +98,7 @@ export async function buildProductionFramework(project: ProjectResult, outputDir
   if (!entryOutput) throw new Error("The production bundler did not emit the Velar entry module");
   const entryPath = relative(outputDirectory, resolve(project.projectRoot, entryOutput[0])).replaceAll("\\", "/");
 
-  const css = project.modules.map((module) => module.result.css ?? "").filter(Boolean).join("\n");
+  const css = projectStyles(project);
   let stylesheetPath: string | null = null;
   if (css) {
     const hash = createHash("sha256").update(css).digest("hex").slice(0, 10);

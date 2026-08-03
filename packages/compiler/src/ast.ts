@@ -8,6 +8,7 @@ export interface Program {
 
 export type Statement =
   | ImportDeclaration
+  | UnsafeCssImportDeclaration
   | ExternModuleDeclaration
   | ComponentDeclaration
   | StateDeclaration
@@ -48,6 +49,13 @@ export interface ImportSpecifier {
   readonly imported: string;
   readonly local: string;
   readonly namespace: boolean;
+  readonly span: Span;
+}
+
+export interface UnsafeCssImportDeclaration {
+  readonly kind: "UnsafeCssImportDeclaration";
+  readonly source: string;
+  readonly placement: "before" | "after";
   readonly span: Span;
 }
 
@@ -119,8 +127,7 @@ export type ComponentItem =
   | ActionDeclaration
   | WatchDeclaration
   | MountedBlock
-  | CleanupBlock
-  | StyleBlock;
+  | CleanupBlock;
 
 export interface StateDeclaration {
   readonly kind: "StateDeclaration";
@@ -177,13 +184,6 @@ export interface MountedBlock {
 export interface CleanupBlock {
   readonly kind: "CleanupBlock";
   readonly body: readonly Statement[];
-  readonly span: Span;
-}
-
-export interface StyleBlock {
-  readonly kind: "StyleBlock";
-  readonly global: boolean;
-  readonly css: string;
   readonly span: Span;
 }
 
@@ -449,12 +449,65 @@ export type Expression =
   | CallExpression
   | MemberExpression
   | IndexExpression
+  | UnitLiteralExpression
+  | LookHookExpression
+  | LookExpression
   | JSXElementExpression;
 
 export interface LiteralExpression {
   readonly kind: "LiteralExpression";
   readonly value: string | number | boolean | null;
   readonly raw: string;
+  readonly span: Span;
+}
+
+export interface UnitLiteralExpression {
+  readonly kind: "UnitLiteralExpression";
+  readonly value: number;
+  readonly unit: string;
+  readonly raw: string;
+  readonly span: Span;
+}
+
+export interface LookHookExpression {
+  readonly kind: "LookHookExpression";
+  readonly name: string;
+  readonly span: Span;
+}
+
+export interface LookExpression {
+  readonly kind: "LookExpression";
+  readonly entries: readonly LookEntry[];
+  readonly span: Span;
+}
+
+export type LookEntry = LookProperty | LookSpread | LookIf | LookTarget;
+
+export interface LookProperty {
+  readonly kind: "LookProperty";
+  readonly name: string;
+  readonly value: Expression;
+  readonly span: Span;
+}
+
+export interface LookSpread {
+  readonly kind: "LookSpread";
+  readonly value: Expression;
+  readonly span: Span;
+}
+
+export interface LookIf {
+  readonly kind: "LookIf";
+  readonly condition: Expression;
+  readonly thenEntries: readonly LookEntry[];
+  readonly elseEntries: readonly LookEntry[];
+  readonly span: Span;
+}
+
+export interface LookTarget {
+  readonly kind: "LookTarget";
+  readonly name: string;
+  readonly entries: readonly LookEntry[];
   readonly span: Span;
 }
 
@@ -568,6 +621,7 @@ export interface CallExpression {
   readonly kind: "CallExpression";
   readonly callee: Expression;
   readonly arguments: readonly Expression[];
+  readonly argumentNames?: readonly (string | null)[];
   readonly span: Span;
 }
 

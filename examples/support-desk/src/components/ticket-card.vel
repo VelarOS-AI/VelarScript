@@ -2,70 +2,56 @@ import {Link} from "velar/web"
 import {format} from "velar/time"
 import {Ticket, TicketPriority, TicketStatus} from "../domain.vel"
 
+const cardLook = look:
+    display = grid
+    gap = 10px
+    padding = 16px
+    border = line(1px, rgb(220, 227, 236))
+    radius = 15px
+    background = rgb(255, 255, 255)
+
+const rowLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    gap = 10px
+
+const badgesLook = look:
+    display = flex
+    gap = 6px
+
+def badgeLook(urgent: bool = false) -> Look:
+    return look:
+        padding = space(4px, 7px)
+        radius = pill
+        color = urgent ? rgb(165, 40, 40) : rgb(83, 96, 121)
+        background = urgent ? rgb(255, 237, 237) : rgb(237, 241, 247)
+        fontSize = 11px
+        fontWeight = 800
+
+const titleLook = look:
+    margin = 0
+    fontSize = 17px
+
+const bodyLook = look:
+    margin = 0
+    color = rgb(104, 117, 138)
+    fontSize = 13px
+    lineHeight = 1.45
+
+const linkLook = look:
+    color = rgb(49, 87, 213)
+    fontSize = 13px
+    fontWeight = 800
+    textDecoration = undecorated
+
 export component TicketCard(ticket: Ticket):
-    style:
-        article {
-            display: grid;
-            gap: 10px;
-            padding: 16px;
-            border: 1px solid #dce3ec;
-            border-radius: 15px;
-            background: #fff;
-        }
-
-        .meta, .footer {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-        }
-
-        .badges {
-            display: flex;
-            gap: 6px;
-        }
-
-        .badge {
-            padding: 4px 7px;
-            border-radius: 999px;
-            color: #536079;
-            background: #edf1f7;
-            font-size: 11px;
-            font-weight: 800;
-        }
-
-        .urgent {
-            color: #a52828;
-            background: #ffeded;
-        }
-
-        h2, p {
-            margin: 0;
-        }
-
-        h2 {
-            font-size: 17px;
-        }
-
-        p, time {
-            color: #68758a;
-            font-size: 13px;
-            line-height: 1.45;
-        }
-
-        a {
-            color: #3157d5;
-            font-size: 13px;
-            font-weight: 850;
-            text-decoration: none;
-        }
-
-    return <article data-ticket data-ticket-id={ticket.id}>
-        <div class="meta">
-            <div class="badges"><span class="badge">{ticket.status}</span><span class="badge">{ticket.priority}</span>{ticket.urgent ? <span class="badge urgent">Urgent</span> : none}</div>
-            <span class="badge">{ticket.estimate} min</span>
+    return <article look={cardLook} data-ticket data-ticket-id={ticket.id}>
+        <div class="meta" look={rowLook}>
+            <div class="badges" look={badgesLook}><span class="badge" look={badgeLook()}>{ticket.status}</span><span class="badge" look={badgeLook()}>{ticket.priority}</span>{ticket.urgent ? <span class="badge urgent" look={badgeLook(true)}>Urgent</span> : none}</div>
+            <span class="badge" look={badgeLook()}>{ticket.estimate} min</span>
         </div>
-        <h2 data-ticket-title>{ticket.title}</h2>
-        <p>{ticket.summary}</p>
-        <div class="footer"><p>{ticket.requester} · <time>{format(ticket.updatedAt, "en-US", "UTC")}</time></p><Link to={f"/tickets/{ticket.id}"}>View ticket</Link></div>
+        <h2 look={titleLook} data-ticket-title>{ticket.title}</h2>
+        <p look={bodyLook}>{ticket.summary}</p>
+        <div class="footer" look={rowLook}><p look={bodyLook}>{ticket.requester} · <time>{format(ticket.updatedAt, "en-US", "UTC")}</time></p><Link look={linkLook} to={f"/tickets/{ticket.id}"}>View ticket</Link></div>
     </article>

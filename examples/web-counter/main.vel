@@ -1,3 +1,12 @@
+def counterLook(active: bool) -> Look:
+    return look:
+        padding = space(10px, 14px)
+        border = line(0px, transparent)
+        radius = 10px
+
+        if active:
+            color = rgb(37, 99, 235)
+
 export component Counter(start: number = 0):
     state count = start
     computed doubled = count * 2
@@ -14,20 +23,9 @@ export component Counter(start: number = 0):
     cleanup:
         print("counter cleanup")
 
-    style:
-        .counter {
-            border: 0;
-            border-radius: 10px;
-            padding: 10px 14px;
-        }
-
-        .counter.active {
-            color: #2563eb;
-        }
-
     return <button
         class="counter"
-        class:active={count > 0}
+        look={counterLook(count > 0)}
         on:click={increment}
     >
         Count: {count}, Double: {doubled}

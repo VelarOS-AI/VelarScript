@@ -11,7 +11,7 @@ single-evaluation strict comparison chains,
 bounded `///` declaration documentation in the semantic index,
 native classes with constructor, explicitly typed instance/static body fields,
 typed read-only getters, native private fields/getters/methods, and one synchronous `init:` construction block.
-JSX, components, reactivity, lifecycle, scoped CSS, Web types, and Web modules
+JSX, components, reactivity, lifecycle, Look, Web types, and Web modules
 are not enabled by Core; they are contributed by `@velarscript/web` through the
 extension contract. That contract separates parsing, analysis, semantic
 indexing, intrinsic typing, dependency/interface inspection, emission,

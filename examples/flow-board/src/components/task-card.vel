@@ -10,92 +10,69 @@ def statusAction(status: TaskStatus) -> string:
         case TaskStatus.done:
             return "Reopen"
 
+def cardLook(high: bool, done: bool) -> Look:
+    return look:
+        display = grid
+        gap = 12px
+        padding = 16px
+        border = line(1px, rgb(224, 230, 240))
+        borderLeft = line(high ? 4px : 1px, high ? rgb(229, 72, 77) : rgb(224, 230, 240))
+        radius = 15px
+        background = rgb(255, 255, 255)
+        shadow = dropShadow(0px, 8px, 24px, rgba(38, 54, 88, 0.06))
+        opacity = done ? 0.72 : 1
+
+const titleLook = look:
+    margin = 0
+    color = rgb(23, 32, 51)
+    fontSize = 16px
+
+const descriptionLook = look:
+    margin = 0
+    color = rgb(93, 104, 128)
+    fontSize = 14px
+    lineHeight = 1.45
+
+const rowLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    gap = 8px
+
+const priorityLook = look:
+    padding = space(4px, 8px)
+    radius = pill
+    color = rgb(67, 80, 106)
+    background = rgb(237, 241, 248)
+    fontSize = 12px
+    fontWeight = 700
+    textCase = capitalize
+
+const timeLook = look:
+    color = rgb(125, 135, 156)
+    fontSize = 11px
+
+def actionLook(dangerous: bool = false) -> Look:
+    return look:
+        border = line(0px, transparent)
+        padding = space(7px, 10px)
+        radius = 9px
+        color = dangerous ? rgb(159, 45, 45) : rgb(35, 69, 174)
+        background = dangerous ? transparent : rgb(233, 239, 255)
+        fontSize = 13px
+        fontWeight = 700
+        cursor = pointer
+
 export component TaskCard(task: Task, onAdvance: TaskIdHandler, onDelete: TaskIdHandler):
-    style:
-        .card {
-            display: grid;
-            gap: 12px;
-            padding: 16px;
-            border: 1px solid #e0e6f0;
-            border-radius: 15px;
-            background: #fff;
-            box-shadow: 0 8px 24px rgba(38, 54, 88, 0.06);
-        }
-
-        .card.high {
-            border-left: 4px solid #e5484d;
-        }
-
-        .card.done {
-            opacity: 0.72;
-        }
-
-        h3, p {
-            margin: 0;
-        }
-
-        h3 {
-            color: #172033;
-            font-size: 16px;
-        }
-
-        .description {
-            color: #5d6880;
-            font-size: 14px;
-            line-height: 1.45;
-        }
-
-        .meta, .actions {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-        }
-
-        .priority {
-            padding: 4px 8px;
-            border-radius: 999px;
-            color: #43506a;
-            background: #edf1f8;
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: capitalize;
-        }
-
-        time {
-            color: #7d879c;
-            font-size: 11px;
-        }
-
-        button {
-            border: 0;
-            padding: 7px 10px;
-            border-radius: 9px;
-            font: inherit;
-            font-size: 13px;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        .move {
-            color: #2345ae;
-            background: #e9efff;
-        }
-
-        .delete {
-            color: #9f2d2d;
-            background: transparent;
-        }
-
-    return <article class="card" class:high={task.priority == TaskPriority.high} class:done={task.status == TaskStatus.done} data-task data-task-id={task.id}>
-        <h3 data-task-title>{task.title}</h3>
-        <p class="description">{task.description}</p>
-        <div class="meta">
-            <span class="priority">{task.priority}</span>
-            <time>{format(task.updatedAt)}</time>
+    return <article class="card" look={cardLook(task.priority == TaskPriority.high, task.status == TaskStatus.done)} data-task data-task-id={task.id}>
+        <h3 look={titleLook} data-task-title>{task.title}</h3>
+        <p class="description" look={descriptionLook}>{task.description}</p>
+        <div class="meta" look={rowLook}>
+            <span class="priority" look={priorityLook}>{task.priority}</span>
+            <time look={timeLook}>{format(task.updatedAt)}</time>
         </div>
-        <div class="actions">
-            <button class="move" data-move-task type="button" on:click={() => onAdvance(task.id)}>{statusAction(task.status)}</button>
-            <button class="delete" data-delete-task type="button" aria-label={f"Delete {task.title}"} on:click={() => onDelete(task.id)}>Delete</button>
+        <div class="actions" look={rowLook}>
+            <button class="move" look={actionLook()} data-move-task type="button" on:click={() => onAdvance(task.id)}>{statusAction(task.status)}</button>
+            <button class="delete" look={actionLook(true)} data-delete-task type="button" aria-label={f"Delete {task.title}"} on:click={() => onDelete(task.id)}>Delete</button>
         </div>
     </article>

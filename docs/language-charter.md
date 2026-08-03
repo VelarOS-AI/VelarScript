@@ -17,7 +17,7 @@ VelarScript combines:
 - Python's readable blocks, named functions, explicit `self`, and approachable control flow.
 - A small type layer for assistance and boundary validation rather than type-level programming.
 - An official `@velarscript/web` extension for JSX, components, state, DOM
-  updates, lifecycle, and scoped CSS.
+  updates, lifecycle, and the controlled Look visual language.
 
 The Core language and Web framework are separate contracts. Core provides the
 neutral compiler-extension host and framework-host ABI but does not activate or document JSX,
@@ -235,6 +235,24 @@ an async function body exists, so a default value cannot contain a direct
 `await`, even on an asynchronous declaration. A nested async callback is a
 separate boundary and remains valid, for example
 `def schedule(work: () -> Promise<Job> = async () => await nextJob()): ...`.
+
+Calls may name ordinary function, method, constructor, action, and Look-builder
+parameters with `name: value`:
+
+```velar
+def greet(name: string, punctuation: string = "!") -> string:
+    return f"Hello, {name}{punctuation}"
+
+greet(punctuation: "?", name: "Ada")
+```
+
+Positional arguments must appear first. A parameter may be supplied once,
+unknown names are errors, every required parameter remains required, and a rest
+parameter has no named form. Named expressions are evaluated once in written
+source order, then passed in declaration order, so readability never changes
+side-effect order. Parameter names are therefore part of a callable's public
+editor/module signature while function-type assignability still depends on
+parameter types and result type.
 
 Arrow functions are reserved for short expression callbacks:
 
@@ -539,9 +557,10 @@ intentional immutable override:
 const completed = {...task, status: TaskStatus.done}
 ```
 
-Application operations with several related values should normally accept one
-record `type` rather than a fragile positional parameter list. This keeps call
-sites named and readable without adding Python keyword-argument metadata:
+Application operations with a durable data shape should normally accept one
+record `type` rather than a long parameter list. Named arguments improve call
+readability, but a record remains the correct boundary when the values travel,
+persist, validate, or evolve together:
 
 ```velar
 type TaskDraft:
@@ -1310,40 +1329,114 @@ return <input on:keydown={addOnEnter} />
 - These are structural Web types over the native object, not synthetic events
   and not permission to use raw browser globals.
 
-```velar
-<div
-    class="card"
-    class:active={active}
-    style:--progress={progress}
-></div>
-```
-
-## 20. CSS
-
-CSS remains standard CSS inside a scoped component block:
+Every native element and component accepts `class` for a stable public hook and
+`look` for a checked visual value:
 
 ```velar
-component Card:
-    style:
-        .card {
-            display: grid;
-            gap: 12px;
-        }
-
-        .card:hover {
-            transform: translateY(-2px);
-        }
-
-    return <article class="card"></article>
+<div class="card" class:active={active} look={cardLook(active)}></div>
 ```
 
-- Component CSS is scoped by default.
-- A scoped selector may style a child component's top-level DOM root. The
-  parent's scope marker is attached only to that root (or each top-level root
-  in a fragment), so arbitrary DOM inside the child remains private.
-- Production builds extract static CSS.
-- Global CSS requires `style global:`.
-- VelarScript Web does not create a CSS-in-JS object system.
+`style`, `style:*`, component-local CSS blocks, and implicit global styles are
+not part of the controlled Web surface.
+
+## 20. Look: the controlled Web visual language
+
+Look is the Web extension's typed visual language. It uses ordinary Velar
+values instead of selectors, declarations, custom-property strings, or a
+second function syntax:
+
+```velar
+const ink = rgb(23, 32, 51)
+const surface = rgb(255, 255, 255)
+
+export const cardBase = look:
+    display = grid
+    gap = 12px
+    padding = 16px
+    border = line(1px, rgba(23, 32, 51, 0.14))
+    radius = 14px
+    color = ink
+    background = surface
+
+def cardLook(active: bool, compact: bool = false) -> Look:
+    return look:
+        ...cardBase
+        padding = compact ? 12px : 16px
+        translateY = active ? -2px : 0px
+
+component Card(active: bool = false):
+    return <article class="card" look={cardLook(active=active)}><h2>Card</h2></article>
+```
+
+The same `const`, `def`, import/export, parameter, named-argument, scope, and
+duplicate-declaration rules used by ordinary Velar code apply to visual values.
+There are no hidden CSS variables. A referenced color or spacing value must be
+a visible Velar binding, so the compiler can prove that it exists and has the
+right type. A repeated property inside one Look is an error; composition order
+is explicit, and a later spread or property intentionally wins.
+
+Look properties use a compact controlled vocabulary such as `background`,
+`padding`, `columns`, `radius`, `fontSize`, `shadow`, and `translateY`.
+Dimensions retain units (`px`, `rem`, `%`, `fr`, `vw`, `ms`, `deg`), while
+builders such as `space`, `edges`, `line`, `dropShadow`, `linearGradient`,
+`tracks`, `repeat`, `minmax`, `change`, `rgb`, `rgba`, `alpha`, `lighten`, and
+`darken` return checked values. The compiler rejects an unknown property,
+wrong value category, invalid builder call, and incompatible unit arithmetic.
+`none` means that a composed property is absent; `gone` deliberately emits the
+CSS value `none`.
+
+Responsive and element-state styling uses normal Velar conditions. Browser
+state starts with `@`, so it cannot collide with application variables:
+
+```velar
+const actionLook = look:
+    display = flex
+    gap = 12px
+    transition = change("translate", 160ms, easeOut)
+
+    if @hover and not @disabled:
+        translateY = -2px
+
+    if viewport.width <= 720px:
+        display = grid
+        gap = 8px
+
+    @before:
+        content = ""
+```
+
+Hooks include `@hover`, `@focus`, `@focusVisible`, `@active`, `@current`,
+`@disabled`, `@checked`, `@invalid`, and `@open`. Targets include `@before`,
+`@after`, `@backdrop`, `@placeholder`, `@selection`, `@marker`, and
+`@fileSelectorButton`. Hooks are legal only in `if` conditions and targets only
+as nested Look blocks. This single rule avoids selector parsing and accidental
+business-name capture. Condition expansion is bounded so one expression cannot
+silently generate an unmaintainable selector matrix.
+
+Output names are deterministic and readable. `class="card"` remains exactly
+`card` for tests, inspection, and external overrides; Look adds stable
+content-derived markers instead of random CSS-module names. Components forward
+their caller's universal `class` and `look` to one native root. A multi-root
+component must mark exactly one native root with the valueless `host` directive.
+
+Raw CSS is an explicit unsafe project boundary. Its position is mandatory:
+
+```velar
+import css unsafe "./foundation.css" before look
+import css unsafe "./integrations.css" after look
+```
+
+`before` and `after` only define source order around the project's controlled
+Look output. They do not imply priority, layers, or `!important`; authors own
+those native CSS decisions. The words remain contextual so ordinary bindings
+and APIs named `before` or `after` are unaffected. Every raw stylesheet must be
+declared once, may not hide another `@import`, and remains outside Look's type
+and scope guarantees. Production builds always emit one visible order:
+all `before look` resources, controlled Look rules, then all `after look`
+resources.
+Relative `url(...)` values are rejected because extraction would otherwise
+silently change their base directory; use a project-public `/path`, fragment,
+data URL, or absolute URL instead.
 
 ## 21. Velar Compiler
 
@@ -1459,7 +1552,7 @@ Their stable public API version is 0.7 and is specified in
   the explicit `velar.json.web.publicConfig` object; it never reads environment
   variables or secrets.
 
-- `velar/web`: `RouteContext`, `route`, `Router`, `Link`, `NavLink`, `Head`, `navigate`, `redirect`,
+- `velar/web`: `RouteContext`, `route`, `Router`, `Link`, `NavLink`, `Head` (including owned document language), `navigate`, `redirect`,
   `back`, `forward`, `reload`, `currentRoute`, and `announce`; application paths
   remain relative to `web.base`. Mounted navigation constructs its target
   before committing: construction failure reports through `velar/app`, retains
@@ -1561,7 +1654,7 @@ VelarScript 0.9 is validated with:
 - An API dashboard using typed HTTP, async functions, runtime type validation, npm interop, forms, and multiple components.
 - A production-style, base-routed Web application using reusable Velar source
   packages, a safely typed JavaScript npm package, Head ownership, accessible
-  forms, persistent state, and scoped CSS in Chromium, Firefox, and WebKit.
+  forms, persistent state, and controlled Look values in Chromium, Firefox, and WebKit.
 - A 121-module incremental compilation budget plus packed compiler/Web/creator/CLI
   installation in a clean npm consumer.
 - A 15-module Release Studio in development and CSP-enabled production across
@@ -1610,7 +1703,7 @@ VelarScript 0.9 is validated with:
 - Standard API 0.4 type/runtime acceptance across collections, text, math,
   JSON, async, URL, time, secure IDs, and structured logging modules, including
   execution from a clean packed CLI consumer.
-- Web API 0.8 type/runtime acceptance across routing, metadata, stable DOM IDs, HTTP,
+- Web API 0.9 type/runtime acceptance across routing, metadata, stable DOM IDs, HTTP,
   storage/IndexedDB, forms, browser helpers, files, WebSocket/SSE, and tests in
   all six development/production browser flows, including explicit public
   configuration and mount/render/event/mounted/cleanup error ownership.

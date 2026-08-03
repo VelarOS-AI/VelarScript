@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
 import { compileProjectEntries, type ProjectResult } from "./project.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
+import { readBoundedText } from "./bounded-text.ts";
 
 interface SessionState {
   config: VelarProjectConfig;
@@ -54,6 +55,23 @@ export class VelarProjectSessions {
         changed.add(module.inputPath);
       }
     }
+    for (const module of state.project?.modules ?? []) {
+      for (const resource of module.result.resources) {
+        if (!resource.source.startsWith(".")) continue;
+        const resourcePath = resolve(dirname(module.inputPath), resource.source);
+        if (contents.has(resourcePath)) continue;
+        try {
+          const overridden = overrides.get(resourcePath);
+          const text = overridden === undefined
+            ? await readBoundedText(resourcePath, 4 * 1024 * 1024, `${resource.kind} resource '${resource.source}'`)
+            : overridden;
+          contents.set(resourcePath, text);
+          if (state.contents.get(resourcePath) !== text) changed.add(resourcePath);
+        } catch {
+          changed.add(resourcePath);
+        }
+      }
+    }
     for (const previous of state.contents.keys()) if (!contents.has(previous)) changed.add(previous);
     if (state.project && changed.size === 0) return { config, project: state.project, changedPaths: changed };
 
@@ -75,6 +93,18 @@ export class VelarProjectSessions {
     state.project = project;
     state.contents = new Map(contents);
     for (const module of project.modules) state.contents.set(module.inputPath, module.result.source.text);
+    for (const module of project.modules) {
+      for (const resource of module.result.resources) {
+        if (!resource.source.startsWith(".")) continue;
+        const resourcePath = resolve(dirname(module.inputPath), resource.source);
+        try {
+          state.contents.set(resourcePath, overrides.get(resourcePath)
+            ?? await readBoundedText(resourcePath, 4 * 1024 * 1024, `${resource.kind} resource '${resource.source}'`));
+        } catch {
+          // Failed resources remain represented by project failures and are retried on the next snapshot.
+        }
+      }
+    }
     return { config, project, changedPaths: changed };
   }
 

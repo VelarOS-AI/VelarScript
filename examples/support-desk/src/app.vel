@@ -7,72 +7,46 @@ component MissingPage:
 
 const routes = [route("/", TicketsPage), route("/tickets/:id", TicketDetail)]
 
+const shellLook = look:
+    minHeight = 100vh
+    color = rgb(23, 32, 51)
+    background = linearGradient(145deg, rgb(224, 232, 255), rgb(245, 247, 251))
+    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+
+const headerLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = spaceBetween
+    gap = 16px
+    minHeight = 62px
+    padding = space(0px, 20px)
+    borderBottom = line(1px, rgba(205, 214, 230, 0.85))
+    background = rgba(245, 247, 251, 0.94)
+    backdropFilter = "blur(14px)"
+
+const brandLook = look:
+    marginRight = auto
+    color = rgb(23, 32, 51)
+    fontWeight = 900
+    letterSpacing = -0.03em
+    textDecoration = undecorated
+
+const navLinkLook = look:
+    padding = space(7px, 10px)
+    radius = 9px
+    color = rgb(104, 117, 138)
+    fontSize = 13px
+    fontWeight = 900
+    textDecoration = undecorated
+
+    if @current:
+        color = rgb(36, 73, 196)
+        background = rgb(229, 234, 255)
+
+const contextLook = look:
+    color = rgb(104, 117, 138)
+    fontSize = 13px
+    fontWeight = 700
+
 export component App:
-    style global:
-        :root {
-            color-scheme: light;
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            color: #172033;
-            background: #f5f7fb;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            background: radial-gradient(circle at 12% -10%, #e0e8ff 0, transparent 30rem), #f5f7fb;
-        }
-
-        button, input, select, textarea {
-            font: inherit;
-        }
-
-    style:
-        .shell {
-            min-height: 100vh;
-        }
-
-        header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            min-height: 62px;
-            padding: 0 max(20px, calc((100vw - 1100px) / 2));
-            border-bottom: 1px solid rgba(205, 214, 230, 0.85);
-            background: rgba(245, 247, 251, 0.9);
-            backdrop-filter: blur(14px);
-        }
-
-        header a {
-            color: #172033;
-            font-weight: 900;
-            letter-spacing: -0.03em;
-            text-decoration: none;
-        }
-
-        header > a {
-            margin-right: auto;
-        }
-
-        header nav a {
-            padding: 7px 10px;
-            border-radius: 9px;
-            color: #68758a;
-            font-size: 13px;
-            letter-spacing: 0;
-        }
-
-        header nav a[aria-current="page"] {
-            color: #2449c4;
-            background: #e5eaff;
-        }
-
-        header span {
-            color: #68758a;
-            font-size: 13px;
-            font-weight: 750;
-        }
-
-    return <div class="shell"><header><Link to="/">SupportDesk</Link><nav data-primary aria-label="Primary navigation"><NavLink to="/" exact={true}>Inbox</NavLink></nav><span>Customer operations</span></header><Router routes={routes} fallback={MissingPage} /></div>
+    return <div class="shell" look={shellLook}><header look={headerLook}><Link look={brandLook} to="/">SupportDesk</Link><nav data-primary aria-label="Primary navigation"><NavLink look={navLinkLook} to="/" exact={true}>Inbox</NavLink></nav><span look={contextLook}>Customer operations</span></header><Router routes={routes} fallback={MissingPage} /></div>

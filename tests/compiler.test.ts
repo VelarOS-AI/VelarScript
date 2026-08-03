@@ -9,6 +9,7 @@ import { compile as compileCore, describeType, formatSource, inspectModule as in
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
 import { isAssignable, parseType, sameType } from "../packages/compiler/src/types.ts";
 import { compileProject as compileProjectCore, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
+import { projectStyles } from "../packages/cli/src/framework-host.ts";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
 import {
   projectCompletionsAt,
@@ -102,6 +103,36 @@ else:
   assert.match(result.code ?? "", /const start = 2;/);
   assert.match(result.code ?? "", /result \+= 1;/);
   assert.match(result.code ?? "", /if \(\(result === 5\)\)/);
+});
+
+test("named arguments are checked, reordered, and evaluated in source order", () => {
+  const result = compileCore(`
+def describe(name: string, count: number = 1, excited: bool = false) -> string:
+    return name
+
+def mark(value: string) -> string:
+    print(value)
+    return value
+
+const label = describe(excited: true, name: mark("name"), count: 2)
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /\(\(__namedArguments\) => describe\(__namedArguments\[1\], __namedArguments\[2\], __namedArguments\[0\]\)\)\(\[true, mark\("name"\), 2\]\)/u);
+  const signature = result.moduleInterface.exports.get("describe");
+  assert.equal(signature, undefined);
+
+  const unknown = compileCore(`
+def greet(name: string, count: number = 1):
+    print(name)
+
+greet(missing: "Velar")
+`.trimStart());
+  assert.match(unknown.diagnostics.map((item) => item.message).join("\n"), /Unknown named argument 'missing'/u);
+  const duplicate = compileCore(`def greet(name: string):\n    print(name)\n\ngreet(name: "Velar", name: "Again")\n`);
+  assert.match(duplicate.diagnostics.map((item) => item.message).join("\n"), /more than once/u);
+  const positional = compileCore(`def greet(name: string, count: number = 1):\n    print(name)\n\ngreet(name: "Velar", 2)\n`);
+  assert.match(positional.diagnostics.map((item) => item.message).join("\n"), /Positional arguments must appear before named arguments/u);
 });
 
 test("keeps Web syntax outside the Core language unless the project loads the Web extension", () => {
@@ -227,7 +258,7 @@ print(count("a", "b"))
   const restSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "values" && symbol.kind === "parameter");
   assert.equal(restSymbol?.type, "List<number>");
   const totalSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "total" && symbol.kind === "function");
-  assert.equal(totalSymbol?.type, "(number, ...number) -> number");
+  assert.equal(totalSymbol?.type, "(first: number, ...number) -> number");
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "6\n6\n6\n2\n");
@@ -256,7 +287,7 @@ print(immediate)
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "load")?.type, "(number) -> Promise<number>");
-  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "combine")?.type, "(number, number) -> Promise<number>");
+  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "combine")?.type, "(left: number, right: number) -> Promise<number>");
   assert.match(result.code ?? "", /const load = async value => await next\(value\);/u);
   assert.match(result.code ?? "", /const combine = async \(left, right\) => next\(\(left \+ right\)\);/u);
   assert.match(result.code ?? "", /const member = \(await result\(\)\)\.value;/u);
@@ -273,7 +304,7 @@ const invalid = () => await task()
   assert.ok(synchronousAwait.diagnostics.some((item) => item.code === "VEL4007" && /async function/u.test(item.message)));
 
   const incompatible = compile("const invalid: (number) -> number = async value => value\n");
-  assert.ok(incompatible.diagnostics.some((item) => /Cannot assign \(number\) -> Promise<number> to \(number\) -> number/u.test(item.message)));
+  assert.ok(incompatible.diagnostics.some((item) => /Cannot assign \(value: number\) -> Promise<number> to \(number\) -> number/u.test(item.message)));
 });
 
 test("multiline declarations and calls accept the trailing commas shared by Python and JavaScript", () => {
@@ -376,7 +407,7 @@ print(await forwardAlias(delayed))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "forward")?.type, "(number) -> Promise<number>");
+  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "forward")?.type, "(value: number) -> Promise<number>");
   assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "save")?.type, "action () -> Promise<number?>");
   assert.match(result.code ?? "", /async function forward\(value\) \{\s*return inner\(value\);/u);
   assert.match(result.code ?? "", /async load\(value\) \{\s*const self = this;\s*return inner\(value\);/u);
@@ -576,7 +607,7 @@ component Choice(onChoose: (string) -> none):
 component App:
     return <Choice onChoose={(value: number) => none} />
 `.trimStart());
-  assert.ok(invalid.diagnostics.some((item) => /Cannot assign \(number\) -> none to \(string\) -> none/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /Cannot assign \(value: number\) -> none to \(string\) -> none/u.test(item.message)));
 
   const incompatibleDefaultOverride = compile(`
 class Greeter:
@@ -587,7 +618,7 @@ class FormalGreeter extends Greeter:
     override def greet(name: string) -> string:
         return name
 `.trimStart());
-  assert.ok(incompatibleDefaultOverride.diagnostics.some((item) => /must keep the base method signature \(string = default\) -> string/u.test(item.message)));
+  assert.ok(incompatibleDefaultOverride.diagnostics.some((item) => /must keep the base method signature \(name: string = default\) -> string/u.test(item.message)));
 
   const malformed = compile("const callback: (...string, number) -> none = (value, next) => none\n");
   assert.ok(malformed.diagnostics.some((item) => item.code === "VEL2016" && /rest function type parameter must be final/u.test(item.message)));
@@ -623,8 +654,8 @@ print(record("saved") == none)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.equal(describeType(result.moduleInterface.exports.get("record")!), "(string) -> none");
-  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "record")?.type, "(string) -> none");
+  assert.equal(describeType(result.moduleInterface.exports.get("record")!), "(value: string) -> none");
+  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "record")?.type, "(value: string) -> none");
   assert.match(result.code ?? "", /function record\(value\) \{\s*console\.log\(value\);\s*return null;\s*\}/u);
   assert.match(result.code ?? "", /__velarAction\(async \(\) => \{\s*saved\.set\(true\);\s*return null;\s*\}/u);
   const execution = executeModule(result.code ?? "");
@@ -1536,7 +1567,7 @@ mount(<App />, "#app")
       apiVersion: string;
       compilation: { moduleCount: number; compiledModules: number; reusedModules: number };
     };
-    assert.equal(initial.apiVersion, "0.8");
+    assert.equal(initial.apiVersion, "0.9");
     assert.deepEqual(initial.compilation, { ...initial.compilation, moduleCount: 3, compiledModules: 3, reusedModules: 0 });
 
     await writeFile(storePath, "export const label = \"Updated\"\n", "utf8");
@@ -1902,7 +1933,7 @@ const result = show(2)
   assert.notEqual(references[0]?.symbolId, references[1]?.symbolId);
   assert.equal(parameter.type, "number");
   const show = result.semanticIndex.symbols.find((symbol) => symbol.name === "show");
-  assert.equal(show?.type, "(number) -> number");
+  assert.equal(show?.type, "(value: number) -> number");
   const innerOffset = source.indexOf("print(value)") + "print(".length;
   const innerVisible = semanticVisibleSymbolsAt(result.semanticIndex, innerOffset);
   assert.deepEqual(innerVisible.filter((symbol) => symbol.name === "value").map((symbol) => symbol.kind), ["variable"]);
@@ -2071,12 +2102,12 @@ const label = greet(ada)
   assert.equal(references.filter((item) => item.path === mainPath).length, 2);
   assert.equal(projectRenameAt(project, modelsPath, (await readFile(modelsPath, "utf8")).indexOf("greet") + 1, "User"), "The new name collides with another declaration");
   assert.deepEqual(projectSignatureAt(project, mainPath, mainSource.indexOf("greet(ada)") + "greet(".length), {
-    label: "greet(User) -> string",
+    label: "greet(user: User) -> string",
     activeParameter: 0,
   });
   const ordinaryCompletions = projectCompletionsAt(project, mainPath, mainSource.indexOf("const label"));
   assert.ok(ordinaryCompletions.some((item) => item.label === "Person" && item.kind === "import" && item.detail === "Person"));
-  assert.ok(ordinaryCompletions.some((item) => item.label === "greet" && item.kind === "import" && /\(Person\) -> string/u.test(item.detail)));
+  assert.ok(ordinaryCompletions.some((item) => item.label === "greet" && item.kind === "import" && /\(user: Person\) -> string/u.test(item.detail)));
   assert.ok(ordinaryCompletions.some((item) => item.label === "ada" && item.kind === "variable" && item.detail === "Person"));
   assert.ok(!ordinaryCompletions.some((item) => item.label === "label"), "the binding being declared must not complete itself");
   assert.deepEqual(projectCompletionsAt(project, mainPath, personUse + "Person.".length), [
@@ -2209,10 +2240,10 @@ test("project sessions reuse unaffected modules and invalidate reverse dependenc
   assert.match(restored.project.modules.find((module) => module.inputPath === storePath)?.result.code ?? "", /const value = 4/u);
 });
 
-test("0.8 Web APIs have one versioned typed compiler/runtime contract", async () => {
+test("0.9 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
   assert.equal(api.standardVersion, "0.4");
-  assert.equal(api.extensions["@velarscript/web"], "0.8");
+  assert.equal(api.extensions["@velarscript/web"], "0.9");
   assert.deepEqual(api.modules["velar/app"], ["onError", "reportError"]);
   assert.deepEqual(api.modules["velar/config"], ["has", "keys", "publicConfig"]);
   assert.deepEqual(api.modules["velar/web"], ["Head", "Link", "NavLink", "RouteContext", "Router", "announce", "back", "currentRoute", "domId", "forward", "lazy", "navigate", "redirect", "reload", "route"]);
@@ -2306,7 +2337,7 @@ component App:
             showDialog(dialog)
             closeDialog(dialog, dialogResult(dialog))
 
-    return <><Head title="API" description="Typed Web" canonical="https://example.com/" robots="index,follow" image="/share.png" themeColor="#111827" /><form ref={form}><input name="name" /><input name="count" type="number" /><input name="selected" type="checkbox" /><input name="labels" /><select name="mode"><option value={FormMode.create}>Create</option></select></form><dialog ref={dialog}>Confirm</dialog><Router routes={[route("/", Missing), route("/items/:id", ItemPage)]} fallback={Missing} /></>
+    return <><Head title="API" description="Typed Web" canonical="https://example.com/" robots="index,follow" image="/share.png" themeColor="#111827" language="en-US" /><form host ref={form}><input name="name" /><input name="count" type="number" /><input name="selected" type="checkbox" /><input name="labels" /><select name="mode"><option value={FormMode.create}>Create</option></select></form><dialog ref={dialog}>Confirm</dialog><Router routes={[route("/", Missing), route("/items/:id", ItemPage)]} fallback={Missing} /></>
 
 const link = <Link to="/items" replace={true}>Items</Link>
 const navLink = <NavLink to="/items" exact={true}>Items</NavLink>
@@ -2367,7 +2398,7 @@ reload()
 });
 
 test("the official Web package owns the framework contract and CLI only composes it", async () => {
-  assert.equal(VELAR_WEB_API_VERSION, "0.8");
+  assert.equal(VELAR_WEB_API_VERSION, "0.9");
   assert.equal(velarWebFramework.name, "@velarscript/web");
   assert.deepEqual([...velarWebFramework.modules], [...VELAR_WEB_MODULES]);
   assert.deepEqual([...webModuleInterfaces.keys()].sort(), [...VELAR_WEB_MODULES].sort());
@@ -2772,6 +2803,7 @@ const operations = [
   () => navigate("/", { scroll: "yes" }),
   () => Head(accessor("title", "Title")),
   () => Head({ title: 42 }),
+  () => Head({ title: "Title", language: "not a tag!" }),
   () => Router(accessor("routes", [])),
   () => Router({ routes: new Array(1) }),
   () => Router({ routes: [routeAccessor] }),
@@ -2791,7 +2823,7 @@ console.log(failures.join(","));
 console.log([getterReads, domCalls, historyCalls, frameCalls].join(":"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, `${new Array(14).fill("TypeError").join(",")}\n0:0:0:0\n`);
+  assert.equal(execution.stdout, `${new Array(15).fill("TypeError").join(",")}\n0:0:0:0\n`);
 });
 
 test("form boundaries validate descriptors before reading or mutating a form", () => {
@@ -3249,7 +3281,7 @@ console.log(reads);
   assert.equal(typeExecution.stdout, "false\n0\n");
 });
 
-test("0.8 Web APIs reject invalid typed boundaries before browser execution", async () => {
+test("0.9 Web APIs reject invalid typed boundaries before browser execution", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-web-api-invalid-"));
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
@@ -5471,7 +5503,7 @@ component App:
 
     return <>
         <Panel><strong>{name}</strong></Panel>
-        <form on:submit.prevent.stop={submit}>
+        <form host on:submit.prevent.stop={submit}>
             <input bind:value={name} />
             <input type="number" bind:value={age} />
             <input type="checkbox" bind:checked={enabled} />
@@ -5770,7 +5802,7 @@ const session = Session.parse({client: direct})
   assert.match(valid.code ?? "", /new Remote\("id", "\/api"\)/u);
   assert.match(valid.code ?? "", /new sdk\.Client\("id", "\/namespace", 500\)/u);
   assert.match(valid.code ?? "", /instanceof Remote/u);
-  assert.ok(valid.semanticIndex.expressions.some((expression) => expression.memberName === "request" && expression.type === "(string) -> Promise<string>"));
+  assert.ok(valid.semanticIndex.expressions.some((expression) => expression.memberName === "request" && expression.type === "(path: string) -> Promise<string>"));
 
   const invalid = compile(`
 extern module "sdk-a":
@@ -6357,7 +6389,7 @@ component Chart:
   assert.deepEqual(valid.failures, []);
   assert.deepEqual(valid.modules.flatMap((module) => module.result.diagnostics), []);
   const invalid = await compileProject(invalidPath);
-  assert.ok(invalid.modules.flatMap((module) => module.result.diagnostics).some((item) => /Cannot assign \(number\) -> none to \(string\) -> none/u.test(item.message)));
+  assert.ok(invalid.modules.flatMap((module) => module.result.diagnostics).some((item) => /Cannot assign \(value: number\) -> none to \(string\) -> none/u.test(item.message)));
   const childrenProject = await compileProject(childrenPath);
   assert.deepEqual(childrenProject.modules.flatMap((module) => module.result.diagnostics), []);
   const svgProject = await compileProject(svgPath);
@@ -6548,7 +6580,7 @@ print(amount)
   assert.ok(valid.modules.every((module) => module.result.diagnostics.length === 0));
   const signatureOffset = validSource.indexOf("Product(\"second\")") + 2;
   const signature = projectSignatureAt(valid, entry, signatureOffset);
-  assert.equal(signature?.label, "count(Item, ...Item) -> number");
+  assert.equal(signature?.label, "count(first: Item, ...Item) -> number");
   assert.equal(signature?.activeParameter, 1);
 
   await writeFile(entry, `
@@ -6583,7 +6615,7 @@ print(count(tags))
   assert.deepEqual(valid.failures, []);
   assert.ok(valid.modules.every((module) => module.result.diagnostics.length === 0));
   const signature = projectSignatureAt(valid, entry, validSource.indexOf("tags))") + 2);
-  assert.equal(signature?.label, "count(Set<Tag>) -> number");
+  assert.equal(signature?.label, "count(tags: Set<Tag>) -> number");
 
   await writeFile(entry, `
 import {count} from "./tags.vel"
@@ -7880,8 +7912,14 @@ test("validates annotations and keeps any behind unsafe boundaries", () => {
   assert.deepEqual(recursive.diagnostics, []);
 });
 
-test("compiles Web components to owned DOM and extracted scoped CSS", () => {
+test("compiles Web components to owned DOM and extracted Look rules", () => {
   const result = compile(`
+const counterLook = look:
+    color = rgb(36, 92, 168)
+
+    if @hover:
+        color = rgb(20, 52, 112)
+
 component Counter(start: number = 0):
     state count = start
     computed doubled = count * 2
@@ -7898,12 +7936,7 @@ component Counter(start: number = 0):
     cleanup:
         print("cleanup")
 
-    style:
-        .counter:hover {
-            color: blue;
-        }
-
-    return <button class="counter" class:active={count > 0} on:click={increment}>{count} / {doubled}</button>
+    return <button class="counter" look={counterLook} class:active={count > 0} on:click={increment}>{count} / {doubled}</button>
 
 mount(<Counter start={1} />, "#app")
 `.trimStart());
@@ -7915,7 +7948,8 @@ mount(<Counter start={1} />, "#app")
   assert.match(result.code ?? "", /__velarWatch/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarCreateElement\("button", __namespace\)/);
-  assert.match(result.css ?? "", /\.counter\[data-velar-[a-z0-9]+\]:hover/);
+  assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\]\[data-velar-look\]:where\(:hover\)\{color:var\(--velar-look-hover-color\)\}/);
+  assert.match(result.code ?? "", /__velarLookBind/);
   assert.doesNotMatch(result.code ?? "", /\bProxy\b/);
   assert.match(result.code ?? "", /if \(initialized && !Object\.is\(next, current\)\) callback/);
   assert.match(result.code ?? "", /if \(destroyed\) return null;[\s\S]*__velarCleanupStep/);
@@ -7924,26 +7958,222 @@ mount(<Counter start={1} />, "#app")
   assert.ok(domCommit >= 0 && watchCommit > domCommit);
 });
 
-test("scoped CSS can style the top-level DOM root of a child component", () => {
+test("Look is flat, typed as a value, responsive, state-aware, and target-aware", () => {
   const result = compile(`
-component ChildLink:
-    return <a href="/docs">Docs</a>
+const cardLook = look:
+    display = grid
+    gap = 12px
+    maxWidth = 680px
+    padding = 20px
+    background = rgb(251, 250, 247)
+    border = line(width: 1px, color: rgb(217, 215, 209))
+    radius = 16px
+    color = rgb(17, 18, 22)
 
-component Navigation:
-    style:
-        nav a {
-            text-decoration: none;
-        }
+    if @hover and not @disabled:
+        translateY = -2px
 
-    return <nav><ChildLink /></nav>
+    if viewport.width <= 720px:
+        padding = 16px
+
+    width = 72 * 1%
+    margin = edges(-8px, 2px, 0px, 2px)
+
+    @before:
+        content = ""
+
+component Card:
+    return <article class="card" look={cardLook}>Card</article>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  const scope = result.css?.match(/nav\[(data-velar-[a-z0-9]+)\] a\[\1\]/)?.[1];
-  assert.ok(scope);
-  assert.match(result.code ?? "", new RegExp(`__velarUseComponent\\(ChildLink\\(\\{  \\}, __namespace\\), __childScope, "${scope}"\\)`));
-  assert.match(result.code ?? "", /function __velarScopeComponentRoot\(node, attribute\)/u);
-  assert.match(result.code ?? "", /node\.nodeType === 11/u);
+  assert.match(result.css ?? "", /\[data-velar-look~="base:display"\]\{display:var\(--velar-look-base-display\)\}/u);
+  assert.match(result.css ?? "", /\[data-velar-look~="hover\+not-disabled:translate-y"\]\[data-velar-look\]:where\(:hover\):where\(:not\(:disabled\):not\(\[aria-disabled="true"\]\)\)/u);
+  assert.match(result.css ?? "", /@media \(width <= 720px\)\{\[data-velar-look~="viewport-width-lte-720px:padding"\]\[data-velar-look\]/u);
+  assert.match(result.css ?? "", /\[data-velar-look~="before:base:content"\]::before/u);
+  assert.match(result.code ?? "", /data-velar-look/u);
+  assert.match(result.code ?? "", /__velarLookMath\("\*", 72, "1%"\)/u);
+  assert.match(result.code ?? "", /"-2px"/u);
+  assert.match(result.code ?? "", /"-8px"/u);
+  assert.doesNotMatch(result.code ?? "", /-"(?:2|8)px"/u);
+  assert.doesNotMatch(result.code ?? "", /[A-Za-z0-9_-]{6,}__[A-Za-z0-9_-]{6,}/u);
+});
+
+test("unsafe CSS imports are explicit resources around the controlled Look segment", () => {
+  const source = `
+import css unsafe "./foundation.css" before look
+import css unsafe "./overrides.css" after look
+
+const cardLook = look:
+    color = rgb(0, 128, 128)
+
+component Card:
+    return <article class="card" look={cardLook}>Card</article>
+`.trimStart();
+  const inspection = inspectModule(source);
+  assert.deepEqual(inspection.resources, [
+    { source: "./foundation.css", kind: "unsafe CSS" },
+    { source: "./overrides.css", kind: "unsafe CSS" },
+  ]);
+  const result = compile(source, {
+    resourceContents: new Map([
+      ["./foundation.css", ".card { color: black; }"],
+      ["./overrides.css", ".card { color: purple; }"],
+    ]),
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const foundation = (result.css ?? "").indexOf("color: black");
+  const look = (result.css ?? "").indexOf("data-velar-look");
+  const override = (result.css ?? "").indexOf("color: purple");
+  assert.ok(foundation >= 0 && look > foundation && override > look);
+
+  const hiddenDependency = compile('import css unsafe "./legacy.css" before look\n', {
+    resourceContents: new Map([["./legacy.css", '@import "./theme.css"; .icon { background: url("./icon.svg"); }']]),
+  });
+  const messages = hiddenDependency.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /contains @import/u);
+  assert.match(messages, /uses relative url/u);
+});
+
+test("Look composition uses ordinary functions and named arguments", () => {
+  const result = compile(`
+def surface(radius: Length, color: Color) -> Look:
+    return look:
+        background = color
+        radius = radius
+
+const interactive = look:
+    cursor = pointer
+
+    if @focusVisible:
+        outline = line(width: 2px, color: rgb(63, 115, 150))
+
+const actionLook = look:
+    ...surface(color: rgb(255, 255, 255), radius: 999px)
+    ...interactive
+    display = inlineFlex
+    alignItems = center
+
+component ActionButton:
+    return <button look={actionLook}>Continue</button>
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /surface\(__namedArguments\[1\], __namedArguments\[0\]\)/u);
+  assert.match(result.code ?? "", /__velarLook\(\[/u);
+  assert.match(result.css ?? "", /focus-visible:outline"\]\[data-velar-look\]:where\(:focus-visible\)/u);
+});
+
+test("Look rejects ambiguous maintenance hazards", () => {
+  const result = compile(`
+const broken = look:
+    padding = 12px
+    paddingInline = 16px
+    paddingInline = 18px
+    missing = 1px
+
+    if @unknown:
+        color = "red"
+
+    @unknownTarget:
+        content = "x"
+
+component Card:
+    return <article style="color:red" style:color={"red"} look={broken}>Card</article>
+`.trimStart());
+
+  const messages = result.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /Look property 'paddingInline' is defined more than once/u);
+  assert.match(messages, /Unknown Look property 'missing'/u);
+  assert.match(messages, /Unknown Look hook '@unknown'/u);
+  assert.match(messages, /Unknown Look target '@unknownTarget'/u);
+  assert.equal(result.diagnostics.filter((item) => item.code === "VEL5041").length, 2);
+
+  const nestedComposition = compile(`
+const base = look:
+    color = rgb(17, 18, 22)
+
+const broken = look:
+    if true:
+        ...base
+`.trimStart());
+  assert.match(nestedComposition.diagnostics.map((item) => item.message).join("\n"), /Look composition is only valid at the outer level/u);
+
+  const condition = Array.from({ length: 33 }, (_, index) => `ready${index}`).join(" or ");
+  const state = Array.from({ length: 33 }, (_, index) => `const ready${index} = true`).join("\n");
+  const expanded = compile(`${state}\n\nconst broken = look:\n    if ${condition}:\n        color = rgb(17, 18, 22)\n`);
+  assert.match(expanded.diagnostics.map((item) => item.message).join("\n"), /at most 32 selector\/runtime terms/u);
+});
+
+test("components expose one stable class and Look host without declaring framework props", () => {
+  const result = compile(`
+const callerLook = look:
+    padding = 12px
+
+component Card:
+    const ownLook = look:
+        color = rgb(17, 18, 22)
+    return <article class="card" look={ownLook}>Card</article>
+
+component App:
+    return <Card class="featured" look={callerLook} />
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /if \(__props\.class !== undefined\) __velarClassBindRoot/u);
+  assert.match(result.code ?? "", /if \(__props\.look !== undefined\) __velarLookBindRoot/u);
+
+  const fragment = compile(`
+component Broken:
+    return <><header>Header</header><main>Main</main></>
+
+component Valid:
+    return <><header>Header</header><main host>Main</main></>
+`.trimStart());
+  assert.equal(fragment.diagnostics.filter((item) => item.code === "VEL5043").length, 1);
+  assert.doesNotMatch(fragment.code ?? "", /setAttribute\("host"/u);
+});
+
+test("project CSS has one explicit before-Look-after order across module boundaries", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-look-order-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(join(directory, "base.css"), ".base { order: 1; }", "utf8");
+  await writeFile(join(directory, "base-after.css"), ".base-after { order: 4; }", "utf8");
+  await writeFile(join(directory, "feature.css"), ".feature { order: 2; }", "utf8");
+  await writeFile(join(directory, "feature-after.css"), ".feature-after { order: 5; }", "utf8");
+  await writeFile(join(directory, "feature.vel"), `
+import css unsafe "./feature.css" before look
+import css unsafe "./feature-after.css" after look
+export const featureLook = look:
+    color = rgb(1, 2, 3)
+`.trimStart(), "utf8");
+  await writeFile(entry, `
+import {featureLook} from "./feature.vel"
+import css unsafe "./base.css" before look
+import css unsafe "./base-after.css" after look
+const appLook = look:
+    background = rgb(4, 5, 6)
+component App:
+    return <main look={[featureLook, appLook]}>App</main>
+`.trimStart(), "utf8");
+
+  const project = await compileProject(entry);
+  assert.deepEqual(project.failures, []);
+  const styles = projectStyles(project);
+  const firstLook = styles.indexOf("data-velar-look");
+  const lastBefore = Math.max(styles.indexOf(".base {"), styles.indexOf(".feature {"));
+  const firstAfter = Math.min(styles.indexOf(".base-after {"), styles.indexOf(".feature-after {"));
+  assert.ok(lastBefore >= 0 && firstLook > lastBefore && firstAfter > firstLook);
+});
+
+test("unsafe CSS has one project owner", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-look-owner-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(join(directory, "shared.css"), ".shared { color: black; }", "utf8");
+  await writeFile(join(directory, "feature.vel"), 'import css unsafe "./shared.css" before look\nexport const value = 1\n', "utf8");
+  await writeFile(entry, 'import {value} from "./feature.vel"\nimport css unsafe "./shared.css" before look\nprint(value)\n', "utf8");
+  const project = await compileProject(entry);
+  assert.match(project.failures.map((failure) => failure.message).join("\n"), /each raw stylesheet must have one project owner/u);
 });
 
 test("component resources own typed asynchronous loading, retry, errors, and stale completion", () => {
@@ -8530,7 +8760,7 @@ test("CLI emits complete Web application assets", async () => {
     capability: "web",
     target: "browser",
     protocolVersion: 1,
-    apiVersion: "0.8",
+    apiVersion: "0.9",
     artifactKind: "velar-web-build",
   });
   assert.deepEqual(manifest.compiler, { name: "velar", version: "0.9.0-dev" });
@@ -8565,7 +8795,7 @@ test("language server publishes diagnostics, hover, and completion", async () =>
     "    state count = 1",
     "    computed doubled = count * 2",
     "    resource remote = loadLabel()",
-    "    return <><p>{remote.loading ? \"Loading\" : doubled}</p><button type=\"button\" on:click={() => remote.reload()}>Reload</button></>",
+    "    return <><p host>{remote.loading ? \"Loading\" : doubled}</p><button type=\"button\" on:click={() => remote.reload()}>Reload</button></>",
     "",
   ].join("\n");
   await linkWorkspaceWebExtension(directory);
@@ -8760,7 +8990,7 @@ test("language server publishes diagnostics, hover, and completion", async () =>
   assert.match(JSON.stringify(symbols.result), /label/);
   send({ jsonrpc: "2.0", id: 8, method: "textDocument/signatureHelp", params: { textDocument: { uri: mainUri }, position: { line: 1, character: callColumn } } });
   const signature = await waitFor((message) => message.id === 8);
-  assert.match(JSON.stringify(signature.result), /greet\(string\) -&gt; string|greet\(string\) -> string/u);
+  assert.match(JSON.stringify(signature.result), /greet\(name: string\) -&gt; string|greet\(name: string\) -> string/u);
   send({ jsonrpc: "2.0", id: 21, method: "textDocument/inlayHint", params: { textDocument: { uri: mainUri }, range: { start: { line: 0, character: 0 }, end: { line: 10, character: 0 } } } });
   const inlayHints = await waitFor((message) => message.id === 21);
   const typeHints = inlayHints.result as Array<{ position: { line: number; character: number }; label: string; kind: number; paddingRight: boolean }>;

@@ -4,6 +4,91 @@ import {filter, loadTickets, nextPage, page, previousPage, query, selectedTicket
 import {TicketCard} from "../components/ticket-card.vel"
 import {TicketForm} from "../components/ticket-form.vel"
 
+const pageLook = look:
+    display = grid
+    gap = 20px
+    width = 100%
+    maxWidth = 1100px
+    marginInline = auto
+    padding = edges(34px, 16px, 60px, 16px)
+
+const heroLook = look:
+    display = flex
+    alignItems = end
+    justifyContent = spaceBetween
+    gap = 18px
+
+    if viewport.width <= 760px:
+        alignItems = start
+        flow = column
+
+const titleLook = look:
+    margin = 0
+    color = rgb(22, 34, 59)
+    fontSize = clamp(34px, 6vw, 58px)
+    letterSpacing = -0.05em
+
+const introLook = look:
+    maxWidth = 560px
+    margin = 0
+    color = rgb(105, 117, 138)
+    lineHeight = 1.55
+
+const toolsLook = look:
+    display = grid
+    columns = tracks(1fr, 170px, 170px)
+    gap = 10px
+
+    if viewport.width <= 760px:
+        columns = tracks(1fr)
+
+const controlLook = look:
+    minHeight = 42px
+    border = line(1px, rgb(204, 214, 229))
+    radius = 10px
+    padding = space(0px, 11px)
+    background = rgb(255, 255, 255)
+
+const listLook = look:
+    display = grid
+    columns = repeat(2, minmax(0px, 1fr))
+    gap = 12px
+
+    if viewport.width <= 760px:
+        columns = tracks(1fr)
+
+def stateLook(failed: bool = false) -> Look:
+    return look:
+        padding = 18px
+        radius = 14px
+        color = failed ? rgb(157, 41, 41) : rgb(99, 112, 135)
+        background = failed ? rgb(255, 237, 237) : rgb(237, 241, 247)
+
+const retryLook = look:
+    marginLeft = 10px
+    border = line(1px, currentColor)
+    radius = 8px
+    padding = space(6px, 9px)
+    color = inherit
+    background = transparent
+    fontWeight = 800
+    cursor = pointer
+
+const paginationLook = look:
+    display = flex
+    alignItems = center
+    justifyContent = center
+    gap = 12px
+
+const pageButtonLook = look:
+    border = line(1px, rgb(204, 214, 229))
+    radius = 9px
+    padding = space(8px, 12px)
+    color = rgb(66, 80, 106)
+    background = rgb(255, 255, 255)
+    fontWeight = 800
+    cursor = pointer
+
 export component TicketsPage(route: RouteContext):
     resource catalog = loadTickets()
     computed loadFailure = catalog.error
@@ -11,121 +96,17 @@ export component TicketsPage(route: RouteContext):
     if requestedPage != none:
         setPage(requestedPage)
 
-    style:
-        .page {
-            display: grid;
-            gap: 20px;
-            width: min(1100px, calc(100% - 32px));
-            margin: 0 auto;
-            padding: 34px 0 60px;
-        }
-
-        .hero {
-            display: flex;
-            align-items: end;
-            justify-content: space-between;
-            gap: 18px;
-        }
-
-        h1, p {
-            margin: 0;
-        }
-
-        h1 {
-            color: #16223b;
-            font-size: clamp(34px, 6vw, 58px);
-            letter-spacing: -0.05em;
-        }
-
-        .hero p {
-            max-width: 560px;
-            color: #69758a;
-            line-height: 1.55;
-        }
-
-        .tools {
-            display: grid;
-            grid-template-columns: 1fr 170px 170px;
-            gap: 10px;
-        }
-
-        .tools input, .tools select {
-            min-height: 42px;
-            border: 1px solid #ccd6e5;
-            border-radius: 10px;
-            padding: 0 11px;
-            background: #fff;
-            font: inherit;
-        }
-
-        .list {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .state {
-            padding: 18px;
-            border-radius: 14px;
-            color: #637087;
-            background: #edf1f7;
-        }
-
-        .error {
-            color: #9d2929;
-            background: #ffeded;
-        }
-
-        .state button {
-            margin-left: 10px;
-            border: 1px solid currentColor;
-            border-radius: 8px;
-            padding: 6px 9px;
-            color: inherit;
-            background: transparent;
-            font-weight: 800;
-            cursor: pointer;
-        }
-
-        .pagination {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-        }
-
-        .pagination button {
-            border: 1px solid #ccd6e5;
-            border-radius: 9px;
-            padding: 8px 12px;
-            color: #42506a;
-            background: #fff;
-            font-weight: 800;
-            cursor: pointer;
-        }
-
-        @media (max-width: 760px) {
-            .hero {
-                align-items: start;
-                flex-direction: column;
-            }
-
-            .tools, .list {
-                grid-template-columns: 1fr;
-            }
-        }
-
-    return <main class="page" data-support-desk>
+    return <main class="page" look={pageLook} data-support-desk>
         <Head title="SupportDesk · Customer issues" description="A routed support application built with Velar" themeColor="#f5f7fb" />
-        <section class="hero"><div><h1>Support, in focus.</h1><p>Turn incoming issues into clear, owned work without losing the customer’s context.</p></div><p data-result-count>{selectedTickets.length} tickets</p></section>
+        <section class="hero" look={heroLook}><div><h1 look={titleLook}>Support, in focus.</h1><p look={introLook}>Turn incoming issues into clear, owned work without losing the customer’s context.</p></div><p look={introLook} data-result-count>{selectedTickets.length} tickets</p></section>
         <TicketForm />
-        <section class="tools" aria-label="Ticket controls">
-            <input data-search bind:value={query} aria-label="Search tickets" placeholder="Search issue or requester" />
-            <select data-filter bind:value={filter} aria-label="Filter tickets"><option value={TicketFilter.all}>All statuses</option><option value={TicketFilter.open}>Open</option><option value={TicketFilter.pending}>Pending</option><option value={TicketFilter.resolved}>Resolved</option></select>
-            <select data-sort bind:value={sort} aria-label="Sort tickets"><option value={TicketSort.recent}>Recently updated</option><option value={TicketSort.oldest}>Oldest updated</option><option value={TicketSort.priority}>Priority</option></select>
+        <section class="tools" look={toolsLook} aria-label="Ticket controls">
+            <input look={controlLook} data-search bind:value={query} aria-label="Search tickets" placeholder="Search issue or requester" />
+            <select look={controlLook} data-filter bind:value={filter} aria-label="Filter tickets"><option value={TicketFilter.all}>All statuses</option><option value={TicketFilter.open}>Open</option><option value={TicketFilter.pending}>Pending</option><option value={TicketFilter.resolved}>Resolved</option></select>
+            <select look={controlLook} data-sort bind:value={sort} aria-label="Sort tickets"><option value={TicketSort.recent}>Recently updated</option><option value={TicketSort.oldest}>Oldest updated</option><option value={TicketSort.priority}>Priority</option></select>
         </section>
-        {catalog.loading ? <p class="state" aria-busy="true">Loading tickets…</p> : none}
-        {loadFailure ? <p class="state error" role="alert">{loadFailure.message}<button type="button" on:click={catalog.reload}>Retry</button></p> : none}
-        <section class="list" aria-label="Tickets">{visibleTickets.map(ticket => <TicketCard key={ticket.id} ticket={ticket} />)}</section>
-        <nav class="pagination" aria-label="Ticket pages"><button data-previous type="button" on:click={previousPage}>Previous</button><span data-page>Page {page} of {totalPages}</span><button data-next type="button" on:click={nextPage}>Next</button></nav>
+        {catalog.loading ? <p class="state" look={stateLook()} aria-busy="true">Loading tickets…</p> : none}
+        {loadFailure ? <p class="state error" look={stateLook(true)} role="alert">{loadFailure.message}<button look={retryLook} type="button" on:click={catalog.reload}>Retry</button></p> : none}
+        <section class="list" look={listLook} aria-label="Tickets">{visibleTickets.map(ticket => <TicketCard key={ticket.id} ticket={ticket} />)}</section>
+        <nav class="pagination" look={paginationLook} aria-label="Ticket pages"><button look={pageButtonLook} data-previous type="button" on:click={previousPage}>Previous</button><span data-page>Page {page} of {totalPages}</span><button look={pageButtonLook} data-next type="button" on:click={nextPage}>Next</button></nav>
     </main>

@@ -24,9 +24,9 @@ export type ValueType =
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | { readonly kind: "node" }
   | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly intrinsic?: string }
-  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
 export const unknownType: ValueType = { kind: "unknown" };
@@ -41,16 +41,22 @@ export interface TypeEnvironment {
   isSubclassOf(actual: string, expected: string): boolean;
 }
 
+function parameterTypeText(value: string): { readonly name: string; readonly type: string } {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$/u.exec(value);
+  return match ? { name: match[1]!, type: match[2]! } : { name: "", type: value };
+}
+
 export function parseType(text: string): ValueType {
   const trimmed = text.trim();
   const functionType = splitFunctionType(trimmed);
   if (functionType) {
     const parameters = splitTopLevel(functionType.parameters, ",");
-    const restText = parameters.at(-1)?.startsWith("...") ? parameters.at(-1)!.slice(3).trim() : null;
-    const fixed = restText ? parameters.slice(0, -1) : parameters;
+    const restText = parameters.at(-1)?.startsWith("...") ? parameterTypeText(parameters.at(-1)!.slice(3).trim()).type : null;
+    const fixed = (restText ? parameters.slice(0, -1) : parameters).map(parameterTypeText);
     return {
       kind: "function",
-      parameters: fixed.map((parameter) => parseType(parameter)),
+      parameters: fixed.map((parameter) => parseType(parameter.type)),
+      ...(fixed.some((parameter) => parameter.name) ? { parameterNames: fixed.map((parameter) => parameter.name) } : {}),
       requiredParameters: fixed.length,
       ...(restText ? { rest: parseType(restText) } : {}),
       result: parseType(functionType.result),
@@ -234,6 +240,7 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
       : !actual.rest && !expected.rest;
     return actual.parameters.length === expected.parameters.length
       && actual.requiredParameters <= expected.requiredParameters
+      && (!expected.parameterNames || expected.parameterNames.every((name, index) => !name || actual.parameterNames?.[index] === name))
       && actual.parameters.every((parameter, index) => isAssignable(expected.parameters[index] ?? unknownType, parameter, environment, new Set(seen)))
       && restAssignable
       && isAssignable(actual.result, expected.result, environment, seen);
@@ -266,7 +273,7 @@ function typeIdentityKey(type: ValueType): string {
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind}:${type.requiredParameters}:${type.parameters.map(typeIdentityKey).join(",")}:${type.rest ? typeIdentityKey(type.rest) : ""}:${typeIdentityKey(type.result)}`;
+      return `${type.kind}:${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(typeIdentityKey).join(",")}:${type.rest ? typeIdentityKey(type.rest) : ""}:${typeIdentityKey(type.result)}`;
     case "componentConstructor":
       return `component:${type.name}`;
     case "union":
@@ -336,9 +343,10 @@ export function describeType(type: ValueType): string {
       return `${type.kind === "action" ? "action " : ""}(${[
         ...type.parameters.map((parameter, index) => {
           const described = describeType(parameter);
+          const labeled = type.parameterNames?.[index] ? `${type.parameterNames[index]}: ${described}` : described;
           return index >= type.requiredParameters
-            ? `${described} = default`
-            : described;
+            ? `${labeled} = default`
+            : labeled;
         }),
         ...(type.rest ? [`...${describeType(type.rest)}`] : []),
       ].join(", ")}) -> ${describeType(type.result)}`;
