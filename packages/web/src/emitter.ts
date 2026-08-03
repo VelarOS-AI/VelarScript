@@ -282,7 +282,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (hasMeaningfulChildren(expression.children)) properties.push(`children: ${this.emitJsxChildren(expression.children, scope, namespace)}`);
       const props = properties.join(", ");
       const component = `${expression.tag}({ ${props} }, ${namespace})`;
-      return asChild ? `__velarUseComponent(${component}, ${scope})` : component;
+      const parentStyleScope = this.currentStyleScope ? `, ${JSON.stringify(this.currentStyleScope)}` : "";
+      return asChild ? `__velarUseComponent(${component}, ${scope}${parentStyleScope})` : component;
     }
 
     const id = ++this.jsxId;
@@ -863,7 +864,19 @@ function __velarComponent(node, scope, mounted, cleanup) {
   };
 }
 
-function __velarUseComponent(instance, scope) {
+function __velarScopeComponentRoot(node, attribute) {
+  if (!attribute || !node) return;
+  if (node.nodeType === 1) {
+    node.setAttribute(attribute, "");
+    return;
+  }
+  if (node.nodeType === 11) {
+    for (const child of node.childNodes) if (child.nodeType === 1) child.setAttribute(attribute, "");
+  }
+}
+
+function __velarUseComponent(instance, scope, parentStyleScope = "") {
+  __velarScopeComponentRoot(instance.node, parentStyleScope);
   scope.mounts.push(() => instance.__mount());
   scope.cleanups.push(() => instance.destroy(false));
   return instance.node;

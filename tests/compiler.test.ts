@@ -7924,6 +7924,28 @@ mount(<Counter start={1} />, "#app")
   assert.ok(domCommit >= 0 && watchCommit > domCommit);
 });
 
+test("scoped CSS can style the top-level DOM root of a child component", () => {
+  const result = compile(`
+component ChildLink:
+    return <a href="/docs">Docs</a>
+
+component Navigation:
+    style:
+        nav a {
+            text-decoration: none;
+        }
+
+    return <nav><ChildLink /></nav>
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const scope = result.css?.match(/nav\[(data-velar-[a-z0-9]+)\] a\[\1\]/)?.[1];
+  assert.ok(scope);
+  assert.match(result.code ?? "", new RegExp(`__velarUseComponent\\(ChildLink\\(\\{  \\}, __namespace\\), __childScope, "${scope}"\\)`));
+  assert.match(result.code ?? "", /function __velarScopeComponentRoot\(node, attribute\)/u);
+  assert.match(result.code ?? "", /node\.nodeType === 11/u);
+});
+
 test("component resources own typed asynchronous loading, retry, errors, and stale completion", () => {
   const result = compile(`
 async def loadLabel() -> string:

@@ -1338,9 +1338,12 @@ component Card:
 ```
 
 - Component CSS is scoped by default.
+- A scoped selector may style a child component's top-level DOM root. The
+  parent's scope marker is attached only to that root (or each top-level root
+  in a fragment), so arbitrary DOM inside the child remains private.
 - Production builds extract static CSS.
 - Global CSS requires `style global:`.
-- Velar Web does not create a CSS-in-JS object system.
+- VelarScript Web does not create a CSS-in-JS object system.
 
 ## 21. Velar Compiler
 
