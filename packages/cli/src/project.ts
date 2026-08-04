@@ -468,6 +468,7 @@ function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]
     .join("|");
   return [
     `exports:${typeMap(interface_.exports)}`,
+    `mutable:${[...interface_.mutableExports].sort().join(",")}`,
     `named:${namedTypes}`,
     `aliases:${typeMap(interface_.typeAliases)}`,
     `enums:${enums}`,
@@ -490,6 +491,7 @@ async function createAnalysisContext(
   const imports = new Map<string, ValueType>();
   const dynamicImports = new Map<string, ValueType>();
   const reactiveImports = new Map<string, "state" | "computed">();
+  const effectfulImports = new Set<string>();
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const namedTypeIdentities = new Map<string, string>();
   const typeAliases = new Map<string, ValueType>();
@@ -519,7 +521,11 @@ async function createAnalysisContext(
           message: `Dynamically imported module '${dependency.source}' exports reactive values; expose behavior through functions or components instead`,
         });
       }
-      dynamicImports.set(dependency.source, { kind: "object", fields: new Map(interface_.exports) });
+      dynamicImports.set(dependency.source, {
+        kind: "object",
+        fields: new Map(interface_.exports),
+        readonlyFields: new Set(interface_.exports.keys()),
+      });
       importHiddenTypeMetadata(interface_, namedTypes, enums, classes);
       continue;
     }
@@ -548,7 +554,8 @@ async function createAnalysisContext(
       }
       for (const specifier of dependency.specifiers) {
         if (specifier.namespace) {
-          imports.set(specifier.local, { kind: "object", fields: new Map([...declarations.exports].map(([name, type]) => [name, renameType(type, aliases)])) });
+          const fields = new Map([...declarations.exports].map(([name, type]) => [name, renameType(type, aliases)]));
+          imports.set(specifier.local, { kind: "object", fields, readonlyFields: new Set(fields.keys()) });
           continue;
         }
         const type = declarations.exports.get(specifier.imported);
@@ -559,7 +566,7 @@ async function createAnalysisContext(
     }
     const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
-      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
+      importInterface(module, dependency, standard, imports, reactiveImports, effectfulImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
       continue;
     }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
@@ -568,12 +575,13 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
+    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, effectfulImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
   }
   return {
     imports,
     dynamicImports,
     reactiveImports,
+    effectfulImports,
     namedTypes,
     namedTypeIdentities,
     typeAliases,
@@ -748,6 +756,7 @@ function importInterface(
   interface_: ModuleInspection["moduleInterface"],
   imports: Map<string, ValueType>,
   reactiveImports: Map<string, "state" | "computed">,
+  effectfulImports: Set<string>,
   namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
   namedTypeIdentities: Map<string, string>,
   typeAliases: Map<string, ValueType>,
@@ -809,15 +818,17 @@ function importInterface(
 
     for (const specifier of dependency.specifiers) {
       if (specifier.namespace) {
-        if (interface_.reactiveExports.size > 0) {
+        if (interface_.reactiveExports.size > 0 || interface_.mutableExports.size > 0) {
           failures.push({
             path: module.inputPath,
-            message: `Module '${dependency.source}' exports reactive values; import them by name instead of using a namespace import`,
+            message: `Module '${dependency.source}' exports live values; import them by name instead of using a namespace import`,
           });
         }
+        const fields = new Map([...interface_.exports].map(([name, type]) => [name, resolveImportedType(type)]));
         imports.set(specifier.local, {
           kind: "object",
-          fields: new Map([...interface_.exports].map(([name, type]) => [name, resolveImportedType(type)])),
+          fields,
+          readonlyFields: new Set(fields.keys()),
         });
         continue;
       }
@@ -830,6 +841,7 @@ function importInterface(
       imports.set(specifier.local, resolveImportedType(exported));
       const reactive = interface_.reactiveExports.get(specifier.imported);
       if (reactive) reactiveImports.set(specifier.local, reactive);
+      if (reactive || interface_.mutableExports.has(specifier.imported)) effectfulImports.add(specifier.local);
     }
 }
 

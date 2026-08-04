@@ -47,6 +47,7 @@ import {
 
 interface Binding {
   readonly mutable: boolean;
+  readonly effectMutable: boolean;
   type: ValueType;
   declaredType: ValueType;
   readonly span: Span;
@@ -179,6 +180,7 @@ export interface LoweringHints {
 
 export interface AnalysisContext {
   readonly imports?: ReadonlyMap<string, ValueType>;
+  readonly effectfulImports?: ReadonlySet<string>;
   readonly dynamicImports?: ReadonlyMap<string, ValueType>;
   readonly reactiveImports?: ReadonlyMap<string, "state" | "computed">;
   readonly namedTypes?: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
@@ -309,6 +311,7 @@ export class Analyzer implements TypeEnvironment {
       staticMethods: new Map(),
     });
     this.importBindings = new Map(context.imports);
+    this.effectfulImports = new Set(context.effectfulImports);
     this.dynamicImports = new Map(context.dynamicImports);
     for (const [name, kind] of context.reactiveImports ?? []) this.reactiveBindings.set(name, kind);
     for (const [name, fields] of context.namedTypes ?? []) this.namedTypes.set(name, fields);
@@ -325,6 +328,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private readonly importBindings: ReadonlyMap<string, ValueType>;
+  private readonly effectfulImports: ReadonlySet<string>;
   private readonly dynamicImports: ReadonlyMap<string, ValueType>;
 
   analyze(program: Program): readonly Diagnostic[] {
@@ -472,6 +476,8 @@ export class Analyzer implements TypeEnvironment {
             false,
             this.importType(statement, specifier.local, specifier.imported, specifier.namespace),
             specifier.span,
+            false,
+            this.effectfulImports.has(specifier.local),
           );
         }
         this.predeclared.add(statement);
@@ -920,6 +926,8 @@ export class Analyzer implements TypeEnvironment {
               false,
               this.importType(statement, specifier.local, specifier.imported, specifier.namespace),
               specifier.span,
+              false,
+              this.effectfulImports.has(specifier.local),
             );
           }
         }
@@ -2354,7 +2362,10 @@ export class Analyzer implements TypeEnvironment {
         this.inferExpression(expression.value);
         const checked = this.resolveAnnotation(expression.type);
         const valid = this.validateTypeReference(expression.type);
-        if (valid && checked.kind === "class") this.classChecks.add(spanIdentity(expression.span));
+        if (valid && checked.kind === "class") {
+          this.classChecks.add(spanIdentity(expression.span));
+          if ((checked.identity ?? checked.name).startsWith("js:")) this.invalidateEffectfulFlowFacts();
+        }
         return valid ? boolType : invalidType;
       }
       case "ArrowFunctionExpression":
@@ -3753,7 +3764,9 @@ export class Analyzer implements TypeEnvironment {
     }
     if (statement.unsafe) return anyType;
     const declarations = this.externModules.get(statement.source);
-    if (namespace) return declarations ? { kind: "object", fields: declarations } : this.importBindings.get(local) ?? unknownType;
+    if (namespace) return declarations
+      ? { kind: "object", fields: declarations, readonlyFields: new Set(declarations.keys()) }
+      : this.importBindings.get(local) ?? unknownType;
     const type = declarations?.get(imported) ?? this.importBindings.get(local) ?? unknownType;
     if (type.kind === "classConstructor" && type.identity) {
       this.classDisplayNames.set(type.identity, local);
@@ -4191,6 +4204,8 @@ export class Analyzer implements TypeEnvironment {
       case "MatchTypePattern": {
         const checked = this.resolveAnnotation(pattern.type);
         const valid = this.validateTypeReference(pattern.type);
+        if (valid && checked.kind === "class"
+          && (checked.identity ?? checked.name).startsWith("js:")) this.invalidateEffectfulFlowFacts();
         if (valid && input.kind !== "unknown" && !this.matchTypesOverlap(this.expandAliases(input), checked)) {
           this.typeError(`Type pattern ${describeType(checked)} can never match ${describeType(input)}`, pattern.span);
         }
@@ -4475,7 +4490,7 @@ export class Analyzer implements TypeEnvironment {
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" ? { kind: "classConstructor", name: "Error" } satisfies ValueType : null)
       ?? (name === "Map" || name === "Set" ? anyType : null);
-    return type ? { mutable: false, type, declaredType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
+    return type ? { mutable: false, effectMutable: false, type, declaredType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
   }
 
   private isFreshUnresolvedCollection(expression: Expression, type: ValueType): boolean {
@@ -4548,6 +4563,7 @@ export class Analyzer implements TypeEnvironment {
     type: ValueType,
     declarationSpan: Span,
     internal = false,
+    effectMutable = mutable,
   ): void {
     if (!internal && name.toLowerCase().startsWith("__velar")) {
       this.diagnostics.push(diagnostic("VEL3007", `'${name}' uses the reserved compiler prefix '__velar'`, declarationSpan));
@@ -4570,7 +4586,7 @@ export class Analyzer implements TypeEnvironment {
       this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
       return;
     }
-    scope.set(name, { mutable, type, declaredType: type, span: declarationSpan, narrowingFrame: null });
+    scope.set(name, { mutable, effectMutable, type, declaredType: type, span: declarationSpan, narrowingFrame: null });
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
   }
 
@@ -4789,6 +4805,7 @@ export class Analyzer implements TypeEnvironment {
         const binding = this.lookup(key);
         this.scopes.at(-1)!.set(key, {
           mutable: binding?.mutable ?? false,
+          effectMutable: binding?.effectMutable ?? false,
           type,
           declaredType: binding?.declaredType ?? type,
           span: binding?.span ?? narrowingSpan,
@@ -4815,6 +4832,7 @@ export class Analyzer implements TypeEnvironment {
       } else {
         scope.set(key, {
           mutable: binding.mutable,
+          effectMutable: binding.effectMutable,
           type,
           declaredType: binding.declaredType,
           span: binding.span,
@@ -4891,7 +4909,7 @@ export class Analyzer implements TypeEnvironment {
   protected invalidateEffectfulFlowFacts(): void {
     for (const scope of this.scopes) {
       for (const binding of scope.values()) {
-        if (binding.mutable && binding.narrowingFrame === this.flowFrameDepth) {
+        if (binding.effectMutable && binding.narrowingFrame === this.flowFrameDepth) {
           binding.type = binding.declaredType;
           binding.narrowingFrame = null;
         }

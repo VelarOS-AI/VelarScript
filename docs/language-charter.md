@@ -233,6 +233,8 @@ their implementation may run code or expose an accessor. Read once into a local
 fields remain stable until an assignment or effect boundary can change them. A
 member write invalidates facts reached through every alias of that object;
 writes to safe-JavaScript fields additionally account for a possible setter.
+An `is` check against a safe-JavaScript class also accounts for its possible
+`Symbol.hasInstance` hook; local VelarScript class checks are inert.
 `await` is also an effect boundary because other event-loop work can run during
 the suspension. Declaring a nested function does not itself invalidate facts;
 invoking it does.
@@ -654,6 +656,13 @@ import {User as Account, loadUser} from "./users.vel"
 
 const user: Account = loadUser()
 ```
+
+An imported name is read-only in the receiving module, but an `export let`
+remains a live ES-module value. The module contract records that distinction,
+so calls, `await`, and other effect boundaries invalidate a narrowed live import
+without pretending it can be assigned locally. `export const` remains stable.
+Modules with live exports must be imported by name rather than through `* as`;
+namespace fields are always read-only.
 
 Different modules may use the same record display name; their field metadata is
 kept separate until ordinary structural assignability is checked.

@@ -45,6 +45,12 @@ Compiler and framework changes:
   `try`/`catch`/`finally`, match guard fallthrough, aliased member writes,
   JavaScript setters, object f-string coercion, and component JSX evaluation all
   follow emitted execution order instead of sharing or guessing flow state.
+- Safe-JavaScript class checks now treat `Symbol.hasInstance` as an effectful
+  host hook, while local VelarScript `is` checks remain inert.
+- Module interfaces now preserve `export let` liveness separately from local
+  assignment permission. Named live imports lose stale facts at effect
+  boundaries, while namespace imports with live exports fail explicitly and
+  all namespace fields remain read-only.
 
 Tooling and documentation changes:
 

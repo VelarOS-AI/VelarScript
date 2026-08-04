@@ -247,12 +247,21 @@ inside their current flow frame, so analyzing a deferred function, callback,
 component, or instance initializer does not pretend that declaration is an
 immediate execution.
 
+Bindings separately record assignment permission and stability across effects.
+Local `let` has both, an imported `export let` is read-only locally but remains
+effect-mutable, and `export const` has neither. `ModuleInterface.mutableExports`
+survives project fixed-point analysis and participates in the interface cache
+identity. Namespace imports reject live exports and expose read-only fields,
+avoiding an untrackable mixture of property syntax and ES-module live bindings.
+
 Member writes clear aliased member-path facts even when their source bindings
 differ. Safe-JavaScript writes additionally clear mutable binding facts because
 the declared field may be implemented by a setter. Object interpolation in an
-f-string performs the same operation for a possible `toString` call. The Web
-analyzer checks component JSX in emitted order—props, children, invocation—and
-marks the final invocation as an effect boundary.
+f-string performs the same operation for a possible `toString` call, and
+`instanceof` checks against safe-JavaScript classes do so for a possible
+`Symbol.hasInstance` hook. The Web analyzer checks component JSX in emitted
+order—props, children, invocation—and marks the final invocation as an effect
+boundary.
 
 Catch lowering uses the host's cross-realm Error brand check, then converts
 foreign non-Error throws without applying JavaScript string coercion to objects

@@ -7996,6 +7996,77 @@ print(greet(person))
   assert.match(execution.stderr, /Cannot assign number to string/);
 });
 
+test("module interfaces distinguish live imports from read-only local bindings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-live-imports-"));
+  const storePath = join(directory, "store.vel");
+  const entryPath = join(directory, "main.vel");
+  const namespacePath = join(directory, "namespace.vel");
+  const reactiveStorePath = join(directory, "reactive-store.vel");
+  const reactiveEntryPath = join(directory, "reactive-main.vel");
+  await writeFile(storePath, `
+export type User:
+    name: string
+
+export let current: User? = {name: "Ada"}
+export const fixed: User? = {name: "Lin"}
+
+export def clear():
+    current = null
+`.trimStart(), "utf8");
+  await writeFile(entryPath, `
+import {current, fixed, clear} from "./store.vel"
+
+def invalid() -> string:
+    assert current
+    clear()
+    return current.name
+
+def stable() -> string:
+    assert fixed
+    clear()
+    return fixed.name
+`.trimStart(), "utf8");
+  await writeFile(namespacePath, `
+import * as store from "./store.vel"
+store.current = null
+`.trimStart(), "utf8");
+  await writeFile(reactiveStorePath, `
+export type User:
+    name: string
+
+export state current: User? = {name: "Mira"}
+
+export def clear():
+    current = null
+`.trimStart(), "utf8");
+  await writeFile(reactiveEntryPath, `
+import {current, clear} from "./reactive-store.vel"
+
+def invalid() -> string:
+    assert current
+    clear()
+    return current.name
+`.trimStart(), "utf8");
+
+  const project = await compileProject(entryPath);
+  assert.deepEqual(project.failures, []);
+  const diagnostics = project.modules.flatMap((module) => module.result.diagnostics);
+  assert.equal(diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  const store = project.modules.find((module) => module.inputPath === storePath)?.result.moduleInterface;
+  assert.equal(store?.mutableExports.has("current"), true);
+  assert.equal(store?.mutableExports.has("fixed"), false);
+
+  const namespace = await compileProject(namespacePath);
+  assert.ok(namespace.failures.some((failure) => /exports live values; import them by name/u.test(failure.message)));
+  assert.ok(namespace.modules.flatMap((module) => module.result.diagnostics)
+    .some((item) => /Cannot assign to read-only field 'current'/u.test(item.message)));
+
+  const reactive = await compileProject(reactiveEntryPath);
+  assert.deepEqual(reactive.failures, []);
+  assert.equal(reactive.modules.flatMap((module) => module.result.diagnostics)
+    .filter((item) => /optional access/u.test(item.message)).length, 1);
+});
+
 test("component callback types cross module and editor boundaries", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-callback-props-"));
   const domainPath = join(directory, "domain.vel");
@@ -10444,6 +10515,62 @@ def label(client: Client, initial: User?) -> string:
     return user.name
 `.trimStart());
   assert.deepEqual(stableLocal.diagnostics, []);
+});
+
+test("external class checks account for JavaScript Symbol.hasInstance hooks", () => {
+  const external = compile(`
+type User:
+    name: string
+
+extern module "host-sdk":
+    export class Client:
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def invalid(value: unknown, initial: User?) -> string:
+    let user = initial
+    assert user
+    const matches = value is Client
+    return user.name
+`.trimStart());
+  assert.equal(external.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const externalMatch = compile(`
+type User:
+    name: string
+
+extern module "host-sdk":
+    export class Client:
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def invalid(value: unknown, initial: User?) -> string:
+    let user = initial
+    assert user
+    match value:
+        case Client:
+            return "client"
+        else:
+            return user.name
+`.trimStart());
+  assert.equal(externalMatch.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const local = compile(`
+type User:
+    name: string
+
+class Client:
+    pass
+
+def label(value: unknown, initial: User?) -> string:
+    let user = initial
+    assert user
+    const matches = value is Client
+    return user.name
+`.trimStart());
+  assert.deepEqual(local.diagnostics, []);
 });
 
 test("conditional expression branches isolate and merge call effects", () => {

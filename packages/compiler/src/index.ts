@@ -408,6 +408,7 @@ function interfaceOf(
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
   const exports = new Map<string, ValueType>();
+  const mutableExports = new Set<string>();
   const reactiveExports = new Map<string, "state" | "computed">();
   const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
   const testFunctions: string[] = [];
@@ -485,6 +486,8 @@ function interfaceOf(
         statement.pattern,
         statement.type ? resolve(statement.type) : inferPublicExpression(statement.initializer, inspectionExtensions),
         exports,
+        mutableExports,
+        statement.binding === "let",
         namedTypes,
         resolvedAnalyzedBindings,
       );
@@ -505,6 +508,7 @@ function interfaceOf(
   }
   return {
     exports,
+    mutableExports,
     reactiveExports,
     namedTypes,
     namedTypeIdentities,
@@ -621,20 +625,26 @@ function exportPattern(
   pattern: BindingPattern,
   type: ValueType,
   exports: Map<string, ValueType>,
+  mutableExports: Set<string>,
+  mutable: boolean,
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>,
   analyzedBindings: ReadonlyMap<string, ValueType> = new Map(),
 ): void {
   if (pattern.kind === "NameBindingPattern") {
     exports.set(pattern.name, analyzedBindings.get(`${pattern.span.start}:${pattern.name}`) ?? type);
+    if (mutable) mutableExports.add(pattern.name);
     return;
   }
   if (pattern.kind === "ListBindingPattern") {
     const element = type.kind === "list" ? type.element : unknownType;
-    for (const child of pattern.elements) if (child) exportPattern(child, element, exports, namedTypes, analyzedBindings);
+    for (const child of pattern.elements) if (child) {
+      exportPattern(child, element, exports, mutableExports, mutable, namedTypes, analyzedBindings);
+    }
     if (pattern.rest) exports.set(
       pattern.rest.name,
       analyzedBindings.get(`${pattern.rest.span.start}:${pattern.rest.name}`) ?? { kind: "list", element },
     );
+    if (pattern.rest && mutable) mutableExports.add(pattern.rest.name);
     return;
   }
   const fields = type.kind === "object" ? type.fields : type.kind === "named" ? namedTypes.get(type.name) : null;
@@ -645,6 +655,8 @@ function exportPattern(
       entry.pattern,
       type.kind === "object" && type.optionalFields?.has(entry.property) ? optionalOf(field) : field,
       exports,
+      mutableExports,
+      mutable,
       namedTypes,
       analyzedBindings,
     );
@@ -658,5 +670,6 @@ function exportPattern(
       fields: new Map([...(fields ?? [])].filter(([name]) => !selected.has(name))),
       ...(optionalFields.size > 0 ? { optionalFields } : {}),
     });
+    if (mutable) mutableExports.add(pattern.rest.name);
   }
 }
