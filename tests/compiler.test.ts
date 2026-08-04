@@ -5115,9 +5115,20 @@ form.elements = [{ disabled: { valueOf() { coercions += 1; return false; } } }];
 try { setPending(form, true); console.log("accepted"); }
 catch (error) { console.log(error.name); }
 console.log(coercions + ":" + formMutations);
+let controlLengthReads = 0;
+let disabledReads = 0;
+let disabledWrites = 0;
+const field = Object.defineProperty({}, "disabled", {
+  get() { disabledReads += 1; return disabledReads === 1 ? false : "changed"; },
+  set() { disabledWrites += 1; },
+});
+form.elements = Object.defineProperty({ 0: field }, "length", { get() { controlLengthReads += 1; return controlLengthReads === 1 ? 1 : 100001; } });
+setPending(form, true);
+setPending(form, false);
+console.log([controlLengthReads, disabledReads, disabledWrites, formMutations].join(":"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "42\n0.5\n1\n1000\n2\nnull\nnull\nnull\nnull\nTypeError\nTypeError\n0:0\n");
+  assert.equal(execution.stdout, "42\n0.5\n1\n1000\n2\nnull\nnull\nnull\nnull\nTypeError\nTypeError\n0:0\n1:1:2:2\n");
 });
 
 test("browser helpers reject invalid values before invoking browser capabilities", () => {
@@ -5170,7 +5181,10 @@ test("browser focus helpers use validated HTML elements and native prototype ope
   const source = standardModuleSource("velar/browser") ?? "";
   const execution = executeModule(`
 const calls = [];
-class FakeElement {}
+  class FakeElement {
+    scrollIntoView(options) { calls.push("prototype-scroll:" + options.behavior); }
+    getBoundingClientRect() { calls.push("prototype-measure"); return { x: 0, y: 0, width: 10, height: 20, top: 0, right: 10, bottom: 20, left: 0 }; }
+  }
 class FakeHTMLElement extends FakeElement {
   focus(options) { calls.push("prototype-focus:" + options.preventScroll); }
   blur() { calls.push("prototype-blur"); }
@@ -5181,8 +5195,12 @@ ${source}
 const element = new FakeHTMLElement();
 element.focus = () => calls.push("instance-focus");
 element.blur = () => calls.push("instance-blur");
+element.scrollIntoView = () => calls.push("instance-scroll");
+element.getBoundingClientRect = () => { calls.push("instance-measure"); return {}; };
 focus(element, true);
 blur(element);
+scrollIntoView(element, "smooth");
+console.log(measure(element).width);
 const failures = [];
 for (const operation of [
   () => focus(new FakeElement()),
@@ -5196,7 +5214,7 @@ console.log(calls.join(","));
 console.log(failures.join(","));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "prototype-focus:true,prototype-blur\nTypeError,TypeError,TypeError\n");
+  assert.equal(execution.stdout, "10\nprototype-focus:true,prototype-blur,prototype-scroll:smooth,prototype-measure\nTypeError,TypeError,TypeError\n");
 });
 
 test("browser snapshots and asynchronous host results stay inside typed bounds", () => {
@@ -5258,14 +5276,23 @@ document.visibilityState = "unknown";
 try { environment(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
 document.visibilityState = "visible";
 navigatorValue.languages = ["en"];
+let navigatorReads = 0;
+let onlineReads = 0;
+let visibilityReads = 0;
+let touchReads = 0;
+Object.defineProperty(navigatorValue, "onLine", { configurable: true, get() { onlineReads += 1; return onlineReads === 1 ? true : "changed"; } });
+Object.defineProperty(navigatorValue, "maxTouchPoints", { configurable: true, get() { touchReads += 1; return touchReads === 1 ? 0 : Number.NaN; } });
+Object.defineProperty(document, "visibilityState", { configurable: true, get() { visibilityReads += 1; return visibilityReads === 1 ? "visible" : "unknown"; } });
+Object.defineProperty(globalThis, "navigator", { configurable: true, get() { navigatorReads += 1; return navigatorValue; } });
 const snapshot = environment();
 snapshot.languages.push("fr");
 console.log(failures.join(","));
 console.log(coercions + ":" + getterReads);
 console.log(Object.isFrozen(snapshot) + ":" + Object.isFrozen(snapshot.languages) + ":" + snapshot.languages.join(","));
+console.log([navigatorReads, onlineReads, visibilityReads, touchReads, snapshot.online, snapshot.visible].join(":"));
 `);
   assert.equal(browserExecution.status, 0, String(browserExecution.stderr));
-  assert.equal(browserExecution.stdout, "TypeError,TypeError,TypeError,TypeError,RangeError,TypeError\n0:0\ntrue:false:en,fr\n");
+  assert.equal(browserExecution.stdout, "TypeError,TypeError,TypeError,TypeError,RangeError,TypeError\n0:0\ntrue:false:en,fr\n1:1:1:1:true:true\n");
 
   const webSource = standardModuleSource("velar/web") ?? "";
   const routerExecution = executeModule(`

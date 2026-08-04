@@ -724,18 +724,27 @@ function formValue(value, name) {
   return value;
 }
 function formList(values, name) {
-  if (values.length > maxFormFields) throw new RangeError(name + " cannot exceed 100000 values");
-  return values;
+  const output = __velarRequireList(values, name);
+  if (output.length > maxFormFields) throw new RangeError(name + " cannot exceed 100000 values");
+  return output;
 }
 function formElements(form) {
-  if (!Number.isSafeInteger(form.elements.length) || form.elements.length < 0) throw new TypeError("Form controls have an invalid length");
-  if (form.elements.length > maxFormFields) throw new RangeError("Forms cannot exceed 100000 controls");
-  return form.elements;
+  const elements = form.elements;
+  const count = elements.length;
+  if (!Number.isSafeInteger(count) || count < 0) throw new TypeError("Form controls have an invalid length");
+  if (count > maxFormFields) throw new RangeError("Forms cannot exceed 100000 controls");
+  const output = new Array(count);
+  for (let index = 0; index < count; index += 1) output[index] = elements[index];
+  return output;
 }
 function formErrorNodes(form) {
   const nodes = form.querySelectorAll("[data-velar-field-error]");
-  if (nodes.length > maxFormFields) throw new RangeError("Forms cannot exceed 100000 field errors");
-  return nodes;
+  const count = nodes.length;
+  if (!Number.isSafeInteger(count) || count < 0) throw new TypeError("Form field errors have an invalid length");
+  if (count > maxFormFields) throw new RangeError("Forms cannot exceed 100000 field errors");
+  const output = new Array(count);
+  for (let index = 0; index < count; index += 1) output[index] = nodes[index];
+  return output;
 }
 function formType(value) { return __velarRequireRuntimeType(value, "Form reading"); }
 function decoderField(value) {
@@ -930,8 +939,10 @@ export function setPending(form, pending) {
     const snapshot = [];
     for (let index = 0; index < elements.length; index += 1) {
       const field = elements[index];
-      if (!field || typeof field !== "object" || typeof field.disabled !== "boolean") throw new TypeError("Form controls must expose a bool disabled state");
-      snapshot.push([field, field.disabled]);
+      if (!field || typeof field !== "object") throw new TypeError("Form controls must expose a bool disabled state");
+      const disabled = field.disabled;
+      if (typeof disabled !== "boolean") throw new TypeError("Form controls must expose a bool disabled state");
+      snapshot.push([field, disabled]);
     }
     if (!pendingFields.has(form)) pendingFields.set(form, snapshot);
     form.setAttribute("aria-busy", "true");
@@ -1536,22 +1547,27 @@ export function location() {
 }
 
 export function environment() {
-  const language = browserText(navigator.language, "Browser language", 256);
-  const languages = browserLanguages(navigator.languages);
-  if (typeof navigator.onLine !== "boolean") throw new TypeError("Browser online state must be bool");
-  if (document.visibilityState !== "visible" && document.visibilityState !== "hidden") throw new TypeError("Browser visibility state is invalid");
+  const navigatorValue = navigator;
+  const language = browserText(navigatorValue.language, "Browser language", 256);
+  const languages = browserLanguages(navigatorValue.languages);
+  const online = navigatorValue.onLine;
+  const touchPoints = navigatorValue.maxTouchPoints;
+  if (typeof online !== "boolean") throw new TypeError("Browser online state must be bool");
+  const documentValue = document;
+  const visibility = documentValue.visibilityState;
+  if (visibility !== "visible" && visibility !== "hidden") throw new TypeError("Browser visibility state is invalid");
   const dark = matchMedia("(prefers-color-scheme: dark)").matches;
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (typeof dark !== "boolean" || typeof reduced !== "boolean") throw new TypeError("Browser media preferences must be bool");
-  if (!Number.isSafeInteger(navigator.maxTouchPoints) || navigator.maxTouchPoints < 0 || navigator.maxTouchPoints > 1000) throw new RangeError("Browser touch points are outside VelarScript limits");
+  if (!Number.isSafeInteger(touchPoints) || touchPoints < 0 || touchPoints > 1000) throw new RangeError("Browser touch points are outside VelarScript limits");
   return Object.freeze({
     language,
     languages,
-    online: navigator.onLine,
-    visible: document.visibilityState === "visible",
+    online,
+    visible: visibility === "visible",
     colorScheme: dark ? "dark" : "light",
     reducedMotion: reduced,
-    touch: navigator.maxTouchPoints > 0,
+    touch: touchPoints > 0,
   });
 }
 
@@ -1564,7 +1580,7 @@ export async function copyText(value) { value = browserText(value, "Clipboard te
 export async function readClipboardText() { return browserText(await clipboard().readText(), "Clipboard text", 16 * 1024 * 1024); }
 export function open(url, target = "_blank") { url = browserText(url, "Browser URL", 2 * 1024 * 1024); target = browserText(target, "Browser target", 256); globalThis.open(url, target, target === "_blank" ? "noopener,noreferrer" : undefined); return null; }
 export function scrollTo(x, y, behavior = "auto") { globalThis.scrollTo({ left: browserNumber(x, "Scroll x"), top: browserNumber(y, "Scroll y"), behavior: scrollBehavior(behavior) }); return null; }
-export function scrollIntoView(element, behavior = "smooth") { requireElement(element); element.scrollIntoView({ behavior: scrollBehavior(behavior), block: "nearest" }); return null; }
+export function scrollIntoView(element, behavior = "smooth") { requireElement(element); Element.prototype.scrollIntoView.call(element, { behavior: scrollBehavior(behavior), block: "nearest" }); return null; }
 export function focus(element, preventScroll = false) {
   element = requireFocusableElement(element);
   preventScroll = __velarBool(preventScroll, "Focus preventScroll");
@@ -1578,7 +1594,7 @@ export function blur(element) {
 }
 export function measure(element) {
   requireElement(element);
-  const value = element.getBoundingClientRect();
+  const value = Element.prototype.getBoundingClientRect.call(element);
   return Object.freeze({
     x: browserNumber(value.x, "Element x"), y: browserNumber(value.y, "Element y"),
     width: browserNumber(value.width, "Element width"), height: browserNumber(value.height, "Element height"),
@@ -1603,8 +1619,9 @@ export function watchOnline(callback) {
 export function watchVisibility(callback) {
   if (typeof callback !== "function") throw new TypeError("watchVisibility requires a callback");
   const changed = () => __velarInvokeOwnedRead(() => {
-    if (document.visibilityState !== "visible" && document.visibilityState !== "hidden") throw new TypeError("Browser visibility state is invalid");
-    return document.visibilityState === "visible";
+    const visibility = document.visibilityState;
+    if (visibility !== "visible" && visibility !== "hidden") throw new TypeError("Browser visibility state is invalid");
+    return visibility === "visible";
   }, callback, "observer", "visibility");
   document.addEventListener("visibilitychange", changed);
   return () => { document.removeEventListener("visibilitychange", changed); return null; };

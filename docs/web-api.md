@@ -428,7 +428,10 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
   and `focusFirstError(form)` focuses the first invalid field.
 - `setPending(form, bool)` owns `aria-busy` and temporarily disables fields,
   restoring their previous disabled state afterward. It validates every
-  control's native `disabled` value as bool before mutating the form.
+  control's native `disabled` value as bool before mutating the form. Live
+  control/error collections and repeated field Lists are first copied with one
+  bounded length snapshot; sparse/accessor Lists and changing collection lengths
+  cannot alter the validated operation midway.
 - `reset(form)` restores pending/error ownership and then performs the native
   form reset.
 - Helpers require a real form element. Submission remains explicit through
@@ -477,11 +480,12 @@ React-style effect API.
   converted.
 - Snapshot language lists are application-owned mutable copies limited to 1,000
   entries of at most 256 characters and cannot contain sparse or accessor
-  elements; the containing environment record remains read-only. Online,
-  visibility, media-preference, and touch fields are validated before the
-  snapshot is returned. Layout rectangles and animation-frame timestamps must
-  contain finite numbers, and dialog results remain bounded strings before
-  they cross back into VelarScript source.
+  elements; the containing environment record remains read-only. Navigator,
+  online, visibility, media-preference, and touch fields are each snapshotted
+  once and validated before the record is returned. Layout rectangles use the
+  native element operation and must contain finite numbers; animation-frame
+  timestamps and dialog results remain bounded typed values before they cross
+  back into VelarScript source.
 - `media`, `watchMedia`, `watchOnline`, and `watchVisibility` expose common
   environment state. Every watcher returns a cleanup function, and callback
   failures are owned by the application error channel.
@@ -491,7 +495,8 @@ React-style effect API.
   window, element, layout, and animation-frame operations. Text/URL/query
   inputs are strings, scroll coordinates are finite numbers, and behavior is
   exactly `auto`, `smooth`, or `instant`; invalid values fail before invoking
-  the browser capability.
+  the browser capability. Element scrolling and measurement call the validated
+  platform prototype rather than an instance override.
 - `focus(element, preventScroll=false)` and `blur(element)` provide explicit
   accessibility focus ownership for typed JSX refs. They require a real HTML
   element and invoke the native prototype operation rather than an instance
