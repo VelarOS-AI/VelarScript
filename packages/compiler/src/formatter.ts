@@ -1,4 +1,5 @@
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
+import { scanInterpolatedString } from "./interpolated-string.ts";
 
 export interface FormatOptions {
   readonly indentWidth?: number;
@@ -16,6 +17,13 @@ const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<="
 const genericNames = new Set(["List", "Set", "Map", "Promise"]);
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
+const expressionStatementWords = new Set(["return", "throw", "assert"]);
+const parenthesizedKeywordWords = new Set([
+  "if", "while", "for", "match", "case", "catch",
+  ...expressionStatementWords,
+  ...binaryWords,
+  ...prefixWords,
+]);
 
 /**
  * Formats VelarScript source without round-tripping through generated JavaScript.
@@ -149,10 +157,16 @@ function tokenizeInline(source: string): InlineToken[] {
       tokens.push({ kind: "comment", text: source.slice(index).trimEnd() });
       break;
     }
-    if ((character === "f" && (source[index + 1] === '"' || source[index + 1] === "'")) || character === '"' || character === "'") {
+    if (character === "f" && (source[index + 1] === '"' || source[index + 1] === "'")) {
       const start = index;
-      const quote = character === "f" ? source[index + 1]! : character;
-      index += character === "f" ? 2 : 1;
+      index = scanInterpolatedString(source, start).end;
+      tokens.push({ kind: "string", text: source.slice(start, index) });
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      const start = index;
+      const quote = character;
+      index += 1;
       while (index < source.length) {
         const current = source[index++]!;
         if (current === "\\" && index < source.length) index += 1;
@@ -281,8 +295,10 @@ function needsSpace(
   if (previous.kind === "comma" || previous.kind === "colon") return true;
   if (previous.kind === "open") return false;
   if (current.kind === "open") {
-    if (previous.text === "return" || previous.text === "throw" || previous.text === "assert") return true;
-    if (current.text === "{" && (previous.text === "import" || previous.text === "export")) return true;
+    if (current.text === "{") return true;
+    const memberAccess = tokens[index - 2]?.kind === "dot";
+    if (!memberAccess && expressionStatementWords.has(previous.text)) return true;
+    if (!memberAccess && current.text === "(" && parenthesizedKeywordWords.has(previous.text)) return true;
     if (current.generic || current.text === "[" && (previous.kind === "word" || previous.kind === "close")) return false;
     return previous.kind !== "word" && previous.kind !== "close" && previous.kind !== "literal";
   }
@@ -318,8 +334,8 @@ function isTernaryColon(tokens: readonly InlineToken[], colonIndex: number): boo
     const token = tokens[index]!;
     if (token.kind === "close") depth += 1;
     else if (token.kind === "open") depth -= 1;
-    else if (depth === 0 && token.text === "?") return true;
-    else if (depth === 0 && token.kind === "colon") return false;
+    else if (depth === 0 && token.text === "?" && !isOptionalQuestion(token, tokens[index + 1], tokens[index + 2])) return true;
+    else if (depth === 0 && (token.kind === "colon" || token.kind === "comma")) return false;
   }
   return false;
 }

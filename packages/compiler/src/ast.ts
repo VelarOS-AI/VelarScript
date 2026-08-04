@@ -39,6 +39,7 @@ export type Statement =
 export interface ImportDeclaration {
   readonly kind: "ImportDeclaration";
   readonly source: string;
+  readonly sourceSpan: Span;
   readonly javascript: boolean;
   readonly unsafe: boolean;
   readonly specifiers: readonly ImportSpecifier[];

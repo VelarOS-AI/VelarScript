@@ -6,7 +6,7 @@ export interface EnumInfo {
 }
 
 export type ValueType =
-  | { readonly kind: "unknown" }
+  | { readonly kind: "unknown"; readonly restricted?: boolean }
   | { readonly kind: "any" }
   | { readonly kind: "null" }
   | { readonly kind: "string" }
@@ -17,8 +17,13 @@ export type ValueType =
   | { readonly kind: "set"; readonly element: ValueType }
   | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType }
   | { readonly kind: "promise"; readonly value: ValueType }
-  | { readonly kind: "object"; readonly fields: ReadonlyMap<string, ValueType> }
-  | { readonly kind: "named"; readonly name: string }
+  | {
+      readonly kind: "object";
+      readonly fields: ReadonlyMap<string, ValueType>;
+      readonly readonlyFields?: ReadonlySet<string>;
+      readonly optionalFields?: ReadonlySet<string>;
+    }
+  | { readonly kind: "named"; readonly name: string; readonly identity?: string }
   | { readonly kind: "class"; readonly name: string; readonly identity?: string }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
   | { readonly kind: "enumObject"; readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> }
@@ -39,7 +44,7 @@ export const numberType: ValueType = { kind: "number" };
 export const boolType: ValueType = { kind: "bool" };
 
 export interface TypeEnvironment {
-  fieldsOf(name: string): ReadonlyMap<string, ValueType> | null;
+  fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
   isSubclassOf(actual: string, expected: string): boolean;
 }
 
@@ -106,7 +111,7 @@ export function optionalOf(type: ValueType): ValueType {
     return type;
   }
   if (type.kind === "null") {
-    return { kind: "optional", inner: unknownType };
+    return nullType;
   }
   return { kind: "optional", inner: type };
 }
@@ -129,10 +134,10 @@ export function unionOf(types: readonly ValueType[]): ValueType {
 }
 
 export function mergeTypes(left: ValueType, right: ValueType): ValueType {
-  if (left.kind === "unknown") {
+  if (left.kind === "unknown" && !left.restricted) {
     return right;
   }
-  if (right.kind === "unknown") {
+  if (right.kind === "unknown" && !right.restricted) {
     return left;
   }
   if (sameType(left, right)) {
@@ -161,7 +166,7 @@ export function resolvedAsyncType(type: ValueType): ValueType {
 }
 
 export function sameType(left: ValueType, right: ValueType): boolean {
-  return typeIdentityKey(left) === typeIdentityKey(right);
+  return semanticTypeIdentity(left) === semanticTypeIdentity(right);
 }
 
 export function isAssignable(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string> = new Set()): boolean {
@@ -169,7 +174,7 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     return true;
   }
   if (expected.kind === "unknown") {
-    return true;
+    return !expected.restricted;
   }
   if (actual.kind === "unknown") {
     return false;
@@ -177,7 +182,7 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   if (sameType(actual, expected)) {
     return true;
   }
-  const pair = `${typeIdentityKey(actual)}\u0000${typeIdentityKey(expected)}`;
+  const pair = `${semanticTypeIdentity(actual)}\u0000${semanticTypeIdentity(expected)}`;
   if (seen.has(pair)) return true;
   seen.add(pair);
   if (actual.kind === "union") {
@@ -211,20 +216,20 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   }
   if (actual.kind === "object" && expected.kind === "named") {
     if (opaqueWebTypeNames.has(expected.name)) return false;
-    const fields = environment.fieldsOf(expected.name);
-    return fields ? fieldsAssignable(actual.fields, fields, environment, seen) : false;
+    const fields = environment.fieldsOf(expected.identity ?? expected.name);
+    return fields ? objectFieldsAssignable(actual.fields, fields, environment, seen, actual.readonlyFields, undefined, actual.optionalFields) : false;
   }
   if (actual.kind === "named" && expected.kind === "object") {
     if (opaqueWebTypeNames.has(actual.name)) return false;
-    const fields = environment.fieldsOf(actual.name);
-    return fields ? writableFieldsAssignable(fields, expected.fields, environment, seen) : false;
+    const fields = environment.fieldsOf(actual.identity ?? actual.name);
+    return fields ? objectFieldsAssignable(fields, expected.fields, environment, seen, undefined, expected.readonlyFields, undefined, expected.optionalFields) : false;
   }
   if (actual.kind === "named" && expected.kind === "named") {
     if (actual.name === expected.name) return true;
     const opaqueCompatibility = opaqueWebTypeAssignable(actual.name, expected.name);
     if (opaqueCompatibility !== null) return opaqueCompatibility;
-    const actualFields = environment.fieldsOf(actual.name);
-    const expectedFields = environment.fieldsOf(expected.name);
+    const actualFields = environment.fieldsOf(actual.identity ?? actual.name);
+    const expectedFields = environment.fieldsOf(expected.identity ?? expected.name);
     return actualFields !== null && expectedFields !== null
       ? writableFieldsAssignable(actualFields, expectedFields, environment, seen)
       : false;
@@ -233,17 +238,10 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     return environment.isSubclassOf(actual.identity ?? actual.name, expected.identity ?? expected.name);
   }
   if (actual.kind === "object" && expected.kind === "object") {
-    return fieldsAssignable(actual.fields, expected.fields, environment, seen);
+    return objectFieldsAssignable(actual.fields, expected.fields, environment, seen, actual.readonlyFields, expected.readonlyFields, actual.optionalFields, expected.optionalFields);
   }
   if ((actual.kind === "function" || actual.kind === "action" || actual.kind === "intrinsic") && (expected.kind === "function" || expected.kind === "action" || expected.kind === "intrinsic")) {
-    const restAssignable = actual.rest && expected.rest
-      ? isAssignable(expected.rest, actual.rest, environment, new Set(seen))
-      : !actual.rest && !expected.rest;
-    return actual.parameters.length === expected.parameters.length
-      && actual.requiredParameters <= expected.requiredParameters
-      && (!expected.parameterNames || expected.parameterNames.every((name, index) => !name || actual.parameterNames?.[index] === name))
-      && actual.parameters.every((parameter, index) => isAssignable(expected.parameters[index] ?? unknownType, parameter, environment, new Set(seen)))
-      && restAssignable
+    return callableInputsAssignable(actual, expected, environment, seen)
       && isAssignable(actual.result, expected.result, environment, seen);
   }
   if (actual.kind === "node" && expected.kind === "node") {
@@ -252,33 +250,45 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   return false;
 }
 
-function typeIdentityKey(type: ValueType): string {
+export function semanticTypeIdentity(type: ValueType): string {
   switch (type.kind) {
+    case "unknown":
+      return type.restricted ? "unknown:restricted" : "unknown";
     case "class":
     case "classConstructor":
       return `${type.kind}:${type.identity ?? type.name}`;
+    case "named":
+      return `named:${type.identity ?? type.name}`;
     case "enum":
     case "enumObject":
       return `${type.kind}:${type.identity}`;
     case "optional":
-      return `optional:${typeIdentityKey(type.inner)}`;
+      return `optional:${semanticTypeIdentity(type.inner)}`;
     case "list":
     case "set":
-      return `${type.kind}:${typeIdentityKey(type.element)}`;
+      return `${type.kind}:${semanticTypeIdentity(type.element)}`;
     case "map":
-      return `map:${typeIdentityKey(type.key)}:${typeIdentityKey(type.value)}`;
+      return `map:${semanticTypeIdentity(type.key)}:${semanticTypeIdentity(type.value)}`;
     case "promise":
-      return `promise:${typeIdentityKey(type.value)}`;
+      return `promise:${semanticTypeIdentity(type.value)}`;
     case "object":
-      return `object:${[...type.fields].map(([name, value]) => `${name}:${typeIdentityKey(value)}`).join(",")}`;
+      return `object:${[...type.fields]
+        .map(([name, value]) => [name, semanticTypeIdentity(value)] as const)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly:" : ""}${type.optionalFields?.has(name) ? "optional:" : ""}${name}:${value}`)
+        .join(",")}`;
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind}:${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(typeIdentityKey).join(",")}:${type.rest ? typeIdentityKey(type.rest) : ""}:${typeIdentityKey(type.result)}`;
+      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(semanticTypeIdentity).join(",")}:${type.rest ? semanticTypeIdentity(type.rest) : ""}:${semanticTypeIdentity(type.result)}`;
     case "componentConstructor":
-      return `component:${type.name}`;
+      return `component:${type.intrinsic ?? ""}:${type.name}:${[...type.props]
+        .map(([name, value]) => [name, semanticTypeIdentity(value)] as const)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([name, value]) => `${name}:${value}`)
+        .join(",")}:${[...type.requiredProps].sort().join(",")}`;
     case "union":
-      return `union:${type.members.map(typeIdentityKey).join("|")}`;
+      return `union:${type.members.map(semanticTypeIdentity).sort().join("|")}`;
     default:
       return `${type.kind}:${describeType(type)}`;
   }
@@ -325,7 +335,7 @@ export function describeType(type: ValueType): string {
     case "promise":
       return `Promise<${describeType(type.value)}>`;
     case "object":
-      return `{ ${[...type.fields].map(([name, value]) => `${name}: ${describeType(value)}`).join(", ")} }`;
+      return `{ ${[...type.fields].map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly " : ""}${name}${type.optionalFields?.has(name) ? "?" : ""}: ${describeType(value)}`).join(", ")} }`;
     case "named":
     case "class":
     case "enum":
@@ -356,35 +366,58 @@ export function describeType(type: ValueType): string {
   }
 }
 
-function fieldsAssignable(actual: ReadonlyMap<string, ValueType>, expected: ReadonlyMap<string, ValueType>, environment: TypeEnvironment, seen: Set<string>): boolean {
-  for (const [name, expectedType] of expected) {
-    const actualType = actual.get(name);
-    if (!actualType) {
-      if (expectedType.kind === "optional") {
-        continue;
-      }
-      return false;
-    }
-    if (!isAssignable(actualType, expectedType, environment, new Set(seen))) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function invariant(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string>): boolean {
   return isAssignable(actual, expected, environment, new Set(seen))
     && isAssignable(expected, actual, environment, new Set(seen));
 }
 
-function writableFieldsAssignable(actual: ReadonlyMap<string, ValueType>, expected: ReadonlyMap<string, ValueType>, environment: TypeEnvironment, seen: Set<string>): boolean {
+type CallableType = Extract<ValueType, { readonly kind: "function" | "action" | "intrinsic" }>;
+
+function callableInputsAssignable(actual: CallableType, expected: CallableType, environment: TypeEnvironment, seen: Set<string>): boolean {
+  if (actual.requiredParameters > expected.requiredParameters) return false;
+  if (!actual.rest && (expected.rest || actual.parameters.length < expected.parameters.length)) return false;
+
+  for (let index = 0; index < expected.parameters.length; index += 1) {
+    const accepted = actual.parameters[index] ?? actual.rest;
+    if (!accepted || !isAssignable(expected.parameters[index]!, accepted, environment, new Set(seen))) return false;
+    const expectedName = expected.parameterNames?.[index];
+    if (expectedName && index < actual.parameters.length && actual.parameterNames?.[index] !== expectedName) return false;
+  }
+
+  if (expected.rest) {
+    if (!actual.rest) return false;
+    for (let index = expected.parameters.length; index < actual.parameters.length; index += 1) {
+      if (!isAssignable(expected.rest, actual.parameters[index]!, environment, new Set(seen))) return false;
+    }
+    if (!isAssignable(expected.rest, actual.rest, environment, new Set(seen))) return false;
+  }
+  return true;
+}
+
+function objectFieldsAssignable(
+  actual: ReadonlyMap<string, ValueType>,
+  expected: ReadonlyMap<string, ValueType>,
+  environment: TypeEnvironment,
+  seen: Set<string>,
+  actualReadonly: ReadonlySet<string> | undefined = undefined,
+  expectedReadonly: ReadonlySet<string> | undefined = undefined,
+  actualOptional: ReadonlySet<string> | undefined = undefined,
+  expectedOptional: ReadonlySet<string> | undefined = undefined,
+): boolean {
   for (const [name, expectedType] of expected) {
     const actualType = actual.get(name);
     if (!actualType) {
-      if (expectedType.kind === "optional") continue;
+      if (expectedType.kind === "optional" || expectedOptional?.has(name)) continue;
       return false;
     }
-    if (!invariant(actualType, expectedType, environment, seen)) return false;
+    if (actualOptional?.has(name) && expectedType.kind !== "optional" && !expectedOptional?.has(name)) return false;
+    if (expectedReadonly?.has(name)) {
+      if (!isAssignable(actualType, expectedType, environment, new Set(seen))) return false;
+    } else if (actualReadonly?.has(name) || !invariant(actualType, expectedType, environment, seen)) return false;
   }
   return true;
+}
+
+function writableFieldsAssignable(actual: ReadonlyMap<string, ValueType>, expected: ReadonlyMap<string, ValueType>, environment: TypeEnvironment, seen: Set<string>): boolean {
+  return objectFieldsAssignable(actual, expected, environment, seen);
 }

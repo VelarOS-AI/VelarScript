@@ -281,7 +281,9 @@ class LookSourceParser {
       const property = /^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/u.exec(line.text);
       if (property) {
         const valueText = property[2]!;
-        const valueStart = line.start + line.text.indexOf(valueText);
+        const assignment = line.text.indexOf("=");
+        const afterAssignment = line.text.slice(assignment + 1);
+        const valueStart = line.start + assignment + 1 + (afterAssignment.length - afterAssignment.trimStart().length);
         entries.push({
           kind: "LookProperty",
           name: property[1]!,
@@ -291,14 +293,15 @@ class LookSourceParser {
         continue;
       }
       if (line.text.startsWith("...")) {
-        const valueText = line.text.slice(3).trim();
+        const afterSpread = line.text.slice(3);
+        const valueText = afterSpread.trim();
         if (!valueText) {
           this.report(diagnostic("VEL5038", "Look composition requires a value after '...'", this.lineSpan(line)));
           continue;
         }
         entries.push({
           kind: "LookSpread",
-          value: this.parseExpression(valueText, line.start + line.text.indexOf(valueText)),
+          value: this.parseExpression(valueText, line.start + 3 + (afterSpread.length - afterSpread.trimStart().length)),
           span: this.lineSpan(line),
         });
         continue;
@@ -324,8 +327,9 @@ class LookSourceParser {
     indent: number,
     prefix: "if " | "else if ",
   ): Extract<LookEntry, { kind: "LookIf" }> {
-    const conditionText = line.text.slice(prefix.length, -1).trim();
-    const conditionOffset = line.start + line.text.indexOf(conditionText);
+    const conditionSource = line.text.slice(prefix.length, -1);
+    const conditionText = conditionSource.trim();
+    const conditionOffset = line.start + prefix.length + (conditionSource.length - conditionSource.trimStart().length);
     const condition = this.parseLookCondition(conditionText, conditionOffset);
     const next = this.lines[this.index];
     let thenEntries: readonly LookEntry[] = [];

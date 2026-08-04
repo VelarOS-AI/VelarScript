@@ -91,8 +91,8 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
 
   while (cursor < context.source.length) {
     const physicalStart = cursor;
-    const lineEndIndex = context.source.indexOf("\n", physicalStart);
-    const physicalEnd = lineEndIndex === -1 ? context.source.length : lineEndIndex;
+    const lineBreak = nextPhysicalLineBreak(context.source, physicalStart);
+    const physicalEnd = lineBreak?.start ?? context.source.length;
     let content = physicalStart;
     let width = first ? context.currentIndent : 0;
     if (!first) {
@@ -104,7 +104,7 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
         content += 1;
       }
     }
-    const raw = context.source.slice(content, physicalEnd).replace(/\r$/u, "");
+    const raw = context.source.slice(content, physicalEnd);
     const blank = raw.trim().length === 0;
     if (!first && !blank && width < context.currentIndent) break;
     if (!blank) {
@@ -119,11 +119,11 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
         });
       }
     }
-    if (lineEndIndex === -1) {
+    if (!lineBreak) {
       cursor = context.source.length;
       break;
     }
-    cursor = lineEndIndex + 1;
+    cursor = lineBreak.end;
     first = false;
   }
 
@@ -134,6 +134,14 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
     diagnostics,
     startsLine: cursor < context.source.length,
   };
+}
+
+function nextPhysicalLineBreak(source: string, start: number): { readonly start: number; readonly end: number } | null {
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] === "\r") return { start: index, end: index + (source[index + 1] === "\n" ? 2 : 1) };
+    if (source[index] === "\n") return { start: index, end: index + 1 };
+  }
+  return null;
 }
 
 class WebJsxScanner {

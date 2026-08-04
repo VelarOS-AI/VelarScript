@@ -11,6 +11,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyProductionBuild } from "../packages/cli/src/production-verifier.ts";
+import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const sourceProject = join(root, "examples", "production-web");
@@ -21,11 +22,14 @@ export async function prepareExternalPreview(outputDirectory = defaultOutput) {
   const output = resolve(outputDirectory);
   await assertReplaceableOutput(output);
   const parent = dirname(output);
-  await mkdir(parent, { recursive: true });
-  const staging = await mkdtemp(join(parent, `.velar-${basename(output)}-`));
+  let toolchain;
+  let staging;
   try {
+    toolchain = await createIsolatedToolchainBuild();
+    await mkdir(parent, { recursive: true });
+    staging = await mkdtemp(join(parent, `.velar-${basename(output)}-`));
     const built = join(staging, "site");
-    await runCompiler(["build", previewManifest, "--out-dir", built]);
+    await runCompiler(toolchain.root, ["build", previewManifest, "--out-dir", built]);
     const verified = await verifyProductionBuild(built);
     if (verified.deployment.base !== "/" || verified.deployment.adapter?.name !== "netlify") {
       throw new Error("external preview preparation did not create the root Netlify contract");
@@ -38,7 +42,8 @@ export async function prepareExternalPreview(outputDirectory = defaultOutput) {
     await rename(built, output);
     return { outputDirectory: output, manifest: verified.manifest };
   } finally {
-    await rm(staging, { recursive: true, force: true });
+    if (staging) await rm(staging, { recursive: true, force: true });
+    await toolchain?.dispose();
   }
 }
 
@@ -64,12 +69,13 @@ async function assertReplaceableOutput(output) {
   }
 }
 
-async function runCompiler(arguments_) {
-  const cli = join(root, "packages", "cli", "dist", "cli.js");
-  const child = spawn(process.execPath, [cli, ...arguments_], {
-    cwd: root,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+async function runCompiler(toolchainRoot, arguments_) {
+  const cli = join(toolchainRoot, "packages", "cli", "dist", "cli.js");
+  await run(process.execPath, [cli, ...arguments_], "external preview build", toolchainRoot);
+}
+
+async function run(command, arguments_, label, cwd = root) {
+  const child = spawn(command, arguments_, { cwd, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
@@ -78,7 +84,7 @@ async function runCompiler(arguments_) {
     child.once("error", reject);
     child.once("exit", resolvePromise);
   });
-  if (code !== 0) throw new Error(`external preview build failed (${code})\n${stdout}\n${stderr}`);
+  if (code !== 0) throw new Error(`${label} failed (${code})\n${stdout}\n${stderr}`);
 }
 
 function parseArguments(arguments_) {

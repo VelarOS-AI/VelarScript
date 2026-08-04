@@ -19,7 +19,10 @@ export class SourceText {
     const starts = [0];
     if (indexLines) {
       for (let index = 0; index < text.length; index += 1) {
-        if (text[index] === "\n") {
+        if (text[index] === "\r") {
+          if (text[index + 1] === "\n") index += 1;
+          starts.push(index + 1);
+        } else if (text[index] === "\n") {
           starts.push(index + 1);
         }
       }
@@ -54,8 +57,14 @@ export class SourceText {
     if (start === undefined) {
       return "";
     }
-    const end = this.text.indexOf("\n", start);
-    return this.text.slice(start, end === -1 ? this.text.length : end).replace(/\r$/, "");
+    const carriageReturn = this.text.indexOf("\r", start);
+    const lineFeed = this.text.indexOf("\n", start);
+    const end = carriageReturn === -1
+      ? lineFeed
+      : lineFeed === -1
+        ? carriageReturn
+        : Math.min(carriageReturn, lineFeed);
+    return this.text.slice(start, end === -1 ? this.text.length : end);
   }
 }
 

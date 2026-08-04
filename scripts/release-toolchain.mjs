@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
@@ -71,10 +72,12 @@ export async function createToolchainRelease(outputDirectory, mode = "rehearse")
   const parent = dirname(outputDirectory);
   await mkdir(parent, { recursive: true });
   const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
+  let toolchain;
   try {
+    toolchain = await createIsolatedToolchainBuild();
     const packages = [];
     for (const workspace of workspaces) {
-      const packed = await packWorkspace(workspace, staging);
+      const packed = await packWorkspace(workspace, staging, toolchain.root);
       const tarballPath = join(staging, packed.filename);
       const body = await readFile(tarballPath);
       packages.push({
@@ -118,6 +121,8 @@ export async function createToolchainRelease(outputDirectory, mode = "rehearse")
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     throw error;
+  } finally {
+    await toolchain?.dispose();
   }
 }
 
@@ -275,8 +280,8 @@ async function sourceTreeHash() {
   return hash.digest("hex");
 }
 
-async function packWorkspace(workspace, destination) {
-  const result = await runNpm(["pack", "--workspace", workspace, "--pack-destination", destination, "--json"], root);
+async function packWorkspace(workspace, destination, workspaceRoot) {
+  const result = await runNpm(["pack", "--ignore-scripts", "--workspace", workspace, "--pack-destination", destination, "--json"], workspaceRoot);
   const values = JSON.parse(result.stdout);
   if (!Array.isArray(values) || values.length !== 1) throw new Error(`npm pack returned an invalid result for ${workspace}`);
   return values[0];

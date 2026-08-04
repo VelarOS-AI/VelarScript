@@ -157,7 +157,7 @@ interface PackedPackage {
 }
 
 async function pack(workspace: string): Promise<PackedPackage> {
-  const result = await runNpm(["pack", "--workspace", workspace, "--pack-destination", directory, "--json"], root);
+  const result = await runNpm(["pack", "--ignore-scripts", "--workspace", workspace, "--pack-destination", directory, "--json"], root);
   const packed = JSON.parse(result.stdout) as PackedPackage[];
   assert.equal(packed.length, 1);
   return packed[0]!;

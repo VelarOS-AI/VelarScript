@@ -1,4 +1,4 @@
-import type { Diagnostic, Span } from "@velarscript/compiler";
+import { semanticTypeIdentity, type Diagnostic, type Span } from "@velarscript/compiler";
 import {
   Analyzer,
   anyType,
@@ -179,7 +179,7 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       const parsed = runtimeTypeAt(1);
       if (parsed.kind === "any" || parsed.kind === "unknown") return parsed;
       const expanded = context.expandAliases(parsed);
-      const fields = expanded.kind === "named" ? context.declaredFieldsOf(expanded.name) : null;
+      const fields = expanded.kind === "named" ? context.declaredFieldsOf(expanded.identity ?? expanded.name) : null;
       if (!fields) {
         context.typeError("Form reading requires a record declared with 'type Name:'", arguments_[1]?.span ?? callSpan);
         return parsed;
@@ -501,7 +501,7 @@ export class VelarWebAnalyzer extends Analyzer {
       const left = this.inferExpression(expression.left);
       const right = this.inferExpression(expression.right);
       if (isLookNumericType(left) || isLookNumericType(right)) {
-        if ((expression.operator === "+" || expression.operator === "-") && describeType(left) === describeType(right)) return left;
+        if ((expression.operator === "+" || expression.operator === "-") && semanticTypeIdentity(left) === semanticTypeIdentity(right)) return left;
         if ((expression.operator === "+" || expression.operator === "-") && isLookMetricPair(left, right)) return lookLength;
         if ((expression.operator === "*" || expression.operator === "/") && isLookNumericType(left) && right.kind === "number") return left;
         if (expression.operator === "*" && left.kind === "number" && isLookNumericType(right)) return right;

@@ -1004,7 +1004,7 @@ function callAt(source: string, offset: number): { readonly calleeOffset: number
       return start === end ? null : { calleeOffset: start, activeParameter };
     }
     if (character === "," && depth === 0) activeParameter += 1;
-    if (character === "\n" && depth === 0) return null;
+    if ((character === "\n" || character === "\r") && depth === 0) return null;
   }
   return null;
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { prepareExternalPreview } from "../scripts/prepare-external-preview.mjs";
@@ -11,6 +11,7 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 test("publication rehearsal emits reproducible verified package identities without publishing", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "velar-release-rehearsal-"));
+  const workspaceOutputs = await protectWorkspaceOutputs("release");
   const first = join(temporary, "first");
   const second = join(temporary, "second");
   try {
@@ -68,13 +69,16 @@ test("publication rehearsal emits reproducible verified package identities witho
     const refusedExtra = await runRelease(["verify", extraFile], true);
     assert.notEqual(refusedExtra.code, 0);
     assert.match(refusedExtra.stderr, /must contain exactly/u);
+    await workspaceOutputs.assertUntouched();
   } finally {
+    await workspaceOutputs.dispose();
     await rm(temporary, { recursive: true, force: true });
   }
 });
 
 test("external preview preparation emits a reproducible root Netlify build", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "velar-external-preview-"));
+  const workspaceOutputs = await protectWorkspaceOutputs("preview");
   const first = join(temporary, "first");
   const second = join(temporary, "second");
   try {
@@ -107,10 +111,38 @@ test("external preview preparation emits a reproducible root Netlify build", asy
     await writeFile(join(unsafe, "keep.txt"), "keep\n", "utf8");
     await assert.rejects(prepareExternalPreview(unsafe), /refusing to replace/u);
     assert.equal(await readFile(join(unsafe, "keep.txt"), "utf8"), "keep\n");
+    await workspaceOutputs.assertUntouched();
   } finally {
+    await workspaceOutputs.dispose();
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+async function protectWorkspaceOutputs(label: string) {
+  const paths = ["compiler", "web", "create", "cli"].map((workspace) => join(root, "packages", workspace, "dist", `.workspace-${label}.sentinel`));
+  const sourcePaths = [
+    join(root, "packages", "compiler", "src", "analyzer.ts"),
+    join(root, "packages", "web", "src", "analyzer.ts"),
+    join(root, "packages", "cli", "src", "project.ts"),
+  ];
+  const sourceContents = new Map(await Promise.all(sourcePaths.map(async (path) => [path, await readFile(path)] as const)));
+  const value = `workspace-owned-${label}\n`;
+  for (const path of paths) {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, value, "utf8");
+  }
+  return {
+    async assertUntouched() {
+      for (const path of paths) assert.equal(await readFile(path, "utf8"), value, `release tooling replaced ${path}`);
+      for (const [path, content] of sourceContents) {
+        assert.deepEqual(await readFile(path), content, `release tooling modified active source ${path}`);
+      }
+    },
+    async dispose() {
+      await Promise.all(paths.map((path) => rm(path, { force: true })));
+    },
+  };
+}
 
 async function runRelease(arguments_: readonly string[], allowFailure = false): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const child = spawn(process.execPath, ["scripts/release-toolchain.mjs", ...arguments_], {

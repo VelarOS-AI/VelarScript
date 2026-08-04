@@ -2,7 +2,7 @@ import { access, readFile, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describeType, type ClassInfo, type ValueType } from "@velarscript/compiler";
+import { describeType, optionalOf, semanticTypeIdentity, type ClassInfo, type ValueType } from "@velarscript/compiler";
 
 export interface TypeScriptDeclarationBridge {
   readonly path: string;
@@ -13,7 +13,14 @@ export interface TypeScriptDeclarationBridge {
   readonly warnings: readonly string[];
 }
 
+type DeclarationDirection = "to-js" | "from-js" | "invariant";
+
+function oppositeDirection(direction: DeclarationDirection): DeclarationDirection {
+  return direction === "to-js" ? "from-js" : direction === "from-js" ? "to-js" : "invariant";
+}
+
 const unknownType: ValueType = { kind: "unknown" };
+const unsupportedType: ValueType = { kind: "unknown", restricted: true };
 const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
@@ -232,7 +239,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
         warnings.push(...child.warnings.map((warning) => `${relative(rootPath, childPath).replaceAll("\\", "/")}: ${warning}`));
         for (const [name, type] of child.exports) {
           if (name === "default" || explicit.has(name)) continue;
-          const key = declarationTypeKey(type);
+          const key = semanticTypeIdentity(type);
           const previous = starKeys.get(name);
           if (previous && previous !== key) {
             warnings.push(`Ambiguous declaration star export '${name}' was kept as unknown`);
@@ -249,7 +256,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
         }
         for (const [name, type] of child.typeExports) {
           if (name === "default" || explicitTypes.has(name)) continue;
-          const key = declarationTypeKey(type);
+          const key = semanticTypeIdentity(type);
           const previous = starTypeKeys.get(name);
           if (previous && previous !== key) {
             warnings.push(`Ambiguous declaration star type export '${name}' was kept as unknown`);
@@ -376,36 +383,6 @@ function renameDeclarationType(type: ValueType, name: string): ValueType {
   return type.kind === "class" ? { ...type, name } : type;
 }
 
-function declarationTypeKey(type: ValueType): string {
-  switch (type.kind) {
-    case "class":
-    case "classConstructor":
-      return `${type.kind}:${type.identity ?? type.name}`;
-    case "enum":
-    case "enumObject":
-      return `${type.kind}:${type.identity}`;
-    case "optional":
-      return `optional:${declarationTypeKey(type.inner)}`;
-    case "list":
-    case "set":
-      return `${type.kind}:${declarationTypeKey(type.element)}`;
-    case "map":
-      return `map:${declarationTypeKey(type.key)}:${declarationTypeKey(type.value)}`;
-    case "promise":
-      return `promise:${declarationTypeKey(type.value)}`;
-    case "object":
-      return `object:${[...type.fields].map(([name, value]) => `${name}:${declarationTypeKey(value)}`).join(",")}`;
-    case "function":
-    case "action":
-    case "intrinsic":
-      return `${type.kind}:${type.parameters.map(declarationTypeKey).join(",")}:${type.rest ? declarationTypeKey(type.rest) : ""}:${declarationTypeKey(type.result)}`;
-    case "union":
-      return `union:${type.members.map(declarationTypeKey).join("|")}`;
-    default:
-      return `${type.kind}:${describeType(type)}`;
-  }
-}
-
 export function parseTypeScriptDeclarations(
   source: string,
   path = "<types>",
@@ -499,7 +476,7 @@ export function parseTypeScriptDeclarations(
     const type: ValueType = { kind: "class", name: declaration.name, identity };
     knownTypes.set(declaration.name, type);
   }
-  const parse = (value: string, stack: ReadonlySet<string> = new Set()): ValueType => parseTsType(value, aliases, warnings, stack, knownTypes);
+  const parse = (value: string, direction: DeclarationDirection = "from-js"): ValueType => parseTsType(value, aliases, warnings, new Set(), knownTypes, direction);
   const classCounts = new Map<string, number>();
   for (const declaration of classDeclarations) classCounts.set(declaration.name, (classCounts.get(declaration.name) ?? 0) + 1);
   for (const declaration of classDeclarations) {
@@ -589,11 +566,11 @@ export function parseTypeScriptDeclarations(
     let incompatible = false;
     for (const [memberName, field] of info.fields) {
       const inherited = inheritedMember(info, memberName);
-      if (inherited && (inherited.kind !== "field" || inherited.mutable !== field.mutable || describeType(inherited.type) !== describeType(field.type))) incompatible = true;
+      if (inherited && (inherited.kind !== "field" || inherited.mutable !== field.mutable || semanticTypeIdentity(inherited.type) !== semanticTypeIdentity(field.type))) incompatible = true;
     }
     for (const [memberName, method] of info.methods) {
       const inherited = inheritedMember(info, memberName);
-      if (inherited && (inherited.kind !== "method" || describeType(inherited.type) !== describeType(method))) incompatible = true;
+      if (inherited && (inherited.kind !== "method" || semanticTypeIdentity(inherited.type) !== semanticTypeIdentity(method))) incompatible = true;
     }
     if (incompatible) {
       warnings.push(`Class declaration '${name}' has an incompatible inherited member contract and was kept as unknown`);
@@ -648,13 +625,13 @@ export function parseTypeScriptDeclarations(
     if (!signature) warnings.push(`Function declaration '${local}' has an unsupported declaration and was kept as unknown`);
     else if (signature.generic) warnings.push(`Generic function '${local}' is outside the VelarScript declaration bridge and was kept as unknown`);
     else {
-      const parameters = parseParameters(signature.parameters, parse, warnings);
+      const parameters = parseParameters(signature.parameters, (value) => parse(value, "to-js"), warnings);
       type = {
         kind: "function",
         parameters: parameters.types,
         requiredParameters: parameters.required,
         ...(parameters.rest ? { rest: parameters.rest } : {}),
-        result: parse(signature.result),
+        result: parse(signature.result, "from-js"),
       };
     }
     setLocalValue(local, type, "function");
@@ -755,7 +732,7 @@ function readClassDeclarations(source: string, warnings: string[]): readonly Typ
 
 function parseClassDeclaration(
   declaration: TypeScriptClassDeclaration,
-  parse: (value: string) => ValueType,
+  parse: (value: string, direction?: DeclarationDirection) => ValueType,
   warnings: string[],
   moduleSource: string,
   classTypes: ReadonlyMap<string, ValueType>,
@@ -831,8 +808,8 @@ function parseClassDeclaration(
         duplicate(accessor.name);
         continue;
       }
-      if (accessor.kind === "get") contract.getter = parse(accessor.type);
-      else contract.setter = parse(accessor.type);
+      if (accessor.kind === "get") contract.getter = parse(accessor.type, "from-js");
+      else contract.setter = parse(accessor.type, "to-js");
       target.set(accessor.name, contract);
       continue;
     }
@@ -847,7 +824,12 @@ function parseClassDeclaration(
         duplicate(name);
         continue;
       }
-      const type = parse(property[4] ?? "unknown");
+      if (property[3] && !modifiers.has("readonly")) {
+        warnings.push(`Optional mutable class field '${name}' has no exact VelarScript field contract and caused '${declaration.name}' to be kept as unknown`);
+        invalid = true;
+        continue;
+      }
+      const type = parse(property[4] ?? "unknown", modifiers.has("readonly") ? "from-js" : "invariant");
       target.set(name, { mutable: !modifiers.has("readonly"), type: property[3] ? optionalOf(type) : type });
       continue;
     }
@@ -864,13 +846,13 @@ function parseClassDeclaration(
         duplicate(method.name);
         continue;
       }
-      const parameters = parseParameters(method.parameters, parse, warnings);
+      const parameters = parseParameters(method.parameters, (value) => parse(value, "to-js"), warnings);
       const type: ValueType = {
         kind: "function",
         parameters: parameters.types,
         requiredParameters: parameters.required,
         ...(parameters.rest ? { rest: parameters.rest } : {}),
-        result: parse(method.result),
+        result: parse(method.result, "from-js"),
       };
       target.set(method.name, method.optional ? optionalOf(type) : type);
       continue;
@@ -889,7 +871,7 @@ function parseClassDeclaration(
         invalid = true;
         continue;
       }
-      if (contract.setter && declarationTypeKey(contract.getter) !== declarationTypeKey(contract.setter)) {
+      if (contract.setter && semanticTypeIdentity(contract.getter) !== semanticTypeIdentity(contract.setter)) {
         warnings.push(`Class accessor '${name}' in '${declaration.name}' has incompatible getter and setter types`);
         invalid = true;
         continue;
@@ -936,6 +918,14 @@ async function readLimitedText(path: string, maximum: number, label: string): Pr
   return source;
 }
 
+function parseRestElementType(source: string, parse: (value: string) => ValueType): ValueType | null {
+  let value = source.trim();
+  if (value.startsWith("readonly ")) value = value.slice("readonly ".length).trim();
+  if (value.endsWith("[]")) return parse(value.slice(0, -2));
+  const generic = /^(?:Array|ReadonlyArray)\s*<([\s\S]+)>$/u.exec(value);
+  return generic && splitTopLevel(generic[1] ?? "", ",").length === 1 ? parse(generic[1] ?? "unknown") : null;
+}
+
 function parseParameters(
   source: string,
   parse: (value: string) => ValueType,
@@ -951,23 +941,24 @@ function parseParameters(
     const match = /^(\.\.\.)?[A-Za-z_$][\w$]*(\?)?\s*:\s*(.+)$/u.exec(part.trim());
     if (!match) {
       warnings.push(`Unsupported parameter declaration '${part.trim()}' was kept as unknown`);
-      types.push(unknownType);
+      types.push(unsupportedType);
       optionalSeen = true;
       continue;
     }
     const optional = Boolean(match[2]);
-    const type = parse(match[3] ?? "unknown");
     if (match[1]) {
       if (index !== parts.length - 1) warnings.push(`Rest parameter '${part.trim()}' is not final and was kept as unknown`);
       if (optional) warnings.push(`Optional rest parameter '${part.trim()}' was kept as unknown`);
-      if (type.kind === "list" && index === parts.length - 1 && !optional) rest = type.element;
+      const element = parseRestElementType(match[3] ?? "unknown", parse);
+      if (element && index === parts.length - 1 && !optional) rest = element;
       else {
-        if (type.kind !== "list") warnings.push(`Rest parameter '${part.trim()}' must use an array type and was kept as unknown`);
-        rest = unknownType;
+        if (!element) warnings.push(`Rest parameter '${part.trim()}' must use an array type and was kept as unknown`);
+        rest = unsupportedType;
       }
       continue;
     }
-    types.push(optional ? optionalOf(type) : type);
+    const type = parse(match[3] ?? "unknown");
+    types.push(type);
     if (!optional && !optionalSeen) required += 1;
     if (optional) optionalSeen = true;
   }
@@ -976,7 +967,7 @@ function parseParameters(
 
 function parseClassConstructorParameters(
   source: string,
-  parse: (value: string) => ValueType,
+  parse: (value: string, direction?: DeclarationDirection) => ValueType,
   warnings: string[],
 ): {
   readonly types: readonly ValueType[];
@@ -995,26 +986,30 @@ function parseClassConstructorParameters(
     const match = /^((?:(?:public|private|protected|readonly)\s+)*)(\.\.\.)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/u.exec(part.trim());
     if (!match) {
       warnings.push(`Unsupported constructor parameter declaration '${part.trim()}' was kept as unknown`);
-      types.push(unknownType);
+      types.push(unsupportedType);
       optionalSeen = true;
       continue;
     }
     const modifiers = new Set((match[1] ?? "").trim().split(/\s+/u).filter(Boolean));
     const optional = Boolean(match[4]);
-    const type = parse(match[5] ?? "unknown");
     if (match[2]) {
       if (index !== parts.length - 1) warnings.push(`Rest parameter '${part.trim()}' is not final and was kept as unknown`);
       if (optional || modifiers.size > 0) warnings.push(`Rest parameter '${part.trim()}' cannot be optional or declare a parameter property`);
-      if (type.kind === "list" && index === parts.length - 1 && !optional && modifiers.size === 0) rest = type.element;
-      else rest = unknownType;
+      const element = parseRestElementType(match[5] ?? "unknown", (value) => parse(value, "to-js"));
+      if (element && index === parts.length - 1 && !optional && modifiers.size === 0) rest = element;
+      else rest = unsupportedType;
       continue;
     }
-    const parameterType = optional ? optionalOf(type) : type;
+    const sourceType = match[5] ?? "unknown";
+    const parameterType = parse(sourceType, "to-js");
     types.push(parameterType);
     if (!optional && !optionalSeen) required += 1;
     if (optional) optionalSeen = true;
     if (modifiers.has("readonly") || modifiers.has("public")) {
-      fields.set(match[3]!, { mutable: !modifiers.has("readonly"), type: parameterType });
+      const mutable = !modifiers.has("readonly");
+      if (optional && mutable) warnings.push(`Optional mutable parameter property '${match[3]}' has no exact VelarScript field contract`);
+      const fieldType = parse(sourceType, mutable ? "invariant" : "from-js");
+      fields.set(match[3]!, { mutable, type: optional ? optionalOf(fieldType) : fieldType });
     }
   }
   return { types, required, ...(rest ? { rest } : {}), fields };
@@ -1026,48 +1021,105 @@ function parseTsType(
   warnings: string[],
   stack: ReadonlySet<string>,
   classTypes: ReadonlyMap<string, ValueType> = new Map(),
+  direction: DeclarationDirection = "from-js",
 ): ValueType {
-  let value = source.trim().replace(/^readonly\s+/u, "");
+  let value = source.trim();
   while (value.startsWith("(") && value.endsWith(")") && balanced(value.slice(1, -1))) value = value.slice(1, -1).trim();
+  if (/^readonly\s+/u.test(value)) {
+    const inner = value.replace(/^readonly\s+/u, "");
+    if (direction === "to-js" && inner.endsWith("[]")) {
+      return { kind: "list", element: parseTsType(inner.slice(0, -2), aliases, warnings, stack, classTypes, "to-js") };
+    }
+    warnings.push(`Readonly collection type '${value}' has no mutable VelarScript equivalent and was kept as unknown`);
+    return unsupportedType;
+  }
   const union = splitTopLevel(value, "|");
   if (union.length > 1) {
-    const empty = union.filter((part) => part === "null" || part === "undefined");
-    const members = union.filter((part) => part !== "null" && part !== "undefined").map((part) => parseTsType(part, aliases, warnings, stack, classTypes));
+    const hasNull = union.includes("null");
+    const hasUndefined = union.includes("undefined");
+    const members = union.filter((part) => part !== "null" && part !== "undefined").map((part) => parseTsType(part, aliases, warnings, stack, classTypes, direction));
+    if (direction === "invariant" && hasUndefined) {
+      warnings.push(`Type '${value}' admits JavaScript undefined in a writable position and was kept as unknown`);
+      return unsupportedType;
+    }
+    if (members.length === 0) {
+      if (hasNull || (hasUndefined && direction === "from-js")) return nullType;
+      warnings.push(`Type '${value}' cannot be supplied from VelarScript and was kept as unknown`);
+      return unsupportedType;
+    }
     const type = unionOf(members);
-    return empty.length > 0 ? optionalOf(type) : type;
+    return hasNull || (hasUndefined && direction === "from-js") ? optionalOf(type) : type;
   }
-  if (value.endsWith("[]")) return { kind: "list", element: parseTsType(value.slice(0, -2), aliases, warnings, stack, classTypes) };
+  if (value.endsWith("[]")) return { kind: "list", element: parseTsType(value.slice(0, -2), aliases, warnings, stack, classTypes, "invariant") };
   const generic = /^([A-Za-z_$][\w$]*)\s*<([\s\S]+)>$/u.exec(value);
   if (generic) {
     const arguments_ = splitTopLevel(generic[2] ?? "", ",");
-    if (generic[1] === "Array" || generic[1] === "ReadonlyArray") return { kind: "list", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes) };
-    if (generic[1] === "Set" || generic[1] === "ReadonlySet") return { kind: "set", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes) };
-    if (generic[1] === "Promise") return { kind: "promise", value: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes) };
-    if (generic[1] === "Record") return { kind: "map", key: parseTsType(arguments_[0] ?? "string", aliases, warnings, stack, classTypes), value: parseTsType(arguments_[1] ?? "unknown", aliases, warnings, stack, classTypes) };
+    if (generic[1] === "Array") return { kind: "list", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant") };
+    if (generic[1] === "Set") return { kind: "set", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant") };
+    if (generic[1] === "ReadonlyArray" || generic[1] === "ReadonlySet") {
+      if (direction === "to-js") {
+        const element = parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "to-js");
+        return generic[1] === "ReadonlyArray" ? { kind: "list", element } : { kind: "set", element };
+      }
+      warnings.push(`Readonly collection type '${generic[1]}' has no mutable VelarScript equivalent and was kept as unknown`);
+      return unsupportedType;
+    }
+    if (generic[1] === "Promise") return { kind: "promise", value: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, direction) };
+    if (generic[1] === "Record") {
+      warnings.push("TypeScript Record is a plain JavaScript object, not a VelarScript Map, and was kept as unknown");
+      return unsupportedType;
+    }
     warnings.push(`Generic type '${generic[1]}' is outside the VelarScript declaration bridge and was kept as unknown`);
-    return unknownType;
+    return unsupportedType;
   }
   const arrow = /^\(([^()]*)\)\s*=>\s*(.+)$/u.exec(value);
   if (arrow) {
-    const parameters = parseParameters(arrow[1] ?? "", (part) => parseTsType(part, aliases, warnings, stack, classTypes), warnings);
+    const parameters = parseParameters(arrow[1] ?? "", (part) => parseTsType(part, aliases, warnings, stack, classTypes, oppositeDirection(direction)), warnings);
+    const resultSource = arrow[2] ?? "unknown";
     return {
       kind: "function",
       parameters: parameters.types,
       requiredParameters: parameters.required,
       ...(parameters.rest ? { rest: parameters.rest } : {}),
-      result: parseTsType(arrow[2] ?? "unknown", aliases, warnings, stack, classTypes),
+      result: resultSource.trim() === "void" ? nullType : parseTsType(resultSource, aliases, warnings, stack, classTypes, direction),
     };
   }
-  if (value.startsWith("{") && value.endsWith("}")) return objectType(value.slice(1, -1), aliases, warnings, stack, classTypes);
-  if (/^['"`]/u.test(value)) return stringType;
-  if (/^-?\d/u.test(value)) return numberType;
-  if (value === "true" || value === "false") return boolType;
+  if (value.startsWith("{") && value.endsWith("}")) return objectType(value.slice(1, -1), aliases, warnings, stack, classTypes, direction);
+  if (/^['"`]/u.test(value)) {
+    if (direction === "from-js") return stringType;
+    warnings.push(`String literal type '${value}' cannot be widened safely in an input position and was kept as unknown`);
+    return unsupportedType;
+  }
+  if (/^-?\d/u.test(value)) {
+    if (direction === "from-js") return numberType;
+    warnings.push(`Numeric literal type '${value}' cannot be widened safely in an input position and was kept as unknown`);
+    return unsupportedType;
+  }
+  if (value === "true" || value === "false") {
+    if (direction === "from-js") return boolType;
+    warnings.push(`Boolean literal type '${value}' cannot be widened safely in an input position and was kept as unknown`);
+    return unsupportedType;
+  }
   if (value === "string") return stringType;
   if (value === "number") return numberType;
   if (value === "boolean") return boolType;
-  if (value === "void") return nullType;
-  if (value === "null" || value === "undefined") return { kind: "optional", inner: unknownType };
-  if (value === "unknown" || value === "object") return unknownType;
+  if (value === "void") {
+    if (direction === "from-js") return nullType;
+    warnings.push("TypeScript void cannot be supplied explicitly from VelarScript and was kept as unknown");
+    return unsupportedType;
+  }
+  if (value === "null") return nullType;
+  if (value === "undefined") {
+    if (direction === "from-js") return nullType;
+    warnings.push("TypeScript undefined cannot be supplied explicitly from VelarScript and was kept as unknown");
+    return unsupportedType;
+  }
+  if (value === "unknown") return unknownType;
+  if (value === "object") {
+    if (direction === "from-js") return unknownType;
+    warnings.push("TypeScript object cannot be represented precisely in a VelarScript input position and was kept as unknown");
+    return unsupportedType;
+  }
   if (value === "any") {
     warnings.push("TypeScript 'any' is kept as unknown at the safe JavaScript boundary");
     return unknownType;
@@ -1075,43 +1127,59 @@ function parseTsType(
   const classType = classTypes.get(value);
   if (classType) return classType;
   const alias = aliases.get(value);
-  if (alias && !stack.has(value)) return parseTsType(alias, aliases, warnings, new Set([...stack, value]), classTypes);
+  if (alias && !stack.has(value)) return parseTsType(alias, aliases, warnings, new Set([...stack, value]), classTypes, direction);
   if (alias) warnings.push(`Recursive declaration '${value}' is outside the VelarScript declaration bridge and was kept as unknown`);
   else warnings.push(`TypeScript type '${value}' is outside the VelarScript declaration bridge and was kept as unknown`);
-  return unknownType;
+  return unsupportedType;
 }
 
-function objectType(source: string, aliases: ReadonlyMap<string, string>, warnings: string[], stack: ReadonlySet<string>, classTypes: ReadonlyMap<string, ValueType>): ValueType {
+function objectType(source: string, aliases: ReadonlyMap<string, string>, warnings: string[], stack: ReadonlySet<string>, classTypes: ReadonlyMap<string, ValueType>, direction: DeclarationDirection): ValueType {
   const fields = new Map<string, ValueType>();
+  const readonlyFields = new Set<string>();
+  const optionalFields = new Set<string>();
+  let invalidInputShape = false;
   for (const part of splitFields(source)) {
-    const match = /^(?:readonly\s+)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/u.exec(part.trim());
+    const match = /^(readonly\s+)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+)$/u.exec(part.trim());
     if (match) {
-      const type = parseTsType(match[3] ?? "unknown", aliases, warnings, stack, classTypes);
-      setObjectField(fields, match[1]!, match[2] ? optionalOf(type) : type, warnings);
+      const name = match[2]!;
+      const type = parseTsType(match[4] ?? "unknown", aliases, warnings, stack, classTypes, match[1] ? direction : "invariant");
+      setObjectField(fields, name, type, warnings);
+      if (match[1]) readonlyFields.add(name);
+      if (match[3]) optionalFields.add(name);
       continue;
     }
     const method = readMethodSignature(part.trim());
     if (method) {
-      const parameters = parseParameters(method.parameters, (value) => parseTsType(value, aliases, warnings, stack, classTypes), warnings);
+      const parameters = parseParameters(method.parameters, (value) => parseTsType(value, aliases, warnings, stack, classTypes, oppositeDirection(direction)), warnings);
       const type: ValueType = {
         kind: "function",
         parameters: parameters.types,
         requiredParameters: parameters.required,
         ...(parameters.rest ? { rest: parameters.rest } : {}),
-        result: parseTsType(method.result, aliases, warnings, stack, classTypes),
+        result: method.result.trim() === "void" ? nullType : parseTsType(method.result, aliases, warnings, stack, classTypes, direction),
       };
-      setObjectField(fields, method.name, method.optional ? optionalOf(type) : type, warnings);
+      setObjectField(fields, method.name, type, warnings);
+      if (method.optional) optionalFields.add(method.name);
       continue;
     }
-    if (part.trim()) warnings.push(`Unsupported object field '${part.trim()}' was ignored`);
+    if (part.trim()) {
+      warnings.push(`Unsupported object field '${part.trim()}' was ignored`);
+      invalidInputShape ||= direction !== "from-js";
+    }
   }
-  return { kind: "object", fields };
+  if (invalidInputShape) return unsupportedType;
+  return {
+    kind: "object",
+    fields,
+    ...(readonlyFields.size > 0 ? { readonlyFields } : {}),
+    ...(optionalFields.size > 0 ? { optionalFields } : {}),
+  };
 }
 
 function setObjectField(fields: Map<string, ValueType>, name: string, type: ValueType, warnings: string[]): void {
   if (fields.has(name)) {
     warnings.push(`Overloaded or duplicate object member '${name}' was kept as unknown`);
-    fields.set(name, unknownType);
+    fields.set(name, unsupportedType);
   } else fields.set(name, type);
 }
 
@@ -1274,13 +1342,9 @@ function balanced(value: string): boolean {
   return depth === 0;
 }
 
-function optionalOf(type: ValueType): ValueType {
-  return type.kind === "optional" ? type : { kind: "optional", inner: type };
-}
-
 function unionOf(types: readonly ValueType[]): ValueType {
   const members = types.flatMap((type) => type.kind === "union" ? type.members : [type])
-    .filter((type, index, values) => values.findIndex((candidate) => describeType(candidate) === describeType(type)) === index);
+    .filter((type, index, values) => values.findIndex((candidate) => semanticTypeIdentity(candidate) === semanticTypeIdentity(type)) === index);
   return members.length === 0 ? unknownType : members.length === 1 ? members[0]! : { kind: "union", members };
 }
 

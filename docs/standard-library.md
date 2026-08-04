@@ -24,10 +24,13 @@ standard library.
   statically are diagnostics; dynamic misuse throws `TypeError` or
   `RangeError`.
 - Every API that requires `List<T>` enforces the same dense, field-free,
-  data-element List boundary used by the language runtime. Sparse JavaScript
-  arrays, arrays carrying hidden/extra fields, and accessor-backed elements do
-  not become valid Lists through a library call; validation never invokes an
-  element getter.
+  mutable data-element List boundary used by the language runtime. Sparse or
+  frozen JavaScript arrays, arrays carrying hidden/extra fields, and
+  accessor-backed elements do not become valid Lists through a library call;
+  validation never invokes an element getter.
+- Map and Set boundaries use native internal-slot checks and prototype
+  operations. Cross-realm native collections are accepted, while subclass
+  overrides cannot replace size, iteration, membership, or lookup semantics.
 - Core conversion is deliberately asymmetric and small: `str(value)` performs
   explicit display conversion, while `number(text) -> number?` strictly parses
   one complete finite decimal. JavaScript `Boolean`, `Number`, and `String`
@@ -49,6 +52,13 @@ Python-style iteration helpers and explicit functional collection operations.
 Core Lists use the same direct vocabulary: `append(value)` adds one item,
 `extend(values)` adds a typed List atomically, and `slice(...)` returns a copy.
 The JavaScript-specific variadic `push` surface is not part of VelarScript source.
+Language-level callback methods read a checked shallow snapshot, so callback
+mutation cannot silently extend, truncate, or replace the values participating
+in the current operation.
+The imported collection helpers use the same snapshot boundary, including for
+Array subclasses with overridden methods or iterators. Values returned from
+host callbacks and async combinators normalize JavaScript `undefined` to
+VelarScript `null` before becoming observable.
 
 | Export | Behavior |
 | --- | --- |

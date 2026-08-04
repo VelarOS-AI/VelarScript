@@ -1,4 +1,4 @@
-import type { ClassInfo, CompilerExtension, ModuleInterface, ValueType } from "@velarscript/compiler";
+import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
 
 const anyType: ValueType = { kind: "any" };
@@ -17,10 +17,6 @@ function intrinsic(name: string, parameters: readonly ValueType[], result: Value
 
 function promise(value: ValueType): ValueType {
   return { kind: "promise", value };
-}
-
-function optional(value: ValueType): ValueType {
-  return { kind: "optional", inner: value };
 }
 
 function object(fields: Readonly<Record<string, ValueType>>): ValueType {
@@ -236,7 +232,7 @@ function moduleInterface(
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
 ): ModuleInterface {
-  return { exports, reactiveExports: new Map(), namedTypes, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, hostBoundaryExports: new Set(), reactiveExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {
@@ -378,9 +374,17 @@ function __velarDenseList(value) {
   if (!Array.isArray(value) || value.length > 1000000
     || Object.getOwnPropertySymbols(value).length !== 0
     || Object.getOwnPropertyNames(value).length !== value.length + 1) return false;
-  for (let index = 0; index < value.length; index += 1) if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable
+    || lengthDescriptor.configurable || !("value" in lengthDescriptor)) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) return false;
+  }
   return true;
 }
+function __velarMapSize(value) { try { return Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value); } catch { return null; } }
+function __velarSetSize(value) { try { return Reflect.getOwnPropertyDescriptor(Set.prototype, "size").get.call(value); } catch { return null; } }
 function __velarDataRecordKeys(value) {
   if (!__velarPlainRecord(value) || Object.getOwnPropertySymbols(value).length > 0) return null;
   const keys = Object.getOwnPropertyNames(value);
@@ -398,17 +402,29 @@ function __velarEqualValue(left, right, leftActive, rightActive, depth = 0) {
   leftActive.add(left); rightActive.add(right);
   try {
     if (Array.isArray(left) || Array.isArray(right)) {
-      return __velarDenseList(left) && __velarDenseList(right) && left.length === right.length
-        && left.every((item, index) => __velarEqualValue(item, right[index], leftActive, rightActive, depth + 1));
-    }
-    if (left instanceof Map || right instanceof Map) {
-      if (!(left instanceof Map) || !(right instanceof Map) || left.size !== right.size) return false;
-      for (const [key, value] of left) if (!right.has(key) || !__velarEqualValue(value, right.get(key), leftActive, rightActive, depth + 1)) return false;
+      if (!__velarDenseList(left) || !__velarDenseList(right) || left.length !== right.length) return false;
+      for (let index = 0; index < left.length; index += 1) {
+        const leftValue = Object.getOwnPropertyDescriptor(left, index).value;
+        const rightValue = Object.getOwnPropertyDescriptor(right, index).value;
+        if (!__velarEqualValue(leftValue, rightValue, leftActive, rightActive, depth + 1)) return false;
+      }
       return true;
     }
-    if (left instanceof Set || right instanceof Set) {
-      if (!(left instanceof Set) || !(right instanceof Set) || left.size !== right.size) return false;
-      for (const value of left) if (!right.has(value)) return false;
+    const leftMapSize = __velarMapSize(left);
+    const rightMapSize = __velarMapSize(right);
+    if (leftMapSize !== null || rightMapSize !== null) {
+      if (leftMapSize === null || rightMapSize === null || leftMapSize !== rightMapSize) return false;
+      for (const [key, value] of Map.prototype.entries.call(left)) {
+        if (!Map.prototype.has.call(right, key)
+          || !__velarEqualValue(value, Map.prototype.get.call(right, key), leftActive, rightActive, depth + 1)) return false;
+      }
+      return true;
+    }
+    const leftSetSize = __velarSetSize(left);
+    const rightSetSize = __velarSetSize(right);
+    if (leftSetSize !== null || rightSetSize !== null) {
+      if (leftSetSize === null || rightSetSize === null || leftSetSize !== rightSetSize) return false;
+      for (const value of Set.prototype.values.call(left)) if (!Set.prototype.has.call(right, value)) return false;
       return true;
     }
     const leftKeys = __velarDataRecordKeys(left);
@@ -433,11 +449,16 @@ function __velarRequireList(value, name) {
     || Object.getOwnPropertyNames(value).length !== value.length + 1) {
     throw new TypeError(name + " requires a dense List without extra fields");
   }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable
+    || lengthDescriptor.configurable || !("value" in lengthDescriptor)) {
+    throw new TypeError(name + " requires an ordinary mutable List length");
+  }
   const output = new Array(value.length);
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, index);
-    if (!descriptor?.enumerable || !("value" in descriptor)) {
-      throw new TypeError(name + " requires data-only List elements");
+    if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) {
+      throw new TypeError(name + " requires ordinary mutable List elements");
     }
     output[index] = descriptor.value;
   }
@@ -527,13 +548,13 @@ export function range(start, stop = null, step = 1) {
 }
 
 export function enumerate(values, start = 0) {
-  requireList(values, "enumerate");
+  values = requireList(values, "enumerate");
   if (!Number.isSafeInteger(start) || (values.length > 0 && !Number.isSafeInteger(start + values.length - 1))) throw new RangeError("enumerate indexes must be safe integers");
   return values.map((value, index) => Object.freeze({ index: start + index, value }));
 }
 
 export function zip(left, right) {
-  requireList(left, "zip"); requireList(right, "zip");
+  left = requireList(left, "zip"); right = requireList(right, "zip");
   const length = Math.min(left.length, right.length);
   return Array.from({ length }, (_, index) => Object.freeze({ first: left[index], second: right[index] }));
 }
@@ -541,14 +562,14 @@ export function zip(left, right) {
 export function unique(values) { return [...new Set(requireList(values, "unique"))]; }
 
 export function chunk(values, size) {
-  requireList(values, "chunk"); requireCount(size, "chunk size", true);
+  values = requireList(values, "chunk"); requireCount(size, "chunk size", true);
   const output = [];
   for (let index = 0; index < values.length; index += size) output.push(values.slice(index, index + size));
   return output;
 }
 
 export function flatten(values) {
-  requireList(values, "flatten");
+  values = requireList(values, "flatten");
   const output = [];
   for (const value of values) {
     const nested = requireList(value, "flatten");
@@ -572,18 +593,18 @@ export function some(values, callback) { return requireList(values, "some").some
 export function every(values, callback) { return requireList(values, "every").every((value) => predicate(callback, value, "every")); }
 
 export function partition(values, callback) {
-  requireList(values, "partition");
+  values = requireList(values, "partition");
   const matches = [], rest = [];
   for (const value of values) (predicate(callback, value, "partition") ? matches : rest).push(value);
   return Object.freeze({ matches, rest });
 }
 
 export function groupBy(values, key) {
-  requireList(values, "groupBy");
+  values = requireList(values, "groupBy");
   requireCallback(key, "groupBy");
   const output = new Map();
   for (const value of values) {
-    const name = key(value);
+    const name = key(value) ?? null;
     const group = output.get(name);
     if (group) group.push(value); else output.set(name, [value]);
   }
@@ -591,16 +612,16 @@ export function groupBy(values, key) {
 }
 
 export function keyBy(values, key) {
-  requireList(values, "keyBy");
+  values = requireList(values, "keyBy");
   requireCallback(key, "keyBy");
-  return new Map(values.map((value) => [key(value), value]));
+  return new Map(values.map((value) => [key(value) ?? null, value]));
 }
 
 export function countBy(values, key) {
-  requireList(values, "countBy");
+  values = requireList(values, "countBy");
   requireCallback(key, "countBy");
   const output = new Map();
-  for (const value of values) { const name = key(value); output.set(name, (output.get(name) || 0) + 1); }
+  for (const value of values) { const name = key(value) ?? null; output.set(name, (output.get(name) || 0) + 1); }
   return output;
 }
 
@@ -620,7 +641,7 @@ export function sortBy(values, key, descending = false) {
 }
 
 function extremeBy(values, key, direction, name) {
-  requireList(values, name); requireCallback(key, name);
+  values = requireList(values, name); requireCallback(key, name);
   if (!values.length) return null;
   let selected = values[0], selectedKey = key(selected), keyType = comparable(selectedKey, name);
   for (let index = 1; index < values.length; index += 1) {
@@ -782,12 +803,13 @@ const __velarMaxTimerMilliseconds = 2147483647;
 const __velarMaxAsyncFanout = 10000;
 function asyncFanout(values, name) { values = __velarRequireList(values, name); if (values.length > __velarMaxAsyncFanout) throw new RangeError(name + " cannot start more than 10000 operations at once"); return values; }
 export function sleep(milliseconds) { if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("sleep requires milliseconds from 0 through 2147483647"); return new Promise((resolve) => setTimeout(() => resolve(null), milliseconds)); }
-export function all(values) { return Promise.all(asyncFanout(values, "async.all")); }
-export function race(values) { return Promise.race(asyncFanout(values, "async.race")); }
-export async function timeout(value, milliseconds, message = "Operation timed out") { if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("timeout requires milliseconds from 0 through 2147483647"); if (typeof message !== "string") throw new TypeError("timeout message must be a string"); if (message.length > 65536) throw new RangeError("timeout messages cannot exceed 64 KiB"); let timer; try { return await Promise.race([value, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); })]); } finally { clearTimeout(timer); } }
-export async function retry(task, attempts = 3) { if (typeof task !== "function") throw new TypeError("retry requires a function"); if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10000) throw new RangeError("retry attempts must be an integer from 1 through 10000"); let last; for (let attempt = 0; attempt < attempts; attempt += 1) { try { return await task(); } catch (error) { last = error; } } throw last; }
-export async function map(values, worker, concurrency = 4) { values = __velarRequireList(values, "async.map"); if (typeof worker !== "function") throw new TypeError("async.map requires a worker"); if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 1024) throw new RangeError("async.map concurrency must be an integer from 1 through 1024"); const output = new Array(values.length); let cursor = 0; async function run() { while (true) { const index = cursor++; if (index >= values.length) return; output[index] = await worker(values[index]); } } await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, run)); return output; }
-export async function series(tasks) { tasks = __velarRequireList(tasks, "async.series"); if (tasks.some((task) => typeof task !== "function")) throw new TypeError("series requires a List of functions"); const output = []; for (const task of tasks) output.push(await task()); return output; }
+function normalize(value) { return value === undefined ? null : value; }
+export async function all(values) { return (await Promise.all(asyncFanout(values, "async.all"))).map(normalize); }
+export async function race(values) { return normalize(await Promise.race(asyncFanout(values, "async.race"))); }
+export async function timeout(value, milliseconds, message = "Operation timed out") { if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("timeout requires milliseconds from 0 through 2147483647"); if (typeof message !== "string") throw new TypeError("timeout message must be a string"); if (message.length > 65536) throw new RangeError("timeout messages cannot exceed 64 KiB"); let timer; try { return normalize(await Promise.race([value, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); })])); } finally { clearTimeout(timer); } }
+export async function retry(task, attempts = 3) { if (typeof task !== "function") throw new TypeError("retry requires a function"); if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10000) throw new RangeError("retry attempts must be an integer from 1 through 10000"); let last; for (let attempt = 0; attempt < attempts; attempt += 1) { try { return normalize(await task()); } catch (error) { last = error; } } throw last; }
+export async function map(values, worker, concurrency = 4) { values = __velarRequireList(values, "async.map"); if (typeof worker !== "function") throw new TypeError("async.map requires a worker"); if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 1024) throw new RangeError("async.map concurrency must be an integer from 1 through 1024"); const output = new Array(values.length); let cursor = 0; async function run() { while (true) { const index = cursor++; if (index >= values.length) return; output[index] = normalize(await worker(values[index])); } } await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, run)); return output; }
+export async function series(tasks) { tasks = __velarRequireList(tasks, "async.series"); if (tasks.some((task) => typeof task !== "function")) throw new TypeError("series requires a List of functions"); const output = []; for (const task of tasks) output.push(normalize(await task())); return output; }
 `.trimStart()],
   ["velar/url", String.raw`
 ${listRuntime}
@@ -817,8 +839,10 @@ function appendQueryValue(output, name, value, budget) {
 function appendParams(params, output) {
   let entries;
   let entryCount;
-  if (params instanceof Map) {
-    entryCount = Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(params);
+  let mapSize = null;
+  try { mapSize = Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(params); } catch {}
+  if (mapSize !== null) {
+    entryCount = mapSize;
     entries = Map.prototype.entries.call(params);
   } else if (params && typeof params === "object" && !Array.isArray(params)
     && (Object.getPrototypeOf(params) === Object.prototype || Object.getPrototypeOf(params) === null)
@@ -957,8 +981,10 @@ function logText(value, name, maximum = 65536) { if (typeof value !== "string") 
 
 function fieldsOf(value) {
   if (value == null) return new Map();
-  if (!(value instanceof Map)) throw new TypeError("VelarScript log fields must be a Map");
-  if (Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value) > maxLogFields) throw new RangeError("VelarScript log fields cannot exceed 1000 entries");
+  let size;
+  try { size = Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value); }
+  catch { throw new TypeError("VelarScript log fields must be a Map"); }
+  if (size > maxLogFields) throw new RangeError("VelarScript log fields cannot exceed 1000 entries");
   const fields = new Map();
   for (const [key, field] of Map.prototype.entries.call(value)) {
     if (typeof key !== "string") throw new TypeError("VelarScript log field names must be strings");
@@ -1044,9 +1070,22 @@ function display(value, active = new WeakSet()) {
   if (active.has(value)) return "[cycle]";
   active.add(value);
   try {
-    if (Array.isArray(value)) return __velarDenseList(value) ? "[" + value.map((item) => display(item, active)).join(", ") + "]" : "[invalid List]";
-    if (value instanceof Map) return "Map(" + [...value].map(([key, item]) => display(key, active) + " => " + display(item, active)).join(", ") + ")";
-    if (value instanceof Set) return "Set(" + [...value].map((item) => display(item, active)).join(", ") + ")";
+    if (Array.isArray(value)) {
+      if (!__velarDenseList(value)) return "[invalid List]";
+      const items = [];
+      for (let index = 0; index < value.length; index += 1) items.push(display(Object.getOwnPropertyDescriptor(value, index).value, active));
+      return "[" + items.join(", ") + "]";
+    }
+    if (__velarMapSize(value) !== null) {
+      const items = [];
+      for (const [key, item] of Map.prototype.entries.call(value)) items.push(display(key, active) + " => " + display(item, active));
+      return "Map(" + items.join(", ") + ")";
+    }
+    if (__velarSetSize(value) !== null) {
+      const items = [];
+      for (const item of Set.prototype.values.call(value)) items.push(display(item, active));
+      return "Set(" + items.join(", ") + ")";
+    }
     const keys = __velarDataRecordKeys(value);
     if (keys) return "{" + keys.map((key) => JSON.stringify(key) + ": " + display(Object.getOwnPropertyDescriptor(value, key).value, active)).join(", ") + "}";
     const prototype = Object.getPrototypeOf(value);
@@ -1063,9 +1102,13 @@ export function expect(actual) {
     toBeTruthy() { if (actual !== true) throw new Error("Expected bool true but received " + display(actual)); },
     toBeFalsy() { if (actual !== false) throw new Error("Expected bool false but received " + display(actual)); },
     toContain(expected) {
-      const contains = typeof actual === "string"
-        ? typeof expected === "string" && actual.includes(expected)
-        : Array.isArray(actual) && __velarDenseList(actual) && actual.some((value) => value === expected);
+      let contains = typeof actual === "string" && typeof expected === "string" && actual.includes(expected);
+      if (Array.isArray(actual) && __velarDenseList(actual)) {
+        contains = false;
+        for (let index = 0; index < actual.length; index += 1) {
+          if (Object.getOwnPropertyDescriptor(actual, index).value === expected) { contains = true; break; }
+        }
+      }
       if (!contains) throw new Error("Expected " + display(actual) + " to contain " + display(expected));
     },
     toMatch(expected) {

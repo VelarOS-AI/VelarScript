@@ -31,6 +31,17 @@ incremental session and dynamically watches resolved npm VelarScript package roo
 Both reuse the compiler's reverse-dependency invalidation rather than creating
 their own semantic cache.
 
+Project modules compile dependency-first. The public interface returned by a
+successful compilation is built from that same analyzer's binding types rather
+than a second expression guesser. Strongly connected module groups run bounded
+interface passes until their complete exported contracts stabilize; a cycle that
+cannot converge is a project failure. Record display names are kept for editor
+output, while module-qualified identities own their field metadata. This lets
+two dependencies both declare `Item` without overwriting one another and keeps
+an unimported type name out of the consumer's source scope. Compiler diagnostics, imported
+contracts, hover, completion, and emitted modules therefore share one semantic
+source.
+
 Literal dynamic `.vel` imports are part of that same graph rather than a
 bundler-only escape hatch. Inspection records them as dynamic dependencies,
 analysis exposes a typed Promise of the target module interface, reverse graph
@@ -90,11 +101,16 @@ them only to expressions analyzed inside the owner class, and prevents
 project-wide inheritance rename from absorbing them.
 
 Core `List`, `Set`, and `Map` types remain distinct compiler values. `Set()`
-construction accepts zero arguments or one checked List/Set, first mutation can
-refine an empty local binding, and the refined type is written back to the
-semantic index for editor hover. Set iteration emits native iteration, while
-the controlled helpers normalize mutating results to VelarScript `null` without
-replacing JavaScript identity, insertion order, or membership semantics.
+construction accepts zero arguments or one checked List/Set. Empty collection
+inference follows the runtime collection identity across direct aliases and
+record fields, freezes when the value crosses an open typed boundary, and is
+written back to the semantic index for editor hover. Iteration, membership,
+size, indexing, copying, and mutation lower through controlled helpers that
+validate dense Lists and invoke native Map/Set prototype operations directly.
+Native slot checks accept cross-realm Map/Set values while instance overrides,
+custom iterators, and Array species cannot change language semantics. Mutating
+results normalize to VelarScript `null` without replacing
+JavaScript identity, insertion order, or membership semantics.
 
 ## Package ownership
 
@@ -180,6 +196,15 @@ column source-map segments instead of assigning one source span to a whole
 generated statement. This keeps content hashes and source maps reproducible
 across output locations. Linked
 production maps are disabled by default and remain an explicit manifest input.
+
+Safe JavaScript imports carry an analysis-only boundary-provenance bit. The bit
+flows through bindings, destructuring, type-preserving calls, function returns,
+and public class members, and is included in the converged cross-module
+interface fingerprint. Null normalization is emitted only for a checked
+nullable value with that provenance. Namespace or dynamic imports of a
+VelarScript module containing boundary exports fail closed because the current
+interface deliberately tracks export provenance, not arbitrary nested field
+provenance.
 
 Release packaging is outside compiler semantics. A repository script builds
 all four npm packages, records source and tarball identities, verifies every

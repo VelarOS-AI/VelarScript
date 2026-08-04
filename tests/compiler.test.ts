@@ -3,11 +3,12 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, symlink, unlink, writeFile
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { SourceMap } from "node:module";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { compile as compileCore, describeType, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt } from "@velarscript/compiler";
+import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { isAssignable, sameType } from "../packages/compiler/src/types.ts";
+import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
 import { compileProject as compileProjectCore, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
@@ -267,7 +268,7 @@ print(count("a", "b"))
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /function total\(first, \.\.\.values\)/u);
   assert.match(result.code ?? "", /total\(first, \.\.\.values\)/u);
-  assert.match(result.code ?? "", /const count = \(\.\.\.values\) => values\.length;/u);
+  assert.match(result.code ?? "", /const count = \(\.\.\.values\) => __velarCollectionSize\(values\);/u);
   const restSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "values" && symbol.kind === "parameter");
   assert.equal(restSymbol?.type, "List<number>");
   const totalSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "total" && symbol.kind === "function");
@@ -656,6 +657,187 @@ handler.run("checked")
   assert.equal(execution.stdout, "true\nchecked\n");
 });
 
+test("writable structural values are invariant and semantic type identity is order independent", () => {
+  const unsafeWidening = compile(`
+class Animal:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
+
+class Dog extends Animal:
+    constructor(name: string):
+        super(name)
+
+    def bark() -> string:
+        return "woof"
+
+type AnimalBox:
+    value: Animal
+
+const dogBox = {value: Dog("Rex")}
+const animalBox: AnimalBox = dogBox
+animalBox.value = Animal("Base")
+print(dogBox.value.bark())
+`.trimStart());
+  assert.ok(unsafeWidening.diagnostics.some((item) => /Cannot assign \{ value: Dog \} to AnimalBox/u.test(item.message)));
+
+  const freshness = compile(`
+class Animal:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
+
+class Dog extends Animal:
+    constructor(name: string):
+        super(name)
+
+type AnimalBox:
+    value: Animal
+
+type Outer:
+    box: AnimalBox
+
+const fresh: Outer = {box: {value: Dog("Rex")}}
+const make: () -> Outer = () => ({box: {value: Dog("Milo")}})
+const selected: Outer? = true ? {box: {value: Dog("Nova")}} : null
+const aliasedBox = {value: Dog("Ada")}
+const unsafeOuter: Outer = {box: aliasedBox}
+const aliasedOuter = {box: aliasedBox}
+const unsafeSpread: Outer = {...aliasedOuter}
+`.trimStart());
+  assert.equal(freshness.diagnostics.filter((item) => /Cannot assign/u.test(item.message)).length, 2);
+  assert.match(freshness.diagnostics.find((item) => /Cannot assign/u.test(item.message))?.message ?? "", /\{ value: Dog \} to AnimalBox/u);
+
+  const leftObject = { kind: "object" as const, fields: new Map([
+    ["name", { kind: "string" as const }],
+    ["score", { kind: "number" as const }],
+  ]) };
+  const rightObject = { kind: "object" as const, fields: new Map([
+    ["score", { kind: "number" as const }],
+    ["name", { kind: "string" as const }],
+  ]) };
+  assert.equal(sameType(leftObject, rightObject), true);
+  const readonlyObject = { ...leftObject, readonlyFields: new Set(["name"]) };
+  const structuralEnvironment = { fieldsOf: () => null, isSubclassOf: () => false };
+  assert.equal(sameType(leftObject, readonlyObject), false);
+  assert.equal(isAssignable(leftObject, readonlyObject, structuralEnvironment), true);
+  assert.equal(isAssignable(readonlyObject, leftObject, structuralEnvironment), false);
+  assert.equal(sameType(
+    { kind: "union", members: [{ kind: "string" }, { kind: "number" }] },
+    { kind: "union", members: [{ kind: "number" }, { kind: "string" }] },
+  ), true);
+  assert.equal(sameType(
+    { kind: "componentConstructor", name: "Card", props: new Map([["title", { kind: "string" }]]), requiredProps: new Set(["title"]) },
+    { kind: "componentConstructor", name: "Card", props: new Map([["count", { kind: "number" }]]), requiredProps: new Set(["count"]) },
+  ), false);
+  assert.equal(sameType(
+    { kind: "intrinsic", name: "json.stringify", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
+    { kind: "intrinsic", name: "json.clone", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
+  ), false);
+
+  const redundantNull = compile("const value: null? = null\n");
+  assert.ok(redundantNull.diagnostics.some((item) => item.message === "'null?' is redundant; use 'null'"));
+});
+
+test("callable compatibility accepts safe optional and rest parameter domains", () => {
+  const valid = compile(`
+def collect(...values: number) -> null:
+    return null
+
+def format(value: string, suffix: string = "") -> string:
+    return value + suffix
+
+const single: (number) -> null = collect
+const basic: (string) -> string = format
+single(1)
+print(basic("ready"))
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  const execution = executeModule(valid.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "ready\n");
+
+  const invalid = compile(`
+def one(value: number) -> null:
+    return null
+
+const variadic: (...number) -> null = one
+`.trimStart());
+  assert.ok(invalid.diagnostics.some((item) => /Cannot assign \(value: number\) -> null to \(\.\.\.number\) -> null/u.test(item.message)));
+});
+
+test("compound index assignment evaluates its receiver and key once", () => {
+  const result = compile(`
+let receiverCalls = 0
+let keyCalls = 0
+let values = [10]
+
+def receiver() -> List<number>:
+    receiverCalls += 1
+    return values
+
+def key() -> number:
+    keyCalls += 1
+    return 0
+
+receiver()[key()] += 5
+print(receiverCalls)
+print(keyCalls)
+print(values[0])
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1\n1\n15\n");
+});
+
+test("numeric literals support familiar exponents and reject non-finite overflow", () => {
+  const valid = compileCore(`
+print(1e3)
+print(2.5E-2)
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  const execution = executeModule(valid.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1000\n0.025\n");
+  assert.equal(formatSource("const value=1e3\n"), "const value = 1e3\n");
+
+  const overflow = compileCore(`const value = ${"9".repeat(400)}\n`);
+  assert.ok(overflow.diagnostics.some((item) => item.code === "VEL2017" && item.message === "Numeric literals must be finite"));
+  assert.equal(overflow.code, null);
+});
+
+test("interpolated strings balance nested expressions and keep escapes in text", () => {
+  const result = compile(`
+const name = "Ada"
+print(f"{({name: name}).name} {{ready}} {'}'}\\nnext")
+print(f"same quote: {"ready"}")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada {ready} }\nnext\nsame quote: ready\n");
+
+  const unmatched = compile("print(f\"value }\")\n");
+  assert.ok(unmatched.diagnostics.some((item) => item.message === "Unmatched '}' in interpolated string"));
+
+  const formattedSource = 'print(f"{"x"}tail")\n';
+  assert.equal(formatSource(formattedSource), formattedSource);
+  const formattedExecution = executeModule(compile(formatSource(formattedSource)).code ?? "");
+  assert.equal(formattedExecution.status, 0, String(formattedExecution.stderr));
+  assert.equal(formattedExecution.stdout, "xtail\n");
+});
+
+test("unterminated strings stop at the line boundary and preserve following declarations", () => {
+  for (const literal of ['"unfinished', 'f"unfinished', '"unfinished\\', 'f"unfinished\\']) {
+    const result = compile(`const broken = ${literal}\r\nconst recovered = 7\r\n`);
+    assert.ok(result.diagnostics.some((item) => item.code === "VEL1003"));
+    assert.ok(result.semanticIndex.symbols.some((item) => item.name === "recovered"));
+  }
+});
+
 test("omitted results mean null and end naturally while value functions stay explicit", () => {
   const result = compile(`
 export def record(value: string):
@@ -700,6 +882,121 @@ async def save():
 `.trimStart());
   assert.deepEqual(asynchronous.diagnostics, []);
   assert.equal(asynchronous.semanticIndex.symbols.find((item) => item.name === "save")?.type, "() -> Promise<null>");
+});
+
+test("statically null calls and awaits normalize JavaScript undefined at the boundary", () => {
+  const result = compileCore(`
+import js {external, externalAsync, externalOptional, externalOptionalAsync, externalUnknown, maybeValue} from "fixture"
+
+const direct = external()
+const asynchronous = await externalAsync()
+const optional = externalOptional()
+const optionalAsync = await externalOptionalAsync()
+const opaque = externalUnknown()
+print(direct == null)
+print(asynchronous == null)
+print(optional == null)
+print(optionalAsync == null)
+print(opaque == null)
+print(maybeValue == null)
+`.trimStart(), { analysis: { imports: new Map<string, ValueType>([
+    ["external", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "null" } }],
+    ["externalAsync", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: { kind: "null" } } }],
+    ["externalOptional", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "optional", inner: { kind: "string" } } }],
+    ["externalOptionalAsync", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: { kind: "optional", inner: { kind: "string" } } } }],
+    ["externalUnknown", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "unknown" } }],
+    ["maybeValue", { kind: "optional", inner: { kind: "string" } }],
+  ]) } });
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /\(external\(\), null\)/u);
+  assert.match(result.code ?? "", /await __velarNormalizePromiseValue\(externalAsync\(\)\)/u);
+  assert.match(result.code ?? "", /externalOptional\(\) \?\? null/u);
+  assert.match(result.code ?? "", /await __velarNormalizePromiseValue\(externalOptionalAsync\(\)\)/u);
+  assert.match(result.code ?? "", /externalUnknown\(\) \?\? null/u);
+  assert.match(result.code ?? "", /maybeValue \?\? null/u);
+  const executable = (result.code ?? "").replace(/import .*?;\n+/u, `function external() {}
+async function externalAsync() {}
+function externalOptional() {}
+async function externalOptionalAsync() {}
+function externalUnknown() {}
+const maybeValue = undefined;
+`);
+  const execution = executeModule(executable);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\n");
+});
+
+test("host Promises normalize undefined before composition without losing identity or rejection", () => {
+  const promiseNull = { kind: "promise", value: { kind: "null" } } as const;
+  const promiseOptional = { kind: "promise", value: { kind: "optional", inner: { kind: "string" } } } as const;
+  const result = compileCore(`
+import js {client, collect, collectMaybe, externalAsync, maybeAsync, ready, rejected} from "fixture"
+
+const first = externalAsync()
+const values = await collect([first, ready])
+const maybeValues = await collectMaybe([maybeAsync()])
+const service = client
+const {flush} = client
+const memberValues = await collect([service.flush(), flush()])
+print(first == first)
+print(ready == ready)
+print(values[0] == null)
+print(values[1] == null)
+print(maybeValues[0] == null)
+print(memberValues[0] == null)
+print(memberValues[1] == null)
+
+try:
+    await rejected
+catch error:
+    print(error.message)
+`.trimStart(), { analysis: { imports: new Map<string, ValueType>([
+    ["client", { kind: "object", fields: new Map([["flush", { kind: "function", parameters: [], requiredParameters: 0, result: promiseNull }]]) }],
+    ["collect", { kind: "function", parameters: [{ kind: "list", element: promiseNull }], requiredParameters: 1, result: { kind: "promise", value: { kind: "list", element: { kind: "null" } } } }],
+    ["collectMaybe", { kind: "function", parameters: [{ kind: "list", element: promiseOptional }], requiredParameters: 1, result: { kind: "promise", value: { kind: "list", element: { kind: "optional", inner: { kind: "string" } } } } }],
+    ["externalAsync", { kind: "function", parameters: [], requiredParameters: 0, result: promiseNull }],
+    ["maybeAsync", { kind: "function", parameters: [], requiredParameters: 0, result: promiseOptional }],
+    ["ready", promiseNull],
+    ["rejected", promiseNull],
+  ]) } });
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarNormalizePromiseValue/u);
+  const executable = (result.code ?? "").replace(/import .*?;\n+/u, `
+const collect = values => Promise.all(values);
+const collectMaybe = values => Promise.all(values);
+const client = { flush: async () => undefined };
+const externalAsync = async () => undefined;
+const maybeAsync = async () => undefined;
+const ready = Promise.resolve(undefined);
+const rejected = Promise.reject(new Error("failed"));
+`);
+  const execution = executeModule(executable);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfailed\n");
+});
+
+test("collection callbacks cannot return JavaScript undefined into VelarScript values", () => {
+  const result = compileCore(`
+import js {combine, initial, transform} from "fixture"
+
+const mapped = [1].map(transform)
+const reduced = [1].reduce(combine, initial)
+print(mapped[0] == null)
+print(reduced == null)
+`.trimStart(), { analysis: { imports: new Map<string, ValueType>([
+    ["transform", { kind: "function", parameters: [{ kind: "number" }], requiredParameters: 1, result: { kind: "optional", inner: { kind: "string" } } }],
+    ["combine", { kind: "function", parameters: [{ kind: "unknown" }, { kind: "number" }], requiredParameters: 2, result: { kind: "unknown" } }],
+    ["initial", { kind: "unknown" }],
+  ]) } });
+  assert.deepEqual(result.diagnostics, []);
+  const executable = (result.code ?? "").replace(/import .*?;\n+/u, `
+const transform = () => undefined;
+const combine = () => undefined;
+const initial = null;
+`);
+  const execution = executeModule(executable);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\ntrue\n");
 });
 
 test("assertions enforce runtime invariants and narrow following stable values", () => {
@@ -834,8 +1131,8 @@ print(not ("missing" in names))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /names\.includes\("Ada"\)/u);
-  assert.match(result.code ?? "", /scores\.has\("Ada"\)/u);
+  assert.match(result.code ?? "", /__velarCollectionHas\(names, "Ada"\)/u);
+  assert.match(result.code ?? "", /__velarCollectionHas\(scores, "Ada"\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\n");
@@ -843,6 +1140,20 @@ print(not ("missing" in names))
   const invalid = compile("print(1 in \"123\")\nprint(\"x\" in {x: 1})\n");
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Membership requires a List, Set, Map, or string/u.test(item.message)));
+
+  const dynamic = compileCore(`
+import js unsafe {text, values} from "fixture"
+print("lar" in text)
+print(2 in values)
+`.trimStart(), { analysis: { imports: new Map([
+    ["text", { kind: "any" }],
+    ["values", { kind: "any" }],
+  ]) } });
+  assert.deepEqual(dynamic.diagnostics, []);
+  assert.match(dynamic.code ?? "", /__velarMembership/u);
+  const dynamicExecution = executeModule((dynamic.code ?? "").replace(/^import .*?;\n+/mu, 'const text = "VelarScript";\nconst values = [1, 2];\n'));
+  assert.equal(dynamicExecution.status, 0, String(dynamicExecution.stderr));
+  assert.equal(dynamicExecution.stdout, "true\ntrue\n");
 });
 
 test("exponentiation is numeric and right-associative", () => {
@@ -1284,6 +1595,32 @@ test("rejects ambient JavaScript coercion globals with intentional replacements"
   }
 });
 
+test("compiler host capabilities stay protected while extension conveniences follow lexical scope", () => {
+  const hostBindings = [
+    "Array", "Boolean", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
+    "Symbol", "TypeError", "WeakMap", "WeakSet", "console", "document", "globalThis", "queueMicrotask",
+  ];
+  for (const name of hostBindings) {
+    const result = compileCore(`const ${name} = 1\n`);
+    assert.ok(result.diagnostics.some((item) => item.code === "VEL3007" && item.message === `'${name}' is a reserved Core binding`), name);
+  }
+
+  const extension = compile("const mount = 1\n");
+  assert.ok(extension.diagnostics.some((item) => item.code === "VEL3007" && /reserved extension binding/u.test(item.message)));
+  assert.deepEqual(compileCore("const mount = 1\n").diagnostics, []);
+  assert.deepEqual(compile("const color = \"brand\"\ntype Node:\n    id: string\n").diagnostics, []);
+
+  for (const source of ["const __velarIndex = 1\n", "def run(__velarScope: number):\n    pass\n", "type __VelarRecord:\n    id: string\n"]) {
+    const result = compile(source);
+    assert.ok(result.diagnostics.some((item) => item.code === "VEL3007" && /reserved compiler prefix '__velar'/u.test(item.message)));
+  }
+
+  const hygienicIndex = compileCore("class IndexError:\n    constructor():\n        pass\n\nconst values = [1]\nprint(values[0])\n");
+  assert.deepEqual(hygienicIndex.diagnostics, []);
+  assert.match(hygienicIndex.code ?? "", /class __VelarIndexError extends RangeError/u);
+  assert.match(hygienicIndex.code ?? "", /class IndexError \{/u);
+});
+
 test("rejects legacy and discarded design surface with intentional diagnostics", () => {
   const cases = new Map([
     ["var value = 1\n", /let.*const.*var/],
@@ -1379,6 +1716,23 @@ def value():
   assert.ok(result.diagnostics.some((item) => item.code === "VEL1004"));
 });
 
+test("source locations treat LF, CRLF, and standalone CR as line boundaries", () => {
+  const source = new SourceText("newlines.vel", "first\rsecond\r\nthird\nfourth");
+  assert.deepEqual(source.location(source.text.indexOf("second")), { line: 2, column: 1 });
+  assert.deepEqual(source.location(source.text.indexOf("third")), { line: 3, column: 1 });
+  assert.deepEqual(source.location(source.text.indexOf("fourth")), { line: 4, column: 1 });
+  assert.equal(source.lineText(1), "first");
+  assert.equal(source.lineText(2), "second");
+  assert.equal(source.lineText(3), "third");
+  assert.equal(source.lineText(4), "fourth");
+  const missingOffset = source.text.indexOf("second");
+  const rendered = formatDiagnostic(source, { code: "VEL3001", message: "Unknown name", span: { start: missingOffset, end: missingOffset + 6 } });
+  assert.match(rendered, /^newlines\.vel:2:1 error VEL3001: Unknown name\nsecond\n\^{6}$/u);
+
+  const documented = compileCore("/// Standalone CR documentation\rconst value = 1\r", { path: "documented.vel" });
+  assert.equal(documented.semanticIndex.symbols.find((item) => item.name === "value")?.documentation, "Standalone CR documentation");
+});
+
 test("compiler and CLI reject oversized source modules before parsing", async () => {
   const oversized = " ".repeat(MAX_VELAR_SOURCE_CODE_UNITS + 1);
   const result = compile(oversized, { path: "oversized.vel" });
@@ -1418,9 +1772,20 @@ test("compiler APIs contain deterministic malformed input without escaping inter
     const length = next() % 500;
     for (let index = 0; index < length; index += 1) source += alphabet[next() % alphabet.length];
     const path = `malformed-${sample}.vel`;
-    assert.ok(Array.isArray(compile(source, { path }).diagnostics));
-    assert.ok(Array.isArray(inspectModule(source, { path }).diagnostics));
+    const compiled = compile(source, { path });
+    const inspected = inspectModule(source, { path });
+    assert.ok(Array.isArray(compiled.diagnostics));
+    assert.ok(Array.isArray(inspected.diagnostics));
+    for (const item of [...compiled.diagnostics, ...inspected.diagnostics]) {
+      assert.ok(item.span.start >= 0 && item.span.start <= item.span.end && item.span.end <= source.length, `${path}: ${JSON.stringify(item)}`);
+    }
     assert.equal(typeof formatSource(source), "string");
+  }
+
+  for (const source of ['const value = "unterminated\\', 'const value = f"unterminated\\']) {
+    const result = compile(source);
+    assert.ok(result.diagnostics.length > 0);
+    assert.ok(result.diagnostics.every((item) => item.span.end <= source.length));
   }
 });
 
@@ -2086,6 +2451,18 @@ const result = show(2)
   assert.deepEqual(returnVisible.filter((symbol) => symbol.name === "value").map((symbol) => symbol.kind), ["parameter"]);
 });
 
+test("semantic module references retain exact literal content spans", () => {
+  const source = 'import {value} from "./a\\\"b.vel"\nprint(value)\n';
+  const result = compileCore(source, { analysis: { imports: new Map([
+    ["value", { kind: "number" }],
+  ]) } });
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.semanticIndex.moduleReferences.length, 1);
+  const reference = result.semanticIndex.moduleReferences[0]!;
+  assert.equal(reference.source, './a"b.vel');
+  assert.equal(source.slice(reference.span.start, reference.span.end), './a\\"b.vel');
+});
+
 test("documentation comments cross declarations, aliases, members, hover targets, and completion", async () => {
   const direct = compile(`
 /// Formats a visible label.
@@ -2399,6 +2776,13 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   const webRuntime = standardModuleSource("velar/web", { base: "/studio/" }) ?? "";
   assert.match(webRuntime, /const appBase = "\/studio\/"/u);
   assert.doesNotMatch(webRuntime, /__VELAR_WEB_BASE__/u);
+  const routeContextExecution = executeModule(`${webRuntime}
+import { runInNewContext } from "node:vm";
+const params = runInNewContext('class HostileMap extends Map { get size() { throw new Error("size override") } entries() { throw new Error("entries override") } }; new HostileMap([["id", "7"]])');
+console.log(RouteContext.is({ path: "/items/7", params, query: new Map(), hash: "" }));
+`);
+  assert.equal(routeContextExecution.status, 0, String(routeContextExecution.stderr));
+  assert.equal(routeContextExecution.stdout, "true\n");
   const configRuntime = standardModuleSource("velar/config", { base: "/", publicConfig: { apiBase: "https://api.example.com" } }) ?? "";
   assert.match(configRuntime, /const source = \{"apiBase":"https:\/\/api\.example\.com"\}/u);
   assert.doesNotMatch(configRuntime, /__VELAR_PUBLIC_CONFIG__/u);
@@ -3499,7 +3883,9 @@ blur("missing")
   const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message).join("\n");
   assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Cannot assign string to number/u);
-  assert.match(messages, /Cannot assign \{ name: string \} to \{ name: string, size: number, type: string, modified: number \}/u);
+  assert.match(messages, /Object is missing required field 'size'/u);
+  assert.match(messages, /Object is missing required field 'type'/u);
+  assert.match(messages, /Object is missing required field 'modified'/u);
   assert.match(messages, /Cannot assign Element to DialogElement/u);
   assert.match(messages, /A <div> ref requires Element/u);
   assert.match(messages, /A route path must start with/u);
@@ -3515,12 +3901,12 @@ blur("missing")
   assert.match(messages, /A Router fallback requires a component, received string/u);
   assert.match(messages, /A Router fallback component cannot require props other than route: required/u);
   assert.match(messages, /A Router fallback component's route prop must accept RouteContext/u);
-  assert.match(messages, /Cannot assign.*message.*number.*message.*string/u);
+  assert.match(messages, /Cannot assign \(value: number\) -> null to \(\(string\) -> unknown\)\?/u);
   assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Cannot assign.*number.*error.*Error/u);
   assert.match(messages, /Cannot assign string to Error/u);
   assert.match(messages, /Cannot assign number to string/u);
-  assert.match(messages, /Cannot assign \{ name: string \} to \{ name: string, size: number, type: string, modified: number \}/u);
+  assert.match(messages, /Object is missing required field 'modified'/u);
   assert.match(messages, /Form field 'nested' cannot decode NestedValue/u);
   assert.match(messages, /Cannot assign number to \(\) -> unknown/u);
 });
@@ -3786,12 +4172,19 @@ test("every declared standard-module export exists in the shipped runtime", asyn
 test("velar/json deepEqual compares owned structures without recursive graph failure", () => {
   const source = standardModuleSource("velar/json") ?? "";
   const execution = executeModule(`${source}
+import { runInNewContext } from "node:vm";
 const left = { name: "Velar", nested: [1, { ready: true }] };
 const right = { nested: [1, { ready: true }], name: "Velar" };
 console.log(deepEqual(left, right));
 console.log(deepEqual(left, { name: "Velar", nested: [1, { ready: false }] }));
 console.log(deepEqual(new Map([["item", { value: 1 }]]), new Map([["item", { value: 1 }]])));
 console.log(deepEqual(new Set(["a", "b"]), new Set(["b", "a"])));
+const foreignList = runInNewContext('class HostileList extends Array { every() { throw new Error("list override") } }; new HostileList(1, 2)');
+const foreignMap = runInNewContext('class HostileMap extends Map { get size() { throw new Error("map size override") } entries() { throw new Error("map entries override") } has() { throw new Error("map has override") } get() { throw new Error("map get override") } }; new HostileMap([["item", 1]])');
+const foreignSet = runInNewContext('class HostileSet extends Set { get size() { throw new Error("set size override") } values() { throw new Error("set values override") } has() { throw new Error("set has override") } }; new HostileSet(["a", "b"])');
+console.log(deepEqual(foreignList, [1, 2]));
+console.log(deepEqual(foreignMap, new Map([["item", 1]])));
+console.log(deepEqual(foreignSet, new Set(["b", "a"])));
 class Box { constructor(value) { this.value = value; } }
 const box = new Box(1);
 console.log(deepEqual(box, box));
@@ -3813,12 +4206,13 @@ console.log(deepEqual(getterA, getterB));
 console.log(getterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\nfalse\n0\n");
+  assert.equal(execution.stdout, "true\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\nfalse\n0\n");
 });
 
 test("velar/test toEqual uses the language deepEqual contract", () => {
   const source = standardModuleSource("velar/test") ?? "";
   const execution = executeModule(`${source}
+import { runInNewContext } from "node:vm";
 function passes(callback) { try { callback(); return true; } catch { return false; } }
 console.log(passes(() => expect({ value: [1, 2] }).toEqual({ value: [1, 2] })));
 const sparseA = []; sparseA.length = 1;
@@ -3831,6 +4225,9 @@ console.log(passes(() => expect(box).toEqual(box)));
 console.log(passes(() => expect(new Map([["item", { value: 1 }]])).toEqual(new Map([["item", { value: 1 }]]))));
 console.log(passes(() => expect(new Set(["a"])).toEqual(new Set(["a"]))));
 console.log(passes(() => expect(new Set(["a"])).toEqual(new Set(["b"]))));
+const foreignMap = runInNewContext('class HostileMap extends Map { get size() { throw new Error("map size override") } entries() { throw new Error("map entries override") } }; new HostileMap([["item", 1]])');
+console.log(passes(() => expect(foreignMap).toEqual(new Map([["item", 1]]))));
+try { expect(foreignMap).toEqual(new Map([["item", 2]])); } catch (error) { console.log(error.message.startsWith("Expected Map(")); }
 const cycleA = {}; cycleA.self = cycleA;
 const cycleB = {}; cycleB.self = cycleB;
 console.log(passes(() => expect(cycleA).toEqual(cycleB)));
@@ -3843,7 +4240,7 @@ console.log(passes(() => expect(getterA).toEqual(getterB)));
 console.log(getterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\n0\n");
+  assert.equal(execution.stdout, "true\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\n0\n");
 });
 
 test("velar/test matchers cannot turn invalid subjects into false positives", async () => {
@@ -3855,6 +4252,8 @@ console.log(passes(() => expect(-0).toBe(0)), passes(() => expect(NaN).toBe(NaN)
 console.log(passes(() => expect(true).toBeTruthy()), passes(() => expect(1).toBeTruthy()));
 console.log(passes(() => expect(false).toBeFalsy()), passes(() => expect("").toBeFalsy()));
 console.log(passes(() => expect([-0]).toContain(0)), passes(() => expect([NaN]).toContain(NaN)));
+class HostileList extends Array { some() { throw new Error("list override"); } }
+console.log(passes(() => expect(new HostileList("value")).toContain("value")));
 const sparse = []; sparse.length = 1;
 console.log(passes(() => expect(sparse).toHaveLength(1)));
 console.log(passes(() => expect("Velar").toMatch("^Vel")), passes(() => expect("Velar").toMatch(42)));
@@ -3867,7 +4266,7 @@ console.log(await passesAsync(() => expect(42).toReject()));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    "true false", "true false", "true false", "true false", "false",
+    "true false", "true false", "true false", "true false", "true", "false",
     "true false", "true false", "true", "true", "false", "false", "false", "",
   ].join("\n"));
 
@@ -3937,15 +4336,33 @@ for (const operation of [
 }
 const sparse = []; sparse.length = 1;
 const extended = [1]; extended.label = "hidden";
-for (const list of [sparse, extended]) {
+const frozen = Object.freeze([1]);
+for (const list of [sparse, extended, frozen]) {
   try { take(list, 1); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
+class HostileList extends Array {
+  [Symbol.iterator]() { throw new Error("iterator override"); }
+  map() { throw new Error("map override"); }
+  slice() { throw new Error("slice override"); }
+}
+const hostile = new HostileList(1, 2);
+for (const operation of [
+  () => enumerate(hostile).length,
+  () => zip(hostile, hostile).length,
+  () => chunk(hostile, 1).length,
+  () => partition(hostile, value => value > 0).matches.length,
+  () => groupBy(hostile, value => value).size,
+  () => keyBy(hostile, value => value).size,
+  () => countBy(hostile, value => value).size,
+  () => minBy(hostile, value => value),
+]) console.log(operation());
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "adbc", "bcad", "true 1 true 1",
     "TypeError", "TypeError", "TypeError", "TypeError", "RangeError",
-    "TypeError", "TypeError", "",
+    "TypeError", "TypeError", "TypeError",
+    "2", "2", "2", "2", "2", "2", "2", "1", "",
   ].join("\n"));
 
   const directory = await mkdtemp(join(tmpdir(), "velar-collection-keys-"));
@@ -3972,15 +4389,26 @@ for (const [name, callback] of [["all", () => all(sparse)], ["race", () => race(
 }
 try { await timeout(Promise.resolve(1), 1, 42); console.log("accepted"); } catch (error) { console.log("timeout", error.name); }
 try { await retry(() => 1, Number.MAX_SAFE_INTEGER + 1); console.log("accepted"); } catch (error) { console.log("retry", error.name); }
+console.log(
+  (await all([Promise.resolve(undefined)]))[0] === null,
+  await race([Promise.resolve(undefined)]) === null,
+  await timeout(Promise.resolve(undefined), 1) === null,
+  await retry(async () => undefined) === null,
+  (await map([1], () => undefined))[0] === null,
+  (await series([() => undefined]))[0] === null,
+);
 `);
   assert.equal(asyncExecution.status, 0, String(asyncExecution.stderr));
-  assert.equal(asyncExecution.stdout, "all TypeError\nrace TypeError\nmap TypeError\nseries TypeError\ntimeout TypeError\nretry RangeError\n");
+  assert.equal(asyncExecution.stdout, "all TypeError\nrace TypeError\nmap TypeError\nseries TypeError\ntimeout TypeError\nretry RangeError\ntrue true true true true true\n");
 
   const urlSource = standardModuleSource("velar/url") ?? "";
   const urlExecution = executeModule(`${urlSource}
+import { runInNewContext } from "node:vm";
 const sparse = []; sparse.length = 1;
 console.log(join("https://", "example.test", "api", "items"));
 console.log(query({ flag: true, page: 2, empty: null, tag: ["a", "b"] }));
+const foreignParams = runInNewContext('class HostileMap extends Map { get size() { throw new Error("size override") } entries() { throw new Error("entries override") } }; new HostileMap([["page", 3]])');
+console.log(query(foreignParams));
 for (const operation of [
   () => query({ tag: sparse }),
   () => query({ filter: { active: true } }),
@@ -3998,6 +4426,7 @@ for (const operation of [
   assert.equal(urlExecution.stdout, [
     "https://example.test/api/items",
     "flag=true&page=2&tag=a&tag=b",
+    "page=3",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "",
   ].join("\n"));
 });
@@ -4034,12 +4463,15 @@ for (const operation of [
 test("velar/log validates dynamic inputs and isolates sink snapshots", () => {
   const source = standardModuleSource("velar/log") ?? "";
   const execution = executeModule(`${source}
+import { runInNewContext } from "node:vm";
 const seen = [];
 const stopFirst = useSink(record => {
   seen.push("first:" + record.message + ":" + record.fields.get("source"));
   record.fields.set("source", "mutated");
 });
 const stopSecond = useSink(record => seen.push("second:" + record.message + ":" + record.fields.get("source")));
+const foreignFields = runInNewContext('class HostileMap extends Map { get size() { throw new Error("size override") } entries() { throw new Error("entries override") } }; new HostileMap([["source", "runtime"]])');
+logger("foreign", foreignFields).info("cross-realm");
 logger("build", new Map([["source", "compiler"]])).info("ready");
 stopFirst(); stopFirst(); stopSecond();
 console.log(seen.join("|"));
@@ -4058,7 +4490,7 @@ for (const operation of [
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    "first:ready:compiler|second:ready:compiler",
+    "first:cross-realm:runtime|second:cross-realm:runtime|first:ready:compiler|second:ready:compiler",
     "debug",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "",
   ].join("\n"));
@@ -4429,11 +4861,13 @@ print(acceptsNumbers([1, 2]))
   const execution = executeModule(`${result.code ?? ""}
 const sparse = []; sparse.length = 1;
 const extended = [1]; extended.label = "hidden";
+const frozen = Object.freeze([1, 2]);
 console.log(acceptsNumbers(sparse));
 console.log(acceptsNumbers(extended));
+console.log(acceptsNumbers(frozen));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\nfalse\nfalse\n");
+  assert.equal(execution.stdout, "true\nfalse\nfalse\nfalse\n");
 });
 
 test("runtime collection types iterate Maps and Sets without copying or invoking overrides", () => {
@@ -4560,6 +4994,7 @@ catch (error) { console.log(error.name); }
 test("HTTP validates options, methods, bodies, headers, and runtime types before fetch", () => {
   const http = standardModuleSource("velar/http") ?? "";
   const execution = executeModule(`${http}
+import { runInNewContext } from "node:vm";
 let fetchCount = 0;
 let captured = null;
 globalThis.fetch = async (url, options) => {
@@ -4568,7 +5003,8 @@ globalThis.fetch = async (url, options) => {
   return new Response('{"value":2}', { status: 200, headers: { "content-type": "application/json" } });
 };
 const Result = __velarRegisterRuntimeType(Object.freeze({ is(value) { return typeof value?.value === "number"; }, parse(value) { if (!this.is(value)) throw new TypeError("invalid result"); return value; } }));
-console.log((await http.post("/items", { headers: new Map([["x-test", "yes"]]), body: { value: 1 }, timeout: 10, credentials: "include", cache: "no-cache" }).parse(Result)).value);
+const foreignHeaders = runInNewContext('class HostileMap extends Map { get size() { throw new Error("size override") } entries() { throw new Error("entries override") } }; new HostileMap([["x-test", "yes"]])');
+console.log((await http.post("/items", { headers: foreignHeaders, body: { value: 1 }, timeout: 10, credentials: "include", cache: "no-cache" }).parse(Result)).value);
 console.log(captured.url, captured.method, captured.body, captured.contentType, captured.credentials, captured.cache, fetchCount);
 let getterReads = 0;
 const accessorOptions = {};
@@ -4762,7 +5198,7 @@ const options = matches("42", "[0-9]+", {ignoreCase: "yes"})
   assert.match(messages, /Expected a List of Promises, received List<number>/u);
   assert.match(messages, /Cannot assign string to number/u);
   assert.match(messages, /Cannot assign number to string/u);
-  assert.match(messages, /Cannot assign \{ ignoreCase: string \} to \{ ignoreCase: bool\?, multiline: bool\?, dotAll: bool\? \}/u);
+  assert.match(messages, /Cannot assign string to bool\?/u);
 });
 
 test("npm packages publish VelarScript source through package.json velar.entry", async () => {
@@ -5772,9 +6208,16 @@ catch error:
 const values = [1]
 values.extend(["two"])
 values.push(2)
+
+const lookup = Map()
+lookup.set("answer", 42)
+print(lookup["answer"])
+lookup["answer"] = 43
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign List<string> to List<number>/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /List has no member 'push'.*append/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /Use Map\.get\(key\) instead of bracket access/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /Use Map\.set\(key, value\) instead of bracket assignment/u.test(item.message)));
 });
 
 test("List, Set, and Map use familiar collection vocabulary without legacy aliases", () => {
@@ -5891,6 +6334,88 @@ extended.extend(["bad"])
   assert.equal(invalid.diagnostics.filter((item) => /Cannot assign/u.test(item.message)).length, 2);
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign string to number/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign List<string> to List<number>/u.test(item.message)));
+});
+
+test("empty collection inference follows runtime aliases instead of individual bindings", () => {
+  const valid = compile(`
+const values = []
+const sameValues = values
+sameValues.append(1)
+const first: number = values[0]
+
+const scores = Map()
+const sameScores = scores
+sameScores.set("Ada", 9)
+const score: number = scores.get("Ada") ?? 0
+
+const tags = Set()
+const sameTags = tags
+sameTags.add("web")
+print(first + score)
+print(tags.has("web"))
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  const execution = executeModule(valid.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "10\ntrue\n");
+
+  const invalid = compile(`
+const values = []
+const sameValues = values
+sameValues.append(1)
+values.append("wrong")
+
+const scores = Map()
+const sameScores = scores
+sameScores.set("Ada", 9)
+scores.set(1, "wrong")
+
+const tags = Set()
+const sameTags = tags
+sameTags.add("web")
+tags.add(1)
+
+const nestedValues = []
+const holder = {values: nestedValues}
+nestedValues.append(1)
+holder.values.append("wrong")
+
+const inner = []
+const outer = [inner]
+inner.append(1)
+outer[0].append("wrong")
+
+let current = []
+const previous = current
+let replacement = []
+current = replacement
+replacement.append(1)
+current.append("wrong")
+previous.append("independent")
+`.trimStart());
+  const messages = invalid.diagnostics.map((item) => item.message);
+  assert.equal(messages.filter((message) => /Cannot assign string to number/u.test(message)).length, 5);
+  assert.equal(messages.filter((message) => /Cannot assign number to string/u.test(message)).length, 2);
+
+  const escaped = compile(`
+type Bucket:
+    values: List<unknown>
+
+def expose(values: List<unknown>):
+    print(values.size)
+
+const objectValues = []
+const bucket: Bucket = {values: objectValues}
+objectValues.append(1)
+bucket.values.append("mixed")
+const objectNumber: number = objectValues[0]
+
+const argumentValues = []
+expose(argumentValues)
+argumentValues.append(1)
+const argumentNumber: number = argumentValues[0]
+`.trimStart());
+  assert.equal(escaped.diagnostics.filter((item) => /Cannot assign unknown to number/u.test(item.message)).length, 2);
 });
 
 test("List.slice returns a typed checked copy with familiar positional semantics", () => {
@@ -6098,7 +6623,15 @@ export interface GenericClient extends GenericBase<string> {
 export declare function format(value: number, options?: FormatOptions): Promise<string>;
 export declare function join(first: string, ...parts: readonly string[]): string;
 export declare function unique(values: readonly string[]): ReadonlySet<string>;
+export declare function consume(values: readonly string[]): void;
+export declare function supply(handler: (values: readonly string[]) => void): void;
+export declare function createValues(): readonly string[];
+export declare function dictionary(): Record<string, number>;
+export declare function setMode(value: "fast" | "safe"): void;
 export declare function visit(handler: (value: string) => void): void;
+export declare function acceptVoid(value: void): void;
+export declare function empty(): null;
+export declare function absent(): undefined;
 export declare const version: string;
 export declare const client: Client;
 export declare const recursiveClient: RecursiveClient;
@@ -6126,12 +6659,20 @@ export declare function overloaded(value: string): string;
 export declare function overloaded(value: number): number;
 export declare function identity<T>(value: T): T;
 `, "fixture/index.d.ts");
-  assert.equal(describeType(declarations.exports.get("format")!), "(number, { prefix: string?, precision: number }? = default) -> Promise<string>");
+  assert.equal(describeType(declarations.exports.get("format")!), "(number, { prefix?: string, precision: number } = default) -> Promise<string>");
   assert.equal(describeType(declarations.exports.get("join")!), "(string, ...string) -> string");
-  assert.equal(describeType(declarations.exports.get("unique")!), "(List<string>) -> Set<string>");
+  assert.equal(describeType(declarations.exports.get("unique")!), "(List<string>) -> unknown");
+  assert.equal(describeType(declarations.exports.get("consume")!), "(List<string>) -> null");
+  assert.equal(describeType(declarations.exports.get("supply")!), "((unknown) -> null) -> null");
+  assert.equal(describeType(declarations.exports.get("createValues")!), "() -> unknown");
+  assert.equal(describeType(declarations.exports.get("dictionary")!), "() -> unknown");
+  assert.equal(describeType(declarations.exports.get("setMode")!), "(unknown) -> null");
   assert.equal(describeType(declarations.exports.get("visit")!), "((string) -> null) -> null");
+  assert.equal(describeType(declarations.exports.get("acceptVoid")!), "(unknown) -> null");
+  assert.equal(describeType(declarations.exports.get("empty")!), "() -> null");
+  assert.equal(describeType(declarations.exports.get("absent")!), "() -> null");
   assert.equal(describeType(declarations.exports.get("version")!), "string");
-  assert.equal(describeType(declarations.exports.get("client")!), "{ version: string, request: (string, number? = default) -> Promise<string>, close: (() -> null)? }");
+  assert.equal(describeType(declarations.exports.get("client")!), "{ readonly version: string, request: (string, number = default) -> Promise<string>, close?: () -> null }");
   assert.equal(describeType(declarations.exports.get("recursiveClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("genericClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("Formatter")!), "Formatter");
@@ -6140,7 +6681,7 @@ export declare function identity<T>(value: T): T;
   assert.equal(declarations.classes.get("Formatter")?.requiredParameters, 1);
   assert.equal(declarations.classes.get("Formatter")?.base, declarations.classes.get("BaseFormatter")?.identity);
   assert.equal(declarations.classes.get("Formatter")!.fields.get("prefix")?.mutable, false);
-  assert.equal(describeType(declarations.classes.get("Formatter")!.methods.get("format")!), "(number, string? = default) -> string");
+  assert.equal(describeType(declarations.classes.get("Formatter")!.methods.get("format")!), "(number, string = default) -> string");
   assert.equal(describeType(declarations.classes.get("Formatter")!.methods.get("setPrecision")!), "(number) -> Formatter");
   assert.equal(describeType(declarations.classes.get("Formatter")!.staticMethods.get("create")!), "(string) -> Formatter");
   assert.equal(describeType(declarations.classes.get("Formatter")!.staticFields.get("version")!.type), "string");
@@ -6152,6 +6693,19 @@ export declare function identity<T>(value: T): T;
   assert.ok(declarations.warnings.some((warning) => /Generic function 'identity'/u.test(warning)));
   assert.ok(declarations.warnings.some((warning) => /GenericFormatter/u.test(warning)));
   assert.ok(declarations.warnings.some((warning) => /incompatible inherited member contract/u.test(warning)));
+  assert.ok(declarations.warnings.some((warning) => /Readonly collection type/u.test(warning)));
+  assert.ok(declarations.warnings.some((warning) => /Record is a plain JavaScript object/u.test(warning)));
+  assert.ok(declarations.warnings.some((warning) => /literal type/u.test(warning)));
+  assert.ok(declarations.warnings.some((warning) => /void cannot be supplied/u.test(warning)));
+
+  const restrictedLiteral = compileCore('import js {setMode} from "fixture"\nsetMode("fast")\n', {
+    analysis: { imports: new Map([["setMode", declarations.exports.get("setMode")!]]) },
+  });
+  assert.ok(restrictedLiteral.diagnostics.some((item) => /Cannot assign string to unknown/u.test(item.message)));
+  const restrictedVoid = compileCore('import js {acceptVoid} from "fixture"\nacceptVoid(null)\n', {
+    analysis: { imports: new Map([["acceptVoid", declarations.exports.get("acceptVoid")!]]) },
+  });
+  assert.ok(restrictedVoid.diagnostics.some((item) => /Cannot assign null to unknown/u.test(item.message)));
 
   const directory = await mkdtemp(join(tmpdir(), "velar-dts-"));
   const packageRoot = join(directory, "node_modules", "typed-format");
@@ -6162,10 +6716,10 @@ export declare function identity<T>(value: T): T;
     exports: "./index.js",
     types: "./index.d.ts",
   }), "utf8");
-  await writeFile(join(packageRoot, "index.js"), "export class Formatter { static version = '1'; constructor(prefix) { this.prefix = prefix; this.precision = 1; } format(value) { return this.prefix + value.toFixed(this.precision); } static create(prefix) { return new Formatter(prefix); } }\nexport const format = value => String(value)\nexport const join = (first, ...parts) => [first, ...parts].join('')\nexport const visit = handler => handler('ready')\nexport const client = { version: '1', request: async path => path }\nexport const identity = value => value\n", "utf8");
-  await writeFile(join(packageRoot, "core.d.ts"), "export declare class Formatter { constructor(prefix: string); readonly prefix: string; precision: number; static readonly version: string; format(value: number): string; static create(prefix: string): Formatter; }\nexport interface Client { readonly version: string; request(path: string, timeoutMs?: number): Promise<string>; }\nexport declare function format(value: number): string;\nexport declare function join(first: string, ...parts: readonly string[]): string;\nexport declare const client: Client;\nexport declare function identity<T>(value: T): T;\n", "utf8");
+  await writeFile(join(packageRoot, "index.js"), "export class Formatter { static version = '1'; constructor(prefix) { this.prefix = prefix; this.precision = 1; } format(value) { return this.prefix + value.toFixed(this.precision); } static create(prefix) { return new Formatter(prefix); } }\nexport const format = value => String(value)\nexport const join = (first, ...parts) => [first, ...parts].join('')\nexport const visit = handler => handler('ready')\nexport const client = { version: '1', request: async path => path }\nexport const maybe = () => undefined\nexport const maybeAsync = async () => undefined\nexport const absent = () => undefined\nexport const maybeValue = undefined\nexport const identity = value => value\n", "utf8");
+  await writeFile(join(packageRoot, "core.d.ts"), "export declare class Formatter { constructor(prefix: string); readonly prefix: string; precision: number; static readonly version: string; format(value: number): string; static create(prefix: string): Formatter; }\nexport interface Client { readonly version: string; request(path: string, timeoutMs?: number): Promise<string>; close?(): void; }\nexport interface FormatOptions { prefix?: string; precision: number; }\nexport declare function format(value: number, options?: FormatOptions): string;\nexport declare function join(first: string, ...parts: readonly string[]): string;\nexport declare const client: Client;\nexport declare function maybe(): string | undefined;\nexport declare function maybeAsync(): Promise<string | undefined>;\nexport declare function absent(): undefined;\nexport declare const maybeValue: string | undefined;\nexport declare function identity<T>(value: T): T;\n", "utf8");
   await writeFile(join(packageRoot, "callbacks.d.ts"), "export declare function visit(handler: (value: string) => void): void;\n", "utf8");
-  await writeFile(join(packageRoot, "index.d.ts"), "export {Formatter, client, format, identity, join} from \"./core.js\";\nexport * from \"./callbacks\";\n", "utf8");
+  await writeFile(join(packageRoot, "index.d.ts"), "export {Formatter, absent, client, format, identity, join, maybe, maybeAsync, maybeValue} from \"./core.js\";\nexport * from \"./callbacks\";\n", "utf8");
   const alternateRoot = join(directory, "node_modules", "typed-format-alt");
   await mkdir(alternateRoot, { recursive: true });
   await writeFile(join(alternateRoot, "package.json"), JSON.stringify({
@@ -6178,21 +6732,34 @@ export declare function identity<T>(value: T): T;
   await writeFile(join(alternateRoot, "index.d.ts"), "export declare class Formatter { constructor(prefix: string); readonly prefix: string; }\n", "utf8");
 
   const validPath = join(directory, "valid.vel");
-  await writeFile(validPath, "import js {Formatter as NumberFormatter, client, format, join, visit} from \"typed-format\"\nconst formatter: NumberFormatter = NumberFormatter(\">\")\nformatter.precision = 2\nconst formatted: string = formatter.format(42)\nconst restored: NumberFormatter = NumberFormatter.create(\"~\")\nconst version: string = NumberFormatter.version\nconst label: string = format(42)\nconst joined: string = join(\"Velar\", \"Script\")\nconst requested: Promise<string> = client.request(\"/status\", 1000)\nvisit(value => print(value))\n", "utf8");
+  await writeFile(validPath, "import js {Formatter as NumberFormatter, absent, client, format, join, maybe, maybeAsync, maybeValue, visit} from \"typed-format\"\nconst formatter: NumberFormatter = NumberFormatter(\">\")\nformatter.precision = 2\nconst formatted: string = formatter.format(42)\nconst restored: NumberFormatter = NumberFormatter.create(\"~\")\nconst version: string = NumberFormatter.version\nconst label: string = format(42)\nconst configured: string = format(42, {precision: 1})\nclient.close?.()\nconst joined: string = join(\"Velar\", \"Script\")\nconst requested: Promise<string> = client.request(\"/status\", 1000)\nvisit(value => print(value))\nprint(maybe() == null)\nprint(await maybeAsync() == null)\nprint(absent() == null)\nprint(maybeValue == null)\n", "utf8");
   const valid = await compileProject(validPath);
   assert.deepEqual(valid.failures, []);
   assert.deepEqual(valid.modules.flatMap((module) => module.result.diagnostics), []);
+  const validOutput = join(directory, "valid.js");
+  const validBuild = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", validPath, "--out", validOutput], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(validBuild.status, 0, String(validBuild.stderr));
+  const validExecution = spawnSync(process.execPath, [validOutput], { encoding: "utf8" });
+  assert.equal(validExecution.status, 0, String(validExecution.stderr));
+  assert.equal(validExecution.stdout, "ready\ntrue\ntrue\ntrue\ntrue\n");
 
   const invalidPath = join(directory, "invalid.vel");
-  await writeFile(invalidPath, "import js {Formatter, client, format, join, identity, visit} from \"typed-format\"\nimport js {Formatter as ForeignFormatter} from \"typed-format-alt\"\nconst formatter = Formatter(1)\nconst foreign: ForeignFormatter = formatter\nformatter.prefix = \"changed\"\nFormatter.version = \"2\"\nformatter.format(\"wrong\")\nconst label = format(\"wrong\")\nconst joined = join(\"Velar\", 2)\nclient.request(2)\nvisit(value => value + 1)\nidentity(1)\n", "utf8");
+  await writeFile(invalidPath, "import js {Formatter, client, format, join, identity, visit} from \"typed-format\"\nimport js {Formatter as ForeignFormatter} from \"typed-format-alt\"\nconst formatter = Formatter(1)\nconst foreign: ForeignFormatter = formatter\nformatter.prefix = \"changed\"\nFormatter.version = \"2\"\nclient.version = \"2\"\nformatter.format(\"wrong\")\nconst label = format(\"wrong\")\nformat(42, null)\nformat(42, {precision: 1, prefix: null})\nconst joined = join(\"Velar\", 2)\nclient.request(2)\nclient.request(\"/status\", null)\nvisit(value => value + 1)\nidentity(1)\n", "utf8");
   const invalid = await compileProject(invalidPath);
   const invalidDiagnostics = invalid.modules.flatMap((module) => module.result.diagnostics);
   assert.ok(invalidDiagnostics.some((item) => /Cannot assign string to number/u.test(item.message)));
   assert.ok(invalidDiagnostics.filter((item) => /Cannot assign number to string/u.test(item.message)).length >= 3);
   assert.ok(invalidDiagnostics.some((item) => /Cannot assign to read-only member 'prefix'/u.test(item.message)));
   assert.ok(invalidDiagnostics.some((item) => /Cannot assign to read-only static member 'version'/u.test(item.message)));
+  assert.ok(invalidDiagnostics.some((item) => /Cannot assign to read-only field 'version'/u.test(item.message)));
   assert.ok(invalidDiagnostics.some((item) => /Cannot assign Formatter to ForeignFormatter/u.test(item.message)));
   assert.ok(invalidDiagnostics.some((item) => /String concatenation requires two strings/u.test(item.message)));
+  assert.ok(invalidDiagnostics.some((item) => /Cannot assign null to \{ prefix/u.test(item.message)), JSON.stringify(invalidDiagnostics));
+  assert.ok(invalidDiagnostics.some((item) => /Cannot assign null to string/u.test(item.message)));
+  assert.ok(invalidDiagnostics.some((item) => /Cannot assign null to number/u.test(item.message)));
   assert.ok(invalidDiagnostics.some((item) => /Cannot call an unknown JavaScript value/u.test(item.message)));
   assert.ok(invalid.notices.some((notice) => /Generic function 'identity'/u.test(notice.message)));
 });
@@ -6541,6 +7108,25 @@ test("formatter is syntax-aware and idempotent", () => {
   assert.equal(formatSource(formatted), formatted);
 });
 
+test("formatter keeps destructuring, grouped conditions, and optional parameter types unambiguous", () => {
+  const source = `import js {format} from "pkg"
+const {name: displayName} = user
+const visible = ready and (active or pending)
+const same = TaskPriority.is(TaskPriority.high)
+def find(value: Ticket?, previous: Ticket?) -> Ticket?:
+    return [ready ? value : previous]
+`;
+  const formatted = formatSource(source);
+  assert.equal(formatted, `import js {format} from "pkg"
+const {name: displayName} = user
+const visible = ready and (active or pending)
+const same = TaskPriority.is(TaskPriority.high)
+def find(value: Ticket?, previous: Ticket?) -> Ticket?:
+    return [ready ? value : previous]
+`);
+  assert.equal(formatSource(formatted), formatted);
+});
+
 test("formatter preserves multiline JSX while formatting surrounding syntax", () => {
   const formatted = formatSource(`
 component App:
@@ -6603,7 +7189,7 @@ print(greet(person))
 
   const execution = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "check", entry], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(execution.status, 1);
-  assert.match(execution.stderr, /Cannot assign .* to Person/);
+  assert.match(execution.stderr, /Cannot assign number to string/);
 });
 
 test("component callback types cross module and editor boundaries", async () => {
@@ -6821,6 +7407,137 @@ const current: WorkflowStatus = OtherStatus.todo
     && module.result.diagnostics.some((item) => /Cannot assign OtherStatus to WorkflowStatus/u.test(item.message))));
 });
 
+test("project interfaces use analyzed export types through dependency chains and cycles", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-analyzed-interface-"));
+  const leaf = join(directory, "leaf.vel");
+  const middle = join(directory, "middle.vel");
+  const entry = join(directory, "main.vel");
+  await writeFile(leaf, "export const value = 42\n", "utf8");
+  await writeFile(middle, 'import {value as source} from "./leaf.vel"\nexport const forwarded = source\n', "utf8");
+  await writeFile(entry, 'import {forwarded} from "./middle.vel"\nconst invalid: string = forwarded\n', "utf8");
+
+  const project = await compileProject(entry);
+  assert.deepEqual(project.failures, []);
+  assert.equal(describeType(project.modules.find((module) => module.inputPath === middle)!.result.moduleInterface.exports.get("forwarded")!), "number");
+  assert.ok(project.modules.find((module) => module.inputPath === entry)!.result.diagnostics
+    .some((item) => /Cannot assign number to string/u.test(item.message)));
+
+  const first = join(directory, "cycle-a.vel");
+  const second = join(directory, "cycle-b.vel");
+  await writeFile(first, 'import {value} from "./cycle-b.vel"\nexport const forwarded = value\n', "utf8");
+  await writeFile(second, 'import {forwarded} from "./cycle-a.vel"\nexport const value: number = 1\nexport def read() -> number:\n    return forwarded\n', "utf8");
+  const cyclic = await compileProject(first);
+  assert.deepEqual(cyclic.failures, []);
+  assert.deepEqual(cyclic.modules.flatMap((module) => module.result.diagnostics), []);
+  assert.equal(describeType(cyclic.modules.find((module) => module.inputPath === first)!.result.moduleInterface.exports.get("forwarded")!), "number");
+});
+
+test("record metadata keeps module identity without creating implicit type imports", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-record-module-"));
+  const leftLibrary = join(directory, "left.vel");
+  const rightLibrary = join(directory, "right.vel");
+  const entry = join(directory, "main.vel");
+  await writeFile(leftLibrary, `
+export type Item:
+    left: string
+
+export def makeLeft() -> Item:
+    return {left: "left"}
+`.trimStart(), "utf8");
+  await writeFile(rightLibrary, `
+export type Item:
+    right: number
+
+export def makeRight() -> Item:
+    return {right: 1}
+`.trimStart(), "utf8");
+  await writeFile(entry, `
+import {makeLeft} from "./left.vel"
+import {makeRight} from "./right.vel"
+
+print(makeLeft().left)
+print(makeRight().right)
+`.trimStart(), "utf8");
+
+  const collisionFree = await compileProject(entry);
+  assert.deepEqual(collisionFree.failures, []);
+  assert.deepEqual(collisionFree.modules.flatMap((module) => module.result.diagnostics), []);
+
+  await writeFile(entry, `
+import {makeLeft} from "./left.vel"
+const value: Item = makeLeft()
+`.trimStart(), "utf8");
+  const hiddenName = await compileProject(entry);
+  assert.ok(hiddenName.modules.find((module) => module.inputPath === entry)?.result.diagnostics
+    .some((item) => /Unknown type 'Item'/u.test(item.message)));
+
+  await writeFile(entry, `
+import {Item as LeftItem, makeLeft} from "./left.vel"
+import {Item as RightItem, makeRight} from "./right.vel"
+
+const left: LeftItem = makeLeft()
+const right: RightItem = makeRight()
+print(left.left)
+print(right.right)
+`.trimStart(), "utf8");
+  const explicit = await compileProject(entry);
+  assert.deepEqual(explicit.failures, []);
+  assert.deepEqual(explicit.modules.flatMap((module) => module.result.diagnostics), []);
+});
+
+test("JavaScript boundary provenance crosses Velar module exports", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-host-reexport-"));
+  const packageRoot = join(directory, "node_modules", "boundary-sdk");
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({
+    name: "boundary-sdk",
+    type: "module",
+    exports: "./index.js",
+    types: "./index.d.ts",
+  }), "utf8");
+  await writeFile(join(packageRoot, "index.js"), "export const client = { maybe: () => undefined };\nexport const emptyBox = { empty: undefined };\nexport const emptyValue = undefined;\nexport const maybeAsync = async () => undefined;\nexport const maybeValue = undefined;\n", "utf8");
+  await writeFile(join(packageRoot, "index.d.ts"), "export interface Client { maybe(): string | undefined; }\nexport interface EmptyBox { readonly empty: undefined; }\nexport declare const client: Client;\nexport declare const emptyBox: EmptyBox;\nexport declare const emptyValue: undefined;\nexport declare function maybeAsync(): Promise<string | undefined>;\nexport declare const maybeValue: string | undefined;\n", "utf8");
+  const bridge = join(directory, "bridge.vel");
+  const entry = join(directory, "main.vel");
+  await writeFile(bridge, 'import js {client, emptyBox, emptyValue, maybeAsync, maybeValue} from "boundary-sdk"\nexport type ClientView:\n    maybe: () -> string?\n\nexport const forwardedClient = client\nexport const forwardedEmpty = emptyValue\nexport const forwardedEmptyBox = emptyBox\nexport const forwardedPromise = maybeAsync()\nexport const forwardedValue = maybeValue\n\nexport def current() -> ClientView:\n    return client\n\nexport def relay(value: ClientView) -> ClientView:\n    return value\n\nexport class Holder:\n    constructor():\n        pass\n\n    def current() -> ClientView:\n        return client\n\n    static def shared() -> ClientView:\n        return client\n', "utf8");
+  await writeFile(entry, 'import {current, forwardedClient, forwardedEmpty, forwardedEmptyBox, forwardedPromise, forwardedValue, Holder, relay} from "./bridge.vel"\nconst throughFunction = current()\nconst throughParameter = relay(forwardedClient)\nconst throughMethod = Holder().current()\nconst throughStaticMethod = Holder.shared()\nprint(forwardedEmptyBox.empty == null)\nprint(forwardedClient.maybe() == null)\nprint(throughFunction.maybe() == null)\nprint(throughParameter.maybe() == null)\nprint(throughMethod.maybe() == null)\nprint(throughStaticMethod.maybe() == null)\nprint(await forwardedPromise == null)\nprint(forwardedEmpty == null)\nprint(forwardedValue == null)\n', "utf8");
+
+  const project = await compileProject(entry);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const bridgeModule = project.modules.find((module) => module.inputPath === bridge)!;
+  const entryModule = project.modules.find((module) => module.inputPath === entry)!;
+  assert.match(entryModule.result.code ?? "", /forwardedEmptyBox\.empty \?\? null/u);
+  assert.match(entryModule.result.code ?? "", /forwardedClient\.maybe\(\) \?\? null/u);
+  assert.match(entryModule.result.code ?? "", /throughFunction\.maybe\(\) \?\? null/u);
+  assert.match(entryModule.result.code ?? "", /throughParameter\.maybe\(\) \?\? null/u);
+  assert.match(entryModule.result.code ?? "", /throughMethod\.maybe\(\) \?\? null/u);
+  assert.match(entryModule.result.code ?? "", /throughStaticMethod\.maybe\(\) \?\? null/u);
+  assert.match(entryModule.result.code ?? "", /forwardedEmpty \?\? null/u);
+  assert.match(bridgeModule.result.code ?? "", /emptyValue \?\? null/u);
+  assert.match(entryModule.result.code ?? "", /__velarNormalizePromiseValue\(forwardedPromise\)/u);
+  assert.match(entryModule.result.code ?? "", /Symbol\.for\("velar\.promise\.normalization\.v1"\)/u);
+
+  const namespaceEntry = join(directory, "namespace.vel");
+  await writeFile(namespaceEntry, 'import * as bridge from "./bridge.vel"\nprint(bridge.forwardedEmpty == null)\nprint(await bridge.forwardedPromise == null)\n', "utf8");
+  const namespaceProject = await compileProject(namespaceEntry);
+  assert.ok(namespaceProject.failures.some((failure) => /JavaScript-boundary values.*import them by name/u.test(failure.message)));
+
+  const dynamicEntry = join(directory, "dynamic.vel");
+  await writeFile(dynamicEntry, 'const bridge = await import("./bridge.vel")\nprint(bridge.forwardedEmpty == null)\n', "utf8");
+  const dynamicProject = await compileProject(dynamicEntry);
+  assert.ok(dynamicProject.failures.some((failure) => /Dynamically imported module.*JavaScript-boundary values/u.test(failure.message)));
+
+  const internal = join(directory, "internal.vel");
+  const internalEntry = join(directory, "internal-main.vel");
+  await writeFile(internal, 'export const maybe: string? = null\n', "utf8");
+  await writeFile(internalEntry, 'import {maybe} from "./internal.vel"\nprint(maybe == null)\n', "utf8");
+  const internalProject = await compileProject(internalEntry);
+  assert.deepEqual(internalProject.failures, []);
+  const internalCode = internalProject.modules.find((module) => module.inputPath === internalEntry)!.result.code ?? "";
+  assert.doesNotMatch(internalCode, /maybe \?\? null/u);
+});
+
 test("rest signatures retain class element types across module and editor boundaries", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-rest-module-"));
   const library = join(directory, "items.vel");
@@ -6909,10 +7626,100 @@ for key in lookup:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /of lookup\.keys\(\)/);
+  assert.match(result.code ?? "", /of __velarCollectionIterator\(lookup\)/);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "first:6\n");
+});
+
+test("collection loops validate boundaries and ignore instance iterator overrides", () => {
+  const result = compileCore(`
+import js {numbers, tags, lookup} from "fixture"
+
+type ForeignCollections:
+    tags: Set<string>
+    lookup: Map<string, number>
+
+const checked = ForeignCollections.parse({tags: tags, lookup: lookup})
+print(checked.tags.size)
+print(checked.lookup.size)
+print(numbers.size)
+print(2 in numbers)
+print(numbers[0])
+print(numbers.copy().size)
+print(numbers.sorted().get(0))
+print(numbers.reversed().get(0))
+numbers.append(3)
+print(numbers.get(2))
+print(tags.size)
+print("web" in tags)
+print(lookup.size)
+print("Ada" in lookup)
+for value in numbers:
+    print(value)
+for tag in tags:
+    print(tag)
+for key in lookup:
+    print(key)
+`.trimStart(), { analysis: { imports: new Map([
+    ["numbers", { kind: "list", element: { kind: "number" } }],
+    ["tags", { kind: "set", element: { kind: "string" } }],
+    ["lookup", { kind: "map", key: { kind: "string" }, value: { kind: "number" } }],
+  ]) } });
+  assert.deepEqual(result.diagnostics, []);
+  const boundary = `
+import { runInNewContext } from "node:vm";
+class HostileList extends Array { static get [Symbol.species]() { throw new Error("list species override"); } set 2(value) { throw new Error("list inherited index setter"); } [Symbol.iterator]() { throw new Error("list override"); } includes() { throw new Error("list includes override"); } }
+const numbers = new HostileList(1, 2);
+const tags = runInNewContext('class HostileSet extends Set { get size() { throw new Error("set size override") } [Symbol.iterator]() { throw new Error("set override") } values() { throw new Error("set values override") } has() { throw new Error("set has override") } }; new HostileSet(["web"])');
+const lookup = runInNewContext('class HostileMap extends Map { get size() { throw new Error("map size override") } [Symbol.iterator]() { throw new Error("map override") } keys() { throw new Error("map keys override") } has() { throw new Error("map has override") } }; new HostileMap([["Ada", 9]])');
+`;
+  const executable = (result.code ?? "").replace(/^import .*?;\n+/mu, boundary);
+  const execution = executeModule(executable);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1\n1\n2\ntrue\n1\n2\n1\n2\n3\n1\ntrue\n1\ntrue\n1\n2\n3\nweb\nAda\n");
+
+  const accessor = compileCore(`
+import js {values, reads} from "fixture"
+try:
+    print(values[0])
+catch error:
+    print(error.message)
+print(reads())
+`.trimStart(), { analysis: { imports: new Map([
+    ["values", { kind: "list", element: { kind: "number" } }],
+    ["reads", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "number" } }],
+  ]) } });
+  assert.deepEqual(accessor.diagnostics, []);
+  const accessorBoundary = `
+let readCount = 0;
+const values = [];
+Object.defineProperty(values, "0", { enumerable: true, get() { readCount += 1; return 1; } });
+const reads = () => readCount;
+`;
+  const accessorExecution = executeModule((accessor.code ?? "").replace(/^import .*?;\n+/mu, accessorBoundary));
+  assert.equal(accessorExecution.status, 0, String(accessorExecution.stderr));
+  assert.equal(accessorExecution.stdout, "List index requires ordinary mutable List data elements\n0\n");
+});
+
+test("List callback operations use a stable checked snapshot", () => {
+  const result = compile(`
+let values = [1, 2]
+
+def grow(value: number) -> number:
+    values.append(9)
+    return value
+
+const mapped = values.map(grow)
+print(values.size)
+print(mapped.size)
+print(mapped.get(0))
+print(mapped.get(1))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "4\n2\n1\n2\n");
 });
 
 test("CLI source maps lead runtime stacks back to .vel source", async () => {
@@ -6939,6 +7746,33 @@ def choose(value: number) -> number:
   const map = JSON.parse(result.sourceMap ?? "{}") as { mappings?: string };
   const generatedIf = map.mappings?.split(";")[1] ?? "";
   assert.ok(generatedIf.split(",").filter(Boolean).length >= 4, generatedIf);
+});
+
+test("source maps preserve exact positions when generated child text is repeated and reordered", () => {
+  const source = `
+def echo(value: string) -> string:
+    return value
+
+const value = "same"
+const result = echo(value=value)
+`.trimStart();
+  const result = compileCore(source, { path: "named-arguments.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  const generatedLines = (result.code ?? "").split("\n");
+  const generatedLine = generatedLines.findIndex((line) => line.includes("const result"));
+  const generated = generatedLines[generatedLine] ?? "";
+  const sourceLines = source.split("\n");
+  const sourceLine = sourceLines.findIndex((line) => line.includes("const result"));
+  const original = sourceLines[sourceLine] ?? "";
+  const sourceMap = new SourceMap(JSON.parse(result.sourceMap ?? "{}"));
+
+  const callee = sourceMap.findEntry(generatedLine, generated.indexOf("echo(")) as { originalLine: number; originalColumn: number };
+  assert.equal(callee.originalLine, sourceLine);
+  assert.equal(callee.originalColumn, original.indexOf("echo("));
+
+  const argument = sourceMap.findEntry(generatedLine, generated.lastIndexOf("value")) as { originalLine: number; originalColumn: number };
+  assert.equal(argument.originalLine, sourceLine);
+  assert.equal(argument.originalColumn, original.lastIndexOf("value"));
 });
 
 test("imported classes preserve construction, aliases, and nominal checks", async () => {
@@ -8356,6 +9190,22 @@ mount(<Counter start={1} />, "#app")
   assert.ok(domCommit >= 0 && watchCommit > domCommit);
 });
 
+test("Web lexical extensions share Core line-boundary semantics", () => {
+  const source = [
+    "const cardLook = look:",
+    "    display = \"grid\"",
+    "    gap = 12px",
+    "",
+    "component Card:",
+    "    return <article look={cardLook}>Card</article>",
+    "",
+  ].join("\r");
+  const result = compile(source, { path: "standalone-cr.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.css ?? "", /display:var\(--velar-look-base-display\)/u);
+  assert.match(result.code ?? "", /function Card/u);
+});
+
 test("Look is flat, typed as a value, responsive, state-aware, and target-aware", () => {
   const result = compile(`
 const cardLook = look:
@@ -8502,6 +9352,19 @@ const broken = look:
   const state = Array.from({ length: 33 }, (_, index) => `const ready${index} = true`).join("\n");
   const expanded = compile(`${state}\n\nconst broken = look:\n    if ${condition}:\n        color = rgb(17, 18, 22)\n`);
   assert.match(expanded.diagnostics.map((item) => item.message).join("\n"), /at most 32 selector\/runtime terms/u);
+});
+
+test("Look diagnostics retain exact right-hand expression spans", () => {
+  const source = `
+const display = 10
+const broken = look:
+    display = display
+`.trimStart();
+  const result = compile(source, { path: "look-spans.vel" });
+  const diagnostic = result.diagnostics.find((item) => /Cannot assign number to string/u.test(item.message));
+  assert.ok(diagnostic);
+  assert.equal(diagnostic.span.start, source.lastIndexOf("display"));
+  assert.equal(diagnostic.span.end, source.lastIndexOf("display") + "display".length);
 });
 
 test("components expose one stable class and Look host without declaring framework props", () => {
@@ -9416,6 +10279,25 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.doesNotMatch(coreCompletionText, /bind:value|DialogElement|velar\/web|velar\/app|"label":"component"|"label":"resource"|"label":"mounted"/u);
   assert.match(coreCompletionText, /velar\/test/);
   assert.match(coreCompletionText, /"label":"const"/);
+
+  const carriageReturnText = "const first = 1\rconst second = first\r";
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didChange",
+    params: { textDocument: { uri: coreUri, version: 2 }, contentChanges: [{ text: carriageReturnText }] },
+  });
+  await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string; version?: number }).uri === coreUri
+    && (message.params as { version?: number }).version === 2);
+  send({
+    jsonrpc: "2.0",
+    id: 34,
+    method: "textDocument/definition",
+    params: { textDocument: { uri: coreUri }, position: { line: 1, character: "const second = ".length + 1 } },
+  });
+  const carriageReturnDefinition = await waitFor((message) => message.id === 34);
+  assert.equal((carriageReturnDefinition.result as { uri: string; range: { start: { line: number; character: number } } }).uri, coreUri);
+  assert.deepEqual((carriageReturnDefinition.result as { range: { start: { line: number; character: number } } }).range.start, { line: 0, character: 6 });
 
   send({
     jsonrpc: "2.0",

@@ -14,15 +14,17 @@ import type { LoweringHints } from "./analyzer.ts";
 import type { SourceText, Span } from "./source.ts";
 
 interface JavaScriptNode {
+  readonly id: number;
   readonly code: string;
   readonly sourceSpan: Span;
-  readonly children: readonly JavaScriptNode[];
 }
 
 interface GeneratedMapping {
   readonly offset: number;
   readonly sourceSpan: Span;
 }
+
+const javaScriptNodeMarker = /\u0000VELAR_MAP_(\d+)\u0000/gu;
 
 export class JavaScriptEmitter {
   private readonly typeDeclarations = new Map<string, TypeDeclaration | TypeAliasDeclaration>();
@@ -34,7 +36,9 @@ export class JavaScriptEmitter {
   private needsCollectionHelpers = false;
   private needsRuntimeTypeHelpers = false;
   private needsNumberHelper = false;
-  private readonly generationFrames: JavaScriptNode[][] = [];
+  private suppressPromiseNormalization = 0;
+  private nextJavaScriptNodeId = 0;
+  private readonly javaScriptNodeSpans = new Map<number, Span>();
   private generatedMappings: readonly GeneratedMapping[] = [];
   private generatedCode = "";
 
@@ -44,6 +48,8 @@ export class JavaScriptEmitter {
   }
 
   emit(program: Program): string {
+    this.nextJavaScriptNodeId = 0;
+    this.javaScriptNodeSpans.clear();
     this.collectDeclarations(program);
     this.collectRuntimeUses(program);
     const statements = program.body
@@ -51,7 +57,47 @@ export class JavaScriptEmitter {
       .filter((item) => item.code.length > 0);
 
     const helpers: string[] = [...this.additionalHelpers(program)];
-    if (this.needsRuntimeTypeHelpers || this.runtimeTypes.size > 0 || program.body.some((statement) => statement.kind === "EnumDeclaration")) {
+    if (this.hints.normalizedPromiseValues.size > 0) {
+      helpers.push([
+        "const __velarNormalizedPromiseRegistryKey = Symbol.for(\"velar.promise.normalization.v1\");",
+        "const __velarNormalizedPromiseValues = (() => {",
+        "  const descriptor = Object.getOwnPropertyDescriptor(globalThis, __velarNormalizedPromiseRegistryKey);",
+        "  if (descriptor) {",
+        "    if (!(\"value\" in descriptor)) throw new TypeError(\"VelarScript Promise normalization registry cannot be an accessor\");",
+        "    try { WeakMap.prototype.has.call(descriptor.value, descriptor.value); }",
+        "    catch { throw new TypeError(\"VelarScript Promise normalization registry is invalid\"); }",
+        "    return descriptor.value;",
+        "  }",
+        "  const registry = new WeakMap();",
+        "  Object.defineProperty(globalThis, __velarNormalizedPromiseRegistryKey, { value: registry, enumerable: false, configurable: false, writable: false });",
+        "  return registry;",
+        "})();",
+        "function __velarNormalizePromiseValue(value) {",
+        "  if ((typeof value !== \"object\" && typeof value !== \"function\") || value === null) throw new TypeError(\"Expected a Promise from JavaScript\");",
+        "  const known = __velarNormalizedPromiseValues.get(value);",
+        "  if (known) return known;",
+        "  const normalized = Promise.resolve(value).then((resolved) => resolved ?? null);",
+        "  __velarNormalizedPromiseValues.set(value, normalized);",
+        "  __velarNormalizedPromiseValues.set(normalized, normalized);",
+        "  return normalized;",
+        "}",
+      ].join("\n"));
+    }
+    const needsRuntimeTypeRuntime = this.needsRuntimeTypeHelpers || this.runtimeTypes.size > 0
+      || program.body.some((statement) => statement.kind === "EnumDeclaration");
+    if (needsRuntimeTypeRuntime || this.needsCollectionHelpers) {
+      helpers.push([
+        "function __velarIsMap(value) {",
+        "  try { Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value); return true; }",
+        "  catch { return false; }",
+        "}",
+        "function __velarIsSet(value) {",
+        "  try { Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value); return true; }",
+        "  catch { return false; }",
+        "}",
+      ].join("\n"));
+    }
+    if (needsRuntimeTypeRuntime) {
       helpers.push([
         "const __velarRuntimeTypeRegistryKey = Symbol.for(\"velar.type.registry.v1\");",
         "const __velarRuntimeTypeRegistry = (() => {",
@@ -79,21 +125,23 @@ export class JavaScriptEmitter {
         "",
         "function __velarListTypeIs(value, check) {",
         "  if (!Array.isArray(value) || value.length > 1000000 || Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) return false;",
+        "  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, \"length\");",
+        "  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable || lengthDescriptor.configurable || !(\"value\" in lengthDescriptor)) return false;",
         "  for (let index = 0; index < value.length; index += 1) {",
         "    const descriptor = Object.getOwnPropertyDescriptor(value, index);",
-        "    if (!descriptor?.enumerable || !(\"value\" in descriptor) || !check(descriptor.value)) return false;",
+        "    if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !(\"value\" in descriptor) || !check(descriptor.value)) return false;",
         "  }",
         "  return true;",
         "}",
         "",
         "function __velarSetTypeIs(value, check) {",
-        "  if (!(value instanceof Set) || Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value) > 1000000) return false;",
+        "  if (!__velarIsSet(value) || Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value) > 1000000) return false;",
         "  for (const item of Set.prototype.values.call(value)) if (!check(item)) return false;",
         "  return true;",
         "}",
         "",
         "function __velarMapTypeIs(value, check) {",
-        "  if (!(value instanceof Map) || Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value) > 1000000) return false;",
+        "  if (!__velarIsMap(value) || Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value) > 1000000) return false;",
         "  for (const [key, item] of Map.prototype.entries.call(value)) if (!check(key, item)) return false;",
         "  return true;",
         "}",
@@ -102,7 +150,7 @@ export class JavaScriptEmitter {
     }
     if (this.needsIndexHelpers) {
       helpers.push([
-        "class IndexError extends RangeError {",
+        "class __VelarIndexError extends RangeError {",
         "  constructor(message) {",
         "    super(message);",
         "    this.name = \"IndexError\";",
@@ -110,8 +158,9 @@ export class JavaScriptEmitter {
         "}",
         "",
         "function __velarIndex(value, index) {",
+        "  __velarValidateDenseList(value, \"List index\");",
         "  if (!Number.isInteger(index) || index < 0 || index >= value.length) {",
-        "    throw new IndexError(`Index ${index} is outside the list`);",
+        "    throw new __VelarIndexError(`Index ${index} is outside the list`);",
         "  }",
         "  return value[index];",
         "}",
@@ -121,8 +170,9 @@ export class JavaScriptEmitter {
         "}",
         "",
         "function __velarSetIndex(value, index, next) {",
+        "  __velarValidateDenseList(value, \"List index assignment\");",
         "  if (!Number.isInteger(index) || index < 0 || index >= value.length) {",
-        "    throw new IndexError(`Index ${index} is outside the list`);",
+        "    throw new __VelarIndexError(`Index ${index} is outside the list`);",
         "  }",
         "  value[index] = next;",
         "  return next;",
@@ -138,11 +188,41 @@ export class JavaScriptEmitter {
         "  if (!Array.isArray(value) || value.length > __velarMaxCollectionItems || Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {",
         "    throw new TypeError(name + \" requires a dense VelarScript List\");",
         "  }",
+        "  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, \"length\");",
+        "  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable || lengthDescriptor.configurable || !(\"value\" in lengthDescriptor)) throw new TypeError(name + \" requires an ordinary mutable List length\");",
         "  for (let index = 0; index < value.length; index += 1) {",
         "    const descriptor = Object.getOwnPropertyDescriptor(value, index);",
-        "    if (!descriptor?.enumerable || !(\"value\" in descriptor)) throw new TypeError(name + \" requires ordinary List data elements\");",
+        "    if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !(\"value\" in descriptor)) throw new TypeError(name + \" requires ordinary mutable List data elements\");",
         "  }",
         "  return value;",
+        "}",
+        "function __velarCopyList(value, name) {",
+        "  __velarValidateDenseList(value, name);",
+        "  const output = [];",
+        "  for (let index = 0; index < value.length; index += 1) output.push(Object.getOwnPropertyDescriptor(value, index).value);",
+        "  return output;",
+        "}",
+        "",
+        "function __velarCollectionIterator(value) {",
+        "  if (Array.isArray(value)) return Array.prototype.values.call(__velarValidateDenseList(value, \"List iteration\"));",
+        "  if (__velarIsMap(value)) {",
+        "    if (Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
+        "    return Map.prototype.keys.call(value);",
+        "  }",
+        "  if (__velarIsSet(value)) {",
+        "    if (Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Set cannot exceed 1000000 items\");",
+        "    return Set.prototype.values.call(value);",
+        "  }",
+        "  throw new TypeError(\"VelarScript iteration requires a List, Set, or Map\");",
+        "}",
+        "",
+        "function __velarCollectionSize(value) {",
+        "  if (Array.isArray(value)) return __velarValidateDenseList(value, \"List size\").length;",
+        "  const prototype = __velarIsMap(value) ? Map.prototype : __velarIsSet(value) ? Set.prototype : null;",
+        "  if (!prototype) throw new TypeError(\"VelarScript size requires a List, Set, or Map\");",
+        "  const size = Reflect.getOwnPropertyDescriptor(prototype, \"size\").get.call(value);",
+        "  if (size > __velarMaxCollectionItems) throw new RangeError(\"A collection cannot exceed 1000000 items\");",
+        "  return size;",
         "}",
         "",
         "function __velarCreateList(parts) {",
@@ -163,29 +243,33 @@ export class JavaScriptEmitter {
         "function __velarCreateSet(value) {",
         "  if (value === undefined) return new Set();",
         "  if (Array.isArray(value)) { const values = __velarValidateDenseList(value, \"Set construction\"); const output = new Set(); for (let index = 0; index < values.length; index += 1) Set.prototype.add.call(output, Object.getOwnPropertyDescriptor(values, index).value); return output; }",
-        "  if (!(value instanceof Set)) throw new TypeError(\"Set construction requires a List or Set\");",
+        "  if (!__velarIsSet(value)) throw new TypeError(\"Set construction requires a List or Set\");",
         "  if (Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Set cannot exceed 1000000 items\");",
         "  return new Set(Set.prototype.values.call(value));",
         "}",
         "",
         "function __velarCreateMap(value) {",
         "  if (value === undefined) return new Map();",
-        "  if (!(value instanceof Map)) throw new TypeError(\"Map construction requires another Map\");",
+        "  if (!__velarIsMap(value)) throw new TypeError(\"Map construction requires another Map\");",
         "  if (Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
         "  return new Map(Map.prototype.entries.call(value));",
         "}",
         "",
         "function __velarCollectionGet(value, key) {",
         "  if (Array.isArray(value)) {",
+        "    __velarValidateDenseList(value, \"List.get\");",
         "    if (!Number.isInteger(key)) return null;",
         "    const index = key < 0 ? value.length + key : key;",
         "    return index >= 0 && index < value.length ? value[index] : null;",
         "  }",
+        "  __velarCollectionSize(value);",
         "  const item = Map.prototype.get.call(value, key);",
         "  return item === undefined ? null : item;",
         "}",
         "",
-        "function __velarCollectionSlice(value, start = 0, end = value.length) {",
+        "function __velarCollectionSlice(value, start = 0, end = null) {",
+        "  __velarValidateDenseList(value, \"List.slice\");",
+        "  if (end === null) end = value.length;",
         "  if (!Number.isInteger(start) || !Number.isInteger(end)) {",
         "    throw new TypeError(\"List.slice positions must be integers\");",
         "  }",
@@ -198,29 +282,33 @@ export class JavaScriptEmitter {
         "}",
         "",
         "function __velarListAppend(value, item) {",
+        "  __velarValidateDenseList(value, \"List.append\");",
         "  if (value.length >= __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
-        "  Array.prototype.push.call(value, item);",
+        "  Object.defineProperty(value, value.length, { value: item, writable: true, enumerable: true, configurable: true });",
         "  return null;",
         "}",
         "",
         "function __velarListExtend(value, items) {",
+        "  __velarValidateDenseList(value, \"List.extend\");",
         "  items = __velarValidateDenseList(items, \"List.extend\");",
         "  if (value.length + items.length > __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
         "  const count = items.length;",
-        "  for (let index = 0; index < count; index += 1) Array.prototype.push.call(value, Object.getOwnPropertyDescriptor(items, index).value);",
+        "  for (let index = 0; index < count; index += 1) Object.defineProperty(value, value.length, { value: Object.getOwnPropertyDescriptor(items, index).value, writable: true, enumerable: true, configurable: true });",
         "  return null;",
         "}",
         "",
         "function __velarListInsert(value, index, item) {",
+        "  __velarValidateDenseList(value, \"List.insert\");",
         "  if (!Number.isInteger(index) || index < 0 || index > value.length) throw new RangeError(\"List.insert index must be an integer from 0 through size\");",
         "  if (value.length >= __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
-        "  value.length += 1;",
+        "  Object.defineProperty(value, value.length, { value: item, writable: true, enumerable: true, configurable: true });",
         "  for (let cursor = value.length - 1; cursor > index; cursor -= 1) value[cursor] = value[cursor - 1];",
         "  value[index] = item;",
         "  return null;",
         "}",
         "",
         "function __velarListPop(value, requested = -1) {",
+        "  __velarValidateDenseList(value, \"List.pop\");",
         "  if (!Number.isInteger(requested)) return null;",
         "  const index = requested < 0 ? value.length + requested : requested;",
         "  if (index < 0 || index >= value.length) return null;",
@@ -229,19 +317,19 @@ export class JavaScriptEmitter {
         "  value.length -= 1;",
         "  return item;",
         "}",
-        "function __velarListRemove(value, item) { for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) { __velarListPop(value, index); return true; } return false; }",
-        "function __velarListCopy(value) { return Array.prototype.slice.call(value); }",
-        "function __velarListCount(value, item) { let count = 0; for (const entry of value) if (__velarSameValueZero(entry, item)) count += 1; return count; }",
-        "function __velarListFind(value, predicate) { __velarValidateDenseList(value, \"List.find\"); for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.find predicate must return bool\"); if (accepted) return value[index]; } return null; }",
-        "function __velarListIndex(value, item) { for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) return index; return null; }",
-        "function __velarListSome(value, predicate) { __velarValidateDenseList(value, \"List.some\"); for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.some predicate must return bool\"); if (accepted) return true; } return false; }",
-        "function __velarListEvery(value, predicate) { __velarValidateDenseList(value, \"List.every\"); for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.every predicate must return bool\"); if (!accepted) return false; } return true; }",
-        "function __velarListMap(value, transform) { __velarValidateDenseList(value, \"List.map\"); const output = new Array(value.length); for (let index = 0; index < value.length; index += 1) output[index] = transform(value[index]); return output; }",
-        "function __velarListFilter(value, predicate) { __velarValidateDenseList(value, \"List.filter\"); const output = []; for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.filter predicate must return bool\"); if (accepted) output.push(value[index]); } return output; }",
-        "function __velarListReduce(value, combine, initial) { __velarValidateDenseList(value, \"List.reduce\"); let result = initial; for (let index = 0; index < value.length; index += 1) result = combine(result, value[index]); return result; }",
-        "function __velarListJoin(value, separator = \"\") { __velarValidateDenseList(value, \"List.join\"); if (typeof separator !== \"string\") throw new TypeError(\"List.join separator must be string\"); for (const item of value) if (typeof item !== \"string\") throw new TypeError(\"List.join requires string values\"); return Array.prototype.join.call(value, separator); }",
-        "function __velarListSorted(value, compare = null) { __velarValidateDenseList(value, \"List.sorted\"); const output = Array.prototype.slice.call(value); const compareValues = compare ?? ((left, right) => { if ((typeof left !== \"string\" && typeof left !== \"number\") || typeof left !== typeof right || (typeof left === \"number\" && (!Number.isFinite(left) || !Number.isFinite(right)))) throw new TypeError(\"List.sorted() requires uniform finite numbers or strings\"); return left < right ? -1 : left > right ? 1 : 0; }); Array.prototype.sort.call(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== \"number\" || !Number.isFinite(order)) throw new TypeError(\"List.sorted comparator must return a finite number\"); return order; }); return output; }",
-        "function __velarListReversed(value) { const output = Array.prototype.slice.call(value); Array.prototype.reverse.call(output); return output; }",
+        "function __velarListRemove(value, item) { __velarValidateDenseList(value, \"List.remove\"); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) { __velarListPop(value, index); return true; } return false; }",
+        "function __velarListCopy(value) { return __velarCopyList(value, \"List.copy\"); }",
+        "function __velarListCount(value, item) { __velarValidateDenseList(value, \"List.count\"); let count = 0; for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) count += 1; return count; }",
+        "function __velarListFind(value, predicate) { const items = __velarCopyList(value, \"List.find\"); for (let index = 0; index < items.length; index += 1) { const accepted = predicate(items[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.find predicate must return bool\"); if (accepted) return items[index]; } return null; }",
+        "function __velarListIndex(value, item) { __velarValidateDenseList(value, \"List.index\"); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) return index; return null; }",
+        "function __velarListSome(value, predicate) { const items = __velarCopyList(value, \"List.some\"); for (let index = 0; index < items.length; index += 1) { const accepted = predicate(items[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.some predicate must return bool\"); if (accepted) return true; } return false; }",
+        "function __velarListEvery(value, predicate) { const items = __velarCopyList(value, \"List.every\"); for (let index = 0; index < items.length; index += 1) { const accepted = predicate(items[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.every predicate must return bool\"); if (!accepted) return false; } return true; }",
+        "function __velarListMap(value, transform) { const items = __velarCopyList(value, \"List.map\"); const output = new Array(items.length); for (let index = 0; index < items.length; index += 1) { const item = transform(items[index]); output[index] = item === undefined ? null : item; } return output; }",
+        "function __velarListFilter(value, predicate) { const items = __velarCopyList(value, \"List.filter\"); const output = []; for (let index = 0; index < items.length; index += 1) { const accepted = predicate(items[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.filter predicate must return bool\"); if (accepted) output.push(items[index]); } return output; }",
+        "function __velarListReduce(value, combine, initial) { const items = __velarCopyList(value, \"List.reduce\"); let result = initial; for (let index = 0; index < items.length; index += 1) { const next = combine(result, items[index]); result = next === undefined ? null : next; } return result; }",
+        "function __velarListJoin(value, separator = \"\") { __velarValidateDenseList(value, \"List.join\"); if (typeof separator !== \"string\") throw new TypeError(\"List.join separator must be string\"); for (let index = 0; index < value.length; index += 1) if (typeof value[index] !== \"string\") throw new TypeError(\"List.join requires string values\"); return Array.prototype.join.call(value, separator); }",
+        "function __velarListSorted(value, compare = null) { const output = __velarCopyList(value, \"List.sorted\"); const compareValues = compare ?? ((left, right) => { if ((typeof left !== \"string\" && typeof left !== \"number\") || typeof left !== typeof right || (typeof left === \"number\" && (!Number.isFinite(left) || !Number.isFinite(right)))) throw new TypeError(\"List.sorted() requires uniform finite numbers or strings\"); return left < right ? -1 : left > right ? 1 : 0; }); Array.prototype.sort.call(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== \"number\" || !Number.isFinite(order)) throw new TypeError(\"List.sorted comparator must return a finite number\"); return order; }); return output; }",
+        "function __velarListReversed(value) { const output = __velarCopyList(value, \"List.reversed\"); Array.prototype.reverse.call(output); return output; }",
         "",
         "function __velarSetAdd(value, item) {",
         "  const size = Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value);",
@@ -251,9 +339,8 @@ export class JavaScriptEmitter {
         "}",
         "",
         "function __velarSetUpdate(value, items) {",
-        "  if (!Array.isArray(items) && !(items instanceof Set)) throw new TypeError(\"Set.update requires a List or Set\");",
-        "  const entries = Array.isArray(items) ? __velarValidateDenseList(items, \"Set.update\") : [...Set.prototype.values.call(items)];",
-        "  if (entries.length > __velarMaxCollectionItems) throw new RangeError(\"A Set cannot exceed 1000000 items\");",
+        "  if (!Array.isArray(items) && !__velarIsSet(items)) throw new TypeError(\"Set.update requires a List or Set\");",
+        "  const entries = Array.isArray(items) ? __velarCopyList(items, \"Set.update\") : (__velarCollectionSize(items), [...Set.prototype.values.call(items)]);",
         "  const additions = new Set();",
         "  for (const item of entries) if (!Set.prototype.has.call(value, item)) Set.prototype.add.call(additions, item);",
         "  const size = Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value);",
@@ -272,7 +359,7 @@ export class JavaScriptEmitter {
         "}",
         "",
         "function __velarMapUpdate(value, items) {",
-        "  if (!(items instanceof Map)) throw new TypeError(\"Map.update requires a Map\");",
+        "  if (!__velarIsMap(items)) throw new TypeError(\"Map.update requires a Map\");",
         "  const sourceSize = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(items);",
         "  if (sourceSize > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
         "  const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value);",
@@ -285,23 +372,30 @@ export class JavaScriptEmitter {
         "function __velarMapCopy(value) { const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\"); return new Map(Map.prototype.entries.call(value)); }",
         "",
         "function __velarCollectionHas(value, item) {",
-        "  if (Array.isArray(value)) { for (const entry of value) if (__velarSameValueZero(entry, item)) return true; return false; }",
-        "  return value instanceof Map ? Map.prototype.has.call(value, item) : Set.prototype.has.call(value, item);",
+        "  if (Array.isArray(value)) { __velarValidateDenseList(value, \"List.has\"); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) return true; return false; }",
+        "  __velarCollectionSize(value);",
+        "  return __velarIsMap(value) ? Map.prototype.has.call(value, item) : Set.prototype.has.call(value, item);",
+        "}",
+        "function __velarMembership(value, item) {",
+        "  if (typeof value === \"string\") { if (typeof item !== \"string\") throw new TypeError(\"String membership requires a string\"); return value.includes(item); }",
+        "  return __velarCollectionHas(value, item);",
         "}",
         "",
         "function __velarCollectionRemove(value, item) {",
-        "  return value instanceof Map ? Map.prototype.delete.call(value, item) : Set.prototype.delete.call(value, item);",
+        "  __velarCollectionSize(value);",
+        "  return __velarIsMap(value) ? Map.prototype.delete.call(value, item) : Set.prototype.delete.call(value, item);",
         "}",
         "",
         "function __velarCollectionClear(value) {",
+        "  __velarCollectionSize(value);",
         "  if (Array.isArray(value)) value.length = 0;",
-        "  else if (value instanceof Map) Map.prototype.clear.call(value);",
+        "  else if (__velarIsMap(value)) Map.prototype.clear.call(value);",
         "  else Set.prototype.clear.call(value);",
         "  return null;",
         "}",
         "",
         "function __velarCollectionKeys(value) { const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\"); return [...Map.prototype.keys.call(value)]; }",
-        "function __velarCollectionValues(value) { const prototype = value instanceof Map ? Map.prototype : Set.prototype; const size = Reflect.getOwnPropertyDescriptor(prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A collection cannot exceed 1000000 items\"); return [...prototype.values.call(value)]; }",
+        "function __velarCollectionValues(value) { const prototype = __velarIsMap(value) ? Map.prototype : Set.prototype; const size = Reflect.getOwnPropertyDescriptor(prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A collection cannot exceed 1000000 items\"); return [...prototype.values.call(value)]; }",
         "function __velarCollectionEntries(value) { const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\"); return [...Map.prototype.entries.call(value)].map(([key, item]) => Object.freeze({ key, value: item })); }",
         "function __velarOptionalCollection(value, operation) { return value == null ? null : operation(value); }",
       ].join("\n"));
@@ -318,9 +412,9 @@ export class JavaScriptEmitter {
       ].join("\n"));
     }
 
-    const chunks: readonly { readonly code: string; readonly node: JavaScriptNode | null }[] = [
-      ...helpers.map((code) => ({ code, node: null })),
-      ...statements.map((node) => ({ code: node.code, node })),
+    const chunks: readonly { readonly code: string; readonly mappings: readonly GeneratedMapping[] }[] = [
+      ...helpers.map((code) => ({ code, mappings: [] })),
+      ...statements.map((node) => this.renderJavaScriptNode(node)),
     ];
     let output = "";
     const mappings: GeneratedMapping[] = [];
@@ -328,7 +422,7 @@ export class JavaScriptEmitter {
       if (output.length > 0) output += "\n\n";
       const offset = output.length;
       output += chunk.code;
-      if (chunk.node) this.collectGeneratedMappings(chunk.node, offset, mappings);
+      mappings.push(...chunk.mappings.map((mapping) => ({ ...mapping, offset: offset + mapping.offset })));
     }
     this.generatedCode = `${output}${output.length > 0 ? "\n" : ""}`;
     this.generatedMappings = mappings.sort((left, right) => left.offset - right.offset);
@@ -379,29 +473,29 @@ export class JavaScriptEmitter {
   }
 
   private emitJavaScriptNode(sourceSpan: Span, render: () => string): JavaScriptNode {
-    const children: JavaScriptNode[] = [];
-    this.generationFrames.push(children);
-    let code: string;
-    try {
-      code = render();
-    } finally {
-      this.generationFrames.pop();
-    }
-    const node = { code: code!, sourceSpan, children } satisfies JavaScriptNode;
-    this.generationFrames.at(-1)?.push(node);
+    const node = { id: this.nextJavaScriptNodeId++, code: render(), sourceSpan } satisfies JavaScriptNode;
+    this.javaScriptNodeSpans.set(node.id, sourceSpan);
     return node;
   }
 
-  private collectGeneratedMappings(node: JavaScriptNode, offset: number, output: GeneratedMapping[]): void {
-    output.push({ offset, sourceSpan: node.sourceSpan });
-    const nextSearch = new Map<string, number>();
-    for (const child of node.children) {
-      if (child.code.length === 0) continue;
-      const childOffset = node.code.indexOf(child.code, nextSearch.get(child.code) ?? 0);
-      if (childOffset === -1) continue;
-      this.collectGeneratedMappings(child, offset + childOffset, output);
-      nextSearch.set(child.code, childOffset + child.code.length);
+  private markJavaScriptNode(node: JavaScriptNode): string {
+    return node.code.length === 0 ? "" : `\u0000VELAR_MAP_${node.id}\u0000${node.code}`;
+  }
+
+  private renderJavaScriptNode(node: JavaScriptNode): { readonly code: string; readonly mappings: readonly GeneratedMapping[] } {
+    let code = "";
+    let cursor = 0;
+    const mappings: GeneratedMapping[] = [{ offset: 0, sourceSpan: node.sourceSpan }];
+    for (const marker of node.code.matchAll(javaScriptNodeMarker)) {
+      const markerIndex = marker.index;
+      code += node.code.slice(cursor, markerIndex);
+      const sourceSpan = this.javaScriptNodeSpans.get(Number(marker[1]));
+      if (!sourceSpan) throw new Error("A generated JavaScript mapping marker has no source node");
+      mappings.push({ offset: code.length, sourceSpan });
+      cursor = markerIndex + marker[0].length;
     }
+    code += node.code.slice(cursor);
+    return { code, mappings };
   }
 
   protected additionalHelpers(_program: Program): readonly string[] {
@@ -593,7 +687,7 @@ export class JavaScriptEmitter {
   }
 
   protected emitMappedStatement(statement: Statement, depth: number): string {
-    return this.emitJavaScriptNode(statement.span, () => this.emitStatement(statement, depth)).code;
+    return this.markJavaScriptNode(this.emitJavaScriptNode(statement.span, () => this.emitStatement(statement, depth)));
   }
 
   protected emitStatement(statement: Statement, depth: number): string {
@@ -640,7 +734,7 @@ export class JavaScriptEmitter {
         let output = `${indentation}if (${this.emitCondition(statement.condition)}) {${thenBody.length > 0 ? `\n${thenBody}\n${indentation}` : ""}}`;
         if (statement.elseBody) {
           const chained = statement.elseBody.length === 1 && statement.elseBody[0]?.kind === "IfStatement"
-            ? this.emitMappedStatement(statement.elseBody[0], depth).slice(indentation.length)
+            ? this.emitMappedStatement(statement.elseBody[0], 0)
             : null;
           if (chained) {
             output += ` else ${chained}`;
@@ -688,10 +782,10 @@ export class JavaScriptEmitter {
         return lines.join("\n");
       }
       case "ForStatement": {
+        this.needsCollectionHelpers = true;
         const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
         const iterable = this.emitMappedExpression(statement.iterable);
-        const emittedIterable = this.hints.mapLoops.has(statement.span.start) ? `${iterable}.keys()` : iterable;
-        return `${indentation}for (const ${this.emitBindingPattern(statement.pattern)} of ${emittedIterable}) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
+        return `${indentation}for (const ${this.emitBindingPattern(statement.pattern)} of __velarCollectionIterator(${iterable})) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
       }
       case "WhileStatement": {
         const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
@@ -721,16 +815,27 @@ export class JavaScriptEmitter {
       case "AssignmentStatement":
         if (statement.target.kind === "IndexExpression") {
           this.needsIndexHelpers = true;
+          this.needsCollectionHelpers = true;
           const object = this.emitMappedExpression(statement.target.object);
           const index = this.emitMappedExpression(statement.target.index);
-          const value = statement.operator === "="
-            ? this.emitMappedExpression(statement.value)
-            : `__velarIndex(${object}, ${index}) ${statement.operator.slice(0, -1)} ${this.emitMappedExpression(statement.value)}`;
-          return `${indentation}__velarSetIndex(${object}, ${index}, ${value});`;
+          if (statement.operator === "=") {
+            return `${indentation}__velarSetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
+          }
+          const suffix = statement.span.start;
+          const objectName = `$velarIndexObject${suffix}`;
+          const keyName = `$velarIndexKey${suffix}`;
+          const value = this.emitMappedExpression(statement.value);
+          return [
+            `${indentation}{`,
+            `${indentation}  const ${objectName} = ${object};`,
+            `${indentation}  const ${keyName} = ${index};`,
+            `${indentation}  __velarSetIndex(${objectName}, ${keyName}, __velarIndex(${objectName}, ${keyName}) ${statement.operator.slice(0, -1)} ${value});`,
+            `${indentation}}`,
+          ].join("\n");
         }
         return `${indentation}${this.emitMappedExpression(statement.target)} ${statement.operator} ${this.emitMappedExpression(statement.value)};`;
       case "ExpressionStatement":
-        return `${indentation}${this.emitMappedExpression(statement.expression)};`;
+        return `${indentation}${this.emitMappedExpression(statement.expression, false)};`;
       default:
         return "";
     }
@@ -977,8 +1082,25 @@ export class JavaScriptEmitter {
     return defaultValue ? `${name} = ${this.emitMappedExpression(defaultValue)}` : name;
   }
 
-  protected emitMappedExpression(expression: Expression): string {
-    return this.emitJavaScriptNode(expression.span, () => this.emitExpression(expression)).code;
+  protected emitMappedExpression(expression: Expression, normalizeNull = true): string {
+    return this.markJavaScriptNode(this.emitJavaScriptNode(expression.span, () => {
+      const key = `${expression.span.start}:${expression.span.end}`;
+      const normalizePromise = normalizeNull
+        && this.suppressPromiseNormalization === 0
+        && this.hints.normalizedPromiseValues.has(key);
+      if (normalizePromise) this.suppressPromiseNormalization += 1;
+      let emitted: string;
+      try {
+        emitted = this.emitExpression(expression);
+      } finally {
+        if (normalizePromise) this.suppressPromiseNormalization -= 1;
+      }
+      if (!normalizeNull) return emitted;
+      if (normalizePromise) return `__velarNormalizePromiseValue(${emitted})`;
+      if (this.hints.normalizedNullResults.has(key)) return `(${emitted}, null)`;
+      if (this.hints.normalizedUndefinedExpressions.has(key)) return `(${emitted} ?? null)`;
+      return emitted;
+    }));
   }
 
   protected emitExpression(expression: Expression): string {
@@ -1023,8 +1145,13 @@ export class JavaScriptEmitter {
           : `${expression.operator}(${this.emitMappedExpression(expression.operand)})`;
       case "BinaryExpression": {
         if (expression.operator === "in") {
-          const method = this.hints.membershipChecks.get(expression.span.start) ?? "includes";
-          return `${this.emitPostfixReceiver(expression.right)}.${method}(${this.emitMappedExpression(expression.left)})`;
+          const membership = this.hints.membershipChecks.get(expression.span.start);
+          if (membership === "string") {
+            return `${this.emitPostfixReceiver(expression.right)}.includes(${this.emitMappedExpression(expression.left)})`;
+          }
+          this.needsCollectionHelpers = true;
+          const helper = membership === "collection" ? "__velarCollectionHas" : "__velarMembership";
+          return `${helper}(${this.emitMappedExpression(expression.right)}, ${this.emitMappedExpression(expression.left)})`;
         }
         const operator = expression.operator === "and" ? "&&" : expression.operator === "or" ? "||" : expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
@@ -1100,13 +1227,21 @@ export class JavaScriptEmitter {
         return wrapNamed(this.hints.optionalCalls.has(expression.span.start) ? `(${call} ?? null)` : call);
       }
       case "MemberExpression": {
-        const publicProperty = this.hints.listSizes.has(expression.span.end) ? "length" : expression.property;
+        if (this.hints.collectionSizes.has(expression.span.end)) {
+          this.needsCollectionHelpers = true;
+          const object = this.emitMappedExpression(expression.object);
+          return expression.optional
+            ? `(__velarOptionalCollection(${object}, __velarCollectionSize) ?? null)`
+            : `__velarCollectionSize(${object})`;
+        }
+        const publicProperty = expression.property;
         const property = `${this.hints.privateMembers.has(expression.span.start) ? "#" : ""}${publicProperty}`;
         const access = `${this.emitPostfixReceiver(expression.object)}${expression.optional ? "?." : "."}${property}`;
         return this.hints.optionalMembers.has(expression.span.start) ? `(${access} ?? null)` : access;
       }
       case "IndexExpression":
         this.needsIndexHelpers = true;
+        this.needsCollectionHelpers = true;
         return this.hints.optionalIndexes.has(expression.span.start)
           ? `__velarOptionalIndex(${this.emitMappedExpression(expression.object)}, () => ${this.emitMappedExpression(expression.index)})`
           : `__velarIndex(${this.emitMappedExpression(expression.object)}, ${this.emitMappedExpression(expression.index)})`;

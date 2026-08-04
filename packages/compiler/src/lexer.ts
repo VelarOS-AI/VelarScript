@@ -1,5 +1,6 @@
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
+import { scanInterpolatedString } from "./interpolated-string.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
@@ -347,6 +348,12 @@ export class Lexer {
         this.advance();
       }
     }
+    if ((this.peek() === "e" || this.peek() === "E")
+      && (this.isDigit(this.peek(1)) || ((this.peek(1) === "+" || this.peek(1) === "-") && this.isDigit(this.peek(2))))) {
+      this.advance();
+      if (this.peek() === "+" || this.peek() === "-") this.advance();
+      while (this.isDigit(this.peek())) this.advance();
+    }
     const numberEnd = this.index;
     if (this.peek() === "%" && this.numericSuffixes.has("%")) this.advance();
     else while (this.isIdentifierPart(this.peek())) this.advance();
@@ -374,9 +381,11 @@ export class Lexer {
         break;
       }
       if (character === "\n" || character === "\r") {
+        this.index -= 1;
         break;
       }
       if (character === "\\") {
+        if (this.isAtEnd() || this.peek() === "\n" || this.peek() === "\r") break;
         const escaped = this.advance();
         value += escaped === "n" ? "\n" : escaped === "r" ? "\r" : escaped === "t" ? "\t" : escaped;
       } else {
@@ -392,32 +401,17 @@ export class Lexer {
 
   private readFString(): void {
     const start = this.index;
-    this.advance();
-    const quote = this.advance();
-    let value = "";
-    let closed = false;
+    const scanned = scanInterpolatedString(this.text, start);
+    this.index = scanned.end;
 
-    while (!this.isAtEnd()) {
-      const character = this.advance();
-      if (character === quote) {
-        closed = true;
-        break;
-      }
-      if (character === "\n" || character === "\r") {
-        break;
-      }
-      if (character === "\\") {
-        const escaped = this.advance();
-        value += escaped === "n" ? "\n" : escaped === "r" ? "\r" : escaped === "t" ? "\t" : escaped;
-      } else {
-        value += character;
-      }
-    }
-
-    if (!closed) {
+    if (!scanned.closed) {
       this.diagnostics.push(diagnostic("VEL1003", "Unterminated interpolated string literal", span(start, this.index)));
     }
-    this.tokens.push({ kind: "fstring", value, span: span(start, this.index) });
+    this.tokens.push({
+      kind: "fstring",
+      value: this.text.slice(scanned.contentStart, scanned.contentEnd),
+      span: span(start, this.index),
+    });
   }
 
   private readExtensionToken(): boolean {

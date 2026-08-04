@@ -711,7 +711,7 @@ __velarRuntime.report ??= (value, options = {}) => {
     phase: String(options.phase || "runtime"),
     detail: String(options.detail || ""),
     component: String(options.component || ""),
-    timestamp: Date.now(),
+    timestamp: globalThis.Date.now(),
   });
   let handled = false;
   for (const handler of __velarRuntime.errorHandlers) {
@@ -1059,7 +1059,7 @@ function __velarCreateElement(tag, namespace) {
 function __velarAppend(parent, value) {
   if (value == null || value === false || value === true) return;
   if (Array.isArray(value)) { for (const item of value) __velarAppend(parent, item); return; }
-  parent.append(value instanceof Node ? value : document.createTextNode(String(value)));
+  parent.append(value instanceof globalThis.Node ? value : document.createTextNode(String(value)));
 }
 
 function __velarDynamic(parent, read, scope) {

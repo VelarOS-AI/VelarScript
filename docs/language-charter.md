@@ -64,6 +64,13 @@ attempts += 1
 - Both are lexically scoped.
 - A binding cannot be declared twice in the same scope.
 - Module reactive bindings cannot be shadowed inside a local scope.
+- Core bindings and the JavaScript host capabilities used directly by generated
+  runtime code cannot be shadowed. Extension conveniences follow ordinary
+  lexical lookup, so a local or imported `color` or `clamp` naturally wins.
+  An extension may reserve an actual runtime entry point such as Web `mount` or
+  `tick` when shadowing would make emitted behavior ambiguous.
+- Binding names beginning with `__velar` are reserved for hygienic generated
+  helpers. Object fields and JavaScript property names are unaffected.
 
 Literals are intentionally small:
 
@@ -311,7 +318,10 @@ List members:
 | `join(separator="")` | Joined string for `List<string>`. |
 
 Direct indexing is strict and throws `IndexError` outside the List. Use `get`
-for an optional read. `sorted` and `reversed` do not mutate the source.
+for an optional read. `sorted` and `reversed` do not mutate the source. Callback
+operations (`find`, `some`, `every`, `map`, `filter`, and `reduce`) read one
+checked shallow snapshot, so a callback may mutate the original List without
+changing which values belong to the current operation.
 
 VelarScript does not expose `splice`, variadic `push`, `shift`, `unshift`, or
 mutating `sort`/`reverse`.
@@ -338,9 +348,15 @@ const selected = users.get("user-1")
 Map members are `size`, `get`, `set`, `update`, `remove`, `has`, `clear`,
 `copy`, `keys`, `values`, and `entries`.
 
-All collection growth is bounded. Empty mutable collections can infer their
-element/key/value types from their first checked mutation, but exported APIs
-should annotate them.
+All collection growth is bounded. Every language collection operation validates
+its JavaScript boundary and calls compiler-owned helpers rather than an
+instance's overridable collection methods. A `for` loop visits List and Set
+values, or Map keys, in insertion order. Native Map and Set brands are checked
+through their internal slots, so legitimate values from another browser realm
+work without trusting an overridable `instanceof`, `size`, iterator, or method.
+Empty mutable collections can infer
+their element/key/value types from their first checked mutation, but exported
+APIs should annotate them.
 
 ## 9. Control flow
 
@@ -504,7 +520,19 @@ export def encode(value: unknown) -> string:
 ```
 
 Relative `.vel` modules and package exports are supported. Project modules are
-checked as one dependency graph.
+checked as one dependency graph. A function or value may carry the shape of an
+unexported or unimported record across that graph, so its fields remain checked,
+but the record's source name is not silently declared in the consumer. Import a
+type explicitly when naming it in an annotation:
+
+```velar fragment
+import {User as Account, loadUser} from "./users.vel"
+
+const user: Account = loadUser()
+```
+
+Different modules may use the same record display name; their field metadata is
+kept separate until ordinary structural assignability is checked.
 
 Native JavaScript is explicit:
 
@@ -780,6 +808,18 @@ VelarScript preserves the JavaScript runtime where it matters:
 The compiler adds checked boundaries, bounded collection helpers, runtime data
 validators, optional-chain normalization, readable DOM output, and source maps.
 It does not pretend those additions create a different memory model.
+Calls and awaited operations whose checked result is `null` normalize their
+observable result to `null` after evaluation. Every expression typed as
+optional, `null`, or `unknown` translates JavaScript `undefined` to `null` only
+when the analyzer can trace the value to a checked JavaScript boundary. The
+trace survives assignment, destructuring, members, calls that preserve their
+input type, function returns, and class methods. Ordinary VelarScript values do
+not receive redundant wrappers. Errors and Promise behavior are unchanged;
+Promise normalization uses one cross-module identity cache. Unsafe JavaScript
+`any` imports deliberately remain outside this guarantee. A discarded
+expression result is not wrapped. VelarScript modules that export such boundary
+values require named imports; namespace and dynamic imports are rejected rather
+than losing field-level provenance.
 
 ## 19. Deliberately absent source features
 

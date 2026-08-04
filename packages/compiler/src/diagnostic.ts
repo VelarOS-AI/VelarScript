@@ -13,15 +13,12 @@ export function diagnostic(code: string, message: string, span: Span): Diagnosti
 export function formatDiagnostic(source: SourceText, item: Diagnostic): string {
   const location = source.location(item.span.start);
   const maximumLine = 240;
-  const lineStart = source.lineStarts[location.line - 1] ?? 0;
-  const nextBreak = item.code === "VEL1003" ? -1 : source.text.indexOf("\n", lineStart);
-  const rawEnd = nextBreak === -1 ? source.text.length : nextBreak;
-  const lineEnd = rawEnd > lineStart && source.text[rawEnd - 1] === "\r" ? rawEnd - 1 : rawEnd;
-  const rawLength = lineEnd - lineStart;
+  const rawLine = source.lineText(location.line);
+  const rawLength = rawLine.length;
   const start = rawLength > maximumLine
     ? Math.max(0, Math.min(rawLength - maximumLine, location.column - 81))
     : 0;
-  const clipped = source.text.slice(lineStart + start, Math.min(lineEnd, lineStart + start + maximumLine));
+  const clipped = rawLine.slice(start, start + maximumLine);
   const prefix = start > 0 ? "…" : "";
   const suffix = start + maximumLine < rawLength ? "…" : "";
   const line = `${prefix}${clipped}${suffix}`;

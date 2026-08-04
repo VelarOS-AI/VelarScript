@@ -71,6 +71,7 @@ export interface CompilerLexicalScanResult {
 export interface CompilerAnalysisExtension {
   readonly primitiveTypes?: ReadonlySet<string>;
   readonly globals?: ReadonlyMap<string, ValueType>;
+  readonly reservedBindings?: ReadonlySet<string>;
   readonly globalGuidance?: ReadonlyMap<string, string>;
   readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
 }
@@ -88,7 +89,7 @@ export interface CompilerIntrinsicAnalysisContext {
   readonly expandAliases: (type: ValueType) => ValueType;
   readonly jsonSerializable: (type: ValueType) => boolean | null;
   readonly isHttpFormBody: (type: ValueType) => boolean;
-  readonly declaredFieldsOf: (name: string) => ReadonlyMap<string, ValueType> | null;
+  readonly declaredFieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null;
   readonly formReadField: (name: string, type: ValueType, span: Span) => FormReadField | null;
   readonly recordFormRead: (spanStart: number, fields: readonly FormReadField[]) => void;
 }
@@ -156,6 +157,7 @@ export interface CompilerInterfaceContext {
   readonly extensionExports: Map<string, unknown>;
   readonly resolve: (reference: TypeReference | null) => ValueType;
   readonly inferPublicExpression: (expression: Expression) => ValueType;
+  readonly bindingType: (name: string, spanStart: number) => ValueType | null;
 }
 
 export interface CompilerInspectionExtension {
@@ -182,8 +184,10 @@ export interface CompilerAnalyzerFactory {
 
 export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
+  readonly hostBoundaryExports: ReadonlySet<string>;
   readonly reactiveExports: ReadonlyMap<string, "state" | "computed">;
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
+  readonly namedTypeIdentities: ReadonlyMap<string, string>;
   readonly typeAliases: ReadonlyMap<string, ValueType>;
   readonly enums: ReadonlyMap<string, EnumInfo>;
   readonly classes: ReadonlyMap<string, ClassInfo>;

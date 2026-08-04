@@ -139,11 +139,16 @@ function __velarRequireList(value, name) {
     || Object.getOwnPropertyNames(value).length !== value.length + 1) {
     throw new TypeError(name + " requires a dense List without extra fields");
   }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable
+    || lengthDescriptor.configurable || !("value" in lengthDescriptor)) {
+    throw new TypeError(name + " requires an ordinary mutable List length");
+  }
   const output = new Array(value.length);
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, index);
-    if (!descriptor?.enumerable || !("value" in descriptor)) {
-      throw new TypeError(name + " requires data-only List elements");
+    if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) {
+      throw new TypeError(name + " requires ordinary mutable List elements");
     }
     output[index] = descriptor.value;
   }
@@ -270,7 +275,10 @@ export function domId(prefix = "velar") {
 }
 
 function isStringMap(value) {
-  if (!(value instanceof Map) || Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value) > 100000) return false;
+  let size;
+  try { size = Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value); }
+  catch { return false; }
+  if (size > 100000) return false;
   for (const [key, item] of Map.prototype.entries.call(value)) if (typeof key !== "string" || typeof item !== "string") return false;
   return true;
 }
@@ -1019,7 +1027,8 @@ function methodOf(value) {
 
 function headersOf(value) {
   if (value == null) return new Map();
-  if (!(value instanceof Map)) throw new TypeError("HTTP headers must be Map<string, string>");
+  try { Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value); }
+  catch { throw new TypeError("HTTP headers must be Map<string, string>"); }
   const headers = new Map();
   let units = 0;
   for (const [name, item] of Map.prototype.entries.call(value)) {

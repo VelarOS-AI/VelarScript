@@ -255,7 +255,7 @@ export function buildSemanticIndex(
       mutable,
       private: options.private ?? false,
       type: explicitType ?? (type ? describeType(type) : null),
-      documentation: documentationBefore(source.text, options.documentationStart ?? declarationSpan.start),
+      documentation: documentationBefore(source, options.documentationStart ?? declarationSpan.start),
       members,
       ...(container ? { container } : {}),
       ...(kind === "method" || kind === "field" ? { static: staticMember } : {}),
@@ -295,15 +295,12 @@ export function buildSemanticIndex(
       shorthand,
     });
   };
-  const moduleSourceSpan = (value: string, valueSpan: Span): Span => {
-    const start = source.text.lastIndexOf(value, Math.max(valueSpan.start, valueSpan.end - value.length));
-    return start >= valueSpan.start && start + value.length <= valueSpan.end
-      ? { start, end: start + value.length }
-      : valueSpan;
-  };
+  const moduleSourceSpan = (valueSpan: Span): Span => valueSpan.end - valueSpan.start >= 2
+    ? { start: valueSpan.start + 1, end: valueSpan.end - 1 }
+    : valueSpan;
 
   const declareImport = (statement: ImportDeclaration): void => {
-    moduleReferences.push({ source: statement.source, span: moduleSourceSpan(statement.source, statement.span), dynamic: false });
+    moduleReferences.push({ source: statement.source, span: moduleSourceSpan(statement.sourceSpan), dynamic: false });
     for (const specifier of statement.specifiers) {
       const words = wordSpans(source.text, specifier.span);
       const importedSpan = specifier.namespace
@@ -419,7 +416,7 @@ export function buildSemanticIndex(
       case "IdentifierExpression": reference(expression.name, expression.span, write); break;
       case "SuperExpression": break;
       case "DynamicImportExpression":
-        moduleReferences.push({ source: expression.source, span: moduleSourceSpan(expression.source, expression.sourceSpan), dynamic: true });
+        moduleReferences.push({ source: expression.source, span: moduleSourceSpan(expression.sourceSpan), dynamic: true });
         break;
       case "FStringExpression": for (const part of expression.parts) if (part.kind === "expression") visitExpression(part.value); break;
       case "ListExpression": for (const element of expression.elements) visitExpression(element); break;
@@ -740,21 +737,17 @@ export function buildSemanticIndex(
 
 const MAX_DOCUMENTATION_CHARS = 16_384;
 
-function documentationBefore(text: string, declarationStart: number): string | null {
-  const lineStart = text.lastIndexOf("\n", Math.max(0, declarationStart - 1)) + 1;
-  const indentation = text.slice(lineStart, declarationStart);
+function documentationBefore(source: SourceText, declarationStart: number): string | null {
+  const location = source.location(declarationStart);
+  const lineStart = source.lineStarts[location.line - 1] ?? 0;
+  const indentation = source.text.slice(lineStart, declarationStart);
   if (!/^[ \t]*$/u.test(indentation)) return null;
   const lines: string[] = [];
-  let cursor = lineStart;
-  while (cursor > 0) {
-    let end = cursor - 1;
-    if (end > 0 && text[end - 1] === "\r") end -= 1;
-    const start = text.lastIndexOf("\n", Math.max(0, end - 1)) + 1;
-    const line = text.slice(start, end);
+  for (let lineNumber = location.line - 1; lineNumber > 0; lineNumber -= 1) {
+    const line = source.lineText(lineNumber);
     if (!line.startsWith(`${indentation}///`)) break;
     const suffix = line.slice(indentation.length + 3);
     lines.unshift(suffix.startsWith(" ") ? suffix.slice(1) : suffix);
-    cursor = start;
   }
   while (lines[0] === "") lines.shift();
   while (lines.at(-1) === "") lines.pop();

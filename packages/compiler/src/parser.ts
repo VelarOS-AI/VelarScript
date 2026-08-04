@@ -40,7 +40,7 @@ import type {
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
-import { span } from "./source.ts";
+import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
 const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ...Object.values(keywordKinds)]);
@@ -319,7 +319,7 @@ export class Parser {
 
     this.expect("from", "Expected 'from' after imports");
     const source = this.expect("string", "Expected a module path string");
-    return { kind: "ImportDeclaration", source: source.value, javascript, unsafe, specifiers, span: span(start, source.span.end) };
+    return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
   }
 
   private parseExternModule(start: number): ExternModuleDeclaration {
@@ -1028,7 +1028,7 @@ export class Parser {
     if (negative) {
       const number = this.expect("number", "A negative match case requires a numeric literal");
       if (!number.value) return null;
-      return { kind: "LiteralExpression", value: -Number(number.value), raw: `-${number.value}`, span: span(start, number.span.end) };
+      return this.numberLiteral(number, true, span(start, number.span.end));
     }
     if (token.kind === "identifier" && this.peekKind(1) === "dot") {
       const object = this.advance();
@@ -1044,7 +1044,7 @@ export class Parser {
     }
     this.advance();
     switch (token.kind) {
-      case "number": return { kind: "LiteralExpression", value: Number(token.value), raw: token.value, span: token.span };
+      case "number": return this.numberLiteral(token);
       case "string": return { kind: "LiteralExpression", value: token.value, raw: token.value, span: token.span };
       case "true": return { kind: "LiteralExpression", value: true, raw: "true", span: token.span };
       case "false": return { kind: "LiteralExpression", value: false, raw: "false", span: token.span };
@@ -1122,7 +1122,7 @@ export class Parser {
       const close = this.expect("rightParen", "Expected ')' after grouped type");
       const groupedSyntax = { ...grouped.syntax, span: span(open.span.start, close.span.end) } as TypeSyntax;
       if (!this.match("question")) return groupedSyntax;
-      return { kind: "OptionalTypeSyntax", inner: groupedSyntax, span: span(open.span.start, this.previous().span.end) };
+      return this.makeOptionalTypeSyntax(groupedSyntax, span(open.span.start, this.previous().span.end));
     }
     if (this.match("leftParen")) {
       const open = this.previous();
@@ -1160,9 +1160,17 @@ export class Parser {
       syntax = { kind: "GenericTypeSyntax", name: name.value, arguments: arguments_, span: span(name.span.start, close.span.end) };
     }
     if (this.match("question")) {
-      syntax = { kind: "OptionalTypeSyntax", inner: syntax, span: span(syntax.span.start, this.previous().span.end) };
+      syntax = this.makeOptionalTypeSyntax(syntax, span(syntax.span.start, this.previous().span.end));
     }
     return syntax;
+  }
+
+  private makeOptionalTypeSyntax(inner: TypeSyntax, optionalSpan: Span): TypeSyntax {
+    if (inner.kind === "NamedTypeSyntax" && inner.name === "null") {
+      this.diagnostics.push(diagnostic("VEL2012", "'null?' is redundant; use 'null'", optionalSpan));
+      return { ...inner, span: optionalSpan };
+    }
+    return { kind: "OptionalTypeSyntax", inner, span: optionalSpan };
   }
 
   private isFunctionTypeParenthesis(): boolean {
@@ -1414,14 +1422,16 @@ export class Parser {
     const token = this.advance();
     switch (token.kind) {
       case "number":
-        return { kind: "LiteralExpression", value: Number(token.value), raw: token.value, span: token.span };
+        return this.numberLiteral(token);
       case "unitNumber": {
-        const match = /^(\d+(?:\.\d+)?)([A-Za-z%]+)$/u.exec(token.value);
+        const match = /^(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%]+)$/u.exec(token.value);
         if (!match) {
           this.diagnostics.push(diagnostic("VEL2002", "Invalid unit literal", token.span));
           return { kind: "LiteralExpression", value: 0, raw: "0", span: token.span };
         }
-        return { kind: "UnitLiteralExpression", value: Number(match[1]), unit: match[2]!, raw: token.value, span: token.span };
+        const value = Number(match[1]);
+        if (!Number.isFinite(value)) this.diagnostics.push(diagnostic("VEL2017", "Numeric literals must be finite", token.span));
+        return { kind: "UnitLiteralExpression", value: Number.isFinite(value) ? value : 0, unit: match[2]!, raw: token.value, span: token.span };
       }
       case "string":
         return { kind: "LiteralExpression", value: token.value, raw: token.value, span: token.span };
@@ -1529,8 +1539,22 @@ export class Parser {
     let index = 0;
 
     while (index < token.value.length) {
+      if (token.value[index] === "\\") {
+        index += Math.min(2, token.value.length - index);
+        continue;
+      }
       if (token.value[index] === "{" && token.value[index + 1] === "{") {
         index += 2;
+        continue;
+      }
+      if (token.value[index] === "}" && token.value[index + 1] === "}") {
+        index += 2;
+        continue;
+      }
+      if (token.value[index] === "}") {
+        const offset = token.span.start + 2 + index;
+        this.diagnostics.push(diagnostic("VEL2009", "Unmatched '}' in interpolated string", span(offset, offset + 1)));
+        index += 1;
         continue;
       }
       if (token.value[index] !== "{") {
@@ -1539,29 +1563,85 @@ export class Parser {
       }
 
       if (index > textStart) {
-        parts.push({ kind: "text", value: token.value.slice(textStart, index).replaceAll("{{", "{").replaceAll("}}", "}") });
+        parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(textStart, index)) });
       }
 
-      const close = token.value.indexOf("}", index + 1);
-      if (close === -1) {
-        this.diagnostics.push(diagnostic("VEL2009", "Unclosed expression in interpolated string", token.span));
-        parts.push({ kind: "text", value: token.value.slice(index) });
+      const close = this.findFStringExpressionEnd(token.value, index + 1);
+      if (close < 0) {
+        const offset = token.span.start + 2 + index;
+        this.diagnostics.push(diagnostic("VEL2009", "Unclosed expression in interpolated string", span(offset, token.span.end)));
+        parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(index)) });
         textStart = token.value.length;
         break;
       }
 
-      const fragment = token.value.slice(index + 1, close).trim();
-      const offset = token.span.start + 2 + index + 1;
+      const rawFragment = token.value.slice(index + 1, close);
+      const fragment = rawFragment.trim();
+      const leadingWhitespace = rawFragment.length - rawFragment.trimStart().length;
+      const offset = token.span.start + 2 + index + 1 + leadingWhitespace;
       parts.push({ kind: "expression", value: this.parseNestedExpression(fragment, offset) });
       index = close + 1;
       textStart = index;
     }
 
     if (textStart < token.value.length) {
-      parts.push({ kind: "text", value: token.value.slice(textStart).replaceAll("{{", "{").replaceAll("}}", "}") });
+      parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(textStart)) });
     }
 
     return { kind: "FStringExpression", parts, span: token.span };
+  }
+
+  private numberLiteral(token: Token, negative = false, literalSpan: Span = token.span): Extract<Expression, { kind: "LiteralExpression" }> {
+    const value = Number(token.value) * (negative ? -1 : 1);
+    if (!Number.isFinite(value)) this.diagnostics.push(diagnostic("VEL2017", "Numeric literals must be finite", literalSpan));
+    return {
+      kind: "LiteralExpression",
+      value: Number.isFinite(value) ? value : 0,
+      raw: `${negative ? "-" : ""}${token.value}`,
+      span: literalSpan,
+    };
+  }
+
+  private findFStringExpressionEnd(value: string, start: number): number {
+    let depth = 1;
+    let quote: "\"" | "'" | null = null;
+    for (let index = start; index < value.length; index += 1) {
+      const character = value[index]!;
+      if (quote) {
+        if (character === "\\") {
+          index += 1;
+        } else if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character === "\"" || character === "'") {
+        quote = character;
+      } else if (character === "{") {
+        depth += 1;
+      } else if (character === "}" && --depth === 0) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private decodeFStringText(value: string): string {
+    let decoded = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index]!;
+      const next = value[index + 1];
+      if (character === "\\" && next !== undefined) {
+        decoded += next === "n" ? "\n" : next === "r" ? "\r" : next === "t" ? "\t" : next;
+        index += 1;
+      } else if ((character === "{" && next === "{") || (character === "}" && next === "}")) {
+        decoded += character;
+        index += 1;
+      } else {
+        decoded += character;
+      }
+    }
+    return decoded;
   }
 
   protected parseExtensionExpression(_token: Token): Expression | undefined {

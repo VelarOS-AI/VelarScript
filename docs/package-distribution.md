@@ -83,6 +83,10 @@ publication blockers. Candidate mode fails closed unless Git/version/remote
 and license requirements are satisfied. CI may attest and upload these
 tarballs, but no VelarScript 0.10 workflow invokes `npm publish`.
 
+The rehearsal builds and packs a private temporary toolchain snapshot. It never
+cleans or rewrites the active workspace's `dist` directories, so release checks
+cannot race with compiler, editor, or application tests.
+
 Release output replacement refuses repository roots/ancestors, symbolic links,
 and non-release directories. Verification accepts exactly the sorted compiler,
 Web, creator, and CLI package identities, canonical tarball names, matching versions/sizes/

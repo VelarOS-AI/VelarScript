@@ -12,9 +12,14 @@ The bridge understands only the TypeScript declaration shapes that map directly
 to VelarScript's lightweight type system:
 
 - exported functions and constants;
-- string, number, boolean, void, null/undefined optionals, and literals;
+- string, number, boolean, output literals, and explicit nullish results:
+  `null`, `void`, or a standalone returned `undefined` become `null`, while
+  `T | undefined` flowing out of JavaScript becomes `T?`;
 - simple unions;
-- arrays, readonly arrays, Set/ReadonlySet, Promise, and Record;
+- mutable arrays, mutable Set, and Promise. A readonly collection used only as
+  an input parameter may accept the corresponding mutable VelarScript
+  collection safely; final array-typed rest parameters may likewise use
+  TypeScript's conventional `readonly T[]` spelling;
 - object/interface fields, simple method signatures, simple non-generic
   interface inheritance, and simple aliases;
 - non-generic callback function types, including callbacks nested in exported
@@ -38,6 +43,26 @@ to VelarScript's lightweight type system:
   `.d.ts`, `.d.mts`, or `.d.cts` files inside the package root, to at most 64 files, 16 levels,
   and 2 MiB in aggregate; cycles, missing names, and ambiguous star exports
   degrade safely instead of selecting an arbitrary contract.
+
+TypeScript's `value?: T` parameter spelling controls call arity only. The bridge
+shows it as `T = default`: omission is allowed, but an explicit VelarScript
+`null` is rejected unless the declaration also contains `null`. Likewise,
+`T | undefined` flowing out of JavaScript is normalized to an optional/null
+result, while an input position never pretends that VelarScript `null` is the
+same JavaScript argument as `undefined` or TypeScript `void`.
+
+`readonly T[]`, `ReadonlyArray<T>`, `ReadonlySet<T>`, and other readonly
+collection values that flow from JavaScript into VelarScript degrade to
+`unknown`: VelarScript deliberately has no hidden readonly collection family,
+so the bridge does not pretend a returned value supports `append`, `add`, or
+other mutation. The bridge tracks direction through callbacks, methods, and
+Promises rather than treating every nested occurrence as an input. Readonly
+object/interface fields remain readable but cannot be assignment targets.
+
+TypeScript `Record<K, V>` also degrades to `unknown`. A Record is a plain
+JavaScript object, not a native `Map`; mapping it to `Map<K, V>` would create a
+false runtime contract. Use an explicit object interface with known fields or a
+manual adapter that returns a real Map.
 
 Namespace declaration imports, abstract/generic classes, unresolved or complex
 inheritance, constructor or method overloads, setter-only or incompatible
@@ -71,6 +96,30 @@ ordinary VelarScript functions. `export class` provides a complete
 constructor/instance/static contract directly.
 Calls lower to native JavaScript `new`, including namespace imports, while
 VelarScript keeps the declared class nominal and enforces read-only members.
+After a statically `null` call or `await` is evaluated, its observable result is
+normalized to `null`. Every checked expression typed as optional, `null`, or
+`unknown` translates a JavaScript `undefined` to `null` only while the analyzer
+can prove that the value originated at a safe JavaScript boundary. Provenance is
+preserved through assignment, destructuring, indexing, member access,
+type-preserving function forwarding, returned functions, and class instance or
+static members. Ordinary VelarScript optional values already contain only
+VelarScript `null`, so they are not wrapped again. This keeps the generated code
+minimal without allowing JavaScript `undefined` to leak into checked values.
+Side effects and errors are preserved. Explicit `import js unsafe` values remain
+the caller's responsibility because `any` has no checked result contract.
+
+When a VelarScript module re-exports JavaScript-boundary values, consumers must
+import those values by name. A namespace import or dynamic import of that module
+is rejected because it would erase which fields carry boundary provenance. This
+is a deliberate precision rule, not a restriction on ordinary VelarScript
+modules or on a direct safe `import js` namespace.
+
+Promise values whose checked result can contain `null`, an optional, or
+`unknown` are adapted when they enter a VelarScript expression, not only when
+they are awaited. The adapter is rejection-preserving and its cache is shared
+by generated VelarScript modules, so the same Promise remains the same
+VelarScript Promise even when it is exported, stored, compared, or passed
+through `velar/async` before awaiting.
 
 An exported constant whose interface contains ordinary methods remains a plain
 checked object boundary. For example, `request(path: string): Promise<string>`

@@ -13,6 +13,7 @@ import {
   mergeTypes,
   nullType,
   numberType,
+  optionalOf,
   resolveTypeReference,
   resolvedAsyncType,
   stringType,
@@ -27,7 +28,7 @@ export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
-export { describeType, type EnumInfo, type ValueType } from "./types.ts";
+export { describeType, optionalOf, semanticTypeIdentity, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
 
 export interface CompileOptions {
@@ -143,7 +144,14 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program, extensions),
     resources: resourcesOf(parsed.program, extensions),
-    moduleInterface: interfaceOf(parsed.program, parsed.source.path, extensions),
+    moduleInterface: interfaceOf(
+      parsed.program,
+      parsed.source.path,
+      extensions,
+      analyzer.semanticTypes(),
+      analyzer.moduleHostBoundaryBindings(),
+      analyzer.moduleClassHostBoundaries(),
+    ),
     semanticIndex,
   };
 }
@@ -330,7 +338,17 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
   return dependencies;
 }
 
-function interfaceOf(program: Program, path: string, extensions: readonly CompilerExtension[]): ModuleInterface {
+function interfaceOf(
+  program: Program,
+  path: string,
+  extensions: readonly CompilerExtension[],
+  analyzedBindings: ReadonlyMap<string, ValueType> = new Map(),
+  analyzedHostBoundaries: ReadonlySet<string> = new Set(),
+  analyzedClassHostBoundaries: ReadonlyMap<string, {
+    readonly members: ReadonlySet<string>;
+    readonly staticMembers: ReadonlySet<string>;
+  }> = new Map(),
+): ModuleInterface {
   const classIdentities = new Map<string, string>([["Error", "Error"]]);
   for (const statement of program.body) {
     if (statement.kind === "ClassDeclaration") classIdentities.set(statement.name, `velar:${path}#${statement.name}`);
@@ -338,6 +356,9 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
   const enumNames = new Map(program.body
     .filter((statement) => statement.kind === "EnumDeclaration")
     .map((statement) => [statement.name, { identity: `${path}#enum:${statement.name}`, members: new Set(statement.members.map((member) => member.name)) }] satisfies [string, EnumInfo]));
+  const namedTypeIdentities = new Map(program.body
+    .filter((statement) => statement.kind === "TypeDeclaration")
+    .map((statement) => [statement.name, `velar:${path}#type:${statement.name}`] satisfies [string, string]));
   const aliasDeclarations = new Map<string, Extract<Statement, { kind: "TypeAliasDeclaration" }>>();
   for (const statement of program.body) {
     if (statement.kind === "TypeAliasDeclaration") aliasDeclarations.set(statement.name, statement);
@@ -353,12 +374,12 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
       aliasCache.set(type.name, expanded);
       return expanded;
     }
-    if (type.kind === "optional") return { kind: "optional", inner: expandAliases(type.inner, seen) };
+    if (type.kind === "optional") return optionalOf(expandAliases(type.inner, seen));
     if (type.kind === "list") return { kind: "list", element: expandAliases(type.element, seen) };
     if (type.kind === "set") return { kind: "set", element: expandAliases(type.element, seen) };
     if (type.kind === "map") return { kind: "map", key: expandAliases(type.key, seen), value: expandAliases(type.value, seen) };
     if (type.kind === "promise") return { kind: "promise", value: expandAliases(type.value, seen) };
-    if (type.kind === "object") return { kind: "object", fields: new Map([...type.fields].map(([name, value]) => [name, expandAliases(value, seen)])) };
+    if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expandAliases(value, seen)])) };
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
       ...type,
       parameters: type.parameters.map((parameter) => expandAliases(parameter, seen)),
@@ -368,12 +389,15 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
     if (type.kind === "union") return { kind: "union", members: type.members.map((member) => expandAliases(member, seen)) };
     return type;
   };
-  const resolve = (reference: TypeReference | null): ValueType => resolveNominals(expandAliases(reference ? resolveTypeReference(reference) : unknownType), classIdentities, enumNames);
+  const resolve = (reference: TypeReference | null): ValueType => resolveNominals(expandAliases(reference ? resolveTypeReference(reference) : unknownType), classIdentities, enumNames, namedTypeIdentities);
+  const resolvedAnalyzedBindings = new Map([...analyzedBindings]
+    .map(([name, type]) => [name, resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities)]));
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
   const exports = new Map<string, ValueType>();
+  const hostBoundaryExports = new Set<string>();
   const reactiveExports = new Map<string, "state" | "computed">();
   const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
   const testFunctions: string[] = [];
@@ -412,6 +436,7 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
       const methods = new Map(statement.methods.filter((method) => !method.static && !method.private).map((method) => [method.name, functionSignature(method, resolve)]));
       const staticMethods = new Map(statement.methods.filter((method) => method.static && !method.private).map((method) => [method.name, functionSignature(method, resolve)]));
       const identity = classIdentities.get(statement.name)!;
+      const hostBoundaries = analyzedClassHostBoundaries.get(statement.name);
       classes.set(statement.name, {
         identity,
         parameters: statement.parameters.map((parameter) => resolve(parameter.type)),
@@ -427,6 +452,8 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
         staticFields,
         staticGetters: new Set(statement.getters.filter((getter) => getter.static && !getter.private).map((getter) => getter.name)),
         staticMethods,
+        ...(hostBoundaries?.members.size ? { hostBoundaryMembers: hostBoundaries.members } : {}),
+        ...(hostBoundaries?.staticMembers.size ? { hostBoundaryStaticMembers: hostBoundaries.staticMembers } : {}),
       });
     } else if (statement.kind === "FunctionDeclaration" && statement.name.startsWith("test_")) {
       testFunctions.push(statement.name);
@@ -445,9 +472,15 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
     } else if (statement.kind === "ClassDeclaration") {
       exports.set(statement.name, { kind: "classConstructor", name: statement.name, identity: classIdentities.get(statement.name)! });
     } else if (statement.kind === "FunctionDeclaration") {
-      exports.set(statement.name, functionSignature(statement, resolve));
+      exports.set(statement.name, resolvedAnalyzedBindings.get(`${statement.span.start}:${statement.name}`) ?? functionSignature(statement, resolve));
     } else if (statement.kind === "VariableDeclaration") {
-      exportPattern(statement.pattern, statement.type ? resolve(statement.type) : inferPublicExpression(statement.initializer, inspectionExtensions), exports, namedTypes);
+      exportPattern(
+        statement.pattern,
+        statement.type ? resolve(statement.type) : inferPublicExpression(statement.initializer, inspectionExtensions),
+        exports,
+        namedTypes,
+        resolvedAnalyzedBindings,
+      );
     } else {
       for (const extension of extensions) {
         if (!extension.inspection) continue;
@@ -457,15 +490,21 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
           extensionExports: extensionExports.get(extension.id)!,
           resolve,
           inferPublicExpression: (expression: Expression) => inferPublicExpression(expression, inspectionExtensions),
+          bindingType: (name: string, spanStart: number) => resolvedAnalyzedBindings.get(`${spanStart}:${name}`) ?? null,
         };
         if (extension.inspection.contributeInterface?.(statement, context)) break;
       }
     }
   }
+  for (const name of exports.keys()) {
+    if (analyzedHostBoundaries.has(name)) hostBoundaryExports.add(name);
+  }
   return {
     exports,
+    hostBoundaryExports,
     reactiveExports,
     namedTypes,
+    namedTypeIdentities,
     typeAliases,
     enums,
     classes,
@@ -488,24 +527,45 @@ function functionSignature(statement: FunctionDeclaration, resolve: (reference: 
   };
 }
 
-function resolveNominals(type: ValueType, classIdentities: ReadonlyMap<string, string>, enumNames: ReadonlyMap<string, EnumInfo>): ValueType {
+function resolveNominals(
+  type: ValueType,
+  classIdentities: ReadonlyMap<string, string>,
+  enumNames: ReadonlyMap<string, EnumInfo>,
+  namedTypeIdentities: ReadonlyMap<string, string>,
+): ValueType {
   if (type.kind === "named" && classIdentities.has(type.name)) {
     const identity = classIdentities.get(type.name)!;
     return { kind: "class", name: type.name, ...(identity === type.name ? {} : { identity }) };
   }
   if (type.kind === "named" && enumNames.has(type.name)) return { kind: "enum", name: type.name, identity: enumNames.get(type.name)!.identity };
-  if (type.kind === "optional") return { kind: "optional", inner: resolveNominals(type.inner, classIdentities, enumNames) };
-  if (type.kind === "list") return { kind: "list", element: resolveNominals(type.element, classIdentities, enumNames) };
-  if (type.kind === "set") return { kind: "set", element: resolveNominals(type.element, classIdentities, enumNames) };
-  if (type.kind === "map") return { kind: "map", key: resolveNominals(type.key, classIdentities, enumNames), value: resolveNominals(type.value, classIdentities, enumNames) };
-  if (type.kind === "promise") return { kind: "promise", value: resolveNominals(type.value, classIdentities, enumNames) };
+  if (type.kind === "named" && namedTypeIdentities.has(type.name)) {
+    return { ...type, identity: namedTypeIdentities.get(type.name)! };
+  }
+  if ((type.kind === "class" || type.kind === "classConstructor") && classIdentities.has(type.name)
+    && (!type.identity || type.identity === type.name)) {
+    return { ...type, identity: classIdentities.get(type.name)! };
+  }
+  if ((type.kind === "enum" || type.kind === "enumObject") && enumNames.has(type.name)
+    && type.identity === type.name) {
+    return { ...type, identity: enumNames.get(type.name)!.identity };
+  }
+  if (type.kind === "optional") return optionalOf(resolveNominals(type.inner, classIdentities, enumNames, namedTypeIdentities));
+  if (type.kind === "list") return { kind: "list", element: resolveNominals(type.element, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "set") return { kind: "set", element: resolveNominals(type.element, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "map") return { kind: "map", key: resolveNominals(type.key, classIdentities, enumNames, namedTypeIdentities), value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "promise") return { kind: "promise", value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, resolveNominals(value, classIdentities, enumNames, namedTypeIdentities)])) };
   if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
     ...type,
-    parameters: type.parameters.map((parameter) => resolveNominals(parameter, classIdentities, enumNames)),
-    ...(type.rest ? { rest: resolveNominals(type.rest, classIdentities, enumNames) } : {}),
-    result: resolveNominals(type.result, classIdentities, enumNames),
+    parameters: type.parameters.map((parameter) => resolveNominals(parameter, classIdentities, enumNames, namedTypeIdentities)),
+    ...(type.rest ? { rest: resolveNominals(type.rest, classIdentities, enumNames, namedTypeIdentities) } : {}),
+    result: resolveNominals(type.result, classIdentities, enumNames, namedTypeIdentities),
   };
-  if (type.kind === "union") return { kind: "union", members: type.members.map((member) => resolveNominals(member, classIdentities, enumNames)) };
+  if (type.kind === "union") return { kind: "union", members: type.members.map((member) => resolveNominals(member, classIdentities, enumNames, namedTypeIdentities)) };
+  if (type.kind === "componentConstructor") return {
+    ...type,
+    props: new Map([...type.props].map(([name, value]) => [name, resolveNominals(value, classIdentities, enumNames, namedTypeIdentities)])),
+  };
   return type;
 }
 
@@ -529,14 +589,23 @@ function inferPublicExpression(expression: Expression, extensions: readonly NonN
     }
     case "ObjectExpression": {
       const fields = new Map<string, ValueType>();
+      const optionalFields = new Set<string>();
       for (const property of expression.properties) {
-        if (property.kind === "ObjectProperty") fields.set(property.name, inferPublicExpression(property.value, extensions));
+        if (property.kind === "ObjectProperty") {
+          fields.set(property.name, inferPublicExpression(property.value, extensions));
+          optionalFields.delete(property.name);
+        }
         else {
           const spread = inferPublicExpression(property.value, extensions);
-          if (spread.kind === "object") for (const [name, type] of spread.fields) fields.set(name, type);
+          if (spread.kind === "object") for (const [name, type] of spread.fields) {
+            const alreadyRequired = fields.has(name) && !optionalFields.has(name);
+            fields.set(name, type);
+            if (!alreadyRequired && spread.optionalFields?.has(name)) optionalFields.add(name);
+            else optionalFields.delete(name);
+          }
         }
       }
-      return { kind: "object", fields };
+      return { kind: "object", fields, ...(optionalFields.size > 0 ? { optionalFields } : {}) };
     }
     case "SpreadExpression":
       return inferPublicExpression(expression.value, extensions);
@@ -550,22 +619,41 @@ function exportPattern(
   type: ValueType,
   exports: Map<string, ValueType>,
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>,
+  analyzedBindings: ReadonlyMap<string, ValueType> = new Map(),
 ): void {
   if (pattern.kind === "NameBindingPattern") {
-    exports.set(pattern.name, type);
+    exports.set(pattern.name, analyzedBindings.get(`${pattern.span.start}:${pattern.name}`) ?? type);
     return;
   }
   if (pattern.kind === "ListBindingPattern") {
     const element = type.kind === "list" ? type.element : unknownType;
-    for (const child of pattern.elements) if (child) exportPattern(child, element, exports, namedTypes);
-    if (pattern.rest) exports.set(pattern.rest.name, { kind: "list", element });
+    for (const child of pattern.elements) if (child) exportPattern(child, element, exports, namedTypes, analyzedBindings);
+    if (pattern.rest) exports.set(
+      pattern.rest.name,
+      analyzedBindings.get(`${pattern.rest.span.start}:${pattern.rest.name}`) ?? { kind: "list", element },
+    );
     return;
   }
   const fields = type.kind === "object" ? type.fields : type.kind === "named" ? namedTypes.get(type.name) : null;
   const selected = new Set(pattern.entries.map((entry) => entry.property));
-  for (const entry of pattern.entries) exportPattern(entry.pattern, fields?.get(entry.property) ?? unknownType, exports, namedTypes);
-  if (pattern.rest) exports.set(pattern.rest.name, {
-    kind: "object",
-    fields: new Map([...(fields ?? [])].filter(([name]) => !selected.has(name))),
-  });
+  for (const entry of pattern.entries) {
+    const field = fields?.get(entry.property) ?? unknownType;
+    exportPattern(
+      entry.pattern,
+      type.kind === "object" && type.optionalFields?.has(entry.property) ? optionalOf(field) : field,
+      exports,
+      namedTypes,
+      analyzedBindings,
+    );
+  }
+  if (pattern.rest) {
+    const optionalFields = type.kind === "object"
+      ? new Set([...type.optionalFields ?? []].filter((name) => !selected.has(name)))
+      : new Set<string>();
+    exports.set(pattern.rest.name, analyzedBindings.get(`${pattern.rest.span.start}:${pattern.rest.name}`) ?? {
+      kind: "object",
+      fields: new Map([...(fields ?? [])].filter(([name]) => !selected.has(name))),
+      ...(optionalFields.size > 0 ? { optionalFields } : {}),
+    });
+  }
 }

@@ -2,6 +2,8 @@ import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path
 import {
   compile,
   inspectModule,
+  optionalOf,
+  semanticTypeIdentity,
   type AnalysisContext,
   type ClassInfo,
   type CompilerExtension,
@@ -246,28 +248,62 @@ export async function compileProjectEntries(
   const modules: ProjectModule[] = [];
   const affected = previous ? affectedModules(loaded, velarImports, previous, changedPaths) : new Set(loaded.keys());
   const previousModules = new Map(previous?.modules.map((module) => [module.inputPath, module]));
+  const compiledInterfaces = new Map<string, ModuleInspection["moduleInterface"]>();
+  for (const [path, module] of previousModules) {
+    if (loaded.has(path) && !affected.has(path)) compiledInterfaces.set(path, module.result.moduleInterface);
+  }
   let compiledModules = 0;
   let reusedModules = 0;
-  for (const module of loaded.values()) {
-    const reusable = !affected.has(module.inputPath) ? previousModules.get(module.inputPath) : null;
+  for (const group of dependencyFirstCompilationGroups(loaded, velarImports, compilerExtensions)) {
+    const reusable = group.every((module) => !affected.has(module.inputPath));
     if (reusable) {
-      modules.push({ ...reusable, relativePath: module.relativePath });
-      reusedModules += 1;
+      for (const module of group) {
+        const previousModule = previousModules.get(module.inputPath)!;
+        modules.push({ ...previousModule, relativePath: module.relativePath });
+        reusedModules += 1;
+      }
       continue;
     }
-    compiledModules += 1;
-    const analysis = await createAnalysisContext(module, loaded, velarImports, failures, notices, declarationCache, interfaceCache, compilerExtensions);
-    modules.push({
-      inputPath: module.inputPath,
-      relativePath: module.relativePath,
-      result: compile(module.text, {
-        path: module.inputPath,
-        analysis,
-        extensions: compilerExtensions,
-        resourceContents: module.resourceContents,
-        ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.testFunctions) } : {}),
-      }),
-    });
+
+    compiledModules += group.length;
+    const cyclic = group.length > 1 || group.some((module) => moduleDependencies(module, loaded, velarImports, compilerExtensions).includes(module.inputPath));
+    const maximumPasses = cyclic ? group.length + 2 : 1;
+    let previousIdentity = "";
+    let passResults = new Map<string, ProjectModule>();
+    for (let pass = 0; pass < maximumPasses; pass += 1) {
+      interfaceCache.clear();
+      const nextResults = new Map<string, ProjectModule>();
+      for (const module of group) {
+        const analysis = await createAnalysisContext(
+          module,
+          loaded,
+          velarImports,
+          failures,
+          notices,
+          declarationCache,
+          interfaceCache,
+          compiledInterfaces,
+          compilerExtensions,
+        );
+        const result = compile(module.text, {
+          path: module.inputPath,
+          analysis,
+          extensions: compilerExtensions,
+          resourceContents: module.resourceContents,
+          ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.testFunctions) } : {}),
+        });
+        nextResults.set(module.inputPath, { inputPath: module.inputPath, relativePath: module.relativePath, result });
+      }
+      const identity = group.map((module) => moduleInterfaceIdentity(nextResults.get(module.inputPath)!.result.moduleInterface)).join("\0");
+      passResults = nextResults;
+      for (const [path, compiled] of nextResults) compiledInterfaces.set(path, compiled.result.moduleInterface);
+      if (!cyclic || identity === previousIdentity) break;
+      previousIdentity = identity;
+      if (pass === maximumPasses - 1) {
+        failures.push({ path: group[0]!.inputPath, message: "Cyclic module interfaces did not converge to a stable type contract" });
+      }
+    }
+    modules.push(...group.map((module) => passResults.get(module.inputPath)!));
   }
 
   modules.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
@@ -345,6 +381,101 @@ function affectedModules(
   return affected;
 }
 
+function dependencyFirstCompilationGroups(
+  loaded: ReadonlyMap<string, LoadedModule>,
+  velarImports: ReadonlyMap<string, string>,
+  compilerExtensions: readonly CompilerExtension[],
+): readonly (readonly LoadedModule[])[] {
+  let nextIndex = 0;
+  const indexes = new Map<string, number>();
+  const lowLinks = new Map<string, number>();
+  const stack: string[] = [];
+  const active = new Set<string>();
+  const groups: LoadedModule[][] = [];
+
+  const visit = (path: string): void => {
+    const index = nextIndex++;
+    indexes.set(path, index);
+    lowLinks.set(path, index);
+    stack.push(path);
+    active.add(path);
+
+    const module = loaded.get(path)!;
+    for (const dependency of moduleDependencies(module, loaded, velarImports, compilerExtensions)) {
+      if (!indexes.has(dependency)) {
+        visit(dependency);
+        lowLinks.set(path, Math.min(lowLinks.get(path)!, lowLinks.get(dependency)!));
+      } else if (active.has(dependency)) {
+        lowLinks.set(path, Math.min(lowLinks.get(path)!, indexes.get(dependency)!));
+      }
+    }
+
+    if (lowLinks.get(path) !== index) return;
+    const group: LoadedModule[] = [];
+    while (stack.length > 0) {
+      const member = stack.pop()!;
+      active.delete(member);
+      group.push(loaded.get(member)!);
+      if (member === path) break;
+    }
+    group.sort((left, right) => left.inputPath.localeCompare(right.inputPath));
+    groups.push(group);
+  };
+
+  for (const path of loaded.keys()) if (!indexes.has(path)) visit(path);
+  return groups;
+}
+
+function moduleDependencies(
+  module: LoadedModule,
+  loaded: ReadonlyMap<string, LoadedModule>,
+  velarImports: ReadonlyMap<string, string>,
+  compilerExtensions: readonly CompilerExtension[],
+): readonly string[] {
+  const output = new Set<string>();
+  for (const dependency of module.inspection.dependencies) {
+    if (dependency.javascript || isStandardModule(dependency.source, compilerExtensions)) continue;
+    const target = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
+      ? resolve(dirname(module.inputPath), dependency.source)
+      : velarImports.get(projectImportKey(module.inputPath, dependency.source));
+    if (target && loaded.has(target)) output.add(target);
+  }
+  return [...output].sort();
+}
+
+function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]): string {
+  const typeMap = (values: ReadonlyMap<string, ValueType>): string => [...values]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, type]) => `${name}:${semanticTypeIdentity(type)}`)
+    .join("|");
+  const namedTypes = [...interface_.namedTypes]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, fields]) => `${name}{${typeMap(fields)}}`)
+    .join("|");
+  const enums = [...interface_.enums]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, info]) => `${name}:${info.identity}:${[...info.members].sort().join(",")}`)
+    .join("|");
+  const classes = [...interface_.classes]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:${typeMap(new Map([
+      ...[...info.fields].map(([field, value]) => [`field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
+      ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
+      ...[...info.staticFields].map(([field, value]) => [`static-field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
+      ...[...info.staticMethods].map(([method, type]) => [`static-method:${method}`, type] as const),
+    ]))}:host:${[...info.hostBoundaryMembers ?? []].sort().join(",")}:static-host:${[...info.hostBoundaryStaticMembers ?? []].sort().join(",")}`)
+    .join("|");
+  return [
+    `exports:${typeMap(interface_.exports)}`,
+    `host:${[...interface_.hostBoundaryExports].sort().join(",")}`,
+    `named:${namedTypes}`,
+    `aliases:${typeMap(interface_.typeAliases)}`,
+    `enums:${enums}`,
+    `classes:${classes}`,
+    `reactive:${[...interface_.reactiveExports].sort(([left], [right]) => left.localeCompare(right)).map(([name, kind]) => `${name}:${kind}`).join(",")}`,
+  ].join("#");
+}
+
 async function createAnalysisContext(
   module: LoadedModule,
   loaded: ReadonlyMap<string, LoadedModule>,
@@ -353,12 +484,15 @@ async function createAnalysisContext(
   notices: ProjectNotice[],
   declarationCache: Map<string, Promise<TypeScriptDeclarationBridge | null>>,
   interfaceCache: Map<string, ModuleInspection["moduleInterface"]>,
+  compiledInterfaces: ReadonlyMap<string, ModuleInspection["moduleInterface"]>,
   compilerExtensions: readonly CompilerExtension[],
 ): Promise<AnalysisContext> {
   const imports = new Map<string, ValueType>();
+  const hostImports = new Set<string>();
   const dynamicImports = new Map<string, ValueType>();
   const reactiveImports = new Map<string, "state" | "computed">();
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
+  const namedTypeIdentities = new Map<string, string>();
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
@@ -379,21 +513,21 @@ async function createAnalysisContext(
         : null;
       const target = targetPath ? loaded.get(targetPath) : null;
       if (!target) continue;
-      const interface_ = resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compilerExtensions);
+      const interface_ = resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions);
       if (interface_.reactiveExports.size > 0) {
         failures.push({
           path: module.inputPath,
           message: `Dynamically imported module '${dependency.source}' exports reactive values; expose behavior through functions or components instead`,
         });
       }
-      dynamicImports.set(dependency.source, { kind: "object", fields: new Map(interface_.exports) });
-      for (const [name, fields] of interface_.namedTypes) if (!namedTypes.has(name)) namedTypes.set(name, fields);
-      for (const [name, type] of interface_.typeAliases) if (!typeAliases.has(name)) typeAliases.set(name, type);
-      for (const [name, members] of interface_.enums) if (!enums.has(name)) enums.set(name, members);
-      for (const [name, info] of interface_.classes) {
-        if (!classes.has(name)) classes.set(name, info);
-        if (info.identity && !classes.has(info.identity)) classes.set(info.identity, info);
+      if (interface_.hostBoundaryExports.size > 0) {
+        failures.push({
+          path: module.inputPath,
+          message: `Dynamically imported module '${dependency.source}' exports JavaScript-boundary values; import those values by name so boundary normalization remains explicit`,
+        });
       }
+      dynamicImports.set(dependency.source, { kind: "object", fields: new Map(interface_.exports) });
+      importHiddenTypeMetadata(interface_, namedTypes, enums, classes);
       continue;
     }
     if (dependency.javascript) {
@@ -432,7 +566,7 @@ async function createAnalysisContext(
     }
     const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
-      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, typeAliases, enums, classes, extensionImports, failures);
+      importInterface(module, dependency, standard, imports, hostImports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
       continue;
     }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
@@ -441,13 +575,15 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compilerExtensions), imports, reactiveImports, namedTypes, typeAliases, enums, classes, extensionImports, failures);
+    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, hostImports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
   }
   return {
     imports,
+    hostImports,
     dynamicImports,
     reactiveImports,
     namedTypes,
+    namedTypeIdentities,
     typeAliases,
     enums,
     classes,
@@ -462,18 +598,26 @@ function resolvedModuleInterface(
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
   cache: Map<string, ModuleInspection["moduleInterface"]>,
+  compiledInterfaces: ReadonlyMap<string, ModuleInspection["moduleInterface"]>,
   compilerExtensions: readonly CompilerExtension[],
 ): ModuleInspection["moduleInterface"] {
   const cached = cache.get(module.inputPath);
   if (cached) return cached;
-  const own = module.inspection.moduleInterface;
+  const own = compiledInterfaces.get(module.inputPath) ?? module.inspection.moduleInterface;
   const exports = new Map(own.exports);
   const namedTypes = new Map(own.namedTypes);
+  const namedTypeIdentities = new Map(own.namedTypeIdentities);
   const typeAliases = new Map(own.typeAliases);
   const enums = new Map(own.enums);
   const classes = new Map(own.classes);
+  for (const [name, identity] of own.namedTypeIdentities) {
+    const fields = own.namedTypes.get(name);
+    if (fields) namedTypes.set(identity, fields);
+  }
+  for (const info of own.enums.values()) enums.set(info.identity, info);
+  for (const info of own.classes.values()) if (info.identity) classes.set(info.identity, info);
   const extensionExports = new Map([...own.extensionExports].map(([id, values]) => [id, new Map(values)] as const));
-  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, namedTypes, typeAliases, enums, classes, extensionExports };
+  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionExports };
   cache.set(module.inputPath, resolved);
 
   for (const dependency of module.inspection.dependencies) {
@@ -485,33 +629,44 @@ function resolvedModuleInterface(
         : velarImports.get(projectImportKey(module.inputPath, dependency.source));
       const target = targetPath ? loaded.get(targetPath) : null;
       if (!target) continue;
-      dependencyInterface = resolvedModuleInterface(target, loaded, velarImports, cache, compilerExtensions);
+      dependencyInterface = resolvedModuleInterface(target, loaded, velarImports, cache, compiledInterfaces, compilerExtensions);
     }
     const aliases = new Map(dependency.specifiers
       .filter((specifier) => !specifier.namespace && specifier.imported !== "default")
       .map((specifier) => [specifier.imported, specifier.local]));
+    const dependencyTypeIdentities = new Set(dependencyInterface.namedTypeIdentities.values());
     for (const [name, fields] of dependencyInterface.namedTypes) {
-      const localName = aliases.get(name) ?? name;
-      if (!namedTypes.has(localName)) {
-        namedTypes.set(localName, new Map([...fields].map(([field, type]) => [field, renameType(type, aliases)])));
+      const identity = dependencyInterface.namedTypeIdentities.get(name) ?? (dependencyTypeIdentities.has(name) ? name : null);
+      if (!identity) continue;
+      const renamedFields = new Map([...fields].map(([field, type]) => [field, renameType(type, aliases)]));
+      if (!namedTypes.has(identity)) namedTypes.set(identity, renamedFields);
+      const localName = aliases.get(name);
+      if (localName && dependencyInterface.exports.has(name)) {
+        namedTypes.set(localName, renamedFields);
+        namedTypeIdentities.set(localName, identity);
       }
     }
     for (const [name, type] of dependencyInterface.typeAliases) {
-      const localName = aliases.get(name) ?? name;
-      if (!typeAliases.has(localName)) typeAliases.set(localName, renameType(type, aliases));
+      const localName = aliases.get(name);
+      if (localName && dependencyInterface.exports.has(name) && !typeAliases.has(localName)) {
+        typeAliases.set(localName, renameType(type, aliases));
+      }
     }
     for (const [name, members] of dependencyInterface.enums) {
-      const localName = aliases.get(name) ?? name;
-      if (!enums.has(localName)) enums.set(localName, members);
+      if (!enums.has(members.identity)) enums.set(members.identity, members);
+      const localName = aliases.get(name);
+      if (localName && dependencyInterface.exports.has(name)) enums.set(localName, members);
     }
     for (const [name, info] of dependencyInterface.classes) {
-      const localName = aliases.get(name) ?? name;
-      if (!classes.has(localName)) classes.set(localName, renameClass(info, aliases));
+      const renamed = renameClass(info, aliases);
+      if (renamed.identity && !classes.has(renamed.identity)) classes.set(renamed.identity, renamed);
+      const localName = aliases.get(name);
+      if (localName && dependencyInterface.exports.has(name)) classes.set(localName, renamed);
     }
   }
 
   const enumNames = enums;
-  const resolveType = (type: ValueType): ValueType => resolveKnownNominals(expandKnownAliases(type, typeAliases), classes, enumNames);
+  const resolveType = (type: ValueType): ValueType => resolveKnownNominals(expandKnownAliases(type, typeAliases), classes, enumNames, namedTypeIdentities);
   for (const [name, type] of exports) exports.set(name, resolveType(type));
   for (const [name, fields] of namedTypes) {
     namedTypes.set(name, new Map([...fields].map(([field, type]) => [field, resolveType(type)])));
@@ -520,6 +675,7 @@ function resolvedModuleInterface(
   for (const [name, info] of classes) {
     classes.set(name, {
       ...info,
+      base: info.base ? classes.get(info.base)?.identity ?? info.base : null,
       parameters: info.parameters.map(resolveType),
       fields: new Map([...info.fields].map(([field, value]) => [field, { ...value, type: resolveType(value.type) }])),
       methods: new Map([...info.methods].map(([method, type]) => [method, resolveType(type)])),
@@ -578,13 +734,32 @@ function normalizeModulePath(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
+function importHiddenTypeMetadata(
+  interface_: ModuleInspection["moduleInterface"],
+  namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
+  enums: Map<string, EnumInfo>,
+  classes: Map<string, ClassInfo>,
+): void {
+  const identities = new Set(interface_.namedTypeIdentities.values());
+  for (const [name, fields] of interface_.namedTypes) {
+    const identity = interface_.namedTypeIdentities.get(name) ?? (identities.has(name) ? name : null);
+    if (identity && !namedTypes.has(identity)) namedTypes.set(identity, fields);
+  }
+  for (const info of interface_.enums.values()) if (!enums.has(info.identity)) enums.set(info.identity, info);
+  for (const info of interface_.classes.values()) {
+    if (info.identity && !classes.has(info.identity)) classes.set(info.identity, info);
+  }
+}
+
 function importInterface(
   module: LoadedModule,
   dependency: ModuleInspection["dependencies"][number],
   interface_: ModuleInspection["moduleInterface"],
   imports: Map<string, ValueType>,
+  hostImports: Set<string>,
   reactiveImports: Map<string, "state" | "computed">,
   namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
+  namedTypeIdentities: Map<string, string>,
   typeAliases: Map<string, ValueType>,
   enums: Map<string, EnumInfo>,
   classes: Map<string, ClassInfo>,
@@ -595,20 +770,42 @@ function importInterface(
       .filter((specifier) => !specifier.namespace && specifier.imported !== "default")
       .map((specifier) => [specifier.imported, specifier.local]));
 
-    for (const [name, fields] of interface_.namedTypes) {
-      const localName = aliases.get(name) ?? name;
-      namedTypes.set(localName, new Map([...fields].map(([field, type]) => [field, renameType(type, aliases)])));
-    }
-    for (const [name, type] of interface_.typeAliases) {
-      typeAliases.set(aliases.get(name) ?? name, renameType(type, aliases));
-    }
     for (const [name, members] of interface_.enums) {
-      enums.set(aliases.get(name) ?? name, members);
+      enums.set(members.identity, members);
+      const localName = aliases.get(name);
+      if (localName && interface_.exports.get(name)?.kind === "enumObject") enums.set(localName, members);
     }
     for (const [name, info] of interface_.classes) {
       const renamed = renameClass(info, aliases);
-      classes.set(aliases.get(name) ?? name, renamed);
       if (renamed.identity) classes.set(renamed.identity, renamed);
+      const localName = aliases.get(name);
+      if (localName && interface_.exports.get(name)?.kind === "classConstructor") classes.set(localName, renamed);
+    }
+    const importedNamedTypeIdentities = new Map([...interface_.namedTypeIdentities]
+      .map(([name, identity]) => [aliases.get(name) ?? name, identity] as const));
+    const resolveImportedType = (type: ValueType): ValueType => resolveKnownNominals(
+      renameType(type, aliases),
+      classes,
+      enums,
+      importedNamedTypeIdentities,
+    );
+    const interfaceTypeIdentities = new Set(interface_.namedTypeIdentities.values());
+    for (const [name, fields] of interface_.namedTypes) {
+      const identity = interface_.namedTypeIdentities.get(name) ?? (interfaceTypeIdentities.has(name) ? name : null);
+      if (!identity) continue;
+      const renamedFields = new Map([...fields].map(([field, type]) => [field, resolveImportedType(type)]));
+      namedTypes.set(identity, renamedFields);
+      const localName = aliases.get(name);
+      if (localName && interface_.exports.get(name)?.kind === "typeObject") {
+        namedTypes.set(localName, renamedFields);
+        namedTypeIdentities.set(localName, identity);
+      }
+    }
+    for (const [name, type] of interface_.typeAliases) {
+      const localName = aliases.get(name);
+      if (localName && interface_.exports.get(name)?.kind === "typeObject") {
+        typeAliases.set(localName, resolveImportedType(type));
+      }
     }
     for (const [extensionId, exportedValues] of interface_.extensionExports) {
       const importedValues = extensionImports.get(extensionId) ?? new Map<string, unknown>();
@@ -628,9 +825,15 @@ function importInterface(
             message: `Module '${dependency.source}' exports reactive values; import them by name instead of using a namespace import`,
           });
         }
+        if (interface_.hostBoundaryExports.size > 0) {
+          failures.push({
+            path: module.inputPath,
+            message: `Module '${dependency.source}' exports JavaScript-boundary values; import them by name instead of using a namespace import`,
+          });
+        }
         imports.set(specifier.local, {
           kind: "object",
-          fields: new Map([...interface_.exports].map(([name, type]) => [name, renameType(type, aliases)])),
+          fields: new Map([...interface_.exports].map(([name, type]) => [name, resolveImportedType(type)])),
         });
         continue;
       }
@@ -640,7 +843,8 @@ function importInterface(
         imports.set(specifier.local, { kind: "unknown" });
         continue;
       }
-      imports.set(specifier.local, renameType(exported, aliases));
+      imports.set(specifier.local, resolveImportedType(exported));
+      if (interface_.hostBoundaryExports.has(specifier.imported)) hostImports.add(specifier.local);
       const reactive = interface_.reactiveExports.get(specifier.imported);
       if (reactive) reactiveImports.set(specifier.local, reactive);
     }
@@ -663,6 +867,8 @@ function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): Cla
     staticFields: new Map([...info.staticFields].map(([name, field]) => [name, { mutable: field.mutable, type: renameType(field.type, aliases) }])),
     staticGetters: info.staticGetters,
     staticMethods: new Map([...info.staticMethods].map(([name, type]) => [name, renameType(type, aliases)])),
+    ...(info.hostBoundaryMembers ? { hostBoundaryMembers: info.hostBoundaryMembers } : {}),
+    ...(info.hostBoundaryStaticMembers ? { hostBoundaryStaticMembers: info.hostBoundaryStaticMembers } : {}),
   };
 }
 
@@ -677,7 +883,7 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
     case "enumObject":
       return { ...type, name: aliases.get(type.name) ?? type.name };
     case "optional":
-      return { kind: "optional", inner: renameType(type.inner, aliases) };
+      return optionalOf(renameType(type.inner, aliases));
     case "list":
       return { kind: "list", element: renameType(type.element, aliases) };
     case "set":
@@ -687,7 +893,7 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
     case "promise":
       return { kind: "promise", value: renameType(type.value, aliases) };
     case "object":
-      return { kind: "object", fields: new Map([...type.fields].map(([name, value]) => [name, renameType(value, aliases)])) };
+      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, renameType(value, aliases)])) };
     case "function":
     case "action":
       return {
@@ -716,41 +922,49 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
   }
 }
 
-function resolveKnownNominals(type: ValueType, classes: ReadonlyMap<string, ClassInfo>, enums: ReadonlyMap<string, EnumInfo>): ValueType {
+function resolveKnownNominals(
+  type: ValueType,
+  classes: ReadonlyMap<string, ClassInfo>,
+  enums: ReadonlyMap<string, EnumInfo>,
+  namedTypeIdentities: ReadonlyMap<string, string>,
+): ValueType {
   if (type.kind === "named" && classes.has(type.name)) {
     const identity = classes.get(type.name)?.identity;
     return { kind: "class", name: type.name, ...(identity ? { identity } : {}) };
   }
   if (type.kind === "named" && enums.has(type.name)) return { kind: "enum", name: type.name, identity: enums.get(type.name)!.identity };
+  if (type.kind === "named" && !type.identity && namedTypeIdentities.has(type.name)) {
+    return { ...type, identity: namedTypeIdentities.get(type.name)! };
+  }
   switch (type.kind) {
     case "optional":
-      return { kind: "optional", inner: resolveKnownNominals(type.inner, classes, enums) };
+      return optionalOf(resolveKnownNominals(type.inner, classes, enums, namedTypeIdentities));
     case "list":
-      return { kind: "list", element: resolveKnownNominals(type.element, classes, enums) };
+      return { kind: "list", element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
     case "set":
-      return { kind: "set", element: resolveKnownNominals(type.element, classes, enums) };
+      return { kind: "set", element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
     case "map":
-      return { kind: "map", key: resolveKnownNominals(type.key, classes, enums), value: resolveKnownNominals(type.value, classes, enums) };
+      return { kind: "map", key: resolveKnownNominals(type.key, classes, enums, namedTypeIdentities), value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
     case "promise":
-      return { kind: "promise", value: resolveKnownNominals(type.value, classes, enums) };
+      return { kind: "promise", value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
     case "object":
-      return { kind: "object", fields: new Map([...type.fields].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums)])) };
+      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums, namedTypeIdentities)])) };
     case "function":
     case "action":
     case "intrinsic":
       return {
         ...type,
-        parameters: type.parameters.map((parameter) => resolveKnownNominals(parameter, classes, enums)),
-        ...(type.rest ? { rest: resolveKnownNominals(type.rest, classes, enums) } : {}),
-        result: resolveKnownNominals(type.result, classes, enums),
+        parameters: type.parameters.map((parameter) => resolveKnownNominals(parameter, classes, enums, namedTypeIdentities)),
+        ...(type.rest ? { rest: resolveKnownNominals(type.rest, classes, enums, namedTypeIdentities) } : {}),
+        result: resolveKnownNominals(type.result, classes, enums, namedTypeIdentities),
       };
     case "componentConstructor":
       return {
         ...type,
-        props: new Map([...type.props].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums)])),
+        props: new Map([...type.props].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums, namedTypeIdentities)])),
       };
     case "union":
-      return { kind: "union", members: type.members.map((member) => resolveKnownNominals(member, classes, enums)) };
+      return { kind: "union", members: type.members.map((member) => resolveKnownNominals(member, classes, enums, namedTypeIdentities)) };
     default:
       return type;
   }
@@ -763,7 +977,7 @@ function expandKnownAliases(type: ValueType, aliases: ReadonlyMap<string, ValueT
   }
   switch (type.kind) {
     case "optional":
-      return { kind: "optional", inner: expandKnownAliases(type.inner, aliases, seen) };
+      return optionalOf(expandKnownAliases(type.inner, aliases, seen));
     case "list":
       return { kind: "list", element: expandKnownAliases(type.element, aliases, seen) };
     case "set":
@@ -773,7 +987,7 @@ function expandKnownAliases(type: ValueType, aliases: ReadonlyMap<string, ValueT
     case "promise":
       return { kind: "promise", value: expandKnownAliases(type.value, aliases, seen) };
     case "object":
-      return { kind: "object", fields: new Map([...type.fields].map(([name, value]) => [name, expandKnownAliases(value, aliases, seen)])) };
+      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expandKnownAliases(value, aliases, seen)])) };
     case "function":
     case "action":
     case "intrinsic":

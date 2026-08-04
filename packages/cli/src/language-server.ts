@@ -760,8 +760,7 @@ function projectInlayHints(project: ProjectResult, path: string, text: string, r
     if (hints.length >= MAX_LSP_RESULT_ITEMS) break;
     if (!kinds.has(symbol.kind) || !symbol.type || symbol.type.length > 1024) continue;
     if (symbol.selectionSpan.end < start || symbol.selectionSpan.end > end) continue;
-    const lineEnd = text.indexOf("\n", symbol.selectionSpan.end);
-    const declarationEnd = lineEnd === -1 ? text.length : lineEnd;
+    const declarationEnd = lineEndAt(text, symbol.selectionSpan.end);
     const assignment = text.indexOf("=", symbol.selectionSpan.end);
     if (assignment !== -1 && assignment < declarationEnd && text.slice(symbol.selectionSpan.end, assignment).includes(":")) continue;
     const location = module.result.source.location(symbol.selectionSpan.end);
@@ -848,10 +847,10 @@ function offsetAt(text: string, position: Position): number {
     : 0;
   let offset = 0;
   for (let line = 0; line < requestedLine && offset < text.length; line += 1) {
-    const newline = text.indexOf("\n", offset);
-    offset = newline === -1 ? text.length : newline + 1;
+    const next = nextLineStart(text, offset);
+    offset = next === null ? text.length : next;
   }
-  return Math.min(text.length, offset + requestedCharacter);
+  return Math.min(lineEndAt(text, offset), offset + requestedCharacter);
 }
 
 function positionAt(text: string, requestedOffset: number): Position {
@@ -859,12 +858,34 @@ function positionAt(text: string, requestedOffset: number): Position {
   let line = 0;
   let lineStart = 0;
   for (let index = 0; index < offset; index += 1) {
-    if (text[index] === "\n") {
+    const character = text[index];
+    if (character === "\r") {
+      const breakEnd = text[index + 1] === "\n" ? index + 2 : index + 1;
+      if (breakEnd > offset) break;
+      line += 1;
+      lineStart = breakEnd;
+      index = breakEnd - 1;
+    } else if (character === "\n") {
       line += 1;
       lineStart = index + 1;
     }
   }
   return { line, character: offset - lineStart };
+}
+
+function nextLineStart(text: string, start: number): number | null {
+  for (let index = start; index < text.length; index += 1) {
+    if (text[index] === "\r") return index + (text[index + 1] === "\n" ? 2 : 1);
+    if (text[index] === "\n") return index + 1;
+  }
+  return null;
+}
+
+function lineEndAt(text: string, start: number): number {
+  for (let index = start; index < text.length; index += 1) {
+    if (text[index] === "\r" || text[index] === "\n") return index;
+  }
+  return text.length;
 }
 
 function wordAt(text: string, offset: number): string {
@@ -876,6 +897,5 @@ function wordAt(text: string, offset: number): string {
 }
 
 function fullRange(text: string): Range {
-  const lines = text.split("\n");
-  return { start: { line: 0, character: 0 }, end: { line: lines.length - 1, character: lines.at(-1)?.length ?? 0 } };
+  return { start: { line: 0, character: 0 }, end: positionAt(text, text.length) };
 }

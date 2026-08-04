@@ -7,6 +7,7 @@ import type {
   ValueType,
   Program,
 } from "@velarscript/compiler/extension";
+import { optionalOf } from "@velarscript/compiler";
 
 const publicBuilderTypes = new Map<string, ValueType>([
   ...["color", "rgb", "rgba", "hsl", "alpha", "lighten", "darken"].map((name) => [name, { kind: "named", name: "Color" } as ValueType] as const),
@@ -83,14 +84,23 @@ function visitDependencyStatement(statement: Statement, context: CompilerDepende
 
 function contributeInterface(statement: Statement, context: CompilerInterfaceContext): boolean {
   if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration") {
-    context.exports.set(statement.name, statement.type ? context.resolve(statement.type) : context.inferPublicExpression(statement.initializer));
+    context.exports.set(
+      statement.name,
+      context.bindingType(statement.name, statement.span.start)
+        ?? (statement.type ? context.resolve(statement.type) : context.inferPublicExpression(statement.initializer)),
+    );
     context.reactiveExports.set(statement.name, statement.kind === "StateDeclaration" ? "state" : "computed");
     return true;
   }
   if (statement.kind === "ComponentDeclaration") {
+    const analyzed = context.bindingType(statement.name, statement.span.start);
+    if (analyzed?.kind === "componentConstructor") {
+      context.exports.set(statement.name, analyzed);
+      return true;
+    }
     const props = new Map(statement.parameters.map((parameter) => [parameter.name, context.resolve(parameter.type)]));
-    if (!props.has("class")) props.set("class", { kind: "optional", inner: { kind: "string" } });
-    if (!props.has("look")) props.set("look", { kind: "optional", inner: { kind: "named", name: "Look" } });
+    if (!props.has("class")) props.set("class", optionalOf({ kind: "string" }));
+    if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
     context.exports.set(statement.name, {
       kind: "componentConstructor",
       name: statement.name,

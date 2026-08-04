@@ -3,6 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("CI covers platform, browser, and non-publishing provenance gates", async () => {
+  const workspace = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
+  assert.match(workspace.scripts.test ?? "", /tests\/release\.acceptance\.ts/u);
+  assert.equal(workspace.scripts["release:rehearse"], "node scripts/release-toolchain.mjs rehearse");
+  assert.equal(workspace.scripts["preview:prepare"], "node scripts/prepare-external-preview.mjs");
+
   const ci = await readFile(".github/workflows/ci.yml", "utf8");
   for (const platform of ["ubuntu-latest", "macos-latest", "windows-latest"]) assert.match(ci, new RegExp(platform, "u"));
   assert.match(ci, /node-version: "24\.x"/u);

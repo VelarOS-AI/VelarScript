@@ -1,4 +1,4 @@
-import type { ClassInfo, CompilerExtension, ModuleInterface, ValueType } from "@velarscript/compiler";
+import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, VelarWebAnalyzer } from "./analyzer.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
@@ -72,10 +72,6 @@ function intrinsic(name: string, parameters: readonly ValueType[], result: Value
 
 function promise(value: ValueType): ValueType {
   return { kind: "promise", value };
-}
-
-function optional(value: ValueType): ValueType {
-  return { kind: "optional", inner: value };
 }
 
 function object(fields: Readonly<Record<string, ValueType>>): ValueType {
@@ -273,7 +269,9 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["Router", { kind: "componentConstructor", name: "Router", props: new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", anyType]]), requiredProps: new Set(["routes"]), intrinsic: "web.router" }],
     ["Link", { kind: "componentConstructor", name: "Link", props: new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
     ["NavLink", { kind: "componentConstructor", name: "NavLink", props: new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
-  ]), new Map(), new Map([["RouteContext", routeContextFields]]))],
+  ]), new Map(), new Map([["RouteContext", routeContextFields]]), new Map([
+    ["RouteContext", "@velarscript/web:velar/web#type:RouteContext"],
+  ]))],
   ["velar/http", moduleInterface(new Map([
     ["http", httpType],
     ["formBody", functionType([], formBodyType)],
@@ -375,8 +373,9 @@ function moduleInterface(
   exports: ReadonlyMap<string, ValueType>,
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
+  namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
 ): ModuleInterface {
-  return { exports, reactiveExports: new Map(), namedTypes, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, hostBoundaryExports: new Set(), reactiveExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({
@@ -419,6 +418,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   analysis: Object.freeze({
     primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "Look", "Length", "Percentage", "Color", "Duration", "Angle", "Opacity", "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing"]),
     globals: webGlobals,
+    reservedBindings: new Set(["mount", "tick"]),
     globalGuidance: new Map([
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
       ["window", "Use velar/browser or an explicit JavaScript boundary instead of the untyped window global"],
