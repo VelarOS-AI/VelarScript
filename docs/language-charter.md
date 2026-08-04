@@ -815,6 +815,10 @@ import js unsafe {legacyValue} from "legacy-package"
 Larger boundaries should use checked `extern module` declarations. Unsafe
 imports do not silently gain trustworthy VelarScript types. See
 [javascript-bridge.md](javascript-bridge.md).
+Checked declarations are trusted static ABI contracts, not a JavaScript sandbox
+or an implicit runtime schema validator. Values that are not already guaranteed
+by their package should enter as `unknown` and be validated explicitly with the
+application's runtime `Type`.
 
 ## 13. Web extension boundary
 

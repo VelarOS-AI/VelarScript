@@ -23,6 +23,9 @@ tooling notices rather than silently becoming `any`. Named reactive imports
 retain dependency tracking across module boundaries through one shared browser
 scheduler. Safe JavaScript imports without a usable declaration remain
 `unknown`; only the explicit unsafe import boundary produces `any`.
+These declarations are trusted static ABI contracts rather than runtime schema
+validation or sandboxing. Untrusted payloads retain `unknown` until application
+code passes them through an explicit runtime `Type` validator.
 
 Project compilation returns structural statistics for module count, compiled,
 reused, and affected modules plus elapsed time. The language server owns a

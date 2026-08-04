@@ -56,7 +56,7 @@ export async function resolveVelarProject(input: string | null, cwd = process.cw
 
   if (explicit && (kind === "file") && extname(explicit) === ".vel") {
     const manifestPath = await findManifest(dirname(explicit));
-    return manifestPath ? loadManifest(manifestPath, explicit) : legacyProject(explicit);
+    return manifestPath ? loadManifest(manifestPath, explicit) : standaloneProject(explicit);
   }
 
   const manifestPath = explicit
@@ -120,7 +120,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   };
 }
 
-function legacyProject(entryPath: string): VelarProjectConfig {
+function standaloneProject(entryPath: string): VelarProjectConfig {
   const root = dirname(entryPath);
   return {
     formatVersion: CURRENT_PROJECT_FORMAT_VERSION,

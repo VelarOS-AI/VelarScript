@@ -8,6 +8,14 @@ there is no manual declaration, the project compiler may read the npm package's
 single-wildcard package subpaths such as `sdk/client` and `sdk/features/*` use
 their own export-map contract rather than silently falling back to the root.
 
+Here, safe means statically checked against one trusted declaration contract.
+It does not sandbox JavaScript, attest a package, or automatically inspect every
+runtime argument, return value, object field, or class instance. The package and
+its declaration must honor the same ABI. VelarScript performs only the explicit
+boundary adaptations documented below, such as `undefined` to `null`
+normalization and actual-Promise enforcement; it does not silently turn a false
+declaration into a runtime schema.
+
 The bridge understands only the TypeScript declaration shapes that map directly
 to VelarScript's lightweight type system:
 
@@ -127,6 +135,27 @@ Direct non-generic interface bases are flattened only when every base resolves
 to a plain object contract. Generic/complex bases, cycles, and declaration
 merging degrade the complete affected interface to `unknown`; the bridge never
 silently drops inherited fields and keeps checking a weaker partial shape.
+
+Untrusted host, network, storage, or plugin data should cross the declaration as
+`unknown`, then enter application code through the existing runtime `Type`
+validator:
+
+```velar
+type User:
+    id: string
+    name: string
+
+extern module "user-sdk":
+    export def loadUser() -> unknown
+
+import js {loadUser} from "user-sdk"
+
+const user = User.parse(loadUser())
+```
+
+Declaring `loadUser() -> User` instead is an assertion that the JavaScript
+package already owns and guarantees that runtime contract. It is not a request
+for the compiler to wrap the package with implicit validation.
 
 Declaration files and JavaScript files in installed npm packages are watched by
 the development server. A declaration change performs a full safe reanalysis;
