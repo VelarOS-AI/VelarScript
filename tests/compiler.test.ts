@@ -9524,6 +9524,30 @@ print(child.doubled)
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "base\nvalue:6\n6\n");
+
+  for (const binding of ["const", "let"]) {
+    const duplicateInitializer = compile(`class Invalid:
+    ${binding} value: number = 1
+
+    constructor():
+        self.value = 2
+`);
+    assert.equal(duplicateInitializer.diagnostics.filter((item) => /initializes field 'value' more than once/u.test(item.message)).length, 1);
+  }
+
+  const inheritedConst = compile(`
+class Base:
+    const id: string
+
+    constructor(id: string):
+        self.id = id
+
+class Child extends Base:
+    constructor():
+        super("fixed")
+        self.id = "other"
+`.trimStart());
+  assert.ok(inheritedConst.diagnostics.some((item) => /Cannot assign to const field 'id'/u.test(item.message)));
 });
 
 test("constructors own one synchronous non-returning execution boundary", () => {
@@ -9652,6 +9676,55 @@ Broken.name = "changed"
   assert.ok(invalidSemantics.diagnostics.some((item) => /conflicts with a static field/u.test(item.message)));
   assert.ok(invalidSemantics.diagnostics.some((item) => /Cannot assign to const field 'code'/u.test(item.message)));
   assert.ok(invalidSemantics.diagnostics.some((item) => /Cannot assign to read-only static member 'name'/u.test(item.message)));
+});
+
+test("static fields cannot expose JavaScript initialization-order undefined", () => {
+  const direct = compile(`
+class Counter:
+    static const first: number = Counter.second
+    static const second: number = 2
+`.trimStart());
+  assert.ok(direct.diagnostics.some((item) => /Static field 'second' is read before it is initialized/u.test(item.message)));
+
+  const privateDirect = compile(`
+class Counter:
+    private static const first: number = Counter.second
+    private static const second: number = 2
+`.trimStart());
+  assert.ok(privateDirect.diagnostics.some((item) => /Static field 'second' is read before it is initialized/u.test(item.message)));
+
+  const indirect = compile(`
+class Counter:
+    static const first: number = Counter.readSecond()
+    static const second: number = 2
+
+    static def readSecond() -> number:
+        return Counter.second
+`.trimStart());
+  assert.deepEqual(indirect.diagnostics, []);
+  assert.match(indirect.code ?? "", /__velarReadStaticField\(Counter, "second", 0\)/u);
+  const failed = executeModule(indirect.code ?? "");
+  assert.notEqual(failed.status, 0);
+  assert.match(String(failed.stderr), /Static field 'second' was read before initialization/u);
+
+  const valid = compile(`
+async def next() -> number:
+    return 3
+
+class Base:
+    static const value: number = 2
+
+class Derived extends Base:
+    static const copy: number = Derived.value
+    static const load: () -> Promise<number> = async () => await next()
+
+print(Derived.copy)
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  assert.match(valid.code ?? "", /__velarReadStaticField\(Derived, "value", 1\)/u);
+  const execution = executeModule(valid.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "2\n");
 });
 
 test("class getters expose native read-only derived properties with explicit inheritance", () => {

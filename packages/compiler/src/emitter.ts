@@ -63,6 +63,21 @@ export class JavaScriptEmitter {
       .filter((item) => item.code.length > 0);
 
     const helpers: string[] = [...this.additionalHelpers(program)];
+    if (this.hints.staticFieldReads.size > 0) {
+      helpers.push([
+        "function __velarReadStaticField(receiver, name, ownerDepth) {",
+        "  let owner = receiver;",
+        "  for (let depth = 0; depth < ownerDepth; depth += 1) owner = Object.getPrototypeOf(owner);",
+        "  const descriptor = owner == null ? null : Object.getOwnPropertyDescriptor(owner, name);",
+        "  if (!descriptor || !(\"value\" in descriptor) || descriptor.value === undefined) {",
+        "    throw new TypeError(`Static field '${name}' was read before initialization`);",
+        "  }",
+        "  const value = Reflect.get(receiver, name);",
+        "  if (value === undefined) throw new TypeError(`Static field '${name}' contains undefined`);",
+        "  return value;",
+        "}",
+      ].join("\n"));
+    }
     if (this.hints.normalizedPromiseValues.size > 0) {
       helpers.push([
         "const __velarNormalizedPromiseRegistryKey = Symbol.for(\"velar.promise.normalization.v1\");",
@@ -1444,6 +1459,14 @@ export class JavaScriptEmitter {
           return expression.optional
             ? `(__velarOptionalCollection(${object}, __velarCollectionSize) ?? null)`
             : `__velarCollectionSize(${object})`;
+        }
+        const staticFieldOwnerDepth = this.hints.staticFieldReads.get(spanIdentity(expression.span));
+        if (staticFieldOwnerDepth !== undefined) {
+          const object = this.emitMappedExpression(expression.object);
+          const read = `__velarReadStaticField(__value, ${JSON.stringify(expression.property)}, ${staticFieldOwnerDepth})`;
+          return expression.optional
+            ? `(__value => __value == null ? null : ${read})(${object})`
+            : `__velarReadStaticField(${object}, ${JSON.stringify(expression.property)}, ${staticFieldOwnerDepth})`;
         }
         const publicProperty = expression.property;
         const property = `${this.hints.privateMembers.has(spanIdentity(expression.span)) ? "#" : ""}${publicProperty}`;

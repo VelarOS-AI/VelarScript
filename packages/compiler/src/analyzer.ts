@@ -200,6 +200,7 @@ export interface LoweringHints {
   readonly normalizedNullResults: ReadonlySet<string>;
   readonly normalizedPromiseValues: ReadonlySet<string>;
   readonly normalizedUndefinedExpressions: ReadonlySet<string>;
+  readonly staticFieldReads: ReadonlyMap<string, number>;
   readonly optionalBindingEntries: ReadonlySet<number>;
   readonly reactiveBindings: ReadonlyMap<string, "state" | "computed">;
   readonly enumValueBindings: ReadonlyMap<number, string>;
@@ -273,6 +274,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly normalizedNullResults = new Set<string>();
   private readonly normalizedPromiseValues = new Set<string>();
   private readonly normalizedUndefinedExpressions = new Set<string>();
+  private readonly staticFieldReads = new Map<string, number>();
   private readonly optionalBindingEntries = new Set<number>();
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
   protected readonly enumValueBindings = new Map<number, string>();
@@ -315,6 +317,10 @@ export class Analyzer implements TypeEnvironment {
   private finallyLoopDepths: number[] = [];
   private currentClass: string | null = null;
   private classFieldInitializerDepth = 0;
+  private staticFieldInitialization: {
+    readonly className: string;
+    readonly initialized: ReadonlySet<string>;
+  } | null = null;
   private nextReferenceIdentity = 1;
   protected constructorDepth = 0;
   protected flowFrameDepth = 0;
@@ -656,6 +662,7 @@ export class Analyzer implements TypeEnvironment {
       normalizedNullResults: this.normalizedNullResults,
       normalizedPromiseValues: this.normalizedPromiseValues,
       normalizedUndefinedExpressions: this.normalizedUndefinedExpressions,
+      staticFieldReads: this.staticFieldReads,
       optionalBindingEntries: this.optionalBindingEntries,
       reactiveBindings: this.reactiveBindings,
       enumValueBindings: this.enumValueBindings,
@@ -1602,6 +1609,7 @@ export class Analyzer implements TypeEnvironment {
     this.flowFrameDepth -= 1;
     this.exitScope();
 
+    const initializedStaticFields = new Set<string>();
     for (const field of statement.fields) {
       if (!field.static) continue;
       const declared = this.resolveAnnotation(field.type);
@@ -1610,10 +1618,14 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Static field '${field.name}' requires an initializer`, field.span);
         continue;
       }
+      const outerStaticFieldInitialization = this.staticFieldInitialization;
+      this.staticFieldInitialization = { className: statement.name, initialized: initializedStaticFields };
       this.classFieldInitializerDepth += 1;
       const actual = this.inferExpression(field.initializer, valid ? declared : invalidType);
       this.classFieldInitializerDepth -= 1;
+      this.staticFieldInitialization = outerStaticFieldInitialization;
       if (valid) this.requireAssignable(actual, declared, field.initializer.span);
+      initializedStaticFields.add(field.name);
     }
 
     const ownFields = new Set<string>();
@@ -1834,12 +1846,20 @@ export class Analyzer implements TypeEnvironment {
     if (!statement.base && isSuperCall(body[0])) {
       this.typeError(`Base class '${statement.name}' cannot call 'super(...)'`, body[0]!.span);
     }
-    const initialized = new Set<string>();
+    const ownFields = new Map(statement.fields
+      .filter((field) => !field.static)
+      .map((field) => [field.name, field] as const));
+    const initialized = new Set([...ownFields]
+      .filter(([, field]) => field.initializer !== null)
+      .map(([name]) => name));
     for (const item of body.slice(statement.base ? 1 : 0)) {
       if (item.kind !== "AssignmentStatement" || item.operator !== "=" || item.target.kind !== "MemberExpression"
         || item.target.object.kind !== "IdentifierExpression" || item.target.object.name !== "self") continue;
+      const field = ownFields.get(item.target.property);
+      if (!field) continue;
       if (initialized.has(item.target.property)) {
         this.typeError(`Constructor initializes field '${item.target.property}' more than once`, item.target.span);
+        this.constructorFieldInitializations.add(item.target.span.start);
         continue;
       }
       initialized.add(item.target.property);
@@ -1922,14 +1942,23 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private findStaticField(className: string, name: string): ClassField | null {
+    return this.findStaticFieldOwner(className, name)?.field ?? null;
+  }
+
+  private findStaticFieldOwner(className: string, name: string): {
+    readonly field: ClassField;
+    readonly depth: number;
+  } | null {
     let current: string | null = className;
     const visited = new Set<string>();
+    let depth = 0;
     while (current && !visited.has(current)) {
       visited.add(current);
       const info = this.classes.get(current);
       const field = info?.staticGetters.has(name) ? null : info?.staticFields.get(name);
-      if (field) return field;
+      if (field) return { field, depth };
       current = info?.base ?? null;
+      depth += 1;
     }
     return null;
   }
@@ -3799,6 +3828,10 @@ export class Analyzer implements TypeEnvironment {
       : expandedContext.kind === "optional" && expandedContext.inner.kind === "function"
         ? expandedContext.inner
         : null;
+    const outerClassFieldInitializerDepth = this.classFieldInitializerDepth;
+    const outerStaticFieldInitialization = this.staticFieldInitialization;
+    this.classFieldInitializerDepth = 0;
+    this.staticFieldInitialization = null;
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
@@ -3870,6 +3903,8 @@ export class Analyzer implements TypeEnvironment {
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
+    this.classFieldInitializerDepth = outerClassFieldInitializerDepth;
+    this.staticFieldInitialization = outerStaticFieldInitialization;
     return this.withCallableResultOrigin({
       kind: "function",
       parameters: parameterTypes,
@@ -4765,7 +4800,8 @@ export class Analyzer implements TypeEnvironment {
       const key = object.identity ?? object.name;
       const privateField = this.privateFieldForAccess(key, property, true);
       const privateMethod = this.privateMethodForAccess(key, property, true);
-      const field = this.findStaticField(key, property);
+      const fieldOwner = this.findStaticFieldOwner(key, property);
+      const field = fieldOwner?.field ?? null;
       const getter = this.findStaticGetter(key, property);
       const method = this.findStaticMethod(key, property);
       result = privateField?.type ?? privateMethod ?? field?.type ?? getter ?? method ?? unknownType;
@@ -4778,6 +4814,21 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Static member '${property}' is private to class '${object.name}'`, memberSpan);
       } else if (!field && !getter && !method) {
         this.typeError(`Class '${object.name}' has no static member '${property}'`, memberSpan);
+      }
+      if (readValue && (field || privateField)) {
+        const initialization = this.staticFieldInitialization;
+        const ownField = initialization?.className === key
+          && (this.classes.get(key)?.staticFields.has(property)
+            || this.privateStaticFields.get(key)?.has(property));
+        if (ownField && !initialization.initialized.has(property)) {
+          this.typeError(
+            `Static field '${property}' is read before it is initialized; declare it earlier or defer the read`,
+            memberSpan,
+          );
+        }
+        if (field && fieldOwner && !key.startsWith("js:")) {
+          this.staticFieldReads.set(spanIdentity(memberSpan), fieldOwner.depth);
+        }
       }
     } else if (object.kind === "enumObject") {
       if (object.members.has(property)) {
