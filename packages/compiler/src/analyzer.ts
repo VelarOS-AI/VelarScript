@@ -1274,17 +1274,18 @@ export class Analyzer implements TypeEnvironment {
             }
           } else if (rootPattern.kind === "MatchTypePattern") {
             const checked = this.resolveAnnotation(rootPattern.type);
-            if (!branch.guard) {
+            if (!branch.guard && !this.runtimeTypeCheckMayExecute(fallthroughType, checked)) {
               if (coveredTypes.some((covered) => isAssignable(checked, covered, this))) {
                 this.diagnostics.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, rootPattern.span));
               }
               coveredTypes.push(checked);
-              if (isAssignable(matched, checked, this)) universalCovered = true;
+              if (this.matchPatternCoversWholeType(rootPattern, matched)) universalCovered = true;
             }
           } else if (rootPattern.kind === "MatchWildcardPattern" && !branch.guard) {
             universalCovered = true;
           } else if (rootPattern.kind === "MatchListPattern" && !branch.guard
-            && rootPattern.elements.every((element) => this.matchPatternIsIrrefutable(element))) {
+            && rootPattern.elements.every((element) => this.matchPatternIsIrrefutable(element))
+            && !this.matchPatternReflectionMayExecute(rootPattern, fallthroughType)) {
             if (rootPattern.rest) {
               coveredListMinimum = coveredListMinimum === null
                 ? rootPattern.elements.length
@@ -1314,6 +1315,7 @@ export class Analyzer implements TypeEnvironment {
           let guardNarrowings: ReadonlyMap<string, ValueType> = new Map();
           let guardFallthroughNarrowings: ReadonlyMap<string, ValueType> = patternSurviving;
           if (branch.guard) {
+            const patternAlwaysMatches = this.matchPatternCoversWholeType(rootPattern, fallthroughType);
             const guardBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
             const guardInvalidations = this.analyzeIsolatedFlow(guardBaseline, () => {
               this.enterScope();
@@ -1323,7 +1325,10 @@ export class Analyzer implements TypeEnvironment {
                 }
                 const guard = this.inferConditionWithNarrowings(branch.guard!, patternNarrowings);
                 guardNarrowings = this.combineNarrowings(guard.surviving, guard.truthy);
-                guardFallthroughNarrowings = this.retargetNarrowings(guard.surviving, fallthroughType);
+                const surviving = this.retargetNarrowings(guard.surviving, fallthroughType);
+                guardFallthroughNarrowings = patternAlwaysMatches
+                  ? this.combineNarrowings(surviving, guard.falsy)
+                  : surviving;
               } finally {
                 this.exitScope();
               }
@@ -3610,13 +3615,13 @@ export class Analyzer implements TypeEnvironment {
           return mergeTypes(thenType, elseType);
         }
       case "IsExpression": {
-        this.inferExpression(expression.value);
+        const value = this.inferExpression(expression.value);
         const checked = this.resolveAnnotation(expression.type);
         const valid = this.validateTypeReference(expression.type);
         if (valid && checked.kind === "class") {
           this.classChecks.add(spanIdentity(expression.span));
-          if ((checked.identity ?? checked.name).startsWith("js:")) this.invalidateEffectfulFlowFacts();
         }
+        if (valid && this.runtimeTypeCheckMayExecute(value, checked)) this.invalidateEffectfulFlowFacts();
         return valid ? boolType : invalidType;
       }
       case "ArrowFunctionExpression":
@@ -6002,8 +6007,6 @@ export class Analyzer implements TypeEnvironment {
       case "MatchTypePattern": {
         const checked = this.resolveAnnotation(pattern.type);
         const valid = this.validateTypeReference(pattern.type);
-        if (valid && checked.kind === "class"
-          && (checked.identity ?? checked.name).startsWith("js:")) this.invalidateEffectfulFlowFacts();
         if (valid && input.kind !== "unknown" && !this.matchTypesOverlap(this.expandAliases(input), checked)) {
           this.typeError(`Type pattern ${describeType(checked)} can never match ${describeType(input)}`, pattern.span);
         }
@@ -6088,7 +6091,8 @@ export class Analyzer implements TypeEnvironment {
     if (pattern.kind === "MatchAsPattern") return this.matchPatternCoversWholeType(pattern.pattern, input);
     if (pattern.kind === "MatchWildcardPattern" || pattern.kind === "MatchCapturePattern") return true;
     if (pattern.kind === "MatchTypePattern") {
-      return isAssignable(input, this.resolveAnnotation(pattern.type), this);
+      const checked = this.resolveAnnotation(pattern.type);
+      return !this.runtimeTypeCheckMayExecute(input, checked) && isAssignable(input, checked, this);
     }
     if (pattern.kind === "MatchValuePattern") {
       if (input.kind === "null") {
@@ -6118,10 +6122,12 @@ export class Analyzer implements TypeEnvironment {
   private matchPatternCoversType(pattern: MatchPattern, input: ValueType): boolean {
     if (pattern.kind === "MatchWildcardPattern" || pattern.kind === "MatchCapturePattern") return true;
     if (pattern.kind === "MatchAsPattern") return this.matchPatternCoversType(pattern.pattern, input);
+    if (this.matchPatternReflectionMayExecute(pattern, input)) return false;
     const type = this.expandAliases(input);
     if (type.kind === "union") return type.members.every((member) => this.matchPatternCoversType(pattern, member));
     if (pattern.kind === "MatchTypePattern") {
-      return isAssignable(type, this.resolveAnnotation(pattern.type), this);
+      const checked = this.resolveAnnotation(pattern.type);
+      return !this.runtimeTypeCheckMayExecute(type, checked) && isAssignable(type, checked, this);
     }
     if (pattern.kind === "MatchListPattern") {
       return type.kind === "list" && pattern.rest !== null && pattern.elements.length === 0;
@@ -6240,6 +6246,18 @@ export class Analyzer implements TypeEnvironment {
     if (left.kind === "optional") return this.matchTypesOverlap(left.inner, right) || this.matchTypesOverlap(nullType, right);
     if (right.kind === "optional") return this.matchTypesOverlap(left, right.inner) || this.matchTypesOverlap(left, nullType);
     return isAssignable(left, right, this) || isAssignable(right, left, this);
+  }
+
+  private runtimeTypeCheckMayExecute(input: ValueType, checkedInput: ValueType): boolean {
+    const checked = this.expandAliases(checkedInput);
+    if (checked.kind === "optional") return this.runtimeTypeCheckMayExecute(input, checked.inner);
+    if (checked.kind === "union") return checked.members.some((member) => this.runtimeTypeCheckMayExecute(input, member));
+    if (checked.kind === "class" && (checked.identity ?? checked.name).startsWith("js:")) return true;
+    const aggregateCheck = checked.kind === "named" || checked.kind === "object" || checked.kind === "list"
+      || checked.kind === "set" || checked.kind === "map";
+    if (!aggregateCheck) return false;
+    const source = this.expandAliases(input);
+    return source.kind === "unknown" || source.kind === "any" || this.hasExternalOrigin(source);
   }
 
   private defaultSortableType(original: ValueType): boolean {
@@ -6915,6 +6933,9 @@ export class Analyzer implements TypeEnvironment {
       return type.members.some((member) => this.matchPatternReflectionMayExecute(pattern, member));
     }
     if (type.kind === "optional") return this.matchPatternReflectionMayExecute(pattern, type.inner);
+    if (pattern.kind === "MatchTypePattern") {
+      return this.runtimeTypeCheckMayExecute(type, this.resolveAnnotation(pattern.type));
+    }
     if (pattern.kind === "MatchListPattern") {
       if (this.collectionReflectionMayExecute(type)) return true;
       const element = type.kind === "list" ? type.element : type.kind === "any" ? anyType : unknownType;

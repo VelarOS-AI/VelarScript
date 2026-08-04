@@ -1992,6 +1992,44 @@ print(managerName(null))
   assert.equal(execution.stdout, "Lin\nmissing\n");
 });
 
+test("match guards preserve negative facts only when their pattern always matches", () => {
+  const result = compile(`
+type User:
+    name: string
+    manager: User?
+
+def absent(value: null) -> string:
+    return "none"
+
+def managerName(value: User) -> string:
+    match value:
+        case User if value.manager:
+            return value.manager.name
+        else:
+            return absent(value.manager)
+
+const unmanaged: User = {name: "Ada", manager: null}
+print(managerName(unmanaged))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "none\n");
+
+  const partialPattern = compile(`
+type User:
+    manager: User?
+
+def invalid(value: User?) -> string:
+    match value:
+        case User if value.manager:
+            return value.manager.manager?.manager == null ? "managed" : "deep"
+        else:
+            return value.manager == null ? "missing" : "unexpected"
+`.trimStart());
+  assert.ok(partialPattern.diagnostics.some((item) => /optional access/u.test(item.message)));
+});
+
 test("match cases isolate and merge outer narrowing facts", () => {
   const result = compile(`
 type User:
@@ -11299,6 +11337,42 @@ def invalid(value: unknown, initial: User?) -> string:
 `.trimStart());
   assert.equal(externalMatch.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 
+  const externalExhaustiveness = compile(`
+extern module "host-sdk":
+    export class Client:
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def label(value: Client) -> string:
+    match value:
+        case Client:
+            return "client"
+`.trimStart());
+  assert.ok(externalExhaustiveness.diagnostics.some((item) => item.code === "VEL4006"));
+
+  const externalGuard = compile(`
+type User:
+    manager: User?
+
+extern module "host-sdk":
+    export class Client:
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def absent(value: null) -> string:
+    return "none"
+
+def invalid(client: Client, user: User) -> string:
+    match client:
+        case Client if user.manager:
+            return "managed"
+        else:
+            return absent(user.manager)
+`.trimStart());
+  assert.ok(externalGuard.diagnostics.some((item) => /Cannot assign User\? to null/u.test(item.message)));
+
   const local = compile(`
 type User:
     name: string
@@ -11313,6 +11387,76 @@ def label(value: unknown, initial: User?) -> string:
     return user.name
 `.trimStart());
   assert.deepEqual(local.diagnostics, []);
+});
+
+test("runtime record type checks account for host reflection", () => {
+  const sourcePrefix = `
+type User:
+    name: string
+
+extern module "host-sdk":
+    export def load() -> User
+
+import js {load} from "host-sdk"
+`;
+  const checked = compile(`${sourcePrefix}
+def invalid(initial: User?) -> string:
+    const remote = load()
+    let user = initial
+    assert user
+    const matches = remote is User
+    return user.name
+`);
+  assert.equal(checked.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const matched = compile(`${sourcePrefix}
+def invalid(initial: User?) -> string:
+    const remote = load()
+    let user = initial
+    assert user
+    match remote:
+        case User:
+            return "remote"
+        else:
+            return user.name
+`);
+  assert.equal(matched.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const exhaustive = compile(`${sourcePrefix}
+def label() -> string:
+    const remote = load()
+    match remote:
+        case User:
+            return remote.name
+`);
+  assert.ok(exhaustive.diagnostics.some((item) => item.code === "VEL4006"));
+
+  const unknownCheck = compile(`
+type User:
+    name: string
+
+def invalid(value: unknown, initial: User?) -> string:
+    let user = initial
+    assert user
+    const matches = value is User
+    return user.name
+`.trimStart());
+  assert.equal(unknownCheck.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+});
+
+test("runtime List patterns do not claim exhaustiveness across host reflection", () => {
+  const result = compileCore(`
+import js {values} from "host-sdk"
+
+def label() -> string:
+    match values:
+        case [...rest]:
+            return str(rest.size)
+`.trimStart(), { analysis: { imports: new Map([[
+    "values",
+    { kind: "list", element: { kind: "number" }, external: true },
+  ]]) } });
+  assert.ok(result.diagnostics.some((item) => item.code === "VEL4006"));
 });
 
 test("conditional expression branches isolate and merge call effects", () => {
