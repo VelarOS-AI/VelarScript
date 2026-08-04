@@ -288,15 +288,17 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   body readers. `blob()` returns an opaque checked `Blob`, not `any`; it may be
   passed back as an HTTP body but does not expose the native browser object or
   arbitrary fields.
-- Fetch results are validated before they enter the typed response object.
-  Status/`ok`, status text, canonical URL, and native response headers must keep
-  their declared types; response headers share the 100-field/64-KiB bound and
-  returned URLs the 2-MiB URL bound.
-- Response bodies are consumed incrementally. A declared or streamed body over
-  `maxBytes` is cancelled before it can be materialized; successful bytes are
-  cached so repeated `text`/`json`/`blob` reads are stable. JSON remains subject
-  to the separate strict 16 MiB JSON contract even when a larger text/blob
-  budget was requested.
+- Fetch results are snapshotted and validated once before they enter the typed
+  response object. Status/`ok`, status text, canonical URL, native headers, and
+  body ownership cannot change between validation and use; response headers
+  share the 100-field/64-KiB bound and returned URLs the 2-MiB URL bound.
+- Response bodies are consumed through captured native stream operations and
+  accept only real `Uint8Array` chunks. Each accepted chunk is copied after its
+  size passes the running budget, and a pathological stream cannot exceed one
+  million chunks. A declared or streamed body over `maxBytes` is cancelled
+  before it can be materialized; successful bytes are cached so repeated
+  `text`/`json`/`blob` reads are stable. JSON remains subject to the separate
+  strict 16 MiB JSON contract even when a larger text/blob budget was requested.
 - Cancellation is idempotent and owns the whole lazy request. Cancelling before
   the first body reader prevents `fetch` from starting; cancelling an active
   request aborts it. Cancellation and timeout reject with `HttpAbortError`,

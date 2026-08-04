@@ -7335,6 +7335,9 @@ globalThis.fetch = async (url) => {
       cancel() { cancelled = true; },
     }));
   }
+  if (url === "/wrong-chunk") {
+    return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint16Array([1])); controller.close(); } }));
+  }
   return new Response('{"value":3}', { headers: { "content-type": "application/json" } });
 };
 try { await http.get("/large", { maxBytes: 4 }).text(); console.log("accepted"); }
@@ -7343,24 +7346,35 @@ console.log(cancelled);
 const response = await http.get("/cached").response();
 console.log(await response.text());
 console.log((await response.json()).value);
+try { await http.get("/wrong-chunk").text(); console.log("accepted"); }
+catch (error) { console.log(error.name); }
 try { http.get("/invalid", { maxBytes: 0 }); console.log("accepted"); }
 catch (error) { console.log(error.name); }
 console.log(fetchCalls);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, 'RangeError\ntrue\n{"value":3}\n3\nRangeError\n2\n');
+  assert.equal(execution.stdout, 'RangeError\ntrue\n{"value":3}\n3\nTypeError\nRangeError\n3\n');
 });
 
 test("HTTP validates response metadata and bounds returned headers", () => {
   const http = standardModuleSource("velar/http") ?? "";
   const execution = executeModule(`${http}
 let mode = "headers";
+let statusReads = 0;
+let okReads = 0;
+let headerReads = 0;
 globalThis.fetch = async () => {
   const headers = new Headers();
   if (mode === "headers") for (let index = 0; index <= 100; index += 1) headers.set("x-field-" + index, "value");
   const response = new Response("ok", { headers });
   if (mode === "url") Object.defineProperty(response, "url", { value: "x".repeat(2 * 1024 * 1024 + 1) });
   if (mode === "status") Object.defineProperty(response, "status", { value: Number.NaN });
+  if (mode === "snapshot") {
+    const nativeHeaders = response.headers;
+    Object.defineProperty(response, "ok", { get() { okReads += 1; return true; } });
+    Object.defineProperty(response, "status", { get() { statusReads += 1; return statusReads === 1 ? 200 : Number.NaN; } });
+    Object.defineProperty(response, "headers", { get() { headerReads += 1; return headerReads === 1 ? nativeHeaders : { get() { throw new Error("headers changed"); } }; } });
+  }
   return response;
 };
 for (const selected of ["headers", "url", "status"]) {
@@ -7368,9 +7382,13 @@ for (const selected of ["headers", "url", "status"]) {
   try { await http.get("/probe").response(); console.log("accepted"); }
   catch (error) { console.log(error.name); }
 }
+mode = "snapshot";
+const snapshot = await http.get("/probe").response();
+console.log(snapshot.status, statusReads, okReads, headerReads);
+console.log(await snapshot.text());
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "RangeError\nRangeError\nTypeError\n");
+  assert.equal(execution.stdout, "RangeError\nRangeError\nTypeError\n200 1 1 1\nok\n");
 });
 
 test("known lossy JSON inputs fail during checking", async () => {

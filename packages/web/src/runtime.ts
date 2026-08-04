@@ -974,6 +974,14 @@ ${VELAR_STRICT_JSON_RUNTIME}
 ${runtimeTypeRuntime}
 ${fileRegistryRuntime}
 const formBodies = new WeakMap();
+const nativeStreamGetReader = typeof ReadableStream === "function" ? Object.getOwnPropertyDescriptor(ReadableStream.prototype, "getReader")?.value : null;
+const nativeStreamCancel = typeof ReadableStream === "function" ? Object.getOwnPropertyDescriptor(ReadableStream.prototype, "cancel")?.value : null;
+const nativeReaderRead = typeof ReadableStreamDefaultReader === "function" ? Object.getOwnPropertyDescriptor(ReadableStreamDefaultReader.prototype, "read")?.value : null;
+const nativeReaderCancel = typeof ReadableStreamDefaultReader === "function" ? Object.getOwnPropertyDescriptor(ReadableStreamDefaultReader.prototype, "cancel")?.value : null;
+const nativeTypedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const nativeTypedArrayTag = Object.getOwnPropertyDescriptor(nativeTypedArrayPrototype, Symbol.toStringTag)?.get;
+const nativeTypedArrayByteLength = Object.getOwnPropertyDescriptor(nativeTypedArrayPrototype, "byteLength")?.get;
+const nativeUint8ArraySet = Object.getOwnPropertyDescriptor(nativeTypedArrayPrototype, "set")?.value;
 
 function runtimeHttpType(Type) { return __velarRequireRuntimeType(Type, "HTTP parsing"); }
 
@@ -1103,49 +1111,77 @@ export class HttpAbortError extends Error {
 
 class HttpResponse {
   constructor(response, maxBytes) {
-    if (typeof response.ok !== "boolean" || !Number.isInteger(response.status) || (response.status !== 0 && (response.status < 100 || response.status > 599))) {
-      throw new TypeError("Fetch returned invalid HTTP response metadata");
-    }
+    const ok = response.ok;
+    const status = response.status;
     const statusText = __velarString(response.statusText, "HTTP response status text");
     const url = __velarString(response.url, "HTTP response URL");
+    const nativeHeaders = response.headers;
+    const body = response.body;
+    if (typeof ok !== "boolean" || !Number.isInteger(status) || (status !== 0 && (status < 100 || status > 599))) {
+      throw new TypeError("Fetch returned invalid HTTP response metadata");
+    }
     if (statusText.length > 65536) throw new RangeError("HTTP response status text cannot exceed 64 KiB");
     if (url.length > 2 * 1024 * 1024) throw new RangeError("HTTP response URLs cannot exceed 2 MiB");
-    this.native = response;
+    const headers = responseHeadersOf(nativeHeaders);
     this.maxBytes = maxBytes;
     this.bytesValue = null;
     this.bytesPending = null;
-    this.ok = response.ok;
-    this.status = response.status;
+    this.ok = ok;
+    this.status = status;
     this.statusText = statusText;
     this.url = url;
-    this.headers = responseHeadersOf(response.headers);
+    this.headers = headers;
+    this.body = body;
+    this.declaredLength = Map.prototype.get.call(headers, "content-length") ?? null;
+    this.contentType = Map.prototype.get.call(headers, "content-type") ?? "";
   }
   async bytes() {
     if (this.bytesValue) return this.bytesValue;
     if (this.bytesPending) return this.bytesPending;
-    const declared = this.native.headers.get("content-length");
+    const declared = this.declaredLength;
     if (declared && /^\d+$/u.test(declared) && Number(declared) > this.maxBytes) {
-      await this.native.body?.cancel("VelarScript HTTP response exceeded maxBytes");
+      if (this.body !== null && typeof nativeStreamCancel === "function") {
+        try { await nativeStreamCancel.call(this.body, "VelarScript HTTP response exceeded maxBytes"); } catch {}
+      }
       throw new RangeError("HTTP response exceeds maxBytes");
     }
     this.bytesPending = (async () => {
-      const reader = this.native.body?.getReader();
-      if (!reader) return new Uint8Array();
+      if (this.body === null) return new Uint8Array();
+      if (typeof nativeStreamGetReader !== "function" || typeof nativeReaderRead !== "function" || typeof nativeReaderCancel !== "function"
+        || typeof nativeTypedArrayTag !== "function" || typeof nativeTypedArrayByteLength !== "function" || typeof nativeUint8ArraySet !== "function") {
+        throw new TypeError("The browser does not expose the required native response stream API");
+      }
+      let reader;
+      try { reader = nativeStreamGetReader.call(this.body); }
+      catch { throw new TypeError("Fetch returned an invalid HTTP response body"); }
       const chunks = [];
       let total = 0;
       while (true) {
-        const next = await reader.read();
+        const next = await nativeReaderRead.call(reader);
         if (next.done) break;
-        total += next.value.byteLength;
+        let kind;
+        let length;
+        try {
+          kind = nativeTypedArrayTag.call(next.value);
+          length = nativeTypedArrayByteLength.call(next.value);
+        } catch { throw new TypeError("Fetch returned a non-byte response chunk"); }
+        if (kind !== "Uint8Array") throw new TypeError("Fetch returned a non-byte response chunk");
+        total += length;
         if (total > this.maxBytes) {
-          await reader.cancel("VelarScript HTTP response exceeded maxBytes");
+          try { await nativeReaderCancel.call(reader, "VelarScript HTTP response exceeded maxBytes"); } catch {}
           throw new RangeError("HTTP response exceeds maxBytes");
         }
-        chunks.push(next.value);
+        if (chunks.length >= 1000000) {
+          try { await nativeReaderCancel.call(reader, "VelarScript HTTP response exceeded the chunk limit"); } catch {}
+          throw new RangeError("HTTP responses cannot exceed 1000000 chunks");
+        }
+        const chunk = new Uint8Array(length);
+        nativeUint8ArraySet.call(chunk, next.value);
+        chunks.push(chunk);
       }
       const output = new Uint8Array(total);
       let offset = 0;
-      for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+      for (const chunk of chunks) { nativeUint8ArraySet.call(output, chunk, offset); offset += chunk.byteLength; }
       return output;
     })();
     try { this.bytesValue = await this.bytesPending; return this.bytesValue; }
@@ -1153,7 +1189,7 @@ class HttpResponse {
   }
   async json() { const text = await this.text(); if (text.length > __velarMaxJsonCodeUnits) throw new RangeError("JSON text cannot exceed 16 MiB"); const value = JSON.parse(text); __velarAssertJson(value); return value; }
   async text() { return new TextDecoder().decode(await this.bytes()); }
-  async blob() { return new Blob([await this.bytes()], { type: this.native.headers.get("content-type") ?? "" }); }
+  async blob() { return new Blob([await this.bytes()], { type: this.contentType }); }
   async parse(Type) { Type = runtimeHttpType(Type); return Type.parse(await this.json()); }
 }
 
@@ -1206,11 +1242,11 @@ class Request {
       });
       if (this.abortError) throw this.abortError;
       const wrapped = new HttpResponse(response, this.options.maxBytes);
-      if (!response.ok) {
+      if (!wrapped.ok) {
         const text = await wrapped.text();
         let parsed = text;
         try { if (text.length > __velarMaxJsonCodeUnits) throw new RangeError("Error body is too large for JSON"); parsed = text ? JSON.parse(text) : null; __velarAssertJson(parsed); } catch { parsed = text; }
-        throw new HttpError("HTTP " + response.status + " for " + this.url, response.status, this.url, parsed);
+        throw new HttpError("HTTP " + wrapped.status + " for " + this.url, wrapped.status, this.url, parsed);
       }
       return wrapped;
     } catch (error) {
