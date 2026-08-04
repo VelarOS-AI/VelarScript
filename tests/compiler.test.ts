@@ -5254,6 +5254,50 @@ console.log(failures.join(","));
   assert.equal(execution.stdout, "10\nprototype-focus:true,prototype-blur,prototype-scroll:smooth,prototype-measure\nTypeError,TypeError,TypeError\n");
 });
 
+test("clipboard and dialog helpers snapshot hosts and bypass instance overrides", () => {
+  const source = standardModuleSource("velar/browser") ?? "";
+  const execution = executeModule(`
+const calls = [];
+class FakeClipboard {
+  async writeText(value) { calls.push("prototype-write:" + value); }
+  async readText() { calls.push("prototype-read"); return "ready"; }
+}
+class FakeDialog {
+  showModal() { calls.push("prototype-show"); this.open = true; }
+  close(value) { calls.push("prototype-close:" + value); this.open = false; }
+}
+globalThis.Clipboard = FakeClipboard;
+globalThis.HTMLDialogElement = FakeDialog;
+let secureReads = 0;
+Object.defineProperty(globalThis, "isSecureContext", { configurable: true, get() { secureReads += 1; return secureReads === 1; } });
+const clipboardValue = new FakeClipboard();
+let clipboardReads = 0;
+const navigatorValue = {};
+Object.defineProperty(navigatorValue, "clipboard", { get() { clipboardReads += 1; return clipboardReads === 1 ? clipboardValue : null; } });
+Object.defineProperty(globalThis, "navigator", { configurable: true, value: navigatorValue });
+${source}
+clipboardValue.writeText = () => calls.push("instance-write");
+await copyText("Velar");
+let openState = false;
+let openReads = 0;
+let connectedReads = 0;
+const dialog = new FakeDialog();
+Object.defineProperty(dialog, "isConnected", { get() { connectedReads += 1; return true; } });
+Object.defineProperty(dialog, "open", {
+  get() { openReads += 1; return openState; },
+  set(value) { openState = value; },
+});
+dialog.showModal = () => calls.push("instance-show");
+dialog.close = () => calls.push("instance-close");
+showDialog(dialog);
+closeDialog(dialog, "done");
+console.log(calls.join(","));
+console.log([secureReads, clipboardReads, connectedReads, openReads, openState].join(":"));
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "prototype-write:Velar,prototype-show,prototype-close:done\n1:1:1:2:false\n");
+});
+
 test("browser snapshots and asynchronous host results stay inside typed bounds", () => {
   const source = standardModuleSource("velar/browser") ?? "";
   const execution = executeModule(`

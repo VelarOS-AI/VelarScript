@@ -1571,13 +1571,25 @@ export function environment() {
   });
 }
 
+const NativeClipboard = typeof Clipboard === "function" ? Clipboard : null;
+const nativeClipboardWriteText = NativeClipboard ? Object.getOwnPropertyDescriptor(NativeClipboard.prototype, "writeText")?.value : null;
+const nativeClipboardReadText = NativeClipboard ? Object.getOwnPropertyDescriptor(NativeClipboard.prototype, "readText")?.value : null;
+const NativeDialog = typeof HTMLDialogElement === "function" ? HTMLDialogElement : null;
+const nativeDialogShowModal = NativeDialog ? Object.getOwnPropertyDescriptor(NativeDialog.prototype, "showModal")?.value : null;
+const nativeDialogClose = NativeDialog ? Object.getOwnPropertyDescriptor(NativeDialog.prototype, "close")?.value : null;
 function clipboard() {
-  if (!globalThis.isSecureContext || !navigator.clipboard) throw new Error("Clipboard access requires a secure browser context");
-  return navigator.clipboard;
+  const secure = globalThis.isSecureContext;
+  const navigatorValue = navigator;
+  const value = navigatorValue.clipboard;
+  if (secure !== true || !NativeClipboard || !(value instanceof NativeClipboard)
+    || typeof nativeClipboardWriteText !== "function" || typeof nativeClipboardReadText !== "function") {
+    throw new Error("Clipboard access requires a secure browser context");
+  }
+  return value;
 }
 
-export async function copyText(value) { value = browserText(value, "Clipboard text", 16 * 1024 * 1024); await clipboard().writeText(value); return null; }
-export async function readClipboardText() { return browserText(await clipboard().readText(), "Clipboard text", 16 * 1024 * 1024); }
+export async function copyText(value) { value = browserText(value, "Clipboard text", 16 * 1024 * 1024); await nativeClipboardWriteText.call(clipboard(), value); return null; }
+export async function readClipboardText() { return browserText(await nativeClipboardReadText.call(clipboard()), "Clipboard text", 16 * 1024 * 1024); }
 export function open(url, target = "_blank") { url = browserText(url, "Browser URL", 2 * 1024 * 1024); target = browserText(target, "Browser target", 256); globalThis.open(url, target, target === "_blank" ? "noopener,noreferrer" : undefined); return null; }
 export function scrollTo(x, y, behavior = "auto") { globalThis.scrollTo({ left: browserNumber(x, "Scroll x"), top: browserNumber(y, "Scroll y"), behavior: scrollBehavior(behavior) }); return null; }
 export function scrollIntoView(element, behavior = "smooth") { requireElement(element); Element.prototype.scrollIntoView.call(element, { behavior: scrollBehavior(behavior), block: "nearest" }); return null; }
@@ -1628,14 +1640,19 @@ export function watchVisibility(callback) {
 }
 export function showDialog(dialog) {
   requireDialog(dialog);
-  if (!dialog.isConnected) throw new Error("A dialog must be mounted before it can be shown");
-  if (!dialog.open) dialog.showModal();
+  const connected = dialog.isConnected;
+  const open = dialog.open;
+  if (connected !== true) throw new Error("A dialog must be mounted before it can be shown");
+  if (typeof open !== "boolean") throw new TypeError("Dialog open state must be bool");
+  if (!open) nativeDialogShowModal.call(dialog);
   return null;
 }
 export function closeDialog(dialog, result = "") {
   requireDialog(dialog);
   result = browserText(result, "Dialog result", 65536);
-  if (dialog.open) dialog.close(result);
+  const open = dialog.open;
+  if (typeof open !== "boolean") throw new TypeError("Dialog open state must be bool");
+  if (open) nativeDialogClose.call(dialog, result);
   return null;
 }
 export function dialogResult(dialog) { requireDialog(dialog); return browserText(dialog.returnValue, "Dialog result", 65536); }
@@ -1646,7 +1663,12 @@ function requireFocusableElement(value) {
   if (typeof HTMLElement === "undefined" || !(value instanceof HTMLElement)) throw new TypeError("Focus helpers require an HTML element");
   return value;
 }
-function requireDialog(value) { if (typeof HTMLDialogElement === "undefined" || !(value instanceof HTMLDialogElement)) throw new TypeError("Dialog helpers require a <dialog> element"); }
+function requireDialog(value) {
+  if (!NativeDialog || !(value instanceof NativeDialog)
+    || typeof nativeDialogShowModal !== "function" || typeof nativeDialogClose !== "function") {
+    throw new TypeError("Dialog helpers require a <dialog> element");
+  }
+}
 `.trimStart()],
   ["velar/files", String.raw`
 ${optionsRuntime}

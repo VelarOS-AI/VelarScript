@@ -490,7 +490,9 @@ React-style effect API.
   environment state. Every watcher returns a cleanup function, and callback
   failures are owned by the application error channel.
 - `copyText` and `readClipboardText` require a secure context and may reject
-  when browser permission or user-gesture policy denies access.
+  when browser permission or user-gesture policy denies access. Each operation
+  snapshots the secure-context and native clipboard host once, then uses the
+  captured platform method rather than a replaceable instance method.
 - `open`, `scrollTo`, `scrollIntoView`, `measure`, and `frame` cover intentional
   window, element, layout, and animation-frame operations. Text/URL/query
   inputs are strings, scroll coordinates are finite numbers, and behavior is
@@ -507,6 +509,9 @@ React-style effect API.
   it modally; `closeDialog(dialog, result="")` closes an open dialog, and
   `dialogResult` returns its native string result. These helpers validate the
   browser object without exposing document construction or an untyped DOM.
+  Dialog state is read once per operation and opening/closing uses the captured
+  native prototype methods, so an instance override cannot replace framework
+  behavior.
 
 ## `velar/files`
 
