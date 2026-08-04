@@ -3521,6 +3521,7 @@ const result = show(2)
   assert.equal(parameter.type, "number");
   const show = result.semanticIndex.symbols.find((symbol) => symbol.name === "show");
   assert.equal(show?.type, "(value: number) -> number");
+  assert.equal(show?.callable, true);
   const innerOffset = source.indexOf("print(value)") + "print(".length;
   const innerVisible = semanticVisibleSymbolsAt(result.semanticIndex, innerOffset);
   assert.deepEqual(innerVisible.filter((symbol) => symbol.name === "value").map((symbol) => symbol.kind), ["variable"]);
@@ -3542,6 +3543,51 @@ test("semantic module references retain exact literal content spans", () => {
   const reference = result.semanticIndex.moduleReferences[0]!;
   assert.equal(reference.source, './a"b.vel');
   assert.equal(source.slice(reference.span.start, reference.span.end), './a\\"b.vel');
+});
+
+test("semantic type references come from the type AST instead of display text", () => {
+  const source = `type User:
+    name: string
+
+type Profile = User
+type Handler = (User: string, current: (User), values: List<User>) -> User
+`;
+  const result = compileCore(source);
+  assert.deepEqual(result.diagnostics, []);
+  const references = result.semanticIndex.references.filter((reference) => reference.name === "User");
+  assert.equal(references.length, 4);
+  assert.ok(references.every((reference) => source.slice(reference.span.start, reference.span.end) === "User"));
+  assert.ok(!references.some((reference) => reference.span.start === source.indexOf("(User: string") + 1));
+  const profile = result.semanticIndex.symbols.find((symbol) => symbol.name === "Profile");
+  assert.equal(profile?.type, "User");
+  assert.equal(profile?.typeTarget, "User");
+  assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "Handler")?.typeTarget, undefined);
+});
+
+test("project member navigation follows explicit type-alias targets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-alias-navigation-"));
+  const modelsPath = join(directory, "models.vel");
+  const mainPath = join(directory, "main.vel");
+  const modelsSource = `export type User:
+    name: string
+
+export type Profile = User
+`;
+  const mainSource = `import {Profile} from "./models.vel"
+const profile: Profile = {name: "Ada"}
+print(profile.name)
+`;
+  await writeFile(modelsPath, modelsSource, "utf8");
+  await writeFile(mainPath, mainSource, "utf8");
+  const project = await compileProject(mainPath);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const memberOffset = mainSource.indexOf("profile.name") + "profile.".length;
+  const fieldOffset = modelsSource.indexOf("name: string");
+  assert.deepEqual(projectDefinitionAt(project, mainPath, memberOffset + 1), {
+    path: modelsPath,
+    span: { start: fieldOffset, end: fieldOffset + "name".length },
+  });
 });
 
 test("documentation comments cross declarations, aliases, members, hover targets, and completion", async () => {
@@ -3767,6 +3813,7 @@ const label = greet(ada)
   });
   assert.equal(projectExpressionAt(project, mainPath, mainSource.indexOf(".slice") + 2)?.type,
     "(number = default, number = default) -> List<number>");
+  assert.equal(projectExpressionAt(project, mainPath, mainSource.indexOf(".slice") + 2)?.callable, true);
   const preparedFieldRename = projectPrepareRenameAt(project, modelsPath, modelsSource.indexOf("{name}\n") + 2);
   assert.equal(preparedFieldRename?.placeholder, "name");
   const fieldRename = projectRenameAt(project, modelsPath, userField + 1, "fullName");

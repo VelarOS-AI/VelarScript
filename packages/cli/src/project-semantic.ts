@@ -229,7 +229,7 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
     const resolved = projectMemberSymbolAt(project, path, Math.min(reference.span.end, reference.span.start + 1));
     const expression = module.result.semanticIndex.expressions.find((item) => item.selectionSpan
       && item.selectionSpan.start === reference.span.start && item.selectionSpan.end === reference.span.end);
-    add(reference.span, resolved, expression?.type.startsWith("(") ? "method" : "property", false, 2);
+    add(reference.span, resolved, expression?.callable ? "method" : "property", false, 2);
   }
 
   return [...tokens.values()].map((item) => item.token).sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end);
@@ -468,13 +468,13 @@ export function projectSignatureAt(project: ProjectResult, path: string, offset:
   const call = callAt(source, offset);
   if (!call) return null;
   const symbol = projectSymbolAt(project, path, call.calleeOffset);
-  if (symbol?.type?.startsWith("(")) return { label: `${symbol.name}${symbol.type}`, activeParameter: call.activeParameter };
+  if (symbol?.callable && symbol.type) return { label: `${symbol.name}${symbol.type}`, activeParameter: call.activeParameter };
   const expression = module.result.semanticIndex.expressions.find((item) => item.selectionSpan && contains(item.selectionSpan, call.calleeOffset));
-  if (expression?.memberName && expression.type.startsWith("(")) {
+  if (expression?.memberName && expression.callable) {
     return { label: `${expression.memberName}${expression.type}`, activeParameter: call.activeParameter };
   }
   const member = memberCallAt(project, module, source, call.calleeOffset);
-  return member?.type.startsWith("(")
+  return member?.kind === "method"
     ? { label: `${member.name}${member.type}`, activeParameter: call.activeParameter }
     : null;
 }
@@ -558,7 +558,7 @@ function memberTargetForExpression(project: ProjectResult, module: ProjectModule
 }
 
 function memberTargetForReference(project: ProjectResult, module: ProjectModule, reference: SemanticMemberReference): MemberTarget | null {
-  return memberTargetForOwner(project, module, reference.name, reference.ownerType, reference.ownerKind);
+  return memberTargetForOwner(project, module, reference.name, reference.ownerType, reference.ownerKind, reference.ownerIdentity);
 }
 
 function memberTargetForOwner(
@@ -567,10 +567,11 @@ function memberTargetForOwner(
   memberName: string,
   ownerType: string,
   ownerKind: SemanticExpression["ownerKind"],
+  ownerIdentity?: string,
 ): MemberTarget | null {
   if (ownerKind !== "named" && ownerKind !== "class" && ownerKind !== "typeObject"
     && ownerKind !== "classConstructor" && ownerKind !== "componentConstructor") return null;
-  const owner = ownerTarget(project, module, ownerType, ownerKind);
+  const owner = ownerTarget(project, module, ownerType, ownerKind, ownerIdentity);
   return owner ? findDeclaredMember(project, owner, memberName, ownerKind === "classConstructor", new Set()) : null;
 }
 
@@ -579,11 +580,17 @@ function ownerTarget(
   module: ProjectModule,
   name: string,
   ownerKind: SemanticExpression["ownerKind"],
+  ownerIdentity?: string,
+  visited: Set<string> = new Set(),
 ): MemberTarget | null {
   const expected = ownerKind === "class" || ownerKind === "classConstructor" ? "class"
     : ownerKind === "componentConstructor" ? "component" : "type";
-  if (expected === "class") {
-    const identified = classOwnerByIdentity(project, name);
+  const key = `${module.inputPath}:${expected}:${name}`;
+  if (visited.has(key)) return null;
+  visited.add(key);
+  const identity = ownerIdentity ?? (expected === "class" ? name : null);
+  if (identity && (expected === "class" || expected === "type")) {
+    const identified = declaredOwnerByIdentity(project, identity, expected);
     if (identified) return identified;
   }
   const symbol = module.result.semanticIndex.symbols.find((item) => item.name === name
@@ -592,19 +599,24 @@ function ownerTarget(
   if (symbol.kind === "import") {
     const imported = importForSymbol(module.result.semanticIndex, symbol.id);
     const exported = imported ? exportedTarget(project, module, imported) : null;
-    return exported && exported.symbol.kind === expected ? { module: exported.module, symbol: exported.symbol } : null;
+    return exported && exported.symbol.kind === expected
+      ? ownerTarget(project, exported.module, exported.symbol.name, ownerKind, ownerIdentity, visited)
+      : null;
   }
-  if (symbol.kind === "type" && symbol.type && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(symbol.type) && symbol.type !== symbol.name) {
-    return ownerTarget(project, module, symbol.type, "named") ?? { module, symbol };
+  if (symbol.kind === "type" && symbol.typeTarget && symbol.typeTarget !== symbol.name) {
+    return ownerTarget(project, module, symbol.typeTarget, "named", undefined, visited) ?? { module, symbol };
   }
   return { module, symbol };
 }
 
-function classOwnerByIdentity(project: ProjectResult, identity: string): MemberTarget | null {
+function declaredOwnerByIdentity(project: ProjectResult, identity: string, kind: "class" | "type"): MemberTarget | null {
   for (const candidate of project.modules) {
-    for (const [name, info] of candidate.result.moduleInterface.classes) {
-      if (info.identity !== identity) continue;
-      const symbol = candidate.result.semanticIndex.symbols.find((item) => item.kind === "class" && item.name === name);
+    const declarations = kind === "class"
+      ? [...candidate.result.moduleInterface.classes].map(([name, info]) => [name, info.identity] as const)
+      : [...candidate.result.moduleInterface.namedTypeIdentities];
+    for (const [name, declarationIdentity] of declarations) {
+      if (declarationIdentity !== identity) continue;
+      const symbol = candidate.result.semanticIndex.symbols.find((item) => item.kind === kind && item.name === name);
       if (symbol) return { module: candidate, symbol };
     }
   }

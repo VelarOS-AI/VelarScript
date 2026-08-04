@@ -601,7 +601,7 @@ async function hover(document: TextDocument, position: Position, project: Projec
   if (keyword) return { contents: { kind: "markdown", value: `\`\`${word}\`\`\n\n${keyword}` } };
   const expression = path && project ? projectExpressionAt(project, path, offset) : null;
   if (expression?.memberName) {
-    const declaration = expression.type.startsWith("(") ? "method" : "field";
+    const declaration = expression.callable ? "method" : "field";
     const member = path && project ? projectMemberSymbolAt(project, path, offset) : null;
     const documentation = member?.documentation ? `\n\n${member.documentation}` : "";
     return { contents: { kind: "markdown", value: clipLspText(`\`\`${declaration} ${expression.memberName}: ${expression.type}\`\`${documentation}`) } };

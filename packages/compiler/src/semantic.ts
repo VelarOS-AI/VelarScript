@@ -7,6 +7,7 @@ import type {
   Program,
   Statement,
   TypeReference,
+  TypeSyntax,
 } from "./ast.ts";
 import { spanIdentity, type SourceText, type Span } from "./source.ts";
 import { describeType, formatTypeReference, type ValueType } from "./types.ts";
@@ -45,6 +46,8 @@ export interface SemanticSymbol {
   readonly type: string | null;
   readonly documentation: string | null;
   readonly members: readonly SemanticMember[];
+  readonly callable?: true;
+  readonly typeTarget?: string;
   readonly container?: string;
   readonly static?: boolean;
 }
@@ -59,6 +62,7 @@ export interface SemanticExpression {
   readonly span: Span;
   readonly type: string;
   readonly members: readonly SemanticMember[];
+  readonly callable?: true;
   readonly memberName?: string;
   readonly selectionSpan?: Span;
   readonly ownerType?: string;
@@ -81,6 +85,7 @@ export interface SemanticMemberReference {
   readonly span: Span;
   readonly ownerType: string;
   readonly ownerKind: ValueType["kind"];
+  readonly ownerIdentity?: string;
   readonly syntax: "access" | "object-key" | "binding-key" | "jsx-prop";
   readonly shorthand: boolean;
 }
@@ -124,6 +129,7 @@ export interface SemanticDeclareOptions {
   readonly lexical?: boolean;
   readonly container?: string;
   readonly explicitType?: string;
+  readonly typeTarget?: string;
   readonly static?: boolean;
   readonly documentationStart?: number;
   readonly private?: boolean;
@@ -210,6 +216,8 @@ export function buildSemanticIndex(
   let extensionContext: SemanticExtensionContext;
   let nextScopeId = 1;
 
+  const callable = (type: ValueType | undefined): boolean => type?.kind === "function" || type?.kind === "intrinsic" || type?.kind === "action";
+
   const currentScope = (): Scope => scopes.at(-1)!;
   const enterScope = (scopeSpan: Span): void => {
     const scope = { id: nextScopeId++, parentId: currentScope().id, span: scopeSpan, bindings: new Map<string, SemanticSymbol>() };
@@ -236,7 +244,7 @@ export function buildSemanticIndex(
     container?: string,
     explicitType?: string,
     staticMember = false,
-    options: { readonly documentationStart?: number; readonly private?: boolean } = {},
+    options: { readonly documentationStart?: number; readonly private?: boolean; readonly typeTarget?: string } = {},
   ): SemanticSymbol => {
     const existing = declarations.get(owner);
     if (existing) return existing;
@@ -258,6 +266,8 @@ export function buildSemanticIndex(
       type: explicitType ?? (type ? describeType(type) : null),
       documentation: documentationBefore(source, options.documentationStart ?? declarationSpan.start),
       members,
+      ...(callable(type) ? { callable: true as const } : {}),
+      ...(options.typeTarget ? { typeTarget: options.typeTarget } : {}),
       ...(container ? { container } : {}),
       ...(kind === "method" || kind === "field" ? { static: staticMember } : {}),
     };
@@ -269,14 +279,29 @@ export function buildSemanticIndex(
   const reference = (name: string, valueSpan: Span, write = false): void => {
     references.push({ name, path: source.path, span: valueSpan, symbolId: lookup(name)?.id ?? null, write });
   };
-  const typeReferences = (type: TypeReference | null): void => {
-    if (!type) return;
-    const text = source.text.slice(type.span.start, type.span.end);
-    for (const match of text.matchAll(/[A-Za-z_][A-Za-z0-9_]*/gu)) {
-      const name = match[0];
-      const start = type.span.start + (match.index ?? 0);
-      if (lookup(name)) reference(name, { start, end: start + name.length });
+  const typeSyntaxReferences = (syntax: TypeSyntax): void => {
+    switch (syntax.kind) {
+      case "NamedTypeSyntax":
+        if (lookup(syntax.name)) reference(syntax.name, syntax.span);
+        break;
+      case "GenericTypeSyntax":
+        if (lookup(syntax.name)) reference(syntax.name, syntax.nameSpan);
+        for (const argument of syntax.arguments) typeSyntaxReferences(argument);
+        break;
+      case "OptionalTypeSyntax":
+        typeSyntaxReferences(syntax.inner);
+        break;
+      case "UnionTypeSyntax":
+        for (const member of syntax.members) typeSyntaxReferences(member);
+        break;
+      case "FunctionTypeSyntax":
+        for (const parameter of syntax.parameters) typeSyntaxReferences(parameter.type);
+        typeSyntaxReferences(syntax.result);
+        break;
     }
+  };
+  const typeReferences = (type: TypeReference | null): void => {
+    if (type) typeSyntaxReferences(type.syntax);
   };
   const nameSpan = (span: Span, name: string, from = span.start): Span => findNameSpan(source.text, span, name, from);
   const recordMemberReference = (
@@ -292,6 +317,7 @@ export function buildSemanticIndex(
       span: referenceSpan,
       ownerType: "name" in owner ? owner.name : describeType(owner),
       ownerKind: owner.kind,
+      ...("identity" in owner && owner.identity ? { ownerIdentity: owner.identity } : {}),
       syntax,
       shorthand,
     });
@@ -326,7 +352,20 @@ export function buildSemanticIndex(
       switch (statement.kind) {
         case "ImportDeclaration": declareImport(statement); break;
         case "TypeDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
-        case "TypeAliasDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported, false, true, undefined, formatTypeReference(statement.target)); break;
+        case "TypeAliasDeclaration": declare(
+          statement,
+          statement.name,
+          "type",
+          statement.span,
+          nameSpan(statement.span, statement.name),
+          statement.exported,
+          false,
+          true,
+          undefined,
+          formatTypeReference(statement.target),
+          false,
+          { ...(statement.target.syntax.kind === "NamedTypeSyntax" ? { typeTarget: statement.target.syntax.name } : {}) },
+        ); break;
         case "EnumDeclaration": {
           declare(statement, statement.name, "enum", statement.span, nameSpan(statement.span, statement.name), statement.exported);
           for (const member of statement.members) {
@@ -438,7 +477,7 @@ export function buildSemanticIndex(
       ? describeMembers(expressionContextMembers.get(expressionKey) ?? new Map())
       : [];
     const describedExpressionMembers = describeMembers(expressionMembers.get(expressionKey) ?? new Map());
-    const callableExpression = expressionType?.kind === "function" || expressionType?.kind === "intrinsic" || expressionType?.kind === "action";
+    const callableExpression = callable(expressionType);
     const indexableExpression = (expression.kind !== "IdentifierExpression" || expressionType !== undefined)
       && expression.kind !== "LiteralExpression" && expression.kind !== "SuperExpression";
     if (expressionType && indexableExpression
@@ -449,6 +488,7 @@ export function buildSemanticIndex(
         span: expression.span,
         type: describeType(expressionType),
         members: describedExpressionMembers,
+        ...(callableExpression ? { callable: true as const } : {}),
         ...(expressionContext ? { contextType: describeType(expressionContext), contextMembers: describedContextMembers } : {}),
         ...(expression.kind === "MemberExpression" ? {
           memberName: expression.property,
@@ -737,6 +777,7 @@ export function buildSemanticIndex(
         {
           ...(options.documentationStart === undefined ? {} : { documentationStart: options.documentationStart }),
           ...(options.private === undefined ? {} : { private: options.private }),
+          ...(options.typeTarget === undefined ? {} : { typeTarget: options.typeTarget }),
         },
       );
     },

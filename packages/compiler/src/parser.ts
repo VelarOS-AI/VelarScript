@@ -1212,9 +1212,8 @@ export class Parser {
       const open = this.advance();
       const grouped = this.parseTypeReference();
       const close = this.expect("rightParen", "Expected ')' after grouped type");
-      const groupedSyntax = { ...grouped.syntax, span: span(open.span.start, close.span.end) } as TypeSyntax;
-      if (!this.match("question")) return groupedSyntax;
-      return this.makeOptionalTypeSyntax(groupedSyntax, span(open.span.start, this.previous().span.end));
+      if (!this.match("question")) return grouped.syntax;
+      return this.makeOptionalTypeSyntax(grouped.syntax, span(open.span.start, this.previous().span.end));
     }
     if (this.match("leftParen")) {
       const open = this.previous();
