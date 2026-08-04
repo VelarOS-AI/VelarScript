@@ -802,6 +802,8 @@ component App:
   const emptyEnvironment = {
     fieldsOf: () => null,
     isSubclassOf: () => false,
+    isPrimitiveType: () => false,
+    isPrimitiveSubtype: () => false,
   };
   assert.equal(sameType(requiredCallback, defaultableCallback), false);
   assert.equal(isAssignable(defaultableCallback, requiredCallback, emptyEnvironment), true);
@@ -935,7 +937,7 @@ const unsafeSpread: Outer = {...aliasedOuter}
   assert.equal(sameType(ownedClass, containingClass), true);
   assert.notEqual(analysisTypeIdentity(ownedClass), analysisTypeIdentity(containingClass));
   const readonlyObject = { ...leftObject, readonlyFields: new Set(["name"]) };
-  const structuralEnvironment = { fieldsOf: () => null, isSubclassOf: () => false };
+  const structuralEnvironment = { fieldsOf: () => null, isSubclassOf: () => false, isPrimitiveType: () => false, isPrimitiveSubtype: () => false };
   assert.equal(sameType(leftObject, readonlyObject), false);
   assert.equal(isAssignable(leftObject, readonlyObject, structuralEnvironment), true);
   assert.equal(isAssignable(readonlyObject, leftObject, structuralEnvironment), false);
@@ -4263,6 +4265,7 @@ test("the official Web package owns the framework contract and CLI only composes
     readFile(resolve("packages/web/src/editor.ts"), "utf8"),
   ]);
   assert.doesNotMatch(coreParser, /parse(?:Component|StateDeclaration|ComputedDeclaration|ResourceDeclaration|ActionDeclaration|WatchDeclaration|Jsx)/u);
+  assert.doesNotMatch(coreEmitter, /HTML(?:Canvas|Dialog|Input|Select|TextArea)Element|instanceof Element|instanceof (?:Keyboard|Pointer|Input)?Event/u);
   assert.doesNotMatch(coreAnalyzer, /analyzeComponent|inferJsx|case "(?:web\.|http\.|storage\.|forms\.|realtime\.|config\.)/u);
   assert.doesNotMatch(coreSemantic, /case "(?:ComponentDeclaration|StateDeclaration|ComputedDeclaration|ResourceDeclaration|ActionDeclaration|WatchDeclaration|JSXElementExpression)"/u);
   assert.doesNotMatch(coreIndex, /case "(?:ComponentDeclaration|StateDeclaration|ComputedDeclaration|ResourceDeclaration|ActionDeclaration|WatchDeclaration|JSXElementExpression)"/u);
@@ -4336,6 +4339,9 @@ import {socket} from "velar/realtime"
 type User:
     name: string
 
+type BinaryPayload:
+    data: Blob
+
 component Page:
     return <main>Page</main>
 
@@ -4348,11 +4354,25 @@ def markNumber(label: string, value: number) -> number:
 def readName(form: Element) -> string:
     return textValue(fallback="", name="name", form=form)
 
-def prepare():
+def canvasContext(canvas: CanvasElement) -> unknown:
+    return canvas.getContext(kind="2d")
+
+def useElement(element: Element):
+    element.focus()
+
+def usePrimitiveSubtypes(input: InputElement, keyboard: KeyboardEvent):
+    useElement(input)
+    const event: Event = keyboard
+
+async def prepare():
     const config = publicConfig(target=User)
     const itemRoute = route(view=Page, path="/items")
     navigate(options={scroll: false}, to=itemRoute.path)
     const request = http.get(options={timeout: markNumber("options", 10)}, url=markText("url", "/api/items"))
+    const binary: Blob = await request.blob()
+    const payload: BinaryPayload = {data: binary}
+    const checked = BinaryPayload.parse(payload)
+    const upload = http.post(url="/api/copy", options={body: binary})
     const loaded: User? = storage.get(target=User, key="current")
     const fallback: User = storage.get(fallback={name: "Ada"}, target=User, key="fallback")
     storage.set(value=fallback, key="current")
@@ -4373,6 +4393,11 @@ def prepare():
   assert.deepEqual(diagnostics, []);
   const code = project.modules[0]?.result.code ?? "";
   assert.ok(code.indexOf('markNumber("options", 10)') < code.indexOf('markText("url", "/api/items")'), code);
+  const symbols = project.modules[0]?.result.semanticIndex.symbols ?? [];
+  assert.match(symbols.find((symbol) => symbol.name === "itemRoute")?.type ?? "", /component: component Page/u);
+  assert.match(symbols.find((symbol) => symbol.name === "request")?.type ?? "", /blob: \(\) -> Promise<Blob>/u);
+  assert.match(code, /typeof Blob !== "undefined".*instanceof Blob/u);
+  assert.doesNotMatch(code, /Blob\.is/u);
 
   const invalidPath = join(directory, "invalid.vel");
   await writeFile(invalidPath, `
@@ -4381,12 +4406,28 @@ import {scrollTo} from "velar/browser"
 
 http.get(path="/items")
 scrollTo(left=10, top=20)
+mount(<main>invalid</main>, 42)
+
+async def inspectBlob():
+    const binary = await http.get("/data").blob()
+    print(binary.size)
+
+const forged: Blob = {}
+const forgedElement: Element = {focus: () => null, remove: () => null}
+
+def inspectCanvas(canvas: CanvasElement):
+    canvas.getContext(kind="2d").fillRect(0, 0, 1, 1)
 `.trimStart(), "utf8");
   const invalid = await compileProject(invalidPath);
   const messages = invalid.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message).join("\n");
   assert.match(messages, /Unknown named argument 'path'/u);
   assert.match(messages, /Unknown named argument 'left'/u);
   assert.match(messages, /Unknown named argument 'top'/u);
+  assert.match(messages, /Cannot assign number to string \| Element/u);
+  assert.match(messages, /Type 'Blob' has no field 'size'/u);
+  assert.match(messages, /Cannot assign \{\s*\} to Blob/u);
+  assert.match(messages, /Cannot assign .* to Element/u);
+  assert.match(messages, /Cannot access 'fillRect' on unknown without validation/u);
 });
 
 test("velar/web creates bounded application-local DOM IDs without requiring cryptographic UUIDs", async () => {
@@ -6580,6 +6621,7 @@ test("known lossy JSON inputs fail during checking", async () => {
 import {clone, stringify} from "velar/json"
 import {http} from "velar/http"
 import {socket} from "velar/realtime"
+import {database, storage} from "velar/storage"
 
 type Tree:
     name: string
@@ -6602,6 +6644,8 @@ const badSet = clone(unique)
 const badClass = stringify(Box(1))
 const badFunction = stringify(callback)
 const badHttp = http.post("/items", {body: mapping})
+storage.set("mapping", mapping)
+database("cache").set("unique", unique)
 const channel = socket("wss://example.test")
 channel.sendJson(unique)
 `.trimStart(), "utf8");
@@ -6614,6 +6658,9 @@ channel.sendJson(unique)
   assert.ok(messages.some((message) => /received Box/u.test(message)));
   assert.ok(messages.some((message) => /received \(\) -> number/u.test(message)));
   assert.ok(messages.some((message) => /HTTP JSON bodies.*received Map<string, number>/u.test(message)));
+  assert.equal(messages.filter((message) => message.startsWith("Storage values accept only records")).length, 2);
+  assert.ok(messages.some((message) => /Storage values.*received Map<string, number>/u.test(message)));
+  assert.ok(messages.some((message) => /Storage values.*received Set<number>/u.test(message)));
   assert.ok(messages.some((message) => /Realtime JSON.*received Set<number>/u.test(message)));
 });
 

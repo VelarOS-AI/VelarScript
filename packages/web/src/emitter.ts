@@ -4,6 +4,7 @@ import type {
   Program,
   Statement,
   LoweringHints,
+  ValueType,
 } from "@velarscript/compiler/extension";
 import { cssPropertyName } from "./look.ts";
 import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
@@ -78,6 +79,22 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   web(): boolean {
     return this.webOutput;
+  }
+
+  protected override emitTypeCheck(type: ValueType, value: string, state = "undefined"): string {
+    if (type.kind === "named") {
+      if (type.name === "Event" || type.name === "KeyboardEvent" || type.name === "PointerEvent" || type.name === "InputEvent") {
+        return `(typeof ${type.name} !== "undefined" && ${value} instanceof ${type.name})`;
+      }
+      if (type.name === "Element") return `(typeof Element !== "undefined" && ${value} instanceof Element)`;
+      if (type.name === "CanvasElement") return `(typeof HTMLCanvasElement !== "undefined" && ${value} instanceof HTMLCanvasElement)`;
+      if (type.name === "DialogElement") return `(typeof HTMLDialogElement !== "undefined" && ${value} instanceof HTMLDialogElement)`;
+      if (type.name === "InputElement") {
+        return `((typeof HTMLInputElement !== "undefined" && ${value} instanceof HTMLInputElement) || (typeof HTMLSelectElement !== "undefined" && ${value} instanceof HTMLSelectElement) || (typeof HTMLTextAreaElement !== "undefined" && ${value} instanceof HTMLTextAreaElement))`;
+      }
+      if (type.name === "Blob") return `(typeof Blob !== "undefined" && ${value} instanceof Blob)`;
+    }
+    return super.emitTypeCheck(type, value, state);
   }
 
   protected override additionalHelpers(program: Program): readonly string[] {

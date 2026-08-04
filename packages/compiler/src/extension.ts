@@ -73,6 +73,7 @@ export interface CompilerLexicalScanResult {
 
 export interface CompilerAnalysisExtension {
   readonly primitiveTypes?: ReadonlySet<string>;
+  readonly primitiveParents?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly globals?: ReadonlyMap<string, ValueType>;
   readonly reservedBindings?: ReadonlySet<string>;
   readonly globalGuidance?: ReadonlyMap<string, string>;

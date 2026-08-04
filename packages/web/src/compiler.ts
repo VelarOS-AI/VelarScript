@@ -21,6 +21,7 @@ const elementType: ValueType = { kind: "named", name: "Element" };
 const inputElementType: ValueType = { kind: "named", name: "InputElement" };
 const canvasElementType: ValueType = { kind: "named", name: "CanvasElement" };
 const dialogElementType: ValueType = { kind: "named", name: "DialogElement" };
+const blobType: ValueType = { kind: "named", name: "Blob" };
 const lengthType: ValueType = { kind: "named", name: "Length" };
 const colorType: ValueType = { kind: "named", name: "Color" };
 const colorInputType: ValueType = colorType;
@@ -33,13 +34,14 @@ const transitionType: ValueType = { kind: "named", name: "Transition" };
 const durationType: ValueType = { kind: "named", name: "Duration" };
 const angleType: ValueType = { kind: "named", name: "Angle" };
 const spacingType: ValueType = { kind: "named", name: "Spacing" };
+const mountTargetType: ValueType = { kind: "union", members: [stringType, elementType] };
 
 function namedFunction(parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
   return { kind: "function", parameterNames, parameters, requiredParameters, result };
 }
 
 const webGlobals = new Map<string, ValueType>([
-  ["mount", namedFunction(["node", "target"], [nodeType, anyType], nullType)],
+  ["mount", namedFunction(["node", "target"], [nodeType, mountTargetType], nullType)],
   ["tick", namedFunction([], [], { kind: "promise", value: nullType })],
   ["color", namedFunction(["value"], [stringType], colorType)],
   ["rgb", namedFunction(["red", "green", "blue"], [numberType, numberType, numberType], colorType)],
@@ -103,7 +105,7 @@ const httpResponseType = object({
   headers: mapString(stringType),
   json: namedFunction([], [], promise(unknownType)),
   text: namedFunction([], [], promise(stringType)),
-  blob: namedFunction([], [], promise(anyType)),
+  blob: namedFunction([], [], promise(blobType)),
   parse: namedIntrinsic("http.parse", ["target"], [anyType], promise(anyType)),
 });
 
@@ -111,7 +113,7 @@ const requestType = object({
   response: namedFunction([], [], promise(httpResponseType)),
   json: namedFunction([], [], promise(unknownType)),
   text: namedFunction([], [], promise(stringType)),
-  blob: namedFunction([], [], promise(anyType)),
+  blob: namedFunction([], [], promise(blobType)),
   parse: namedIntrinsic("http.parse", ["target"], [anyType], promise(anyType)),
   cancel: namedFunction([], [], nullType),
 });
@@ -137,7 +139,7 @@ const httpType = object({
 function createStorageType(): ValueType {
   const common = (): Map<string, ValueType> => new Map([
     ["get", namedIntrinsic("storage.get", ["key", "target", "fallback"], [stringType, anyType, anyType], anyType, 2)],
-    ["set", namedFunction(["key", "value"], [stringType, anyType], nullType)],
+    ["set", namedIntrinsic("storage.set", ["key", "value"], [stringType, anyType], nullType)],
     ["has", namedFunction(["key"], [stringType], boolType)],
     ["keys", namedFunction([], [], arrayString)],
     ["remove", namedFunction(["key"], [stringType], nullType)],
@@ -153,7 +155,7 @@ function createStorageType(): ValueType {
 const storageType = createStorageType();
 const databaseType = object({
   get: namedIntrinsic("storage.databaseGet", ["key", "target", "fallback"], [stringType, anyType, anyType], promise(anyType), 2),
-  set: namedFunction(["key", "value"], [stringType, anyType], promise(nullType)),
+  set: namedIntrinsic("storage.set", ["key", "value"], [stringType, anyType], promise(nullType)),
   has: namedFunction(["key"], [stringType], promise(boolType)),
   keys: namedFunction([], [], promise(arrayString)),
   remove: namedFunction(["key"], [stringType], promise(nullType)),
@@ -418,7 +420,15 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "Look", "Length", "Percentage", "Color", "Duration", "Angle", "Opacity", "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing"]),
+    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "Look", "Length", "Percentage", "Color", "Duration", "Angle", "Opacity", "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing"]),
+    primitiveParents: new Map([
+      ["InputElement", new Set(["Element"])],
+      ["CanvasElement", new Set(["Element"])],
+      ["DialogElement", new Set(["Element"])],
+      ["KeyboardEvent", new Set(["Event"])],
+      ["PointerEvent", new Set(["Event"])],
+      ["InputEvent", new Set(["Event"])],
+    ]),
     globals: webGlobals,
     reservedBindings: new Set(["mount", "tick"]),
     globalGuidance: new Map([
@@ -450,6 +460,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       InputElement: "A native input, select, or textarea reference obtained through JSX `ref`.",
       CanvasElement: "A native canvas reference obtained through JSX `ref`.",
       DialogElement: "A native dialog reference obtained from `<dialog ref={value}>` and operated through `velar/browser`.",
+      Blob: "An opaque binary HTTP body returned by `blob()` and accepted by HTTP request bodies.",
       Event: "A restricted Web event value exposed to VelarScript event handlers.",
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),

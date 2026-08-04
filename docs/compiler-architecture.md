@@ -215,6 +215,9 @@ for `match`; an asserted binding shape fails immediately.
   explicit parser, analyzer, semantic-index, intrinsic-analysis,
   dependency-inspection, public-interface, module, emitter, lexical-editor, and
   contextual project-editor seams;
+  extensions declare opaque primitive types and their parent relations through
+  the generic analysis contract, so Core assignability contains no Web type
+  names;
   loading lexical keywords alone can never silently activate Web semantics.
   Its `framework-host` subpath is a platform-neutral tooling ABI containing
   only protocol types and a version constant; it does not implement HTML,

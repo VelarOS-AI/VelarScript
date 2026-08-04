@@ -1185,7 +1185,7 @@ export class JavaScriptEmitter {
     ].join("\n");
   }
 
-  private emitTypeCheck(type: ValueType, value: string, state = "undefined"): string {
+  protected emitTypeCheck(type: ValueType, value: string, state = "undefined"): string {
     switch (type.kind) {
       case "unknown":
       case "any":
@@ -1207,15 +1207,6 @@ export class JavaScriptEmitter {
       case "promise":
         return `(${value} instanceof Promise)`;
       case "named":
-        if (type.name === "Event" || type.name === "KeyboardEvent" || type.name === "PointerEvent" || type.name === "InputEvent") {
-          return `(typeof ${type.name} !== "undefined" && ${value} instanceof ${type.name})`;
-        }
-        if (type.name === "Element") return `(typeof Element !== "undefined" && ${value} instanceof Element)`;
-        if (type.name === "CanvasElement") return `(typeof HTMLCanvasElement !== "undefined" && ${value} instanceof HTMLCanvasElement)`;
-        if (type.name === "DialogElement") return `(typeof HTMLDialogElement !== "undefined" && ${value} instanceof HTMLDialogElement)`;
-        if (type.name === "InputElement") {
-          return `((typeof HTMLInputElement !== "undefined" && ${value} instanceof HTMLInputElement) || (typeof HTMLSelectElement !== "undefined" && ${value} instanceof HTMLSelectElement) || (typeof HTMLTextAreaElement !== "undefined" && ${value} instanceof HTMLTextAreaElement))`;
-        }
         if (this.hints.enumNames.has(type.name)) return `${type.name}.is(${value})`;
         if (this.hints.classNames.has(type.name)) return `${value} instanceof ${type.name}`;
         return this.typeDeclarations.has(type.name)

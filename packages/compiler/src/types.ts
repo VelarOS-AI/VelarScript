@@ -60,6 +60,8 @@ export const boolType: ValueType = { kind: "bool" };
 export interface TypeEnvironment {
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
   isSubclassOf(actual: string, expected: string): boolean;
+  isPrimitiveType(name: string): boolean;
+  isPrimitiveSubtype(actual: string, expected: string): boolean;
 }
 
 export function resolveTypeReference(reference: TypeReference): ValueType {
@@ -362,19 +364,22 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     return isAssignable(actual.value, expected.value, environment, seen);
   }
   if (actual.kind === "object" && expected.kind === "named") {
-    if (opaqueWebTypeNames.has(expected.name)) return false;
+    if (environment.isPrimitiveType(expected.name)) return false;
     const fields = environment.fieldsOf(expected.identity ?? expected.name);
     return fields ? objectFieldsAssignable(actual.fields, fields, environment, seen, actual.readonlyFields, undefined, actual.optionalFields) : false;
   }
   if (actual.kind === "named" && expected.kind === "object") {
-    if (opaqueWebTypeNames.has(actual.name)) return false;
+    if (environment.isPrimitiveType(actual.name)) return false;
     const fields = environment.fieldsOf(actual.identity ?? actual.name);
     return fields ? objectFieldsAssignable(fields, expected.fields, environment, seen, undefined, expected.readonlyFields, undefined, expected.optionalFields) : false;
   }
   if (actual.kind === "named" && expected.kind === "named") {
     if (actual.name === expected.name) return true;
-    const opaqueCompatibility = opaqueWebTypeAssignable(actual.name, expected.name);
-    if (opaqueCompatibility !== null) return opaqueCompatibility;
+    const actualPrimitive = environment.isPrimitiveType(actual.name);
+    const expectedPrimitive = environment.isPrimitiveType(expected.name);
+    if (actualPrimitive || expectedPrimitive) {
+      return actualPrimitive && expectedPrimitive && environment.isPrimitiveSubtype(actual.name, expected.name);
+    }
     const actualFields = environment.fieldsOf(actual.identity ?? actual.name);
     const expectedFields = environment.fieldsOf(expected.identity ?? expected.name);
     return actualFields !== null && expectedFields !== null
@@ -455,27 +460,6 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
 
 export function isInvalidType(type: ValueType): boolean {
   return type === invalidType;
-}
-
-const opaqueWebTypeNames = new Set([
-  "Element",
-  "InputElement",
-  "CanvasElement",
-  "DialogElement",
-  "Event",
-  "KeyboardEvent",
-  "PointerEvent",
-  "InputEvent",
-]);
-
-function opaqueWebTypeAssignable(actual: string, expected: string): boolean | null {
-  const actualOpaque = opaqueWebTypeNames.has(actual);
-  const expectedOpaque = opaqueWebTypeNames.has(expected);
-  if (!actualOpaque && !expectedOpaque) return null;
-  if (!actualOpaque || !expectedOpaque) return false;
-  if (expected === "Element") return actual === "InputElement" || actual === "CanvasElement" || actual === "DialogElement";
-  if (expected === "Event") return actual === "KeyboardEvent" || actual === "PointerEvent" || actual === "InputEvent";
-  return false;
 }
 
 export function describeType(type: ValueType): string {

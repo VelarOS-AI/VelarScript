@@ -340,6 +340,7 @@ export class Analyzer implements TypeEnvironment {
   protected flowFrameDepth = 0;
   private callableOriginChanged = false;
   private readonly primitiveNames = new Set(corePrimitiveNames);
+  private readonly primitiveParents = new Map<string, Set<string>>();
   private readonly extensionGlobals = new Map<string, ValueType>();
   private readonly extensionReservedBindings = new Set<string>();
   private readonly globalGuidance = new Map(coreGlobalGuidance);
@@ -377,6 +378,11 @@ export class Analyzer implements TypeEnvironment {
     for (const [name, info] of context.classes ?? []) this.classes.set(name, info);
     for (const extension of extensions) {
       for (const name of extension.primitiveTypes ?? []) this.primitiveNames.add(name);
+      for (const [name, parents] of extension.primitiveParents ?? []) {
+        const collected = this.primitiveParents.get(name) ?? new Set<string>();
+        for (const parent of parents) collected.add(parent);
+        this.primitiveParents.set(name, collected);
+      }
       for (const [name, type] of extension.globals ?? []) this.extensionGlobals.set(name, type);
       for (const name of extension.reservedBindings ?? []) this.extensionReservedBindings.add(name);
       for (const [name, guidance] of extension.globalGuidance ?? []) this.globalGuidance.set(name, guidance);
@@ -766,6 +772,24 @@ export class Analyzer implements TypeEnvironment {
       const info = this.classes.get(current);
       if (info?.identity === expected) return true;
       current = info?.base ?? null;
+    }
+    return false;
+  }
+
+  isPrimitiveType(name: string): boolean {
+    return this.primitiveNames.has(name);
+  }
+
+  isPrimitiveSubtype(actual: string, expected: string): boolean {
+    if (!this.primitiveNames.has(actual) || !this.primitiveNames.has(expected)) return false;
+    const pending = [actual];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (visited.has(current)) continue;
+      if (current === expected) return true;
+      visited.add(current);
+      for (const parent of this.primitiveParents.get(current) ?? []) pending.push(parent);
     }
     return false;
   }
@@ -6077,7 +6101,8 @@ export class Analyzer implements TypeEnvironment {
 
   private contextualObjectType(type: ValueType): Extract<ValueType, { kind: "named" | "object" }> | null {
     const expanded = this.expandAliases(type);
-    if (expanded.kind === "named" || expanded.kind === "object") return expanded;
+    if (expanded.kind === "named") return this.primitiveNames.has(expanded.name) ? null : expanded;
+    if (expanded.kind === "object") return expanded;
     if (expanded.kind === "optional") return this.contextualObjectType(expanded.inner);
     if (expanded.kind === "union") {
       const candidates = expanded.members

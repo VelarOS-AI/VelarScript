@@ -67,7 +67,7 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       const path = argumentAt(0);
       if (path?.kind === "LiteralExpression" && typeof path.value === "string") checkRoutePath(path.value, path.span, context);
       checkRouteComponent(component, argumentAt(1)?.span ?? callSpan, "A route", context);
-      return { kind: "object", fields: new Map([["path", stringType], ["component", anyType]]) };
+      return { kind: "object", fields: new Map([["path", stringType], ["component", component]]) };
     }
     case "web.lazy": {
       arity(2, 4);
@@ -141,12 +141,24 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       }
       const fields = options?.kind === "object" ? options.fields : null;
       const body = fields?.get("body");
-      if (body && !context.isHttpFormBody(body) && context.jsonSerializable(body) === false) {
+      const expandedBody = body ? context.expandAliases(body) : null;
+      const blob = expandedBody?.kind === "named" && expandedBody.name === "Blob";
+      if (body && !context.isHttpFormBody(body) && !blob && context.jsonSerializable(body) === false) {
         const optionsExpression = argumentAt(intrinsic.parameters.length - 1);
         const bodyExpression = optionsExpression?.kind === "ObjectExpression"
           ? optionsExpression.properties.find((property) => property.kind === "ObjectProperty" && property.name === "body")?.value
           : null;
         context.typeError(`HTTP JSON bodies accept only records, Lists, enums, primitives, and optionals; received ${describeType(body)}`, bodyExpression?.span ?? optionsExpression?.span ?? callSpan);
+      }
+      return intrinsic.result;
+    }
+    case "storage.set": {
+      arity(2, 2);
+      inferAt(0, stringType);
+      const value = inferAt(1);
+      const valueExpression = argumentAt(1);
+      if (context.jsonSerializable(value) === false && valueExpression) {
+        context.typeError(`Storage values accept only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, valueExpression.span);
       }
       return intrinsic.result;
     }
@@ -1000,18 +1012,19 @@ export class VelarWebAnalyzer extends Analyzer {
 }
 
 function webTypeFields(name: string): ReadonlyMap<string, ValueType> | null {
-  const functionType = (parameters: readonly ValueType[], result: ValueType): ValueType => ({ kind: "function", parameters, requiredParameters: parameters.length, result });
+  const functionType = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result });
   const eventFields = (): Map<string, ValueType> => new Map([
-    ["type", stringType], ["defaultPrevented", boolType], ["preventDefault", functionType([], nullType)], ["stopPropagation", functionType([], nullType)],
+    ["type", stringType], ["defaultPrevented", boolType], ["preventDefault", functionType([], [], nullType)], ["stopPropagation", functionType([], [], nullType)],
   ]);
   if (name === "Event") return eventFields();
   if (name === "KeyboardEvent") return new Map([...eventFields(), ["key", stringType], ["code", stringType], ["repeat", boolType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "PointerEvent") return new Map([...eventFields(), ["pointerId", numberType], ["pointerType", stringType], ["pressure", numberType], ["button", numberType], ["buttons", numberType], ["clientX", numberType], ["clientY", numberType], ["movementX", numberType], ["movementY", numberType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "InputEvent") return new Map([...eventFields(), ["data", optionalOf(stringType)], ["inputType", stringType], ["isComposing", boolType]]);
+  if (name === "Blob") return new Map();
   if (name === "Element" || name === "InputElement" || name === "CanvasElement" || name === "DialogElement") {
-    const fields = new Map<string, ValueType>([["focus", functionType([], nullType)], ["remove", functionType([], nullType)]]);
+    const fields = new Map<string, ValueType>([["focus", functionType([], [], nullType)], ["remove", functionType([], [], nullType)]]);
     if (name === "InputElement") { fields.set("value", stringType); fields.set("checked", boolType); }
-    if (name === "CanvasElement") { fields.set("width", numberType); fields.set("height", numberType); fields.set("getContext", functionType([stringType], anyType)); }
+    if (name === "CanvasElement") { fields.set("width", numberType); fields.set("height", numberType); fields.set("getContext", functionType(["kind"], [stringType], unknownType)); }
     return fields;
   }
   return null;

@@ -266,7 +266,9 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   `no-store`, `reload`, `no-cache`, or `force-cache`.
 - Requests expose `response`, `json`, `text`, `blob`, `parse(Type)`, and
   `cancel`. Responses expose typed status, URL, and header fields plus the same
-  body readers.
+  body readers. `blob()` returns an opaque checked `Blob`, not `any`; it may be
+  passed back as an HTTP body but does not expose the native browser object or
+  arbitrary fields.
 - Fetch results are validated before they enter the typed response object.
   Status/`ok`, status text, canonical URL, and native response headers must keep
   their declared types; response headers share the 100-field/64-KiB bound and
@@ -360,7 +362,9 @@ component PreferencesPanel:
   are sorted for deterministic application behavior; an externally injected
   non-string IndexedDB key fails instead of being coerced.
 - Every write uses the strict `velar/json` data contract. Unsupported or lossy
-  values fail before local/session storage or IndexedDB is mutated.
+  values that are visible to the compiler fail during checking; dynamic values
+  are validated again at runtime before local/session storage or IndexedDB is
+  mutated.
 
 ## `velar/forms`
 
@@ -586,6 +590,9 @@ install.
 
 Web API 0.10 does not define SSR/server execution, workers, service workers/PWA,
 WebRTC, WebGPU, directory handles, persistent file handles, or a game runtime.
+`CanvasElement.getContext(kind=...)` therefore returns `unknown` rather than an
+untyped browser escape hatch; the future game package will own a checked Canvas
+surface.
 JavaScript packages remain available through checked declarations or an
 explicit unsafe boundary when an application needs capabilities outside the
 official surface. `velar/game` remains a later Canvas-oriented package built on
