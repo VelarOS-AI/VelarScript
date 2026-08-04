@@ -204,6 +204,36 @@ value to `null` is therefore valid, and later reads must prove presence again.
 Compound assignment uses the current fact because the operation itself requires
 and preserves the checked non-null value.
 
+Mutually exclusive branches are analyzed independently. A write in one branch
+does not contaminate a sibling that cannot execute it, while any write that can
+reach the following statement invalidates the merged fact. A terminating guard
+therefore reads naturally:
+
+```velar fragment
+if user == null:
+    return "Missing"
+return user.name
+```
+
+Ordinary calls are boundaries for mutable bindings and object-field facts
+because VelarScript keeps JavaScript reference and closure semantics. Save a
+checked value in a local `const` when it must remain stable across calls:
+
+```velar fragment
+if form:
+    const currentForm = form
+    setError(currentForm, "email", "Required")
+    focusFirstError(currentForm)
+```
+
+Getters and fields supplied by safe JavaScript imports use the same boundary:
+their implementation may run code or expose an accessor. Read once into a local
+`const`, then check and reuse that value. Plain VelarScript record and class
+fields remain stable until an assignment or effect boundary can change them.
+`await` is also an effect boundary because other event-loop work can run during
+the suspension. Declaring a nested function does not itself invalidate facts;
+invoking it does.
+
 Optional access is explicit at each optional continuation:
 
 ```velar fragment
@@ -462,10 +492,13 @@ only wildcard and never creates a binding. Reusing a binding name inside one
 pattern is an error.
 
 The matched expression evaluates once. Guards run only after their pattern
-matches. Guarded cases do not count as exhaustive because the guard may be
-false. Complete enum matches, an unguarded wildcard, exhaustive List length
-patterns, and irrefutable patterns over required typed record fields participate
-in required-return analysis. `match` remains a statement;
+matches, and a successful guard narrows its case body by the same rules as
+`if`. Cases are mutually exclusive: a write in one case cannot erase a fact
+used only by a sibling, but facts invalidated by a case that reaches the code
+after `match` stay invalidated. Guarded cases do not count as exhaustive because
+the guard may be false. Complete enum matches, an unguarded wildcard, exhaustive
+List length patterns, and irrefutable patterns over required typed record fields
+participate in required-return analysis. `match` remains a statement;
 branches use ordinary `return` or assignments instead of introducing a second
 expression form.
 
@@ -484,7 +517,10 @@ while attempts < 3:
 `break` and `continue` are available only inside loops. Iterating a Map yields
 its keys. A `while` body receives the successful condition's facts on every
 iteration; assigning a narrowed optional back to `null` invalidates that fact
-for the remainder of the current iteration.
+for the remainder of the current iteration. Writes after an unconditional
+`return`, `throw`, `break`, or `continue` do not affect reachable flow facts. If
+a loop body can only return or throw, its writes cannot escape to the skipped
+path after the loop.
 
 ## 10. Classes
 

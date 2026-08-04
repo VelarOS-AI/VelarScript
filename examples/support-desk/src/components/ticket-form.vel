@@ -61,22 +61,23 @@ export component TicketForm:
 
     def submit():
         if form:
-            clearErrors(form)
-            const draft = read(form, TicketDraft)
+            const currentForm = form
+            clearErrors(currentForm)
+            const draft = read(currentForm, TicketDraft)
             const title = trim(draft.title)
             const requester = trim(draft.requester)
             if isBlank(title):
-                setError(form, "title", "Add a short issue title")
+                setError(currentForm, "title", "Add a short issue title")
             if isBlank(requester):
-                setError(form, "requester", "Add the requester name")
+                setError(currentForm, "requester", "Add the requester name")
             if draft.estimate == null:
-                setError(form, "estimate", "Add an estimate in minutes")
-            if errors(form).size > 0:
-                focusFirstError(form)
+                setError(currentForm, "estimate", "Add an estimate in minutes")
+            if errors(currentForm).size > 0:
+                focusFirstError(currentForm)
             else:
                 assert draft.estimate != null, "Ticket estimate must be present after validation"
                 addTicket({...draft, title, requester, summary: trim(draft.summary)})
-                reset(form)
+                reset(currentForm)
                 announce("Ticket created")
 
     return <form look={formLook} ref={form} on:submit.prevent={submit} data-ticket-form>

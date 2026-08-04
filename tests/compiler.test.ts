@@ -1543,6 +1543,79 @@ def inspect(value: number) -> null:
   assert.ok(impossible.diagnostics.some((item) => /can never match number/u.test(item.message)));
 });
 
+test("match guards narrow the successful branch", () => {
+  const result = compile(`
+type User:
+    name: string
+    manager: User?
+
+def managerName(value: User?) -> string:
+    match value:
+        case User as user if user.manager:
+            return user.manager.name
+        else:
+            return "missing"
+
+const managed: User = {
+    name: "Ada",
+    manager: {name: "Lin", manager: null},
+}
+print(managerName(managed))
+print(managerName(null))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Lin\nmissing\n");
+});
+
+test("match cases isolate and merge outer narrowing facts", () => {
+  const result = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def label(box: Box, kind: string) -> string:
+    assert box.user
+    match kind:
+        case "drop":
+            box.user = null
+        case "keep":
+            return box.user.name
+        else:
+            return "other"
+    return "dropped"
+
+print(label({user: {name: "Ada"}}, "keep"))
+print(label({user: {name: "Ada"}}, "drop"))
+print(label({user: {name: "Ada"}}, "other"))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\ndropped\nother\n");
+
+  const merged = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box, kind: string):
+    assert box.user
+    match kind:
+        case "drop":
+            box.user = null
+        else:
+            pass
+    const stale: User = box.user
+`.trimStart());
+  assert.equal(merged.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
+});
+
 test("match structurally destructures records and Lists with safe scoped bindings", () => {
   const result = compile(`
 type Payload:
@@ -3337,29 +3410,31 @@ component App:
 
     def inspect():
         if form:
-            const typed = read(form, FormDraft)
-            const data = values(form)
-            const name = fieldValue(form, "name")
-            const title = textValue(form, "name", "Untitled")
-            const count = numberValue(form, "count")
-            const selected = checkedValue(form, "selected")
-            const labels = fieldValues(form, "label")
-            setError(form, "name", "Required")
-            const currentErrors = errors(form)
-            focusFirstError(form)
-            setPending(form, true)
-            setPending(form, false)
-            reset(form)
-            clearError(form, "name")
-            clearErrors(form)
-            const bounds = measure(form)
-            scrollIntoView(form)
-            focus(form, true)
-            blur(form)
+            const currentForm = form
+            const typed = read(currentForm, FormDraft)
+            const data = values(currentForm)
+            const name = fieldValue(currentForm, "name")
+            const title = textValue(currentForm, "name", "Untitled")
+            const count = numberValue(currentForm, "count")
+            const selected = checkedValue(currentForm, "selected")
+            const labels = fieldValues(currentForm, "label")
+            setError(currentForm, "name", "Required")
+            const currentErrors = errors(currentForm)
+            focusFirstError(currentForm)
+            setPending(currentForm, true)
+            setPending(currentForm, false)
+            reset(currentForm)
+            clearError(currentForm, "name")
+            clearErrors(currentForm)
+            const bounds = measure(currentForm)
+            scrollIntoView(currentForm)
+            focus(currentForm, true)
+            blur(currentForm)
             announce("Checked")
         if dialog:
-            showDialog(dialog)
-            closeDialog(dialog, dialogResult(dialog))
+            const currentDialog = dialog
+            showDialog(currentDialog)
+            closeDialog(currentDialog, dialogResult(currentDialog))
 
     return <><Head title="API" description="Typed Web" canonical="https://example.com/" robots="index,follow" image="/share.png" themeColor="#111827" language="en-US" /><form host ref={form}><input name="name" /><input name="count" type="number" /><input name="selected" type="checkbox" /><input name="labels" /><select name="mode"><option value={FormMode.create}>Create</option></select></form><dialog ref={dialog}>Confirm</dialog><Router routes={[route("/", Missing), route("/items/:id", ItemPage)]} fallback={Missing} /></>
 
@@ -3416,7 +3491,7 @@ reload()
   });
   const compiled = project.modules[0]?.result;
   assert.match(compiled?.code ?? "", /http\.request/u);
-  assert.match(compiled?.code ?? "", /read\(form, FormDraft, \[\{"name":"name","kind":"string","optional":false\}/u);
+  assert.match(compiled?.code ?? "", /read\(currentForm, FormDraft, \[\{"name":"name","kind":"string","optional":false\}/u);
   assert.match(compiled?.code ?? "", /"name":"mode","kind":"enum","optional":false,"enumValues":\["create","update"\]/u);
   assert.equal(compiled?.semanticIndex.symbols.find((item) => item.name === "typed")?.type, "FormDraft");
 });
@@ -9759,6 +9834,555 @@ if current and current.active:
     const invalid: User = current
 `.trimStart());
   assert.equal(stale.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
+});
+
+test("condition narrowing reuses analyzed types without inventing bindings", () => {
+  const missingEquality = compile(`
+if missing() == null:
+    pass
+else:
+    pass
+`.trimStart());
+  assert.deepEqual(
+    missingEquality.diagnostics.map((item) => item.message),
+    ["Unknown name 'missing'"],
+  );
+
+  const missingMember = compile(`
+if unknown.field == null:
+    pass
+else:
+    pass
+`.trimStart());
+  assert.deepEqual(
+    missingMember.diagnostics.map((item) => item.message),
+    ["Unknown name 'unknown'", "Cannot access 'field' on unknown without validation"],
+  );
+
+  const missingTypeCheck = compile(`
+if missing is string:
+    print(missing)
+`.trimStart());
+  assert.equal(
+    missingTypeCheck.diagnostics.filter((item) => item.message === "Unknown name 'missing'").length,
+    2,
+  );
+
+  const missingMemberTypeCheck = compile(`
+if unknown.field is string:
+    pass
+else:
+    pass
+`.trimStart());
+  assert.deepEqual(
+    missingMemberTypeCheck.diagnostics.map((item) => item.message),
+    ["Unknown name 'unknown'", "Cannot access 'field' on unknown without validation"],
+  );
+});
+
+test("mutually exclusive branches isolate and merge narrowing facts", () => {
+  const result = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def guardLabel(user: User?) -> string:
+    if user == null:
+        return "missing"
+    return user.name
+
+def explicitElseLabel(user: User?) -> string:
+    if user == null:
+        return "missing"
+    else:
+        pass
+    return user.name
+
+def inverseElseLabel(user: User?) -> string:
+    if user != null:
+        pass
+    else:
+        return "missing"
+    return user.name
+
+def bindingLabel(initial: User?, change: bool) -> string:
+    let user = initial
+    assert user
+    if change:
+        user = null
+    else:
+        return user.name
+    return "changed"
+
+def memberLabel(box: Box, change: bool) -> string:
+    assert box.user
+    if change:
+        box.user = null
+    else:
+        return box.user.name
+    return "changed"
+
+def returningMutation(initial: User?, change: bool) -> string:
+    let user = initial
+    assert user
+    if change:
+        user = null
+        return "changed"
+    return user.name
+
+const ada: User = {name: "Ada"}
+print(guardLabel(ada))
+print(guardLabel(null))
+print(explicitElseLabel(ada))
+print(inverseElseLabel(ada))
+print(bindingLabel(ada, false))
+print(bindingLabel(ada, true))
+print(memberLabel({user: ada}, false))
+print(memberLabel({user: ada}, true))
+print(returningMutation(ada, false))
+print(returningMutation(ada, true))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\nmissing\nAda\nAda\nAda\nchanged\nAda\nchanged\nAda\nchanged\n");
+
+  const merged = compile(`
+type User:
+    name: string
+
+def invalid(initial: User?, change: bool):
+    let user = initial
+    assert user
+    if change:
+        user = null
+    const stale: User = user
+`.trimStart());
+  assert.equal(merged.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
+
+  const reassignedContinuation = compile(`
+type User:
+    name: string
+
+def invalid(initial: User?) -> string:
+    let user = initial
+    if user == null:
+        return "missing"
+    else:
+        user = null
+    return user.name
+`.trimStart());
+  assert.equal(reassignedContinuation.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+});
+
+test("unreachable writes do not corrupt continuing flow facts", () => {
+  const result = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def caught(box: Box, failure: Error) -> string:
+    assert box.user
+    try:
+        throw failure
+        box.user = null
+    catch error:
+        return box.user.name
+
+def stoppedLoop(box: Box) -> string:
+    assert box.user
+    for value in [1]:
+        break
+        box.user = null
+    return box.user.name
+
+print(caught({user: {name: "Ada"}}, Error("stop")))
+print(stoppedLoop({user: {name: "Lin"}}))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\nLin\n");
+
+  const reachable = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box):
+    assert box.user
+    try:
+        box.user = null
+        throw Error("stop")
+    catch error:
+        const stale: User = box.user
+`.trimStart());
+  assert.equal(reachable.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
+});
+
+test("terminating loop bodies preserve facts on the skipped path", () => {
+  const result = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def firstOrOwner(box: Box, values: List<number>) -> string:
+    assert box.user
+    for value in values:
+        box.user = null
+        return str(value)
+    return box.user.name
+
+def waitOrRead(user: User?) -> string:
+    while user == null:
+        return "missing"
+    return user.name
+
+print(firstOrOwner({user: {name: "Ada"}}, []))
+print(firstOrOwner({user: {name: "Ada"}}, [7]))
+print(waitOrRead({name: "Lin"}))
+print(waitOrRead(null))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\n7\nLin\nmissing\n");
+
+  const continuing = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box, values: List<number>):
+    assert box.user
+    for value in values:
+        box.user = null
+    const stale: User = box.user
+`.trimStart());
+  assert.equal(continuing.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
+});
+
+test("member receivers are analyzed once across calls and assignments", () => {
+  const call = compile("missing.run()\n");
+  assert.deepEqual(
+    call.diagnostics.map((item) => item.message),
+    ["Unknown name 'missing'", "Cannot access 'run' on unknown without validation"],
+  );
+
+  const assignment = compile("missing.field = 1\n");
+  assert.deepEqual(
+    assignment.diagnostics.map((item) => item.message),
+    ["Unknown name 'missing'", "Cannot access 'field' on unknown without validation"],
+  );
+});
+
+test("calls invalidate mutable flow facts but local const values remain stable", () => {
+  const safe = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box):
+    box.user = null
+
+def label(box: Box) -> string:
+    assert box.user
+    const user = box.user
+    clear(box)
+    return user.name
+
+print(label({user: {name: "Ada"}}))
+`.trimStart());
+  assert.deepEqual(safe.diagnostics, []);
+  const execution = executeModule(safe.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\n");
+
+  const aliasedMember = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box):
+    box.user = null
+
+def invalid(box: Box) -> string:
+    assert box.user
+    clear(box)
+    return box.user.name
+`.trimStart());
+  assert.equal(aliasedMember.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const capturedBinding = compile(`
+type User:
+    name: string
+
+def invalid(initial: User?) -> string:
+    let user = initial
+
+    def clear():
+        user = null
+
+    assert user
+    clear()
+    return user.name
+`.trimStart());
+  assert.equal(capturedBinding.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const shortCircuit = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> bool:
+    box.user = null
+    return true
+
+def invalid(box: Box) -> string:
+    if box.user and clear(box):
+        return box.user.name
+    return "missing"
+`.trimStart());
+  assert.equal(shortCircuit.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const deferredClosure = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def label(box: Box) -> string:
+    assert box.user
+
+    def clearLater():
+        print("later")
+        box.user = null
+
+    return box.user.name
+
+print(label({user: {name: "Ada"}}))
+`.trimStart());
+  assert.deepEqual(deferredClosure.diagnostics, []);
+  const deferredExecution = executeModule(deferredClosure.code ?? "");
+  assert.equal(deferredExecution.status, 0, String(deferredExecution.stderr));
+  assert.equal(deferredExecution.stdout, "Ada\n");
+
+  const invokedClosure = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box) -> string:
+    assert box.user
+
+    def clearLater():
+        box.user = null
+
+    clearLater()
+    return box.user.name
+`.trimStart());
+  assert.equal(invokedClosure.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+});
+
+test("conditional expression branches isolate and merge call effects", () => {
+  const result = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> string:
+    box.user = null
+    return "cleared"
+
+def choose(box: Box, changed: bool) -> string:
+    assert box.user
+    return changed ? clear(box) : box.user.name
+
+print(choose({user: {name: "Ada"}}, false))
+print(choose({user: {name: "Ada"}}, true))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\ncleared\n");
+
+  const merged = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> string:
+    box.user = null
+    return "cleared"
+
+def invalid(box: Box, changed: bool) -> string:
+    assert box.user
+    const status = changed ? clear(box) : "kept"
+    return box.user.name
+`.trimStart());
+  assert.equal(merged.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+});
+
+test("getters are effect boundaries rather than stable field locations", () => {
+  const safe = compile(`
+type User:
+    name: string
+
+class Box:
+    let user: User? = {name: "Ada"}
+
+    get current() -> User?:
+        const result = self.user
+        self.user = null
+        return result
+
+def label(box: Box) -> string:
+    const current = box.current
+    if current:
+        return current.name
+    return "missing"
+
+print(label(Box()))
+`.trimStart());
+  assert.deepEqual(safe.diagnostics, []);
+  const execution = executeModule(safe.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\n");
+
+  const staleField = compile(`
+type User:
+    name: string
+
+class Box:
+    let user: User? = {name: "Ada"}
+
+    get current() -> User?:
+        const result = self.user
+        self.user = null
+        return result
+
+def invalid(box: Box) -> string:
+    assert box.user
+    const current = box.current
+    return box.user.name
+`.trimStart());
+  assert.equal(staleField.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const repeatedGetter = compile(`
+type User:
+    name: string
+
+class Box:
+    let user: User? = {name: "Ada"}
+
+    get current() -> User?:
+        const result = self.user
+        self.user = null
+        return result
+
+def invalid(box: Box) -> string:
+    if box.current:
+        return box.current.name
+    return "missing"
+`.trimStart());
+  assert.equal(repeatedGetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const externalGetter = compile(`
+extern module "host-sdk":
+    export class Client:
+        const label: string?
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def invalid(client: Client) -> number:
+    if client.label:
+        return client.label.length
+    return 0
+`.trimStart());
+  assert.equal(externalGetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const stableExternalValue = compile(`
+extern module "host-sdk":
+    export class Client:
+        const label: string?
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def length(client: Client) -> number:
+    const label = client.label
+    if label:
+        return label.length
+    return 0
+`.trimStart());
+  assert.deepEqual(stableExternalValue.diagnostics, []);
+});
+
+test("await invalidates facts that can change during suspension", () => {
+  const safe = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+async def label(box: Box, pending: Promise<null>) -> string:
+    assert box.user
+    const user = box.user
+    await pending
+    return user.name
+`.trimStart());
+  assert.deepEqual(safe.diagnostics, []);
+
+  const aliasedMember = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+async def invalid(box: Box, pending: Promise<null>) -> string:
+    assert box.user
+    await pending
+    return box.user.name
+`.trimStart());
+  assert.equal(aliasedMember.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const capturedBinding = compile(`
+type User:
+    name: string
+
+async def invalid(initial: User?, pending: Promise<null>) -> string:
+    let user = initial
+    assert user
+    await pending
+    return user.name
+`.trimStart());
+  assert.equal(capturedBinding.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 });
 
 test("lowering hints use exact spans across nested expressions", () => {

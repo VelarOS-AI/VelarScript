@@ -97,8 +97,9 @@ export component TicketDetail(route: RouteContext):
     async def confirmResolve():
         resolveTicket(id)
         if confirmDialog:
-            closeDialog(confirmDialog, "resolved")
-            resolution = dialogResult(confirmDialog)
+            const currentDialog = confirmDialog
+            closeDialog(currentDialog, "resolved")
+            resolution = dialogResult(currentDialog)
         announce("Ticket resolved")
         await frame()
         if resolveButton:

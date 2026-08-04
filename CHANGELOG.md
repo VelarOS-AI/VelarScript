@@ -35,6 +35,12 @@ Compiler and framework changes:
   normalization.
 - Short-circuit conditions and `while` bodies share optional narrowing, while
   complete source spans keep nested lowering hints from colliding.
+- Mutually exclusive branches, `match` cases, terminating loops, and
+  unreachable tails now merge flow facts by reachable path. Match guards narrow
+  their body, and ordinary calls invalidate mutable or aliased facts unless the
+  checked value was first saved in a local `const`. Getter and safe-JavaScript
+  property reads, plus resumed code after `await`, follow the same effect
+  boundary.
 
 Tooling and documentation changes:
 

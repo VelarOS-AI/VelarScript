@@ -401,7 +401,7 @@ export class VelarWebAnalyzer extends Analyzer {
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
-          for (const child of statement.body) this.analyzeStatement(child);
+          this.analyzeStatements(statement.body);
           this.exitScope();
         }
         this.flowFrameDepth -= 1;
@@ -695,7 +695,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
-        for (const child of item.body) this.analyzeStatement(child);
+        this.analyzeStatements(item.body);
         this.exitScope();
         this.flowFrameDepth -= 1;
       } else if (item.kind === "MountedBlock") {

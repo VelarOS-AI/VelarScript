@@ -64,6 +64,19 @@ interface MemberNarrowing {
   readonly frame: number;
 }
 
+interface FlowFactsSnapshot {
+  readonly bindings: ReadonlyMap<Binding, {
+    readonly type: ValueType;
+    readonly frame: number;
+  }>;
+  readonly members: readonly ReadonlyMap<string, MemberNarrowing>[];
+}
+
+interface FlowFactInvalidations {
+  readonly bindings: ReadonlySet<Binding>;
+  readonly members: ReadonlyMap<number, ReadonlySet<string>>;
+}
+
 interface AnalyzableFunctionDeclaration {
   readonly kind: string;
   readonly name: string;
@@ -247,6 +260,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly semanticExpressionContexts = new Map<string, ValueType>();
   private readonly semanticExpressionContextMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly contextualAssignments = new Map<string, ValueType>();
+  private readonly inferredExpressionTypes = new Map<string, ValueType>();
   private readonly logicalConditionNarrowings = new Map<string, {
     readonly truthy: ReadonlyMap<string, ValueType>;
     readonly falsy: ReadonlyMap<string, ValueType>;
@@ -1096,21 +1110,41 @@ export class Analyzer implements TypeEnvironment {
         this.persistNarrowings(this.narrowingFor(statement.condition, condition));
         break;
       }
-      case "IfStatement":
-        {
-          const condition = this.inferExpression(statement.condition);
-          this.requireCondition(condition, statement.condition);
-          this.analyzeBlock(statement.thenBody, this.narrowingFor(statement.condition, condition));
-        }
+      case "IfStatement": {
+        const condition = this.inferExpression(statement.condition);
+        this.requireCondition(condition, statement.condition);
+        const truthy = this.narrowingFor(statement.condition, condition);
+        const falsy = this.negativeNarrowingFor(statement.condition, condition);
+        const baseline = this.snapshotFlowFacts();
+        const continuingInvalidations: FlowFactInvalidations[] = [];
+        let thenFacts: ReadonlyMap<string, ValueType> = new Map();
+        const thenInvalidations = this.analyzeIsolatedFlow(baseline, () => {
+          thenFacts = this.analyzeBlock(statement.thenBody, truthy);
+        });
+        const thenReturns = this.blockAlwaysReturns(statement.thenBody);
+        if (!thenReturns) continuingInvalidations.push(thenInvalidations);
+        let elseFacts: ReadonlyMap<string, ValueType> = new Map();
+        let elseReturns = false;
         if (statement.elseBody) {
-          this.analyzeBlock(statement.elseBody, this.negativeNarrowingFor(statement.condition));
+          const elseInvalidations = this.analyzeIsolatedFlow(baseline, () => {
+            elseFacts = this.analyzeBlock(statement.elseBody!, falsy);
+          });
+          elseReturns = this.blockAlwaysReturns(statement.elseBody);
+          if (!elseReturns) continuingInvalidations.push(elseInvalidations);
         }
+        this.applyFlowInvalidations(continuingInvalidations);
+        if (!statement.elseBody && thenReturns) this.persistNarrowings(falsy);
+        else if (statement.elseBody && thenReturns && !elseReturns) this.persistNarrowings(elseFacts);
+        else if (statement.elseBody && elseReturns && !thenReturns) this.persistNarrowings(thenFacts);
         break;
+      }
       case "MatchStatement": {
         const matched = this.inferExpression(statement.value);
         if (matched.kind === "unknown" && !isInvalidType(matched)) {
           this.typeError("Validate an unknown value before matching it", statement.value.span);
         }
+        const flowBaseline = this.snapshotFlowFacts();
+        const continuingInvalidations: FlowFactInvalidations[] = [];
         const coveredValues = new Set<string>();
         const coveredEnumMembers = new Set<string>();
         const coveredTypes: ValueType[] = [];
@@ -1174,21 +1208,32 @@ export class Analyzer implements TypeEnvironment {
             universalCovered = true;
           }
 
-          this.enterScope();
-          for (const [name, binding] of bindings) {
-            this.declareBinding(name, false, binding.type, binding.span);
-          }
-          if (branch.guard) {
-            this.requireCondition(this.inferExpression(branch.guard), branch.guard);
-          }
-          for (const child of branch.body) this.analyzeStatement(child);
-          this.exitScope();
+          const branchInvalidations = this.analyzeIsolatedFlow(flowBaseline, () => {
+            this.enterScope();
+            try {
+              for (const [name, binding] of bindings) {
+                this.declareBinding(name, false, binding.type, binding.span);
+              }
+              if (branch.guard) {
+                const guard = this.inferExpression(branch.guard);
+                this.requireCondition(guard, branch.guard);
+                this.persistNarrowings(this.narrowingFor(branch.guard, guard));
+              }
+              this.analyzeStatements(branch.body);
+            } finally {
+              this.exitScope();
+            }
+          });
+          if (!this.blockAlwaysReturns(branch.body)) continuingInvalidations.push(branchInvalidations);
         }
         if (statement.elseBody) {
           if (universalCovered) {
             this.diagnostics.push(diagnostic("VEL4014", "The match else branch is already covered", statement.elseBody[0]?.span ?? statement.span));
           }
-          this.analyzeBlock(statement.elseBody);
+          const elseInvalidations = this.analyzeIsolatedFlow(flowBaseline, () => {
+            this.analyzeBlock(statement.elseBody!);
+          });
+          if (!this.blockAlwaysReturns(statement.elseBody)) continuingInvalidations.push(elseInvalidations);
         }
         if (statement.elseBody || universalCovered || this.matchTypeFullyCovered(
           matched,
@@ -1206,6 +1251,7 @@ export class Analyzer implements TypeEnvironment {
             this.diagnostics.push(diagnostic("VEL4015", `Match on ${matched.name} is missing: ${missing.join(", ")}`, statement.span));
           }
         }
+        this.applyFlowInvalidations(continuingInvalidations);
         break;
       }
       case "ForStatement": {
@@ -1216,28 +1262,40 @@ export class Analyzer implements TypeEnvironment {
         if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "string" && iterable.kind !== "any") {
           this.typeError(`Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
         }
-        this.enterScope();
-        this.declarePattern(statement.pattern, false, element);
-        if (statement.iterable.kind === "ListExpression"
-          && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
-          for (const item of statement.iterable.elements) {
-            this.validateKnownBindingShape(statement.pattern, item);
+        const baseline = this.snapshotFlowFacts();
+        const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
+          this.enterScope();
+          try {
+            this.declarePattern(statement.pattern, false, element);
+            if (statement.iterable.kind === "ListExpression"
+              && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
+              for (const item of statement.iterable.elements) {
+                this.validateKnownBindingShape(statement.pattern, item);
+              }
+            }
+            this.loopDepth += 1;
+            this.analyzeStatements(statement.body);
+            this.loopDepth -= 1;
+          } finally {
+            this.exitScope();
           }
-        }
-        this.loopDepth += 1;
-        for (const child of statement.body) {
-          this.analyzeStatement(child);
-        }
-        this.loopDepth -= 1;
-        this.exitScope();
+        });
+        if (!this.blockAlwaysReturns(statement.body)) this.applyFlowInvalidations([bodyInvalidations]);
         break;
       }
       case "WhileStatement": {
         const condition = this.inferExpression(statement.condition);
         this.requireCondition(condition, statement.condition);
-        this.loopDepth += 1;
-        this.analyzeBlock(statement.body, this.narrowingFor(statement.condition, condition));
-        this.loopDepth -= 1;
+        const truthy = this.narrowingFor(statement.condition, condition);
+        const falsy = this.negativeNarrowingFor(statement.condition, condition);
+        const baseline = this.snapshotFlowFacts();
+        const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
+          this.loopDepth += 1;
+          this.analyzeBlock(statement.body, truthy);
+          this.loopDepth -= 1;
+        });
+        if (this.blockAlwaysReturns(statement.body)) this.persistNarrowings(falsy);
+        else this.applyFlowInvalidations([bodyInvalidations]);
         break;
       }
       case "BreakStatement":
@@ -1255,9 +1313,7 @@ export class Analyzer implements TypeEnvironment {
           if (statement.catchName) {
             this.declareBinding(statement.catchName, false, { kind: "class", name: "Error" }, statement.span);
           }
-          for (const child of statement.catchBody) {
-            this.analyzeStatement(child);
-          }
+          this.analyzeStatements(statement.catchBody);
           this.exitScope();
         }
         if (statement.finallyBody) {
@@ -1541,7 +1597,7 @@ export class Analyzer implements TypeEnvironment {
     this.returnTypes.push(nullType);
     this.constructorDepth += 1;
     this.declareBinding("self", false, { kind: "class", name: statement.name }, initialization.span, true);
-    for (const child of initialization.body) this.analyzeStatement(child);
+    this.analyzeStatements(initialization.body);
     this.constructorDepth -= 1;
     this.returnTypes.pop();
     this.asynchronousFunctions.pop();
@@ -1771,9 +1827,7 @@ export class Analyzer implements TypeEnvironment {
       this.declareBinding(parameter.name, false, parameter.rest ? { kind: "list", element: declared } : declared, parameter.span);
     }
     this.constructorDepth = 0;
-    for (const child of statement.body) {
-      this.analyzeStatement(child);
-    }
+    this.analyzeStatements(statement.body);
     if (statement.returnType && returnValid && expectedReturn.kind !== "null" && !this.blockAlwaysReturns(statement.body)) {
       this.diagnostics.push(diagnostic("VEL4006", `${declarationKind} '${statement.name}' can finish without returning ${describeType(expectedReturn)}`, statement.span));
     }
@@ -1788,13 +1842,43 @@ export class Analyzer implements TypeEnvironment {
     this.constructorDepth = outerConstructorDepth;
   }
 
-  protected analyzeBlock(statements: readonly Statement[], narrowed: ReadonlyMap<string, ValueType> = new Map()): void {
+  protected analyzeBlock(
+    statements: readonly Statement[],
+    narrowed: ReadonlyMap<string, ValueType> = new Map(),
+  ): ReadonlyMap<string, ValueType> {
     this.enterScope();
     this.applyNarrowings(narrowed, statements[0]?.span ?? { start: 0, end: 0 });
+    this.analyzeStatements(statements);
+    const surviving = this.survivingNarrowings(narrowed);
+    this.exitScope();
+    return surviving;
+  }
+
+  private survivingNarrowings(narrowed: ReadonlyMap<string, ValueType>): ReadonlyMap<string, ValueType> {
+    const surviving = new Map<string, ValueType>();
+    const scope = this.scopes.at(-1)!;
+    const memberScope = this.memberNarrowings.at(-1)!;
+    for (const [key, type] of narrowed) {
+      if (key.startsWith(memberNarrowingPrefix)) {
+        const current = memberScope.get(key.slice(memberNarrowingPrefix.length));
+        if (current?.frame === this.flowFrameDepth && sameType(current.type, type)) surviving.set(key, type);
+      } else {
+        const current = scope.get(key);
+        if (current?.narrowingFrame === this.flowFrameDepth && sameType(current.type, type)) surviving.set(key, type);
+      }
+    }
+    return surviving;
+  }
+
+  protected analyzeStatements(statements: readonly Statement[]): void {
+    let completedFlow: FlowFactsSnapshot | null = null;
     for (const statement of statements) {
       this.analyzeStatement(statement);
+      if (!completedFlow && this.statementAlwaysExitsBlock(statement)) {
+        completedFlow = this.snapshotFlowFacts();
+      }
     }
-    this.exitScope();
+    if (completedFlow) this.restoreFlowFacts(completedFlow);
   }
 
   private analyzeAssignment(statement: AssignmentStatement): void {
@@ -1827,7 +1911,7 @@ export class Analyzer implements TypeEnvironment {
         statement.target.span,
         statement.operator !== "=",
       );
-      const owner = nonOptional(this.expandAliases(this.inferExpression(statement.target.object)));
+      const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
       if (owner.kind === "class") {
         const key = owner.identity ?? owner.name;
         const info = this.classes.get(key) ?? this.classes.get(owner.name);
@@ -1909,6 +1993,7 @@ export class Analyzer implements TypeEnvironment {
 
   protected inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     const type = this.inferExpressionType(expression, contextualType);
+    this.inferredExpressionTypes.set(spanIdentity(expression.span), type);
     const expanded = this.expandAliases(type);
     if (expanded.kind === "promise" && this.hasNullishContract(this.expandAliases(expanded.value))) {
       this.normalizedPromiseValues.add(spanIdentity(expression.span));
@@ -1917,6 +2002,10 @@ export class Analyzer implements TypeEnvironment {
     }
     this.recordSemanticExpression(expression, type);
     return type;
+  }
+
+  private inferredOrAnalyze(expression: Expression): ValueType {
+    return this.inferredExpressionTypes.get(spanIdentity(expression.span)) ?? this.inferExpression(expression);
   }
 
   private hasNullishContract(type: ValueType): boolean {
@@ -2085,6 +2174,7 @@ export class Analyzer implements TypeEnvironment {
             this.diagnostics.push(diagnostic("VEL4007", "'await' can only be used in an async function, mounted block, or at module scope", expression.span));
           }
           const awaited = this.expandAliases(operand);
+          this.invalidateEffectfulFlowFacts();
           if (isInvalidType(awaited)) return invalidType;
           if (awaited.kind === "promise") {
             const result = resolvedAsyncType(awaited.value);
@@ -2127,8 +2217,24 @@ export class Analyzer implements TypeEnvironment {
         {
           const condition = this.inferExpression(expression.condition);
           this.requireCondition(condition, expression.condition);
-          const thenType = this.inferNarrowedExpression(expression.thenValue, this.narrowingFor(expression.condition, condition), contextualType);
-          const elseType = this.inferNarrowedExpression(expression.elseValue, this.negativeNarrowingFor(expression.condition), contextualType);
+          const baseline = this.snapshotFlowFacts();
+          let thenType = unknownType;
+          const thenInvalidations = this.analyzeIsolatedFlow(baseline, () => {
+            thenType = this.inferNarrowedExpression(
+              expression.thenValue,
+              this.narrowingFor(expression.condition, condition),
+              contextualType,
+            );
+          });
+          let elseType = unknownType;
+          const elseInvalidations = this.analyzeIsolatedFlow(baseline, () => {
+            elseType = this.inferNarrowedExpression(
+              expression.elseValue,
+              this.negativeNarrowingFor(expression.condition, condition),
+              contextualType,
+            );
+          });
+          this.applyFlowInvalidations([thenInvalidations, elseInvalidations]);
           if (this.contextualObjectType(contextualType)
             && this.contextuallyAssignable(thenType, contextualType, expression.thenValue.span)
             && this.contextuallyAssignable(elseType, contextualType, expression.elseValue.span)) {
@@ -2147,6 +2253,7 @@ export class Analyzer implements TypeEnvironment {
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
         const result = this.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
+        this.invalidateEffectfulFlowFacts();
         if (this.expandAliases(result).kind === "null") this.normalizedNullResults.add(spanIdentity(expression.span));
         return result;
       }
@@ -2197,8 +2304,8 @@ export class Analyzer implements TypeEnvironment {
       const rightContext = operator === "and" ? leftTruthy : leftFalsy;
       const rightCondition = this.inferConditionWithNarrowings(rightExpression, rightContext);
       this.logicalConditionNarrowings.set(spanIdentity(operationSpan), {
-        truthy: operator === "and" ? this.combineNarrowings(leftTruthy, rightCondition.truthy) : new Map(),
-        falsy: operator === "or" ? this.combineNarrowings(leftFalsy, rightCondition.falsy) : new Map(),
+        truthy: operator === "and" ? this.combineNarrowings(rightCondition.surviving, rightCondition.truthy) : new Map(),
+        falsy: operator === "or" ? this.combineNarrowings(rightCondition.surviving, rightCondition.falsy) : new Map(),
       });
       return isInvalidType(left) || isInvalidType(rightCondition.type) ? invalidType : boolType;
     }
@@ -2802,6 +2909,7 @@ export class Analyzer implements TypeEnvironment {
 
   private inferCollectionCall(member: Extract<Expression, { kind: "MemberExpression" }>, arguments_: readonly Expression[], callSpan: Span): ValueType | null {
     const object = this.inferExpression(member.object);
+    if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set") return null;
     this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, nonOptional(object));
     const memberType = object.kind === "list" ? this.listMember(object, member.property)
       : object.kind === "map" ? this.mapMember(object, member.property)
@@ -3086,9 +3194,10 @@ export class Analyzer implements TypeEnvironment {
         return unknownType;
       }
       this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, { kind: "class", name: base });
+      if (getter) this.invalidateEffectfulFlowFacts();
       return method?.type ?? getter!.type;
     }
-    const original = this.inferExpression(objectExpression);
+    const original = this.inferredOrAnalyze(objectExpression);
     this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, nonOptional(original));
     const resolvedOriginal = this.expandAliases(original);
     const object = nonOptional(resolvedOriginal);
@@ -3105,6 +3214,7 @@ export class Analyzer implements TypeEnvironment {
     const basePath = this.stableMemberAccessPath(objectExpression);
     const narrowedMember = basePath ? this.lookupMemberNarrowing(`${basePath}.${property}`) : null;
     let result = unknownType;
+    let effectfulRead = false;
 
     if (object.kind === "any") {
       result = anyType;
@@ -3149,6 +3259,9 @@ export class Analyzer implements TypeEnvironment {
       const getter = this.findGetter(classKey, property);
       const method = this.findMethod(classKey, property);
       result = privateField?.type ?? privateMethod ?? field?.type ?? getter?.type ?? method?.type ?? unknownType;
+      effectfulRead = Boolean(getter
+        || privateField && (this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false)
+        || classKey.startsWith("js:") && !privateMethod && !method && (privateField || field));
       if (privateField || privateMethod) {
         this.privateMembers.add(spanIdentity(memberSpan));
       } else if (!field && !getter && !method && this.declaresPrivateMember(classKey, property, false)) {
@@ -3164,6 +3277,9 @@ export class Analyzer implements TypeEnvironment {
       const getter = this.findStaticGetter(key, property);
       const method = this.findStaticMethod(key, property);
       result = privateField?.type ?? privateMethod ?? field?.type ?? getter ?? method ?? unknownType;
+      effectfulRead = Boolean(getter
+        || privateField && (this.privateStaticGetters.get(this.currentClass ?? "")?.has(property) ?? false)
+        || key.startsWith("js:") && !privateMethod && !method && (privateField || field));
       if (privateField || privateMethod) {
         this.privateMembers.add(spanIdentity(memberSpan));
       } else if (!field && !getter && !method && this.declaresPrivateMember(key, property, true)) {
@@ -3200,6 +3316,7 @@ export class Analyzer implements TypeEnvironment {
 
     result = this.displayExternalClasses(result);
     if (useNarrowing && narrowedMember) result = narrowedMember;
+    if (effectfulRead) this.invalidateEffectfulFlowFacts();
 
     if (optional) {
       const finalType = resolvedOriginal.kind === "optional" || resolvedOriginal.kind === "null" ? optionalOf(result) : result;
@@ -3557,8 +3674,8 @@ export class Analyzer implements TypeEnvironment {
       const rightIsNone = expression.right.kind === "LiteralExpression" && expression.right.value === null;
       if (leftIsNone !== rightIsNone) {
         const candidate = leftIsNone ? expression.right : expression.left;
-        const candidateType = this.inferExpression(candidate);
-        if (candidateType.kind === "optional") {
+        const candidateType = this.inferredExpressionTypes.get(spanIdentity(candidate.span));
+        if (candidateType?.kind === "optional") {
           const equalToNone = expression.operator === "==" ? truthy : !truthy;
           this.addLocationNarrowing(narrowed, candidate, equalToNone ? nullType : candidateType.inner);
         }
@@ -3572,16 +3689,14 @@ export class Analyzer implements TypeEnvironment {
       }
     } else if (expression.kind === "MemberExpression" && !expression.optional) {
       const path = this.stableMemberAccessPath(expression);
-      const type = knownType ?? this.inferExpression(expression);
-      if (path && type.kind === "optional") narrowed.set(`${memberNarrowingPrefix}${path}`, truthy ? type.inner : nullType);
+      const type = knownType ?? this.inferredExpressionTypes.get(spanIdentity(expression.span));
+      if (path && type?.kind === "optional") narrowed.set(`${memberNarrowingPrefix}${path}`, truthy ? type.inner : nullType);
     } else if (expression.kind === "IsExpression") {
       const checked = this.resolveAnnotation(expression.type);
       if (truthy) {
         this.addLocationNarrowing(narrowed, expression.value, checked);
       } else {
-        const current = expression.value.kind === "IdentifierExpression"
-          ? this.lookup(expression.value.name)?.type
-          : this.inferExpression(expression.value);
+        const current = this.inferredExpressionTypes.get(spanIdentity(expression.value.span));
         const remaining = current ? this.excludeCheckedType(current, checked) : null;
         if (remaining) this.addLocationNarrowing(narrowed, expression.value, remaining);
       }
@@ -3604,7 +3719,7 @@ export class Analyzer implements TypeEnvironment {
 
   private addLocationNarrowing(target: Map<string, ValueType>, expression: Expression, type: ValueType): void {
     if (expression.kind === "IdentifierExpression") {
-      target.set(expression.name, type);
+      if (this.lookup(expression.name)) target.set(expression.name, type);
       return;
     }
     const path = this.stableMemberAccessPath(expression);
@@ -3631,6 +3746,7 @@ export class Analyzer implements TypeEnvironment {
     readonly type: ValueType;
     readonly truthy: ReadonlyMap<string, ValueType>;
     readonly falsy: ReadonlyMap<string, ValueType>;
+    readonly surviving: ReadonlyMap<string, ValueType>;
   } {
     if (narrowed.size === 0) {
       const type = this.inferExpression(expression);
@@ -3639,6 +3755,7 @@ export class Analyzer implements TypeEnvironment {
         type,
         truthy: this.narrowingFor(expression, type),
         falsy: this.negativeNarrowingFor(expression, type),
+        surviving: new Map(),
       };
     }
     this.enterScope();
@@ -3650,6 +3767,7 @@ export class Analyzer implements TypeEnvironment {
         type,
         truthy: this.narrowingFor(expression, type),
         falsy: this.negativeNarrowingFor(expression, type),
+        surviving: this.survivingNarrowings(narrowed),
       };
     } finally {
       this.exitScope();
@@ -4219,6 +4337,27 @@ export class Analyzer implements TypeEnvironment {
     return false;
   }
 
+  private statementAlwaysExitsBlock(statement: Statement): boolean {
+    if (statement.kind === "ReturnStatement" || statement.kind === "ThrowStatement"
+      || statement.kind === "BreakStatement" || statement.kind === "ContinueStatement") return true;
+    if (statement.kind === "IfStatement" && statement.elseBody) {
+      return this.blockAlwaysExits(statement.thenBody) && this.blockAlwaysExits(statement.elseBody);
+    }
+    if (statement.kind === "MatchStatement" && (statement.elseBody || this.exhaustiveMatches.has(statement.span.start))) {
+      return statement.cases.every((branch) => this.blockAlwaysExits(branch.body))
+        && (!statement.elseBody || this.blockAlwaysExits(statement.elseBody));
+    }
+    if (statement.kind !== "TryStatement") return false;
+    if (statement.finallyBody && this.blockAlwaysExits(statement.finallyBody)) return true;
+    return Boolean(statement.catchBody
+      && this.blockAlwaysExits(statement.tryBody)
+      && this.blockAlwaysExits(statement.catchBody));
+  }
+
+  private blockAlwaysExits(statements: readonly Statement[]): boolean {
+    return statements.some((statement) => this.statementAlwaysExitsBlock(statement));
+  }
+
   private builtin(name: string): Binding | null {
     const functions = new Map<string, ValueType>([
       ["number", { kind: "function", parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) }],
@@ -4584,7 +4723,30 @@ export class Analyzer implements TypeEnvironment {
     }
     if (expression.kind !== "MemberExpression" || expression.optional) return null;
     const base = this.stableMemberAccessPath(expression.object);
-    return base ? `${base}.${expression.property}` : null;
+    if (!base || !this.stableDataMember(expression.object, expression.property)) return null;
+    return `${base}.${expression.property}`;
+  }
+
+  private stableDataMember(objectExpression: Expression, property: string): boolean {
+    const inferred = this.inferredExpressionTypes.get(spanIdentity(objectExpression.span))
+      ?? (objectExpression.kind === "IdentifierExpression" ? this.lookup(objectExpression.name)?.type : null);
+    if (!inferred) return false;
+    const owner = nonOptional(this.expandAliases(inferred));
+    if (owner.kind === "object") return owner.fields.has(property);
+    if (owner.kind === "named") return this.fieldsOf(owner.identity ?? owner.name)?.has(property) ?? false;
+    if (owner.kind === "class") {
+      const key = owner.identity ?? owner.name;
+      if (key.startsWith("js:")) return false;
+      if (this.findGetter(key, property)) return false;
+      if (this.privateGetters.get(this.currentClass ?? "")?.has(property)) return false;
+      return Boolean(this.findField(key, property) || this.privateFieldForAccess(key, property, false));
+    }
+    if (owner.kind !== "classConstructor") return false;
+    const key = owner.identity ?? owner.name;
+    if (key.startsWith("js:")) return false;
+    if (this.findStaticGetter(key, property)) return false;
+    if (this.privateStaticGetters.get(this.currentClass ?? "")?.has(property)) return false;
+    return Boolean(this.findStaticField(key, property) || this.privateFieldForAccess(key, property, true));
   }
 
   private lookupMemberNarrowing(path: string): ValueType | null {
@@ -4611,8 +4773,88 @@ export class Analyzer implements TypeEnvironment {
 
   private invalidateMemberNarrowings(path: string): void {
     for (const scope of this.memberNarrowings) {
-      for (const candidate of scope.keys()) {
-        if (candidate === path || candidate.startsWith(`${path}.`)) scope.delete(candidate);
+      for (const [candidate, narrowing] of scope) {
+        if (narrowing.frame === this.flowFrameDepth
+          && (candidate === path || candidate.startsWith(`${path}.`))) scope.delete(candidate);
+      }
+    }
+  }
+
+  private invalidateEffectfulFlowFacts(): void {
+    for (const scope of this.scopes) {
+      for (const binding of scope.values()) {
+        if (binding.mutable && binding.narrowingFrame === this.flowFrameDepth) {
+          binding.type = binding.declaredType;
+          binding.narrowingFrame = null;
+        }
+      }
+    }
+    for (const scope of this.memberNarrowings) {
+      for (const [path, narrowing] of scope) {
+        if (narrowing.frame === this.flowFrameDepth) scope.delete(path);
+      }
+    }
+  }
+
+  private snapshotFlowFacts(): FlowFactsSnapshot {
+    const bindings = new Map<Binding, { readonly type: ValueType; readonly frame: number }>();
+    for (const scope of this.scopes) {
+      for (const binding of scope.values()) {
+        if (binding.narrowingFrame !== null) {
+          bindings.set(binding, { type: binding.type, frame: binding.narrowingFrame });
+        }
+      }
+    }
+    return {
+      bindings,
+      members: this.memberNarrowings.map((scope) => new Map(scope)),
+    };
+  }
+
+  private restoreFlowFacts(snapshot: FlowFactsSnapshot): void {
+    for (const [binding, state] of snapshot.bindings) {
+      binding.type = state.type;
+      binding.narrowingFrame = state.frame;
+    }
+    snapshot.members.forEach((source, index) => {
+      const target = this.memberNarrowings[index];
+      if (!target) return;
+      target.clear();
+      for (const [path, narrowing] of source) target.set(path, narrowing);
+    });
+  }
+
+  private analyzeIsolatedFlow(snapshot: FlowFactsSnapshot, analyze: () => void): FlowFactInvalidations {
+    this.restoreFlowFacts(snapshot);
+    analyze();
+    const bindings = new Set<Binding>();
+    for (const [binding, state] of snapshot.bindings) {
+      if (binding.narrowingFrame !== state.frame || !sameType(binding.type, state.type)) bindings.add(binding);
+    }
+    const members = new Map<number, ReadonlySet<string>>();
+    snapshot.members.forEach((source, index) => {
+      const current = this.memberNarrowings[index];
+      const invalidated = new Set<string>();
+      for (const [path, narrowing] of source) {
+        const after = current?.get(path);
+        if (!after || after.frame !== narrowing.frame || !sameType(after.type, narrowing.type)) invalidated.add(path);
+      }
+      if (invalidated.size > 0) members.set(index, invalidated);
+    });
+    this.restoreFlowFacts(snapshot);
+    return { bindings, members };
+  }
+
+  private applyFlowInvalidations(branches: readonly FlowFactInvalidations[]): void {
+    for (const branch of branches) {
+      for (const binding of branch.bindings) {
+        binding.type = binding.declaredType;
+        binding.narrowingFrame = null;
+      }
+      for (const [index, paths] of branch.members) {
+        const scope = this.memberNarrowings[index];
+        if (!scope) continue;
+        for (const path of paths) scope.delete(path);
       }
     }
   }

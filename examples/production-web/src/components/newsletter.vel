@@ -29,18 +29,19 @@ export component Newsletter:
 
     action submit():
         if form:
+            const currentForm = form
             const domain = findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups?.[0]
             if email == "":
-                setError(form, "email", "Email is required")
-                focusFirstError(form)
+                setError(currentForm, "email", "Email is required")
+                focusFirstError(currentForm)
                 announce("Email is required", "assertive")
             else if domain == null:
-                setError(form, "email", "Enter a complete email address")
-                focusFirstError(form)
+                setError(currentForm, "email", "Enter a complete email address")
+                focusFirstError(currentForm)
                 announce("Email is incomplete", "assertive")
             else:
                 await frame()
-                clearError(form, "email")
+                clearError(currentForm, "email")
                 announce("Subscription ready")
 
     computed submitFailure = submit.error

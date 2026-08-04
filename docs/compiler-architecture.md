@@ -229,6 +229,20 @@ Short-circuit `and`/`or` analysis evaluates the right operand under the facts
 that make it reachable, records only facts valid for the complete result path,
 and lowers optional conditions to explicit presence checks. `while` bodies use
 the same successful-condition facts rather than a separate loop rule.
+Flow facts are snapshotted around mutually exclusive `if`, `match`, and inline
+conditional branches and around loop bodies. Only invalidations from paths that
+can reach the next statement are merged; unreachable tails cannot mutate the
+continuing fact set. Successful match guards and terminating guard clauses reuse
+the same fact model.
+Every ordinary call clears mutable binding facts and member-path facts before
+later expressions are checked, matching JavaScript closure and reference
+semantics. Getter reads and safe-JavaScript class fields are handled as the same
+effect boundary because repeated property access may execute host code. `await`
+clears the same facts before the resumed continuation is checked. A local
+non-optional `const` is the explicit stable-value boundary. Invalidations remain
+inside their current flow frame, so analyzing a deferred function, callback,
+component, or instance initializer does not pretend that declaration is an
+immediate execution.
 
 Catch lowering uses the host's cross-realm Error brand check, then converts
 foreign non-Error throws without applying JavaScript string coercion to objects
