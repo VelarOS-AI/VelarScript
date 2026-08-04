@@ -3937,11 +3937,11 @@ const label = greet(ada)
   });
   const sliceCall = mainSource.indexOf(".slice(0, 2)") + ".slice(0, ".length;
   assert.deepEqual(projectSignatureAt(project, mainPath, sliceCall), {
-    label: "slice(number = default, number = default) -> List<number>",
+    label: "slice(start: number = default, end: number = default) -> List<number>",
     activeParameter: 1,
   });
   assert.equal(projectExpressionAt(project, mainPath, mainSource.indexOf(".slice") + 2)?.type,
-    "(number = default, number = default) -> List<number>");
+    "(start: number = default, end: number = default) -> List<number>");
   assert.equal(projectExpressionAt(project, mainPath, mainSource.indexOf(".slice") + 2)?.callable, true);
   const preparedFieldRename = projectPrepareRenameAt(project, modelsPath, modelsSource.indexOf("{name}\n") + 2);
   assert.equal(preparedFieldRename?.placeholder, "name");
@@ -7595,6 +7595,80 @@ scores.delete("Ada")
   assert.match(messages, /remove/u);
   assert.doesNotMatch(messages, /Cannot call an unknown JavaScript value/u);
   assert.doesNotMatch(messages, /Ordered comparison requires/u);
+});
+
+test("collection methods use the same named-argument contract as ordinary functions", () => {
+  const result = compileCore(`
+def markIndex(label: string, value: number) -> number:
+    print(label)
+    return value
+
+def markText(label: string, value: string) -> string:
+    print(label)
+    return value
+
+let values = ["a", "c"]
+values.insert(value=markText("value", "b"), index=markIndex("index", 1))
+print(values.join(separator=","))
+print(values.slice(end=2, start=1).join(separator="-"))
+print([1, 2, 3].reduce(initial=0, combine=(sum, value) => sum + value))
+
+const scores: Map<string, number> = Map()
+scores.set(value=2, key="b")
+print(scores.get(key="b"))
+
+const tags: Set<string> = Set()
+tags.add(value="web")
+print(tags.has(value="web"))
+
+const absent: List<string>? = null
+absent?.append(value=markText("skipped", "x"))
+print("done")
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "value\nindex\na,b,c\nb\n6\n2\ntrue\ndone\n");
+
+  const inferred = compileCore(`
+let values = []
+values.append(value=1)
+const first: number = values[0]
+
+let tags = Set()
+tags.add(value="web")
+const tag: string = tags.values()[0]
+
+let scores = Map()
+scores.set(value=1, key="Ada")
+const score: number? = scores.get(key="Ada")
+`.trimStart());
+  assert.deepEqual(inferred.diagnostics, []);
+
+  const wrongTypes = compileCore(`
+const values = [1]
+values.get(index="zero")
+values.map(transform=1)
+
+const scores: Map<string, number> = Map()
+scores.get(key=1)
+`.trimStart());
+  const typeMessages = wrongTypes.diagnostics.map((item) => item.message).join("\n");
+  assert.match(typeMessages, /Cannot assign string to number/u);
+  assert.match(typeMessages, /Cannot assign number to \(number\) -> unknown/u);
+  assert.match(typeMessages, /Cannot assign number to string/u);
+
+  const invalidNames = compileCore(`
+const values = [1]
+values.append(item=2)
+values.insert(value=2)
+values.insert(index=0, index=1, value=2)
+`.trimStart());
+  const nameMessages = invalidNames.diagnostics.map((item) => item.message).join("\n");
+  assert.match(nameMessages, /Unknown named argument 'item'/u);
+  assert.match(nameMessages, /Missing required named argument: index/u);
+  assert.match(nameMessages, /Parameter 'index' is provided more than once/u);
 });
 
 test("empty Lists infer one element type from append or extend", () => {

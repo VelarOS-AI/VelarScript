@@ -409,6 +409,8 @@ users expect and JavaScript users can read immediately.
 - An optional call that short-circuits does not evaluate its arguments.
 - Lowered JavaScript receives arguments in declaration order.
 - No runtime keyword-argument record is created.
+- Core collection methods follow this same contract and expose the parameter
+  names documented in their signatures.
 - Once a fixed parameter has a default value, every following fixed parameter
   also has a default value. This keeps positional and named calls identical.
 
@@ -449,6 +451,7 @@ let names: List<string> = ["Ada", "Lin"]
 names.append("Grace")
 names.extend(["Edsger", "Margaret"])
 names.insert(1, "Barbara")
+names.insert(value="Alan", index=0)
 ```
 
 List members:
@@ -508,6 +511,12 @@ const selected = users.get("user-1")
 
 Map members are `size`, `get`, `set`, `update`, `remove`, `has`, `clear`,
 `copy`, `keys`, `values`, and `entries`.
+
+Every method signature in the tables is also its named-argument vocabulary.
+For example, `slice(end=5, start=1)`, `Map.set(value=user, key=user.id)`, and
+`Set.add(value="web")` are checked exactly like calls to user-defined
+functions. Source expressions still evaluate from left to right even when the
+named values are reordered for the runtime call.
 
 All collection growth is bounded. Every language collection operation validates
 its JavaScript boundary and calls compiler-owned helpers rather than an

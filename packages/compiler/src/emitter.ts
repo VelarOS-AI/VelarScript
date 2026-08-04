@@ -1457,12 +1457,20 @@ export class JavaScriptEmitter {
           if (helper) {
             this.needsCollectionHelpers = true;
             const object = this.emitMappedExpression(expression.callee.object);
-            const arguments_ = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+            const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+            const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
+            const arguments_ = namedOrder
+              ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
+              : sourceArguments;
+            const emitArguments = (): string => namedOrder
+              ? `...((__namedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+              : arguments_.join(", ");
+            const suffix = arguments_.length > 0 ? `, ${emitArguments()}` : "";
             if (this.hints.optionalCallees.has(spanIdentity(expression.span))) {
-              const invocation = `${helper}(__value${arguments_.length > 0 ? `, ${arguments_.join(", ")}` : ""})`;
+              const invocation = `${helper}(__value${suffix})`;
               return `(__velarOptionalCollection(${object}, __value => ${invocation}) ?? null)`;
             }
-            return `${helper}(${[object, ...arguments_].join(", ")})`;
+            return `${helper}(${object}${suffix})`;
           }
         }
         const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));

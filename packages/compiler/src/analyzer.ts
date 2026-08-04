@@ -4030,11 +4030,8 @@ export class Analyzer implements TypeEnvironment {
     }
 
     if (calleeExpression.kind === "MemberExpression" && calleeExpression.object.kind !== "SuperExpression") {
-      const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, callSpan);
-      if (collectionResult) {
-        if (hasNamed) this.typeError("Collection methods do not expose named parameters", callSpan);
-        return collectionResult;
-      }
+      const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, argumentNames, callSpan);
+      if (collectionResult) return collectionResult;
     }
 
     const diagnosticsBeforeCallee = this.diagnostics.length;
@@ -4451,7 +4448,12 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private inferCollectionCall(member: Extract<Expression, { kind: "MemberExpression" }>, arguments_: readonly Expression[], callSpan: Span): ValueType | null {
+  private inferCollectionCall(
+    member: Extract<Expression, { kind: "MemberExpression" }>,
+    sourceArguments: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType | null {
     const object = this.inferExpression(member.object);
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set") return null;
     this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, nonOptional(object));
@@ -4460,6 +4462,72 @@ export class Analyzer implements TypeEnvironment {
         : object.kind === "set" ? this.setMember(object, member.property)
           : unknownType;
     this.recordSemanticExpression(member, memberType ?? unknownType);
+    let arguments_ = sourceArguments;
+    let namedPreanalyzed = false;
+    const callableMember: CallableValueType | null = memberType
+      && (memberType.kind === "function" || memberType.kind === "action" || memberType.kind === "intrinsic")
+      ? memberType
+      : null;
+    const named = callableMember
+      ? this.orderCollectionNamedArguments(sourceArguments, argumentNames, callableMember, callSpan)
+      : null;
+    if (named) {
+      const inferSource = (contextForTarget: (target: number) => ValueType): void => {
+        for (const [source, target] of named.targets.entries()) {
+          const argument = sourceArguments[source]!;
+          this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, target === null ? unknownType : contextForTarget(target));
+        }
+      };
+      if (!named.valid) {
+        inferSource((target) => callableMember!.parameters[target] ?? unknownType);
+        return callableMember!.result;
+      }
+      if (object.kind === "list" && member.property === "reduce") {
+        let initial = unknownType;
+        let deferred: ArrowFunctionExpression | null = null;
+        for (const [source, target] of named.targets.entries()) {
+          const argument = sourceArguments[source]!;
+          if (target === 0 && argument.kind === "ArrowFunctionExpression") deferred = argument;
+          else if (target === 1) initial = this.inferExpression(argument);
+          else this.inferExpression(argument);
+        }
+        if (deferred) {
+          this.inferExpression(deferred, {
+            kind: "function",
+            parameters: [initial, object.element],
+            requiredParameters: 2,
+            result: initial,
+          });
+        }
+      } else {
+        inferSource((target) => callableMember!.parameters[target] ?? unknownType);
+      }
+      arguments_ = named.ordered;
+      namedPreanalyzed = true;
+    }
+    const omitted = (argument: Expression | undefined): boolean => argument?.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument";
+    const argumentAt = (index: number): Expression | null => {
+      const argument = arguments_[index];
+      return !argument || omitted(argument) ? null : argument;
+    };
+    const inferArgument = (index: number, contextualType: ValueType = unknownType): ValueType => {
+      const argument = argumentAt(index);
+      if (!argument) return unknownType;
+      return namedPreanalyzed ? this.inferredExpressionType(argument) : this.inferExpression(argument, contextualType);
+    };
+    const checkCollectionArguments = (parameters: readonly ValueType[], requiredParameters = parameters.length): void => {
+      if (!namedPreanalyzed) {
+        this.checkArguments(arguments_, parameters, callSpan, requiredParameters);
+        return;
+      }
+      for (const [index, expected] of parameters.entries()) {
+        const argument = argumentAt(index);
+        if (argument) this.requireAssignable(this.inferredExpressionType(argument), expected, argument.span);
+      }
+    };
+    const requireCount = (count: number): void => {
+      if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
+    };
     const lowered = object.kind === "list"
       ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed"].includes(member.property)
       : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property)
@@ -4471,107 +4539,112 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "map") {
         this.collectionCalls.set(member.span.end, "listMap");
         const callbackExpected: ValueType = { kind: "function", parameters: [object.element], requiredParameters: 1, result: unknownType };
-        const callback = arguments_[0] ? this.inferExpression(arguments_[0], callbackExpected) : unknownType;
+        const callback = inferArgument(0, callbackExpected);
+        const callbackArgument = argumentAt(0);
+        if (callbackArgument) this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         const result = callback.kind === "function" ? callback.result : unknownType;
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
+        requireCount(1);
         return { kind: "list", element: result };
       }
       if (member.property === "filter") {
         this.collectionCalls.set(member.span.end, "listFilter");
         const callbackExpected: ValueType = { kind: "function", parameters: [object.element], requiredParameters: 1, result: boolType };
-        if (arguments_[0]) {
-          const callback = this.inferExpression(arguments_[0], callbackExpected);
-          this.requireAssignable(callback, callbackExpected, arguments_[0].span);
+        const callbackArgument = argumentAt(0);
+        if (callbackArgument) {
+          const callback = inferArgument(0, callbackExpected);
+          this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         }
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
+        requireCount(1);
         return { kind: "list", element: object.element };
       }
       if (member.property === "reduce") {
         this.collectionCalls.set(member.span.end, "listReduce");
-        const callbackArgument = arguments_[0];
+        const callbackArgument = argumentAt(0);
         const deferredArrow = callbackArgument?.kind === "ArrowFunctionExpression";
-        let callback = callbackArgument && !deferredArrow ? this.inferExpression(callbackArgument) : unknownType;
-        const initial = arguments_[1] ? this.inferExpression(arguments_[1]) : unknownType;
+        let callback = callbackArgument && !deferredArrow ? inferArgument(0) : unknownType;
+        const initial = inferArgument(1);
         const callbackExpected: ValueType = { kind: "function", parameters: [initial, object.element], requiredParameters: 2, result: initial };
         if (callbackArgument) {
-          if (deferredArrow) callback = this.inferExpression(callbackArgument, callbackExpected);
+          if (deferredArrow) callback = inferArgument(0, callbackExpected);
           this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         }
-        if (arguments_.length !== 2) this.typeError(`Expected 2 arguments but received ${arguments_.length}`, callSpan);
+        requireCount(2);
         return initial;
       }
       if (member.property === "append") {
         this.collectionCalls.set(member.span.end, "listAppend");
-        const argument = arguments_[0];
-        const value = argument ? this.inferExpression(argument, object.element) : unknownType;
+        const argument = argumentAt(0);
+        const value = inferArgument(0, object.element);
         if (argument && object.element.kind === "unknown") {
           if (!this.refineCollectionInference(object, { kind: "list", element: value })) this.requireAssignable(value, object.element, argument.span);
         } else if (argument) this.requireAssignable(value, object.element, argument.span);
         if (argument && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "element");
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
+        requireCount(1);
         return nullType;
       }
       if (member.property === "extend") {
         this.collectionCalls.set(member.span.end, "listExtend");
-        const argument = arguments_[0];
-        const source = argument ? this.expandAliases(this.inferExpression(argument)) : unknownType;
+        const argument = argumentAt(0);
+        const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
         let inferred = false;
         if (argument && source.kind === "list" && object.element.kind === "unknown") {
           inferred = this.refineCollectionInference(object, source);
         }
         if (argument && !inferred) this.requireAssignable(source, object, argument.span);
         if (argument && this.hasExternalOrigin(source)) this.retainContainedOrigin(member.object, "element");
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
+        requireCount(1);
         return nullType;
       }
       if (member.property === "insert") {
         this.collectionCalls.set(member.span.end, "listInsert");
-        if (arguments_[0]) this.requireAssignable(this.inferExpression(arguments_[0], numberType), numberType, arguments_[0].span);
-        const argument = arguments_[1];
-        const value = argument ? this.inferExpression(argument, object.element) : unknownType;
+        const indexArgument = argumentAt(0);
+        if (indexArgument) this.requireAssignable(inferArgument(0, numberType), numberType, indexArgument.span);
+        const argument = argumentAt(1);
+        const value = inferArgument(1, object.element);
         if (argument && object.element.kind === "unknown") {
           if (!this.refineCollectionInference(object, { kind: "list", element: value })) this.requireAssignable(value, object.element, argument.span);
         } else if (argument) this.requireAssignable(value, object.element, argument.span);
         if (argument && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "element");
-        if (arguments_.length !== 2) this.typeError(`Expected 2 arguments but received ${arguments_.length}`, callSpan);
+        requireCount(2);
         return nullType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "listRemove");
-        this.checkArguments(arguments_, [object.element], callSpan);
+        checkCollectionArguments([object.element]);
         return boolType;
       }
       if (member.property === "pop") {
         this.collectionCalls.set(member.span.end, "listPop");
-        this.checkArguments(arguments_, [numberType], callSpan, 0);
+        checkCollectionArguments([numberType], 0);
         return optionalOf(object.element);
       }
       if (member.property === "clear" || member.property === "copy" || member.property === "reversed") {
         this.collectionCalls.set(member.span.end, member.property === "clear" ? "clear" : member.property === "copy" ? "listCopy" : "listReversed");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return member.property === "clear" ? nullType : { kind: "list", element: object.element };
       }
       if (member.property === "has" || member.property === "count") {
         this.collectionCalls.set(member.span.end, member.property === "has" ? "has" : "listCount");
-        this.checkArguments(arguments_, [object.element], callSpan);
+        checkCollectionArguments([object.element]);
         return member.property === "has" ? boolType : numberType;
       }
       if (member.property === "sorted") {
         this.collectionCalls.set(member.span.end, "listSorted");
         const comparator: ValueType = { kind: "function", parameters: [object.element, object.element], requiredParameters: 2, result: numberType };
-        this.checkArguments(arguments_, [comparator], callSpan, 0);
-        if (arguments_.length === 0 && !this.defaultSortableType(object.element)) {
+        checkCollectionArguments([comparator], 0);
+        if (!argumentAt(0) && !this.defaultSortableType(object.element)) {
           this.typeError(`List<${describeType(object.element)}>.sorted() requires an explicit comparator`, callSpan);
         }
         return { kind: "list", element: object.element };
       }
       if (["some", "every", "find"].includes(member.property)) {
         const callbackExpected: ValueType = { kind: "function", parameters: [object.element], requiredParameters: 1, result: boolType };
-        if (arguments_[0]) {
-          const callback = this.inferExpression(arguments_[0], callbackExpected);
-          this.requireAssignable(callback, callbackExpected, arguments_[0].span);
+        const callbackArgument = argumentAt(0);
+        if (callbackArgument) {
+          const callback = inferArgument(0, callbackExpected);
+          this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         }
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
+        requireCount(1);
         if (member.property === "find") {
           this.collectionCalls.set(member.span.end, "listFind");
           return optionalOf(object.element);
@@ -4581,12 +4654,12 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "index") {
         this.collectionCalls.set(member.span.end, "listIndex");
-        this.checkArguments(arguments_, [object.element], callSpan);
+        checkCollectionArguments([object.element]);
         return optionalOf(numberType);
       }
       if (member.property === "join") {
         this.collectionCalls.set(member.span.end, "listJoin");
-        this.checkArguments(arguments_, [stringType], callSpan, 0);
+        checkCollectionArguments([stringType], 0);
         if (object.element.kind !== "any" && object.element.kind !== "unknown" && !isAssignable(object.element, stringType, this)) {
           this.typeError(`List.join requires List<string>, received ${describeType(object)}`, member.span);
         }
@@ -4594,12 +4667,12 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "get") {
         this.collectionCalls.set(member.span.end, "get");
-        this.checkArguments(arguments_, [numberType], callSpan);
+        checkCollectionArguments([numberType]);
         return optionalOf(object.element);
       }
       if (member.property === "slice") {
         this.collectionCalls.set(member.span.end, "slice");
-        this.checkArguments(arguments_, [numberType, numberType], callSpan, 0);
+        checkCollectionArguments([numberType, numberType], 0);
         return { kind: "list", element: object.element };
       }
     }
@@ -4607,87 +4680,90 @@ export class Analyzer implements TypeEnvironment {
     if (object.kind === "map") {
       if (member.property === "set") {
         this.collectionCalls.set(member.span.end, "mapSet");
-        const key = arguments_[0] ? this.inferExpression(arguments_[0]) : unknownType;
-        const value = arguments_[1] ? this.inferExpression(arguments_[1]) : unknownType;
+        const keyArgument = argumentAt(0);
+        const valueArgument = argumentAt(1);
+        const key = inferArgument(0);
+        const value = inferArgument(1);
         if (object.key.kind === "unknown" && object.value.kind === "unknown") {
           this.refineCollectionInference(object, { kind: "map", key, value });
         }
-        if (arguments_[0]) this.requireAssignable(key, object.key, arguments_[0].span);
-        if (arguments_[1]) this.requireAssignable(value, object.value, arguments_[1].span);
-        if (arguments_[0] && this.hasExternalOrigin(key)) this.retainContainedOrigin(member.object, "key");
-        if (arguments_[1] && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "value");
-        if (arguments_.length !== 2) this.typeError(`Expected 2 arguments but received ${arguments_.length}`, callSpan);
+        if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
+        if (valueArgument) this.requireAssignable(value, object.value, valueArgument.span);
+        if (keyArgument && this.hasExternalOrigin(key)) this.retainContainedOrigin(member.object, "key");
+        if (valueArgument && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "value");
+        requireCount(2);
         return nullType;
       }
       if (member.property === "update") {
         this.collectionCalls.set(member.span.end, "mapUpdate");
-        const argument = arguments_[0];
-        const source = argument ? this.expandAliases(this.inferExpression(argument)) : unknownType;
+        const argument = argumentAt(0);
+        const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
         let inferred = false;
         if (argument && source.kind === "map" && object.key.kind === "unknown" && object.value.kind === "unknown") {
           inferred = this.refineCollectionInference(object, source);
         }
         if (argument && !inferred) this.requireAssignable(source, object, argument.span);
         if (argument && this.hasExternalOrigin(source)) this.retainContainedOrigin(member.object);
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
+        requireCount(1);
         return nullType;
       }
       if (member.property === "get") {
         this.collectionCalls.set(member.span.end, "get");
-        this.checkArguments(arguments_, [object.key], callSpan);
+        checkCollectionArguments([object.key]);
         return optionalOf(object.value);
       }
       if (member.property === "keys") {
         this.collectionCalls.set(member.span.end, "keys");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return { kind: "list", element: object.key };
       }
       if (member.property === "values") {
         this.collectionCalls.set(member.span.end, "values");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return { kind: "list", element: object.value };
       }
       if (member.property === "entries") {
         this.collectionCalls.set(member.span.end, "entries");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return { kind: "list", element: { kind: "object", fields: new Map([["key", object.key], ["value", object.value]]) } };
       }
       if (member.property === "has") {
         this.collectionCalls.set(member.span.end, "has");
-        this.checkArguments(arguments_, [object.key], callSpan);
+        checkCollectionArguments([object.key]);
         return boolType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "remove");
-        this.checkArguments(arguments_, [object.key], callSpan);
+        checkCollectionArguments([object.key]);
         return boolType;
       }
       if (member.property === "clear") {
         this.collectionCalls.set(member.span.end, "clear");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return nullType;
       }
       if (member.property === "copy") {
         this.collectionCalls.set(member.span.end, "mapCopy");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return { kind: "map", key: object.key, value: object.value };
       }
     }
     if (object.kind === "set") {
       if (member.property === "add") {
         this.collectionCalls.set(member.span.end, "setAdd");
-        const value = arguments_[0] ? this.inferExpression(arguments_[0], object.element) : unknownType;
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
-        if (arguments_[0] && object.element.kind === "unknown") {
-          if (!this.refineCollectionInference(object, { kind: "set", element: value })) this.requireAssignable(value, object.element, arguments_[0].span);
-        } else if (arguments_[0]) this.requireAssignable(value, object.element, arguments_[0].span);
-        if (arguments_[0] && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "element");
+        const argument = argumentAt(0);
+        const value = inferArgument(0, object.element);
+        requireCount(1);
+        if (argument && object.element.kind === "unknown") {
+          if (!this.refineCollectionInference(object, { kind: "set", element: value })) this.requireAssignable(value, object.element, argument.span);
+        } else if (argument) this.requireAssignable(value, object.element, argument.span);
+        if (argument && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "element");
         return nullType;
       }
       if (member.property === "update") {
         this.collectionCalls.set(member.span.end, "setUpdate");
-        const argument = arguments_[0];
-        const source = argument ? this.expandAliases(this.inferExpression(argument)) : unknownType;
+        const argument = argumentAt(0);
+        const source = argument ? this.expandAliases(inferArgument(0)) : unknownType;
         let inferred = false;
         if (argument && (source.kind === "set" || source.kind === "list") && object.element.kind === "unknown") {
           inferred = this.refineCollectionInference(object, { kind: "set", element: source.element });
@@ -4696,36 +4772,110 @@ export class Analyzer implements TypeEnvironment {
           this.requireAssignable(source, { kind: "union", members: [object, { kind: "list", element: object.element }] }, argument.span);
         }
         if (argument && this.hasExternalOrigin(source)) this.retainContainedOrigin(member.object, "element");
-        if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
+        requireCount(1);
         return nullType;
       }
       if (member.property === "has") {
         this.collectionCalls.set(member.span.end, "has");
-        this.checkArguments(arguments_, [object.element], callSpan);
+        checkCollectionArguments([object.element]);
         return boolType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "remove");
-        this.checkArguments(arguments_, [object.element], callSpan);
+        checkCollectionArguments([object.element]);
         return boolType;
       }
       if (member.property === "clear") {
         this.collectionCalls.set(member.span.end, "clear");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return nullType;
       }
       if (member.property === "values") {
         this.collectionCalls.set(member.span.end, "values");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return { kind: "list", element: object.element };
       }
       if (member.property === "copy") {
         this.collectionCalls.set(member.span.end, "setCopy");
-        this.checkArguments(arguments_, [], callSpan);
+        checkCollectionArguments([]);
         return { kind: "set", element: object.element };
       }
     }
     return null;
+  }
+
+  private orderCollectionNamedArguments(
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callable: CallableValueType,
+    callSpan: Span,
+  ): {
+    readonly ordered: readonly Expression[];
+    readonly targets: readonly (number | null)[];
+    readonly valid: boolean;
+  } | null {
+    if (!argumentNames?.some((name) => name !== null)) return null;
+    const parameterNames = callable.parameterNames;
+    if (!parameterNames || parameterNames.length !== callable.parameters.length || parameterNames.some((name) => !name)) {
+      this.typeError("This collection method does not expose stable parameter names", callSpan);
+      return {
+        ordered: arguments_,
+        targets: arguments_.map(() => null),
+        valid: false,
+      };
+    }
+
+    const sources = Array<number>(callable.parameters.length).fill(-1);
+    const targets: (number | null)[] = [];
+    let nextPositional = 0;
+    let valid = true;
+    for (const [source, argument] of arguments_.entries()) {
+      const name = argumentNames[source] ?? null;
+      let target: number;
+      if (name === null) {
+        while (nextPositional < sources.length && sources[nextPositional] !== -1) nextPositional += 1;
+        target = nextPositional++;
+      } else {
+        target = parameterNames.indexOf(name);
+        if (target === -1) {
+          this.typeError(`Unknown named argument '${name}'`, argument.span);
+          targets.push(null);
+          valid = false;
+          continue;
+        }
+      }
+      if (target >= sources.length) {
+        this.typeError("This fixed-arity collection method has no position for another argument", argument.span);
+        targets.push(null);
+        valid = false;
+        continue;
+      }
+      if (sources[target] !== -1) {
+        this.typeError(`Parameter '${parameterNames[target]}' is provided more than once`, argument.span);
+        targets.push(null);
+        valid = false;
+        continue;
+      }
+      if (argument.kind === "SpreadExpression") {
+        this.typeError("Named arguments cannot be combined with a call spread", argument.span);
+        valid = false;
+      }
+      sources[target] = source;
+      targets.push(target);
+    }
+    const missing = parameterNames.filter((_, index) => index < callable.requiredParameters && sources[index] === -1);
+    if (missing.length > 0) {
+      this.typeError(`Missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, callSpan);
+      valid = false;
+    }
+    this.namedArgumentOrders.set(spanIdentity(callSpan), sources);
+    return {
+      ordered: sources.map((source) => source === -1
+        ? { kind: "IdentifierExpression", name: "\u0000omitted-named-argument", span: callSpan } satisfies Expression
+        : arguments_[source]!),
+      targets,
+      valid,
+    };
   }
 
   private inferMember(
@@ -4949,49 +5099,58 @@ export class Analyzer implements TypeEnvironment {
 
   private listMember(list: Extract<ValueType, { kind: "list" }>, property: string): ValueType | null {
     const owned: ValueType = { kind: "list", element: list.element };
+    const callable = (
+      parameterNames: readonly string[],
+      parameters: readonly ValueType[],
+      result: ValueType,
+      requiredParameters = parameters.length,
+    ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
+    const test: ValueType = { kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType };
+    const transform: ValueType = { kind: "function", parameters: [list.element], requiredParameters: 1, result: unknownType };
+    const compare: ValueType = { kind: "function", parameters: [list.element, list.element], requiredParameters: 2, result: numberType };
     switch (property) {
       case "size":
         return numberType;
       case "get":
-        return { kind: "function", parameters: [numberType], requiredParameters: 1, result: optionalOf(list.element) };
+        return callable(["index"], [numberType], optionalOf(list.element));
       case "slice":
-        return { kind: "function", parameters: [numberType, numberType], requiredParameters: 0, result: owned };
+        return callable(["start", "end"], [numberType, numberType], owned, 0);
       case "append":
-        return { kind: "function", parameters: [list.element], requiredParameters: 1, result: nullType };
+        return callable(["value"], [list.element], nullType);
       case "extend":
-        return { kind: "function", parameters: [list], requiredParameters: 1, result: nullType };
+        return callable(["values"], [list], nullType);
       case "insert":
-        return { kind: "function", parameters: [numberType, list.element], requiredParameters: 2, result: nullType };
+        return callable(["index", "value"], [numberType, list.element], nullType);
       case "remove":
-        return { kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType };
+        return callable(["value"], [list.element], boolType);
       case "pop":
-        return { kind: "function", parameters: [numberType], requiredParameters: 0, result: optionalOf(list.element) };
+        return callable(["index"], [numberType], optionalOf(list.element), 0);
       case "clear":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
+        return callable([], [], nullType);
       case "copy":
       case "reversed":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: owned };
+        return callable([], [], owned);
       case "has":
-        return { kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType };
+        return callable(["value"], [list.element], boolType);
       case "count":
-        return { kind: "function", parameters: [list.element], requiredParameters: 1, result: numberType };
+        return callable(["value"], [list.element], numberType);
       case "sorted":
-        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element, list.element], requiredParameters: 2, result: numberType }], requiredParameters: 0, result: owned };
+        return callable(["compare"], [compare], owned, 0);
       case "map":
-        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element], requiredParameters: 1, result: unknownType }], requiredParameters: 1, result: { kind: "list", element: unknownType } };
+        return callable(["transform"], [transform], { kind: "list", element: unknownType });
       case "filter":
-        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType }], requiredParameters: 1, result: owned };
+        return callable(["test"], [test], owned);
       case "reduce":
-        return { kind: "function", parameters: [unknownType, unknownType], requiredParameters: 2, result: unknownType };
+        return callable(["combine", "initial"], [unknownType, unknownType], unknownType);
       case "some":
       case "every":
-        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType }], requiredParameters: 1, result: boolType };
+        return callable(["test"], [test], boolType);
       case "find":
-        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType }], requiredParameters: 1, result: optionalOf(list.element) };
+        return callable(["test"], [test], optionalOf(list.element));
       case "index":
-        return { kind: "function", parameters: [list.element], requiredParameters: 1, result: optionalOf(numberType) };
+        return callable(["value"], [list.element], optionalOf(numberType));
       case "join":
-        return { kind: "function", parameters: [stringType], requiredParameters: 0, result: stringType };
+        return callable(["separator"], [stringType], stringType, 0);
       default:
         return null;
     }
@@ -5003,50 +5162,56 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private mapMember(map: Extract<ValueType, { kind: "map" }>, property: string): ValueType | null {
+    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
+      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
+    });
     switch (property) {
       case "size":
         return numberType;
       case "get":
-        return { kind: "function", parameters: [map.key], requiredParameters: 1, result: optionalOf(map.value) };
+        return callable(["key"], [map.key], optionalOf(map.value));
       case "set":
-        return { kind: "function", parameters: [map.key, map.value], requiredParameters: 2, result: nullType };
+        return callable(["key", "value"], [map.key, map.value], nullType);
       case "update":
-        return { kind: "function", parameters: [map], requiredParameters: 1, result: nullType };
+        return callable(["values"], [map], nullType);
       case "has":
       case "remove":
-        return { kind: "function", parameters: [map.key], requiredParameters: 1, result: boolType };
+        return callable(["key"], [map.key], boolType);
       case "clear":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
+        return callable([], [], nullType);
       case "copy":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: map };
+        return callable([], [], map);
       case "keys":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "list", element: map.key } };
+        return callable([], [], { kind: "list", element: map.key });
       case "values":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "list", element: map.value } };
+        return callable([], [], { kind: "list", element: map.value });
       case "entries":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "list", element: { kind: "object", fields: new Map([["key", map.key], ["value", map.value]]) } } };
+        return callable([], [], { kind: "list", element: { kind: "object", fields: new Map([["key", map.key], ["value", map.value]]) } });
       default:
         return null;
     }
   }
 
   private setMember(set: Extract<ValueType, { kind: "set" }>, property: string): ValueType | null {
+    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
+      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
+    });
     switch (property) {
       case "size":
         return numberType;
       case "add":
-        return { kind: "function", parameters: [set.element], requiredParameters: 1, result: nullType };
+        return callable(["value"], [set.element], nullType);
       case "update":
-        return { kind: "function", parameters: [{ kind: "union", members: [set, { kind: "list", element: set.element }] }], requiredParameters: 1, result: nullType };
+        return callable(["values"], [{ kind: "union", members: [set, { kind: "list", element: set.element }] }], nullType);
       case "has":
       case "remove":
-        return { kind: "function", parameters: [set.element], requiredParameters: 1, result: boolType };
+        return callable(["value"], [set.element], boolType);
       case "clear":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
+        return callable([], [], nullType);
       case "copy":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: set };
+        return callable([], [], set);
       case "values":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "list", element: set.element } };
+        return callable([], [], { kind: "list", element: set.element });
       default:
         return null;
     }
