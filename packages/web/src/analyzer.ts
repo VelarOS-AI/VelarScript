@@ -422,16 +422,16 @@ export class VelarWebAnalyzer extends Analyzer {
           return true;
         }
         this.flowFrameDepth += 1;
+        this.synchronousReactiveDepth += 1;
         {
           const watched = this.inferExpression(statement.expression);
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
-          this.synchronousReactiveDepth += 1;
           this.analyzeStatements(statement.body);
-          this.synchronousReactiveDepth -= 1;
           this.exitScope();
         }
+        this.synchronousReactiveDepth -= 1;
         this.flowFrameDepth -= 1;
         return true;
       case "VariableDeclaration": {
@@ -744,14 +744,14 @@ export class VelarWebAnalyzer extends Analyzer {
         this.analyzeActionDeclaration(item);
       } else if (item.kind === "WatchDeclaration") {
         this.flowFrameDepth += 1;
+        this.synchronousReactiveDepth += 1;
         const watched = this.inferExpression(item.expression);
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
-        this.synchronousReactiveDepth += 1;
         this.analyzeStatements(item.body);
-        this.synchronousReactiveDepth -= 1;
         this.exitScope();
+        this.synchronousReactiveDepth -= 1;
         this.flowFrameDepth -= 1;
       } else if (item.kind === "MountedBlock") {
         mounted += 1;

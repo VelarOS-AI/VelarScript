@@ -3597,6 +3597,16 @@ watch ready:
   assert.equal(asynchronousWatch.code, null);
   assert.ok(asynchronousWatch.diagnostics.some((item) => item.code === "VEL4007" && /watch blocks are synchronous/u.test(item.message)));
 
+  const asynchronousWatchRead = compile(`
+async def later() -> bool:
+    return true
+
+watch await later():
+    print("changed")
+`.trimStart());
+  assert.equal(asynchronousWatchRead.code, null);
+  assert.ok(asynchronousWatchRead.diagnostics.some((item) => item.code === "VEL4007" && /watch blocks are synchronous/u.test(item.message)));
+
   const asynchronousComputed = compile(`
 async def later() -> number:
     return 1
