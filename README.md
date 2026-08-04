@@ -168,6 +168,7 @@ velar lsp
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md)
 - [Language reference](docs/language-charter.md)
 - [Standard library](docs/standard-library.md)
 - [Web framework API](docs/web-api.md)
