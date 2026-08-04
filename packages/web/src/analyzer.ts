@@ -4,6 +4,7 @@ import {
   anyType,
   boolType,
   describeType,
+  isInvalidType,
   isAssignable,
   nullType,
   nonOptional,
@@ -78,11 +79,13 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         context.typeError("A lazy loader must be written as () => import(\"./module.vel\")", loaderExpression?.span ?? callSpan);
         return anyType;
       }
+      if (isInvalidType(loader)) return loader;
       if (loader.kind !== "function" && loader.kind !== "any") {
         if (arguments_[0]) context.typeError(`Expected a module loader, received ${describeType(loader)}`, arguments_[0]!.span);
         return anyType;
       }
       if (loader.kind === "any") return anyType;
+      if (isInvalidType(loader.result)) return loader.result;
       if (loader.parameters.length !== 0) context.typeError("A lazy module loader cannot receive parameters", arguments_[0]?.span ?? callSpan);
       const moduleType = loader.result.kind === "promise" ? loader.result.value : null;
       if (!moduleType) {
@@ -107,11 +110,11 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         context.typeError(`Dynamic export '${name}' is ${describeType(exported)}, not a component`, arguments_[1]?.span ?? callSpan);
         return anyType;
       }
-      if (arguments_[2] && loadingFallback.kind !== "null" && loadingFallback.kind !== "any") {
+      if (arguments_[2] && !isInvalidType(loadingFallback) && loadingFallback.kind !== "null" && loadingFallback.kind !== "any") {
         if (loadingFallback.kind !== "componentConstructor") context.typeError("A lazy loading fallback must be a component", arguments_[2]!.span);
         else if (loadingFallback.requiredProps.size > 0) context.typeError("A lazy loading fallback cannot require props", arguments_[2]!.span);
       }
-      if (arguments_[3] && failedFallback.kind !== "null" && failedFallback.kind !== "any") {
+      if (arguments_[3] && !isInvalidType(failedFallback) && failedFallback.kind !== "null" && failedFallback.kind !== "any") {
         if (failedFallback.kind !== "componentConstructor") context.typeError("A lazy failure fallback must be a component accepting error: Error", arguments_[3]!.span);
         else {
           const error = failedFallback.props.get("error");
@@ -263,6 +266,7 @@ function containsCssImport(source: string): boolean {
 }
 
 function checkRouteComponent(type: ValueType, sourceSpan: Span, subject: string, context: CompilerIntrinsicAnalysisContext): void {
+  if (isInvalidType(type)) return;
   if (type.kind !== "componentConstructor") {
     if (type.kind !== "any") context.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
     return;
@@ -365,13 +369,13 @@ export class VelarWebAnalyzer extends Analyzer {
           this.diagnostics.push(diagnostic("VEL3010", `'${statement.kind === "StateDeclaration" ? "state" : "computed"}' is only valid at module or component scope`, statement.span));
           return true;
         }
-        const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
+        const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
+        const annotationContext = statement.type ? this.resolveValidatedAnnotation(statement.type) : null;
         if (statement.kind === "ComputedDeclaration") this.flowFrameDepth += 1;
-        const actual = this.inferExpression(statement.initializer, annotated ?? unknownType);
+        const actual = this.inferExpression(statement.initializer, annotationContext ?? unknownType);
         if (statement.kind === "ComputedDeclaration") this.flowFrameDepth -= 1;
-        const declared = annotated ?? actual;
-        if (statement.type) this.validateType(declared, statement.type.span);
-        this.requireAssignable(actual, declared, statement.initializer.span);
+        const declared = annotationContext ?? actual;
+        if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
         const kind = statement.kind === "StateDeclaration" ? "state" : "computed";
         this.declareBinding(statement.name, kind === "state", declared, statement.span);
         this.reactiveBindings.set(statement.name, kind);
@@ -596,7 +600,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private componentType(statement: ComponentDeclaration): ValueType {
-    const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.resolveAnnotation(parameter.type)]));
+    const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.resolveValidatedAnnotation(parameter.type)]));
     if (!props.has("class")) props.set("class", optionalOf(stringType));
     if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
     return {
@@ -609,16 +613,17 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private analyzeResourceDeclaration(statement: ResourceDeclaration): void {
     const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
-    if (statement.type) this.validateType(annotated!, statement.type.span);
-    const expected: ValueType = annotated ? { kind: "promise", value: annotated } : unknownType;
+    const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
+    const annotationContext = statement.type ? this.resolveValidatedAnnotation(statement.type) : null;
+    const expected: ValueType = annotationContext ? { kind: "promise", value: annotationContext } : unknownType;
     const actual = this.inferExpression(statement.initializer, expected);
-    let value = annotated ?? unknownType;
+    let value = annotationContext ?? unknownType;
     if (actual.kind === "promise") {
-      if (annotated) this.requireAssignable(actual.value, annotated, statement.initializer.span);
-      else value = actual.value;
+      if (annotated && annotationValid) this.requireAssignable(actual.value, annotated, statement.initializer.span);
+      else if (!statement.type) value = actual.value;
     } else if (actual.kind === "any") {
-      value = annotated ?? anyType;
-    } else {
+      value = annotationContext ?? anyType;
+    } else if (!isInvalidType(actual)) {
       this.diagnostics.push(diagnostic("VEL4016", `A resource initializer must return Promise<T>, received ${describeType(actual)}`, statement.initializer.span));
     }
     const fields = new Map<string, ValueType>([
@@ -632,14 +637,14 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private actionType(statement: ActionDeclaration): ValueType {
-    const declaredResult = this.resolvedAsyncResult(this.resolveResult(statement.returnType));
+    const declaredResult = this.resolvedAsyncResult(this.resolveValidatedResult(statement.returnType));
     const rest = statement.parameters.find((parameter) => parameter.rest);
     return {
       kind: "action",
-      parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveAnnotation(parameter.type)),
+      parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
       parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
       requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-      ...(rest ? { rest: this.resolveAnnotation(rest.type) } : {}),
+      ...(rest ? { rest: this.resolveValidatedAnnotation(rest.type) } : {}),
       result: { kind: "promise", value: declaredResult },
     };
   }
@@ -658,9 +663,9 @@ export class VelarWebAnalyzer extends Analyzer {
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
-      if (parameter.type) this.validateType(type, parameter.type.span);
-      if (parameter.defaultValue) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-      this.declareBinding(parameter.name, false, type, parameter.span);
+      const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
+      if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
+      this.declareBinding(parameter.name, false, valid ? type : this.resolveValidatedAnnotation(parameter.type), parameter.span);
     }
     this.constructorDepth = 0;
     let renders = 0;
@@ -669,13 +674,13 @@ export class VelarWebAnalyzer extends Analyzer {
     let cleanup = 0;
     for (const item of statement.body) {
       if (item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration") {
-        const annotated = item.type ? this.resolveAnnotation(item.type) : null;
+        const annotationValid = item.type ? this.validateTypeReference(item.type) : true;
+        const annotationContext = item.type ? this.resolveValidatedAnnotation(item.type) : null;
         if (item.kind === "ComputedDeclaration") this.flowFrameDepth += 1;
-        const actual = this.inferExpression(item.initializer, annotated ?? unknownType);
+        const actual = this.inferExpression(item.initializer, annotationContext ?? unknownType);
         if (item.kind === "ComputedDeclaration") this.flowFrameDepth -= 1;
-        const declared = annotated ?? actual;
-        if (item.type) this.validateType(declared, item.type.span);
-        this.requireAssignable(actual, declared, item.initializer.span);
+        const declared = annotationContext ?? actual;
+        if (annotationValid) this.requireAssignable(actual, declared, item.initializer.span);
         this.declareBinding(item.name, item.kind === "StateDeclaration", declared, item.span);
       } else if (item.kind === "ResourceDeclaration") {
         this.flowFrameDepth += 1;
@@ -863,7 +868,7 @@ export class VelarWebAnalyzer extends Analyzer {
       if (removedJsxControlAttributes.has(attribute.name)) continue;
       if (attribute.name === "key") {
         const key = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-        if (key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
+        if (!isInvalidType(key) && key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
         continue;
       }
       if (attribute.value && typeof attribute.value !== "string") {
@@ -950,7 +955,7 @@ export class VelarWebAnalyzer extends Analyzer {
       }
     } else if (attribute.name.startsWith("class:")) {
       this.requireAssignable(inferred, boolType, attribute.span);
-    } else if (attribute.name === "key" && inferred.kind !== "string" && inferred.kind !== "number" && inferred.kind !== "enum" && inferred.kind !== "any") {
+    } else if (attribute.name === "key" && !isInvalidType(inferred) && inferred.kind !== "string" && inferred.kind !== "number" && inferred.kind !== "enum" && inferred.kind !== "any") {
       this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
     }
     if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
@@ -975,6 +980,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private checkWebRouteComponent(type: ValueType, sourceSpan: Span, subject: string): void {
+    if (isInvalidType(type)) return;
     if (type.kind !== "componentConstructor") {
       if (type.kind !== "any") this.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
       return;

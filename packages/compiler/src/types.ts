@@ -37,6 +37,7 @@ export type ValueType =
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
 export const unknownType: ValueType = { kind: "unknown" };
+export const invalidType: ValueType = Object.freeze({ kind: "unknown" });
 export const anyType: ValueType = { kind: "any" };
 export const nullType: ValueType = { kind: "null" };
 export const stringType: ValueType = { kind: "string" };
@@ -107,6 +108,9 @@ export function formatTypeSyntax(syntax: TypeSyntax): string {
 }
 
 export function optionalOf(type: ValueType): ValueType {
+  if (isInvalidType(type)) {
+    return invalidType;
+  }
   if (type.kind === "optional") {
     return type;
   }
@@ -125,6 +129,7 @@ export function unionOf(types: readonly ValueType[]): ValueType {
   for (const type of types) {
     const candidates = type.kind === "union" ? type.members : [type];
     for (const candidate of candidates) {
+      if (isInvalidType(candidate)) return invalidType;
       if (!members.some((existing) => sameType(existing, candidate))) {
         members.push(candidate);
       }
@@ -134,6 +139,9 @@ export function unionOf(types: readonly ValueType[]): ValueType {
 }
 
 export function mergeTypes(left: ValueType, right: ValueType): ValueType {
+  if (isInvalidType(left) || isInvalidType(right)) {
+    return invalidType;
+  }
   if (left.kind === "unknown" && !left.restricted) {
     return right;
   }
@@ -170,6 +178,9 @@ export function sameType(left: ValueType, right: ValueType): boolean {
 }
 
 export function isAssignable(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string> = new Set()): boolean {
+  if (isInvalidType(actual) || isInvalidType(expected)) {
+    return true;
+  }
   if (actual.kind === "any" || expected.kind === "any") {
     return true;
   }
@@ -253,7 +264,7 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
 export function semanticTypeIdentity(type: ValueType): string {
   switch (type.kind) {
     case "unknown":
-      return type.restricted ? "unknown:restricted" : "unknown";
+      return isInvalidType(type) ? "unknown:diagnosed" : type.restricted ? "unknown:restricted" : "unknown";
     case "class":
     case "classConstructor":
       return `${type.kind}:${type.identity ?? type.name}`;
@@ -292,6 +303,10 @@ export function semanticTypeIdentity(type: ValueType): string {
     default:
       return `${type.kind}:${describeType(type)}`;
   }
+}
+
+export function isInvalidType(type: ValueType): boolean {
+  return type === invalidType;
 }
 
 const opaqueWebTypeNames = new Set([

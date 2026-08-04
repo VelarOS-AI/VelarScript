@@ -1177,6 +1177,105 @@ test("type annotations guide familiar JavaScript and Python spellings without pa
   assert.equal(map.diagnostics[0]?.message, "Generic type arguments use '<...>', not '[...]'");
 });
 
+test("type validation keeps AST-level spans and contains invalid annotations at their source", () => {
+  const missingSource = "const value: Missing = null\n";
+  const missing = compile(missingSource);
+  assert.equal(missing.diagnostics.length, 1);
+  assert.deepEqual(missing.diagnostics[0]?.span, {
+    start: missingSource.indexOf("Missing"),
+    end: missingSource.indexOf("Missing") + "Missing".length,
+  });
+
+  const repeatedSource = "const values: Map<Missing, Missing> = Map()\n";
+  const repeated = compile(repeatedSource);
+  const firstMissing = repeatedSource.indexOf("Missing");
+  const secondMissing = repeatedSource.indexOf("Missing", firstMissing + 1);
+  assert.deepEqual(repeated.diagnostics.map((item) => item.span), [
+    { start: firstMissing, end: firstMissing + "Missing".length },
+    { start: secondMissing, end: secondMissing + "Missing".length },
+  ]);
+  assert.ok(repeated.diagnostics.every((item) => item.message === "Unknown type 'Missing'"));
+
+  const functionSource = "const callback: (Missing) -> Missing = value => value\n";
+  const functionType = compile(functionSource);
+  assert.deepEqual(functionType.diagnostics.map((item) => item.span.start), [
+    functionSource.indexOf("Missing"),
+    functionSource.lastIndexOf("Missing"),
+  ]);
+
+  const alias = compile("type Broken = Missing\nconst value: Broken = null\n");
+  assert.equal(alias.diagnostics.length, 1);
+  assert.equal(alias.diagnostics[0]?.message, "Unknown type 'Missing'");
+
+  const forwardAlias = compile("const value: Broken = null\ntype Broken = Missing\n");
+  assert.equal(forwardAlias.diagnostics.length, 1);
+  assert.equal(forwardAlias.diagnostics[0]?.message, "Unknown type 'Missing'");
+
+  const genericSource = "const value: Missing<number> = null\n";
+  const generic = compile(genericSource);
+  assert.deepEqual(generic.diagnostics[0]?.span, {
+    start: genericSource.indexOf("Missing"),
+    end: genericSource.indexOf("Missing") + "Missing".length,
+  });
+
+  const anySource = "const values: List<any> = []\n";
+  const any = compile(anySource);
+  assert.deepEqual(any.diagnostics[0]?.span, {
+    start: anySource.indexOf("any"),
+    end: anySource.indexOf("any") + "any".length,
+  });
+
+  const webSource = `
+component App(value: Missing):
+    state current: List<Missing> = []
+    return <p>{value}</p>
+`.trimStart();
+  const web = compile(webSource);
+  assert.deepEqual(web.diagnostics.map((item) => item.span.start), [
+    webSource.indexOf("Missing"),
+    webSource.lastIndexOf("Missing"),
+  ]);
+  assert.ok(web.diagnostics.every((item) => item.message === "Unknown type 'Missing'"));
+
+  const propagated = compile(`
+const before: number = broken(null).field[0]() + 1
+def broken(value: Missing) -> Missing:
+    if value:
+        throw value
+    return value
+const after: number = not broken(null)
+`.trimStart());
+  assert.equal(propagated.diagnostics.length, 2);
+  assert.ok(propagated.diagnostics.every((item) => item.message === "Unknown type 'Missing'"));
+
+  const invalidRuntimeType = compile(`
+type Broken = Missing
+const parsed: number = Broken.parse(null)
+`.trimStart());
+  assert.equal(invalidRuntimeType.diagnostics.length, 1);
+  assert.equal(invalidRuntimeType.diagnostics[0]?.message, "Unknown type 'Missing'");
+
+  const extern = compile(`
+extern module "broken-sdk":
+    export def broken(value: Missing) -> Missing
+
+import js {broken} from "broken-sdk"
+const value: number = broken(null)
+`.trimStart());
+  assert.equal(extern.diagnostics.length, 2);
+  assert.ok(extern.diagnostics.every((item) => item.message === "Unknown type 'Missing'"));
+
+  const webPropagation = compile(`
+def broken() -> Missing:
+    return null
+component App:
+    resource value: number = broken()
+    return <p key={broken()}>{broken()}</p>
+`.trimStart());
+  assert.equal(webPropagation.diagnostics.length, 1);
+  assert.equal(webPropagation.diagnostics[0]?.message, "Unknown type 'Missing'");
+});
+
 test("lowers null and readable logical operators", () => {
   const result = compile(`
 const missing = null

@@ -352,6 +352,7 @@ export interface NamedTypeSyntax {
 export interface GenericTypeSyntax {
   readonly kind: "GenericTypeSyntax";
   readonly name: string;
+  readonly nameSpan: Span;
   readonly arguments: readonly TypeSyntax[];
   readonly span: Span;
 }

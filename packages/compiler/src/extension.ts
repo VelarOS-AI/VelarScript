@@ -25,6 +25,7 @@ export {
   anyType,
   boolType,
   describeType,
+  isInvalidType,
   isAssignable,
   nullType,
   nonOptional,

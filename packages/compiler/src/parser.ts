@@ -1259,7 +1259,7 @@ export class Parser {
       if (expectedArguments !== null && arguments_.length !== expectedArguments) {
         this.diagnostics.push(diagnostic("VEL2012", `Type '${name.value}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
       }
-      syntax = { kind: "GenericTypeSyntax", name: name.value, arguments: arguments_, span: span(name.span.start, close.span.end) };
+      syntax = { kind: "GenericTypeSyntax", name: name.value, nameSpan: name.span, arguments: arguments_, span: span(name.span.start, close.span.end) };
     }
     if (this.match("question")) {
       syntax = this.makeOptionalTypeSyntax(syntax, span(syntax.span.start, this.previous().span.end));

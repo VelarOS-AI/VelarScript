@@ -15,6 +15,7 @@ import type {
   TypeDeclaration,
   TypeAliasDeclaration,
   TypeReference,
+  TypeSyntax,
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
@@ -24,6 +25,8 @@ import {
   anyType,
   boolType,
   describeType,
+  invalidType,
+  isInvalidType,
   isAssignable,
   mergeTypes,
   nullType,
@@ -198,10 +201,14 @@ export class Analyzer implements TypeEnvironment {
   private readonly namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly namedTypeIdentities = new Map<string, string>();
   private readonly typeAliases = new Map<string, ValueType>();
+  private readonly invalidDeclaredTypes = new Set<string>();
+  private readonly typeReferenceValidity = new WeakMap<TypeReference, boolean>();
+  private readonly invalidExternTypeReferences = new WeakSet<TypeReference>();
   private readonly enums = new Map<string, EnumInfo>();
   private readonly classes = new Map<string, ClassInfo>();
   private readonly classDisplayNames = new Map<string, string>();
   private readonly externModules = new Map<string, ReadonlyMap<string, ValueType>>();
+  private readonly externTypeImports = new Map<string, ValueType>();
   private readonly returnTypes: ValueType[] = [];
   private readonly asynchronousFunctions: boolean[] = [];
   private readonly collectionCalls = new Map<number, CollectionOperation>();
@@ -307,15 +314,105 @@ export class Analyzer implements TypeEnvironment {
     this.registerAliasShapes(program);
     // Class identities must exist before record fields are resolved. Otherwise a
     // record field annotated with a class is frozen as a structural named type.
-    this.registerClassShapes(program);
+    this.registerClassNames(program);
+    this.registerExternTypeImports(program);
     this.registerTypeShapes(program);
+    this.validateDataTypeDeclarations(program);
+    this.validateCoreDeclarationSignatures(program);
+    this.registerClassShapes(program);
     this.rejectUnproductiveRecursiveTypes(program);
+    this.validateExternDeclarations(program);
     this.registerExternModules(program);
     this.predeclareTopLevel(program);
     for (const statement of program.body) {
       this.analyzeStatement(statement);
     }
     return this.diagnostics;
+  }
+
+  private registerExternTypeImports(program: Program): void {
+    const classesBySource = new Map<string, ReadonlySet<string>>();
+    for (const statement of program.body) {
+      if (statement.kind !== "ExternModuleDeclaration" || classesBySource.has(statement.source)) continue;
+      classesBySource.set(statement.source, new Set(statement.classes.map((declaration) => declaration.name)));
+    }
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration" || !statement.javascript || statement.unsafe) continue;
+      const classNames = classesBySource.get(statement.source);
+      if (!classNames) continue;
+      for (const specifier of statement.specifiers) {
+        if (specifier.namespace || !classNames.has(specifier.imported)) continue;
+        this.externTypeImports.set(specifier.local, {
+          kind: "class",
+          name: specifier.local,
+          identity: this.externClassIdentity(statement.source, specifier.imported),
+        });
+      }
+    }
+  }
+
+  private validateDataTypeDeclarations(program: Program): void {
+    const declarations = program.body.filter((statement): statement is TypeDeclaration | TypeAliasDeclaration =>
+      statement.kind === "TypeDeclaration" || statement.kind === "TypeAliasDeclaration");
+    for (const declaration of declarations) {
+      const valid = declaration.kind === "TypeAliasDeclaration"
+        ? this.validateTypeReference(declaration.target)
+        : declaration.fields.map((field) => this.validateTypeReference(field.type)).every(Boolean);
+      if (!valid) this.invalidDeclaredTypes.add(declaration.name);
+    }
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const declaration of declarations) {
+        if (this.invalidDeclaredTypes.has(declaration.name)) continue;
+        const syntaxes = declaration.kind === "TypeAliasDeclaration"
+          ? [declaration.target.syntax]
+          : declaration.fields.map((field) => field.type.syntax);
+        if (!syntaxes.some((syntax) => this.typeSyntaxReferencesInvalidDeclaration(syntax))) continue;
+        this.invalidDeclaredTypes.add(declaration.name);
+        changed = true;
+      }
+    }
+  }
+
+  private validateCoreDeclarationSignatures(program: Program): void {
+    const validateFunction = (statement: Pick<FunctionDeclaration, "parameters" | "returnType">): void => {
+      for (const parameter of statement.parameters) {
+        if (parameter.type) this.validateTypeReference(parameter.type);
+      }
+      if (statement.returnType) this.validateTypeReference(statement.returnType);
+    };
+    for (const statement of program.body) {
+      if (statement.kind === "VariableDeclaration") {
+        if (statement.type) this.validateTypeReference(statement.type);
+      } else if (statement.kind === "FunctionDeclaration") {
+        validateFunction(statement);
+      } else if (statement.kind === "ClassDeclaration") {
+        for (const parameter of statement.parameters) {
+          if (parameter.type) this.validateTypeReference(parameter.type);
+        }
+        for (const field of statement.fields) this.validateTypeReference(field.type);
+        for (const getter of statement.getters) validateFunction(getter);
+        for (const method of statement.methods) validateFunction(method);
+      }
+    }
+  }
+
+  private typeSyntaxReferencesInvalidDeclaration(syntax: TypeSyntax): boolean {
+    switch (syntax.kind) {
+      case "NamedTypeSyntax":
+        return this.invalidDeclaredTypes.has(syntax.name);
+      case "GenericTypeSyntax":
+        return syntax.arguments.some((argument) => this.typeSyntaxReferencesInvalidDeclaration(argument));
+      case "OptionalTypeSyntax":
+        return this.typeSyntaxReferencesInvalidDeclaration(syntax.inner);
+      case "UnionTypeSyntax":
+        return syntax.members.some((member) => this.typeSyntaxReferencesInvalidDeclaration(member));
+      case "FunctionTypeSyntax":
+        return syntax.parameters.some((parameter) => this.typeSyntaxReferencesInvalidDeclaration(parameter.type))
+          || this.typeSyntaxReferencesInvalidDeclaration(syntax.result);
+    }
   }
 
   private rejectUnproductiveRecursiveTypes(program: Program): void {
@@ -379,6 +476,32 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  private validateExternDeclarations(program: Program): void {
+    for (const statement of program.body) {
+      if (statement.kind !== "ExternModuleDeclaration") continue;
+      const classNames = new Set(statement.classes.map((declaration) => declaration.name));
+      const validate = (reference: TypeReference | null): boolean => {
+        if (!reference) return true;
+        const valid = this.validateTypeReference(reference, (value) => this.resolveExternAnnotation(value, statement.source, classNames));
+        if (!valid) this.invalidExternTypeReferences.add(reference);
+        return valid;
+      };
+      for (const declaration of statement.classes) {
+        for (const parameter of declaration.parameters) validate(parameter.type);
+        for (const field of declaration.fields) validate(field.type);
+        for (const method of declaration.methods) {
+          for (const parameter of method.parameters) validate(parameter.type);
+          validate(method.returnType);
+        }
+      }
+      for (const declaration of statement.functions) {
+        for (const parameter of declaration.parameters) validate(parameter.type);
+        validate(declaration.returnType);
+      }
+      for (const declaration of statement.constants) validate(declaration.type);
+    }
+  }
+
   private registerExternModules(program: Program): void {
     for (const statement of program.body) {
       if (statement.kind !== "ExternModuleDeclaration") continue;
@@ -399,13 +522,13 @@ export class Analyzer implements TypeEnvironment {
         for (const parameter of declaration.parameters) {
           if (parameter.binding) fields.set(parameter.name, {
             mutable: parameter.binding === "let",
-            type: this.resolveExternAnnotation(parameter.type, statement.source, classNames),
+            type: this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames),
           });
         }
         for (const field of declaration.fields) {
           (field.static ? staticFields : fields).set(field.name, {
             mutable: field.mutable,
-            type: this.resolveExternAnnotation(field.type, statement.source, classNames),
+            type: this.resolveValidatedExternAnnotation(field.type, statement.source, classNames),
           });
         }
         const methods = new Map<string, ValueType>();
@@ -413,15 +536,15 @@ export class Analyzer implements TypeEnvironment {
         for (const method of declaration.methods) {
           (method.static ? staticMethods : methods).set(method.name, this.externFunctionType(
             method,
-            (reference) => this.resolveExternAnnotation(reference, statement.source, classNames),
+            (reference) => this.resolveValidatedExternAnnotation(reference, statement.source, classNames),
           ));
         }
         const rest = declaration.parameters.find((parameter) => parameter.rest);
         this.classes.set(identity, {
           identity,
-          parameters: declaration.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveExternAnnotation(parameter.type, statement.source, classNames)),
+          parameters: declaration.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames)),
           requiredParameters: declaration.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-          ...(rest ? { constructorRest: this.resolveExternAnnotation(rest.type, statement.source, classNames) } : {}),
+          ...(rest ? { constructorRest: this.resolveValidatedExternAnnotation(rest.type, statement.source, classNames) } : {}),
           base: declaration.base ? this.externClassIdentity(statement.source, declaration.base) : null,
           abstract: false,
           fields,
@@ -440,8 +563,8 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic("VEL4005", `Extern export '${declaration.name}' is declared more than once`, declaration.span));
         }
         exports.set(declaration.name, "parameters" in declaration
-          ? this.externFunctionType(declaration, (reference) => this.resolveExternAnnotation(reference, statement.source, classNames))
-          : this.resolveExternAnnotation(declaration.type, statement.source, classNames));
+          ? this.externFunctionType(declaration, (reference) => this.resolveValidatedExternAnnotation(reference, statement.source, classNames))
+          : this.resolveValidatedExternAnnotation(declaration.type, statement.source, classNames));
       }
       this.externModules.set(statement.source, exports);
     }
@@ -667,7 +790,7 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private registerClassShapes(program: Program): void {
+  private registerClassNames(program: Program): void {
     for (const statement of program.body) {
       if (statement.kind !== "ClassDeclaration" || this.classes.has(statement.name)) continue;
       this.classes.set(statement.name, {
@@ -685,6 +808,9 @@ export class Analyzer implements TypeEnvironment {
         staticMethods: new Map(),
       });
     }
+  }
+
+  private registerClassShapes(program: Program): void {
     for (const statement of program.body) {
       if (statement.kind !== "ClassDeclaration") {
         continue;
@@ -702,7 +828,7 @@ export class Analyzer implements TypeEnvironment {
         if (parameter.binding) {
           (parameter.private ? privateFields : fields).set(parameter.name, {
             mutable: parameter.binding === "let",
-            type: this.resolveAnnotation(parameter.type),
+            type: this.resolveValidatedAnnotation(parameter.type),
           });
         }
       }
@@ -712,14 +838,14 @@ export class Analyzer implements TypeEnvironment {
           : field.static ? staticFields : fields;
         target.set(field.name, {
           mutable: field.binding === "let",
-          type: this.resolveAnnotation(field.type),
+          type: this.resolveValidatedAnnotation(field.type),
         });
       }
       for (const getter of statement.getters) {
         const target = getter.private
           ? getter.static ? privateStaticFields : privateFields
           : getter.static ? staticFields : fields;
-        target.set(getter.name, { mutable: false, type: this.resolveResult(getter.returnType) });
+        target.set(getter.name, { mutable: false, type: this.resolveValidatedResult(getter.returnType) });
         if (getter.private) (getter.static ? privateStaticGetters : privateGetters).add(getter.name);
         else if (getter.static) staticGetters.add(getter.name);
         else {
@@ -748,7 +874,7 @@ export class Analyzer implements TypeEnvironment {
       this.privateStaticGetters.set(statement.name, privateStaticGetters);
       this.privateStaticMethods.set(statement.name, privateStaticMethods);
       this.classes.set(statement.name, {
-        parameters: statement.parameters.map((parameter) => this.resolveAnnotation(parameter.type)),
+        parameters: statement.parameters.map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
         base: statement.base?.name ?? null,
@@ -801,30 +927,28 @@ export class Analyzer implements TypeEnvironment {
               }
             }
             for (const parameter of declaration.parameters) {
-              const type = this.resolveExternAnnotation(parameter.type, statement.source, classNames);
-              this.validateType(type, parameter.span);
-              if (parameter.defaultValue) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
+              const type = this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
+              const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
+              if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
               if (parameter.binding) members.add(`instance:${parameter.name}`);
             }
             for (const field of declaration.fields) {
               const key = `${field.static ? "static" : "instance"}:${field.name}`;
               if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${field.name}' more than once`, field.span);
               members.add(key);
-              this.validateType(this.resolveExternAnnotation(field.type, statement.source, classNames), field.span);
             }
             for (const method of declaration.methods) {
               const key = `${method.static ? "static" : "instance"}:${method.name}`;
               if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${method.name}' more than once`, method.span);
               members.add(key);
               for (const parameter of method.parameters) {
-                const type = this.resolveExternAnnotation(parameter.type, statement.source, classNames);
-                this.validateType(type, parameter.span);
-                if (parameter.defaultValue) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
+                const type = this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
+                const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
+                if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
               }
               if (method.returnType) {
-                const result = this.resolveExternAnnotation(method.returnType, statement.source, classNames);
-                this.validateType(result, method.returnType.span);
-                if (method.asynchronous && this.asyncResultContainsPromise(result)) {
+                const result = this.resolveValidatedExternAnnotation(method.returnType, statement.source, classNames);
+                if (!this.invalidExternTypeReferences.has(method.returnType) && method.asynchronous && this.asyncResultContainsPromise(result)) {
                   this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
                 }
               }
@@ -835,13 +959,13 @@ export class Analyzer implements TypeEnvironment {
                 ...declaration.parameters.filter((parameter) => parameter.binding).map((parameter) => ({
                   name: parameter.name,
                   mutable: parameter.binding === "let",
-                  type: this.resolveExternAnnotation(parameter.type, statement.source, classNames),
+                  type: this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames),
                   span: parameter.span,
                 })),
                 ...declaration.fields.filter((field) => !field.static).map((field) => ({
                   name: field.name,
                   mutable: field.mutable,
-                  type: this.resolveExternAnnotation(field.type, statement.source, classNames),
+                  type: this.resolveValidatedExternAnnotation(field.type, statement.source, classNames),
                   span: field.span,
                 })),
               ];
@@ -855,7 +979,7 @@ export class Analyzer implements TypeEnvironment {
               for (const method of declaration.methods.filter((item) => !item.static)) {
                 if (this.findField(base, method.name)) this.typeError(`Extern method '${method.name}' conflicts with an inherited field`, method.span);
                 const inherited = this.findMethod(base, method.name);
-                const own = this.externFunctionType(method, (reference) => this.resolveExternAnnotation(reference, statement.source, classNames));
+                const own = this.externFunctionType(method, (reference) => this.resolveValidatedExternAnnotation(reference, statement.source, classNames));
                 if (inherited && !sameType(inherited.type, own)) {
                   this.typeError(`Extern override '${method.name}' must keep the base method signature ${describeType(inherited.type)}`, method.span);
                 }
@@ -865,17 +989,20 @@ export class Analyzer implements TypeEnvironment {
         }
         for (const declaration of statement.functions) {
           for (const parameter of declaration.parameters) {
-            const type = this.resolveExternAnnotation(parameter.type, statement.source, new Set(statement.classes.map((item) => item.name)));
-            this.validateType(type, parameter.span);
-            if (parameter.defaultValue) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
+            const classNames = new Set(statement.classes.map((item) => item.name));
+            const type = this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
+            const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
+            if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
           }
-          const result = this.resolveExternAnnotation(declaration.returnType, statement.source, new Set(statement.classes.map((item) => item.name)));
-          this.validateType(result, declaration.span);
-          if (declaration.asynchronous && declaration.returnType && this.asyncResultContainsPromise(result)) {
-            this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", declaration.returnType.span));
+          const classNames = new Set(statement.classes.map((item) => item.name));
+          const result = this.resolveValidatedExternAnnotation(declaration.returnType, statement.source, classNames);
+          if (declaration.returnType) {
+            const valid = !this.invalidExternTypeReferences.has(declaration.returnType);
+            if (valid && declaration.asynchronous && this.asyncResultContainsPromise(result)) {
+              this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", declaration.returnType.span));
+            }
           }
         }
-        for (const declaration of statement.constants) this.validateType(this.resolveExternAnnotation(declaration.type, statement.source, new Set(statement.classes.map((item) => item.name))), declaration.span);
         break;
       case "TypeDeclaration":
         this.analyzeTypeDeclaration(statement);
@@ -904,13 +1031,13 @@ export class Analyzer implements TypeEnvironment {
         break;
       case "VariableDeclaration": {
         const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
+        const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
         const aliasedBinding = !annotated && statement.initializer.kind === "IdentifierExpression"
           ? this.lookup(statement.initializer.name)
           : null;
-        const actual = this.inferExpression(statement.initializer, annotated ?? unknownType);
-        const declared = annotated ?? actual;
-        if (statement.type) this.validateType(declared, statement.type.span);
-        this.requireAssignable(actual, declared, statement.initializer.span);
+        const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
+        const declared = annotationValid ? annotated ?? actual : invalidType;
+        if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
         this.declarePattern(statement.pattern, statement.binding === "let", declared);
         this.validateKnownBindingShape(statement.pattern, statement.initializer);
         if (!annotated && statement.pattern.kind === "NameBindingPattern") {
@@ -951,7 +1078,7 @@ export class Analyzer implements TypeEnvironment {
         const throwable = (type: ValueType): boolean => type.kind === "class"
           ? this.isSubclassOf(type.identity ?? type.name, "Error")
           : type.kind === "union" && type.members.every(throwable);
-        if (!throwable(thrown)) {
+        if (!throwable(thrown) && !isInvalidType(thrown)) {
           this.typeError(`Only Error values can be thrown, received ${describeType(thrown)}`, statement.value.span);
         }
         break;
@@ -977,7 +1104,7 @@ export class Analyzer implements TypeEnvironment {
         break;
       case "MatchStatement": {
         const matched = this.inferExpression(statement.value);
-        if (matched.kind === "unknown") {
+        if (matched.kind === "unknown" && !isInvalidType(matched)) {
           this.typeError("Validate an unknown value before matching it", statement.value.span);
         }
         const coveredValues = new Set<string>();
@@ -1152,13 +1279,11 @@ export class Analyzer implements TypeEnvironment {
         this.diagnostics.push(diagnostic("VEL4004", `Type '${statement.name}' declares '${field.name}' more than once`, field.span));
       }
       seen.add(field.name);
-      this.validateType(this.resolveAnnotation(field.type), field.type.span);
     }
   }
 
   private analyzeTypeAliasDeclaration(statement: TypeAliasDeclaration): void {
     if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
-    this.validateType(this.resolveAnnotation(statement.target), statement.target.span);
   }
 
   private analyzeClassDeclaration(statement: ClassDeclaration): void {
@@ -1181,11 +1306,12 @@ export class Analyzer implements TypeEnvironment {
     this.flowFrameDepth += 1;
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
-      this.validateType(type, parameter.span);
-      if (parameter.defaultValue) {
+      const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
+      if (parameter.defaultValue && valid) {
         this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       }
-      this.declareBinding(parameter.name, false, parameter.rest ? { kind: "list", element: type } : type, parameter.span);
+      const declared = valid ? type : invalidType;
+      this.declareBinding(parameter.name, false, parameter.rest ? { kind: "list", element: declared } : declared, parameter.span);
     }
     if (statement.base?.arguments.length) {
       this.typeError("Base constructor arguments belong in 'super(...)' inside the constructor", statement.base.span);
@@ -1193,12 +1319,12 @@ export class Analyzer implements TypeEnvironment {
     for (const field of statement.fields) {
       if (field.static) continue;
       const declared = this.resolveAnnotation(field.type);
-      this.validateType(declared, field.type.span);
+      const valid = this.validateTypeReference(field.type);
       if (field.initializer) {
         this.classFieldInitializerDepth += 1;
-        const actual = this.inferExpression(field.initializer, declared);
+        const actual = this.inferExpression(field.initializer, valid ? declared : invalidType);
         this.classFieldInitializerDepth -= 1;
-        this.requireAssignable(actual, declared, field.initializer.span);
+        if (valid) this.requireAssignable(actual, declared, field.initializer.span);
       }
     }
     this.validateConstructorShape(statement);
@@ -1209,15 +1335,15 @@ export class Analyzer implements TypeEnvironment {
     for (const field of statement.fields) {
       if (!field.static) continue;
       const declared = this.resolveAnnotation(field.type);
-      this.validateType(declared, field.type.span);
+      const valid = this.validateTypeReference(field.type);
       if (!field.initializer) {
         this.typeError(`Static field '${field.name}' requires an initializer`, field.span);
         continue;
       }
       this.classFieldInitializerDepth += 1;
-      const actual = this.inferExpression(field.initializer, declared);
+      const actual = this.inferExpression(field.initializer, valid ? declared : invalidType);
       this.classFieldInitializerDepth -= 1;
-      this.requireAssignable(actual, declared, field.initializer.span);
+      if (valid) this.requireAssignable(actual, declared, field.initializer.span);
     }
 
     const ownFields = new Set<string>();
@@ -1459,13 +1585,13 @@ export class Analyzer implements TypeEnvironment {
   private validateMethodSignature(method: ClassDeclaration["methods"][number]): void {
     for (const parameter of method.parameters) {
       const type = this.resolveAnnotation(parameter.type);
-      this.validateType(type, parameter.span);
-      if (parameter.defaultValue) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
+      const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
+      if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
     }
     if (method.returnType) {
       const result = this.resolveAnnotation(method.returnType);
-      this.validateType(result, method.returnType.span);
-      if (method.asynchronous && this.asyncResultContainsPromise(result)) {
+      const valid = this.validateTypeReference(method.returnType);
+      if (valid && method.asynchronous && this.asyncResultContainsPromise(result)) {
         this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
       }
     }
@@ -1618,28 +1744,31 @@ export class Analyzer implements TypeEnvironment {
     const asynchronous = forceAsynchronous || statement.asynchronous === true;
     this.asynchronousFunctions.push(asynchronous);
     const declaredReturn = this.resolveResult(statement.returnType);
-    if (statement.returnType) this.validateType(declaredReturn, statement.returnType.span);
-    if (asynchronous && statement.returnType && this.asyncResultContainsPromise(declaredReturn)) {
+    const returnValid = statement.returnType ? this.validateTypeReference(statement.returnType) : true;
+    if (asynchronous && statement.returnType && returnValid && this.asyncResultContainsPromise(declaredReturn)) {
       this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", statement.returnType.span));
     }
-    const expectedReturn = asynchronous ? this.resolvedAsyncResult(declaredReturn) : declaredReturn;
+    const expectedReturn = returnValid
+      ? asynchronous ? this.resolvedAsyncResult(declaredReturn) : declaredReturn
+      : invalidType;
     this.returnTypes.push(expectedReturn);
     if (className && declareSelf) {
       this.declareBinding("self", false, { kind: "class", name: className }, statement.span, true);
     }
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
-      this.validateType(type, parameter.span);
-      if (parameter.defaultValue) {
+      const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
+      if (parameter.defaultValue && valid) {
         this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       }
-      this.declareBinding(parameter.name, false, parameter.rest ? { kind: "list", element: type } : type, parameter.span);
+      const declared = valid ? type : invalidType;
+      this.declareBinding(parameter.name, false, parameter.rest ? { kind: "list", element: declared } : declared, parameter.span);
     }
     this.constructorDepth = 0;
     for (const child of statement.body) {
       this.analyzeStatement(child);
     }
-    if (statement.returnType && expectedReturn.kind !== "null" && !this.blockAlwaysReturns(statement.body)) {
+    if (statement.returnType && returnValid && expectedReturn.kind !== "null" && !this.blockAlwaysReturns(statement.body)) {
       this.diagnostics.push(diagnostic("VEL4006", `${declarationKind} '${statement.name}' can finish without returning ${describeType(expectedReturn)}`, statement.span));
     }
     this.returnTypes.pop();
@@ -1911,7 +2040,7 @@ export class Analyzer implements TypeEnvironment {
       case "SpreadExpression":
         return this.inferExpression(expression.value);
       case "UnaryExpression": {
-          const operand = this.inferExpression(expression.operand);
+        const operand = this.inferExpression(expression.operand);
         if (expression.operator === "await") {
           if (this.parameterDefaultDepth > 0) {
             this.diagnostics.push(diagnostic("VEL4007", "'await' cannot be used in a parameter default value", expression.span));
@@ -1926,6 +2055,7 @@ export class Analyzer implements TypeEnvironment {
             this.diagnostics.push(diagnostic("VEL4007", "'await' can only be used in an async function, mounted block, or at module scope", expression.span));
           }
           const awaited = this.expandAliases(operand);
+          if (isInvalidType(awaited)) return invalidType;
           if (awaited.kind === "promise") {
             const result = resolvedAsyncType(awaited.value);
             if (result.kind === "null" && !this.normalizedPromiseValues.has(`${expression.operand.span.start}:${expression.operand.span.end}`)) {
@@ -1938,6 +2068,7 @@ export class Analyzer implements TypeEnvironment {
           }
           return awaited.kind === "any" ? anyType : unknownType;
         }
+        if (isInvalidType(operand)) return invalidType;
         if (expression.operator === "not") {
           if (operand.kind === "optional") this.optionalNegations.add(expression.span.start);
           else this.requireAssignable(operand, boolType, expression.operand.span);
@@ -1960,7 +2091,7 @@ export class Analyzer implements TypeEnvironment {
             expression.span,
           );
         }
-        return boolType;
+        return types.some(isInvalidType) ? invalidType : boolType;
       }
       case "ConditionalExpression":
         {
@@ -1975,14 +2106,13 @@ export class Analyzer implements TypeEnvironment {
           }
           return mergeTypes(thenType, elseType);
         }
-      case "IsExpression":
+      case "IsExpression": {
         this.inferExpression(expression.value);
-        {
-          const checked = this.resolveAnnotation(expression.type);
-          this.validateType(checked, expression.type.span);
-          if (checked.kind === "class") this.classChecks.add(expression.span.start);
-        }
-        return boolType;
+        const checked = this.resolveAnnotation(expression.type);
+        const valid = this.validateTypeReference(expression.type);
+        if (valid && checked.kind === "class") this.classChecks.add(expression.span.start);
+        return valid ? boolType : invalidType;
+      }
       case "ArrowFunctionExpression":
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
@@ -2005,6 +2135,7 @@ export class Analyzer implements TypeEnvironment {
         }
         const object = guarded && original.kind === "optional" ? original.inner : original;
         const index = this.inferExpression(expression.index);
+        if (isInvalidType(object)) return invalidType;
         if (object.kind === "list") {
           this.requireAssignable(index, numberType, expression.index.span);
           if (guarded) {
@@ -2030,6 +2161,7 @@ export class Analyzer implements TypeEnvironment {
   private inferBinary(leftExpression: Expression, operator: string, rightExpression: Expression, operationSpan: Span): ValueType {
     const left = this.inferExpression(leftExpression);
     const right = this.inferExpression(rightExpression);
+    if (isInvalidType(left) || isInvalidType(right)) return invalidType;
     if (operator === "??") {
       if (left.kind !== "optional" && left.kind !== "null" && left.kind !== "any") {
         this.typeError(`Left side of '??' is not optional: ${describeType(left)}`, leftExpression.span);
@@ -2085,6 +2217,7 @@ export class Analyzer implements TypeEnvironment {
   ): void {
     const left = this.expandAliases(leftType);
     const right = this.expandAliases(rightType);
+    if (isInvalidType(left) || isInvalidType(right)) return;
     if (left.kind === "any" || right.kind === "any") return;
     if ((left.kind === "number" && right.kind === "number")
       || (left.kind === "string" && right.kind === "string")) return;
@@ -2126,12 +2259,12 @@ export class Analyzer implements TypeEnvironment {
     for (const parameter of expression.parameters) {
       const contextualParameter = parameter.rest ? expected?.rest : expected?.parameters[fixedIndex];
       const annotated = parameter.type ? this.resolveAnnotation(parameter.type) : null;
+      const annotationValid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       const defaultType = !annotated && !contextualParameter && parameter.defaultValue
         ? this.inferParameterDefault(parameter.defaultValue)
         : null;
-      const type = annotated ?? contextualParameter ?? defaultType ?? unknownType;
-      if (parameter.type) this.validateType(type, parameter.type.span);
-      if (parameter.defaultValue && !defaultType) {
+      const type = annotationValid ? annotated ?? contextualParameter ?? defaultType ?? unknownType : invalidType;
+      if (parameter.defaultValue && !defaultType && annotationValid) {
         const actualDefault = this.inferParameterDefault(parameter.defaultValue, type);
         this.requireAssignable(actualDefault, type, parameter.defaultValue.span);
       }
@@ -2202,6 +2335,7 @@ export class Analyzer implements TypeEnvironment {
     if (optionalCall) {
       const original = this.inferExpression(calleeExpression);
       const callee = original.kind === "optional" ? original.inner : original;
+      if (isInvalidType(callee)) return invalidType;
       if (callee.kind === "function" || callee.kind === "action") {
         this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
         this.optionalCallees.add(callSpan.start);
@@ -2293,6 +2427,7 @@ export class Analyzer implements TypeEnvironment {
       return anyType;
     }
     if (callee.kind === "unknown") {
+      if (isInvalidType(callee)) return invalidType;
       if (!calleeAlreadyDiagnosed) {
         if (hasNamed) this.typeError("Named arguments require a statically known callable signature", callSpan);
         for (const argument of arguments_) {
@@ -2931,7 +3066,8 @@ export class Analyzer implements TypeEnvironment {
     if (object.kind === "any") {
       result = anyType;
     } else if (object.kind === "unknown") {
-      this.typeError(`Cannot access '${property}' on unknown without validation`, memberSpan);
+      if (isInvalidType(object)) result = invalidType;
+      else this.typeError(`Cannot access '${property}' on unknown without validation`, memberSpan);
     } else if (object.kind === "string" && property === "length") {
       result = numberType;
     } else if (object.kind === "list") {
@@ -3008,7 +3144,9 @@ export class Analyzer implements TypeEnvironment {
           kind: "function",
           parameters: [unknownType],
           requiredParameters: 1,
-          result: this.typeAliases.get(object.name) ?? { kind: "named", name: object.name },
+          result: this.invalidDeclaredTypes.has(object.name)
+            ? invalidType
+            : this.typeAliases.get(object.name) ?? { kind: "named", name: object.name },
         };
       } else {
         this.typeError(`Type '${object.name}' has no runtime member '${property}'`, memberSpan);
@@ -3273,14 +3411,14 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private functionType(statement: FunctionDeclaration): ValueType {
-    const result = this.resolveResult(statement.returnType);
+    const result = this.resolveValidatedResult(statement.returnType);
     const rest = statement.parameters.find((parameter) => parameter.rest);
     return {
       kind: "function",
-      parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveAnnotation(parameter.type)),
+      parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
       parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
       requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-      ...(rest ? { rest: this.resolveAnnotation(rest.type) } : {}),
+      ...(rest ? { rest: this.resolveValidatedAnnotation(rest.type) } : {}),
       result: statement.asynchronous ? { kind: "promise", value: this.resolvedAsyncResult(result) } : result,
     };
   }
@@ -3330,6 +3468,13 @@ export class Analyzer implements TypeEnvironment {
       return this.resolveNamedClasses(type);
     };
     return reference ? resolve(this.expandAliases(resolveTypeReference(reference))) : unknownType;
+  }
+
+  private resolveValidatedExternAnnotation(reference: TypeReference | null, source: string, classNames: ReadonlySet<string>): ValueType {
+    if (!reference) return unknownType;
+    return this.invalidExternTypeReferences.has(reference)
+      ? invalidType
+      : this.resolveExternAnnotation(reference, source, classNames);
   }
 
   private importType(statement: Extract<Statement, { kind: "ImportDeclaration" }>, local: string, imported: string, namespace: boolean): ValueType {
@@ -3435,6 +3580,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   protected requireCondition(type: ValueType, condition: Expression): void {
+    if (isInvalidType(type)) return;
     if (type.kind === "optional") this.presenceConditions.add(condition.span.start);
     if (type.kind !== "bool" && type.kind !== "optional" && type.kind !== "any") {
       this.typeError(`Condition must be bool or optional, received ${describeType(type)}`, condition.span);
@@ -3584,8 +3730,17 @@ export class Analyzer implements TypeEnvironment {
     return reference ? this.resolveNamedClasses(this.expandAliases(resolveTypeReference(reference))) : unknownType;
   }
 
+  protected resolveValidatedAnnotation(reference: TypeReference | null): ValueType {
+    if (!reference) return unknownType;
+    return this.validateTypeReference(reference) ? this.resolveAnnotation(reference) : invalidType;
+  }
+
   protected resolveResult(reference: TypeReference | null): ValueType {
     return reference ? this.resolveAnnotation(reference) : nullType;
+  }
+
+  protected resolveValidatedResult(reference: TypeReference | null): ValueType {
+    return reference ? this.resolveValidatedAnnotation(reference) : nullType;
   }
 
   private resolveNamedClasses(type: ValueType): ValueType {
@@ -3593,7 +3748,7 @@ export class Analyzer implements TypeEnvironment {
       return { kind: "enum", name: type.name, identity: this.enums.get(type.name)!.identity };
     }
     if (type.kind === "named") {
-      const imported = this.lookup(type.name)?.type ?? this.importBindings.get(type.name);
+      const imported = this.lookup(type.name)?.type ?? this.importBindings.get(type.name) ?? this.externTypeImports.get(type.name);
       if (imported?.kind === "classConstructor") {
         return { kind: "class", name: type.name, ...(imported.identity ? { identity: imported.identity } : {}) };
       }
@@ -3634,31 +3789,62 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
-  protected validateType(type: ValueType, typeSpan: Span): void {
-    if (type.kind === "any") {
-      this.typeError("'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript", typeSpan);
-    } else if (type.kind === "named" && !this.namedTypes.has(type.identity ?? type.name) && !this.classes.has(type.name) && !this.enums.has(type.name) && !this.primitiveNames.has(type.name)) {
-      this.typeError(`Unknown type '${type.name}'`, typeSpan);
-    } else if (type.kind === "optional") {
-      this.validateType(type.inner, typeSpan);
-    } else if (type.kind === "list") {
-      this.validateType(type.element, typeSpan);
-    } else if (type.kind === "set") {
-      this.validateType(type.element, typeSpan);
-    } else if (type.kind === "map") {
-      this.validateType(type.key, typeSpan);
-      this.validateType(type.value, typeSpan);
-    } else if (type.kind === "promise") {
-      this.validateType(type.value, typeSpan);
-    } else if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") {
-      for (const parameter of type.parameters) this.validateType(parameter, typeSpan);
-      if (type.rest) this.validateType(type.rest, typeSpan);
-      this.validateType(type.result, typeSpan);
-    } else if (type.kind === "union") {
-      for (const member of type.members) {
-        this.validateType(member, typeSpan);
-      }
+  protected validateTypeReference(
+    reference: TypeReference,
+    resolve?: (reference: TypeReference) => ValueType,
+  ): boolean {
+    if (!resolve) {
+      const cached = this.typeReferenceValidity.get(reference);
+      if (cached !== undefined) return cached;
     }
+    const resolver = resolve ?? ((value: TypeReference) => this.resolveAnnotation(value));
+    const validate = (syntax: TypeSyntax): boolean => {
+      switch (syntax.kind) {
+        case "NamedTypeSyntax": {
+          if (syntax.name === "any") {
+            this.typeError("'any' is reserved for explicit unsafe JavaScript boundaries; use 'unknown' in VelarScript", syntax.span);
+            return false;
+          }
+          if (this.invalidDeclaredTypes.has(syntax.name)) return false;
+          if (this.primitiveNames.has(syntax.name)
+            || this.namedTypes.has(syntax.name)
+            || this.namedTypeIdentities.has(syntax.name)
+            || this.typeAliases.has(syntax.name)
+            || this.classes.has(syntax.name)
+            || this.enums.has(syntax.name)
+            || this.externTypeImports.has(syntax.name)) return true;
+          const resolved = resolver({ syntax, span: syntax.span });
+          if (resolved.kind !== "named"
+            || (resolved.identity && this.namedTypes.has(resolved.identity))) return true;
+          this.typeError(`Unknown type '${syntax.name}'`, syntax.span);
+          return false;
+        }
+        case "GenericTypeSyntax": {
+          let valid = true;
+          if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Promise") {
+            const resolved = resolver({ syntax, span: syntax.span });
+            if (resolved.kind === "named") {
+              this.typeError(`Unknown type '${syntax.name}'`, syntax.nameSpan);
+              valid = false;
+            }
+          }
+          const argumentsValid = syntax.arguments.map(validate).every(Boolean);
+          return valid && argumentsValid;
+        }
+        case "OptionalTypeSyntax":
+          return validate(syntax.inner);
+        case "UnionTypeSyntax":
+          return syntax.members.map(validate).every(Boolean);
+        case "FunctionTypeSyntax": {
+          const parametersValid = syntax.parameters.map((parameter) => validate(parameter.type)).every(Boolean);
+          const resultValid = validate(syntax.result);
+          return parametersValid && resultValid;
+        }
+      }
+    };
+    const valid = validate(reference.syntax);
+    if (!resolve) this.typeReferenceValidity.set(reference, valid);
+    return valid;
   }
 
   protected typeError(message: string, errorSpan: Span): void {
@@ -3694,11 +3880,11 @@ export class Analyzer implements TypeEnvironment {
       }
       case "MatchTypePattern": {
         const checked = this.resolveAnnotation(pattern.type);
-        this.validateType(checked, pattern.type.span);
-        if (input.kind !== "unknown" && !this.matchTypesOverlap(this.expandAliases(input), checked)) {
+        const valid = this.validateTypeReference(pattern.type);
+        if (valid && input.kind !== "unknown" && !this.matchTypesOverlap(this.expandAliases(input), checked)) {
           this.typeError(`Type pattern ${describeType(checked)} can never match ${describeType(input)}`, pattern.span);
         }
-        return this.narrowMatchType(input, checked);
+        return valid ? this.narrowMatchType(input, checked) : invalidType;
       }
       case "MatchListPattern": {
         const candidates = this.matchListCandidates(input);
