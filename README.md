@@ -115,6 +115,8 @@ the explicit `@velarscript/web` package.
 - Records and aliases share one `type` keyword.
 - Optional values use `T?`; small unions use `A | B`.
 - Functions use `def`, and named arguments use `name=value`.
+- Declaration and `for` binding patterns use checked record fields and exact
+  List shapes; expected shape alternatives belong in `match`.
 - `match` supports literals, enum members, type patterns, nested record/List
   destructuring, `_`, `...rest`, `as` bindings, and guards.
 - Classes use body fields and an explicit `constructor(...)`.

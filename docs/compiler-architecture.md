@@ -112,6 +112,16 @@ custom iterators, and Array species cannot change language semantics. Mutating
 results normalize to VelarScript `null` without replacing
 JavaScript identity, insertion order, or membership semantics.
 
+Declaration and `for` binding patterns do not lower to native JavaScript
+destructuring. The analyzer records which record fields are optional, and one
+Core lowering path evaluates the source value once, reads only own enumerable
+data descriptors, normalizes optional absence to `null`, and builds controlled
+rest copies. List bindings reuse dense-List validation and enforce exact length
+without rest or minimum length with rest. This keeps binding types sound at
+runtime and prevents getters, inherited fields, sparse Lists, or JavaScript
+`undefined` from changing the language contract. Shape mismatch is reserved
+for `match`; an asserted binding shape fails immediately.
+
 ## Package ownership
 
 - `packages/compiler` owns the Core language, source text, diagnostics,

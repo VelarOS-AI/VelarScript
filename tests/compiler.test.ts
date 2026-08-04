@@ -7202,7 +7202,7 @@ const value: number = scale(2, 3)
   assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
 });
 
-test("supports safe object shorthand plus object and list destructuring with spread", () => {
+test("supports object shorthand plus controlled object and List binding patterns", () => {
   const result = compile(`
 const base = {name: "Ada", score: 1}
 const score = 2
@@ -7223,6 +7223,97 @@ print(f"{name}:{details.score}:{first}:{rest.size}")
 
   const quoted = compile("const value = {\"name\"}\n");
   assert.ok(quoted.diagnostics.some((item) => item.code === "VEL2020" && /requires ':' and a value/u.test(item.message)));
+});
+
+test("binding patterns reject ambiguous shapes without leaking JavaScript undefined or accessors", () => {
+  const optional = compile(`
+type Profile:
+    name: string
+    nickname: string?
+
+const profile = Profile.parse({name: "Ada"})
+export const {name, nickname, ...details} = profile
+`.trimStart());
+  assert.deepEqual(optional.diagnostics, []);
+  assert.match(optional.code ?? "", /export const nickname = __velarReadBindingField\([^\n]+, "nickname", true,/u);
+  const optionalExecution = executeModule(`${optional.code ?? ""}\nconsole.log(name, nickname === null, Object.keys(details).length);\n`);
+  assert.equal(optionalExecution.status, 0, String(optionalExecution.stderr));
+  assert.equal(optionalExecution.stdout, "Ada true 0\n");
+
+  const shortList = compile(`
+const values: List<number> = []
+const [first] = values
+print(first + 1)
+`.trimStart());
+  assert.deepEqual(shortList.diagnostics, []);
+  const shortExecution = executeModule(shortList.code ?? "");
+  assert.notEqual(shortExecution.status, 0);
+  assert.match(String(shortExecution.stderr), /Variable List binding requires exactly 1 item, received 0/u);
+
+  const literalMismatch = compile("const [only] = [1, 2]\n");
+  assert.ok(literalMismatch.diagnostics.some((item) => item.code === "VEL4020" && /requires exactly 1 item, but this literal contains 2/u.test(item.message)));
+
+  const longList = compile("const values: List<number> = [1, 2]\nconst [only] = values\nprint(only)\n");
+  assert.deepEqual(longList.diagnostics, []);
+  const longExecution = executeModule(longList.code ?? "");
+  assert.notEqual(longExecution.status, 0);
+  assert.match(String(longExecution.stderr), /Variable List binding requires exactly 1 item, received 2/u);
+
+  const pairs = compile(`
+def loadPairs() -> List<List<number>>:
+    return [[1, 2], [3]]
+
+for [left, right] in loadPairs():
+    print(left + right)
+`.trimStart());
+  assert.deepEqual(pairs.diagnostics, []);
+  const pairExecution = executeModule(pairs.code ?? "");
+  assert.notEqual(pairExecution.status, 0);
+  assert.equal(pairExecution.stdout, "3\n");
+  assert.match(String(pairExecution.stderr), /For List binding requires exactly 2 items, received 1/u);
+
+  const getterSource = Buffer.from([
+    "export const payload=Object.defineProperty({},'name',{enumerable:true,get(){console.log('getter called');return 'Ada'}})",
+    "export const inherited=Object.create({name:'Inherited'})",
+    "export const restPayload=Object.defineProperty({name:'Ada'},'secret',{enumerable:true,get(){console.log('rest getter called');return 'hidden'}})",
+  ].join(";"), "utf8").toString("base64");
+  const accessor = compile(`
+import js unsafe {payload} from "data:text/javascript;base64,${getterSource}"
+const {name} = payload
+print(name)
+`.trimStart());
+  assert.deepEqual(accessor.diagnostics, []);
+  const accessorExecution = executeModule(accessor.code ?? "");
+  assert.notEqual(accessorExecution.status, 0);
+  assert.equal(accessorExecution.stdout, "");
+  assert.match(String(accessorExecution.stderr), /Variable object binding requires enumerable data field 'name'/u);
+
+  const inherited = compile(`
+import js unsafe {inherited} from "data:text/javascript;base64,${getterSource}"
+const {name} = inherited
+print(name)
+`.trimStart());
+  assert.deepEqual(inherited.diagnostics, []);
+  const inheritedExecution = executeModule(inherited.code ?? "");
+  assert.notEqual(inheritedExecution.status, 0);
+  assert.match(String(inheritedExecution.stderr), /Variable object binding requires own data field 'name'/u);
+
+  const restAccessor = compile(`
+import js unsafe {restPayload} from "data:text/javascript;base64,${getterSource}"
+const {name, ...rest} = restPayload
+print(rest.size)
+`.trimStart());
+  assert.deepEqual(restAccessor.diagnostics, []);
+  const restExecution = executeModule(restAccessor.code ?? "");
+  assert.notEqual(restExecution.status, 0);
+  assert.equal(restExecution.stdout, "");
+  assert.match(String(restExecution.stderr), /Variable object rest cannot copy accessor field 'secret'/u);
+
+  const duplicateField = compile(`
+const value = {name: "Ada"}
+const {name: first, name: second} = value
+`.trimStart());
+  assert.ok(duplicateField.diagnostics.some((item) => item.code === "VEL4019" && /binding field 'name' is declared more than once/u.test(item.message)));
 });
 
 test("uses native Set with list construction, inference, mutation, and iteration", () => {

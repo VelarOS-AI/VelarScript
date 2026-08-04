@@ -35,6 +35,8 @@ export class JavaScriptEmitter {
   private readonly forcedFunctionExports: ReadonlySet<string>;
   private needsIndexHelpers = false;
   private needsCollectionHelpers = false;
+  private needsObjectBindingHelpers = false;
+  private needsListBindingHelpers = false;
   private needsRuntimeTypeHelpers = false;
   private needsNumberHelper = false;
   private suppressPromiseNormalization = 0;
@@ -401,6 +403,59 @@ export class JavaScriptEmitter {
         "function __velarOptionalCollection(value, operation) { return value == null ? null : operation(value); }",
       ].join("\n"));
     }
+    if (this.needsObjectBindingHelpers) {
+      helpers.push([
+        "const __velarMaxBindingFields = 1000000;",
+        "",
+        "function __velarRequireBindingObject(value, name) {",
+        "  if (value === null || typeof value !== \"object\" || Array.isArray(value)) throw new TypeError(name + \" object binding requires a record object\");",
+        "  return value;",
+        "}",
+        "function __velarReadBindingField(value, field, optional, name) {",
+        "  const descriptor = Object.getOwnPropertyDescriptor(value, field);",
+        "  if (descriptor === undefined) {",
+        "    if (optional) return null;",
+        "    throw new TypeError(name + \" object binding requires own data field '\" + field + \"'\");",
+        "  }",
+        "  if (!descriptor.enumerable || !(\"value\" in descriptor)) throw new TypeError(name + \" object binding requires enumerable data field '\" + field + \"'\");",
+        "  return descriptor.value ?? null;",
+        "}",
+        "function __velarBindingObjectRest(value, excluded, name) {",
+        "  if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError(name + \" object rest cannot copy symbol fields\");",
+        "  const fields = Object.getOwnPropertyNames(value);",
+        "  if (fields.length > __velarMaxBindingFields) throw new RangeError(name + \" object rest cannot copy more than 1000000 fields\");",
+        "  const output = {};",
+        "  for (const field of fields) {",
+        "    let selected = false;",
+        "    for (let index = 0; index < excluded.length; index += 1) if (excluded[index] === field) { selected = true; break; }",
+        "    if (selected) continue;",
+        "    const descriptor = Object.getOwnPropertyDescriptor(value, field);",
+        "    if (!descriptor?.enumerable) continue;",
+        "    if (!(\"value\" in descriptor)) throw new TypeError(name + \" object rest cannot copy accessor field '\" + field + \"'\");",
+        "    Object.defineProperty(output, field, { value: descriptor.value ?? null, writable: true, enumerable: true, configurable: true });",
+        "  }",
+        "  return output;",
+        "}",
+      ].join("\n"));
+    }
+    if (this.needsListBindingHelpers) {
+      helpers.push([
+        "function __velarRequireBindingList(value, size, hasRest, name) {",
+        "  __velarValidateDenseList(value, name + \" List binding\");",
+        "  const valid = hasRest ? value.length >= size : value.length === size;",
+        "  if (!valid) throw new RangeError(name + \" List binding\" + (hasRest ? \" requires at least \" : \" requires exactly \") + size + (size === 1 ? \" item\" : \" items\") + \", received \" + value.length);",
+        "  return value;",
+        "}",
+        "function __velarReadBindingListItem(value, index) {",
+        "  return Object.getOwnPropertyDescriptor(value, index).value ?? null;",
+        "}",
+        "function __velarBindingListRest(value, start) {",
+        "  const output = [];",
+        "  for (let index = start; index < value.length; index += 1) output.push(Object.getOwnPropertyDescriptor(value, index).value ?? null);",
+        "  return output;",
+        "}",
+      ].join("\n"));
+    }
     if (this.needsNumberHelper) {
       helpers.push([
         "function __velarNumber(value) {",
@@ -718,8 +773,24 @@ export class JavaScriptEmitter {
         return this.emitEnumDeclaration(statement, depth);
       case "ClassDeclaration":
         return this.emitClass(statement, depth);
-      case "VariableDeclaration":
-        return `${indentation}${statement.exported ? "export " : ""}${statement.binding} ${this.emitBindingPattern(statement.pattern)} = ${this.emitMappedExpression(statement.initializer)};`;
+      case "VariableDeclaration": {
+        const initializer = this.emitMappedExpression(statement.initializer);
+        if (statement.pattern.kind === "NameBindingPattern") {
+          return `${indentation}${statement.exported ? "export " : ""}${statement.binding} ${statement.pattern.name} = ${initializer};`;
+        }
+        const valueName = `__velarBindingValue${statement.pattern.span.start}`;
+        return [
+          `${indentation}const ${valueName} = ${initializer};`,
+          ...this.emitBindingPatternStatements(
+            statement.pattern,
+            valueName,
+            statement.binding,
+            statement.exported,
+            depth,
+            "Variable",
+          ),
+        ].join("\n");
+      }
       case "FunctionDeclaration": {
         const prefix = `${statement.exported || this.forcedFunctionExports.has(statement.name) ? "export " : ""}${statement.asynchronous ? "async " : ""}function`;
         const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
@@ -799,9 +870,17 @@ export class JavaScriptEmitter {
       }
       case "ForStatement": {
         this.needsCollectionHelpers = true;
-        const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
         const iterable = this.emitMappedExpression(statement.iterable);
-        return `${indentation}for (const ${this.emitBindingPattern(statement.pattern)} of __velarCollectionIterator(${iterable})) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
+        if (statement.pattern.kind === "NameBindingPattern") {
+          const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+          return `${indentation}for (const ${statement.pattern.name} of __velarCollectionIterator(${iterable})) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
+        }
+        const valueName = `__velarForValue${statement.pattern.span.start}`;
+        const lines = [
+          ...this.emitBindingPatternStatements(statement.pattern, valueName, "const", false, depth + 1, "For"),
+          ...statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean),
+        ];
+        return `${indentation}for (const ${valueName} of __velarCollectionIterator(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
       }
       case "WhileStatement": {
         const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
@@ -1488,19 +1567,71 @@ export class JavaScriptEmitter {
     return { lines, bindings: [...bindings].map(([name, value]) => ({ name, value })) };
   }
 
-  protected emitBindingPattern(pattern: BindingPattern): string {
-    if (pattern.kind === "NameBindingPattern") return pattern.name;
-    if (pattern.kind === "ObjectBindingPattern") {
-      const entries = pattern.entries.map((entry) => {
-        const emitted = this.emitBindingPattern(entry.pattern);
-        return entry.pattern.kind === "NameBindingPattern" && entry.pattern.name === entry.property ? entry.property : `${entry.property}: ${emitted}`;
+  protected emitBindingPatternStatements(
+    pattern: BindingPattern,
+    value: string,
+    binding: "const" | "let",
+    exported: boolean,
+    depth: number,
+    label: string,
+  ): readonly string[] {
+    const lines: string[] = [];
+    const indentation = "  ".repeat(depth);
+    let temporary = 0;
+    const nextTemporary = (kind: string, current: BindingPattern): string => `__velarBinding${kind}${current.span.start}_${temporary++}`;
+    const declare = (name: string, expression: string): void => {
+      lines.push(`${indentation}${exported ? "export " : ""}${binding} ${name} = ${expression};`);
+    };
+    const emit = (current: BindingPattern, currentValue: string): void => {
+      if (current.kind === "NameBindingPattern") {
+        declare(current.name, currentValue);
+        return;
+      }
+      if (current.kind === "ObjectBindingPattern") {
+        this.needsObjectBindingHelpers = true;
+        const object = nextTemporary("Object", current);
+        lines.push(`${indentation}const ${object} = __velarRequireBindingObject(${currentValue}, ${JSON.stringify(label)});`);
+        for (const entry of current.entries) {
+          const read = `__velarReadBindingField(${object}, ${JSON.stringify(entry.property)}, ${this.hints.optionalBindingEntries.has(entry.span.start)}, ${JSON.stringify(label)})`;
+          if (entry.pattern.kind === "NameBindingPattern") {
+            declare(entry.pattern.name, read);
+          } else {
+            const field = nextTemporary("Field", entry.pattern);
+            lines.push(`${indentation}const ${field} = ${read};`);
+            emit(entry.pattern, field);
+          }
+        }
+        if (current.rest) {
+          declare(
+            current.rest.name,
+            `__velarBindingObjectRest(${object}, ${JSON.stringify(current.entries.map((entry) => entry.property))}, ${JSON.stringify(label)})`,
+          );
+        }
+        return;
+      }
+
+      this.needsCollectionHelpers = true;
+      this.needsListBindingHelpers = true;
+      const list = nextTemporary("List", current);
+      lines.push(`${indentation}const ${list} = __velarRequireBindingList(${currentValue}, ${current.elements.length}, ${current.rest !== null}, ${JSON.stringify(label)});`);
+      current.elements.forEach((element, index) => {
+        if (!element) return;
+        const read = `__velarReadBindingListItem(${list}, ${index})`;
+        if (element.kind === "NameBindingPattern") {
+          declare(element.name, read);
+        } else {
+          const item = nextTemporary("Item", element);
+          lines.push(`${indentation}const ${item} = ${read};`);
+          emit(element, item);
+        }
       });
-      if (pattern.rest) entries.push(`...${pattern.rest.name}`);
-      return `{ ${entries.join(", ")} }`;
-    }
-    const entries = pattern.elements.map((element) => element ? this.emitBindingPattern(element) : "");
-    if (pattern.rest) entries.push(`...${pattern.rest.name}`);
-    return `[${entries.join(", ")}]`;
+      if (current.rest) {
+        declare(current.rest.name, `__velarBindingListRest(${list}, ${current.elements.length})`);
+      }
+    };
+
+    emit(pattern, value);
+    return lines;
   }
 
   private escapeTemplateText(value: string): string {

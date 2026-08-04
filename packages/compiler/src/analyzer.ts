@@ -165,6 +165,7 @@ export interface LoweringHints {
   readonly normalizedNullResults: ReadonlySet<string>;
   readonly normalizedPromiseValues: ReadonlySet<string>;
   readonly normalizedUndefinedExpressions: ReadonlySet<string>;
+  readonly optionalBindingEntries: ReadonlySet<number>;
   readonly reactiveBindings: ReadonlyMap<string, "state" | "computed">;
   readonly enumValueBindings: ReadonlyMap<number, string>;
   readonly exhaustiveMatches: ReadonlySet<number>;
@@ -233,6 +234,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly normalizedNullResults = new Set<string>();
   private readonly normalizedPromiseValues = new Set<string>();
   private readonly normalizedUndefinedExpressions = new Set<string>();
+  private readonly optionalBindingEntries = new Set<number>();
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
   protected readonly enumValueBindings = new Map<number, string>();
   private readonly exhaustiveMatches = new Set<number>();
@@ -477,6 +479,7 @@ export class Analyzer implements TypeEnvironment {
       normalizedNullResults: this.normalizedNullResults,
       normalizedPromiseValues: this.normalizedPromiseValues,
       normalizedUndefinedExpressions: this.normalizedUndefinedExpressions,
+      optionalBindingEntries: this.optionalBindingEntries,
       reactiveBindings: this.reactiveBindings,
       enumValueBindings: this.enumValueBindings,
       exhaustiveMatches: this.exhaustiveMatches,
@@ -923,6 +926,7 @@ export class Analyzer implements TypeEnvironment {
         if (statement.type) this.validateType(declared, statement.type.span);
         this.requireAssignable(actual, declared, statement.initializer.span);
         this.declarePattern(statement.pattern, statement.binding === "let", declared);
+        this.validateKnownBindingShape(statement.pattern, statement.initializer);
         if (!annotated && statement.pattern.kind === "NameBindingPattern") {
           const binding = this.scopes.at(-1)?.get(statement.pattern.name);
           if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
@@ -1092,6 +1096,12 @@ export class Analyzer implements TypeEnvironment {
         }
         this.enterScope();
         this.declarePattern(statement.pattern, false, element);
+        if (statement.iterable.kind === "ListExpression"
+          && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
+          for (const item of statement.iterable.elements) {
+            this.validateKnownBindingShape(statement.pattern, item);
+          }
+        }
         this.loopDepth += 1;
         for (const child of statement.body) {
           this.analyzeStatement(child);
@@ -4177,12 +4187,19 @@ export class Analyzer implements TypeEnvironment {
     }
     const selected = new Set<string>();
     for (const entry of pattern.entries) {
+      if (selected.has(entry.property)) {
+        this.diagnostics.push(diagnostic("VEL4019", `Object binding field '${entry.property}' is declared more than once`, entry.span));
+      }
       selected.add(entry.property);
       if (type.kind === "named" && fields?.has(entry.property)) {
         this.semanticBindingEntryOwners.set(`${entry.span.start}:${entry.property}`, type);
       }
       const fieldValue = fields?.get(entry.property) ?? (type.kind === "any" ? anyType : unknownType);
-      const field = type.kind === "object" && type.optionalFields?.has(entry.property) ? optionalOf(fieldValue) : fieldValue;
+      const structurallyOptional = type.kind === "object" && type.optionalFields?.has(entry.property);
+      const field = structurallyOptional ? optionalOf(fieldValue) : fieldValue;
+      if (structurallyOptional || this.expandAliases(fieldValue).kind === "optional") {
+        this.optionalBindingEntries.add(entry.span.start);
+      }
       if (fields && !fields.has(entry.property)) this.typeError(`Object has no field '${entry.property}'`, entry.span);
       this.declarePattern(entry.pattern, mutable, field);
     }
@@ -4197,6 +4214,32 @@ export class Analyzer implements TypeEnvironment {
         fields: remaining,
         ...(remainingOptional.size > 0 ? { optionalFields: remainingOptional } : {}),
       }, pattern.rest.span);
+    }
+  }
+
+  private validateKnownBindingShape(pattern: BindingPattern, value: Expression): void {
+    if (pattern.kind === "NameBindingPattern") return;
+    if (pattern.kind === "ListBindingPattern") {
+      if (value.kind !== "ListExpression" || value.elements.some((element) => element.kind === "SpreadExpression")) return;
+      const valid = pattern.rest ? value.elements.length >= pattern.elements.length : value.elements.length === pattern.elements.length;
+      if (!valid) {
+        const expected = `${pattern.rest ? "at least " : "exactly "}${pattern.elements.length} ${pattern.elements.length === 1 ? "item" : "items"}`;
+        this.diagnostics.push(diagnostic(
+          "VEL4020",
+          `List binding requires ${expected}, but this literal contains ${value.elements.length}`,
+          pattern.span,
+        ));
+        return;
+      }
+      pattern.elements.forEach((element, index) => {
+        if (element) this.validateKnownBindingShape(element, value.elements[index]!);
+      });
+      return;
+    }
+    if (value.kind !== "ObjectExpression") return;
+    for (const entry of pattern.entries) {
+      const property = [...value.properties].reverse().find((candidate) => candidate.kind === "ObjectProperty" && candidate.name === entry.property);
+      if (property?.kind === "ObjectProperty") this.validateKnownBindingShape(entry.pattern, property.value);
     }
   }
 

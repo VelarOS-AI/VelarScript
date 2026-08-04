@@ -96,6 +96,30 @@ const nextUser = {...user, title: "Owner"}
 const nextValues = [...values, 4]
 ```
 
+Declarations and `for` loops share one controlled binding-pattern contract:
+
+```velar fragment
+const {name, nickname, ...details} = profile
+const [first, ...rest] = values
+
+for [key, value] in pairs:
+    print(f"{key}: {value}")
+```
+
+Object bindings read present own enumerable data fields and never invoke
+accessors. A field declared with an optional `T?` contract may be absent and
+binds `null`; a missing required field fails at the binding instead of leaking
+JavaScript `undefined`. Object rest produces a new ordinary record containing
+the remaining enumerable data fields.
+
+List bindings use one shape rule everywhere. Without `...rest`, the List must
+have exactly as many items as the pattern, so `[first, second]` requires two.
+With `...rest`, it must contain at least the fixed prefix, so
+`[first, ...rest]` requires one or more and creates a fresh List for `rest`.
+The same rules apply to nested declaration patterns and `for` bindings. Use
+`match` when shape mismatch is an expected branch; binding mismatch is a
+runtime error because a declaration asserts that shape.
+
 ## 4. Operators
 
 VelarScript keeps familiar operators but removes coercive JavaScript behavior.

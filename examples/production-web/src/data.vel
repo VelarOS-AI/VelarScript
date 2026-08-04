@@ -37,14 +37,11 @@ export const projects: List<ProjectSummary> = [
     },
 ]
 
-def countProject(project: ProjectSummary) -> number:
-    let total = 1
-    for child in project.children:
-        total += countProject(child)
+def countProjects(items: List<ProjectSummary>) -> number:
+    let total = 0
+    for {children} in items:
+        total += 1 + countProjects(children)
     return total
 
 export def projectCount() -> number:
-    let total = 0
-    for project in projects:
-        total += countProject(project)
-    return total
+    return countProjects(projects)
