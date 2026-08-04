@@ -51,13 +51,13 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
         for (const dispose of globalThis.__velarHotDisposers.splice(0)) dispose()
         await import(entry + "?velar=" + revision)
       }
-      addEventListener("error", async (event) => showError("Velar runtime error", await mapStack(event.error || event.message)))
-      addEventListener("unhandledrejection", async (event) => showError("Velar unhandled rejection", await mapStack(event.reason)))
-      try { await load() } catch (error) { showError("Velar runtime error", await mapStack(error)) }
+      addEventListener("error", async (event) => showError("VelarScript runtime error", await mapStack(event.error || event.message)))
+      addEventListener("unhandledrejection", async (event) => showError("VelarScript unhandled rejection", await mapStack(event.reason)))
+      try { await load() } catch (error) { showError("VelarScript runtime error", await mapStack(error)) }
       new EventSource(eventsUrl).addEventListener("reload", async (event) => {
         const update = JSON.parse(event.data)
         if (update.errors.length) {
-          showError("Velar compile error", update.errors.join("\\n\\n"))
+          showError("VelarScript compile error", update.errors.join("\\n\\n"))
           return
         }
         revision = update.revision
@@ -67,7 +67,7 @@ export function createWebArtifacts(input: FrameworkHostArtifactsInput): Framewor
           await load()
           hideError()
         } catch (error) {
-          showError("Velar runtime error", await mapStack(error))
+          showError("VelarScript runtime error", await mapStack(error))
         }
       })
     </script>` : `
@@ -117,7 +117,7 @@ export function createWebErrorDocument(input: FrameworkHostErrorDocumentInput): 
   const config = webConfig(input.config);
   const escaped = input.errors.join("\n\n").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   const eventsUrl = withBase(config.base, "__velar/events");
-  return `<!doctype html><html><head><meta charset="UTF-8"><title>Velar build error</title><style>body{font:15px/1.55 ui-monospace,monospace;margin:0;padding:32px;background:#171717;color:#fee2e2}pre{white-space:pre-wrap}</style></head><body><h1>Velar build error</h1><pre>${escaped}</pre><script>new EventSource(${JSON.stringify(eventsUrl)}).addEventListener("reload",(event)=>{if(JSON.parse(event.data).errors.length===0)location.reload()})</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="UTF-8"><title>VelarScript build error</title><style>body{font:15px/1.55 ui-monospace,monospace;margin:0;padding:32px;background:#171717;color:#fee2e2}pre{white-space:pre-wrap}</style></head><body><h1>VelarScript build error</h1><pre>${escaped}</pre><script>new EventSource(${JSON.stringify(eventsUrl)}).addEventListener("reload",(event)=>{if(JSON.parse(event.data).errors.length===0)location.reload()})</script></body></html>`;
 }
 
 export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({

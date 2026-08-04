@@ -1,6 +1,6 @@
 # FlowBoard
 
-FlowBoard is an independent application used to mature the Velar 0.9 language and Web framework. It
+FlowBoard is an independent application used to mature the VelarScript 0.10 language and Web framework. It
 is a real nine-module project rather than a compiler showcase page.
 
 It exercises:

@@ -2,7 +2,7 @@ import type { ClassInfo, CompilerExtension, ModuleInterface, ValueType } from "@
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
 
 const anyType: ValueType = { kind: "any" };
-const noneType: ValueType = { kind: "none" };
+const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
@@ -29,7 +29,7 @@ function object(fields: Readonly<Record<string, ValueType>>): ValueType {
 
 const unknownType: ValueType = { kind: "unknown" };
 const errorType: ValueType = { kind: "class", name: "Error" };
-const cleanupType = functionType([], noneType);
+const cleanupType = functionType([], nullType);
 const listAny: ValueType = { kind: "list", element: anyType };
 const listNumber: ValueType = { kind: "list", element: numberType };
 const listString: ValueType = { kind: "list", element: stringType };
@@ -45,7 +45,7 @@ const textMatchType = object({
   index: numberType,
   groups: { kind: "list", element: optional(stringType) },
 });
-const textMatchListType: ValueType = { kind: "list", element: textMatchType };
+const textMatchArrayType: ValueType = { kind: "list", element: textMatchType };
 const urlInfoType = object({
   href: stringType,
   protocol: stringType,
@@ -71,10 +71,10 @@ const logRecordType = object({
   error: optional(errorType),
 });
 const loggerType = object({
-  debug: functionType([stringType, logFieldsType], noneType, 1),
-  info: functionType([stringType, logFieldsType], noneType, 1),
-  warn: functionType([stringType, logFieldsType], noneType, 1),
-  error: functionType([stringType, errorType, logFieldsType], noneType, 1),
+  debug: functionType([stringType, logFieldsType], nullType, 1),
+  info: functionType([stringType, logFieldsType], nullType, 1),
+  warn: functionType([stringType, logFieldsType], nullType, 1),
+  error: functionType([stringType, errorType, logFieldsType], nullType, 1),
 });
 
 const coreModuleInterfaces = new Map<string, ModuleInterface>([
@@ -86,17 +86,17 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["chunk", intrinsic("collections.chunk", [listAny, numberType], listAny)],
     ["flatten", intrinsic("collections.flatten", [listAny], listAny)],
     ["compact", intrinsic("collections.compact", [listAny], listAny)],
-    ["reverse", intrinsic("collections.reverse", [listAny], listAny)],
+    ["reversed", intrinsic("collections.reversed", [listAny], listAny)],
     ["take", intrinsic("collections.take", [listAny, numberType], listAny)],
     ["drop", intrinsic("collections.drop", [listAny, numberType], listAny)],
     ["first", intrinsic("collections.first", [listAny], anyType)],
     ["last", intrinsic("collections.last", [listAny], anyType)],
     ["find", intrinsic("collections.find", [listAny, anyType], anyType)],
-    ["findIndex", intrinsic("collections.findIndex", [listAny, anyType], numberType)],
-    ["contains", intrinsic("collections.contains", [listAny, anyType], boolType)],
+    ["index", intrinsic("collections.index", [listAny, anyType], optional(numberType))],
+    ["has", intrinsic("collections.has", [listAny, anyType], boolType)],
     ["count", intrinsic("collections.count", [listAny, anyType], numberType)],
-    ["any", intrinsic("collections.any", [listAny, anyType], boolType)],
-    ["all", intrinsic("collections.all", [listAny, anyType], boolType)],
+    ["some", intrinsic("collections.some", [listAny, anyType], boolType)],
+    ["every", intrinsic("collections.every", [listAny, anyType], boolType)],
     ["partition", intrinsic("collections.partition", [listAny, anyType], anyType)],
     ["groupBy", intrinsic("collections.groupBy", [listAny, anyType], mapAny)],
     ["keyBy", intrinsic("collections.keyBy", [listAny, anyType], mapAny)],
@@ -136,7 +136,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["escapeHtml", functionType([stringType], stringType)],
     ["matches", functionType([stringType, stringType, patternOptionsType], boolType, 2)],
     ["findMatch", functionType([stringType, stringType, patternOptionsType], optional(textMatchType), 2)],
-    ["findMatches", functionType([stringType, stringType, patternOptionsType], textMatchListType, 2)],
+    ["findMatches", functionType([stringType, stringType, patternOptionsType], textMatchArrayType, 2)],
     ["replaceMatches", functionType([stringType, stringType, stringType, patternOptionsType], stringType, 3)],
     ["splitPattern", functionType([stringType, stringType, patternOptionsType], listString, 2)],
   ]))],
@@ -185,7 +185,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["deepEqual", functionType([anyType, anyType], boolType)],
   ]))],
   ["velar/async", moduleInterface(new Map([
-    ["sleep", functionType([numberType], promise(noneType))],
+    ["sleep", functionType([numberType], promise(nullType))],
     ["all", intrinsic("async.all", [listAny], promise(listAny))],
     ["race", intrinsic("async.race", [listAny], promise(anyType))],
     ["timeout", intrinsic("async.timeout", [promise(anyType), numberType, stringType], promise(anyType), 2)],
@@ -223,7 +223,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["log", loggerType],
     ["logger", functionType([stringType, logFieldsType], loggerType, 1)],
     ["level", functionType([], stringType)],
-    ["setLevel", functionType([stringType], noneType)],
+    ["setLevel", functionType([stringType], nullType)],
     ["useSink", functionType([functionType([logRecordType], unknownType)], cleanupType)],
   ]))],
   ["velar/test", moduleInterface(new Map([
@@ -450,9 +450,9 @@ const __velarRuntimeTypeRegistryKey = Symbol.for("velar.type.registry.v1");
 const __velarRuntimeTypeRegistry = (() => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, __velarRuntimeTypeRegistryKey);
   if (descriptor) {
-    if (!("value" in descriptor)) throw new TypeError("Velar runtime type registry cannot be an accessor");
+    if (!("value" in descriptor)) throw new TypeError("VelarScript runtime type registry cannot be an accessor");
     try { WeakSet.prototype.has.call(descriptor.value, descriptor.value); }
-    catch { throw new TypeError("Velar runtime type registry is invalid"); }
+    catch { throw new TypeError("VelarScript runtime type registry is invalid"); }
     return descriptor.value;
   }
   const registry = new WeakSet();
@@ -468,7 +468,7 @@ function __velarRegisterRuntimeType(value) { __velarRuntimeTypeRegistry.add(valu
 function __velarRequireRuntimeType(value, name, optional = false) {
   if (optional && value == null) return null;
   if (!value || typeof value !== "object" || !WeakSet.prototype.has.call(__velarRuntimeTypeRegistry, value)) {
-    throw new TypeError(name + " requires a compiler-known Velar runtime type");
+    throw new TypeError(name + " requires a compiler-known VelarScript runtime type");
   }
   return value;
 }
@@ -559,17 +559,17 @@ export function flatten(values) {
 }
 
 export function compact(values) { return requireList(values, "compact").filter((value) => value != null); }
-export function reverse(values) { return requireList(values, "reverse").slice().reverse(); }
+export function reversed(values) { return requireList(values, "reversed").slice().reverse(); }
 export function take(values, count) { return requireList(values, "take").slice(0, requireCount(count, "take count")); }
 export function drop(values, count) { return requireList(values, "drop").slice(requireCount(count, "drop count")); }
 export function first(values) { values = requireList(values, "first"); return values.length ? values[0] : null; }
 export function last(values) { values = requireList(values, "last"); return values.length ? values[values.length - 1] : null; }
 export function find(values, callback) { return requireList(values, "find").find((value) => predicate(callback, value, "find")) ?? null; }
-export function findIndex(values, callback) { return requireList(values, "findIndex").findIndex((value) => predicate(callback, value, "findIndex")); }
-export function contains(values, value) { return requireList(values, "contains").some((item) => item === value); }
-export function count(values, value) { return requireList(values, "count").reduce((total, item) => total + (item === value ? 1 : 0), 0); }
-export function any(values, callback) { return requireList(values, "any").some((value) => predicate(callback, value, "any")); }
-export function all(values, callback) { return requireList(values, "all").every((value) => predicate(callback, value, "all")); }
+export function index(values, item) { const position = requireList(values, "index").findIndex((value) => value === item || Object.is(value, item)); return position < 0 ? null : position; }
+export function has(values, value) { return requireList(values, "has").some((item) => item === value || Object.is(item, value)); }
+export function count(values, value) { return requireList(values, "count").reduce((total, item) => total + (item === value || Object.is(item, value) ? 1 : 0), 0); }
+export function some(values, callback) { return requireList(values, "some").some((value) => predicate(callback, value, "some")); }
+export function every(values, callback) { return requireList(values, "every").every((value) => predicate(callback, value, "every")); }
 
 export function partition(values, callback) {
   requireList(values, "partition");
@@ -808,7 +808,7 @@ function queryMap(search, name) {
 }
 function appendQueryValue(output, name, value, budget) {
   if (value == null) return;
-  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") throw new TypeError("URL query value '" + name + "' must be a string, number, bool, none, or List of those values");
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") throw new TypeError("URL query value '" + name + "' must be a string, number, bool, null, or List of those values");
   const text = String(value);
   budget.units += (name.length + text.length) * 9 + 2;
   if (budget.units > 2 * 1024 * 1024) throw new RangeError("URL query output cannot exceed 2 MiB");
@@ -957,12 +957,12 @@ function logText(value, name, maximum = 65536) { if (typeof value !== "string") 
 
 function fieldsOf(value) {
   if (value == null) return new Map();
-  if (!(value instanceof Map)) throw new TypeError("Velar log fields must be a Map");
-  if (Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value) > maxLogFields) throw new RangeError("Velar log fields cannot exceed 1000 entries");
+  if (!(value instanceof Map)) throw new TypeError("VelarScript log fields must be a Map");
+  if (Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value) > maxLogFields) throw new RangeError("VelarScript log fields cannot exceed 1000 entries");
   const fields = new Map();
   for (const [key, field] of Map.prototype.entries.call(value)) {
-    if (typeof key !== "string") throw new TypeError("Velar log field names must be strings");
-    if (key.length > 1024) throw new RangeError("Velar log field names cannot exceed 1024 characters");
+    if (typeof key !== "string") throw new TypeError("VelarScript log field names must be strings");
+    if (key.length > 1024) throw new RangeError("VelarScript log field names cannot exceed 1024 characters");
     fields.set(key, field);
   }
   return fields;
@@ -1018,7 +1018,7 @@ function createLogger(scope, base = new Map()) {
 export const log = createLogger("");
 export function logger(scope, fields = new Map()) {
   const name = logText(scope, "Logger scope", 1024).trim();
-  if (!name) throw new TypeError("A Velar logger requires a non-empty scope");
+  if (!name) throw new TypeError("A VelarScript logger requires a non-empty scope");
   return createLogger(name, fields);
 }
 export function level() { return threshold; }
@@ -1029,8 +1029,8 @@ export function setLevel(value) {
   return null;
 }
 export function useSink(sink) {
-  if (typeof sink !== "function") throw new TypeError("A Velar log sink must be callable");
-  if (!sinks.has(sink) && sinks.size >= maxLogSinks) throw new RangeError("Velar logging cannot install more than 1000 sinks");
+  if (typeof sink !== "function") throw new TypeError("A VelarScript log sink must be callable");
+  if (!sinks.has(sink) && sinks.size >= maxLogSinks) throw new RangeError("VelarScript logging cannot install more than 1000 sinks");
   sinks.add(sink);
   return () => { sinks.delete(sink); return null; };
 }

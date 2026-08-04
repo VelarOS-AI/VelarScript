@@ -35,8 +35,8 @@ export type TaskDraft:
     description: string
     priority: TaskPriority
 
-export type TaskIdHandler = (string) -> none
-export type CreateTaskHandler = (TaskDraft) -> none
+export type TaskIdHandler = (string) -> null
+export type CreateTaskHandler = (TaskDraft) -> null
 
 export def seedTasks() -> List<Task>:
     return [
@@ -90,4 +90,4 @@ export def filterTasks(tasks: List<Task>, query: string, filter: TaskFilter) -> 
     return tasks.filter(task => matchesFilter(task, filter) and (isBlank(needle) or needle in lower(task.title) or needle in lower(task.description)))
 
 export def countStatus(tasks: List<Task>, status: TaskStatus) -> number:
-    return tasks.filter(task => task.status == status).length
+    return tasks.filter(task => task.status == status).size

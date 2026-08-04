@@ -14,7 +14,7 @@ export interface TypeScriptDeclarationBridge {
 }
 
 const unknownType: ValueType = { kind: "unknown" };
-const noneType: ValueType = { kind: "none" };
+const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
@@ -140,7 +140,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
       const importWarnings: string[] = [];
       for (const declarationImport of declarationImports(source)) {
         if (declarationImport.unsupported) {
-          importWarnings.push(`Namespace declaration import from '${declarationImport.source}' is outside the Velar declaration bridge and was kept as unknown`);
+          importWarnings.push(`Namespace declaration import from '${declarationImport.source}' is outside the VelarScript declaration bridge and was kept as unknown`);
           continue;
         }
         const importedPath = await resolveDeclarationReexport(rootPath, path, declarationImport.source);
@@ -428,7 +428,7 @@ export function parseTypeScriptDeclarations(
     const name = match[2]!;
     if (match[1]) directlyExportedTypes.add(name);
     if (interfaces.has(name)) {
-      warnings.push(`Merged interface '${name}' is outside the Velar declaration bridge and was kept as unknown`);
+      warnings.push(`Merged interface '${name}' is outside the VelarScript declaration bridge and was kept as unknown`);
       invalidInterfaces.add(name);
     }
     interfaces.set(name, {
@@ -441,7 +441,7 @@ export function parseTypeScriptDeclarations(
     const name = match[2]!;
     if (match[1]) directlyExportedTypes.add(name);
     if (aliases.has(name) || interfaces.has(name)) {
-      warnings.push(`Merged declaration '${name}' is outside the Velar declaration bridge and was kept as unknown`);
+      warnings.push(`Merged declaration '${name}' is outside the VelarScript declaration bridge and was kept as unknown`);
       aliases.set(name, "unknown");
       invalidInterfaces.add(name);
     } else aliases.set(name, match[3] ?? "unknown");
@@ -454,7 +454,7 @@ export function parseTypeScriptDeclarations(
     const declaration = interfaces.get(name);
     if (!declaration) return "unknown";
     if (resolvingInterfaces.has(name)) {
-      warnings.push(`Recursive interface '${name}' is outside the Velar declaration bridge and was kept as unknown`);
+      warnings.push(`Recursive interface '${name}' is outside the VelarScript declaration bridge and was kept as unknown`);
       invalidInterfaces.add(name);
       return "unknown";
     }
@@ -462,7 +462,7 @@ export function parseTypeScriptDeclarations(
     const bodies: string[] = [];
     for (const baseName of declaration.bases) {
       if (!/^[A-Za-z_$][\w$]*$/u.test(baseName)) {
-        warnings.push(`Generic or complex interface base '${baseName}' is outside the Velar declaration bridge and '${name}' was kept as unknown`);
+        warnings.push(`Generic or complex interface base '${baseName}' is outside the VelarScript declaration bridge and '${name}' was kept as unknown`);
         invalidInterfaces.add(name);
         resolvingInterfaces.delete(name);
         return "unknown";
@@ -505,14 +505,14 @@ export function parseTypeScriptDeclarations(
   for (const declaration of classDeclarations) {
     if (declaration.directExportName) directRuntimeExports.push({ local: declaration.name, exported: declaration.directExportName });
     if ((classCounts.get(declaration.name) ?? 0) > 1) {
-      if (!localTypes.has(declaration.name)) warnings.push(`Duplicate class declaration '${declaration.name}' is outside the Velar declaration bridge and was kept as unknown`);
+      if (!localTypes.has(declaration.name)) warnings.push(`Duplicate class declaration '${declaration.name}' is outside the VelarScript declaration bridge and was kept as unknown`);
       localTypes.set(declaration.name, unknownType);
       localValues.set(declaration.name, unknownType);
       knownTypes.set(declaration.name, unknownType);
       continue;
     }
     if (interfaces.has(declaration.name) || aliases.has(declaration.name)) {
-      warnings.push(`Merged class declaration '${declaration.name}' is outside the Velar declaration bridge and was kept as unknown`);
+      warnings.push(`Merged class declaration '${declaration.name}' is outside the VelarScript declaration bridge and was kept as unknown`);
       localTypes.set(declaration.name, unknownType);
       localValues.set(declaration.name, unknownType);
       knownTypes.set(declaration.name, unknownType);
@@ -634,7 +634,7 @@ export function parseTypeScriptDeclarations(
 
   const setLocalValue = (name: string, type: ValueType, label: string): void => {
     if (localValues.has(name)) {
-      warnings.push(`Overloaded export '${name}' or merged local ${label} declaration is outside the Velar declaration bridge and was kept as unknown`);
+      warnings.push(`Overloaded export '${name}' or merged local ${label} declaration is outside the VelarScript declaration bridge and was kept as unknown`);
       localValues.set(name, unknownType);
     } else localValues.set(name, type);
   };
@@ -646,7 +646,7 @@ export function parseTypeScriptDeclarations(
     const signature = readFunctionSignature(text, match.index + match[0].length);
     let type: ValueType = unknownType;
     if (!signature) warnings.push(`Function declaration '${local}' has an unsupported declaration and was kept as unknown`);
-    else if (signature.generic) warnings.push(`Generic function '${local}' is outside the Velar declaration bridge and was kept as unknown`);
+    else if (signature.generic) warnings.push(`Generic function '${local}' is outside the VelarScript declaration bridge and was kept as unknown`);
     else {
       const parameters = parseParameters(signature.parameters, parse, warnings);
       type = {
@@ -711,7 +711,7 @@ export function parseTypeScriptDeclarations(
       setTypeExport(item.exported, unknownType);
     }
   }
-  if (/export\s*=/u.test(text)) warnings.push("TypeScript export assignment is outside the Velar declaration bridge");
+  if (/export\s*=/u.test(text)) warnings.push("TypeScript export assignment is outside the VelarScript declaration bridge");
   if (!reexportsHandled && (/export\s+\*/u.test(text) || /export\s+(?:type\s+)?\{[^}]+\}\s+from\s*["']/u.test(text))) {
     warnings.push("TypeScript re-export requires the package declaration graph loader");
   }
@@ -1044,7 +1044,7 @@ function parseTsType(
     if (generic[1] === "Set" || generic[1] === "ReadonlySet") return { kind: "set", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes) };
     if (generic[1] === "Promise") return { kind: "promise", value: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes) };
     if (generic[1] === "Record") return { kind: "map", key: parseTsType(arguments_[0] ?? "string", aliases, warnings, stack, classTypes), value: parseTsType(arguments_[1] ?? "unknown", aliases, warnings, stack, classTypes) };
-    warnings.push(`Generic type '${generic[1]}' is outside the Velar declaration bridge and was kept as unknown`);
+    warnings.push(`Generic type '${generic[1]}' is outside the VelarScript declaration bridge and was kept as unknown`);
     return unknownType;
   }
   const arrow = /^\(([^()]*)\)\s*=>\s*(.+)$/u.exec(value);
@@ -1065,7 +1065,7 @@ function parseTsType(
   if (value === "string") return stringType;
   if (value === "number") return numberType;
   if (value === "boolean") return boolType;
-  if (value === "void") return noneType;
+  if (value === "void") return nullType;
   if (value === "null" || value === "undefined") return { kind: "optional", inner: unknownType };
   if (value === "unknown" || value === "object") return unknownType;
   if (value === "any") {
@@ -1076,8 +1076,8 @@ function parseTsType(
   if (classType) return classType;
   const alias = aliases.get(value);
   if (alias && !stack.has(value)) return parseTsType(alias, aliases, warnings, new Set([...stack, value]), classTypes);
-  if (alias) warnings.push(`Recursive declaration '${value}' is outside the Velar declaration bridge and was kept as unknown`);
-  else warnings.push(`TypeScript type '${value}' is outside the Velar declaration bridge and was kept as unknown`);
+  if (alias) warnings.push(`Recursive declaration '${value}' is outside the VelarScript declaration bridge and was kept as unknown`);
+  else warnings.push(`TypeScript type '${value}' is outside the VelarScript declaration bridge and was kept as unknown`);
   return unknownType;
 }
 

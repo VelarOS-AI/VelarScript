@@ -4,22 +4,21 @@ type ActivityPayload:
     message: string
 
 const activityLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
     gap = 16px
-    padding = space(14px, 16px)
-    radius = 12px
+    padding = spacing(14px, 16px)
+    borderRadius = 12px
     background = rgb(17, 24, 46)
 
 const buttonLook = look:
-    padding = space(8px, 12px)
-    border = line(0px, transparent)
-    radius = 9px
+    padding = spacing(8px, 12px)
+    border = border(0px, color("transparent"))
+    borderRadius = 9px
     color = rgb(8, 16, 34)
     background = rgb(157, 172, 255)
-    cursor = pointer
-
+    cursor = "pointer"
 export component ActivityFeed:
     state message = "Activity has not been refreshed"
 

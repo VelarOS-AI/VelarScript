@@ -154,7 +154,7 @@ async function discoverVelarFiles(config: VelarProjectConfig): Promise<string[]>
       } else if (entry.isFile() && entry.name.endsWith(".vel")) {
         output.push(path);
         if (output.length > MAX_VELAR_PROJECT_MODULES) {
-          throw new RangeError(`A Velar workspace cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules`);
+          throw new RangeError(`A VelarScript workspace cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules`);
         }
       }
     }

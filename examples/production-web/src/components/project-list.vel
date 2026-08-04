@@ -8,35 +8,33 @@ def isHealthy(status: string) -> bool:
             return false
 
 const projectsLook = look:
-    display = grid
+    display = "grid"
     gap = 10px
     padding = 0
-    listStyle = undecorated
-
+    listStyle = "none"
 def projectLook(nested: bool) -> Look:
     return look:
-        overflow = hidden
-        radius = 12px
+        overflow = "hidden"
+        borderRadius = 12px
         background = nested ? rgb(24, 33, 61) : rgb(17, 24, 46)
 
 const summaryLook = look:
-    display = grid
-    columns = tracks(1fr, auto)
-    gap = space(8px, 18px)
-    padding = space(14px, 16px)
+    display = "grid"
+    gridTemplateColumns = tracks(1fr, "auto")
+    gap = spacing(8px, 18px)
+    padding = spacing(14px, 16px)
 
 const childrenLook = look:
-    display = grid
+    display = "grid"
     gap = 8px
     margin = 0
-    padding = edges(0px, 10px, 10px, 26px)
-    listStyle = undecorated
-
+    padding = spacing(0px, 10px, 10px, 26px)
+    listStyle = "none"
 const progressLook = look:
     gridColumn = "1 / -1"
     height = 5px
-    overflow = hidden
-    radius = pill
+    overflow = "hidden"
+    borderRadius = 9999px
     background = rgb(39, 50, 84)
 
 def progressFillLook(progress: number) -> Look:
@@ -59,9 +57,9 @@ export component ProjectList(items: List<ProjectSummary>):
                     <div class="progress-fill" look={progressFillLook(project.progress)}></div>
                 </div>
             </div>
-            {project.children.length > 0 ? <ul class="project-children" look={childrenLook}>
+            {project.children.size > 0 ? <ul class="project-children" look={childrenLook}>
                 {project.children.map(child => <ProjectBranch key={child.id} project={child} nested={true} />)}
-            </ul> : none}
+            </ul> : null}
         </li>
 
     return <ul class="projects" look={projectsLook} data-project-tree>

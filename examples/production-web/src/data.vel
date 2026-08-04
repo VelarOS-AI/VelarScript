@@ -8,7 +8,7 @@ export type ProjectSummary:
 export const projects: List<ProjectSummary> = [
     {
         id: "compiler",
-        name: "Velar Compiler",
+        name: "VelarScript Compiler",
         status: "Healthy",
         progress: 92,
         children: [
@@ -18,7 +18,7 @@ export const projects: List<ProjectSummary> = [
     },
     {
         id: "web",
-        name: "Velar Web",
+        name: "VelarScript Web",
         status: "Healthy",
         progress: 84,
         children: [
@@ -32,7 +32,7 @@ export const projects: List<ProjectSummary> = [
         status: "Integrating",
         progress: 76,
         children: [
-            {id: "velar-integration", name: "Velar Integration", status: "Healthy", progress: 82, children: []},
+            {id: "velar-integration", name: "VelarScript Integration", status: "Healthy", progress: 82, children: []},
         ],
     },
 ]

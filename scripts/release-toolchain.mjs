@@ -28,14 +28,14 @@ async function main(arguments_) {
   if (command === "rehearse" || command === "candidate") {
     const outputDirectory = parseOutputDirectory(rest, command === "rehearse" ? defaultOutput : join(root, "release", "candidate"));
     const result = await createToolchainRelease(outputDirectory, command);
-    process.stdout.write(`${command === "candidate" ? "Created Velar release candidate" : "Velar publication rehearsal passed"} -> ${result.outputDirectory}\n`);
+    process.stdout.write(`${command === "candidate" ? "Created VelarScript release candidate" : "VelarScript publication rehearsal passed"} -> ${result.outputDirectory}\n`);
     return 0;
   }
   if (command === "verify") {
     const outputDirectory = rest.length === 0 ? defaultOutput : resolve(root, rest[0]);
     if (rest.length > 1) throw new Error("verify accepts at most one release directory");
     await verifyToolchainRelease(outputDirectory);
-    process.stdout.write(`Verified Velar toolchain release -> ${outputDirectory}\n`);
+    process.stdout.write(`Verified VelarScript toolchain release -> ${outputDirectory}\n`);
     return 0;
   }
   process.stderr.write("Usage: release-toolchain.mjs <rehearse|candidate|verify> [--output-dir <directory>]\n");

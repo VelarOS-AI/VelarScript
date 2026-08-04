@@ -4,22 +4,41 @@ export interface FormatOptions {
   readonly indentWidth?: number;
 }
 
+type InlineKind = "word" | "literal" | "string" | "operator" | "open" | "close" | "comma" | "colon" | "dot" | "at" | "jsx" | "comment";
+
+interface InlineToken {
+  readonly kind: InlineKind;
+  readonly text: string;
+  readonly generic?: boolean;
+}
+
+const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%="] as const;
+const genericNames = new Set(["List", "Set", "Map", "Promise"]);
+const binaryWords = new Set(["and", "or", "in", "is"]);
+const prefixWords = new Set(["not", "await"]);
+
 /**
- * Conservative source formatter for the Core language. It owns line endings,
- * indentation width, trailing whitespace, and the final newline while leaving
- * strings, comments, and expression layout untouched.
+ * Formats VelarScript source without round-tripping through generated JavaScript.
+ * The formatter tokenizes each logical source line so strings, comments, JSX,
+ * unit literals, Look hooks, operators, named arguments, and type syntax retain
+ * their meaning while whitespace and indentation become canonical.
  */
 export function formatSource(text: string, options: FormatOptions = {}): string {
-  if (text.length > MAX_VELAR_SOURCE_CODE_UNITS) throw new RangeError("A Velar source module cannot exceed 4 MiB");
+  if (text.length > MAX_VELAR_SOURCE_CODE_UNITS) throw new RangeError("A VelarScript source module cannot exceed 4 MiB");
   const indentWidth = options.indentWidth ?? 4;
+  if (!Number.isSafeInteger(indentWidth) || indentWidth < 1 || indentWidth > 16) {
+    throw new RangeError("VelarScript formatter indentWidth must be an integer from 1 through 16");
+  }
+
   const lines = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
   const indentation = [0];
   const formatted: string[] = [];
+  let jsxDepth = 0;
 
   for (const original of lines) {
     const line = original.replace(/[ \t]+$/u, "");
     if (line.trim().length === 0) {
-      formatted.push("");
+      if (formatted.length > 0 && formatted.at(-1) !== "") formatted.push("");
       continue;
     }
 
@@ -33,9 +52,274 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
       while (indentation.length > 1 && width < (indentation.at(-1) ?? 0)) indentation.pop();
       if (width !== (indentation.at(-1) ?? 0)) indentation.push(width);
     }
-    formatted.push(`${" ".repeat((indentation.length - 1) * indentWidth)}${content}`);
+    formatted.push(`${" ".repeat((indentation.length - 1) * indentWidth)}${jsxDepth > 0 ? content : formatInline(content)}`);
+    jsxDepth = nextJsxDepth(content, jsxDepth);
   }
 
   while (formatted.at(-1) === "") formatted.pop();
   return `${formatted.join("\n")}\n`;
+}
+
+function nextJsxDepth(source: string, currentDepth: number): number {
+  let depth = currentDepth;
+  let index = 0;
+  if (depth === 0) {
+    const start = jsxStart(source);
+    if (start === -1) return 0;
+    index = start;
+  }
+  while (index < source.length) {
+    if (source.startsWith("<!--", index)) {
+      const end = source.indexOf("-->", index + 4);
+      if (end === -1) return depth;
+      index = end + 3;
+      continue;
+    }
+    if (source[index] !== "<" || !/[A-Za-z/>]/u.test(source[index + 1] ?? "")) {
+      index += 1;
+      continue;
+    }
+    const closing = source[index + 1] === "/";
+    let cursor = index + (closing ? 2 : 1);
+    const nameStart = cursor;
+    while (/[A-Za-z0-9_.:-]/u.test(source[cursor] ?? "")) cursor += 1;
+    const name = source.slice(nameStart, cursor);
+    const fragment = name === "" && source[cursor] === ">";
+    if (!name && !fragment) {
+      index += 1;
+      continue;
+    }
+    let quote = "";
+    let braces = 0;
+    while (cursor < source.length) {
+      const character = source[cursor++]!;
+      if (quote) {
+        if (character === "\\") cursor += 1;
+        else if (character === quote) quote = "";
+      } else if (character === '"' || character === "'") quote = character;
+      else if (character === "{") braces += 1;
+      else if (character === "}") braces = Math.max(0, braces - 1);
+      else if (character === ">" && braces === 0) break;
+    }
+    const tag = source.slice(index, cursor);
+    const selfClosing = /\/\s*>$/u.test(tag) || (name === name.toLowerCase() && formatterVoidTags.has(name));
+    if (closing) depth = Math.max(0, depth - 1);
+    else if (!selfClosing) depth += 1;
+    index = cursor;
+  }
+  return depth;
+}
+
+function jsxStart(source: string): number {
+  for (let index = 0; index < source.length - 1; index += 1) {
+    if (source[index] !== "<" || !/[A-Za-z>]/u.test(source[index + 1] ?? "")) continue;
+    const prefix = source.slice(0, index).trimEnd();
+    if (prefix === "" || /(?:\breturn|=>|=|\(|\[|\{|,|:|\?)$/u.test(prefix)) return index;
+  }
+  return -1;
+}
+
+const formatterVoidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+
+function formatInline(source: string): string {
+  const tokens = tokenizeInline(source);
+  if (tokens.length === 0) return "";
+  let output = "";
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const previous = tokens[index - 1];
+    const next = tokens[index + 1];
+    if (previous && needsSpace(previous, token, next, tokens, index)) output += " ";
+    output += token.text;
+  }
+  return output;
+}
+
+function tokenizeInline(source: string): InlineToken[] {
+  const tokens: InlineToken[] = [];
+  const genericStack: boolean[] = [];
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index]!;
+    if (character === " " || character === "\t") {
+      index += 1;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "/") {
+      tokens.push({ kind: "comment", text: source.slice(index).trimEnd() });
+      break;
+    }
+    if ((character === "f" && (source[index + 1] === '"' || source[index + 1] === "'")) || character === '"' || character === "'") {
+      const start = index;
+      const quote = character === "f" ? source[index + 1]! : character;
+      index += character === "f" ? 2 : 1;
+      while (index < source.length) {
+        const current = source[index++]!;
+        if (current === "\\" && index < source.length) index += 1;
+        else if (current === quote) break;
+      }
+      tokens.push({ kind: "string", text: source.slice(start, index) });
+      continue;
+    }
+    if (character === "<" && beginsJsx(tokens, source, index)) {
+      tokens.push({ kind: "jsx", text: source.slice(index).trimEnd() });
+      break;
+    }
+    if (/[A-Za-z_]/u.test(character)) {
+      const start = index++;
+      while (index < source.length && /[A-Za-z0-9_]/u.test(source[index]!)) index += 1;
+      const value = source.slice(start, index);
+      tokens.push({ kind: value === "true" || value === "false" || value === "null" ? "literal" : "word", text: value });
+      continue;
+    }
+    if (/[0-9]/u.test(character)) {
+      const start = index++;
+      while (index < source.length && /[0-9]/u.test(source[index]!)) index += 1;
+      if (source[index] === "." && /[0-9]/u.test(source[index + 1] ?? "")) {
+        index += 1;
+        while (index < source.length && /[0-9]/u.test(source[index]!)) index += 1;
+      }
+      if ((source[index] === "e" || source[index] === "E") && /[+\-0-9]/u.test(source[index + 1] ?? "")) {
+        index += 1;
+        if (source[index] === "+" || source[index] === "-") index += 1;
+        while (index < source.length && /[0-9]/u.test(source[index]!)) index += 1;
+      }
+      while (index < source.length && /[A-Za-z%]/u.test(source[index]!)) index += 1;
+      tokens.push({ kind: "literal", text: source.slice(start, index) });
+      continue;
+    }
+    if (character === ">" && genericStack.at(-1) === true) {
+      genericStack.pop();
+      tokens.push({ kind: "close", text: character, generic: true });
+      index += 1;
+      continue;
+    }
+    const operator = multiCharacterOperators.find((candidate) => source.startsWith(candidate, index));
+    if (operator) {
+      tokens.push({ kind: operator === "?." ? "dot" : "operator", text: operator });
+      index += operator.length;
+      continue;
+    }
+    if (character === "@") {
+      tokens.push({ kind: "at", text: character });
+      index += 1;
+      continue;
+    }
+    if (character === ".") {
+      tokens.push({ kind: "dot", text: character });
+      index += 1;
+      continue;
+    }
+    if (character === ",") {
+      tokens.push({ kind: "comma", text: character });
+      index += 1;
+      continue;
+    }
+    if (character === ":") {
+      tokens.push({ kind: "colon", text: character });
+      index += 1;
+      continue;
+    }
+    if (character === "(" || character === "[" || character === "{") {
+      tokens.push({ kind: "open", text: character });
+      index += 1;
+      continue;
+    }
+    if (character === ")" || character === "]" || character === "}") {
+      tokens.push({ kind: "close", text: character });
+      index += 1;
+      continue;
+    }
+    if (character === "<") {
+      const previous = tokens.at(-1);
+      const generic = previous?.kind === "word" && (genericNames.has(previous.text) || /^[A-Z]/u.test(previous.text));
+      if (generic) genericStack.push(true);
+      tokens.push({ kind: generic ? "open" : "operator", text: character, generic });
+      index += 1;
+      continue;
+    }
+    if (character === ">") {
+      tokens.push({ kind: "operator", text: character });
+      index += 1;
+      continue;
+    }
+    if ("=+-*/%?|".includes(character)) {
+      tokens.push({ kind: "operator", text: character });
+      index += 1;
+      continue;
+    }
+    tokens.push({ kind: "operator", text: character });
+    index += 1;
+  }
+  return tokens;
+}
+
+function beginsJsx(tokens: readonly InlineToken[], source: string, index: number): boolean {
+  if (!/[A-Za-z>]/u.test(source[index + 1] ?? "")) return false;
+  const previous = tokens.at(-1);
+  return !previous || previous.text === "return" || previous.text === "=>" || previous.text === "="
+    || previous.text === "(" || previous.text === "[" || previous.text === "{" || previous.text === ","
+    || previous.text === ":" || previous.text === "?";
+}
+
+function needsSpace(
+  previous: InlineToken,
+  current: InlineToken,
+  next: InlineToken | undefined,
+  tokens: readonly InlineToken[],
+  index: number,
+): boolean {
+  if (current.kind === "comment") return true;
+  if (previous.kind === "comment") return false;
+  if (current.kind === "jsx") return previous.kind !== "open" && previous.kind !== "comma" && previous.kind !== "colon";
+  if (current.kind === "comma" || current.kind === "close" || current.kind === "dot" || current.kind === "colon") {
+    if (current.kind === "colon" && isTernaryColon(tokens, index)) return true;
+    return false;
+  }
+  if (previous.kind === "dot" || previous.kind === "at") return false;
+  if (current.kind === "at") return previous.kind !== "open" && previous.kind !== "operator";
+  if (previous.kind === "comma" || previous.kind === "colon") return true;
+  if (previous.kind === "open") return false;
+  if (current.kind === "open") {
+    if (previous.text === "return" || previous.text === "throw" || previous.text === "assert") return true;
+    if (current.text === "{" && (previous.text === "import" || previous.text === "export")) return true;
+    if (current.generic || current.text === "[" && (previous.kind === "word" || previous.kind === "close")) return false;
+    return previous.kind !== "word" && previous.kind !== "close" && previous.kind !== "literal";
+  }
+  if (previous.kind === "close" && previous.generic) return current.text !== "?";
+  if (previous.kind === "operator" || current.kind === "operator") {
+    if (previous.text === "..." || current.text === "...") return false;
+    if (current.text === "?" && isOptionalQuestion(current, next, tokens[index + 2])) return false;
+    if (previous.text === "?" && isOptionalQuestion(previous, current, next)) return true;
+    if (isUnaryOperator(previous, tokens[index - 2])) return previous.text === "not" || previous.text === "await";
+    if (isUnaryOperator(current, previous)) return true;
+    return true;
+  }
+  if ((previous.kind === "word" && (binaryWords.has(previous.text) || prefixWords.has(previous.text)))
+    || (current.kind === "word" && binaryWords.has(current.text))) return true;
+  return true;
+}
+
+function isUnaryOperator(token: InlineToken, previous: InlineToken | undefined): boolean {
+  if (prefixWords.has(token.text)) return true;
+  if (token.text !== "+" && token.text !== "-") return false;
+  return !previous || previous.kind === "operator" || previous.kind === "open" || previous.kind === "comma" || previous.kind === "colon";
+}
+
+function isOptionalQuestion(token: InlineToken, next: InlineToken | undefined, after: InlineToken | undefined): boolean {
+  if (token.text !== "?") return false;
+  return !next || next.kind === "comma" || next.kind === "close" || next.kind === "colon"
+    || next.text === "=" || next.text === "|" || after?.text === "=>";
+}
+
+function isTernaryColon(tokens: readonly InlineToken[], colonIndex: number): boolean {
+  let depth = 0;
+  for (let index = colonIndex - 1; index >= 0; index -= 1) {
+    const token = tokens[index]!;
+    if (token.kind === "close") depth += 1;
+    else if (token.kind === "open") depth -= 1;
+    else if (depth === 0 && token.text === "?") return true;
+    else if (depth === 0 && token.kind === "colon") return false;
+  }
+  return false;
 }

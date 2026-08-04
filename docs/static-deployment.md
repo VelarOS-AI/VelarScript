@@ -1,6 +1,6 @@
-# Velar Static Deployment Contract
+# VelarScript Static Deployment Contract
 
-Status: production contract retained for Velar 0.9 internal development
+Status: production contract retained for VelarScript 0.10 internal development
 
 `velar build` creates a complete static Web application in an isolated staging
 directory. Only a successful build replaces the configured output directory.
@@ -51,7 +51,7 @@ authentication. Authenticity still requires a trusted release signature or
 provenance over the build manifest in the external release pipeline.
 
 Production source maps are not emitted by default because linked maps contain
-Velar source content. An application may opt in with
+VelarScript source content. An application may opt in with
 `web.build.sourceMaps: true`; the policy is recorded in `velar-build.json`, and
 maps participate in the exact file inventory and `buildId`. Repeated builds of
 identical inputs must produce identical manifest and asset bytes even when the
@@ -103,10 +103,10 @@ from becoming `index.html`. These are the provider's
 documented file-based [custom-header](https://docs.netlify.com/manage/routing/headers/)
 and [rewrite](https://docs.netlify.com/manage/routing/redirects/rewrites-proxies/)
 contracts. The adapter files are hashed assets in `velar-build.json`; a public
-asset cannot override them. Root HTML, fallback HTML, and both Velar manifests
+asset cannot override them. Root HTML, fallback HTML, and both VelarScript manifests
 have explicit `no-cache` rules; content-hashed assets remain immutable.
 
-The Netlify adapter currently rejects non-root `web.base`. Velar's neutral
+The Netlify adapter currently rejects non-root `web.base`. VelarScript's neutral
 manifest and local production server support a subpath, but silently pretending
 that Netlify will strip that prefix would misroute physical assets. A future
 path-aware adapter must prove that mapping before this restriction is relaxed.

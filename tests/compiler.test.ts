@@ -7,7 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { compile as compileCore, describeType, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { isAssignable, parseType, sameType } from "../packages/compiler/src/types.ts";
+import { isAssignable, sameType } from "../packages/compiler/src/types.ts";
 import { compileProject as compileProjectCore, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
@@ -117,7 +117,7 @@ def mark(value: string) -> string:
     print(value)
     return value
 
-const label = describe(excited: true, name: mark("name"), count: 2)
+const label = describe(excited=true, name=mark("name"), count=2)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -129,13 +129,15 @@ const label = describe(excited: true, name: mark("name"), count: 2)
 def greet(name: string, count: number = 1):
     print(name)
 
-greet(missing: "Velar")
+greet(missing="Velar")
 `.trimStart());
   assert.match(unknown.diagnostics.map((item) => item.message).join("\n"), /Unknown named argument 'missing'/u);
-  const duplicate = compileCore(`def greet(name: string):\n    print(name)\n\ngreet(name: "Velar", name: "Again")\n`);
+  const duplicate = compileCore(`def greet(name: string):\n    print(name)\n\ngreet(name="Velar", name="Again")\n`);
   assert.match(duplicate.diagnostics.map((item) => item.message).join("\n"), /more than once/u);
-  const positional = compileCore(`def greet(name: string, count: number = 1):\n    print(name)\n\ngreet(name: "Velar", 2)\n`);
+  const positional = compileCore(`def greet(name: string, count: number = 1):\n    print(name)\n\ngreet(name="Velar", 2)\n`);
   assert.match(positional.diagnostics.map((item) => item.message).join("\n"), /Positional arguments must appear before named arguments/u);
+  const colon = compileCore(`def greet(name: string):\n    print(name)\n\ngreet(name: "Velar")\n`);
+  assert.match(colon.diagnostics.map((item) => item.message).join("\n"), /uses ':' rather than '='/u);
 });
 
 test("keeps Web syntax outside the Core language unless the project loads the Web extension", () => {
@@ -151,19 +153,19 @@ test("keeps Web syntax outside the Core language unless the project loads the We
 test("else if chains preserve rejected facts, complete returns, and readable JavaScript", () => {
   const result = compile(`
 def describe(value: number?, fallback: string?) -> string:
-    if value == none:
+    if value == null:
         return fallback ?? "missing"
     else if value > 10:
         return f"high:{value}"
-    else if fallback != none:
+    else if fallback != null:
         return f"{fallback}:{value}"
     else:
         return f"low:{value}"
 
-print(describe(none, none))
-print(describe(12, none))
+print(describe(null, null))
+print(describe(12, null))
 print(describe(4, "steady"))
-print(describe(2, none))
+print(describe(2, null))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -201,20 +203,28 @@ def incrementField(payload: Payload) -> number:
         return payload.value + 1
 
 def optionalIncrement(value: number?) -> number:
-    if value is none:
+    if value is null:
         return 0
     else:
         return value + 1
 
 component Preview(value: DisplayValue):
-    return <div><p if={value is string}>{value.length}</p><p else-if={value is number}>{value + 1}</p><p else>{value ? "yes" : "no"}</p></div>
+    def content() -> WebNode:
+        if value is string:
+            return <p>{value.length}</p>
+        else if value is number:
+            return <p>{value + 1}</p>
+        else:
+            return <p>{value ? "yes" : "no"}</p>
+
+    return <div>{content()}</div>
 
 print(display("velar"))
 print(display(4))
 print(display(true))
 print(increment(4))
 print(incrementField({value: 9}))
-print(optionalIncrement(none))
+print(optionalIncrement(null))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -247,7 +257,7 @@ class Calculator:
         return result
 
 const tail = [2, 3]
-const count = (...values: string) => values.length
+const count = (...values: string) => values.size
 print(total(1, ...tail))
 print(total(1, 2, 3))
 print(Calculator().total(1, ...tail))
@@ -330,7 +340,7 @@ const add: (
     first,
     second,
 )
-`.trimStart(), { analysis: { imports: new Map([["logger", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "none" } }]]) } });
+`.trimStart(), { analysis: { imports: new Map([["logger", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "null" } }]]) } });
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "add")?.type, "(number, number) -> Promise<number>");
@@ -411,7 +421,7 @@ print(await forwardAlias(delayed))
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "forward")?.type, "(value: number) -> Promise<number>");
-  assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "save")?.type, "action () -> Promise<number?>");
+  assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "save")?.type, "action () -> Promise<number>");
   assert.match(result.code ?? "", /async function forward\(value\) \{\s*return inner\(value\);/u);
   assert.match(result.code ?? "", /async load\(value\) \{\s*const self = this;\s*return inner\(value\);/u);
   const execution = executeModule(result.code ?? "");
@@ -437,7 +447,7 @@ print(await task())
   for (const source of [
     `async def inner() -> number:\n    return 1\nasync def invalid(value: number = await inner()) -> number:\n    return value\n`,
     `async def inner() -> number:\n    return 1\nconst invalid = (value: number = await inner()) => value\n`,
-    `async def inner() -> number:\n    return 1\nclass Invalid(value: number = await inner()):\n    pass\n`,
+    `async def inner() -> number:\n    return 1\nclass Invalid:\n    const value: number\n\n    constructor(value: number = await inner()):\n        self.value = value\n`,
     `async def inner() -> number:\n    return 1\ncomponent Invalid(value: number = await inner()):\n    return <p>{value}</p>\n`,
   ]) {
     const invalid = compile(source);
@@ -453,7 +463,7 @@ test("async declarations annotate the resolved value instead of a nested Promise
     `component Invalid:\n    action save() -> Promise<number>:\n        return 1\n    return <p>Invalid</p>\n`,
     `extern module "library":\n    export async def load() -> Promise<number>\n`,
     `async def invalid() -> Promise<number> | string:\n    return 1\n`,
-    `async def invalid() -> Promise<number>?:\n    return none\n`,
+    `async def invalid() -> Promise<number>?:\n    return null\n`,
     `type LaterNumber = Promise<number>\nasync def invalid() -> LaterNumber:\n    return 1\n`,
   ]) {
     const invalid = compile(source);
@@ -548,15 +558,15 @@ class NumberReporter extends Reporter:
 
 test("function types make component callbacks explicit without a second type system", () => {
   const result = compile(`
-component Choice(label: string, onChoose: (string) -> none):
+component Choice(label: string, onChoose: (string) -> null):
     return <button type="button" on:click={() => onChoose(label)}>{label}</button>
 
 component App:
-    state selected = "none"
+    state selected = "null"
 
-    def choose(label: string) -> none:
+    def choose(label: string) -> null:
         selected = label
-        return none
+        return null
 
     return <main><Choice label="Velar" onChoose={choose} /><p>{selected}</p></main>
 `.trimStart());
@@ -564,7 +574,7 @@ component App:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /onChoose\(label\)/u);
   const callback = result.semanticIndex.symbols.find((item) => item.kind === "parameter" && item.name === "onChoose");
-  assert.equal(callback?.type, "(string) -> none");
+  assert.equal(callback?.type, "(string) -> null");
   assert.equal(describeType({
     kind: "function",
     parameters: [{ kind: "string" }],
@@ -572,20 +582,26 @@ component App:
     rest: { kind: "number" },
     result: { kind: "bool" },
   }), "(string, ...number) -> bool");
-  assert.equal(describeType(parseType("(() -> none)?")), "(() -> none)?");
-  assert.equal(describeType(parseType("(string | number)?")), "(string | number)?");
+  assert.equal(describeType({
+    kind: "optional",
+    inner: { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "null" } },
+  }), "(() -> null)?");
+  assert.equal(describeType({
+    kind: "optional",
+    inner: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] },
+  }), "(string | number)?");
   assert.equal(describeType({
     kind: "function",
     parameters: [{ kind: "optional", inner: { kind: "string" } }],
     requiredParameters: 0,
-    result: { kind: "none" },
-  }), "(string? = default) -> none");
+    result: { kind: "null" },
+  }), "(string? = default) -> null");
 
   const requiredCallback = {
     kind: "function" as const,
     parameters: [{ kind: "string" as const }],
     requiredParameters: 1,
-    result: { kind: "none" as const },
+    result: { kind: "null" as const },
   };
   const defaultableCallback = { ...requiredCallback, requiredParameters: 0 };
   const emptyEnvironment = {
@@ -598,19 +614,19 @@ component App:
 
   const grouped = compile(`
 type MaybeValue = (string | number)?
-const callback: (() -> none)? = none
+const callback: (() -> null)? = null
 const value: MaybeValue = "ready"
 `.trimStart());
   assert.deepEqual(grouped.diagnostics, []);
 
   const invalid = compile(`
-component Choice(onChoose: (string) -> none):
+component Choice(onChoose: (string) -> null):
     return <button type="button" on:click={() => onChoose("value")}>Choose</button>
 
 component App:
-    return <Choice onChoose={(value: number) => none} />
+    return <Choice onChoose={(value: number) => null} />
 `.trimStart());
-  assert.ok(invalid.diagnostics.some((item) => /Cannot assign \(value: number\) -> none to \(string\) -> none/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /Cannot assign \(value: number\) -> null to \(string\) -> null/u.test(item.message)));
 
   const incompatibleDefaultOverride = compile(`
 class Greeter:
@@ -623,12 +639,12 @@ class FormalGreeter extends Greeter:
 `.trimStart());
   assert.ok(incompatibleDefaultOverride.diagnostics.some((item) => /must keep the base method signature \(name: string = default\) -> string/u.test(item.message)));
 
-  const malformed = compile("const callback: (...string, number) -> none = (value, next) => none\n");
+  const malformed = compile("const callback: (...string, number) -> null = (value, next) => null\n");
   assert.ok(malformed.diagnostics.some((item) => item.code === "VEL2016" && /rest function type parameter must be final/u.test(item.message)));
 
   const runtime = compile(`
 type Handler:
-    run: (string) -> none
+    run: (string) -> null
 
 const handler = Handler.parse({run: value => print(value)})
 print(handler is Handler)
@@ -640,7 +656,7 @@ handler.run("checked")
   assert.equal(execution.stdout, "true\nchecked\n");
 });
 
-test("omitted results mean none and end naturally while value functions stay explicit", () => {
+test("omitted results mean null and end naturally while value functions stay explicit", () => {
   const result = compile(`
 export def record(value: string):
     print(value)
@@ -653,12 +669,12 @@ component SaveButton:
 
     return <button type="button" on:click={save}>{saved ? "Saved" : "Save"}</button>
 
-print(record("saved") == none)
+print(record("saved") == null)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.equal(describeType(result.moduleInterface.exports.get("record")!), "(value: string) -> none");
-  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "record")?.type, "(value: string) -> none");
+  assert.equal(describeType(result.moduleInterface.exports.get("record")!), "(value: string) -> null");
+  assert.equal(result.semanticIndex.symbols.find((item) => item.name === "record")?.type, "(value: string) -> null");
   assert.match(result.code ?? "", /function record\(value\) \{\s*console\.log\(value\);\s*return null;\s*\}/u);
   assert.match(result.code ?? "", /__velarAction\(async \(\) => \{\s*saved\.set\(true\);\s*return null;\s*\}/u);
   const execution = executeModule(result.code ?? "");
@@ -676,14 +692,14 @@ def title(ready: bool) -> string:
 def answer():
     return 42
 `.trimStart());
-  assert.ok(implicitValue.diagnostics.some((item) => /Cannot assign number to none/u.test(item.message)));
+  assert.ok(implicitValue.diagnostics.some((item) => /Cannot assign number to null/u.test(item.message)));
 
   const asynchronous = compile(`
 async def save():
     print("saved")
 `.trimStart());
   assert.deepEqual(asynchronous.diagnostics, []);
-  assert.equal(asynchronous.semanticIndex.symbols.find((item) => item.name === "save")?.type, "() -> Promise<none>");
+  assert.equal(asynchronous.semanticIndex.symbols.find((item) => item.name === "save")?.type, "() -> Promise<null>");
 });
 
 test("assertions enforce runtime invariants and narrow following stable values", () => {
@@ -756,7 +772,7 @@ const callback: () -> number = () => value
 test("transparent type aliases improve names without changing assignability", () => {
   const result = compile(`
 type Identifier = string
-type Handler = (Identifier) -> none
+type Handler = (Identifier) -> null
 
 type User:
     name: string
@@ -789,13 +805,13 @@ parsed("checked")
   const recursive = compile("type Loop = List<Loop>\n");
   assert.ok(recursive.diagnostics.some((item) => item.code === "VEL4017" && /recursive/u.test(item.message)));
 
-  const unknown = compile("type MissingValue = Missing\nconst value: MissingValue = none\n");
+  const unknown = compile("type MissingValue = Missing\nconst value: MissingValue = null\n");
   assert.ok(unknown.diagnostics.some((item) => /Unknown type 'Missing'/u.test(item.message)));
 });
 
-test("lowers none and readable logical operators", () => {
+test("lowers null and readable logical operators", () => {
   const result = compile(`
-const missing = none
+const missing = null
 const visible = true and not false
 `.trimStart());
 
@@ -885,7 +901,7 @@ print(stopped)
 print(lexical)
 print(equality)
 print(await inRange())
-print(order.length)
+print(order.size)
 print(order[0])
 print(order[1])
 print(order[2])
@@ -931,7 +947,7 @@ def numeric(value: number?) -> string:
     match value:
         case -1:
             return "negative"
-        case none:
+        case null:
             return "missing"
         else:
             return "number"
@@ -940,12 +956,12 @@ print(describe("ready"))
 print(describe("failed"))
 print(describe("other"))
 print(numeric(-1))
-print(numeric(none))
+print(numeric(null))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /switch \(value\)/u);
-  assert.match(result.code ?? "", /case "ready":\n\s+case "done":/u);
+  assert.match(result.code ?? "", /const __velarMatchValue\d+ = value;/u);
+  assert.match(result.code ?? "", /__velarMatchValue\d+ === "ready" \|\| __velarMatchValue\d+ === "done"/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "ok\nbad\nunknown\nnegative\nmissing\n");
@@ -978,8 +994,72 @@ def label(value: string) -> string:
   ]) {
     const result = compile(source);
     assert.equal(result.code, null);
-    assert.ok(result.diagnostics.some((item) => item.code === "VEL2001" || item.code === "VEL2015"), source);
+    assert.ok(result.diagnostics.some((item) => item.code === "VEL2001" || item.code === "VEL2015" || item.code === "VEL4001"), source);
   }
+});
+
+test("match supports type patterns, bindings, guards, and single evaluation", () => {
+  const result = compile(`
+type User:
+    name: string
+
+class Animal:
+    pass
+
+class Dog extends Animal:
+    pass
+
+let evaluations = 0
+
+def source() -> string | number | User | null:
+    evaluations += 1
+    return "ready"
+
+def describe(value: string | number | User | null) -> string:
+    match value:
+        case string as text if text == "ready":
+            return "ready text"
+        case string as text:
+            return text
+        case number as amount if amount > 10:
+            return "large"
+        case number as amount:
+            return str(amount)
+        case User as user:
+            return user.name
+        case null:
+            return "missing"
+
+def animalKind(value: Animal) -> string:
+    match value:
+        case Dog as dog:
+            return "dog"
+        case Animal:
+            return "animal"
+
+const user: User = {name: "Ada"}
+print(describe(source()))
+print(evaluations)
+print(describe(user))
+print(animalKind(Dog()))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /const text = __velarMatchValue\d+;/u);
+  assert.match(result.code ?? "", /typeof __velarMatchValue\d+ === "string"/u);
+  assert.match(result.code ?? "", /__velarMatchValue\d+ instanceof Dog/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "ready text\n1\nAda\ndog\n");
+
+  const impossible = compile(`
+def inspect(value: number) -> null:
+    match value:
+        case string as text:
+            print(text)
+    return null
+`.trimStart());
+  assert.ok(impossible.diagnostics.some((item) => /can never match number/u.test(item.message)));
 });
 
 test("match participates in component reactivity and scoped case bindings", () => {
@@ -1001,7 +1081,7 @@ component Badge:
     return <p>{label()}</p>
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /switch \(status\.get\(\)\)/u);
+  assert.match(result.code ?? "", /const __velarMatchValue\d+ = status\.get\(\);/u);
 });
 
 test("string-backed enums model finite application states and match qualified members", () => {
@@ -1024,9 +1104,9 @@ def label(status: TaskStatus) -> string:
         case TaskStatus.done:
             return "Done"
 
-def persist(value: string) -> none:
+def persist(value: string) -> null:
     print(value)
-    return none
+    return null
 
 component StatusFilter:
     state selected: TaskStatus = TaskStatus.todo
@@ -1043,7 +1123,7 @@ print(label(parsed))
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "TaskStatus")?.kind, "enum");
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "parsed")?.type, "TaskStatus");
   assert.match(result.code ?? "", /export const TaskStatus = __velarRegisterType\(Object\.freeze/u);
-  assert.match(result.code ?? "", /case TaskStatus\.doing:/u);
+  assert.match(result.code ?? "", /__velarMatchValue\d+ === TaskStatus\.doing/u);
   assert.match(result.code ?? "", /TaskStatus\.is\(value\["status"\]\)/u);
   assert.match(result.code ?? "", /__velarBindValue\([^\n]+TaskStatus\.parse\)/u);
   const execution = executeModule(result.code ?? "");
@@ -1100,8 +1180,12 @@ test("throws only Error values, normalizes JavaScript failures, and preserves re
   const result = compile(`
 import js unsafe {explode} from "data:text/javascript,export function explode(){throw 'raw failure'}"
 
-class ValidationError(const code: string, const message: string) extends Error(message):
-    pass
+class ValidationError extends Error:
+    const code: string
+
+    constructor(code: string, message: string):
+        super(message)
+        self.code = code
 
 def bucket(value: number) -> number:
     if value < 0:
@@ -1166,11 +1250,11 @@ def label(value: number?) -> string:
 print(label(number("0")))
 print(label(number("  -12.5e1  ")))
 print(label(number(".5")))
-print(number("") == none)
-print(number("0x10") == none)
-print(number("12px") == none)
-print(number("Infinity") == none)
-print(number("1e999") == none)
+print(number("") == null)
+print(number("0x10") == null)
+print(number("12px") == null)
+print(number("Infinity") == null)
+print(number("1e999") == null)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -1203,8 +1287,7 @@ test("rejects ambient JavaScript coercion globals with intentional replacements"
 test("rejects legacy and discarded design surface with intentional diagnostics", () => {
   const cases = new Map([
     ["var value = 1\n", /let.*const.*var/],
-    ["const value = undefined\n", /none.*undefined/],
-    ["const value = null\n", /none.*null/],
+    ["const value = undefined\n", /null.*undefined/],
     ["const value = this\n", /self.*this/],
     ["const value = new Player()\n", /directly.*new/],
     ["eval(\"1\")\n", /does not expose 'eval'/],
@@ -1214,6 +1297,13 @@ test("rejects legacy and discarded design surface with intentional diagnostics",
     ["const value = item.__proto__\n", /prototype manipulation/],
     ["const value = 1 === 1\n", /equality is already strict/],
     ["const value = 1 !== 2\n", /inequality is already strict/],
+    ["const value = True\n", /Use 'true'.*lowercase/],
+    ["const value = False\n", /Use 'false'.*lowercase/],
+    ["const value: int = 1\n", /Use 'number'.*numeric type/],
+    ["if true:\n    pass\nelif false:\n    pass\n", /Use 'else if'/],
+    ["const value = true && false\n", /Use 'and'.*readable logical/],
+    ["const value = true || false\n", /Use 'or'.*readable logical/],
+    ["const value = !false\n", /Use 'not'.*readable logical/],
     ["schema User:\n    name: string\n", /Use 'type'.*no separate schema/],
     ["effect count:\n    print(count)\n", /internal to @velarscript\/web.*watch.*mounted.*cleanup/],
     ["onMounted()\n", /component-level 'mounted:'/],
@@ -1313,7 +1403,7 @@ test("compiler and CLI reject oversized source modules before parsing", async ()
     encoding: "utf8",
   });
   assert.equal(execution.status, 1);
-  assert.match(execution.stderr, /exceeds the 4 MiB Velar source-module limit/u);
+  assert.match(execution.stderr, /exceeds the 4 MiB VelarScript source-module limit/u);
 });
 
 test("compiler APIs contain deterministic malformed input without escaping internal exceptions", () => {
@@ -1369,13 +1459,13 @@ test("dev server exits cleanly after browser requests", async () => {
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   const deadline = Date.now() + 5_000;
-  while (!output.includes("Velar dev server:") && Date.now() < deadline) {
+  while (!output.includes("VelarScript dev server:") && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.match(output, /Velar dev server:/);
+  assert.match(output, /VelarScript dev server:/);
   const html = await (await fetch("http://127.0.0.1:42879/")).text();
   assert.match(html, /data-velar-error-overlay/);
-  assert.match(html, /Velar runtime error/);
+  assert.match(html, /VelarScript runtime error/);
   assert.match(html, /update\.errors\.length/);
   const javascript = await (await fetch("http://127.0.0.1:42879/main.js")).text();
   const generatedLines = javascript.split("\n");
@@ -1418,11 +1508,11 @@ test("dev server keeps the last good app behind compile-error overlays", async (
     while (!pattern.test(output) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.match(output, pattern);
   };
-  await waitForOutput(/Velar dev server:/u);
+  await waitForOutput(/VelarScript dev server:/u);
   const first = await fetch("http://127.0.0.1:42880/");
   assert.equal(first.status, 200);
   await writeFile(mainPath, "component App:\n    return <img />\n", "utf8");
-  await waitForOutput(/Velar app has \d+ error/u);
+  await waitForOutput(/VelarScript app has \d+ error/u);
   const retained = await fetch("http://127.0.0.1:42880/");
   assert.equal(retained.status, 200);
   assert.match(await retained.text(), /data-velar-error-overlay/u);
@@ -1453,14 +1543,14 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
   };
 
   try {
-    await waitForOutput(/Velar dev server:/u);
+    await waitForOutput(/VelarScript dev server:/u);
     const excessiveImports = Array.from(
       { length: 4_097 },
       (_, index) => `import js unsafe {value as value${index}} from "overflow-${index}"`,
     ).join("\n");
     await writeFile(mainPath, `${excessiveImports}\n${validSource("Too many")}`, "utf8");
-    await waitForOutput(/Velar rebuild failed: A browser project cannot import more than 4096 JavaScript packages/u, () => errors);
-    await waitForOutput(/Velar app has 1 error/u);
+    await waitForOutput(/VelarScript rebuild failed: A browser project cannot import more than 4096 JavaScript packages/u, () => errors);
+    await waitForOutput(/VelarScript app has 1 error/u);
     assert.equal(child.exitCode, null);
     const failed = await (await fetch("http://127.0.0.1:42881/__velar/status")).json() as {
       ready: boolean;
@@ -1473,7 +1563,7 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
     assert.match(retained, /Ready/u);
 
     await writeFile(mainPath, validSource("Recovered"), "utf8");
-    await waitForOutput(/Velar app rebuilt in/u);
+    await waitForOutput(/VelarScript app rebuilt in/u);
     const recovered = await (await fetch("http://127.0.0.1:42881/__velar/status")).json() as {
       ready: boolean;
       errors: string[];
@@ -1526,9 +1616,9 @@ test("dev server polling watcher reports project changes without native file eve
     assert.match(output, pattern);
   };
 
-  await waitForOutput(/Velar dev server:/u);
+  await waitForOutput(/VelarScript dev server:/u);
   await writeFile(mainPath, "component App:\n    return <main>After</main>\n\nmount(<App />, \"#app\")\n", "utf8");
-  await waitForOutput(/Velar app rebuilt in/u);
+  await waitForOutput(/VelarScript app rebuilt in/u);
   const javascript = await (await fetch("http://127.0.0.1:42882/main.js")).text();
   assert.match(javascript, /After/u);
   child.kill("SIGTERM");
@@ -1565,16 +1655,16 @@ mount(<App />, "#app")
     assert.match(output, pattern);
   };
   try {
-    await waitForOutput(/Velar dev server:/u);
+    await waitForOutput(/VelarScript dev server:/u);
     const initial = await (await fetch("http://127.0.0.1:42883/__velar/status")).json() as {
       apiVersion: string;
       compilation: { moduleCount: number; compiledModules: number; reusedModules: number };
     };
-    assert.equal(initial.apiVersion, "0.9");
+    assert.equal(initial.apiVersion, "0.10");
     assert.deepEqual(initial.compilation, { ...initial.compilation, moduleCount: 3, compiledModules: 3, reusedModules: 0 });
 
     await writeFile(storePath, "export const label = \"Updated\"\n", "utf8");
-    await waitForOutput(/Velar app rebuilt in .*\(2 compiled, 1 reused\)/u);
+    await waitForOutput(/VelarScript app rebuilt in .*\(2 compiled, 1 reused\)/u);
     const updated = await (await fetch("http://127.0.0.1:42883/__velar/status")).json() as {
       compilation: { compiledModules: number; reusedModules: number; affectedModules: number };
     };
@@ -1591,7 +1681,7 @@ mount(<App />, "#app")
   }
 });
 
-test("dev server watches installed Velar source package roots", async () => {
+test("dev server watches installed VelarScript source package roots", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dev-package-"));
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "library");
@@ -1624,9 +1714,9 @@ mount(<App />, "#app")
     while (!pattern.test(output) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.match(output, pattern);
   };
-  await waitForOutput(/Velar dev server:/u);
+  await waitForOutput(/VelarScript dev server:/u);
   await writeFile(packageEntry, "export const label = \"Updated library\"\n", "utf8");
-  await waitForOutput(/Velar app rebuilt in .*\(2 compiled, 0 reused\)/u);
+  await waitForOutput(/VelarScript app rebuilt in .*\(2 compiled, 0 reused\)/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
@@ -1669,9 +1759,9 @@ mount(<App />, "#app")
     while (!pattern.test(output) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.match(output, pattern);
   };
-  await waitForOutput(/Velar dev server:/u);
+  await waitForOutput(/VelarScript dev server:/u);
   await writeFile(declarationPath, "export declare function format(value: string): string;\n", "utf8");
-  await waitForOutput(/Velar app has 1 error/u);
+  await waitForOutput(/VelarScript app has 1 error/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
@@ -1696,7 +1786,7 @@ type User:
     name: string
     avatar: string?
 
-const raw = {name: "Ada", avatar: none}
+const raw = {name: "Ada", avatar: null}
 const user = User.parse(raw)
 const avatar = user?.avatar ?? "default.png"
 `.trimStart());
@@ -1728,7 +1818,7 @@ const id = randomUUID()
   assert.doesNotMatch(result.code ?? "", /import js/);
 });
 
-test("type-checks literal dynamic Velar imports and lazy components", async () => {
+test("type-checks literal dynamic VelarScript imports and lazy components", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dynamic-import-"));
   const mainPath = join(directory, "main.vel");
   const pagePath = join(directory, "page.vel");
@@ -1818,7 +1908,7 @@ const Feature = lazy(() => import("./feature.vel"), "Feature", BadLoading, BadFa
   assert.ok(reactive.failures.some((failure) => /exports reactive values/u.test(failure.message)));
 });
 
-test("production builds emit separately verified chunks for lazy Velar components", async () => {
+test("production builds emit separately verified chunks for lazy VelarScript components", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dynamic-build-"));
   const output = join(directory, "dist");
   await linkWorkspaceWebExtension(directory);
@@ -1871,11 +1961,59 @@ component Counter:
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.moduleInterface.reactiveExports.get("count"), "state");
   assert.equal(result.moduleInterface.reactiveExports.get("doubled"), "computed");
-  assert.equal(describeType(result.moduleInterface.exports.get("increment")!), "() -> none");
+  assert.equal(describeType(result.moduleInterface.exports.get("increment")!), "() -> null");
   assert.match(result.code ?? "", /export const count = __velarState\(0\)/);
   assert.match(result.code ?? "", /export const doubled = __velarComputed\(\(\) => \(count\.get\(\) \* 2\)/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarWatch\(\(\) => count\.get\(\)/);
+});
+
+test("reactive reference state cannot escape through aliases, calls, returns, or nested mutation", () => {
+  const invalid = compile(`
+type Store:
+    label: string
+    values: List<number>
+
+def mutate(values: List<number>):
+    values.append(2)
+
+component Child(values: List<number>):
+    return <span>{values.size}</span>
+
+component App:
+    state store: Store = {label: "ready", values: [1]}
+    const alias = store.values
+    const wrapped = {values: store.values}
+
+    def leak() -> List<number>:
+        return store.values
+
+    def update():
+        store.values.append(2)
+        mutate(store.values)
+
+    return <><button type="button" on:click={update}>{store.label}</button><Child values={store.values} /></>
+`.trimStart());
+
+  const messages = invalid.diagnostics.filter((item) => item.code === "VEL5046").map((item) => item.message);
+  assert.ok(messages.some((message) => /cannot be aliased/u.test(message)), messages.join("\n"));
+  assert.ok(messages.some((message) => /cannot escape by reference/u.test(message)), messages.join("\n"));
+  assert.ok(messages.some((message) => /mutating collection calls do not publish state/u.test(message)), messages.join("\n"));
+  assert.ok(messages.some((message) => /cannot cross an ordinary call/u.test(message)), messages.join("\n"));
+  assert.ok(messages.some((message) => /cannot cross a component prop/u.test(message)), messages.join("\n"));
+
+  const valid = compile(`
+component App:
+    state values: List<number> = [1]
+
+    def update():
+        const next = values.copy()
+        next.append(2)
+        values = next
+
+    return <button type="button" on:click={update}>{values.size}</button>
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
 });
 
 test("reactive module imports lower reads and reject ambiguous access", async () => {
@@ -2243,10 +2381,10 @@ test("project sessions reuse unaffected modules and invalidate reverse dependenc
   assert.match(restored.project.modules.find((module) => module.inputPath === storePath)?.result.code ?? "", /const value = 4/u);
 });
 
-test("0.9 Web APIs have one versioned typed compiler/runtime contract", async () => {
+test("0.10 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
   assert.equal(api.standardVersion, "0.4");
-  assert.equal(api.extensions["@velarscript/web"], "0.9");
+  assert.equal(api.extensions["@velarscript/web"], "0.10");
   assert.deepEqual(api.modules["velar/app"], ["onError", "reportError"]);
   assert.deepEqual(api.modules["velar/config"], ["has", "keys", "publicConfig"]);
   assert.deepEqual(api.modules["velar/web"], ["Head", "Link", "NavLink", "RouteContext", "Router", "announce", "back", "currentRoute", "domId", "forward", "lazy", "navigate", "redirect", "reload", "route"]);
@@ -2302,8 +2440,8 @@ component ItemPage(route: RouteContext):
     return <main>{route.params.get("id") ?? "missing"}</main>
 
 component App:
-    let form: Element? = none
-    let dialog: DialogElement? = none
+    let form: Element? = null
+    let dialog: DialogElement? = null
     const request = http.request("GET", "/api/items", {timeout: 100})
     const abortError = HttpAbortError("cancelled")
     const known = storage.has("items")
@@ -2350,9 +2488,9 @@ const configuredKeys = configKeys()
 const stopErrors = onError(report => print(report.error.message))
 reportError(Error("reported"), "manual", "contract")
 const local = storage.scope("app")
-const stopStorage = local.watch("item", Item, (next, previous) => print(next?.name ?? "none"))
+const stopStorage = local.watch("item", Item, (next, previous) => print(next?.name ?? "null"))
 const cached = await database("app").get("item", Item)
-const stopSession = session.watch("item", Item, (next, previous) => print(previous?.name ?? "none"))
+const stopSession = session.watch("item", Item, (next, previous) => print(previous?.name ?? "null"))
 const stopMedia = watchMedia("(prefers-color-scheme: dark)", matches => print(matches))
 const stopOnline = watchOnline(online => print(online))
 const stopVisibility = watchVisibility(visible => print(visible))
@@ -2364,7 +2502,7 @@ const selected = await pick()
 const upload = formBody()
 upload.field("label", "items")
 upload.files("attachments", selected)
-if selected.length > 0:
+if selected.size > 0:
     upload.file("primary", selected[0], "primary.txt")
 const uploadNames = upload.names()
 const hasUpload = upload.has("label")
@@ -2401,7 +2539,7 @@ reload()
 });
 
 test("the official Web package owns the framework contract and CLI only composes it", async () => {
-  assert.equal(VELAR_WEB_API_VERSION, "0.9");
+  assert.equal(VELAR_WEB_API_VERSION, "0.10");
   assert.equal(velarWebFramework.name, "@velarscript/web");
   assert.deepEqual([...velarWebFramework.modules], [...VELAR_WEB_MODULES]);
   assert.deepEqual([...webModuleInterfaces.keys()].sort(), [...VELAR_WEB_MODULES].sort());
@@ -2751,7 +2889,7 @@ console.log(reports.join("|"));
     ":Page not found:No route matches /missing",
     "Page not found",
     "true:false",
-    "render:router:A Velar Router target must render a component",
+    "render:router:A VelarScript Router target must render a component",
     "",
   ].join("\n"));
 });
@@ -3284,7 +3422,7 @@ console.log(reads);
   assert.equal(typeExecution.stdout, "false\n0\n");
 });
 
-test("0.9 Web APIs reject invalid typed boundaries before browser execution", async () => {
+test("0.10 Web APIs reject invalid typed boundaries before browser execution", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-web-api-invalid-"));
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
@@ -3320,8 +3458,8 @@ component BrokenRouterFallbacks:
     return <><WebRouter routes={[route("/", GoodRoute)]} fallback="missing" /><WebRouter routes={[route("/", GoodRoute)]} fallback={WrongRoute} /><Router fallback="local" /></>
 
 component WrongDialog:
-    let dialog: DialogElement? = none
-    let form: Element? = none
+    let dialog: DialogElement? = null
+    let form: Element? = null
     def inspect():
         if form:
             const unsupported = read(form, UnsupportedForm)
@@ -3350,7 +3488,7 @@ const invalidPartialWildcard = route("/items/file*", GoodRoute)
 const invalidWildcardName = route("/:wildcard/*", GoodRoute)
 const invalidComponent = route("/items", 42)
 const invalidFallback = textValue({name: "form"}, "name", 42)
-const invalidAfter = after("soon", () => none)
+const invalidAfter = after("soon", () => null)
 const invalidEvery = every(1, 42)
 focus("missing")
 blur("missing")
@@ -3359,7 +3497,7 @@ blur("missing")
   const project = await compileProject(entry);
   assert.deepEqual(project.failures, []);
   const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message).join("\n");
-  assert.match(messages, /Runtime parsing requires a Velar runtime type/u);
+  assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Cannot assign string to number/u);
   assert.match(messages, /Cannot assign \{ name: string \} to \{ name: string, size: number, type: string, modified: number \}/u);
   assert.match(messages, /Cannot assign Element to DialogElement/u);
@@ -3378,7 +3516,7 @@ blur("missing")
   assert.match(messages, /A Router fallback component cannot require props other than route: required/u);
   assert.match(messages, /A Router fallback component's route prop must accept RouteContext/u);
   assert.match(messages, /Cannot assign.*message.*number.*message.*string/u);
-  assert.match(messages, /Runtime parsing requires a Velar runtime type/u);
+  assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Cannot assign.*number.*error.*Error/u);
   assert.match(messages, /Cannot assign string to Error/u);
   assert.match(messages, /Cannot assign number to string/u);
@@ -3410,7 +3548,7 @@ import {SignupForm} from "./form-types.vel"
 import {read} from "velar/forms"
 
 component Signup:
-    let form: Element? = none
+    let form: Element? = null
     def submit():
         if form:
             const draft = read(form, SignupForm)
@@ -3486,7 +3624,7 @@ test("0.4 Core standard library combines typed Python ergonomics with explicit J
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
-import {all, chunk, compact, enumerate, find, flatten, groupBy, join as joinItems, partition, range, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
+import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, range, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
 import {capitalize, escapeHtml, findMatch, findMatches, isBlank, lines, lower, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, upper, words} from "velar/text"
 import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians, round} from "velar/math"
 import {clone as cloneJson, deepEqual, parse as parseJson, stableStringify, stringify, tryParse} from "velar/json"
@@ -3511,26 +3649,26 @@ const grouped = groupBy(users, user => user.role)
 const ordered = sortBy(users, user => user.name)
 const splitUsers = partition(users, user => user.role == "admin")
 const found = find(users, user => user.name == "Lin")
-const maybe: List<string?> = ["a", none, "b"]
+const maybe: List<string?> = ["a", null, "b"]
 print(sum(values))
 print(indexed[0].index)
 print(pairs[0].second)
-print(grouped.get("admin")?.length ?? 0)
+print(grouped.get("admin")?.size ?? 0)
 print(ordered[0].name)
-print(splitUsers.rest.length)
+print(splitUsers.rest.size)
 print(found?.name ?? "missing")
 print(joinItems(compact(maybe), ","))
-print(flatten(chunk(values, 2)).length)
-print(unique([1, 1, 2]).length)
-print(all(values, value => value > 0))
+print(flatten(chunk(values, 2)).size)
+print(unique([1, 1, 2]).size)
+print(every(values, value => value > 0))
 
 print(capitalize("vELAR"))
 print(title("next_generation web"))
 print(slug("  Velar Web 游戏  "))
 print(truncate("VelarScript", 6))
 print(normalizeWhitespace("  a   b  "))
-print(lines("a\\nb").length)
-print(words("a  b").length)
+print(lines("a\\nb").size)
+print(words("a  b").size)
 print(lower("ABC"))
 print(upper("abc"))
 print(isBlank("   "))
@@ -3540,14 +3678,14 @@ const firstPatternMatch = findMatch("ticket-42", "[0-9]+")
 print(firstPatternMatch?.value ?? "missing")
 print(firstPatternMatch?.index ?? -1)
 const patternMatches = findMatches("a1 b22", "([a-z])([0-9]+)")
-print(patternMatches.length)
+print(patternMatches.size)
 print(patternMatches[1].groups[1] ?? "missing")
 print(replaceMatches("a1 b22", "[0-9]+", "#"))
 print(joinItems(splitPattern("a, b; c", " *[,;] *"), "|"))
 print(matches("first\\nlast", "^last$", {multiline: true}))
 print(matches("a\\nb", "^a.b$", {dotAll: true}))
 const optionalPatternMatch = findMatch("b", "(a)?b")
-print(optionalPatternMatch?.groups[0] ?? "none")
+print(optionalPatternMatch?.groups?.[0] ?? "null")
 print(replaceMatches("x1", "[0-9]", "$&"))
 print(joinItems(splitPattern("a1b", "([0-9])"), "|"))
 try:
@@ -3588,23 +3726,23 @@ const retried = await retry(ready, 2)
 const serial = await series([ready, ready])
 await timeout(sleep(1), 100)
 print(doubled[2])
-print(waited.length)
+print(waited.size)
 print(retried)
-print(serial.length)
+print(serial.size)
 
 const info = parseUrl("/items?page=1", "https://example.com/app/")
 print(info.path)
-print(parseQuery("?page=2").get("page") ?? "none")
+print(parseQuery("?page=2").get("page") ?? "null")
 print(query({page: 3}))
 print(withQuery("/items", {page: 4}))
 print(withHash("/items", "top"))
 print(joinUrl("https://example.com", "api", "users"))
-print(decode(encode("Velar 游戏")))
+print(decode(encode("VelarScript 游戏")))
 print(isExternal("https://other.example", "https://example.com"))
 const timestamp = utc(2024, 1, 2, 3, 4, 5)
 print(iso(timestamp))
 print(parts(timestamp, "UTC").year)
-print(parseTime("invalid") == none)
+print(parseTime("invalid") == null)
 const stopLog = useSink(record => print(f"{record.level}:{record.scope}:{record.message}"))
 setLevel("debug")
 logger("core").info("ready")
@@ -3624,11 +3762,11 @@ print(logLevel())
   assert.equal(execution.stdout, [
     "15", "10", "x", "2", "Ada", "1", "Lin", "a,b", "5", "2", "true",
     "Velar", "Next Generation Web", "velar-web-游戏", "Velar…", "a b", "2", "2", "abc", "ABC", "true", "&lt;velar&gt;",
-    "true", "42", "7", "2", "22", "a# b#", "a|b|c", "true", "true", "none", "x$&", "a|b", "TypeError", "TypeError",
+    "true", "42", "7", "2", "22", "a# b#", "a|b|c", "true", "true", "null", "x$&", "a|b", "TypeError", "TypeError",
     "3.14", "10", "2", "8", "90", "6", "24",
     "Nova", "fallback", '{"a":2,"z":1}', "[1,2]", "true", "false",
     "6", "2", "7", "2",
-    "/items", "2", "page=3", "/items?page=4", "/items#top", "https://example.com/api/users", "Velar 游戏", "true",
+    "/items", "2", "page=3", "/items?page=4", "/items#top", "https://example.com/api/users", "VelarScript 游戏", "true",
     "2024-01-02T03:04:05.000Z", "2024", "true", "info:core:ready", "debug::trace", "debug",
     "",
   ].join("\n"));
@@ -3781,15 +3919,15 @@ try { parts(utc(2024, 1, 1), 42); console.log("accepted"); } catch (error) { con
   ].join("\n"));
 });
 
-test("collection ordering, predicates, equality, and List boundaries follow Velar semantics", async () => {
+test("collection ordering, predicates, equality, and List boundaries follow VelarScript semantics", async () => {
   const source = standardModuleSource("velar/collections") ?? "";
   const execution = executeModule(`${source}
 const values = [{ id: "a", key: 1 }, { id: "b", key: 2 }, { id: "c", key: 2 }, { id: "d", key: 1 }];
 console.log(sortBy(values, value => value.key).map(value => value.id).join(""));
 console.log(sortBy(values, value => value.key, true).map(value => value.id).join(""));
-console.log(contains([-0], 0), count([-0], 0), contains([NaN], NaN), count([NaN], NaN));
+console.log(has([-0], 0), count([-0], 0), has([NaN], NaN), count([NaN], NaN));
 for (const operation of [
-  () => any([1], () => "yes"),
+  () => some([1], () => "yes"),
   () => partition([1], () => 1),
   () => sortBy([1, 2], value => value === 1 ? "one" : 2),
   () => sortBy([1], () => NaN),
@@ -3805,7 +3943,7 @@ for (const list of [sparse, extended]) {
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    "adbc", "bcad", "true 1 false 0",
+    "adbc", "bcad", "true 1 true 1",
     "TypeError", "TypeError", "TypeError", "TypeError", "RangeError",
     "TypeError", "TypeError", "",
   ].join("\n"));
@@ -3816,7 +3954,7 @@ for (const list of [sparse, extended]) {
 import {maxBy, minBy, sortBy} from "velar/collections"
 
 const sorted = sortBy([1], value => true)
-const lowest = minBy([1], value => none)
+const lowest = minBy([1], value => null)
 const highest = maxBy([1], value => {label: "one"})
 `.trimStart(), "utf8");
   const invalid = await compileProject(entry);
@@ -4341,8 +4479,8 @@ lookup.set("value", 1)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /__velarCreateList/u);
-  assert.match(result.code ?? "", /__velarCollectionAppend/u);
-  assert.match(result.code ?? "", /__velarCollectionExtend/u);
+  assert.match(result.code ?? "", /__velarListAppend/u);
+  assert.match(result.code ?? "", /__velarListExtend/u);
   assert.match(result.code ?? "", /__velarCreateSet/u);
   assert.match(result.code ?? "", /__velarCreateMap/u);
   const hardened = (result.code ?? "").replaceAll("1000000", "3");
@@ -4353,20 +4491,20 @@ let getterReads = 0;
 class HostileSet extends Set { values() { iteratorCalls += 1; return super.values(); } [Symbol.iterator]() { iteratorCalls += 1; return super[Symbol.iterator](); } }
 class HostileMap extends Map { entries() { iteratorCalls += 1; return super.entries(); } [Symbol.iterator]() { iteratorCalls += 1; return super[Symbol.iterator](); } }
 console.log(__velarCreateSet(new HostileSet([1])).size, __velarCreateMap(new HostileMap([["a", 1]])).size, iteratorCalls);
-const extended = [1]; __velarCollectionExtend(extended, [2, 3]); console.log(extended.join(":"));
-const selfExtended = [1]; __velarCollectionExtend(selfExtended, selfExtended); console.log(selfExtended.join(":"));
+const extended = [1]; __velarListExtend(extended, [2, 3]); console.log(extended.join(":"));
+const selfExtended = [1]; __velarListExtend(selfExtended, selfExtended); console.log(selfExtended.join(":"));
 const accessor = [];
 Object.defineProperty(accessor, 0, { enumerable: true, get() { getterReads += 1; return 1; } });
 accessor.length = 1;
 const failures = [];
 const atomic = [1, 2];
 for (const operation of [
-  () => __velarCollectionAppend([1, 2, 3], 4),
-  () => __velarCollectionExtend(atomic, [3, 4]),
-  () => __velarCollectionExtend([], accessor),
+  () => __velarListAppend([1, 2, 3], 4),
+  () => __velarListExtend(atomic, [3, 4]),
+  () => __velarListExtend([], accessor),
   () => __velarCreateList([[true, () => [1, 2, 3]], [false, () => { effects += 1; return 4; }]]),
-  () => { const value = __velarCreateSet([1, 2, 3]); __velarCollectionAdd(value, 3); __velarCollectionAdd(value, 4); },
-  () => { const value = __velarCreateMap(); __velarCollectionSet(value, "a", 1); __velarCollectionSet(value, "b", 2); __velarCollectionSet(value, "c", 3); __velarCollectionSet(value, "a", 4); __velarCollectionSet(value, "d", 4); },
+  () => { const value = __velarCreateSet([1, 2, 3]); __velarSetAdd(value, 3); __velarSetAdd(value, 4); },
+  () => { const value = __velarCreateMap(); __velarMapSet(value, "a", 1); __velarMapSet(value, "b", 2); __velarMapSet(value, "c", 3); __velarMapSet(value, "a", 4); __velarMapSet(value, "d", 4); },
   () => __velarCreateSet(accessor),
 ]) {
   try { operation(); failures.push("accepted"); }
@@ -4529,8 +4667,11 @@ type Tree:
     name: string
     children: List<Tree>
 
-class Box(const value: number):
-    pass
+class Box:
+    const value: number
+
+    constructor(value: number):
+        self.value = value
 
 const tree: Tree = {name: "root", children: []}
 const valid = stringify(tree)
@@ -4617,14 +4758,14 @@ const options = matches("42", "[0-9]+", {ignoreCase: "yes"})
   const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message).join("\n");
   assert.match(messages, /sum expects List<number>, received List<string>/u);
   assert.match(messages, /flatten expects a List of Lists, received List<number>/u);
-  assert.match(messages, /Runtime parsing requires a Velar runtime type/u);
+  assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Expected a List of Promises, received List<number>/u);
   assert.match(messages, /Cannot assign string to number/u);
   assert.match(messages, /Cannot assign number to string/u);
   assert.match(messages, /Cannot assign \{ ignoreCase: string \} to \{ ignoreCase: bool\?, multiline: bool\?, dotAll: bool\? \}/u);
 });
 
-test("npm packages publish Velar source through package.json velar.entry", async () => {
+test("npm packages publish VelarScript source through package.json velar.entry", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-source-package-"));
   const packageRoot = join(directory, "node_modules", "velar-greeter");
   await linkWorkspaceWebExtension(directory);
@@ -4675,7 +4816,7 @@ mount(<App />, "#app")
   assert.match(await readFile(join(output, "assets", javascript), "utf8"), /Hello/);
 });
 
-test("Velar source packages cannot escape their package root", async () => {
+test("VelarScript source packages cannot escape their package root", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-package-boundary-"));
   const packageRoot = join(directory, "node_modules", "unsafe-package");
   await mkdir(join(packageRoot, "src"), { recursive: true });
@@ -4689,7 +4830,7 @@ test("Velar source packages cannot escape their package root", async () => {
   await writeFile(mainPath, "import {value} from \"unsafe-package\"\nprint(value)\n", "utf8");
 
   const project = await compileProject(mainPath);
-  assert.ok(project.failures.some((failure) => /cannot escape Velar package 'unsafe-package'/u.test(failure.message)));
+  assert.ok(project.failures.some((failure) => /cannot escape VelarScript package 'unsafe-package'/u.test(failure.message)));
 });
 
 test("reactive bindings cannot be declared in functions or shadowed", () => {
@@ -4718,7 +4859,7 @@ test("velar.json defines a self-contained Web project and standard modules", asy
       build: { sourceMaps: true },
     },
   }), "utf8");
-  await writeFile(join(directory, "assets", "message.txt"), "Velar asset\n", "utf8");
+  await writeFile(join(directory, "assets", "message.txt"), "VelarScript asset\n", "utf8");
   await writeFile(join(directory, "src", "main.vel"), `
 import {route, Router, Link} from "velar/web"
 import {http} from "velar/http"
@@ -4783,7 +4924,7 @@ mount(<App />, "#app")
   assert.match(html, /Content-Security-Policy/u);
   assert.match(html, /script-src 'self'/u);
   assert.doesNotMatch(html, /importmap/);
-  assert.equal(await readFile(join(directory, "build", "message.txt"), "utf8"), "Velar asset\n");
+  assert.equal(await readFile(join(directory, "build", "message.txt"), "utf8"), "VelarScript asset\n");
   await assert.rejects(readFile(join(directory, "build", "stale.txt")), /ENOENT/u);
   assert.equal(await readFile(join(directory, "build", "404.html"), "utf8"), html);
   const deployment = JSON.parse(await readFile(join(directory, "build", "velar-deploy.json"), "utf8"));
@@ -5132,8 +5273,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.9.0-dev");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.9.0-dev");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.10.0-dev");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.10.0-dev");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -5159,7 +5300,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
 
   const formatCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "format", "--check"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(formatCheck.status, 0, formatCheck.stderr);
-  assert.match(formatCheck.stdout, /Checked formatting of 4 Velar source files/u);
+  assert.match(formatCheck.stdout, /Checked formatting of 4 VelarScript source files/u);
   await writeFile(join(projectRoot, "src", "app.vel"), generatedApp.replace("\n", "  \n"), "utf8");
   const unformatted = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "format", projectRoot, "--check"], { cwd: directory, encoding: "utf8" });
   assert.equal(unformatted.status, 1);
@@ -5197,7 +5338,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const docsRoot = join(directory, "product-docs");
   const docsCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", docsRoot, "--template", "docs"], { cwd: directory, encoding: "utf8" });
   assert.equal(docsCreate.status, 0, docsCreate.stderr);
-  assert.match(docsCreate.stdout, /Created Velar docs project/u);
+  assert.match(docsCreate.stdout, /Created VelarScript docs project/u);
   assert.match(await readFile(join(docsRoot, "src", "content.vel"), "utf8"), /export type DocPage/u);
   assert.match(await readFile(join(docsRoot, "src", "app.vel"), "utf8"), /Router routes/u);
   await linkWorkspaceWebExtension(docsRoot);
@@ -5210,7 +5351,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const libraryRoot = join(directory, "text-library");
   const libraryCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", "--template=library", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryCreate.status, 0, libraryCreate.stderr);
-  assert.match(libraryCreate.stdout, /Created Velar library project/u);
+  assert.match(libraryCreate.stdout, /Created VelarScript library project/u);
   const libraryPackage = JSON.parse(await readFile(join(libraryRoot, "package.json"), "utf8")) as {
     files: string[];
     velar: { entry: string };
@@ -5234,7 +5375,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const componentRoot = join(directory, "info-card");
   const componentCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", componentRoot, "--template", "component"], { cwd: directory, encoding: "utf8" });
   assert.equal(componentCreate.status, 0, componentCreate.stderr);
-  assert.match(componentCreate.stdout, /Created Velar component project/u);
+  assert.match(componentCreate.stdout, /Created VelarScript component project/u);
   const componentPackage = JSON.parse(await readFile(join(componentRoot, "package.json"), "utf8")) as {
     files: string[];
     velar: { entry: string };
@@ -5243,8 +5384,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   };
   assert.deepEqual(componentPackage.files, ["src/index.vel", "README.md"]);
   assert.equal(componentPackage.velar.entry, "src/index.vel");
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "0.9.0-dev");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.9.0-dev");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "0.10.0-dev");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.10.0-dev");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -5302,7 +5443,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.9.0-dev\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.10.0-dev\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -5317,7 +5458,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   assert.match(invalidVersion.stderr, /does not accept arguments/u);
 });
 
-test("Velar dependency commands keep npm authoritative and project extensions explicit", async () => {
+test("VelarScript dependency commands keep npm authoritative and project extensions explicit", async () => {
   assert.deepEqual(parseDependencyArguments("install", []), { packages: [], packageNames: [], dev: false });
   assert.deepEqual(parseDependencyArguments("add", ["@example/feature@1.2.3", "tiny-lib", "--dev"]), {
     packages: ["@example/feature@1.2.3", "tiny-lib"],
@@ -5399,7 +5540,7 @@ export const velarProjectExtension = Object.freeze({id: "@example/feature", mani
   assert.equal(npmCalls.length, 3);
 });
 
-test("Velar dependency activation rolls back only the project manifest on an invalid extension", async () => {
+test("VelarScript dependency activation rolls back only the project manifest on an invalid extension", async () => {
   const root = await mkdtemp(join(tmpdir(), "velar-dependency-rollback-"));
   const extensionRoot = join(root, "node_modules", "invalid-extension");
   await mkdir(join(root, "src"), { recursive: true });
@@ -5460,7 +5601,7 @@ async def test_async_code():
   assert.match(execution.stdout, /2 passed, 0 failed/);
 });
 
-test("velar test executes transitive installed Velar source packages", async () => {
+test("velar test executes transitive installed VelarScript source packages", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-test-packages-"));
   const suffixRoot = join(directory, "node_modules", "velar-suffix");
   const greeterRoot = join(directory, "node_modules", "velar-greeter");
@@ -5548,7 +5689,7 @@ component Chart:
         <g>
             <Point x={12} y={20} />
             {values.map(value => <rect key={value} x={value} y="30" width="8" height="12" />)}
-            {values.length > 0 ? <path d="M0 50 L100 10" /> : none}
+            {values.size > 0 ? <path d="M0 50 L100 10" /> : null}
             <use xlink:href="#marker" />
             <Annotation />
         </g>
@@ -5599,18 +5740,21 @@ test("CLI checks and builds a multi-module project", async () => {
   assert.match(dependency, /export function greet/);
 });
 
-test("collection operations use Velar return and bounds semantics", () => {
+test("collection operations use VelarScript return and bounds semantics", () => {
   const result = compile(`
 let values = [1, 2]
-print(values.get(9) == none)
-print(values.append(3) == none)
-print(values.extend([4, 5]) == none)
-print(values.length)
+print(values.get(9) == null)
+print(values.append(3) == null)
+print(values.extend([4, 5]) == null)
+print(values.size)
 print(values.remove(2))
+print(values.pop())
+print(values.some(value => value == 4))
+print(values.every(value => value > 0))
 
 const lookup = Map()
 lookup.set("answer", 42)
-print(lookup.get("missing") == none)
+print(lookup.get("missing") == null)
 print(lookup.remove("answer"))
 
 try:
@@ -5622,7 +5766,7 @@ catch error:
   assert.deepEqual(result.diagnostics, []);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\ntrue\ntrue\n5\ntrue\ntrue\ntrue\nIndexError\n");
+  assert.equal(execution.stdout, "true\ntrue\ntrue\n5\ntrue\n5\ntrue\ntrue\ntrue\ntrue\nIndexError\n");
 
   const invalid = compile(`
 const values = [1]
@@ -5630,7 +5774,82 @@ values.extend(["two"])
 values.push(2)
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign List<string> to List<number>/u.test(item.message)));
-  assert.ok(invalid.diagnostics.some((item) => /Cannot call an unknown JavaScript value/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /List has no member 'push'.*append/u.test(item.message)));
+});
+
+test("List, Set, and Map use familiar collection vocabulary without legacy aliases", () => {
+  const result = compile(`
+let values: List<number> = []
+values.append(2)
+values.extend([4, 6])
+values.insert(1, 3)
+print(values.size)
+print(values.get(-1))
+print(values.has(3))
+print(values.remove(4))
+print(values.pop())
+print(values.some(value => value == 3))
+print(values.every(value => value > 0))
+print(values.index(3))
+
+const words = ["beta", "alpha"]
+print(words.sorted().join("|"))
+print(words.map(word => f"<{word}>").filter(word => word != "<beta>").reduce((text, word) => text + word, ""))
+
+const tags = Set(["web"])
+print(tags.update(["game", "web"]) == null)
+print(tags.has("game"))
+print(tags.remove("web"))
+
+const scores = Map()
+scores.set("Ada", 9)
+const more = Map()
+more.set("Lin", 7)
+print(scores.update(more) == null)
+print(scores.get("Lin"))
+print(scores.remove("Ada"))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarListAppend/u);
+  assert.match(result.code ?? "", /__velarListMap/u);
+  assert.match(result.code ?? "", /__velarListFilter/u);
+  assert.match(result.code ?? "", /__velarListReduce/u);
+  assert.match(result.code ?? "", /__velarListJoin/u);
+  assert.match(result.code ?? "", /__velarListSorted/u);
+  assert.match(result.code ?? "", /__velarSetUpdate/u);
+  assert.match(result.code ?? "", /__velarMapUpdate/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "4\n6\ntrue\ntrue\n6\ntrue\ntrue\n1\nalpha|beta\n<alpha>\ntrue\ntrue\ntrue\ntrue\n7\ntrue\n");
+
+  const legacy = compile(`
+const values = [1]
+values.add(2)
+values.addAll([3])
+values.deleteAt(0)
+values.splice(0, 1)
+values.any(value => value > 0)
+values.findIndex(value => value > 0)
+
+const tags = Set()
+tags.addAll(["web"])
+tags.delete("web")
+
+const scores = Map()
+scores.setAll(Map())
+scores.delete("Ada")
+`.trimStart());
+  const messages = legacy.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /append\(value\)/u);
+  assert.match(messages, /extend\(values\)/u);
+  assert.match(messages, /pop\(index\)/u);
+  assert.match(messages, /insert.*remove.*pop.*slice/u);
+  assert.match(messages, /some\(test\)/u);
+  assert.match(messages, /index\(value\)/u);
+  assert.match(messages, /Set has no member 'addAll'.*update/u);
+  assert.match(messages, /Map has no member 'setAll'.*update/u);
+  assert.match(messages, /remove/u);
 });
 
 test("empty Lists infer one element type from append or extend", () => {
@@ -5644,10 +5863,9 @@ extended.extend([2, 3])
 const second: number = extended[0]
 
 component Values:
-    state values = []
+    state values: List<number> = []
     def addValues():
-        values.append(1)
-        values.extend([2, 3])
+        values = [...values, 1, 2, 3]
     return <div>{values.map(value => <span key={value}>{value + 1}</span>)}</div>
 
 print(first + second)
@@ -5685,7 +5903,7 @@ copied[0] = 9
 print(values[0])
 print(middle[0])
 print(tail[0])
-print(values.slice(20).length)
+print(values.slice(20).size)
 
 try:
     values.slice(0.5)
@@ -5710,7 +5928,7 @@ values.slice(0, 1, 2)
 
 test("does not rewrite class methods that share collection method names", () => {
   const result = compile(`
-class Box():
+class Box:
     def get() -> number:
         return 7
 
@@ -5777,14 +5995,19 @@ mystery()
 test("safe JavaScript classes keep constructors, members, aliases, and nominal package identity", () => {
   const valid = compile(`
 extern module "sdk-a":
-    export class BaseClient(const id: string):
+    export class BaseClient:
+        const id: string
+        constructor(id: string)
         static const family: string
         def label() -> string
 
-    export class Client(id: string, const baseUrl: string, let timeoutMs: number = 1000) extends BaseClient:
+    export class Client extends BaseClient:
+        const baseUrl: string
+        let timeoutMs: number
+        constructor(id: string, baseUrl: string, timeoutMs: number = 1000)
         static const version: string
         def request(path: string) -> Promise<string>
-        static def connect(baseUrl: string) -> Client
+        static def from(baseUrl: string) -> Client
 
 import js {BaseClient, Client as Remote} from "sdk-a"
 import js * as sdk from "sdk-a"
@@ -5795,7 +6018,7 @@ const base: BaseClient = direct
 const inheritedId: string = direct.id
 const family: string = Remote.family
 direct.timeoutMs = 2000
-const connected: Remote = Remote.connect("/next")
+const connected: Remote = Remote.from("/next")
 const namespaced = sdk.Client("id", "/namespace", 500)
 const pending: Promise<string> = connected.request("/status")
 const version: string = Remote.version
@@ -5809,12 +6032,15 @@ const session = Session.parse({client: direct})
 
   const invalid = compile(`
 extern module "sdk-a":
-    export class Client(const baseUrl: string):
+    export class Client:
+        const baseUrl: string
+        constructor(baseUrl: string)
         static const version: string
         def request(path: string) -> Promise<string>
 
 extern module "sdk-b":
-    export class Client(baseUrl: string):
+    export class Client:
+        constructor(baseUrl: string)
         pass
 
 import js {Client as FirstClient} from "sdk-a"
@@ -5841,6 +6067,13 @@ extern module "bad-sdk":
         def label(value: number) -> string
 `.trimStart());
   assert.ok(invalidInheritance.diagnostics.some((item) => /Extern override 'label' must keep the base method signature/u.test(item.message)));
+
+  const removedHeaderConstructor = compile(`
+extern module "old-sdk":
+    export class Client(const id: string):
+        pass
+`.trimStart());
+  assert.ok(removedHeaderConstructor.diagnostics.some((item) => item.code === "VEL2022" && /constructor in the class body/u.test(item.message)));
 });
 
 test("limited TypeScript declarations bridge safe JavaScript imports without importing TypeScript's type system", async () => {
@@ -5896,9 +6129,9 @@ export declare function identity<T>(value: T): T;
   assert.equal(describeType(declarations.exports.get("format")!), "(number, { prefix: string?, precision: number }? = default) -> Promise<string>");
   assert.equal(describeType(declarations.exports.get("join")!), "(string, ...string) -> string");
   assert.equal(describeType(declarations.exports.get("unique")!), "(List<string>) -> Set<string>");
-  assert.equal(describeType(declarations.exports.get("visit")!), "((string) -> none) -> none");
+  assert.equal(describeType(declarations.exports.get("visit")!), "((string) -> null) -> null");
   assert.equal(describeType(declarations.exports.get("version")!), "string");
-  assert.equal(describeType(declarations.exports.get("client")!), "{ version: string, request: (string, number? = default) -> Promise<string>, close: (() -> none)? }");
+  assert.equal(describeType(declarations.exports.get("client")!), "{ version: string, request: (string, number? = default) -> Promise<string>, close: (() -> null)? }");
   assert.equal(describeType(declarations.exports.get("recursiveClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("genericClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("Formatter")!), "Formatter");
@@ -6186,7 +6419,7 @@ const merged = {...base, score}
 const {name, ...details} = merged
 const source = [1, 2]
 const [first, ...rest] = [0, ...source]
-print(f"{name}:{details.score}:{first}:{rest.length}")
+print(f"{name}:{details.score}:{first}:{rest.size}")
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -6226,7 +6459,7 @@ print(tags.size)
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const tags = __velarCreateSet\(\["velar", "web", "velar"\]\);/u);
-  assert.match(result.code ?? "", /__velarCollectionAdd\(tags, "game"\)/u);
+  assert.match(result.code ?? "", /__velarSetAdd\(tags, "game"\)/u);
   assert.match(result.code ?? "", /__velarSetTypeIs\(value\["values"\]/u);
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "inferred")?.type, "Set<number>");
   const execution = executeModule(result.code ?? "");
@@ -6301,17 +6534,33 @@ def choose(flag: bool) -> number:
   assert.ok(incomplete.diagnostics.some((item) => item.code === "VEL4006"));
 });
 
-test("formatter is conservative and idempotent", () => {
-  const source = "type ChooseHandler = (string) -> none  \r\ncomponent App:  \r\n\t// keep me\r\n\tresource label: string = loadLabel()   \r\n\tconst choose: ChooseHandler = value => none\r\n\taction refresh() -> none:\r\n\t\tawait label.reload()\r\n\t\treturn none\r\n\treturn <main>{label.value}</main>\r\n";
+test("formatter is syntax-aware and idempotent", () => {
+  const source = "type ChooseHandler=(string)->null  \r\ncomponent App:  \r\n\t// keep me\r\n\tresource label:string=loadLabel()   \r\n\tconst values:List<number>=[1,2,3]\r\n\tconst choose:ChooseHandler=value=>null\r\n\tconst result=ready?values[0]:null\r\n\taction refresh()->null:\r\n\t\tawait label.reload()\r\n\t\treturn null\r\n\treturn <main>{label.value}</main>\r\n";
   const formatted = formatSource(source);
-  assert.equal(formatted, "type ChooseHandler = (string) -> none\ncomponent App:\n    // keep me\n    resource label: string = loadLabel()\n    const choose: ChooseHandler = value => none\n    action refresh() -> none:\n        await label.reload()\n        return none\n    return <main>{label.value}</main>\n");
+  assert.equal(formatted, "type ChooseHandler = (string) -> null\ncomponent App:\n    // keep me\n    resource label: string = loadLabel()\n    const values: List<number> = [1, 2, 3]\n    const choose: ChooseHandler = value => null\n    const result = ready ? values[0] : null\n    action refresh() -> null:\n        await label.reload()\n        return null\n    return <main>{label.value}</main>\n");
+  assert.equal(formatSource(formatted), formatted);
+});
+
+test("formatter preserves multiline JSX while formatting surrounding syntax", () => {
+  const formatted = formatSource(`
+component App:
+  const label="Ready"
+  return <main>
+    <button type="button">
+      {label}
+    </button>
+  </main>
+`.trimStart());
+  assert.match(formatted, /const label = "Ready"/u);
+  assert.match(formatted, /<\/button>\n    <\/main>/u);
+  assert.deepEqual(compile(formatted).diagnostics, []);
   assert.equal(formatSource(formatted), formatted);
 });
 
 test("CLI format supports write and check modes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-format-"));
   const sourcePath = join(directory, "main.vel");
-  await writeFile(sourcePath, "def main():  \n  return none  \n", "utf8");
+  await writeFile(sourcePath, "def main():  \n  return null  \n", "utf8");
 
   const before = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "format", sourcePath, "--check"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(before.status, 1);
@@ -6319,10 +6568,23 @@ test("CLI format supports write and check modes", async () => {
   assert.equal(write.status, 0, write.stderr);
   const after = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "format", sourcePath, "--check"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(after.status, 0, after.stderr);
-  assert.equal(await readFile(sourcePath, "utf8"), "def main():\n    return none\n");
+  assert.equal(await readFile(sourcePath, "utf8"), "def main():\n    return null\n");
 });
 
-test("project builds enforce imported Velar signatures", async () => {
+test("documentation example checker rejects invalid complete examples", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-doc-example-"));
+  const markdownPath = join(directory, "guide.md");
+  await writeFile(markdownPath, "```velar\nconst enabled = True\n```\n", "utf8");
+
+  const execution = spawnSync(process.execPath, ["scripts/check-documentation-examples.mjs", markdownPath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(execution.status, 1);
+  assert.match(execution.stderr, /VEL1005/u);
+});
+
+test("project builds enforce imported VelarScript signatures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-module-types-"));
   const library = join(directory, "models.vel");
   const entry = join(directory, "main.vel");
@@ -6353,7 +6615,7 @@ test("component callback types cross module and editor boundaries", async () => 
   const childrenPath = join(directory, "children.vel");
   const svgPath = join(directory, "svg.vel");
   await writeFile(domainPath, `
-export type ChooseHandler = (string) -> none
+export type ChooseHandler = (string) -> null
 `.trimStart(), "utf8");
   await writeFile(itemPath, `
 import {ChooseHandler} from "./domain.vel"
@@ -6364,14 +6626,14 @@ export component Item(label: string, onChoose: ChooseHandler):
   await writeFile(validPath, `
 import {ChooseHandler as Handler} from "./domain.vel"
 import {Item as Choice} from "./item.vel"
-const choose: Handler = Handler.parse(label => none)
+const choose: Handler = Handler.parse(label => null)
 component App:
     return <Choice label="Velar" onChoose={choose} />
 `.trimStart(), "utf8");
   await writeFile(invalidPath, `
 import {Item} from "./item.vel"
-def choose(value: number) -> none:
-    return none
+def choose(value: number) -> null:
+    return null
 component App:
     return <Item label="Velar" onChoose={choose} />
 `.trimStart(), "utf8");
@@ -6392,7 +6654,7 @@ component Chart:
   assert.deepEqual(valid.failures, []);
   assert.deepEqual(valid.modules.flatMap((module) => module.result.diagnostics), []);
   const invalid = await compileProject(invalidPath);
-  assert.ok(invalid.modules.flatMap((module) => module.result.diagnostics).some((item) => /Cannot assign \(value: number\) -> none to \(string\) -> none/u.test(item.message)));
+  assert.ok(invalid.modules.flatMap((module) => module.result.diagnostics).some((item) => /Cannot assign \(value: number\) -> null to \(string\) -> null/u.test(item.message)));
   const childrenProject = await compileProject(childrenPath);
   assert.deepEqual(childrenProject.modules.flatMap((module) => module.result.diagnostics), []);
   const svgProject = await compileProject(svgPath);
@@ -6416,7 +6678,7 @@ component Chart:
   assert.equal(projectCompletionContextAt(valid, validPath, labelAttribute), "extension:@velarscript/web:component-attribute");
   const propCompletions = projectCompletionsAt(valid, validPath, labelAttribute);
   assert.ok(propCompletions.some((item) => item.label === "label" && item.detail === "string"));
-  assert.ok(propCompletions.some((item) => item.label === "onChoose" && item.detail === "(string) -> none"));
+  assert.ok(propCompletions.some((item) => item.label === "onChoose" && item.detail === "(string) -> null"));
   assert.ok(propCompletions.some((item) => item.label === "key"));
   assert.ok(!propCompletions.some((item) => item.label === "const"));
   const nativeAttribute = itemSource.indexOf("type=\"button\"");
@@ -6564,11 +6826,14 @@ test("rest signatures retain class element types across module and editor bounda
   const library = join(directory, "items.vel");
   const entry = join(directory, "main.vel");
   await writeFile(library, `
-export class Item(const name: string):
-    pass
+export class Item:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
 
 export def count(first: Item, ...others: Item) -> number:
-    return others.length + 1
+    return others.size + 1
 `.trimStart(), "utf8");
   const validSource = `
 import {Item as Product, count} from "./items.vel"
@@ -6601,8 +6866,11 @@ test("Set element contracts cross module aliases and signature help", async () =
   const library = join(directory, "tags.vel");
   const entry = join(directory, "main.vel");
   await writeFile(library, `
-export class Tag(const name: string):
-    pass
+export class Tag:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
 
 export def count(tags: Set<Tag>) -> number:
     return tags.size
@@ -6660,11 +6928,29 @@ test("CLI source maps lead runtime stacks back to .vel source", async () => {
   assert.match(execution.stderr, new RegExp(`${sourcePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:2:`));
 });
 
+test("source maps retain nested statement and expression columns", () => {
+  const result = compileCore(`
+def choose(value: number) -> number:
+    if value > 2:
+        return value * 2
+    return value + 1
+`.trimStart(), { path: "mapped.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  const map = JSON.parse(result.sourceMap ?? "{}") as { mappings?: string };
+  const generatedIf = map.mappings?.split(";")[1] ?? "";
+  assert.ok(generatedIf.split(",").filter(Boolean).length >= 4, generatedIf);
+});
+
 test("imported classes preserve construction, aliases, and nominal checks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-module-class-"));
   const output = join(directory, "dist");
   await writeFile(join(directory, "models.vel"), `
-export class Player(const name: string):
+export class Player:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
+
     def label() -> string:
         return self.name
 `.trimStart(), "utf8");
@@ -6681,10 +6967,10 @@ print(player is Hero)
   assert.equal(execution.stdout, "Nova\ntrue\n");
 });
 
-test("Velar classes use module identities instead of colliding display names", async () => {
+test("VelarScript classes use module identities instead of colliding display names", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-class-identity-"));
-  await writeFile(join(directory, "first.vel"), "export class Session(const id: string):\n    pass\n", "utf8");
-  await writeFile(join(directory, "second.vel"), "export class Session(const id: string):\n    pass\n", "utf8");
+  await writeFile(join(directory, "first.vel"), "export class Session:\n    const id: string\n\n    constructor(id: string):\n        self.id = id\n", "utf8");
+  await writeFile(join(directory, "second.vel"), "export class Session:\n    const id: string\n\n    constructor(id: string):\n        self.id = id\n", "utf8");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {Session as FirstSession} from "./first.vel"
@@ -6706,23 +6992,44 @@ test("class inheritance, abstract contracts, super, static methods, and Error re
 abstract class Shape:
     abstract def area() -> number
 
-class Circle(const radius: number) extends Shape:
+class Circle extends Shape:
+    const radius: number
+
+    constructor(radius: number):
+        super()
+        self.radius = radius
+
     override def area() -> number:
         return self.radius * self.radius
 
-class Entity(const id: string):
+class Entity:
+    const id: string
+
+    constructor(id: string):
+        self.id = id
+
     def describe() -> string:
         return self.id
 
-class Player(const id: string, let score: number = 0) extends Entity(id):
+class Player extends Entity:
+    let score: number
+
+    constructor(id: string, score: number = 0):
+        super(id)
+        self.score = score
+
     override def describe() -> string:
         return f"{super.describe()}:{self.score}"
 
     static def guest() -> Player:
         return Player("guest", 1)
 
-class ValidationError(const field: string, const message: string) extends Error(message):
-    pass
+class ValidationError extends Error:
+    const field: string
+
+    constructor(field: string, message: string):
+        super(message)
+        self.field = field
 
 const shape: Shape = Circle(3)
 const entity: Entity = Player.guest()
@@ -6745,24 +7052,31 @@ print(error.message)
   assert.equal(execution.stdout, "9\nguest:1\ntrue\nRequired\n");
 });
 
-test("class init runs once after base construction, fields, and method binding", () => {
+test("constructors initialize fields once after the base constructor and preserve bound methods", () => {
   const result = compile(`
-def invoke(callback: () -> none):
+def invoke(callback: () -> null):
     callback()
 
-class Base(let steps: List<string>):
-    init:
+class Base:
+    let steps: List<string>
+
+    constructor(steps: List<string>):
+        self.steps = steps
         self.steps.append("base")
 
-class Child(steps: List<string>, const value: number) extends Base(steps):
-    let doubled: number = value * 2
+class Child extends Base:
+    const value: number
+    let doubled: number
+
+    constructor(steps: List<string>, value: number):
+        super(steps)
+        self.value = value
+        self.doubled = value * 2
+        assert value > 0, "Value must be positive"
+        invoke(self.record)
 
     def record():
         self.steps.append(f"value:{self.doubled}")
-
-    init:
-        assert value > 0, "Value must be positive"
-        invoke(self.record)
 
 const steps: List<string> = []
 const child = Child(steps, 3)
@@ -6772,19 +7086,21 @@ print(child.doubled)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /this\.doubled = \(value \* 2\);\s+this\.record = this\.record\.bind\(this\);\s+const self = this;/u);
+  assert.match(result.code ?? "", /super\(steps\);/u);
+  assert.match(result.code ?? "", /self\.value = value;/u);
+  assert.match(result.code ?? "", /self\.doubled = \(value \* 2\);/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "base\nvalue:6\n6\n");
 });
 
-test("class init owns one synchronous non-returning execution boundary", () => {
+test("constructors own one synchronous non-returning execution boundary", () => {
   const valid = compile(`
 async def ready() -> number:
     return 1
 
 class Scheduler:
-    init:
+    constructor():
         async def later() -> number:
             return await ready()
 `.trimStart());
@@ -6795,29 +7111,32 @@ async def ready() -> number:
     return 1
 
 class Invalid:
-    init:
+    constructor():
         const value = await ready()
-        return none
+        return null
 `.trimStart());
-  assert.ok(direct.diagnostics.some((item) => item.code === "VEL4007" && /class init block/u.test(item.message)));
-  assert.ok(direct.diagnostics.some((item) => item.code === "VEL3014" && /class init block/u.test(item.message)));
+  assert.ok(direct.diagnostics.some((item) => item.code === "VEL4007" && /constructor/u.test(item.message)));
+  assert.ok(direct.diagnostics.some((item) => item.code === "VEL3014" && /constructor/u.test(item.message)));
 
-  const duplicate = compile("class Invalid:\n    init:\n        pass\n    init:\n        pass\n");
-  assert.ok(duplicate.diagnostics.some((item) => item.code === "VEL2022" && /more than one init block/u.test(item.message)));
+  const duplicate = compile("class Invalid:\n    constructor():\n        pass\n    constructor():\n        pass\n");
+  assert.ok(duplicate.diagnostics.some((item) => item.code === "VEL2022" && /more than one constructor/u.test(item.message)));
 
   for (const modifier of ["async", "static", "override", "abstract"]) {
-    const modified = compile(`class Invalid:\n    ${modifier} init:\n        pass\n`);
-    assert.ok(modified.diagnostics.some((item) => item.code === "VEL2022" && /does not accept modifiers/u.test(item.message)), JSON.stringify(modified.diagnostics));
+    const modified = compile(`class Invalid:\n    ${modifier} constructor():\n        pass\n`);
+    assert.ok(modified.diagnostics.some((item) => item.code === "VEL2022" && /does not accept method modifiers/u.test(item.message)), JSON.stringify(modified.diagnostics));
   }
 });
 
-test("init remains a contextual class word instead of a reserved identifier", () => {
+test("init remains an ordinary identifier after the init block syntax is removed", () => {
   const result = compile(`
 type Options:
     init: string
 
-class Worker(const label: string):
-    init:
+class Worker:
+    const label: string
+
+    constructor(label: string):
+        self.label = label
         assert label.length > 0
 
     def init(suffix: string) -> string:
@@ -6838,19 +7157,24 @@ print(worker.init("!"))
 
 test("class body fields keep body-owned instance state out of constructor signatures", () => {
   const result = compile(`
-class Ledger(const label: string):
+class Ledger:
     static const kind: string = "ledger"
     static let created: number = 0
-    const display: string = f"{label} ledger"
+    const label: string
+    const display: string
     const entries: List<number> = []
     let total: number = 0
+
+    constructor(label: string):
+        self.label = label
+        self.display = f"{label} ledger"
 
     def add(value: number):
         self.entries.append(value)
         self.total += value
 
     def summary() -> string:
-        return f"{self.display}:{self.total}:{self.entries.length}"
+        return f"{self.display}:{self.total}:{self.entries.size}"
 
 const ledger = Ledger("main")
 Ledger.created += 1
@@ -6863,7 +7187,9 @@ print(ledger.summary())
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /static kind = "ledger";/u);
-  assert.match(result.code ?? "", /constructor\(label\) \{\s+this\.label = label;\s+this\.display = `\$\{label\} ledger`;\s+this\.entries = \[\];\s+this\.total = 0;/u);
+  assert.match(result.code ?? "", /constructor\(label\)/u);
+  assert.match(result.code ?? "", /self\.label = label;/u);
+  assert.match(result.code ?? "", /self\.display = `\$\{label\} ledger`;/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "ledger\n1\nmain ledger:11:2\n");
@@ -6901,11 +7227,22 @@ test("class getters expose native read-only derived properties with explicit inh
 abstract class Metric:
     abstract get label() -> string
 
-class BaseMetric(const name: string):
+class BaseMetric:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
+
     get label() -> string:
         return self.name
 
-class Score(const name: string, private const points: number) extends BaseMetric(name):
+class Score extends BaseMetric:
+    private const points: number
+
+    constructor(name: string, points: number):
+        super(name)
+        self.points = points
+
     private static get internalUnit() -> string:
         return "pt"
 
@@ -7013,11 +7350,15 @@ print(Label().get())
 
 test("private class members preserve native encapsulation without a visibility hierarchy", () => {
   const result = compile(`
-class Vault(private const secret: string):
+class Vault:
+    private const secret: string
     private static const category: string = "vault"
     private static const fullCategory: string = Vault.category + "-store"
     private const prefix: string = "token"
     private let reads: number = 0
+
+    constructor(secret: string):
+        self.secret = secret
 
     private def reveal(suffix: string) -> string:
         self.reads += 1
@@ -7078,9 +7419,14 @@ print(vault.matches(Vault("safe")))
   assert.equal(execution.stdout, "token:safe:one:1\ntoken:safe:two:2\nvault-store\ntoken:safe:async:3\nvault\ntrue\n");
 
   const inaccessible = compile(`
-class Vault(private const secret: string):
+class Vault:
+    private const secret: string
     private static const category: string = "vault"
     private let reads: number = 0
+
+    constructor(secret: string):
+        self.secret = secret
+
     private def reveal() -> string:
         return self.secret
 
@@ -7138,10 +7484,14 @@ test("private members stay inside their class across project and editor semantic
   const modelPath = join(directory, "model.vel");
   const mainPath = join(directory, "main.vel");
   const modelSource = `
-export class Vault(private const secret: string):
+export class Vault:
+    private const secret: string
     private static const category: string = "vault"
     /// Tracks how often the secret was opened.
     private let reads: number = 0
+
+    constructor(secret: string):
+        self.secret = secret
 
     /// Produces the internal display value.
     private def reveal() -> string:
@@ -7199,10 +7549,17 @@ test("class getters cross module and editor boundaries as documented properties"
   const modelPath = join(directory, "model.vel");
   const mainPath = join(directory, "main.vel");
   const modelSource = `
-export class ScoreCard(const label: string, private const values: List<number>):
+export class ScoreCard:
+    const label: string
+    private const values: List<number>
+
+    constructor(label: string, values: List<number>):
+        self.label = label
+        self.values = values
+
     /// Number of recorded values.
     get count() -> number:
-        return self.values.length
+        return self.values.size
 
     /// Internal doubled count used by the summary.
     private get doubledCount() -> number:
@@ -7242,7 +7599,7 @@ print(card.summary)
   if (typeof rename !== "string") assert.equal(rename.edits.length, 2);
 });
 
-test("abstract getter contracts retain identity across Velar modules", async () => {
+test("abstract getter contracts retain identity across VelarScript modules", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-inherited-getters-"));
   const basePath = join(directory, "base.vel");
   const mainPath = join(directory, "main.vel");
@@ -7273,20 +7630,23 @@ test("class body fields cross module and editor boundaries", async () => {
   const modelPath = join(directory, "model.vel");
   const mainPath = join(directory, "main.vel");
   const modelSource = `
-export class ScoreCard(const label: string):
+export class ScoreCard:
     static const category: string = "score"
+    const label: string
     const history: List<number> = []
     let total: number = 0
 
-    init:
-        assert label.length > 0, "ScoreCard label cannot be empty"
+    constructor(label: string):
+        self.label = label
+        assert self.label.length > 0, "ScoreCard label cannot be empty"
 
     def add(value: number):
         self.history.append(value)
         self.total += value
 
-export class TeamCard extends ScoreCard("Team"):
-    pass
+export class TeamCard extends ScoreCard:
+    constructor():
+        super("Team")
 `.trimStart();
   const mainSource = `
 import {ScoreCard as Card, TeamCard} from "./model.vel"
@@ -7296,7 +7656,7 @@ const team = TeamCard()
 team.add(3)
 print(Card.category)
 print(card.total)
-print(card.history.length)
+print(card.history.size)
 print(TeamCard.category)
 print(team.total)
 `.trimStart();
@@ -7312,7 +7672,7 @@ print(team.total)
   const totalDeclaration = modelSource.indexOf("total: number");
   const categoryDeclaration = modelSource.indexOf("category: string");
   const labelDeclaration = modelSource.indexOf("label: string");
-  const labelInitUse = modelSource.indexOf("label.length");
+  const labelInitUse = modelSource.indexOf("self.label.length") + "self.".length;
   assert.ok(projectCompletionsAt(project, mainPath, totalUse).some((item) => item.label === "total" && item.detail === "number"));
   assert.ok(projectCompletionsAt(project, mainPath, categoryUse).some((item) => item.label === "category" && item.detail === "string"));
   assert.ok(!projectCompletionsAt(project, mainPath, categoryUse).some((item) => item.label === "total"));
@@ -7369,37 +7729,48 @@ test("class inheritance rejects unsafe or incomplete object contracts", () => {
   const incompatibleOverride = compile("class Base:\n    def label(value: string) -> string:\n        return value\n\nclass Child extends Base:\n    override def label(value: number) -> string:\n        return str(value)\n");
   assert.ok(incompatibleOverride.diagnostics.some((item) => /must keep the base method signature/.test(item.message)));
 
-  const inheritedConst = compile("class Base(const id: string):\n    pass\n\nclass Child extends Base(\"fixed\"):\n    def change():\n        self.id = \"other\"\n");
+  const inheritedConst = compile("class Base:\n    const id: string\n\n    constructor(id: string):\n        self.id = id\n\nclass Child extends Base:\n    constructor():\n        super(\"fixed\")\n\n    def change():\n        self.id = \"other\"\n");
   assert.ok(inheritedConst.diagnostics.some((item) => /Cannot assign to const field 'id'/.test(item.message)));
 
-  const localFieldMethodCollision = compile("class User(const name: string):\n    def name() -> string:\n        return self.name\n");
+  const localFieldMethodCollision = compile("class User:\n    const name: string\n\n    constructor(name: string):\n        self.name = name\n\n    def name() -> string:\n        return self.name\n");
   assert.ok(localFieldMethodCollision.diagnostics.some((item) => /conflicts with a field declared by class 'User'/.test(item.message)));
 
-  const inheritedFieldMethodCollision = compile("class Base:\n    def name() -> string:\n        return \"base\"\n\nclass Child(const name: string) extends Base:\n    pass\n");
+  const inheritedFieldMethodCollision = compile("class Base:\n    def name() -> string:\n        return \"base\"\n\nclass Child extends Base:\n    const name: string\n\n    constructor(name: string):\n        super()\n        self.name = name\n");
   assert.ok(inheritedFieldMethodCollision.diagnostics.some((item) => /Field 'name' conflicts with an inherited method/.test(item.message)));
 });
 
-test("inheritance metadata crosses Velar module boundaries", async () => {
+test("inheritance metadata crosses VelarScript module boundaries", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-module-inheritance-"));
   const output = join(directory, "dist");
   const basePath = join(directory, "base.vel");
   const playerPath = join(directory, "player.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(basePath, `
-export abstract class Entity(const id: string):
+export abstract class Entity:
+    const id: string
+
+    constructor(id: string):
+        self.id = id
+
     def label() -> string:
         return self.id
 `.trimStart(), "utf8");
   await writeFile(playerPath, `
 import {Entity} from "./base.vel"
-export class Player(const id: string) extends Entity(id):
+export class Player extends Entity:
+    constructor(id: string):
+        super(id)
+
     def score() -> number:
         return 1
 
     static def score(id: string) -> Player:
         return Player(id)
 
-export class NamedPlayer(const id: string) extends Player(id):
+export class NamedPlayer extends Player:
+    constructor(id: string):
+        super(id)
+
     override def label() -> string:
         return f"named:{super.label()}"
 `.trimStart(), "utf8");
@@ -7418,7 +7789,7 @@ print(scored.score())
   assert.deepEqual(project.failures, []);
   assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
   const playerText = await readFile(playerPath, "utf8");
-  const baseUse = playerText.indexOf("Entity(id)");
+  const baseUse = playerText.indexOf("extends Entity") + "extends ".length;
   const definition = projectDefinitionAt(project, playerPath, baseUse + 1);
   assert.equal(definition?.path, basePath);
   const mainText = await readFile(mainPath, "utf8");
@@ -7458,10 +7829,10 @@ print(scored.score())
   const methodReferences = projectReferencesAt(project, basePath, baseLabel + 1, true);
   assert.equal(methodReferences.length, 5);
   const fieldReferences = projectReferencesAt(project, basePath, baseId + 1, true);
-  assert.equal(fieldReferences.length, 6);
+  assert.equal(fieldReferences.length, 3);
   const fieldRename = projectRenameAt(project, basePath, baseId + 1, "identifier");
   assert.notEqual(typeof fieldRename, "string");
-  if (typeof fieldRename !== "string") assert.equal(fieldRename.edits.length, 6);
+  if (typeof fieldRename !== "string") assert.equal(fieldRename.edits.length, 3);
   assert.equal(projectRenameAt(project, basePath, baseLabel + 1, "score"), "The new name collides with another declaration");
   const methodRename = projectRenameAt(project, basePath, baseLabel + 1, "title");
   assert.notEqual(typeof methodRename, "string");
@@ -7497,7 +7868,12 @@ test("runtime data validation composes nested data types and class identity", ()
 type Profile:
     name: string
 
-class Player(const name: string):
+class Player:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
+
     def label() -> string:
         return self.name
 
@@ -7541,7 +7917,7 @@ type FolderEntry:
 const tree = TreeNode.parse({label: "root", children: [{label: "leaf", children: []}]})
 const forest = Forest.parse([tree])
 const linked = LinkedNode.parse({label: "root", next: {label: "leaf", next: "end"}})
-const folder = Folder.parse({name: "docs", entries: [{name: "guide.md", folder: none}]})
+const folder = Folder.parse({name: "docs", entries: [{name: "guide.md", folder: null}]})
 print(tree.children[0].label)
 print(forest[0].label)
 print(linked.label)
@@ -7620,7 +7996,12 @@ type UnionRight:
 
 test("nested method closures capture self without dynamic this", () => {
   const result = compile(`
-class Counter(const value: number):
+class Counter:
+    const value: number
+
+    constructor(value: number):
+        self.value = value
+
     def show():
         def nested():
             print(self.value)
@@ -7666,20 +8047,25 @@ print(value is string)
   assert.ok(reserved.diagnostics.some((item) => item.code === "VEL3007"));
 });
 
-test("normalizes optional members and calls to none", () => {
+test("normalizes optional members and calls to null", () => {
   const result = compile(`
 type User:
     name: string
     avatar: string?
 
-class Box(const value: string):
+class Box:
+    const value: string
+
+    constructor(value: string):
+        self.value = value
+
     def label() -> string:
         return self.value
 
 const user = User.parse({name: "Ada"})
-let box: Box? = none
-print(user.avatar == none)
-print(box?.label() == none)
+let box: Box? = null
+print(user.avatar == null)
+print(box?.label() == null)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /user\.avatar \?\? null/);
@@ -7698,33 +8084,33 @@ type Details:
 type Envelope:
     details: Details?
 
-const absent: Envelope? = none
-const present: Envelope = {details: {groups: [none, "42"], format: () => "ready"}}
+const absent: Envelope? = null
+const present: Envelope = {details: {groups: [null, "42"], format: () => "ready"}}
 let loads = 0
 let indexes = 0
 
 def loadAbsent() -> Envelope?:
     loads += 1
-    return none
+    return null
 
 def nextIndex() -> number:
     indexes += 1
     return 0
 
-print(absent?.details.groups[0] ?? "missing")
-print(present?.details.groups[1] ?? "missing")
-print(absent?.details.format() ?? "missing")
-print(present?.details.format() ?? "missing")
-print(absent?.details.groups.slice(1).length ?? -1)
-print(present?.details.groups.slice(1).length ?? -1)
-print(loadAbsent()?.details.groups[0] ?? "missing")
+print(absent?.details?.groups?.[0] ?? "missing")
+print(present.details?.groups?.[1] ?? "missing")
+print(absent?.details?.format?.() ?? "missing")
+print(present.details?.format?.() ?? "missing")
+print(absent?.details?.groups?.slice(1)?.size ?? -1)
+print(present.details?.groups?.slice(1)?.size ?? -1)
+print(loadAbsent()?.details?.groups?.[0] ?? "missing")
 print(loads)
-print(absent?.details.groups[nextIndex()] ?? "missing")
+print(absent?.details?.groups?.[nextIndex()] ?? "missing")
 print(indexes)
-print(present?.details.groups[nextIndex()] ?? "missing")
+print(present.details?.groups?.[nextIndex()] ?? "missing")
 print(indexes)
 try:
-    print(present?.details.groups[9] ?? "missing")
+    print(present.details?.groups?.[9] ?? "missing")
 catch error:
     print(error.name)
 `.trimStart());
@@ -7748,9 +8134,9 @@ type Handler = () -> string
 type Hooks:
     handler: Handler?
 
-let value: Envelope? = none
-const hooks: Hooks = {handler: none}
-value?.details = none
+let value: Envelope? = null
+const hooks: Hooks = {handler: null}
+value?.details = null
 value?.details.groups[0] = "changed"
 const indexed = value.details.groups[0]
 const called = hooks.handler()
@@ -7772,10 +8158,10 @@ def inverse(user: User?) -> string:
     return not user ? "Guest" : user.name
 
 def numberLabel(value: number?) -> string:
-    return value ? "present" : "none"
+    return value ? "present" : "null"
 
 def inverseNumberLabel(value: number?) -> string:
-    return not value ? "none" : "present"
+    return not value ? "null" : "present"
 
 print(numberLabel(0))
 print(inverseNumberLabel(0))
@@ -7786,42 +8172,46 @@ print(inverseNumberLabel(0))
   assert.equal(execution.stdout, "present\npresent\n");
 });
 
-test("explicit none comparisons narrow blocks, inline expressions, assertions, and JSX sequences", () => {
+test("explicit null comparisons narrow blocks, inline expressions, assertions, and JSX sequences", () => {
   const result = compile(`
 type Contact:
     email: string?
 
 def blockLabel(contact: Contact) -> string:
-    if contact.email == none:
+    if contact.email == null:
         return "missing"
     else:
         const address: string = contact.email
         return address
 
 def inverseLabel(contact: Contact) -> string:
-    if none != contact.email:
+    if null != contact.email:
         return contact.email
     return "missing"
 
 def inlineLabel(contact: Contact) -> string:
-    return contact.email != none ? contact.email : "missing"
+    return contact.email != null ? contact.email : "missing"
 
 def assertedLabel(contact: Contact) -> string:
-    assert contact.email != none, "Email is required"
+    assert contact.email != null, "Email is required"
     const address: string = contact.email
     return address
 
 def preserveZero(value: number?) -> number:
-    if value != none:
+    if value != null:
         return value
     return -1
 
 component ContactView(primary: Contact, secondary: Contact):
-    return <main>
-        <p if={primary.email != none}>{primary.email}</p>
-        <p else-if={secondary.email == none}>Missing</p>
-        <a else href={secondary.email}>{secondary.email}</a>
-    </main>
+    def content() -> WebNode:
+        if primary.email != null:
+            return <p>{primary.email}</p>
+        else if secondary.email == null:
+            return <p>Missing</p>
+        else:
+            return <a href={secondary.email}>{secondary.email}</a>
+
+    return <main>{content()}</main>
 
 const contact: Contact = {email: "ada@example.com"}
 print(blockLabel(contact))
@@ -7839,8 +8229,8 @@ print(preserveZero(0))
 type Contact:
     email: string?
 
-const contact: Contact = {email: none}
-if contact.email != none:
+const contact: Contact = {email: null}
+if contact.email != null:
     print(contact.email)
 const address: string = contact.email
 `.trimStart());
@@ -7873,10 +8263,15 @@ def inverse(contact: Contact) -> string:
 def errorMessage(fault: Fault) -> string:
     if fault.error is Error:
         return fault.error.message
-    return "none"
+    return "null"
 
 component ContactLink(contact: Contact):
-    return <p><a if={contact.email} href={contact.email}>{contact.email}</a><span else>Missing</span></p>
+    def content() -> WebNode:
+        if contact.email:
+            return <a href={contact.email}>{contact.email}</a>
+        return <span>Missing</span>
+
+    return <p>{content()}</p>
 
 const contact: Contact = {email: "", manager: {email: "lead@example.com"}}
 print(label(contact))
@@ -7892,17 +8287,17 @@ print(errorMessage({error: Error("broken")}))
 type Contact:
     email: string?
 
-const contact: Contact = {email: none}
+const contact: Contact = {email: null}
 const address: string = contact.email
 if contact.email:
-    const contact: Contact = {email: none}
+    const contact: Contact = {email: null}
     const shadowed: string = contact.email
 `.trimStart());
   assert.equal(outside.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 2);
 });
 
 test("validates annotations and keeps any behind unsafe boundaries", () => {
-  const missing = compile("const value: Missing = none\n");
+  const missing = compile("const value: Missing = null\n");
   assert.ok(missing.diagnostics.some((item) => /Unknown type 'Missing'/.test(item.message)));
 
   const any = compile("def escape(value: any) -> any:\n    return value\n");
@@ -7964,23 +8359,23 @@ mount(<Counter start={1} />, "#app")
 test("Look is flat, typed as a value, responsive, state-aware, and target-aware", () => {
   const result = compile(`
 const cardLook = look:
-    display = grid
+    display = "grid"
     gap = 12px
     maxWidth = 680px
     padding = 20px
     background = rgb(251, 250, 247)
-    border = line(width: 1px, color: rgb(217, 215, 209))
-    radius = 16px
+    border = border(width=1px, color=rgb(217, 215, 209))
+    borderRadius = 16px
     color = rgb(17, 18, 22)
 
     if @hover and not @disabled:
-        translateY = -2px
+        translate = spacing(0px, -2px)
 
     if viewport.width <= 720px:
         padding = 16px
 
     width = 72 * 1%
-    margin = edges(-8px, 2px, 0px, 2px)
+    margin = spacing(-8px, 2px, 0px, 2px)
 
     @before:
         content = ""
@@ -7991,7 +8386,7 @@ component Card:
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.css ?? "", /\[data-velar-look~="base:display"\]\{display:var\(--velar-look-base-display\)\}/u);
-  assert.match(result.css ?? "", /\[data-velar-look~="hover\+not-disabled:translate-y"\]\[data-velar-look\]:where\(:hover\):where\(:not\(:disabled\):not\(\[aria-disabled="true"\]\)\)/u);
+  assert.match(result.css ?? "", /\[data-velar-look~="hover\+not-disabled:translate"\]\[data-velar-look\]:where\(:hover\):where\(:not\(:disabled\):not\(\[aria-disabled="true"\]\)\)/u);
   assert.match(result.css ?? "", /@media \(width <= 720px\)\{\[data-velar-look~="viewport-width-lte-720px:padding"\]\[data-velar-look\]/u);
   assert.match(result.css ?? "", /\[data-velar-look~="before:base:content"\]::before/u);
   assert.match(result.code ?? "", /data-velar-look/u);
@@ -8044,19 +8439,19 @@ test("Look composition uses ordinary functions and named arguments", () => {
 def surface(radius: Length, color: Color) -> Look:
     return look:
         background = color
-        radius = radius
+        borderRadius = radius
 
 const interactive = look:
-    cursor = pointer
+    cursor = "pointer"
 
     if @focusVisible:
-        outline = line(width: 2px, color: rgb(63, 115, 150))
+        outline = border(width=2px, color=rgb(63, 115, 150))
 
 const actionLook = look:
-    ...surface(color: rgb(255, 255, 255), radius: 999px)
+    ...surface(color=rgb(255, 255, 255), radius=9999px)
     ...interactive
-    display = inlineFlex
-    alignItems = center
+    display = "inline-flex"
+    alignItems = "center"
 
 component ActionButton:
     return <button look={actionLook}>Continue</button>
@@ -8203,7 +8598,7 @@ component App:
   assert.match(result.code ?? "", /const label = __velarResource\(\(\) => loadLabel\(\), __scope, "label"\)/u);
   const symbol = result.semanticIndex.symbols.find((item) => item.kind === "resource" && item.name === "label");
   assert.match(symbol?.type ?? "", /value: string\?/u);
-  assert.match(symbol?.type ?? "", /reload: \(\) -> Promise<none>/u);
+  assert.match(symbol?.type ?? "", /reload: \(\) -> Promise<null>/u);
 
   const execution = executeModule(`${result.code ?? ""}
 const pending = [];
@@ -8297,58 +8692,72 @@ component App:
 
     computed failure = refresh.error
 
-    return <main><button type="button" disabled={refresh.pending} on:click={refresh}>Refresh</button>{failure ? <p role="alert">{failure.message}</p> : none}</main>
+    return <main><button type="button" disabled={refresh.pending} on:click={refresh}>Refresh</button>{failure ? <p role="alert">{failure.message}</p> : null}</main>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const refresh = __velarAction\(async \(\) =>/u);
   const symbol = result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "refresh");
-  assert.match(symbol?.type ?? "", /action \(\) -> Promise<string\?>/u);
+  assert.match(symbol?.type ?? "", /action \(\) -> Promise<string>/u);
 
   const execution = executeModule(`${result.code ?? ""}
 const pending = [];
 const scope = __velarScope("ActionProbe");
 __velarRuntime.errorHandlers.add((report) => console.log(report.phase + ":" + report.detail + ":" + report.error.message));
 const save = __velarAction((value) => new Promise((resolve, reject) => pending.push({ value, resolve, reject })), scope, "save");
-console.log(save.pending + ":" + (save.error?.message ?? "none"));
+console.log(save.pending + ":" + (save.error?.message ?? "null"));
 const older = save("old");
 const latest = save("new");
 await Promise.resolve();
-console.log(save.pending + ":" + (save.error?.message ?? "none"));
+console.log(save.pending + ":" + (save.error?.message ?? "null"));
 pending[1].resolve("new");
-console.log((await latest) + ":" + save.pending + ":" + (save.error?.message ?? "none"));
+console.log((await latest) + ":" + save.pending + ":" + (save.error?.message ?? "null"));
 pending[0].reject(Error("Stale failure"));
-console.log((await older) + ":" + save.pending + ":" + (save.error?.message ?? "none"));
+try { await older; }
+catch (error) { console.log(error.message + ":" + save.pending + ":" + (save.error?.message ?? "null")); }
 const failed = save("broken");
 await Promise.resolve();
 pending[2].reject(Error("Save failed"));
-console.log((await failed) + ":" + save.pending + ":" + save.error.message);
+try { await failed; }
+catch (error) { console.log(error.message + ":" + save.pending + ":" + save.error.message); }
+const eventTarget = new EventTarget();
+const eventScope = __velarScope("EventProbe");
+const ownedFailure = __velarAction(() => Promise.reject(Error("Owned failure")), eventScope, "owned");
+__velarOn(eventTarget, "owned", ownedFailure, eventScope);
+__velarOn(eventTarget, "plain", () => Promise.reject(Error("Plain failure")), eventScope);
+eventTarget.dispatchEvent(new Event("owned"));
+eventTarget.dispatchEvent(new Event("plain"));
+await new Promise((resolve) => setTimeout(resolve, 0));
+__velarDestroyScope(eventScope);
 __velarDestroyScope(scope);
-console.log((await save("ignored")) + ":" + pending.length);
+try { await save("ignored"); }
+catch (error) { console.log(error.message + ":" + pending.length); }
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    "false:none",
-    "true:none",
-    "new:true:none",
-    "null:false:none",
+    "false:null",
+    "true:null",
+    "new:true:null",
+    "Stale failure:false:null",
     "action:save:Save failed",
-    "null:false:Save failed",
-    "null:3",
+    "Save failed:false:Save failed",
+    "event:plain:Plain failure",
+    "action:owned:Owned failure",
+    "Action 'save' cannot run after its component is destroyed:3",
     "",
   ].join("\n"));
 });
 
 test("actions reject exports, non-component ownership, bad returns, and unknown state fields", () => {
   const outside = compile(`
-action save() -> none:
-    return none
+action save() -> null:
+    return null
 `.trimStart());
   assert.ok(outside.diagnostics.some((item) => item.code === "VEL3013" && /only valid at component scope/u.test(item.message)));
 
   const exported = compile(`
-export action save() -> none:
-    return none
+export action save() -> null:
+    return null
 `.trimStart());
   assert.ok(exported.diagnostics.some((item) => item.code === "VEL2019" && /component-owned and cannot be exported/u.test(item.message)));
 
@@ -8392,7 +8801,7 @@ component App:
 
   const asynchronousMount = compile(`
 async def prepare():
-    return none
+    return null
 
 component App:
     mounted:
@@ -8404,7 +8813,7 @@ component App:
 
   const asynchronousCleanup = compile(`
 async def dispose():
-    return none
+    return null
 
 component App:
     cleanup:
@@ -8449,7 +8858,7 @@ test("Web runtime reports mount failures with a fatal fallback and continues cle
   const failedMount = compile(`
 let activeHandles = 0
 
-def acquireHandle() -> () -> none:
+def acquireHandle() -> () -> null:
     activeHandles += 1
     def stop():
         activeHandles -= 1
@@ -8545,11 +8954,11 @@ component Form:
 
   const correctRef = compile(`
 component CanvasView:
-    let canvas: CanvasElement? = none
+    let canvas: CanvasElement? = null
     return <canvas ref={canvas}></canvas>
 
 component DialogView:
-    let dialog: DialogElement? = none
+    let dialog: DialogElement? = null
     return <dialog ref={dialog}>Confirm</dialog>
 `.trimStart());
   assert.deepEqual(correctRef.diagnostics, []);
@@ -8557,20 +8966,20 @@ component DialogView:
 
   const wrongRef = compile(`
 component CanvasView:
-    let canvas: InputElement? = none
+    let canvas: InputElement? = null
     return <canvas ref={canvas}></canvas>
 `.trimStart());
   assert.ok(wrongRef.diagnostics.some((item) => item.code === "VEL5024"));
 
   const nonOptionalRef = compile(`
 component CanvasView:
-    let canvas: CanvasElement = none
+    let canvas: CanvasElement = null
     return <canvas ref={canvas}></canvas>
 `.trimStart());
-  assert.ok(nonOptionalRef.diagnostics.some((item) => item.code === "VEL5024" && /cleanup can restore none/u.test(item.message)));
+  assert.ok(nonOptionalRef.diagnostics.some((item) => item.code === "VEL5024" && /cleanup can restore null/u.test(item.message)));
 });
 
-test("JSX conditional branches stay readable, narrowed, and ownership-safe", () => {
+test("ordinary control flow keeps JSX branches readable, narrowed, and ownership-safe", () => {
   const result = compile(`
 type User:
     name: string
@@ -8579,16 +8988,21 @@ component Badge(label: string):
     return <strong>{label}</strong>
 
 component Profile(user: User?, failed: Error?, loading: bool):
-    return <main>
-        <p if={loading} aria-busy="true">Loading…</p>
-        <p else-if={failed} role="alert">{failed.message}</p>
-        <Badge else-if={user} label={user.name} />
-        <p else>Guest</p>
-    </main>
+    def content() -> WebNode:
+        if loading:
+            return <p aria-busy="true">Loading…</p>
+        else if failed:
+            return <p role="alert">{failed.message}</p>
+        else if user:
+            return <Badge label={user.name} />
+        else:
+            return <p>Guest</p>
+
+    return <main>{content()}</main>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarDynamic\(__el\d+, \(__childScope\) => \(loading \?/u);
+  assert.match(result.code ?? "", /if \(loading\)/u);
   assert.match(result.code ?? "", /failed != null/u);
   assert.match(result.code ?? "", /user != null/u);
   assert.doesNotMatch(result.code ?? "", /__velarStaticAttr\([^\n]+"(?:if|else-if|else)"/u);
@@ -8607,7 +9021,7 @@ component Broken:
 `.trimStart());
   assert.ok(invalid.diagnostics.filter((item) => item.code === "VEL5029").length >= 5);
 
-  const badCondition = compile("component Broken:\n    return <main><p if={\"yes\"}>Wrong</p></main>\n");
+  const badCondition = compile("component Broken:\n    def content() -> WebNode:\n        if \"yes\":\n            return <p>Wrong</p>\n        return <p>Fallback</p>\n\n    return <main>{content()}</main>\n");
   assert.ok(badCondition.diagnostics.some((item) => /Condition must be bool or optional/u.test(item.message)));
 });
 
@@ -8619,10 +9033,10 @@ def isKeyPayload(value: unknown) -> bool:
     return value is KeyPayload
 
 component Controls:
-    def handleAny(event: Event) -> none:
+    def handleAny(event: Event) -> null:
         print(event.type)
 
-    def handleKey(event: KeyboardEvent) -> none:
+    def handleKey(event: KeyboardEvent) -> null:
         print(event.key)
 
     return <main>
@@ -8649,7 +9063,7 @@ type Detailed:
     label: string
     count: number
 
-def show(value: Summary) -> none:
+def show(value: Summary) -> null:
     print(value.label)
 
 const detail: Detailed = {label: "ready", count: 1}
@@ -8659,10 +9073,10 @@ show(detail)
 
   const invalid = compile(`
 component Broken:
-    def pointerOnly(event: PointerEvent) -> none:
+    def pointerOnly(event: PointerEvent) -> null:
         print(event.clientX)
 
-    def tooMany(first: Event, second: Event) -> none:
+    def tooMany(first: Event, second: Event) -> null:
         print(first.type)
 
     return <main>
@@ -8763,10 +9177,10 @@ test("CLI emits complete Web application assets", async () => {
     capability: "web",
     target: "browser",
     protocolVersion: 1,
-    apiVersion: "0.9",
+    apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.9.0-dev" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.10.0-dev" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
@@ -8784,7 +9198,7 @@ test("CLI emits complete Web application assets", async () => {
   assert.ok(manifest.assets.some((asset) => asset.path === `assets/${trafficChunk}.map` && asset.role === "source-map"));
 });
 
-test("language server publishes diagnostics, hover, and completion", async () => {
+test("language server publishes diagnostics, hover, and completion", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "velar-lsp-project-"));
   const modelsPath = join(directory, "models.vel");
   const mainPath = join(directory, "main.vel");
@@ -8810,6 +9224,10 @@ test("language server publishes diagnostics, hover, and completion", async () =>
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "lsp"], {
     cwd: process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
+  });
+  context.after(() => {
+    child.stdin.destroy();
+    if (child.exitCode === null) child.kill();
   });
   let output = Buffer.alloc(0);
   const messages: Array<Record<string, unknown>> = [];
@@ -8862,7 +9280,7 @@ test("language server publishes diagnostics, hover, and completion", async () =>
     };
     serverInfo: { name: string };
   };
-  assert.equal(initializeResult.serverInfo.name, "Velar Language Server");
+  assert.equal(initializeResult.serverInfo.name, "VelarScript Language Server");
   assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 1);
   assert.equal(initializeResult.capabilities.definitionProvider, true);
   assert.deepEqual(initializeResult.capabilities.completionProvider.triggerCharacters, [".", "<", " ", "{", ",", ":"]);
@@ -8878,14 +9296,14 @@ test("language server publishes diagnostics, hover, and completion", async () =>
   send({
     jsonrpc: "2.0",
     method: "textDocument/didOpen",
-    params: { textDocument: { uri: scratchUri, languageId: "velar", version: 1, text: "component App:\n    let dialog: DialogElement? = none\n    return <img />\n" } },
+    params: { textDocument: { uri: scratchUri, languageId: "velar", version: 1, text: "component App:\n    let dialog: DialogElement? = null\n    return <img />\n" } },
   });
   const published = await waitFor((message) => message.method === "textDocument/publishDiagnostics");
   const diagnostics = (published.params as { diagnostics: Array<{ code: string }> }).diagnostics;
   assert.ok(diagnostics.some((item) => item.code === "VEL5016"));
 
   const fixUri = pathToFileURL(join(directory, "fix.vel")).href;
-  const fixText = "const same = 1 === 1\n\tprint(same)\n";
+  const fixText = "const same = 1 === 1\n\tprint(same)\nconst enabled = True && !False\n";
   send({
     jsonrpc: "2.0",
     method: "textDocument/didOpen",
@@ -8908,8 +9326,46 @@ test("language server publishes diagnostics, hover, and completion", async () =>
   });
   const fixed = await waitFor((message) => message.id === 30);
   const fixes = fixed.result as Array<{ title: string; kind: string; isPreferred: boolean; edit: { changes: Record<string, Array<{ newText: string }>> } }>;
-  assert.deepEqual(fixes.map((item) => item.edit.changes[fixUri]![0]!.newText).sort(), ["    ", "=="]);
+  assert.deepEqual(fixes.map((item) => item.edit.changes[fixUri]![0]!.newText).sort(), ["    ", "and", "false", "not", "true", "=="].sort());
   assert.ok(fixes.every((item) => item.kind === "quickfix" && item.isPreferred));
+
+  const namedFixUri = pathToFileURL(join(directory, "named-fix.vel")).href;
+  const namedFixText = "def greet(name: string):\n    pass\n\ngreet(name: \"Ada\")\n";
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: namedFixUri, languageId: "velar", version: 1, text: namedFixText } },
+  });
+  const namedPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === namedFixUri);
+  const namedDiagnostics = (namedPublished.params as { diagnostics: Array<{ code: string; range: Range }> }).diagnostics;
+  send({
+    jsonrpc: "2.0",
+    id: 130,
+    method: "textDocument/codeAction",
+    params: { textDocument: { uri: namedFixUri }, context: { diagnostics: namedDiagnostics, only: ["quickfix"] } },
+  });
+  const namedFixed = await waitFor((message) => message.id === 130);
+  assert.deepEqual((namedFixed.result as Array<{ edit: { changes: Record<string, Array<{ newText: string }>> } }>).map((item) => item.edit.changes[namedFixUri]![0]!.newText), ["="]);
+
+  const memberFixUri = pathToFileURL(join(directory, "member-fix.vel")).href;
+  const memberFixText = "const values: List<number> = []\nvalues.push(1)\n";
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: memberFixUri, languageId: "velar", version: 1, text: memberFixText } },
+  });
+  const memberPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === memberFixUri);
+  const memberDiagnostics = (memberPublished.params as { diagnostics: Array<{ code: string; range: Range }> }).diagnostics;
+  send({
+    jsonrpc: "2.0",
+    id: 131,
+    method: "textDocument/codeAction",
+    params: { textDocument: { uri: memberFixUri }, context: { diagnostics: memberDiagnostics, only: ["quickfix"] } },
+  });
+  const memberFixed = await waitFor((message) => message.id === 131);
+  assert.deepEqual((memberFixed.result as Array<{ edit: { changes: Record<string, Array<{ newText: string }>> } }>).map((item) => item.edit.changes[memberFixUri]![0]!.newText), ["append"]);
 
   send({ jsonrpc: "2.0", id: 2, method: "textDocument/hover", params: { textDocument: { uri: scratchUri }, position: { line: 0, character: 2 } } });
   const hovered = await waitFor((message) => message.id === 2);
@@ -8920,7 +9376,8 @@ test("language server publishes diagnostics, hover, and completion", async () =>
   assert.match(JSON.stringify(completed.result), /abstract/);
   assert.match(JSON.stringify(completed.result), /override/);
   assert.match(JSON.stringify(completed.result), /"label":"get"/);
-  assert.match(JSON.stringify(completed.result), /init/);
+  assert.match(JSON.stringify(completed.result), /constructor/);
+  assert.doesNotMatch(JSON.stringify(completed.result), /"label":"init"/u);
   assert.match(JSON.stringify(completed.result), /super/);
   assert.match(JSON.stringify(completed.result), /throw/);
   assert.match(JSON.stringify(completed.result), /assert/);
@@ -9037,12 +9494,12 @@ test("language server publishes diagnostics, hover, and completion", async () =>
   const memberItems = (memberCompletion.result as { items: Array<{ label: string; kind: number; detail?: string }> }).items;
   assert.ok(memberItems.some((item) => item.label === "value" && item.kind === 5 && item.detail === "string?"));
   assert.ok(memberItems.some((item) => item.label === "loading" && item.kind === 5 && item.detail === "bool"));
-  assert.ok(memberItems.some((item) => item.label === "reload" && item.kind === 2 && item.detail === "() -> Promise<none>"));
+  assert.ok(memberItems.some((item) => item.label === "reload" && item.kind === 2 && item.detail === "() -> Promise<null>"));
   const reloadCallColumn = mainText.split("\n")[9]!.indexOf("remote.reload(") + "remote.reload(".length;
   send({ jsonrpc: "2.0", id: 27, method: "textDocument/signatureHelp", params: { textDocument: { uri: mainUri }, position: { line: 9, character: reloadCallColumn } } });
   const memberSignature = await waitFor((message) => message.id === 27);
   assert.deepEqual(memberSignature.result, {
-    signatures: [{ label: "reload() -> Promise<none>" }],
+    signatures: [{ label: "reload() -> Promise<null>" }],
     activeSignature: 0,
     activeParameter: 0,
   });

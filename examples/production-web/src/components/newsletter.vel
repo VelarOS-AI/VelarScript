@@ -4,8 +4,8 @@ import {findMatch} from "velar/text"
 import {announce} from "velar/web"
 
 const formLook = look:
-    display = grid
-    columns = tracks(1fr, auto)
+    display = "grid"
+    gridTemplateColumns = tracks(1fr, "auto")
     gap = 8px
 
 const labelLook = look:
@@ -14,28 +14,27 @@ const labelLook = look:
 
 const inputLook = look:
     minWidth = 0
-    padding = space(10px, 12px)
-    border = line(1px, rgb(66, 82, 143))
-    radius = 9px
+    padding = spacing(10px, 12px)
+    border = border(1px, rgb(66, 82, 143))
+    borderRadius = 9px
 
 const buttonLook = look:
     ...inputLook
     color = rgb(8, 16, 34)
     background = rgb(157, 172, 255)
-    cursor = pointer
-
+    cursor = "pointer"
 export component Newsletter:
     state email = ""
-    let form: Element? = none
+    let form: Element? = null
 
     action submit():
         if form:
-            const domain = findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups[0]
+            const domain = findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups?.[0]
             if email == "":
                 setError(form, "email", "Email is required")
                 focusFirstError(form)
                 announce("Email is required", "assertive")
-            else if domain == none:
+            else if domain == null:
                 setError(form, "email", "Enter a complete email address")
                 focusFirstError(form)
                 announce("Email is incomplete", "assertive")
@@ -50,5 +49,5 @@ export component Newsletter:
         <label look={labelLook} for="newsletter-email">Release newsletter</label>
         <input look={inputLook} id="newsletter-email" name="email" type="email" bind:value={email} />
         <button look={buttonLook} type="submit" disabled={submit.pending}>Subscribe</button>
-        {submitFailure ? <p role="alert">{submitFailure.message}</p> : none}
+        {submitFailure ? <p role="alert">{submitFailure.message}</p> : null}
     </form>

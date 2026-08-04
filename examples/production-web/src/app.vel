@@ -25,23 +25,22 @@ const shellLook = look:
     minHeight = 100vh
     color = rgb(232, 236, 255)
     background = rgb(11, 16, 32)
-    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
 
 const navLook = look:
-    display = flex
+    display = "flex"
     gap = 8px
     width = 100%
     maxWidth = 1072px
-    marginInline = auto
+    marginInline = "auto"
     paddingTop = 18px
     paddingInline = 16px
 
 const navLinkLook = look:
-    padding = space(7px, 10px)
-    radius = 8px
+    padding = spacing(7px, 10px)
+    borderRadius = 8px
     color = rgb(189, 199, 255)
-    textDecoration = undecorated
-
+    textDecoration = "none"
     if @current:
         color = rgb(255, 255, 255)
         background = rgb(40, 53, 111)

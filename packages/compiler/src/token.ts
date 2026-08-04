@@ -5,8 +5,7 @@ export type TokenKind =
   | "number"
   | "string"
   | "fstring"
-  | "jsx"
-  | "embeddedBlock"
+  | "extensionToken"
   | "unitNumber"
   | "const"
   | "let"
@@ -50,7 +49,7 @@ export type TokenKind =
   | "is"
   | "true"
   | "false"
-  | "none"
+  | "null"
   | "and"
   | "or"
   | "not"
@@ -97,6 +96,7 @@ export interface Token {
   readonly kind: TokenKind;
   readonly value: string;
   readonly span: Span;
+  readonly payload?: unknown;
 }
 
 export const keywordKinds: Readonly<Record<string, TokenKind>> = {
@@ -141,7 +141,7 @@ export const keywordKinds: Readonly<Record<string, TokenKind>> = {
   is: "is",
   true: "true",
   false: "false",
-  none: "none",
+  null: "null",
   and: "and",
   or: "or",
   not: "not",

@@ -22,9 +22,6 @@ const svgElementNames = new Set<string>(nativeSvgTags);
 
 const jsxControlCompletions: readonly CompilerProjectEditorCompletion[] = [
   { label: "key", detail: "stable JSX list key", kind: "field" },
-  { label: "if", detail: "conditional JSX branch", kind: "field" },
-  { label: "else-if", detail: "conditional JSX branch", kind: "field" },
-  { label: "else", detail: "conditional JSX fallback", kind: "field" },
 ];
 
 const nativeJsxCompletions: readonly CompilerProjectEditorCompletion[] = [

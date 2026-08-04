@@ -101,7 +101,7 @@ export async function runDependencyCommand(
     try {
       addedMetadata = await extensionMetadata(project.root, parsed.packageNames);
     } catch (error) {
-      throw new Error(`Dependency was installed but its Velar metadata is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Dependency was installed but its VelarScript metadata is invalid: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const declaredBefore = extensionNames(project.manifest);
@@ -166,7 +166,7 @@ async function locatePackageProject(cwd: string): Promise<PackageProject> {
     if (await ordinaryFile(manifestPath)) {
       const packagePath = join(current, "package.json");
       if (!await ordinaryFile(packagePath)) throw new Error(`${current} contains velar.json but no ordinary package.json`);
-      const { source: manifestSource, value: manifest } = await readJsonObject(manifestPath, "Velar project manifest");
+      const { source: manifestSource, value: manifest } = await readJsonObject(manifestPath, "VelarScript project manifest");
       if (manifest.formatVersion !== CURRENT_PROJECT_FORMAT_VERSION) {
         throw new Error(`${manifestPath}: package commands require formatVersion ${CURRENT_PROJECT_FORMAT_VERSION}`);
       }
@@ -177,14 +177,14 @@ async function locatePackageProject(cwd: string): Promise<PackageProject> {
     if (parent === current || current === parse(current).root) break;
     current = parent;
   }
-  throw new Error("velar.json was not found; run package commands inside a Velar project");
+  throw new Error("velar.json was not found; run package commands inside a VelarScript project");
 }
 
 async function validatePackageManager(packagePath: string): Promise<void> {
   const { value } = await readJsonObject(packagePath, "package manifest");
   const packageManager = value.packageManager;
   if (packageManager !== undefined && (typeof packageManager !== "string" || !/^npm@[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?$/u.test(packageManager))) {
-    throw new Error(`${packagePath}: Velar package commands use npm, but packageManager is '${String(packageManager)}'`);
+    throw new Error(`${packagePath}: VelarScript package commands use npm, but packageManager is '${String(packageManager)}'`);
   }
 }
 

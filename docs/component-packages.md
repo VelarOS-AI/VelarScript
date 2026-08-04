@@ -1,8 +1,8 @@
-# Velar Component Packages
+# VelarScript Component Packages
 
 Status: source-package contract under application dogfood
 
-A Velar component package is an ordinary npm package whose public implementation
+A VelarScript component package is an ordinary npm package whose public implementation
 is checked `.vel` source. It is not a compiler extension, does not provide a
 framework host, and cannot silently activate language syntax.
 
@@ -29,7 +29,7 @@ framework host, and cannot silently activate language syntax.
   the framework instance and compiler extension. A component library must not
   hide a second Web runtime inside itself.
 - Runtime JavaScript dependencies remain ordinary npm dependencies. Framework
-  and toolchain dependencies are not smuggled through Velar metadata.
+  and toolchain dependencies are not smuggled through VelarScript metadata.
 
 `npm create velar@latest components -- --template component` creates this
 shape with a local preview application, Core contract test, browser rendering
@@ -47,7 +47,7 @@ Component systems should grow in three layers:
 
 The official website dogfoods this split privately as `@velarscript/ui`,
 `@velarscript/site-ui`, and `@velarscript/docs-kit`. Those packages do not enter
-the public toolchain release merely because they live under the Velar namespace;
+the public toolchain release merely because they live under the VelarScript namespace;
 promotion requires a stable API, independent package acceptance, and explicit
 release scope.
 

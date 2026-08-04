@@ -5,24 +5,24 @@ import {TicketDraft, TicketPriority} from "../domain.vel"
 import {addTicket} from "../store.vel"
 
 const formLook = look:
-    display = grid
+    display = "grid"
     gap = 12px
     padding = 18px
-    border = line(1px, rgb(220, 227, 236))
-    radius = 18px
+    border = border(1px, rgb(220, 227, 236))
+    borderRadius = 18px
     background = rgb(255, 255, 255)
-    shadow = dropShadow(0px, 16px, 44px, rgba(42, 55, 79, 0.07))
+    boxShadow = shadow(0px, 16px, 44px, rgba(42, 55, 79, 0.07))
 
 const gridLook = look:
-    display = grid
-    columns = tracks(1.2fr, 1fr, 0.7fr, 0.7fr)
+    display = "grid"
+    gridTemplateColumns = tracks(1.2fr, 1fr, 0.7fr, 0.7fr)
     gap = 10px
 
     if viewport.width <= 820px:
-        columns = tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 const labelLook = look:
-    display = grid
+    display = "grid"
     gap = 6px
     color = rgb(80, 93, 114)
     fontSize = 12px
@@ -30,9 +30,9 @@ const labelLook = look:
 
 const fieldLook = look:
     minHeight = 42px
-    border = line(1px, rgb(207, 216, 230))
-    radius = 10px
-    padding = space(9px, 11px)
+    border = border(1px, rgb(207, 216, 230))
+    borderRadius = 10px
+    padding = spacing(9px, 11px)
     color = rgb(23, 32, 51)
     background = rgb(251, 252, 254)
 
@@ -41,25 +41,23 @@ const textareaLook = look:
     minHeight = 76px
 
 const urgentLook = look:
-    display = flex
-    alignItems = center
+    display = "flex"
+    alignItems = "center"
     gap = 8px
 
 const checkboxLook = look:
-    minHeight = auto
-
+    minHeight = "auto"
 const submitLook = look:
-    justifySelf = start
-    border = line(0px, transparent)
-    radius = 10px
-    padding = space(10px, 15px)
+    justifySelf = "start"
+    border = border(0px, color("transparent"))
+    borderRadius = 10px
+    padding = spacing(10px, 15px)
     color = rgb(255, 255, 255)
     background = rgb(49, 87, 213)
     fontWeight = 800
-    cursor = pointer
-
+    cursor = "pointer"
 export component TicketForm:
-    let form: Element? = none
+    let form: Element? = null
 
     def submit():
         if form:
@@ -71,12 +69,12 @@ export component TicketForm:
                 setError(form, "title", "Add a short issue title")
             if isBlank(requester):
                 setError(form, "requester", "Add the requester name")
-            if draft.estimate == none:
+            if draft.estimate == null:
                 setError(form, "estimate", "Add an estimate in minutes")
             if errors(form).size > 0:
                 focusFirstError(form)
             else:
-                assert draft.estimate != none, "Ticket estimate must be present after validation"
+                assert draft.estimate != null, "Ticket estimate must be present after validation"
                 addTicket({...draft, title, requester, summary: trim(draft.summary)})
                 reset(form)
                 announce("Ticket created")

@@ -269,7 +269,7 @@ export interface ClassFieldDeclaration {
   readonly private: boolean;
   readonly name: string;
   readonly type: TypeReference;
-  readonly initializer: Expression;
+  readonly initializer: Expression | null;
   readonly span: Span;
 }
 
@@ -336,7 +336,48 @@ export interface Parameter {
 }
 
 export interface TypeReference {
-  readonly text: string;
+  readonly syntax: TypeSyntax;
+  readonly span: Span;
+}
+
+export type TypeSyntax = NamedTypeSyntax | GenericTypeSyntax | OptionalTypeSyntax | UnionTypeSyntax | FunctionTypeSyntax;
+
+export interface NamedTypeSyntax {
+  readonly kind: "NamedTypeSyntax";
+  readonly name: string;
+  readonly span: Span;
+}
+
+export interface GenericTypeSyntax {
+  readonly kind: "GenericTypeSyntax";
+  readonly name: string;
+  readonly arguments: readonly TypeSyntax[];
+  readonly span: Span;
+}
+
+export interface OptionalTypeSyntax {
+  readonly kind: "OptionalTypeSyntax";
+  readonly inner: TypeSyntax;
+  readonly span: Span;
+}
+
+export interface UnionTypeSyntax {
+  readonly kind: "UnionTypeSyntax";
+  readonly members: readonly TypeSyntax[];
+  readonly span: Span;
+}
+
+export interface FunctionTypeSyntax {
+  readonly kind: "FunctionTypeSyntax";
+  readonly parameters: readonly FunctionTypeParameterSyntax[];
+  readonly result: TypeSyntax;
+  readonly span: Span;
+}
+
+export interface FunctionTypeParameterSyntax {
+  readonly name: string | null;
+  readonly type: TypeSyntax;
+  readonly rest: boolean;
   readonly span: Span;
 }
 
@@ -369,8 +410,29 @@ export interface MatchStatement {
 }
 
 export interface MatchCase {
-  readonly values: readonly MatchValue[];
+  readonly pattern: MatchPattern;
+  readonly guard: Expression | null;
   readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export type MatchPattern = MatchValuePattern | MatchTypePattern;
+
+export interface MatchValuePattern {
+  readonly kind: "MatchValuePattern";
+  readonly values: readonly MatchValue[];
+  readonly span: Span;
+}
+
+export interface MatchTypePattern {
+  readonly kind: "MatchTypePattern";
+  readonly type: TypeReference;
+  readonly binding: MatchBinding | null;
+  readonly span: Span;
+}
+
+export interface MatchBinding {
+  readonly name: string;
   readonly span: Span;
 }
 
@@ -622,6 +684,7 @@ export interface CallExpression {
   readonly callee: Expression;
   readonly arguments: readonly Expression[];
   readonly argumentNames?: readonly (string | null)[];
+  readonly optional: boolean;
   readonly span: Span;
 }
 
@@ -637,6 +700,7 @@ export interface IndexExpression {
   readonly kind: "IndexExpression";
   readonly object: Expression;
   readonly index: Expression;
+  readonly optional: boolean;
   readonly span: Span;
 }
 

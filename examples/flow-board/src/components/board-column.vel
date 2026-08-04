@@ -2,19 +2,19 @@ import {Task, TaskIdHandler, TaskStatus} from "../domain.vel"
 import {TaskCard} from "./task-card.vel"
 
 const columnLook = look:
-    display = grid
-    alignContent = start
+    display = "grid"
+    alignContent = "start"
     gap = 12px
     minWidth = 0px
     padding = 12px
-    radius = 18px
+    borderRadius = 18px
     background = rgb(238, 242, 248)
 
 const headingLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
-    padding = edges(3px, 4px, 7px, 4px)
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
+    padding = spacing(3px, 4px, 7px, 4px)
 
 const titleLook = look:
     margin = 0
@@ -22,11 +22,11 @@ const titleLook = look:
     fontSize = 15px
 
 const countLook = look:
-    display = grid
-    placeItems = center
+    display = "grid"
+    placeItems = "center"
     minWidth = 26px
     height = 26px
-    radius = pill
+    borderRadius = 9999px
     color = rgb(82, 96, 120)
     background = rgb(255, 255, 255)
     fontSize = 12px
@@ -34,17 +34,17 @@ const countLook = look:
 
 const emptyLook = look:
     margin = 0
-    padding = space(30px, 12px)
-    border = line(1px, rgb(199, 208, 223))
-    radius = 13px
+    padding = spacing(30px, 12px)
+    border = border(1px, rgb(199, 208, 223))
+    borderRadius = 13px
     color = rgb(124, 135, 155)
-    textAlign = center
+    textAlign = "center"
     fontSize = 13px
 
 export component BoardColumn(title: string, status: TaskStatus, tasks: List<Task>, onAdvance: TaskIdHandler, onDelete: TaskIdHandler):
     const items = tasks.filter(task => task.status == status)
 
     return <section class="column" look={columnLook} data-column={status}>
-        <header class="heading" look={headingLook}><h2 look={titleLook}>{title}</h2><span class="count" look={countLook}>{items.length}</span></header>
-        {items.length == 0 ? <p class="empty" look={emptyLook}>No matching tasks</p> : <>{items.map(task => <TaskCard key={task.id} task={task} onAdvance={onAdvance} onDelete={onDelete} />)}</>}
+        <header class="heading" look={headingLook}><h2 look={titleLook}>{title}</h2><span class="count" look={countLook}>{items.size}</span></header>
+        {items.size == 0 ? <p class="empty" look={emptyLook}>No matching tasks</p> : <>{items.map(task => <TaskCard key={task.id} task={task} onAdvance={onAdvance} onDelete={onDelete} />)}</>}
     </section>

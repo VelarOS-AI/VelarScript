@@ -83,16 +83,16 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       const update = JSON.stringify({ revision, errors: next.errors, compilation: next.project.stats });
       for (const client of clients) client.write(`event: reload\ndata: ${update}\n\n`);
       process.stdout.write(next.errors.length === 0
-        ? `Velar app rebuilt in ${next.project.stats.durationMs}ms (${next.project.stats.compiledModules} compiled, ${next.project.stats.reusedModules} reused)\n`
-        : `Velar app has ${next.errors.length} error${next.errors.length === 1 ? "" : "s"}\n`);
+        ? `VelarScript app rebuilt in ${next.project.stats.durationMs}ms (${next.project.stats.compiledModules} compiled, ${next.project.stats.reusedModules} reused)\n`
+        : `VelarScript app has ${next.errors.length} error${next.errors.length === 1 ? "" : "s"}\n`);
     }).catch((error: unknown) => {
-      const message = `Velar rebuild failed: ${error instanceof Error ? error.message : String(error)}`;
+      const message = `VelarScript rebuild failed: ${error instanceof Error ? error.message : String(error)}`;
       snapshot = { ...snapshot, errors: [message] };
       revision += 1;
       const update = JSON.stringify({ revision, errors: snapshot.errors, compilation: snapshot.compilation });
       for (const client of clients) client.write(`event: reload\ndata: ${update}\n\n`);
       process.stderr.write(`${message}\n`);
-      process.stdout.write("Velar app has 1 error\n");
+      process.stdout.write("VelarScript app has 1 error\n");
     }).finally(() => {
       compiling = null;
       if (dirtyRevision !== rebuildRevision) scheduleRebuild();
@@ -206,7 +206,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     server.listen(port, "127.0.0.1", () => resolve());
   });
   const url = `http://127.0.0.1:${port}${base}`;
-  process.stdout.write(`Velar dev server: ${url}\n`);
+  process.stdout.write(`VelarScript dev server: ${url}\n`);
   if (snapshot.errors.length > 0) process.stdout.write(`${snapshot.errors.join("\n\n")}\n`);
 
   const close = (): void => {

@@ -5,7 +5,7 @@
   "publicDir": "public",
   "extensions": ["@velarscript/web"],
   "web": {
-    "title": "Velar Counter",
+    "title": "VelarScript Counter",
     "base": "/"
   }
 }

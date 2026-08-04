@@ -55,10 +55,10 @@ async def loadDashboard() -> DashboardData:
 
 const metricLook = look:
     padding = 20px
-    border = line(1px, rule)
-    radius = 16px
+    border = border(1px, rule)
+    borderRadius = 16px
     background = surface
-    shadow = dropShadow(0px, 12px, 30px, rgba(32, 48, 80, 0.05))
+    boxShadow = shadow(0px, 12px, 30px, rgba(32, 48, 80, 0.05))
 
 const metricValueLook = look:
     marginBlock = 8px
@@ -79,13 +79,13 @@ component MetricCard(metric: Metric):
     </article>
 
 const chartSummaryLook = look:
-    display = grid
+    display = "grid"
     gap = 3px
-    padding = space(8px, 10px)
-    radius = 8px
+    padding = spacing(8px, 10px)
+    borderRadius = 8px
     color = ink
     background = rgb(234, 240, 255)
-    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
     fontSize = 11px
 
 component ChartSummary(peakLabel: string):
@@ -99,14 +99,14 @@ component ChartSummary(peakLabel: string):
 const chartShellLook = look:
     marginTop = 22px
     padding = 22px
-    border = line(1px, rule)
-    radius = 16px
+    border = border(1px, rule)
+    borderRadius = 16px
     background = surface
 
 const chartLook = look:
-    display = block
+    display = "block"
     width = 100%
-    height = auto
+    height = "auto"
     minHeight = 220px
 
 component TrafficChart(points: List<TrafficPoint>, maxValue: number, peakLabel: string):
@@ -127,44 +127,42 @@ component TrafficChart(points: List<TrafficPoint>, maxValue: number, peakLabel: 
 const dashboardLook = look:
     width = 100%
     minHeight = 100vh
-    padding = space(48px, 16px)
+    padding = spacing(48px, 16px)
     color = ink
     background = paper
-    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
 
 const dashboardInnerLook = look:
     width = 100%
     maxWidth = 980px
-    marginInline = auto
-
+    marginInline = "auto"
 const toolbarLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
     gap = 16px
 
 const refreshLook = look:
-    padding = space(10px, 14px)
-    border = line(0px, transparent)
-    radius = 10px
+    padding = spacing(10px, 14px)
+    border = border(0px, color("transparent"))
+    borderRadius = 10px
     color = surface
     background = primary
-    cursor = pointer
-
+    cursor = "pointer"
     if @disabled:
         opacity = 0.55
 
 const gridLook = look:
-    display = grid
-    columns = repeat(4, minmax(0px, 1fr))
+    display = "grid"
+    gridTemplateColumns = repeat(4, minmax(0px, 1fr))
     gap = 16px
     marginTop = 22px
 
     if viewport.width <= 860px:
-        columns = repeat(2, minmax(0px, 1fr))
+        gridTemplateColumns = repeat(2, minmax(0px, 1fr))
 
     if viewport.width <= 520px:
-        columns = tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 def statusLook(failed: bool) -> Look:
     return look:
@@ -176,21 +174,26 @@ component Dashboard:
     computed payload = dashboard.value
     computed failure = dashboard.error
 
+    def status() -> WebNode:
+        if dashboard.loading:
+            return <p class="status" look={statusLook(false)} aria-busy="true">Loading dashboard...</p>
+        if failure:
+            return <p class="status" look={statusLook(true)} role="alert">{failure.message}</p>
+        return <p class="status" look={statusLook(false)}></p>
+
     return <main class="dashboard" look={dashboardLook} data-dashboard><div look={dashboardInnerLook}>
         <header class="toolbar" look={toolbarLook}>
             <div>
-                <h1>Velar Metrics</h1>
+                <h1>VelarScript Metrics</h1>
                 <p>Updated: {payload ? payload.updatedAt : "not yet"}</p>
             </div>
             <button look={refreshLook} data-refresh type="button" disabled={dashboard.loading} on:click={dashboard.reload}>Refresh</button>
         </header>
-        <p if={dashboard.loading} class="status" look={statusLook(false)} aria-busy="true">Loading dashboard...</p>
-        <p else-if={failure} class="status" look={statusLook(true)} role="alert">{failure.message}</p>
-        <p else class="status" look={statusLook(false)}></p>
+        {status()}
         <section class="grid" look={gridLook} aria-label="Current metrics">
             {payload ? payload.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />) : <></>}
         </section>
-        {payload ? <TrafficChart points={payload.traffic} maxValue={payload.trafficMax} peakLabel={payload.peakLabel} /> : none}
+        {payload ? <TrafficChart points={payload.traffic} maxValue={payload.trafficMax} peakLabel={payload.peakLabel} /> : null}
     </div></main>
 
 mount(<Dashboard />, "#app")

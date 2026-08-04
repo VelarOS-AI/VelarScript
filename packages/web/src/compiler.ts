@@ -5,13 +5,14 @@ import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension } from "./editor.ts";
 import { velarWebInspectionExtension } from "./inspection.ts";
 import { VelarWebParser } from "./parser.ts";
+import { scanWebToken } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
 
-export const VELAR_WEB_API_VERSION = "0.9";
+export const VELAR_WEB_API_VERSION = "0.10";
 
 const anyType: ValueType = { kind: "any" };
-const noneType: ValueType = { kind: "none" };
+const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
@@ -38,26 +39,24 @@ function namedFunction(parameterNames: readonly string[], parameters: readonly V
 }
 
 const webGlobals = new Map<string, ValueType>([
-  ["mount", { kind: "function", parameters: [nodeType, anyType], requiredParameters: 2, result: noneType }],
-  ["tick", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: noneType } }],
-  ...["grid", "flex", "block", "inline", "inlineFlex", "inlineGrid", "gone", "auto", "hidden", "visible", "scroll", "pointer", "defaultCursor", "center", "start", "end", "stretch", "spaceBetween", "spaceAround", "spaceEvenly", "wrap", "nowrap", "pill", "relative", "absolute", "fixed", "sticky", "transparent", "currentColor", "canvas", "canvasText", "inherit", "contain", "ease", "easeIn", "easeOut", "easeInOut", "column", "row", "undecorated", "strike", "uppercase", "lowercase", "capitalize", "ellipsis", "italic", "normal", "noPointer", "noSelect"].map((name) => [name, anyType] as const),
+  ["mount", { kind: "function", parameters: [nodeType, anyType], requiredParameters: 2, result: nullType }],
+  ["tick", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: nullType } }],
+  ["color", namedFunction(["value"], [stringType], colorType)],
   ["rgb", namedFunction(["red", "green", "blue"], [numberType, numberType, numberType], colorType)],
   ["rgba", namedFunction(["red", "green", "blue", "alpha"], [numberType, numberType, numberType, numberType], colorType)],
   ["hsl", namedFunction(["hue", "saturation", "lightness"], [numberType, numberType, numberType], colorType)],
   ["alpha", namedFunction(["color", "opacity"], [colorInputType, numberType], colorType)],
   ["lighten", namedFunction(["color", "amount"], [colorInputType, numberType], colorType)],
   ["darken", namedFunction(["color", "amount"], [colorInputType, numberType], colorType)],
-  ["line", namedFunction(["width", "color"], [lengthType, colorInputType], borderType)],
-  ["dropShadow", namedFunction(["x", "y", "blur", "color", "spread", "inside"], [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType, 4)],
+  ["border", namedFunction(["width", "color", "style"], [lengthType, colorInputType, stringType], borderType, 2)],
+  ["shadow", namedFunction(["x", "y", "blur", "color", "spread", "inset"], [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType, 4)],
   ["linearGradient", namedFunction(["angle", "from", "to"], [angleType, colorInputType, colorInputType], imageType)],
   ["asset", namedFunction(["path"], [stringType], imageType)],
   ["minmax", namedFunction(["minimum", "maximum"], [anyType, anyType], trackType)],
   ["repeat", namedFunction(["count", "size"], [numberType, anyType], trackListType)],
   ["tracks", { kind: "function", parameters: [], requiredParameters: 0, rest: anyType, result: trackListType }],
-  ["change", namedFunction(["property", "duration", "easing", "delay"], [stringType, durationType, anyType, durationType], transitionType, 2)],
-  ["space", namedFunction(["block", "inline"], [anyType, anyType], spacingType)],
-  ["edges", namedFunction(["top", "right", "bottom", "left"], [anyType, anyType, anyType, anyType], spacingType)],
-  ["inset", namedFunction(["size"], [lengthType], anyType)],
+  ["transition", namedFunction(["property", "duration", "easing", "delay"], [stringType, durationType, stringType, durationType], transitionType, 2)],
+  ["spacing", namedFunction(["first", "second", "third", "fourth"], [anyType, anyType, anyType, anyType], spacingType, 1)],
   ["min", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
   ["max", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
   ["clamp", namedFunction(["minimum", "preferred", "maximum"], [lengthType, lengthType, lengthType], lengthType)],
@@ -85,19 +84,19 @@ function object(fields: Readonly<Record<string, ValueType>>): ValueType {
 
 const unknownType: ValueType = { kind: "unknown" };
 const errorType: ValueType = { kind: "class", name: "Error" };
-const cleanupType = functionType([], noneType);
-const listString: ValueType = { kind: "list", element: stringType };
+const cleanupType = functionType([], nullType);
+const arrayString: ValueType = { kind: "list", element: stringType };
 const mapString = (value: ValueType): ValueType => ({ kind: "map", key: stringType, value });
 const webElementType: ValueType = { kind: "union", members: [elementType, inputElementType, canvasElementType, dialogElementType] };
 const fileType = object({ name: stringType, size: numberType, type: stringType, modified: numberType });
-const fileListType: ValueType = { kind: "list", element: fileType };
+const fileArrayType: ValueType = { kind: "list", element: fileType };
 const formBodyType = object({
-  field: functionType([stringType, stringType], noneType),
-  file: functionType([stringType, fileType, stringType], noneType, 2),
-  files: functionType([stringType, fileListType], noneType),
-  remove: functionType([stringType], noneType),
+  field: functionType([stringType, stringType], nullType),
+  file: functionType([stringType, fileType, stringType], nullType, 2),
+  files: functionType([stringType, fileArrayType], nullType),
+  remove: functionType([stringType], nullType),
   has: functionType([stringType], boolType),
-  names: functionType([], listString),
+  names: functionType([], arrayString),
 });
 
 const httpResponseType = object({
@@ -118,7 +117,7 @@ const requestType = object({
   text: functionType([], promise(stringType)),
   blob: functionType([], promise(anyType)),
   parse: intrinsic("http.parse", [anyType], promise(anyType)),
-  cancel: functionType([], noneType),
+  cancel: functionType([], nullType),
 });
 
 const httpOptionsType = object({
@@ -142,11 +141,11 @@ const httpType = object({
 function createStorageType(): ValueType {
   const common = (): Map<string, ValueType> => new Map([
     ["get", intrinsic("storage.get", [stringType, anyType, anyType], anyType, 2)],
-    ["set", functionType([stringType, anyType], noneType)],
+    ["set", functionType([stringType, anyType], nullType)],
     ["has", functionType([stringType], boolType)],
-    ["keys", functionType([], listString)],
-    ["remove", functionType([stringType], noneType)],
-    ["clear", functionType([], noneType)],
+    ["keys", functionType([], arrayString)],
+    ["remove", functionType([stringType], nullType)],
+    ["clear", functionType([], nullType)],
     ["watch", intrinsic("storage.watch", [stringType, anyType, anyType], cleanupType)],
   ]);
   const scoped: ValueType = { kind: "object", fields: common() };
@@ -158,11 +157,11 @@ function createStorageType(): ValueType {
 const storageType = createStorageType();
 const databaseType = object({
   get: intrinsic("storage.databaseGet", [stringType, anyType, anyType], promise(anyType), 2),
-  set: functionType([stringType, anyType], promise(noneType)),
+  set: functionType([stringType, anyType], promise(nullType)),
   has: functionType([stringType], promise(boolType)),
-  keys: functionType([], promise(listString)),
-  remove: functionType([stringType], promise(noneType)),
-  clear: functionType([], promise(noneType)),
+  keys: functionType([], promise(arrayString)),
+  remove: functionType([stringType], promise(nullType)),
+  clear: functionType([], promise(nullType)),
 });
 
 const routeType = object({
@@ -188,7 +187,7 @@ const browserLocationType = object({
 });
 const browserEnvironmentType = object({
   language: stringType,
-  languages: listString,
+  languages: arrayString,
   online: boolType,
   visible: boolType,
   colorScheme: stringType,
@@ -209,16 +208,16 @@ const socketHandlersType = object({
 const socketType = object({
   url: stringType,
   state: functionType([], stringType),
-  send: functionType([stringType], noneType),
-  sendJson: intrinsic("realtime.sendJson", [anyType], noneType),
-  close: functionType([numberType, stringType], noneType, 0),
+  send: functionType([stringType], nullType),
+  sendJson: intrinsic("realtime.sendJson", [anyType], nullType),
+  close: functionType([numberType, stringType], nullType, 0),
 });
 const eventStreamHandlersType = object({
   open: optional(functionType([], unknownType)),
   message: optional(functionType([stringType, stringType], unknownType)),
   error: optional(functionType([stringType], unknownType)),
 });
-const eventStreamType = object({ url: stringType, state: functionType([], stringType), close: functionType([], noneType) });
+const eventStreamType = object({ url: stringType, state: functionType([], stringType), close: functionType([], nullType) });
 const appErrorType = object({
   error: errorType,
   phase: stringType,
@@ -227,45 +226,45 @@ const appErrorType = object({
   timestamp: numberType,
 });
 const browserTestControllerType = object({
-  open: functionType([stringType], promise(noneType), 0),
-  reload: functionType([], promise(noneType)),
-  click: functionType([stringType], promise(noneType)),
-  fill: functionType([stringType, stringType], promise(noneType)),
-  select: functionType([stringType, stringType], promise(noneType)),
-  press: functionType([stringType, stringType], promise(noneType)),
+  open: functionType([stringType], promise(nullType), 0),
+  reload: functionType([], promise(nullType)),
+  click: functionType([stringType], promise(nullType)),
+  fill: functionType([stringType, stringType], promise(nullType)),
+  select: functionType([stringType, stringType], promise(nullType)),
+  press: functionType([stringType, stringType], promise(nullType)),
   text: functionType([stringType], promise(stringType)),
   attribute: functionType([stringType, stringType], promise(optional(stringType))),
   namespace: functionType([stringType], promise(stringType)),
   count: functionType([stringType], promise(numberType)),
   visible: functionType([stringType], promise(boolType)),
-  waitFor: functionType([stringType, stringType], promise(noneType), 1),
-  waitForText: functionType([stringType, stringType], promise(noneType)),
+  waitFor: functionType([stringType, stringType], promise(nullType), 1),
+  waitForText: functionType([stringType, stringType], promise(nullType)),
   currentPath: functionType([], promise(stringType)),
-  viewport: functionType([numberType, numberType], promise(noneType)),
+  viewport: functionType([numberType, numberType], promise(nullType)),
 });
 
 
 export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
   ["velar/app", moduleInterface(new Map([
     ["onError", functionType([functionType([appErrorType], unknownType)], cleanupType)],
-    ["reportError", functionType([errorType, stringType, stringType], noneType, 1)],
+    ["reportError", functionType([errorType, stringType, stringType], nullType, 1)],
   ]))],
   ["velar/config", moduleInterface(new Map([
     ["publicConfig", intrinsic("config.public", [anyType], anyType)],
     ["has", functionType([stringType], boolType)],
-    ["keys", functionType([], listString)],
+    ["keys", functionType([], arrayString)],
   ]))],
   ["velar/web", moduleInterface(new Map([
     ["RouteContext", { kind: "typeObject", name: "RouteContext" }],
     ["route", intrinsic("web.route", [stringType, anyType], routeType)],
     ["lazy", intrinsic("web.lazy", [functionType([], promise(anyType)), stringType, anyType, anyType], anyType, 2)],
-    ["navigate", functionType([stringType, navigationOptionsType], noneType, 1)],
-    ["redirect", functionType([stringType], noneType)],
-    ["back", functionType([], noneType)],
-    ["forward", functionType([], noneType)],
-    ["reload", functionType([], noneType)],
+    ["navigate", functionType([stringType, navigationOptionsType], nullType, 1)],
+    ["redirect", functionType([stringType], nullType)],
+    ["back", functionType([], nullType)],
+    ["forward", functionType([], nullType)],
+    ["reload", functionType([], nullType)],
     ["currentRoute", functionType([], routeContextType)],
-    ["announce", functionType([stringType, stringType], noneType, 1)],
+    ["announce", functionType([stringType, stringType], nullType, 1)],
     ["domId", functionType([stringType], stringType, 0)],
     ["Head", { kind: "componentConstructor", name: "Head", props: new Map<string, ValueType>([
       ["title", stringType], ["description", stringType], ["canonical", stringType], ["robots", stringType],
@@ -326,42 +325,42 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["textValue", functionType([elementType, stringType, stringType], stringType, 2)],
     ["numberValue", functionType([elementType, stringType], optional(numberType))],
     ["checkedValue", functionType([elementType, stringType], boolType)],
-    ["fieldValues", functionType([elementType, stringType], listString)],
-    ["setError", functionType([elementType, stringType, stringType], noneType)],
-    ["clearError", functionType([elementType, stringType], noneType)],
-    ["clearErrors", functionType([elementType], noneType)],
+    ["fieldValues", functionType([elementType, stringType], arrayString)],
+    ["setError", functionType([elementType, stringType, stringType], nullType)],
+    ["clearError", functionType([elementType, stringType], nullType)],
+    ["clearErrors", functionType([elementType], nullType)],
     ["errors", functionType([elementType], mapString(stringType))],
     ["focusFirstError", functionType([elementType], boolType)],
-    ["setPending", functionType([elementType, boolType], noneType)],
-    ["reset", functionType([elementType], noneType)],
+    ["setPending", functionType([elementType, boolType], nullType)],
+    ["reset", functionType([elementType], nullType)],
   ]))],
   ["velar/browser", moduleInterface(new Map([
     ["after", functionType([numberType, functionType([], unknownType)], cleanupType)],
     ["location", functionType([], browserLocationType)],
     ["environment", functionType([], browserEnvironmentType)],
-    ["copyText", functionType([stringType], promise(noneType))],
+    ["copyText", functionType([stringType], promise(nullType))],
     ["readClipboardText", functionType([], promise(stringType))],
-    ["open", functionType([stringType, stringType], noneType, 1)],
-    ["scrollTo", functionType([numberType, numberType, stringType], noneType, 2)],
-    ["scrollIntoView", functionType([webElementType, stringType], noneType, 1)],
-    ["focus", functionType([webElementType, boolType], noneType, 1)],
-    ["blur", functionType([webElementType], noneType)],
+    ["open", functionType([stringType, stringType], nullType, 1)],
+    ["scrollTo", functionType([numberType, numberType, stringType], nullType, 2)],
+    ["scrollIntoView", functionType([webElementType, stringType], nullType, 1)],
+    ["focus", functionType([webElementType, boolType], nullType, 1)],
+    ["blur", functionType([webElementType], nullType)],
     ["measure", functionType([webElementType], rectType)],
     ["media", functionType([stringType], boolType)],
     ["watchMedia", functionType([stringType, functionType([boolType], unknownType)], cleanupType)],
     ["watchOnline", functionType([functionType([boolType], unknownType)], cleanupType)],
     ["watchVisibility", functionType([functionType([boolType], unknownType)], cleanupType)],
-    ["showDialog", functionType([dialogElementType], noneType)],
-    ["closeDialog", functionType([dialogElementType, stringType], noneType, 1)],
+    ["showDialog", functionType([dialogElementType], nullType)],
+    ["closeDialog", functionType([dialogElementType, stringType], nullType, 1)],
     ["dialogResult", functionType([dialogElementType], stringType)],
     ["every", functionType([numberType, functionType([], unknownType)], cleanupType)],
     ["frame", functionType([], promise(numberType))],
   ]))],
   ["velar/files", moduleInterface(new Map([
-    ["pick", functionType([fileOptionsType], promise(fileListType), 0)],
+    ["pick", functionType([fileOptionsType], promise(fileArrayType), 0)],
     ["readText", functionType([fileType, numberType], promise(stringType), 1)],
     ["readDataUrl", functionType([fileType, numberType], promise(stringType), 1)],
-    ["download", functionType([stringType, stringType, stringType], noneType, 2)],
+    ["download", functionType([stringType, stringType, stringType], nullType, 2)],
   ]))],
   ["velar/realtime", moduleInterface(new Map([
     ["socket", functionType([stringType, socketHandlersType], socketType, 1)],
@@ -402,9 +401,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       onMounted: "Use the Web extension's component-level 'mounted:' block",
       on_mount: "Use the Web extension's component-level 'mounted:' block",
     }),
-    jsx: true,
-    embeddedBlocks: new Set(["look"]),
     numericSuffixes: new Set(["px", "rem", "em", "%", "vw", "vh", "vmin", "vmax", "fr", "ms", "s", "deg", "turn"]),
+    scan: scanWebToken,
   }),
   parser: Object.freeze({
     create(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[]) {
@@ -450,13 +448,13 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       InputElement: "A native input, select, or textarea reference obtained through JSX `ref`.",
       CanvasElement: "A native canvas reference obtained through JSX `ref`.",
       DialogElement: "A native dialog reference obtained from `<dialog ref={value}>` and operated through `velar/browser`.",
-      Event: "A restricted Web event value exposed to Velar event handlers.",
+      Event: "A restricted Web event value exposed to VelarScript event handlers.",
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),
     completions: Object.freeze([
       ...["component", "state", "computed", "resource", "action", "watch", "mounted", "cleanup", "look"].map((label) => ({ label, kind: 14 })),
-      { label: "mount", kind: 3, detail: "mount(node, target) -> none" },
-      { label: "tick", kind: 3, detail: "tick() -> Promise<none>" },
+      { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
+      { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
       { label: "on:click", kind: 10, detail: "DOM click handler" },

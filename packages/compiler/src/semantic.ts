@@ -8,7 +8,7 @@ import type {
   TypeReference,
 } from "./ast.ts";
 import type { SourceText, Span } from "./source.ts";
-import { describeType, type ValueType } from "./types.ts";
+import { describeType, formatTypeReference, type ValueType } from "./types.ts";
 
 export type SemanticSymbolKind =
   | "import"
@@ -328,7 +328,7 @@ export function buildSemanticIndex(
       switch (statement.kind) {
         case "ImportDeclaration": declareImport(statement); break;
         case "TypeDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
-        case "TypeAliasDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported, false, true, undefined, statement.target.text); break;
+        case "TypeAliasDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported, false, true, undefined, formatTypeReference(statement.target)); break;
         case "EnumDeclaration": {
           declare(statement, statement.name, "enum", statement.span, nameSpan(statement.span, statement.name), statement.exported);
           for (const member of statement.members) {
@@ -535,7 +535,7 @@ export function buildSemanticIndex(
         }
         for (const declaration of statement.constants) {
           const selection = nameSpan(declaration.span, declaration.name);
-          declare(declaration, declaration.name, "variable", declaration.span, selection, true, false, true, undefined, declaration.type.text);
+          declare(declaration, declaration.name, "variable", declaration.span, selection, true, false, true, undefined, formatTypeReference(declaration.type));
           typeReferences(declaration.type);
         }
         for (const declaration of statement.classes) {
@@ -608,17 +608,17 @@ export function buildSemanticIndex(
             field.binding === "let",
             false,
             statement.name,
-            field.type.text,
+            formatTypeReference(field.type),
             field.static,
             { ...(field.private ? { private: true } : {}) },
           );
           typeReferences(field.type);
-          if (!field.static) visitExpression(field.initializer);
+          if (!field.static && field.initializer) visitExpression(field.initializer);
         }
         if (statement.initialization) visitBlock(statement.initialization.body, statement.initialization.span);
         exitScope();
-        for (const field of statement.fields) if (field.static) visitExpression(field.initializer);
-        for (const getter of statement.getters) visitFunction(getter, true, statement.name, "field", getter.returnType?.text);
+        for (const field of statement.fields) if (field.static && field.initializer) visitExpression(field.initializer);
+        for (const getter of statement.getters) visitFunction(getter, true, statement.name, "field", getter.returnType ? formatTypeReference(getter.returnType) : undefined);
         for (const method of statement.methods) visitFunction(method, true, statement.name);
         break;
       case "VariableDeclaration":
@@ -637,8 +637,24 @@ export function buildSemanticIndex(
       case "MatchStatement":
         visitExpression(statement.value);
         for (const branch of statement.cases) {
-          for (const value of branch.values) visitExpression(value);
-          visitBlock(branch.body, branch.span);
+          if (branch.pattern.kind === "MatchValuePattern") {
+            for (const value of branch.pattern.values) visitExpression(value);
+          } else {
+            typeReferences(branch.pattern.type);
+          }
+          enterScope(branch.span);
+          if (branch.pattern.kind === "MatchTypePattern" && branch.pattern.binding) {
+            declare(
+              branch.pattern.binding,
+              branch.pattern.binding.name,
+              "variable",
+              branch.pattern.binding.span,
+              branch.pattern.binding.span,
+            );
+          }
+          if (branch.guard) visitExpression(branch.guard);
+          for (const child of branch.body) visitStatement(child);
+          exitScope();
         }
         if (statement.elseBody) visitBlock(statement.elseBody, statement.span);
         break;

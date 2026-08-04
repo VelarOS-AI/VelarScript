@@ -6,6 +6,14 @@ import {
   type Statement,
   type Token,
 } from "@velarscript/compiler/extension";
+import {
+  WEB_JSX_TOKEN,
+  WEB_LOOK_TOKEN,
+  type WebExpressionSource,
+  type WebJsxElementSyntax,
+  type WebLookBlockSyntax,
+  type WebLookLineSyntax,
+} from "./lexer.ts";
 
 type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
 type ComponentItem = ComponentDeclaration["body"][number];
@@ -18,8 +26,6 @@ type UnsafeCssImportDeclaration = Extract<Statement, { kind: "UnsafeCssImportDec
 type LookExpression = Extract<Expression, { kind: "LookExpression" }>;
 type LookEntry = LookExpression["entries"][number];
 type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
-type JSXAttribute = JSXElementExpression["attributes"][number];
-type JSXChild = JSXElementExpression["children"][number];
 
 const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
@@ -82,25 +88,28 @@ export class VelarWebParser extends Parser {
   }
 
   protected override parseExtensionExpression(token: Token): Expression | undefined {
-    if (token.kind === "jsx") {
-      return new JsxSourceParser(
-        token.value,
-        token.span.start,
-        (text, offset) => this.parseNestedExpression(text, offset),
-        (item) => this.diagnostics.push(item),
-      ).parse();
+    if (token.kind === "extensionToken" && token.value === WEB_JSX_TOKEN) {
+      const syntax = token.payload as WebJsxElementSyntax | undefined;
+      if (!syntax || syntax.kind !== "WebJsxElementSyntax") {
+        this.diagnostics.push(diagnostic("VEL5001", "The Web JSX token is missing its structured syntax", token.span));
+        return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+      }
+      return jsxExpression(syntax, (source) => this.parseNestedExpression(source.source, source.span.start));
     }
     if (token.kind !== "extensionKeyword" || token.value !== "look") return undefined;
     this.expect("colon", "Expected ':' after 'look'");
     this.expect("newline", "Expected a newline before Look entries");
     this.consumeNewlines();
     this.expect("indent", "Expected an indented Look block");
-    const block = this.expect("embeddedBlock", "Expected Look entries");
+    const block = this.expect("extensionToken", "Expected Look entries");
+    const syntax = block.value === WEB_LOOK_TOKEN ? block.payload as WebLookBlockSyntax | undefined : undefined;
+    if (!syntax || syntax.kind !== "WebLookBlockSyntax") {
+      this.diagnostics.push(diagnostic("VEL5038", "The Look block is missing its structured syntax", block.span));
+    }
     this.consumeNewlines();
     this.expect("dedent", "Expected the end of the Look block");
     const entries = new LookSourceParser(
-      block.value,
-      block.span.start,
+      syntax ?? { kind: "WebLookBlockSyntax", lines: [], span: block.span },
       (text, offset) => this.parseNestedExpression(text, offset),
       (item) => this.diagnostics.push(item),
     ).parse();
@@ -199,38 +208,52 @@ export class VelarWebParser extends Parser {
   }
 }
 
+function jsxExpression(
+  syntax: WebJsxElementSyntax,
+  parseExpression: (source: WebExpressionSource) => Expression,
+): JSXElementExpression {
+  return {
+    kind: "JSXElementExpression",
+    tag: syntax.tag,
+    attributes: syntax.attributes.map((attribute) => ({
+      name: attribute.name,
+      value: typeof attribute.value === "object" && attribute.value !== null
+        ? parseExpression(attribute.value)
+        : attribute.value,
+      span: attribute.span,
+    })),
+    children: syntax.children.map((child) => {
+      if (child.kind === "WebJsxElementSyntax") return jsxExpression(child, parseExpression);
+      if (child.kind === "WebJsxExpressionSyntax") {
+        return { kind: "JSXExpressionChild", expression: parseExpression(child.expression), span: child.span };
+      }
+      return { kind: "JSXText", value: child.value, span: child.span };
+    }),
+    span: syntax.span,
+  };
+}
+
 class LookSourceParser {
-  private readonly lines: readonly { indent: number; text: string; start: number; end: number }[];
-  private readonly offset: number;
+  private readonly lines: readonly WebLookLineSyntax[];
+  private readonly blockSpan: Span;
   private readonly parseExpression: (text: string, offset: number) => Expression;
   private readonly report: (item: Diagnostic) => void;
   private index = 0;
 
   constructor(
-    text: string,
-    offset: number,
+    block: WebLookBlockSyntax,
     parseExpression: (text: string, offset: number) => Expression,
     report: (item: Diagnostic) => void,
   ) {
-    this.offset = offset;
+    this.blockSpan = block.span;
     this.parseExpression = parseExpression;
     this.report = report;
-    const lines: { indent: number; text: string; start: number; end: number }[] = [];
-    let cursor = 0;
-    for (const raw of text.split("\n")) {
-      const whitespace = /^\s*/u.exec(raw)?.[0] ?? "";
-      const content = raw.slice(whitespace.length).trimEnd();
-      if (content && !content.startsWith("//")) {
-        lines.push({ indent: whitespace.replaceAll("\t", "    ").length, text: content, start: cursor + whitespace.length, end: cursor + raw.length });
-      }
-      cursor += raw.length + 1;
-    }
-    this.lines = lines;
+    this.lines = block.lines;
   }
 
   parse(): readonly LookEntry[] {
     if (this.lines.length === 0) {
-      this.report(diagnostic("VEL5038", "A Look block requires at least one entry", span(this.offset, this.offset)));
+      this.report(diagnostic("VEL5038", "A Look block requires at least one entry", this.blockSpan));
       return [];
     }
     return this.parseEntries(this.lines[0]!.indent);
@@ -262,7 +285,7 @@ class LookSourceParser {
         entries.push({
           kind: "LookProperty",
           name: property[1]!,
-          value: this.parseExpression(valueText, this.offset + valueStart),
+          value: this.parseExpression(valueText, valueStart),
           span: this.lineSpan(line),
         });
         continue;
@@ -275,7 +298,7 @@ class LookSourceParser {
         }
         entries.push({
           kind: "LookSpread",
-          value: this.parseExpression(valueText, this.offset + line.start + line.text.indexOf(valueText)),
+          value: this.parseExpression(valueText, line.start + line.text.indexOf(valueText)),
           span: this.lineSpan(line),
         });
         continue;
@@ -291,7 +314,7 @@ class LookSourceParser {
         continue;
       }
       const children = this.parseEntries(next.indent);
-      entries.push({ kind: "LookTarget", name: target, entries: children, span: span(this.offset + line.start, children.at(-1)?.span.end ?? this.offset + line.end) });
+      entries.push({ kind: "LookTarget", name: target, entries: children, span: span(line.start, children.at(-1)?.span.end ?? line.end) });
     }
     return entries;
   }
@@ -302,7 +325,7 @@ class LookSourceParser {
     prefix: "if " | "else if ",
   ): Extract<LookEntry, { kind: "LookIf" }> {
     const conditionText = line.text.slice(prefix.length, -1).trim();
-    const conditionOffset = this.offset + line.start + line.text.indexOf(conditionText);
+    const conditionOffset = line.start + line.text.indexOf(conditionText);
     const condition = this.parseLookCondition(conditionText, conditionOffset);
     const next = this.lines[this.index];
     let thenEntries: readonly LookEntry[] = [];
@@ -331,7 +354,7 @@ class LookSourceParser {
       condition,
       thenEntries,
       elseEntries,
-      span: span(this.offset + line.start, elseEntries.at(-1)?.span.end ?? thenEntries.at(-1)?.span.end ?? this.offset + line.end),
+      span: span(line.start, elseEntries.at(-1)?.span.end ?? thenEntries.at(-1)?.span.end ?? line.end),
     };
   }
 
@@ -373,7 +396,7 @@ class LookSourceParser {
   }
 
   private lineSpan(line: { start: number; end: number }): Span {
-    return span(this.offset + line.start, this.offset + line.end);
+    return span(line.start, line.end);
   }
 }
 
@@ -393,172 +416,4 @@ function replaceLookHooks(expression: Expression, hooks: ReadonlyMap<number, str
     return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, key === "span" ? child : visit(child)]));
   };
   return visit(expression) as Expression;
-}
-
-class JsxSourceParser {
-  private index = 0;
-  private readonly voidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-  private readonly text: string;
-  private readonly offset: number;
-  private readonly parseExpression: (text: string, offset: number) => Expression;
-  private readonly report: (item: Diagnostic) => void;
-
-  constructor(
-    text: string,
-    offset: number,
-    parseExpression: (text: string, offset: number) => Expression,
-    report: (item: Diagnostic) => void,
-  ) {
-    this.text = text;
-    this.offset = offset;
-    this.parseExpression = parseExpression;
-    this.report = report;
-  }
-
-  parse(): JSXElementExpression {
-    this.skipWhitespace();
-    return this.parseElement();
-  }
-
-  private parseElement(): JSXElementExpression {
-    const start = this.index;
-    this.expectCharacter("<", "Expected '<' to start JSX");
-    const tag = this.readName();
-    const fragment = !tag && this.peek() === ">";
-    if (!tag && !fragment) this.report(diagnostic("VEL5001", "Expected a JSX tag name or fragment", this.absoluteSpan(start, this.index)));
-    const attributes: JSXAttribute[] = [];
-    let selfClosing = false;
-
-    while (this.index < this.text.length) {
-      this.skipWhitespace();
-      if (this.text.startsWith("/>", this.index)) {
-        this.index += 2;
-        selfClosing = true;
-        break;
-      }
-      if (this.peek() === ">") {
-        this.index += 1;
-        break;
-      }
-      const attributeStart = this.index;
-      const name = this.readAttributeName();
-      if (!name) {
-        this.report(diagnostic("VEL5002", "Expected a JSX attribute", this.absoluteSpan(this.index, this.index + 1)));
-        this.index += 1;
-        continue;
-      }
-      this.skipWhitespace();
-      let value: string | Expression | null = null;
-      if (this.peek() === "=") {
-        this.index += 1;
-        this.skipWhitespace();
-        if (this.peek() === '"' || this.peek() === "'") {
-          value = this.readQuoted();
-        } else if (this.peek() === "{") {
-          const embedded = this.readEmbedded();
-          value = this.parseExpression(embedded.text, this.offset + embedded.start);
-        } else {
-          this.report(diagnostic("VEL5003", "JSX attribute values use quotes or '{...}'", this.absoluteSpan(this.index, this.index + 1)));
-        }
-      }
-      attributes.push({ name, value, span: this.absoluteSpan(attributeStart, this.index) });
-    }
-
-    const children: JSXChild[] = [];
-    if (!selfClosing && !(tag === tag.toLowerCase() && this.voidTags.has(tag))) {
-      while (this.index < this.text.length && !this.text.startsWith("</", this.index)) {
-        if (this.peek() === "<") {
-          children.push(this.parseElement());
-        } else if (this.peek() === "{") {
-          const childStart = this.index;
-          const embedded = this.readEmbedded();
-          children.push({
-            kind: "JSXExpressionChild",
-            expression: this.parseExpression(embedded.text, this.offset + embedded.start),
-            span: this.absoluteSpan(childStart, this.index),
-          });
-        } else {
-          const textStart = this.index;
-          while (this.index < this.text.length && this.peek() !== "<" && this.peek() !== "{") this.index += 1;
-          children.push({ kind: "JSXText", value: this.text.slice(textStart, this.index), span: this.absoluteSpan(textStart, this.index) });
-        }
-      }
-      if (!this.text.startsWith("</", this.index)) {
-        this.report(diagnostic("VEL5004", `JSX ${fragment ? "fragment" : `element '<${tag}>'`} is not closed`, this.absoluteSpan(start, this.index)));
-      } else {
-        this.index += 2;
-        const closing = this.readName();
-        if (closing !== tag) this.report(diagnostic("VEL5005", fragment ? "Expected '</>' to close the JSX fragment" : `Expected '</${tag}>' but received '</${closing}>'`, this.absoluteSpan(this.index - closing.length, this.index)));
-        this.skipWhitespace();
-        this.expectCharacter(">", "Expected '>' after JSX closing tag");
-      }
-    }
-
-    return { kind: "JSXElementExpression", tag, attributes, children, span: this.absoluteSpan(start, this.index) };
-  }
-
-  private readEmbedded(): { text: string; start: number } {
-    this.expectCharacter("{", "Expected '{'");
-    const start = this.index;
-    let depth = 1;
-    let quote = "";
-    while (this.index < this.text.length) {
-      const character = this.text[this.index++]!;
-      if (quote) {
-        if (character === "\\") this.index += 1;
-        else if (character === quote) quote = "";
-      } else if (character === '"' || character === "'" || character === "`") {
-        quote = character;
-      } else if (character === "{") {
-        depth += 1;
-      } else if (character === "}") {
-        depth -= 1;
-        if (depth === 0) return { text: this.text.slice(start, this.index - 1), start };
-      }
-    }
-    this.report(diagnostic("VEL5006", "Unclosed JSX expression", this.absoluteSpan(start - 1, this.index)));
-    return { text: this.text.slice(start), start };
-  }
-
-  private readQuoted(): string {
-    const quote = this.text[this.index++]!;
-    let value = "";
-    while (this.index < this.text.length) {
-      const character = this.text[this.index++]!;
-      if (character === quote) return value;
-      if (character === "\\" && this.index < this.text.length) value += this.text[this.index++]!;
-      else value += character;
-    }
-    this.report(diagnostic("VEL5007", "Unclosed JSX attribute string", this.absoluteSpan(this.index, this.index)));
-    return value;
-  }
-
-  private readName(): string {
-    const start = this.index;
-    while (/[A-Za-z0-9_.:-]/u.test(this.peek())) this.index += 1;
-    return this.text.slice(start, this.index);
-  }
-
-  private readAttributeName(): string {
-    const start = this.index;
-    while (/[A-Za-z0-9_.:-]/u.test(this.peek())) this.index += 1;
-    return this.text.slice(start, this.index);
-  }
-
-  private skipWhitespace(): void {
-    while (/\s/u.test(this.peek())) this.index += 1;
-  }
-
-  private expectCharacter(character: string, message: string): void {
-    if (this.peek() === character) this.index += 1;
-    else this.report(diagnostic("VEL5001", message, this.absoluteSpan(this.index, this.index + 1)));
-  }
-
-  private peek(): string {
-    return this.text[this.index] ?? "\0";
-  }
-
-  private absoluteSpan(start: number, end: number): Span {
-    return span(this.offset + start, this.offset + end);
-  }
 }

@@ -5,8 +5,15 @@ import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
 const forbiddenSourceIdentifiers = new Map<string, string>([
   ["var", "Use 'let' or 'const'; VelarScript does not expose 'var'"],
-  ["undefined", "Use 'none'; VelarScript does not expose 'undefined'"],
-  ["null", "Use 'none'; VelarScript does not expose 'null'"],
+  ["undefined", "Use 'null'; VelarScript does not expose 'undefined'"],
+  ["none", "Use 'null'; VelarScript uses the Web-native empty value spelling"],
+  ["None", "Use 'null'; VelarScript keywords are lowercase and Web-native"],
+  ["True", "Use 'true'; VelarScript keywords are lowercase"],
+  ["False", "Use 'false'; VelarScript keywords are lowercase"],
+  ["elif", "Use 'else if'; VelarScript keeps ordinary readable if chains"],
+  ["int", "Use 'number'; VelarScript has one finite numeric type"],
+  ["float", "Use 'number'; VelarScript has one finite numeric type"],
+  ["switch", "Use 'match' for strict pattern dispatch"],
   ["this", "Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'"],
   ["new", "Call a class directly; VelarScript does not expose 'new'"],
   ["eval", "VelarScript does not expose 'eval'"],
@@ -28,8 +35,7 @@ export class Lexer {
   private readonly text: string;
   private readonly extensionKeywords = new Map<string, string>();
   private readonly extensionForbiddenIdentifiers = new Map<string, string>();
-  private readonly jsxEnabled: boolean;
-  private readonly embeddedBlocks = new Set<string>();
+  private readonly extensionScanners: NonNullable<CompilerLexicalExtension["scan"]>[] = [];
   private readonly numericSuffixes = new Set<string>();
   private readonly tokens: Token[] = [];
   private readonly diagnostics: Diagnostic[] = [];
@@ -49,16 +55,15 @@ export class Lexer {
       for (const [name, guidance] of Object.entries(extension.forbiddenIdentifiers ?? {})) {
         this.extensionForbiddenIdentifiers.set(name, guidance);
       }
-      for (const name of extension.embeddedBlocks ?? []) this.embeddedBlocks.add(name);
       for (const suffix of extension.numericSuffixes ?? []) this.numericSuffixes.add(suffix);
+      if (extension.scan) this.extensionScanners.push(extension.scan);
     }
-    this.jsxEnabled = extensions.some((extension) => extension.jsx === true);
   }
 
   lex(): LexResult {
     while (!this.isAtEnd()) {
       if (this.tokens.length >= MAX_TOKENS) {
-        this.diagnostics.push(diagnostic("VEL1005", `A Velar module cannot exceed ${MAX_TOKENS} tokens`, span(this.index, this.index)));
+        this.diagnostics.push(diagnostic("VEL1005", `A VelarScript module cannot exceed ${MAX_TOKENS} tokens`, span(this.index, this.index)));
         this.index = this.text.length;
         break;
       }
@@ -69,10 +74,6 @@ export class Lexer {
       }
       if (this.atLineStart && this.nesting === 0) {
         this.readIndentation();
-        if (this.isEmbeddedBlockStart()) {
-          this.readEmbeddedBlock();
-          continue;
-        }
       }
 
       if (this.isAtEnd()) {
@@ -97,6 +98,8 @@ export class Lexer {
         continue;
       }
 
+      if (this.readExtensionToken()) continue;
+
       if (character === "f" && (this.peek(1) === '"' || this.peek(1) === "'")) {
         this.readFString();
         continue;
@@ -114,11 +117,6 @@ export class Lexer {
 
       if (character === '"' || character === "'") {
         this.readString(character);
-        continue;
-      }
-
-      if (this.jsxEnabled && character === "<" && this.shouldReadJsx()) {
-        this.readJsx();
         continue;
       }
 
@@ -206,6 +204,15 @@ export class Lexer {
           } else if (this.peek(1) === "=") {
             this.simple("notEqual", start, 2);
           } else {
+            this.diagnostics.push(diagnostic("VEL1005", "Use 'not'; VelarScript uses readable logical operators", span(start, start + 1)));
+            this.simple("not", start, 1);
+          }
+          break;
+        case "&":
+          if (this.peek(1) === "&") {
+            this.diagnostics.push(diagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2)));
+            this.simple("and", start, 2);
+          } else {
             this.invalidCharacter(character, start);
           }
           break;
@@ -216,7 +223,12 @@ export class Lexer {
           this.simple(this.peek(1) === "=" ? "greaterEqual" : "greater", start, this.peek(1) === "=" ? 2 : 1);
           break;
         case "|":
-          this.simple("pipe", start, 1);
+          if (this.peek(1) === "|") {
+            this.diagnostics.push(diagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2)));
+            this.simple("or", start, 2);
+          } else {
+            this.simple("pipe", start, 1);
+          }
           break;
         default:
           this.invalidCharacter(character, start);
@@ -320,7 +332,8 @@ export class Lexer {
       this.diagnostics.push(diagnostic("VEL1005", "VelarScript does not expose prototype manipulation", span(start, this.index)));
     }
     const extensionKeyword = this.extensionKeywords.get(value);
-    this.tokens.push({ kind: keywordKinds[value] ?? (extensionKeyword ? "extensionKeyword" : "identifier"), value: extensionKeyword ?? value, span: span(start, this.index) });
+    const keyword = Object.hasOwn(keywordKinds, value) ? keywordKinds[value] : undefined;
+    this.tokens.push({ kind: keyword ?? (extensionKeyword ? "extensionKeyword" : "identifier"), value: extensionKeyword ?? value, span: span(start, this.index) });
   }
 
   private readNumber(): void {
@@ -407,137 +420,25 @@ export class Lexer {
     this.tokens.push({ kind: "fstring", value, span: span(start, this.index) });
   }
 
-  private shouldReadJsx(): boolean {
-    if (!/[A-Za-z>]/u.test(this.peek(1))) return false;
-    const previous = this.tokens.at(-1)?.kind;
-    return previous === undefined || [
-      "assign", "return", "fatArrow", "leftParen", "leftBracket", "leftBrace",
-      "comma", "colon", "question", "newline", "indent",
-    ].includes(previous);
-  }
-
-  private readJsx(): void {
-    const start = this.index;
-    let depth = 0;
-    let finished = false;
-    const voidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-
-    while (!this.isAtEnd()) {
-      if (this.peek() === "{") {
-        this.skipJsxExpression();
-        continue;
+  private readExtensionToken(): boolean {
+    for (const scanner of this.extensionScanners) {
+      const result = scanner({
+        source: this.text,
+        offset: this.index,
+        currentIndent: this.indentStack.at(-1) ?? 0,
+        tokens: this.tokens,
+      });
+      if (!result) continue;
+      if (result.token.kind !== "extensionToken" || result.nextOffset <= this.index || result.nextOffset > this.text.length) {
+        throw new Error("A compiler lexical extension returned an invalid token boundary");
       }
-      if (this.peek() !== "<") {
-        this.advance();
-        continue;
-      }
-      if (this.text.startsWith("<!--", this.index)) {
-        const close = this.text.indexOf("-->", this.index + 4);
-        this.index = close === -1 ? this.text.length : close + 3;
-        continue;
-      }
-
-      const tagStart = this.index;
-      this.advance();
-      const closing = this.peek() === "/";
-      if (closing) this.advance();
-      const nameStart = this.index;
-      while (/[A-Za-z0-9_.:-]/u.test(this.peek())) this.advance();
-      const name = this.text.slice(nameStart, this.index);
-      let quote = "";
-      let braces = 0;
-      while (!this.isAtEnd()) {
-        const character = this.advance();
-        if (quote) {
-          if (character === "\\") this.advance();
-          else if (character === quote) quote = "";
-          continue;
-        }
-        if (character === '"' || character === "'") quote = character;
-        else if (character === "{") braces += 1;
-        else if (character === "}") braces = Math.max(0, braces - 1);
-        else if (character === ">" && braces === 0) break;
-      }
-      const tagText = this.text.slice(tagStart, this.index);
-      const selfClosing = /\/\s*>$/u.test(tagText) || (name === name.toLowerCase() && voidTags.has(name));
-      if (closing) depth -= 1;
-      else if (!selfClosing) depth += 1;
-
-      if ((closing || selfClosing) && depth === 0) {
-        finished = true;
-        break;
-      }
+      this.tokens.push(result.token);
+      this.diagnostics.push(...result.diagnostics ?? []);
+      this.index = result.nextOffset;
+      this.atLineStart = result.startsLine ?? false;
+      return true;
     }
-
-    if (!finished) {
-      this.diagnostics.push(diagnostic("VEL1010", "Unterminated JSX element", span(start, this.index)));
-    }
-    this.tokens.push({ kind: "jsx", value: this.text.slice(start, this.index), span: span(start, this.index) });
-    this.atLineStart = false;
-  }
-
-  private isEmbeddedBlockStart(): boolean {
-    if (this.tokens.at(-1)?.kind !== "indent") return false;
-    const beforeIndent = this.tokens.slice(0, -1);
-    let index = beforeIndent.length - 1;
-    if (beforeIndent[index]?.kind !== "newline") return false;
-    index -= 1;
-    if (beforeIndent[index]?.kind !== "colon") return false;
-    index -= 1;
-    return beforeIndent[index]?.kind === "extensionKeyword" && this.embeddedBlocks.has(beforeIndent[index]!.value);
-  }
-
-  private readEmbeddedBlock(): void {
-    const contentIndent = this.indentStack.at(-1) ?? 0;
-    const start = this.index;
-    const lines: string[] = [];
-    let cursor = this.index;
-
-    while (cursor < this.text.length) {
-      const end = this.text.indexOf("\n", cursor);
-      const lineEnd = end === -1 ? this.text.length : end;
-      lines.push(this.text.slice(cursor, lineEnd).replace(/\r$/u, ""));
-      if (end === -1) {
-        cursor = this.text.length;
-        break;
-      }
-      const nextLine = end + 1;
-      let width = 0;
-      let content = nextLine;
-      while (content < this.text.length && (this.text[content] === " " || this.text[content] === "\t")) {
-        width += this.text[content] === "\t" ? 4 : 1;
-        content += 1;
-      }
-      const blank = this.text[content] === "\n" || this.text[content] === "\r";
-      if (!blank && width < contentIndent) {
-        cursor = nextLine;
-        break;
-      }
-      cursor = blank ? content : nextLine + Math.min(contentIndent, width);
-    }
-
-    this.index = cursor;
-    this.tokens.push({ kind: "embeddedBlock", value: lines.join("\n").trimEnd(), span: span(start, cursor) });
-    this.atLineStart = cursor < this.text.length;
-  }
-
-  private skipJsxExpression(): void {
-    let depth = 0;
-    let quote = "";
-    while (!this.isAtEnd()) {
-      const character = this.advance();
-      if (quote) {
-        if (character === "\\") this.advance();
-        else if (character === quote) quote = "";
-        continue;
-      }
-      if (character === '"' || character === "'" || character === "`") quote = character;
-      else if (character === "{") depth += 1;
-      else if (character === "}") {
-        depth -= 1;
-        if (depth === 0) return;
-      }
-    }
+    return false;
   }
 
   private operator(single: TokenKind, compound: TokenKind, start: number): void {

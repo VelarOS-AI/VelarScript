@@ -23,17 +23,17 @@ type PreviewConfig:
 const previewConfig = publicConfig(PreviewConfig)
 
 const pageLook = look:
-    display = grid
+    display = "grid"
     gap = 22px
     width = 100%
     maxWidth = 1072px
-    marginInline = auto
-    padding = edges(40px, 16px, 64px, 16px)
+    marginInline = "auto"
+    padding = spacing(40px, 16px, 64px, 16px)
 
 const headerLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
     gap = 16px
 
 const titleLook = look:
@@ -45,19 +45,18 @@ const eyebrowLook = look:
     fontWeight = 700
 
 const actionsLook = look:
-    display = flex
-    alignItems = center
+    display = "flex"
+    alignItems = "center"
     gap = 12px
 
 def themeButtonLook(active: bool) -> Look:
     return look:
-        padding = space(9px, 12px)
-        border = line(1px, active ? rgb(157, 172, 255) : rgb(82, 99, 165))
-        radius = 9px
-        color = inherit
+        padding = spacing(9px, 12px)
+        border = border(1px, active ? rgb(157, 172, 255) : rgb(82, 99, 165))
+        borderRadius = 9px
+        color = "inherit"
         background = rgb(21, 28, 54)
-        cursor = pointer
-
+        cursor = "pointer"
 def formattedSamples() -> string:
     let labels = []
     formatter.visit([1.5, 2.5], label => labels.append(label))
@@ -72,15 +71,15 @@ def classFormattedSamples() -> string:
 
 export component Home:
     return <main class="page" look={pageLook}>
-        <Head title="Velar Release Studio" description="Velar 0.9 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
+        <Head title="VelarScript Release Studio" description="VelarScript 0.10 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
         <header class="header" look={headerLook}>
             <div>
-                <p class="eyebrow" look={eyebrowLook}>Velar 0.9 · Web API 0.9</p>
-                <h1 look={titleLook}>Velar Release Studio</h1>
+                <p class="eyebrow" look={eyebrowLook}>VelarScript 0.10 · Web API 0.10</p>
+                <h1 look={titleLook}>VelarScript Release Studio</h1>
             </div>
             <nav class="actions" look={actionsLook} aria-label="Primary navigation">
                 <StatusBadge theme={theme} />
-                <button class={dark ? "active" : none} look={themeButtonLook(dark)} on:click={toggleTheme}>Toggle theme</button>
+                <button class={dark ? "active" : null} look={themeButtonLook(dark)} on:click={toggleTheme}>Toggle theme</button>
             </nav>
         </header>
         <Metrics projects={projectCount()} />

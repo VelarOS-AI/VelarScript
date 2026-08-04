@@ -15,7 +15,7 @@ with an accidental earlier implementation is not a goal by itself.
   Web framework.
 - `packages/create` owns transactional project templates.
 - The independent Workbench repository is a generic editor host. Language
-  intelligence must arrive from the project-local Velar LSP.
+  intelligence must arrive from the project-local VelarScript LSP.
 
 ## Language and API changes
 

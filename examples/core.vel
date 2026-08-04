@@ -3,7 +3,14 @@ type User:
     name: string
     avatar: string?
 
-class Player(const name: string, let score: number = 0):
+class Player:
+    const name: string
+    let score: number
+
+    constructor(name: string, score: number = 0):
+        self.name = name
+        self.score = score
+
     def addScore(points: number):
         self.score += points
 
@@ -16,7 +23,7 @@ def activeNames(users: List<User>) -> List<string>:
 const raw = {
     id: "user-1",
     name: "Ada",
-    avatar: none,
+    avatar: null,
 }
 
 const user = User.parse(raw)
@@ -45,7 +52,7 @@ for id in scores:
     print(id)
 
 let index = 0
-while index < users.length:
+while index < users.size:
     print(users[index].name)
     index += 1
 

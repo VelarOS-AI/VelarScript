@@ -14,18 +14,18 @@ const shellLook = look:
     minHeight = 100vh
     color = rgb(23, 32, 51)
     background = linearGradient(145deg, rgb(223, 232, 255), rgb(246, 248, 252))
-    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
 
 const topbarLook = look:
-    position = sticky
+    position = "sticky"
     zIndex = 10
     top = 0px
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
     minHeight = 62px
-    padding = space(0px, 20px)
-    borderBottom = line(1px, rgba(205, 214, 230, 0.8))
+    padding = spacing(0px, 20px)
+    borderBottom = border(1px, rgba(205, 214, 230, 0.8))
     background = rgba(246, 248, 252, 0.94)
     backdropFilter = "blur(16px)"
 
@@ -33,20 +33,18 @@ const brandLook = look:
     color = rgb(23, 32, 51)
     fontWeight = 900
     letterSpacing = -0.03em
-    textDecoration = undecorated
-
+    textDecoration = "none"
 const navLook = look:
-    display = flex
+    display = "flex"
     gap = 8px
 
 const navLinkLook = look:
-    padding = space(8px, 10px)
-    radius = 9px
+    padding = spacing(8px, 10px)
+    borderRadius = 9px
     color = rgb(89, 101, 122)
     fontSize = 14px
     fontWeight = 700
-    textDecoration = undecorated
-
+    textDecoration = "none"
     if @hover:
         color = rgb(35, 69, 174)
         background = rgb(232, 237, 250)

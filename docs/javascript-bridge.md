@@ -1,6 +1,6 @@
 # JavaScript Declaration Bridge
 
-Status: deliberately limited in Velar 0.9
+Status: deliberately limited in VelarScript 0.10
 
 Safe `import js` first uses an explicit local `extern module` when present. If
 there is no manual declaration, the project compiler may read the npm package's
@@ -9,7 +9,7 @@ single-wildcard package subpaths such as `sdk/client` and `sdk/features/*` use
 their own export-map contract rather than silently falling back to the root.
 
 The bridge understands only the TypeScript declaration shapes that map directly
-to Velar's lightweight type system:
+to VelarScript's lightweight type system:
 
 - exported functions and constants;
 - string, number, boolean, void, null/undefined optionals, and literals;
@@ -19,7 +19,7 @@ to Velar's lightweight type system:
   interface inheritance, and simple aliases;
 - non-generic callback function types, including callbacks nested in exported
   function parameters;
-- final array-typed rest parameters, mapped to Velar rest element types;
+- final array-typed rest parameters, mapped to VelarScript rest element types;
 - simple classes with one constructor, public mutable/read-only fields,
   getter-only or same-typed getter/setter properties, instance methods, static
   mutable/read-only fields/accessors, static methods, and `this`
@@ -56,25 +56,28 @@ extern module "text-tools":
     export const version: string
     export def format(value: string) -> string
 
-    export class Formatter(const prefix: string, let precision: number = 1):
+    export class Formatter:
+        const prefix: string
+        let precision: number
+        constructor(prefix: string, precision: number = 1)
         static const version: string
         def format(value: number) -> string
         static def create(prefix: string) -> Formatter
 ```
 
 `export const name: Type` describes a read-only JavaScript export without a
-Velar initializer. Functions use the same checked parameter/result syntax as
-ordinary Velar functions. `export class` provides a complete
+VelarScript initializer. Functions use the same checked parameter/result syntax as
+ordinary VelarScript functions. `export class` provides a complete
 constructor/instance/static contract directly.
 Calls lower to native JavaScript `new`, including namespace imports, while
-Velar keeps the declared class nominal and enforces read-only members.
+VelarScript keeps the declared class nominal and enforces read-only members.
 
 An exported constant whose interface contains ordinary methods remains a plain
 checked object boundary. For example, `request(path: string): Promise<string>`
 maps to a callable `request` field. This does not create a class, infer
 overloads, execute declaration code, or import TypeScript's type-level rules.
 Optional function-valued members are displayed without ambiguity, for example
-`(() -> none)?` rather than a function returning an optional result.
+`(() -> null)?` rather than a function returning an optional result.
 Direct non-generic interface bases are flattened only when every base resolves
 to a plain object contract. Generic/complex bases, cycles, and declaration
 merging degrade the complete affected interface to `unknown`; the bridge never

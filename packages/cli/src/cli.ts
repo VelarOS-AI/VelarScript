@@ -111,7 +111,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     try {
       const result = await createVelarProject(parsed.directory, { template: parsed.template });
-      process.stdout.write(`Created Velar ${result.template} project -> ${result.root}\n`);
+      process.stdout.write(`Created VelarScript ${result.template} project -> ${result.root}\n`);
       return 0;
     } catch (error) {
       process.stderr.write(`velar create: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -240,15 +240,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     if (parsed.check && changed.length > 0) {
       for (const input of changed) process.stderr.write(`${displayPath(input)} is not formatted\n`);
-      process.stderr.write(`${changed.length} of ${inputs.length} Velar source file${inputs.length === 1 ? "" : "s"} require formatting\n`);
+      process.stderr.write(`${changed.length} of ${inputs.length} VelarScript source file${inputs.length === 1 ? "" : "s"} require formatting\n`);
       return 1;
     }
     if (singleFile) {
       process.stdout.write(parsed.check ? `${parsed.input} is formatted\n` : `Formatted ${parsed.input}\n`);
     } else if (parsed.check) {
-      process.stdout.write(`Checked formatting of ${inputs.length} Velar source file${inputs.length === 1 ? "" : "s"}\n`);
+      process.stdout.write(`Checked formatting of ${inputs.length} VelarScript source file${inputs.length === 1 ? "" : "s"}\n`);
     } else {
-      process.stdout.write(`Formatted ${changed.length} of ${inputs.length} Velar source file${inputs.length === 1 ? "" : "s"}\n`);
+      process.stdout.write(`Formatted ${changed.length} of ${inputs.length} VelarScript source file${inputs.length === 1 ? "" : "s"}\n`);
     }
     return 0;
   }
@@ -615,7 +615,7 @@ async function discoverVelarSources(config: VelarProjectConfig): Promise<string[
       } else if (entry.isFile() && entry.name.endsWith(".vel")) {
         output.push(path);
         if (output.length > MAX_VELAR_PROJECT_MODULES) {
-          throw new RangeError(`A Velar project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules`);
+          throw new RangeError(`A VelarScript project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules`);
         }
       }
     }
@@ -631,7 +631,7 @@ function displayPath(path: string): string {
 
 function printHelp(output: NodeJS.WritableStream = process.stdout): void {
   output.write([
-    "Velar Compiler",
+    "VelarScript Compiler",
     "",
     "Usage:",
     "  velar check [entry.vel | project-directory]",
@@ -664,9 +664,9 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
   const details: Readonly<Record<string, readonly string[]>> = {
     check: ["Usage: velar check [entry.vel | project-directory]", "Type-checks the whole resolved project without writing build output."],
     create: ["Usage: velar create <project-directory> [--template <web|docs|library|component>]", "Creates a transactional Web app, documentation site, Core source library, or Web component source package without installing dependencies."],
-    install: ["Usage: velar install", "Installs the current Velar project's declared dependencies through npm, then validates the project."],
+    install: ["Usage: velar install", "Installs the current VelarScript project's declared dependencies through npm, then validates the project."],
     add: ["Usage: velar add <package[@version]>... [--dev]", "Adds npm registry packages and activates packages that declare velar.extension metadata."],
-    remove: ["Usage: velar remove <package>...", "Removes npm packages and their extension-owned Velar project configuration."],
+    remove: ["Usage: velar remove <package>...", "Removes npm packages and their extension-owned VelarScript project configuration."],
     update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Runs the development server; the default port is 5173."],
     build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated framework application output or JavaScript modules."],
@@ -677,7 +677,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     format: ["Usage: velar format [file.vel | project-directory] [--check]", "Formats one file or every manifest-owned .vel source; --check never writes."],
     lsp: ["Usage: velar lsp", "Runs the stdio language server for an editor host."],
   };
-  output.write(["Velar Compiler", "", ...(details[command] ?? []), ""].join("\n"));
+  output.write(["VelarScript Compiler", "", ...(details[command] ?? []), ""].join("\n"));
 }
 
 function dependencyResultMessage(
@@ -687,7 +687,7 @@ function dependencyResultMessage(
   activated: readonly string[],
   removed: readonly string[],
 ): string {
-  if (action === "install") return `Installed and validated Velar project dependencies -> ${root}\n`;
+  if (action === "install") return `Installed and validated VelarScript project dependencies -> ${root}\n`;
   const names = packages.length > 0 ? packages.join(", ") : "all direct dependencies";
   const detail = activated.length > 0
     ? `; activated extensions: ${activated.join(", ")}`

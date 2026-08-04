@@ -1,4 +1,4 @@
-# Velar Project Lifecycle
+# VelarScript Project Lifecycle
 
 Status: project format 2, explicit compiler extensions
 
@@ -35,7 +35,7 @@ npm exec velar -- remove package-name
 ```
 
 These commands do not replace npm. npm owns dependency resolution and the lock;
-Velar validates that it is operating inside a format-2 project and synchronizes
+VelarScript validates that it is operating inside a format-2 project and synchronizes
 only extension activation metadata. An extension package opts in through its
 own `package.json` `velar.extension` object, so the CLI has no official Web or
 future Game package-name branch.
@@ -50,7 +50,7 @@ Format 2 makes the language/framework boundary explicit:
   "publicDir": "public",
   "extensions": ["@velarscript/web"],
   "web": {
-    "title": "My Velar App",
+    "title": "My VelarScript App",
     "base": "/",
     "publicConfig": {},
     "build": { "sourceMaps": false },

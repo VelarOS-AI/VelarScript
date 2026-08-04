@@ -5,23 +5,22 @@ import {TicketCard} from "../components/ticket-card.vel"
 import {TicketForm} from "../components/ticket-form.vel"
 
 const pageLook = look:
-    display = grid
+    display = "grid"
     gap = 20px
     width = 100%
     maxWidth = 1100px
-    marginInline = auto
-    padding = edges(34px, 16px, 60px, 16px)
+    marginInline = "auto"
+    padding = spacing(34px, 16px, 60px, 16px)
 
 const heroLook = look:
-    display = flex
-    alignItems = end
-    justifyContent = spaceBetween
+    display = "flex"
+    alignItems = "end"
+    justifyContent = "space-between"
     gap = 18px
 
     if viewport.width <= 760px:
-        alignItems = start
-        flow = column
-
+        alignItems = "start"
+        flexDirection = "column"
 const titleLook = look:
     margin = 0
     color = rgb(22, 34, 59)
@@ -35,78 +34,76 @@ const introLook = look:
     lineHeight = 1.55
 
 const toolsLook = look:
-    display = grid
-    columns = tracks(1fr, 170px, 170px)
+    display = "grid"
+    gridTemplateColumns = tracks(1fr, 170px, 170px)
     gap = 10px
 
     if viewport.width <= 760px:
-        columns = tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 const controlLook = look:
     minHeight = 42px
-    border = line(1px, rgb(204, 214, 229))
-    radius = 10px
-    padding = space(0px, 11px)
+    border = border(1px, rgb(204, 214, 229))
+    borderRadius = 10px
+    padding = spacing(0px, 11px)
     background = rgb(255, 255, 255)
 
 const listLook = look:
-    display = grid
-    columns = repeat(2, minmax(0px, 1fr))
+    display = "grid"
+    gridTemplateColumns = repeat(2, minmax(0px, 1fr))
     gap = 12px
 
     if viewport.width <= 760px:
-        columns = tracks(1fr)
+        gridTemplateColumns = tracks(1fr)
 
 def stateLook(failed: bool = false) -> Look:
     return look:
         padding = 18px
-        radius = 14px
+        borderRadius = 14px
         color = failed ? rgb(157, 41, 41) : rgb(99, 112, 135)
         background = failed ? rgb(255, 237, 237) : rgb(237, 241, 247)
 
 const retryLook = look:
     marginLeft = 10px
-    border = line(1px, currentColor)
-    radius = 8px
-    padding = space(6px, 9px)
-    color = inherit
-    background = transparent
+    border = border(1px, color("currentColor"))
+    borderRadius = 8px
+    padding = spacing(6px, 9px)
+    color = "inherit"
+    background = "transparent"
     fontWeight = 800
-    cursor = pointer
-
+    cursor = "pointer"
 const paginationLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = center
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "center"
     gap = 12px
 
 const pageButtonLook = look:
-    border = line(1px, rgb(204, 214, 229))
-    radius = 9px
-    padding = space(8px, 12px)
+    border = border(1px, rgb(204, 214, 229))
+    borderRadius = 9px
+    padding = spacing(8px, 12px)
     color = rgb(66, 80, 106)
     background = rgb(255, 255, 255)
     fontWeight = 800
-    cursor = pointer
-
+    cursor = "pointer"
 export component TicketsPage(route: RouteContext):
     resource catalog = loadTickets()
     computed loadFailure = catalog.error
     const requestedPage = number(route.query.get("page") ?? "")
-    if requestedPage != none:
+    if requestedPage != null:
         setPage(requestedPage)
 
     return <main class="page" look={pageLook} data-support-desk>
-        <Head title="SupportDesk · Customer issues" description="A routed support application built with Velar" themeColor="#f5f7fb" />
-        <section class="hero" look={heroLook}><div><h1 look={titleLook}>Support, in focus.</h1><p look={introLook}>Turn incoming issues into clear, owned work without losing the customer’s context.</p></div><p look={introLook} data-result-count>{selectedTickets.length} tickets</p></section>
+        <Head title="SupportDesk · Customer issues" description="A routed support application built with VelarScript" themeColor="#f5f7fb" />
+        <section class="hero" look={heroLook}><div><h1 look={titleLook}>Support, in focus.</h1><p look={introLook}>Turn incoming issues into clear, owned work without losing the customer’s context.</p></div><p look={introLook} data-result-count>{selectedTickets.size} tickets</p></section>
         <TicketForm />
         <section class="tools" look={toolsLook} aria-label="Ticket controls">
             <input look={controlLook} data-search bind:value={query} aria-label="Search tickets" placeholder="Search issue or requester" />
             <select look={controlLook} data-filter bind:value={filter} aria-label="Filter tickets"><option value={TicketFilter.all}>All statuses</option><option value={TicketFilter.open}>Open</option><option value={TicketFilter.pending}>Pending</option><option value={TicketFilter.resolved}>Resolved</option></select>
             <select look={controlLook} data-sort bind:value={sort} aria-label="Sort tickets"><option value={TicketSort.recent}>Recently updated</option><option value={TicketSort.oldest}>Oldest updated</option><option value={TicketSort.priority}>Priority</option></select>
         </section>
-        {catalog.loading ? <p class="state" look={stateLook()} aria-busy="true">Loading tickets…</p> : none}
-        {loadFailure ? <p class="state error" look={stateLook(true)} role="alert">{loadFailure.message}<button look={retryLook} type="button" on:click={catalog.reload}>Retry</button></p> : none}
+        {catalog.loading ? <p class="state" look={stateLook()} aria-busy="true">Loading tickets…</p> : null}
+        {loadFailure ? <p class="state error" look={stateLook(true)} role="alert">{loadFailure.message}<button look={retryLook} type="button" on:click={catalog.reload}>Retry</button></p> : null}
         <section class="list" look={listLook} aria-label="Tickets">{visibleTickets.map(ticket => <TicketCard key={ticket.id} ticket={ticket} />)}</section>
         <nav class="pagination" look={paginationLook} aria-label="Ticket pages"><button look={pageButtonLook} data-previous type="button" on:click={previousPage}>Previous</button><span data-page>Page {page} of {totalPages}</span><button look={pageButtonLook} data-next type="button" on:click={nextPage}>Next</button></nav>
     </main>

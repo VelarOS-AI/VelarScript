@@ -176,9 +176,9 @@ const __velarRuntimeTypeRegistryKey = Symbol.for("velar.type.registry.v1");
 const __velarRuntimeTypeRegistry = (() => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, __velarRuntimeTypeRegistryKey);
   if (descriptor) {
-    if (!("value" in descriptor)) throw new TypeError("Velar runtime type registry cannot be an accessor");
+    if (!("value" in descriptor)) throw new TypeError("VelarScript runtime type registry cannot be an accessor");
     try { WeakSet.prototype.has.call(descriptor.value, descriptor.value); }
-    catch { throw new TypeError("Velar runtime type registry is invalid"); }
+    catch { throw new TypeError("VelarScript runtime type registry is invalid"); }
     return descriptor.value;
   }
   const registry = new WeakSet();
@@ -194,7 +194,7 @@ function __velarRegisterRuntimeType(value) { __velarRuntimeTypeRegistry.add(valu
 function __velarRequireRuntimeType(value, name, optional = false) {
   if (optional && value == null) return null;
   if (!value || typeof value !== "object" || !WeakSet.prototype.has.call(__velarRuntimeTypeRegistry, value)) {
-    throw new TypeError(name + " requires a compiler-known Velar runtime type");
+    throw new TypeError(name + " requires a compiler-known VelarScript runtime type");
   }
   return value;
 }
@@ -265,7 +265,7 @@ export function domId(prefix = "velar") {
   prefix = __velarString(prefix, "DOM ID prefix");
   if (!/^[A-Za-z][A-Za-z0-9_-]*$/u.test(prefix)) throw new TypeError("DOM ID prefixes must start with a letter and contain only letters, numbers, underscores, or hyphens");
   if (prefix.length > 64) throw new RangeError("DOM ID prefixes cannot exceed 64 characters");
-  if (!Number.isSafeInteger(nextDomId)) throw new RangeError("The Velar DOM ID space is exhausted");
+  if (!Number.isSafeInteger(nextDomId)) throw new RangeError("The VelarScript DOM ID space is exhausted");
   return prefix + "-" + nextDomId++;
 }
 
@@ -290,26 +290,26 @@ export const RouteContext = __velarRegisterRuntimeType(Object.freeze({
 }));
 
 function validateRoutePath(path) {
-  if (typeof path !== "string" || !path.startsWith("/")) throw new TypeError("A Velar route path must start with '/'");
-  if (path.length > 8192) throw new RangeError("A Velar route path cannot exceed 8192 code units");
-  if (path.includes("?") || path.includes("#")) throw new TypeError("A Velar route path describes only a pathname");
-  if (path.includes("\\")) throw new TypeError("A Velar route path cannot contain a backslash");
-  if (path.length > 1 && path.endsWith("/")) throw new TypeError("A Velar route path cannot end with '/'");
+  if (typeof path !== "string" || !path.startsWith("/")) throw new TypeError("A VelarScript route path must start with '/'");
+  if (path.length > 8192) throw new RangeError("A VelarScript route path cannot exceed 8192 code units");
+  if (path.includes("?") || path.includes("#")) throw new TypeError("A VelarScript route path describes only a pathname");
+  if (path.includes("\\")) throw new TypeError("A VelarScript route path cannot contain a backslash");
+  if (path.length > 1 && path.endsWith("/")) throw new TypeError("A VelarScript route path cannot end with '/'");
   const names = new Set();
   const segments = path.split("/").slice(1);
   for (const [index, segment] of segments.entries()) {
-    if (!segment && path !== "/") throw new TypeError("A Velar route path cannot contain an empty segment");
+    if (!segment && path !== "/") throw new TypeError("A VelarScript route path cannot contain an empty segment");
     if (segment === "*") {
-      if (index !== segments.length - 1) throw new TypeError("A Velar route wildcard must be the final segment");
-      if (names.has("wildcard")) throw new TypeError("A Velar route parameter named 'wildcard' conflicts with the '*' capture");
+      if (index !== segments.length - 1) throw new TypeError("A VelarScript route wildcard must be the final segment");
+      if (names.has("wildcard")) throw new TypeError("A VelarScript route parameter named 'wildcard' conflicts with the '*' capture");
       names.add("wildcard");
       continue;
     }
-    if (segment.includes("*")) throw new TypeError("A Velar route wildcard must occupy its whole final segment");
+    if (segment.includes("*")) throw new TypeError("A VelarScript route wildcard must occupy its whole final segment");
     if (!segment.startsWith(":")) continue;
     const name = segment.slice(1);
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) throw new TypeError("A Velar route parameter requires a valid name");
-    if (names.has(name)) throw new TypeError("A Velar route parameter cannot be repeated: " + name);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) throw new TypeError("A VelarScript route parameter requires a valid name");
+    if (names.has(name)) throw new TypeError("A VelarScript route parameter cannot be repeated: " + name);
     names.add(name);
   }
   return path;
@@ -327,16 +327,16 @@ function compileRoutePath(path) {
 
 export function route(path, component) {
   path = validateRoutePath(path);
-  if (typeof component !== "function") throw new TypeError("A Velar route component must be callable");
+  if (typeof component !== "function") throw new TypeError("A VelarScript route component must be callable");
   return Object.freeze({ path, component });
 }
 
 export function lazy(loader, exportName, loading = null, failed = null) {
-  if (typeof loader !== "function") throw new TypeError("Velar lazy requires a module loader");
-  if (typeof exportName !== "string" || !exportName) throw new TypeError("Velar lazy requires an exported component name");
-  if (exportName.length > 4096) throw new RangeError("Velar lazy export names cannot exceed 4096 characters");
-  if (loading != null && typeof loading !== "function") throw new TypeError("Velar lazy loading fallback must be a component");
-  if (failed != null && typeof failed !== "function") throw new TypeError("Velar lazy failure fallback must be a component");
+  if (typeof loader !== "function") throw new TypeError("VelarScript lazy requires a module loader");
+  if (typeof exportName !== "string" || !exportName) throw new TypeError("VelarScript lazy requires an exported component name");
+  if (exportName.length > 4096) throw new RangeError("VelarScript lazy export names cannot exceed 4096 characters");
+  if (loading != null && typeof loading !== "function") throw new TypeError("VelarScript lazy loading fallback must be a component");
+  if (failed != null && typeof failed !== "function") throw new TypeError("VelarScript lazy failure fallback must be a component");
 
   let resolved = null;
   let pending = null;
@@ -363,14 +363,14 @@ export function lazy(loader, exportName, loading = null, failed = null) {
       : document.createElement("velar-lazy");
     if (!svg) host.style.display = "contents";
     let active = loading ? loading({}, namespace) : null;
-    if (active != null && !active.__velarComponent) throw new TypeError("Velar lazy loading fallback must render a component");
+    if (active != null && !active.__velarComponent) throw new TypeError("VelarScript lazy loading fallback must render a component");
     let mounted = false;
     let destroyed = false;
     if (active && active.__velarComponent) host.append(active.node);
     else host.append(document.createComment("lazy component loading"));
 
     const replace = (next) => {
-      if (!next || !next.__velarComponent) throw new TypeError("Velar lazy fallbacks must render components");
+      if (!next || !next.__velarComponent) throw new TypeError("VelarScript lazy fallbacks must render components");
       if (destroyed) { next.destroy(); return; }
       if (active && active.__velarComponent) active.destroy(false);
       active = next;
@@ -572,7 +572,7 @@ export function Router(props) {
       const match = path === null ? null : matchRoute(routes, path);
       const context = match?.context ?? { path: path ?? "/", params: new Map(), query: queryValues(), hash: routeHash() };
       const next = match ? match.item.component({ route: context }) : (fallback ?? notFound)({ route: context });
-      if (!next || !next.__velarComponent) throw new TypeError("A Velar Router target must render a component");
+      if (!next || !next.__velarComponent) throw new TypeError("A VelarScript Router target must render a component");
       if (active) active.destroy();
       active = next;
       node.replaceChildren(active.node);
@@ -658,7 +658,7 @@ function forwardHost(node, props) {
   }
   if (props.look != null) {
     const runtime = globalThis[Symbol.for("velar.runtime.v1")];
-    if (!runtime || typeof runtime.applyLook !== "function") throw new TypeError("Link Look requires the Velar Web runtime");
+    if (!runtime || typeof runtime.applyLook !== "function") throw new TypeError("Link Look requires the VelarScript Web runtime");
     cleanups.push(runtime.applyLook(node, props.look));
   }
   return () => { for (const cleanup of cleanups.reverse()) cleanup(); };
@@ -693,8 +693,8 @@ function applicationPath(pathname) {
 }
 
 function internalHref(to) {
-  if (typeof to !== "string" || !to.startsWith("/") || isExternal(to)) throw new TypeError("Velar navigation targets must be application paths starting with '/'");
-  if (to.length > 2 * 1024 * 1024) throw new RangeError("Velar navigation targets cannot exceed 2 MiB");
+  if (typeof to !== "string" || !to.startsWith("/") || isExternal(to)) throw new TypeError("VelarScript navigation targets must be application paths starting with '/'");
+  if (to.length > 2 * 1024 * 1024) throw new RangeError("VelarScript navigation targets cannot exceed 2 MiB");
   const parsed = new URL(to, "https://velar.invalid");
   return appBase + parsed.pathname.slice(1) + parsed.search + parsed.hash;
 }
@@ -730,7 +730,7 @@ function component(node, mounted, cleanup) {
     node,
     mount(target, before = null) {
       const parent = typeof target === "string" ? document.querySelector(target) : target;
-      if (!parent) throw new Error("Velar mount target was not found");
+      if (!parent) throw new Error("VelarScript mount target was not found");
       parent.insertBefore(node, before);
       this.__mount();
       return null;
@@ -996,7 +996,7 @@ function firstValue(form, name) {
 }
 
 function requireForm(value) {
-  if (!(value instanceof HTMLFormElement)) throw new TypeError("Velar form helpers require a form element");
+  if (!(value instanceof HTMLFormElement)) throw new TypeError("VelarScript form helpers require a form element");
 }
 `.trimStart()],
   ["velar/http", String.raw`
@@ -1059,7 +1059,7 @@ function optionsOf(value) {
   const nativeForm = typeof FormData !== "undefined" && body instanceof FormData;
   const nativeBlob = typeof Blob !== "undefined" && body instanceof Blob;
   if (body != null && typeof body !== "string" && !multipart && !nativeForm && !nativeBlob) {
-    if (typeof body !== "object") throw new TypeError("HTTP body must be text, JSON data, a Blob, or a Velar form body");
+    if (typeof body !== "object") throw new TypeError("HTTP body must be text, JSON data, a Blob, or a VelarScript form body");
     __velarAssertJson(body);
   }
   if (typeof body === "string" && body.length > 16 * 1024 * 1024) throw new RangeError("HTTP text bodies cannot exceed 16 MiB");
@@ -1157,7 +1157,7 @@ class HttpResponse {
     if (this.bytesPending) return this.bytesPending;
     const declared = this.native.headers.get("content-length");
     if (declared && /^\d+$/u.test(declared) && Number(declared) > this.maxBytes) {
-      await this.native.body?.cancel("Velar HTTP response exceeded maxBytes");
+      await this.native.body?.cancel("VelarScript HTTP response exceeded maxBytes");
       throw new RangeError("HTTP response exceeds maxBytes");
     }
     this.bytesPending = (async () => {
@@ -1170,7 +1170,7 @@ class HttpResponse {
         if (next.done) break;
         total += next.value.byteLength;
         if (total > this.maxBytes) {
-          await reader.cancel("Velar HTTP response exceeded maxBytes");
+          await reader.cancel("VelarScript HTTP response exceeded maxBytes");
           throw new RangeError("HTTP response exceeds maxBytes");
         }
         chunks.push(next.value);
@@ -1222,7 +1222,7 @@ class Request {
       let body = this.options.body;
       const multipart = body != null && typeof body === "object" ? formBodies.get(body) : null;
       if (multipart instanceof FormData) {
-        if (headers.has("content-type")) throw new TypeError("Do not set content-type for a Velar form body; the browser owns its multipart boundary");
+        if (headers.has("content-type")) throw new TypeError("Do not set content-type for a VelarScript form body; the browser owns its multipart boundary");
         body = multipart;
       } else if (body != null && typeof body === "object" && !(body instanceof FormData) && !(body instanceof Blob)) {
         if (!headers.has("content-type")) headers.set("content-type", "application/json");
@@ -1366,7 +1366,7 @@ export function database(name) {
         resolve(result);
       };
       request.onerror = () => reject(request.error);
-      request.onblocked = () => reject(new Error("Velar database upgrade is blocked by another open page"));
+      request.onblocked = () => reject(new Error("VelarScript database upgrade is blocked by another open page"));
     });
     opened = pending;
     void pending.catch(() => { if (opened === pending) opened = null; });
@@ -1395,7 +1395,7 @@ export function database(name) {
       return null;
     },
     async has(key) { const name = keyOf(key); return (await request("readonly", (store) => store.getKey(name))) !== undefined; },
-    async keys() { const keys = await request("readonly", (store) => store.getAllKeys(undefined, 100001)); if (!Array.isArray(keys) || keys.some((key) => typeof key !== "string")) throw new TypeError("Velar database contains a non-string key"); if (keys.length > 100000) throw new RangeError("Velar databases cannot expose more than 100000 keys at once"); return keys.slice().sort(); },
+    async keys() { const keys = await request("readonly", (store) => store.getAllKeys(undefined, 100001)); if (!Array.isArray(keys) || keys.some((key) => typeof key !== "string")) throw new TypeError("VelarScript database contains a non-string key"); if (keys.length > 100000) throw new RangeError("VelarScript databases cannot expose more than 100000 keys at once"); return keys.slice().sort(); },
     async remove(key) { const name = keyOf(key); await request("readwrite", (store) => store.delete(name)); return null; },
     async clear() { await request("readwrite", (store) => store.clear()); return null; },
   });
@@ -1485,7 +1485,7 @@ export function location() {
 
 export function environment() {
   const sourceLanguages = navigator.languages || [];
-  if (!Number.isSafeInteger(sourceLanguages.length) || sourceLanguages.length < 0 || sourceLanguages.length > 1000) throw new RangeError("Browser languages are outside Velar limits");
+  if (!Number.isSafeInteger(sourceLanguages.length) || sourceLanguages.length < 0 || sourceLanguages.length > 1000) throw new RangeError("Browser languages are outside VelarScript limits");
   const languages = [];
   for (let index = 0; index < sourceLanguages.length; index += 1) languages.push(browserText(sourceLanguages[index], "Browser language", 256));
   return Object.freeze({
@@ -1711,7 +1711,7 @@ export function socket(url, handlers = {}) {
   value.addEventListener("open", () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "socket:open"));
   value.addEventListener("message", (event) => {
     if (typeof event.data !== "string") {
-      __velarInvokeOwnedCallback(handlers.error, ["Binary WebSocket messages are not supported by Velar Web API 0.9"], "realtime", "socket:error");
+      __velarInvokeOwnedCallback(handlers.error, ["Binary WebSocket messages are not supported by VelarScript Web API 0.10"], "realtime", "socket:error");
       if (value.readyState < WebSocket.CLOSING) value.close(1003, "Text messages only");
       return;
     }
@@ -1745,7 +1745,7 @@ export function eventStream(url, handlers = {}, credentials = false) {
   value.addEventListener("open", () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "event-stream:open"));
   value.addEventListener("message", (event) => {
     if (typeof event.data !== "string" || event.data.length > maxRealtimeTextCodeUnits || typeof event.lastEventId !== "string" || event.lastEventId.length > 65536) {
-      __velarInvokeOwnedCallback(handlers.error, ["Event stream message or ID exceeded Velar limits"], "realtime", "event-stream:error");
+      __velarInvokeOwnedCallback(handlers.error, ["Event stream message or ID exceeded VelarScript limits"], "realtime", "event-stream:error");
       value.close();
       return;
     }

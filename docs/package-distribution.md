@@ -1,6 +1,6 @@
-# Velar Toolchain Distribution
+# VelarScript Toolchain Distribution
 
-Status: pre-release package contract for Velar 0.9; publication deferred
+Status: pre-release package contract for VelarScript 0.10; publication deferred
 
 The toolchain is distributed as four independent npm packages:
 
@@ -26,7 +26,7 @@ Workbench discovers the project-local
 
 ## Package model
 
-Velar does not operate a second registry or invent another dependency graph.
+VelarScript does not operate a second registry or invent another dependency graph.
 npm remains authoritative for registry resolution, `package.json`,
 `package-lock.json`, installation, integrity, audit, and update ranges. The CLI
 adds a project-aware layer:
@@ -43,7 +43,7 @@ Registry package specifications are passed to npm as argument-array data after
 to direct npm usage. `update` follows the ranges already declared in
 `package.json` rather than silently moving every dependency to a new major.
 
-A reusable Velar source package declares `velar.entry`. A compiler/framework
+A reusable VelarScript source package declares `velar.entry`. A compiler/framework
 extension declares `velar.extension`:
 
 ```json
@@ -70,7 +70,7 @@ The complete layering, accessibility, and versioning rules are documented in
 
 `npm run test:packages` is the release boundary. It builds all four packages,
 runs `npm pack`, checks the tarball contents, installs the complete set into a clean
-temporary consumer, invokes the installed CLI, builds and runs a Velar file
+temporary consumer, invokes the installed CLI, builds and runs a VelarScript file
 that imports the Core Standard API, and imports the public compiler API. The
 browser package gate additionally creates a project through packed tarballs,
 builds and verifies its production output, and runs its browser test. A
@@ -81,7 +81,7 @@ publishable.
 deterministic SHA-256 values, source identity, npm integrity, and explicit
 publication blockers. Candidate mode fails closed unless Git/version/remote
 and license requirements are satisfied. CI may attest and upload these
-tarballs, but no Velar 0.9 workflow invokes `npm publish`.
+tarballs, but no VelarScript 0.10 workflow invokes `npm publish`.
 
 Release output replacement refuses repository roots/ancestors, symbolic links,
 and non-release directories. Verification accepts exactly the sorted compiler,

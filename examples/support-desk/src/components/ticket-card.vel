@@ -3,27 +3,27 @@ import {format} from "velar/time"
 import {Ticket, TicketPriority, TicketStatus} from "../domain.vel"
 
 const cardLook = look:
-    display = grid
+    display = "grid"
     gap = 10px
     padding = 16px
-    border = line(1px, rgb(220, 227, 236))
-    radius = 15px
+    border = border(1px, rgb(220, 227, 236))
+    borderRadius = 15px
     background = rgb(255, 255, 255)
 
 const rowLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
     gap = 10px
 
 const badgesLook = look:
-    display = flex
+    display = "flex"
     gap = 6px
 
 def badgeLook(urgent: bool = false) -> Look:
     return look:
-        padding = space(4px, 7px)
-        radius = pill
+        padding = spacing(4px, 7px)
+        borderRadius = 9999px
         color = urgent ? rgb(165, 40, 40) : rgb(83, 96, 121)
         background = urgent ? rgb(255, 237, 237) : rgb(237, 241, 247)
         fontSize = 11px
@@ -43,12 +43,11 @@ const linkLook = look:
     color = rgb(49, 87, 213)
     fontSize = 13px
     fontWeight = 800
-    textDecoration = undecorated
-
+    textDecoration = "none"
 export component TicketCard(ticket: Ticket):
     return <article look={cardLook} data-ticket data-ticket-id={ticket.id}>
         <div class="meta" look={rowLook}>
-            <div class="badges" look={badgesLook}><span class="badge" look={badgeLook()}>{ticket.status}</span><span class="badge" look={badgeLook()}>{ticket.priority}</span>{ticket.urgent ? <span class="badge urgent" look={badgeLook(true)}>Urgent</span> : none}</div>
+            <div class="badges" look={badgesLook}><span class="badge" look={badgeLook()}>{ticket.status}</span><span class="badge" look={badgeLook()}>{ticket.priority}</span>{ticket.urgent ? <span class="badge urgent" look={badgeLook(true)}>Urgent</span> : null}</div>
             <span class="badge" look={badgeLook()}>{ticket.estimate} min</span>
         </div>
         <h2 look={titleLook} data-ticket-title>{ticket.title}</h2>

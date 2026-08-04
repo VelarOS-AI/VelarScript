@@ -12,8 +12,9 @@ import {matches} from "velar/text"
 type CapabilityStatus:
     label: string
 
-class CapabilityError(const message: string) extends Error(message):
-    pass
+class CapabilityError extends Error:
+    constructor(message: string):
+        super(message)
 
 type RuntimeFeatures:
     recovery: bool
@@ -38,34 +39,33 @@ async def loadResourceLabel() -> string:
     return "resource-ready"
 
 const capabilitiesLook = look:
-    display = grid
+    display = "grid"
     gap = 12px
     padding = 16px
-    border = line(1px, rgb(66, 82, 143))
-    radius = 12px
+    border = border(1px, rgb(66, 82, 143))
+    borderRadius = 12px
     background = rgb(17, 24, 46)
 
 const capabilityRowLook = look:
-    display = flex
-    wrap = wrap
-    gap = space(8px, 16px)
+    display = "flex"
+    flexWrap = "wrap"
+    gap = spacing(8px, 16px)
 
 const summaryItemLook = look:
     color = rgb(189, 199, 255)
 
 const actionButtonLook = look:
-    padding = space(8px, 11px)
-    border = line(1px, rgb(82, 99, 165))
-    radius = 8px
-    color = inherit
+    padding = spacing(8px, 11px)
+    border = border(1px, rgb(82, 99, 165))
+    borderRadius = 8px
+    color = "inherit"
     background = rgb(21, 28, 54)
-    cursor = pointer
-
+    cursor = "pointer"
 const eventInputLook = look:
-    padding = space(8px, 11px)
-    border = line(1px, rgb(82, 99, 165))
-    radius = 8px
-    color = inherit
+    padding = spacing(8px, 11px)
+    border = border(1px, rgb(82, 99, 165))
+    borderRadius = 8px
+    color = "inherit"
     background = rgb(21, 28, 54)
 
 export component WebCapabilities:
@@ -102,7 +102,7 @@ export component WebCapabilities:
     state timerLabel = "timer-pending"
     state timerTicks = 0
     state renderFails = false
-    let panel: Element? = none
+    let panel: Element? = null
 
     def onlineChanged(value: bool):
         online = value
@@ -178,7 +178,7 @@ export component WebCapabilities:
 
     async def verifyRecovery():
         try:
-            throw CapabilityError("Velar recovery ready")
+            throw CapabilityError("VelarScript recovery ready")
         catch error:
             errorLabel = error.message
         finally:
@@ -187,7 +187,7 @@ export component WebCapabilities:
     action chooseFile():
         const selected = await pick({accept: ".txt", multiple: false})
         const file = selected.get(0)
-        if file != none:
+        if file != null:
             fileName = file.name
             fileText = await readText(file)
             const body = formBody()
@@ -197,7 +197,7 @@ export component WebCapabilities:
             uploadLabel = f"{uploaded.label}:{uploaded.fileName}:{uploaded.size}"
 
     action copyStatus():
-        await copyText("Velar Web API 0.9")
+        await copyText("VelarScript Web API 0.10")
         clipboardLabel = "Copied"
 
     def saveStatus():

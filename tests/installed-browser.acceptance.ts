@@ -93,7 +93,7 @@ try {
   };
   assert.deepEqual(componentManifest.files, ["src/index.vel", "README.md"]);
   assert.equal(componentManifest.velar.entry, "src/index.vel");
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "0.9.0-dev");
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "0.10.0-dev");
   await runNpm(["run", "format:check"], component);
   await runNpm(["run", "check"], component);
   await runNpm(["test"], component);
@@ -102,7 +102,7 @@ try {
   const componentBrowser = await runNpm(["run", "test:browser", "--", "chromium"], component);
   assert.match(componentBrowser.stdout, /chromium :: src\/demo\.browser\.test\.vel :: test_component_preview/u);
   assert.match(componentBrowser.stdout, /1 passed, 0 failed/u);
-  process.stdout.write("Installed Velar browser-project acceptance passed\n");
+  process.stdout.write("Installed VelarScript browser-project acceptance passed\n");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

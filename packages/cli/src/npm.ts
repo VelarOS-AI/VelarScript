@@ -65,7 +65,7 @@ export async function resolveBrowserNpm(project: ProjectResult): Promise<Browser
   for (const package_ of project.velarPackages) {
     const entry = project.modules.find((module) => module.inputPath === package_.entryPath);
     if (!entry) {
-      failures.push(`Velar package '${package_.name}' entry was not compiled`);
+      failures.push(`VelarScript package '${package_.name}' entry was not compiled`);
       continue;
     }
     imports[package_.name] = withBase(

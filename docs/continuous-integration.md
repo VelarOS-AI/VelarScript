@@ -1,10 +1,10 @@
-# Velar Continuous Integration
+# VelarScript Continuous Integration
 
-Status: Velar 0.9 internal gate; publishing remains absent
+Status: VelarScript 0.10 internal gate; publishing remains absent
 
 The repository defines three GitHub Actions workflows:
 
-- `Velar CI` runs Node 24 check, tests, and packed-package consumer validation
+- `VelarScript CI` runs Node 24 check, tests, and packed-package consumer validation
   on Linux, macOS, and Windows. A separate Linux job installs Playwright's
   Chromium, Firefox, and WebKit dependencies and runs both development-server
   and CSP-enabled production browser matrices, the project-owned
@@ -12,6 +12,11 @@ The repository defines three GitHub Actions workflows:
   through packed installed compiler/Web/creator/CLI tarballs. Browser-project execution
   first verifies the exact production asset inventory and uses the public
   preview server.
+- The check gate extracts every `velar` fence from README, package guides, and
+  language/API documentation. Complete examples must compile with the real Web
+  extension and standard modules; explicitly marked `fragment` blocks must
+  still pass the real lexer and parser. Project scaffolds are compiled again by
+  packed-package consumer acceptance.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
   access redirects, and asset-to-HTML fallback are rejected. A real preview
@@ -35,4 +40,4 @@ Browser binaries are installed for the exact locked Playwright version in CI.
 They are not cached independently because browser/system dependency caches can
 drift from Playwright and do not provide a reliable speed advantage.
 
-No workflow publishes to npm in Velar 0.9.
+No workflow publishes to npm in VelarScript 0.10.

@@ -11,9 +11,9 @@ import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
   boolType,
   mergeTypes,
-  noneType,
+  nullType,
   numberType,
-  parseType,
+  resolveTypeReference,
   resolvedAsyncType,
   stringType,
   unknownType,
@@ -25,7 +25,7 @@ export { formatDiagnostic, type Diagnostic } from "./diagnostic.ts";
 export { formatSource } from "./formatter.ts";
 export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { describeType, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
@@ -170,7 +170,7 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
       program: { kind: "Program", body: [], span: { start: 0, end: 0 } },
       diagnostics: [diagnostic(
         "VEL1003",
-        `A Velar source module cannot exceed ${MAX_VELAR_SOURCE_CODE_UNITS / 1024 / 1024} MiB`,
+        `A VelarScript source module cannot exceed ${MAX_VELAR_SOURCE_CODE_UNITS / 1024 / 1024} MiB`,
         { start: 0, end: Math.min(1, text.length) },
       )],
     };
@@ -190,7 +190,7 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
     return {
       source,
       program: { kind: "Program", body: [], span: { start: 0, end: 0 } },
-      diagnostics: [diagnostic("VEL2008", "Velar source nesting is too complex to parse safely", { start: 0, end: Math.min(1, text.length) })],
+      diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to parse safely", { start: 0, end: Math.min(1, text.length) })],
     };
   }
 }
@@ -283,7 +283,7 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       case "ClassDeclaration":
         if (statement.base) for (const argument of statement.base.arguments) visitExpression(argument);
         for (const parameter of statement.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
-        for (const field of statement.fields) visitExpression(field.initializer);
+        for (const field of statement.fields) if (field.initializer) visitExpression(field.initializer);
         if (statement.initialization) visitBlock(statement.initialization.body);
         for (const method of statement.methods) {
           for (const parameter of method.parameters) if (parameter.defaultValue) visitExpression(parameter.defaultValue);
@@ -301,7 +301,13 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       case "IfStatement": visitExpression(statement.condition); visitBlock(statement.thenBody); if (statement.elseBody) visitBlock(statement.elseBody); break;
       case "MatchStatement":
         visitExpression(statement.value);
-        for (const branch of statement.cases) visitBlock(branch.body);
+        for (const branch of statement.cases) {
+          if (branch.pattern.kind === "MatchValuePattern") {
+            for (const value of branch.pattern.values) visitExpression(value);
+          }
+          if (branch.guard) visitExpression(branch.guard);
+          visitBlock(branch.body);
+        }
         if (statement.elseBody) visitBlock(statement.elseBody);
         break;
       case "ForStatement": visitExpression(statement.iterable); visitBlock(statement.body); break;
@@ -343,7 +349,7 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
       const cached = aliasCache.get(type.name);
       if (cached) return cached;
       const declaration = aliasDeclarations.get(type.name)!;
-      const expanded = expandAliases(parseType(declaration.target.text), new Set([...seen, type.name]));
+      const expanded = expandAliases(resolveTypeReference(declaration.target), new Set([...seen, type.name]));
       aliasCache.set(type.name, expanded);
       return expanded;
     }
@@ -362,7 +368,7 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
     if (type.kind === "union") return { kind: "union", members: type.members.map((member) => expandAliases(member, seen)) };
     return type;
   };
-  const resolve = (reference: TypeReference | null): ValueType => resolveNominals(expandAliases(reference ? parseType(reference.text) : unknownType), classIdentities, enumNames);
+  const resolve = (reference: TypeReference | null): ValueType => resolveNominals(expandAliases(reference ? resolveTypeReference(reference) : unknownType), classIdentities, enumNames);
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
@@ -470,7 +476,7 @@ function interfaceOf(program: Program, path: string, extensions: readonly Compil
 }
 
 function functionSignature(statement: FunctionDeclaration, resolve: (reference: TypeReference | null) => ValueType): ValueType {
-  const result = statement.returnType ? resolve(statement.returnType) : noneType;
+  const result = statement.returnType ? resolve(statement.returnType) : nullType;
   const rest = statement.parameters.find((parameter) => parameter.rest);
   return {
     kind: "function",
@@ -510,7 +516,7 @@ function inferPublicExpression(expression: Expression, extensions: readonly NonN
   }
   switch (expression.kind) {
     case "LiteralExpression":
-      return expression.value === null ? noneType : typeof expression.value === "string" ? stringType : typeof expression.value === "number" ? numberType : boolType;
+      return expression.value === null ? nullType : typeof expression.value === "string" ? stringType : typeof expression.value === "number" ? numberType : boolType;
     case "FStringExpression":
       return stringType;
     case "ListExpression": {

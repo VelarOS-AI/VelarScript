@@ -34,6 +34,7 @@ import type {
   TypeAliasDeclaration,
   TypeField,
   TypeReference,
+  TypeSyntax,
   VariableDeclaration,
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
@@ -388,7 +389,11 @@ export class Parser {
 
   private parseExternClass(start: number): ExternClassDeclaration {
     const name = this.expect("identifier", "Expected an extern class name");
-    const parameters = this.check("leftParen") ? this.parseExternClassParameters() : [];
+    let parameters: ClassParameter[] = [];
+    if (this.check("leftParen")) {
+      this.diagnostics.push(diagnostic("VEL2022", `Extern class '${name.value}' declares its constructor in the class body with 'constructor(...)'`, this.current().span));
+      this.parseExternClassParameters();
+    }
     const base = this.match("extends") ? this.expect("identifier", "Expected an extern base class name after 'extends'").value : null;
     this.expect("colon", "Expected ':' before an extern class body");
     this.expect("newline", "Expected a newline before an extern class body");
@@ -396,11 +401,25 @@ export class Parser {
     this.expect("indent", "Expected an indented extern class body");
     const fields: ExternClassFieldDeclaration[] = [];
     const methods: ExternClassMethodDeclaration[] = [];
+    let constructorSeen = false;
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
       const memberStart = this.current().span.start;
       if (this.match("pass")) {
+        this.expectStatementEnd();
+        this.consumeNewlines();
+        continue;
+      }
+      if (this.check("identifier") && this.current().value === "constructor") {
+        this.advance();
+        const constructorParameters = this.parseParameters();
+        if (constructorSeen) {
+          this.diagnostics.push(diagnostic("VEL2022", `Extern class '${name.value}' has more than one constructor`, span(memberStart, this.previous().span.end)));
+        } else {
+          parameters = constructorParameters.map((parameter) => ({ ...parameter, binding: null, private: false }));
+          constructorSeen = true;
+        }
         this.expectStatementEnd();
         this.consumeNewlines();
         continue;
@@ -411,7 +430,7 @@ export class Parser {
       const readonly = !mutable && this.match("const");
       if (mutable || readonly) {
         if (asynchronous) this.diagnostics.push(diagnostic("VEL2010", "Extern class fields cannot be async", this.previous().span));
-        const fieldName = this.expect("identifier", "Expected an extern class field name");
+        const fieldName = this.expectMemberName("Expected an extern class field name");
         this.expect("colon", "Expected ':' after an extern class field name");
         const type = this.parseTypeReference();
         fields.push({ static: static_, mutable, name: fieldName.value, type, span: span(memberStart, type.span.end) });
@@ -420,7 +439,7 @@ export class Parser {
         continue;
       }
       if (this.match("def")) {
-        const methodName = this.expect("identifier", "Expected an extern class method name");
+        const methodName = this.expectMemberName("Expected an extern class method name");
         const methodParameters = this.parseParameters();
         const returnType = this.match("arrow") ? this.parseTypeReference() : null;
         methods.push({
@@ -435,7 +454,7 @@ export class Parser {
         this.consumeNewlines();
         continue;
       }
-      this.diagnostics.push(diagnostic("VEL2010", "Extern class bodies declare fields with const/let, methods with def, or 'pass'", this.current().span));
+      this.diagnostics.push(diagnostic("VEL2010", "Extern class bodies declare fields with const/let, one constructor signature, methods with def, or 'pass'", this.current().span));
       this.synchronize();
       this.consumeNewlines();
     }
@@ -643,8 +662,9 @@ export class Parser {
 
   private parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration {
     const name = this.expect("identifier", "Expected a class name");
-    const parameters: ClassParameter[] = [];
+    let parameters: ClassParameter[] = [];
     if (this.match("leftParen")) {
+      this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' declares its constructor in the class body with 'constructor(...)'`, this.previous().span));
       if (!this.check("rightParen")) {
         do {
           const rest = this.match("ellipsis");
@@ -680,6 +700,7 @@ export class Parser {
       const arguments_: Expression[] = [];
       let end = baseName.span.end;
       if (this.match("leftParen")) {
+        this.diagnostics.push(diagnostic("VEL2022", "Pass base constructor arguments with an explicit 'super(...)' call inside the constructor", this.previous().span));
         if (!this.check("rightParen")) {
           do {
             arguments_.push(this.parseSpreadExpression());
@@ -715,11 +736,17 @@ export class Parser {
         else if (this.match("async")) asynchronous = true;
         else scanningModifiers = false;
       }
-      if (this.check("identifier") && this.current().value === "init") {
+      if (this.check("identifier") && (this.current().value === "constructor" || this.current().value === "init")) {
+        const constructorName = this.current();
         this.advance();
-        if (methodAbstract || methodOverride || methodStatic || methodPrivate || asynchronous) {
-          this.diagnostics.push(diagnostic("VEL2022", "A class init block does not accept modifiers", span(methodStart, this.previous().span.end)));
+        if (constructorName.value === "init") {
+          this.diagnostics.push(diagnostic("VEL2022", "Use 'constructor(...)' for class construction; the separate 'init:' block was removed", constructorName.span));
         }
+        if (methodAbstract || methodOverride || methodStatic || methodPrivate || asynchronous) {
+          this.diagnostics.push(diagnostic("VEL2022", "A constructor does not accept method modifiers", span(methodStart, this.previous().span.end)));
+        }
+        const constructorParameters = constructorName.value === "constructor" ? this.parseParameters() : [];
+        parameters = constructorParameters.map((parameter) => ({ ...parameter, binding: null, private: false }));
         const initBody = this.parseBlock();
         const block = {
           kind: "ClassInitBlock",
@@ -727,7 +754,7 @@ export class Parser {
           span: span(methodStart, initBody.at(-1)?.span.end ?? this.previous().span.end),
         } satisfies ClassInitBlock;
         if (initialization) {
-          this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' has more than one init block`, block.span));
+          this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' has more than one constructor`, block.span));
         } else {
           initialization = block;
         }
@@ -745,10 +772,9 @@ export class Parser {
           type = this.parseTypeReference();
         } else {
           this.diagnostics.push(diagnostic("VEL2021", "Class fields require an explicit type", fieldName.span));
-          type = { text: "unknown", span: fieldName.span };
+          type = { syntax: { kind: "NamedTypeSyntax", name: "unknown", span: fieldName.span }, span: fieldName.span };
         }
-        this.expect("assign", "Expected '=' before the class field initializer");
-        const initializer = this.parseExpression();
+        const initializer = this.match("assign") ? this.parseExpression() : null;
         fields.push({
           binding,
           static: methodStatic,
@@ -756,7 +782,7 @@ export class Parser {
           name: fieldName.value,
           type,
           initializer,
-          span: span(methodStart, initializer.span.end),
+          span: span(methodStart, initializer?.span.end ?? type.span.end),
         });
         this.expectStatementEnd();
         this.consumeNewlines();
@@ -774,7 +800,7 @@ export class Parser {
           this.consumeNewlines();
           continue;
         }
-        this.diagnostics.push(diagnostic("VEL2007", "Class bodies contain const/let fields, get properties, one init block, methods, or 'pass'", this.current().span));
+        this.diagnostics.push(diagnostic("VEL2007", "Class bodies contain const/let fields, one constructor, get properties, methods, or 'pass'", this.current().span));
         this.synchronize();
         this.consumeNewlines();
         continue;
@@ -819,7 +845,7 @@ export class Parser {
       returnType = this.parseTypeReference();
     } else {
       this.diagnostics.push(diagnostic("VEL2023", "A getter requires an explicit result type", name.span));
-      returnType = { text: "unknown", span: name.span };
+      returnType = { syntax: { kind: "NamedTypeSyntax", name: "unknown", span: name.span }, span: name.span };
     }
     if (asynchronous) {
       this.diagnostics.push(diagnostic("VEL2023", "A getter cannot be async; expose an ordinary async method instead", span(start, returnType.span.end)));
@@ -939,17 +965,31 @@ export class Parser {
         if (elseBody) {
           this.diagnostics.push(diagnostic("VEL2015", "A match case cannot follow else", this.previous().span));
         }
-        const values: MatchStatement["cases"][number]["values"][number][] = [];
-        if (this.check("colon")) {
-          this.diagnostics.push(diagnostic("VEL2015", "A match case requires at least one literal value", this.current().span));
-        } else {
+        const patternStart = this.current().span.start;
+        let pattern: MatchStatement["cases"][number]["pattern"];
+        if (this.startsMatchValue()) {
+          const values: Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchValuePattern" }>["values"][number][] = [];
           do {
             const value = this.parseMatchValue();
             if (value) values.push(value);
-          } while (this.match("comma") && !this.check("colon"));
+          } while (this.match("comma") && !this.check("if") && !this.check("colon"));
+          const patternEnd = values.at(-1)?.span.end ?? this.current().span.start;
+          pattern = { kind: "MatchValuePattern", values, span: span(patternStart, patternEnd) };
+        } else {
+          const type = this.parseTypeReference();
+          const binding = this.match("as")
+            ? this.expect("identifier", "Expected a binding name after 'as'")
+            : null;
+          pattern = {
+            kind: "MatchTypePattern",
+            type,
+            binding: binding ? { name: binding.value, span: binding.span } : null,
+            span: span(patternStart, binding?.span.end ?? type.span.end),
+          };
         }
+        const guard = this.match("if") ? this.parseExpression() : null;
         const body = this.parseBlock();
-        cases.push({ values, body, span: span(branchStart, body.at(-1)?.span.end ?? this.previous().span.end) });
+        cases.push({ pattern, guard, body, span: span(branchStart, body.at(-1)?.span.end ?? this.previous().span.end) });
       } else if (this.match("else")) {
         if (elseBody) {
           this.diagnostics.push(diagnostic("VEL2015", "A match block can contain only one else branch", this.previous().span));
@@ -970,7 +1010,18 @@ export class Parser {
     return { kind: "MatchStatement", value, cases, elseBody, span: span(start, end) };
   }
 
-  private parseMatchValue(): MatchStatement["cases"][number]["values"][number] | null {
+  private startsMatchValue(): boolean {
+    const kind = this.current().kind;
+    return kind === "minus"
+      || kind === "number"
+      || kind === "string"
+      || kind === "true"
+      || kind === "false"
+      || kind === "null"
+      || (kind === "identifier" && this.peekKind(1) === "dot");
+  }
+
+  private parseMatchValue(): Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchValuePattern" }>["values"][number] | null {
     const negative = this.match("minus");
     const start = negative ? this.previous().span.start : this.current().span.start;
     const token = this.current();
@@ -997,7 +1048,7 @@ export class Parser {
       case "string": return { kind: "LiteralExpression", value: token.value, raw: token.value, span: token.span };
       case "true": return { kind: "LiteralExpression", value: true, raw: "true", span: token.span };
       case "false": return { kind: "LiteralExpression", value: false, raw: "false", span: token.span };
-      case "none": return { kind: "LiteralExpression", value: null, raw: "none", span: token.span };
+      case "null": return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       default:
         this.diagnostics.push(diagnostic("VEL2015", "Match cases accept literals or qualified enum members", token.span));
         return null;
@@ -1053,57 +1104,65 @@ export class Parser {
 
   protected parseTypeReference(): TypeReference {
     const start = this.current().span.start;
-    let text = this.parseSingleTypeReference();
+    const members: TypeSyntax[] = [this.parseSingleTypeReference()];
     while (this.match("pipe")) {
-      text += ` | ${this.parseSingleTypeReference()}`;
+      members.push(this.parseSingleTypeReference());
     }
-    return { text, span: span(start, this.previous().span.end) };
+    const referenceSpan = span(start, this.previous().span.end);
+    return {
+      syntax: members.length === 1 ? members[0]! : { kind: "UnionTypeSyntax", members, span: referenceSpan },
+      span: referenceSpan,
+    };
   }
 
-  private parseSingleTypeReference(): string {
+  private parseSingleTypeReference(): TypeSyntax {
     if (this.check("leftParen") && !this.isFunctionTypeParenthesis()) {
-      this.advance();
+      const open = this.advance();
       const grouped = this.parseTypeReference();
-      this.expect("rightParen", "Expected ')' after grouped type");
-      return `(${grouped.text})${this.match("question") ? "?" : ""}`;
+      const close = this.expect("rightParen", "Expected ')' after grouped type");
+      const groupedSyntax = { ...grouped.syntax, span: span(open.span.start, close.span.end) } as TypeSyntax;
+      if (!this.match("question")) return groupedSyntax;
+      return { kind: "OptionalTypeSyntax", inner: groupedSyntax, span: span(open.span.start, this.previous().span.end) };
     }
     if (this.match("leftParen")) {
-      const parameters: string[] = [];
+      const open = this.previous();
+      const parameters: Extract<TypeSyntax, { kind: "FunctionTypeSyntax" }>["parameters"][number][] = [];
       let sawRest = false;
       if (!this.check("rightParen")) {
         do {
+          const parameterStart = this.current().span.start;
           const rest = this.match("ellipsis");
           if (sawRest) this.diagnostics.push(diagnostic("VEL2016", "A rest function type parameter must be final", this.current().span));
           const parameterName = this.check("identifier") && this.peekKind(1) === "colon" ? this.advance().value : null;
           if (parameterName) this.advance();
           const type = this.parseTypeReference();
-          parameters.push(`${rest ? "..." : ""}${parameterName ? `${parameterName}: ` : ""}${type.text}`);
+          parameters.push({ name: parameterName, type: type.syntax, rest, span: span(parameterStart, type.span.end) });
           if (rest) sawRest = true;
         } while (this.match("comma") && !this.check("rightParen"));
       }
       this.expect("rightParen", "Expected ')' after function type parameters");
       this.expect("arrow", "Expected '->' after function type parameters");
       const result = this.parseTypeReference();
-      return `(${parameters.join(", ")}) -> ${result.text}`;
+      return { kind: "FunctionTypeSyntax", parameters, result: result.syntax, span: span(open.span.start, result.span.end) };
     }
-    const name = this.check("none") ? this.advance() : this.expect("identifier", "Expected a type name");
-    let text = name.value;
+    const name = this.check("null") ? this.advance() : this.expect("identifier", "Expected a type name");
+    let syntax: TypeSyntax = { kind: "NamedTypeSyntax", name: name.value, span: name.span };
     if (this.match("less")) {
-      const arguments_: string[] = [];
+      const arguments_: TypeSyntax[] = [];
       do {
-        arguments_.push(this.parseTypeReference().text);
+        arguments_.push(this.parseTypeReference().syntax);
       } while (this.match("comma") && !this.check("greater"));
-      this.expect("greater", "Expected '>' after type arguments");
+      const close = this.expect("greater", "Expected '>' after type arguments");
       const expectedArguments = name.value === "Map" ? 2 : name.value === "List" || name.value === "Set" || name.value === "Promise" ? 1 : null;
       if (expectedArguments !== null && arguments_.length !== expectedArguments) {
         this.diagnostics.push(diagnostic("VEL2012", `Type '${name.value}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
       }
-      text += `<${arguments_.join(", ")}>`;
+      syntax = { kind: "GenericTypeSyntax", name: name.value, arguments: arguments_, span: span(name.span.start, close.span.end) };
     }
     if (this.match("question")) {
-      text += "?";
+      syntax = { kind: "OptionalTypeSyntax", inner: syntax, span: span(syntax.span.start, this.previous().span.end) };
     }
-    return text;
+    return syntax;
   }
 
   private isFunctionTypeParenthesis(): boolean {
@@ -1269,7 +1328,17 @@ export class Parser {
     let expression = this.parsePrimary();
 
     while (true) {
+      let call = false;
+      let optionalCall = false;
       if (this.match("leftParen")) {
+        call = true;
+      } else if (this.check("optionalDot") && this.peekKind(1) === "leftParen") {
+        this.advance();
+        this.advance();
+        call = true;
+        optionalCall = true;
+      }
+      if (call) {
         const arguments_: Expression[] = [];
         const argumentNames: (string | null)[] = [];
         let sawNamed = false;
@@ -1277,6 +1346,14 @@ export class Parser {
         if (!this.check("rightParen")) {
           do {
             if (this.check("identifier") && this.peekKind(1) === "colon") {
+              const name = this.advance();
+              this.advance();
+              this.diagnostics.push(diagnostic("VEL2024", `Named argument '${name.value}' uses ':' rather than '='`, name.span));
+              if (sawSpread) this.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
+              sawNamed = true;
+              argumentNames.push(name.value);
+              arguments_.push(this.parseExpression());
+            } else if (this.check("identifier") && this.peekKind(1) === "assign") {
               const name = this.advance();
               this.advance();
               if (sawSpread) this.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
@@ -1298,8 +1375,18 @@ export class Parser {
           callee: expression,
           arguments: arguments_,
           ...(sawNamed ? { argumentNames } : {}),
+          optional: optionalCall,
           span: span(expression.span.start, close.span.end),
         };
+        continue;
+      }
+
+      if (this.check("optionalDot") && this.peekKind(1) === "leftBracket") {
+        this.advance();
+        this.advance();
+        const index = this.parseExpression();
+        const close = this.expect("rightBracket", "Expected ']' after optional index");
+        expression = { kind: "IndexExpression", object: expression, index, optional: true, span: span(expression.span.start, close.span.end) };
         continue;
       }
 
@@ -1313,7 +1400,7 @@ export class Parser {
       if (this.match("leftBracket")) {
         const index = this.parseExpression();
         const close = this.expect("rightBracket", "Expected ']' after index");
-        expression = { kind: "IndexExpression", object: expression, index, span: span(expression.span.start, close.span.end) };
+        expression = { kind: "IndexExpression", object: expression, index, optional: false, span: span(expression.span.start, close.span.end) };
         continue;
       }
 
@@ -1358,23 +1445,23 @@ export class Parser {
       }
       case "fstring":
         return this.parseFString(token);
-      case "jsx": {
+      case "extensionToken": {
         const extensionExpression = this.parseExtensionExpression(token);
         if (extensionExpression) return extensionExpression;
         this.diagnostics.push(diagnostic("VEL2002", "No compiler extension accepts this embedded expression", token.span));
-        return { kind: "LiteralExpression", value: null, raw: "none", span: token.span };
+        return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       }
       case "extensionKeyword": {
         const extensionExpression = this.parseExtensionExpression(token);
         if (extensionExpression) return extensionExpression;
         this.diagnostics.push(diagnostic("VEL2002", `Extension keyword '${token.value}' is not valid in this expression`, token.span));
-        return { kind: "LiteralExpression", value: null, raw: "none", span: token.span };
+        return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       }
       case "true":
         return { kind: "LiteralExpression", value: true, raw: token.value, span: token.span };
       case "false":
         return { kind: "LiteralExpression", value: false, raw: token.value, span: token.span };
-      case "none":
+      case "null":
         return { kind: "LiteralExpression", value: null, raw: token.value, span: token.span };
       case "identifier":
         return { kind: "IdentifierExpression", name: token.value, span: token.span };
@@ -1416,7 +1503,7 @@ export class Parser {
               ? this.parseExpression()
               : name.kind === "identifier"
                 ? { kind: "IdentifierExpression", name: name.value, span: name.span } satisfies IdentifierExpression
-                : { kind: "LiteralExpression", value: null, raw: "none", span: name.span } satisfies Expression;
+                : { kind: "LiteralExpression", value: null, raw: "null", span: name.span } satisfies Expression;
             properties.push({ kind: "ObjectProperty", name: name.value, value, span: span(name.span.start, value.span.end) });
           } while (this.match("comma") && !this.check("rightBrace"));
         }
@@ -1425,7 +1512,7 @@ export class Parser {
       }
       default:
         this.diagnostics.push(diagnostic("VEL2002", "Expected an expression", token.span));
-        return { kind: "LiteralExpression", value: null, raw: "none", span: token.span };
+        return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
   }
 

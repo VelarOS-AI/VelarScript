@@ -7,10 +7,22 @@ import type {
   Statement,
   TypeAliasDeclaration,
   TypeDeclaration,
+  TypeReference,
 } from "./ast.ts";
-import { parseType, type ValueType } from "./types.ts";
+import { formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
 import type { LoweringHints } from "./analyzer.ts";
 import type { SourceText, Span } from "./source.ts";
+
+interface JavaScriptNode {
+  readonly code: string;
+  readonly sourceSpan: Span;
+  readonly children: readonly JavaScriptNode[];
+}
+
+interface GeneratedMapping {
+  readonly offset: number;
+  readonly sourceSpan: Span;
+}
 
 export class JavaScriptEmitter {
   private readonly typeDeclarations = new Map<string, TypeDeclaration | TypeAliasDeclaration>();
@@ -20,8 +32,11 @@ export class JavaScriptEmitter {
   private readonly forcedFunctionExports: ReadonlySet<string>;
   private needsIndexHelpers = false;
   private needsCollectionHelpers = false;
+  private needsRuntimeTypeHelpers = false;
   private needsNumberHelper = false;
-  private generatedLineSpans: readonly (Span | null)[] = [];
+  private readonly generationFrames: JavaScriptNode[][] = [];
+  private generatedMappings: readonly GeneratedMapping[] = [];
+  private generatedCode = "";
 
   constructor(hints: LoweringHints, forcedFunctionExports: ReadonlySet<string> = new Set()) {
     this.hints = hints;
@@ -32,19 +47,19 @@ export class JavaScriptEmitter {
     this.collectDeclarations(program);
     this.collectRuntimeUses(program);
     const statements = program.body
-      .map((statement) => ({ code: this.emitStatement(statement, 0), span: statement.span }))
+      .map((statement) => this.emitJavaScriptNode(statement.span, () => this.emitStatement(statement, 0)))
       .filter((item) => item.code.length > 0);
 
     const helpers: string[] = [...this.additionalHelpers(program)];
-    if (this.runtimeTypes.size > 0 || program.body.some((statement) => statement.kind === "EnumDeclaration")) {
+    if (this.needsRuntimeTypeHelpers || this.runtimeTypes.size > 0 || program.body.some((statement) => statement.kind === "EnumDeclaration")) {
       helpers.push([
         "const __velarRuntimeTypeRegistryKey = Symbol.for(\"velar.type.registry.v1\");",
         "const __velarRuntimeTypeRegistry = (() => {",
         "  const descriptor = Object.getOwnPropertyDescriptor(globalThis, __velarRuntimeTypeRegistryKey);",
         "  if (descriptor) {",
-        "    if (!(\"value\" in descriptor)) throw new TypeError(\"Velar runtime type registry cannot be an accessor\");",
+        "    if (!(\"value\" in descriptor)) throw new TypeError(\"VelarScript runtime type registry cannot be an accessor\");",
         "    try { WeakSet.prototype.has.call(descriptor.value, descriptor.value); }",
-        "    catch { throw new TypeError(\"Velar runtime type registry is invalid\"); }",
+        "    catch { throw new TypeError(\"VelarScript runtime type registry is invalid\"); }",
         "    return descriptor.value;",
         "  }",
         "  const registry = new WeakSet();",
@@ -83,7 +98,7 @@ export class JavaScriptEmitter {
         "  return true;",
         "}",
       ].join("\n"));
-      helpers.push("class ValidationError extends TypeError {\n  constructor(message) {\n    super(message);\n    this.name = \"ValidationError\";\n  }\n}");
+      helpers.push("class __VelarValidationError extends TypeError {\n  constructor(message) {\n    super(message);\n    this.name = \"ValidationError\";\n  }\n}");
     }
     if (this.needsIndexHelpers) {
       helpers.push([
@@ -117,10 +132,11 @@ export class JavaScriptEmitter {
     if (this.needsCollectionHelpers) {
       helpers.push([
         "const __velarMaxCollectionItems = 1000000;",
+        "const __velarSameValueZero = (left, right) => left === right || (left !== left && right !== right);",
         "",
         "function __velarValidateDenseList(value, name) {",
         "  if (!Array.isArray(value) || value.length > __velarMaxCollectionItems || Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {",
-        "    throw new TypeError(name + \" requires a dense Velar List\");",
+        "    throw new TypeError(name + \" requires a dense VelarScript List\");",
         "  }",
         "  for (let index = 0; index < value.length; index += 1) {",
         "    const descriptor = Object.getOwnPropertyDescriptor(value, index);",
@@ -161,7 +177,9 @@ export class JavaScriptEmitter {
         "",
         "function __velarCollectionGet(value, key) {",
         "  if (Array.isArray(value)) {",
-        "    return Number.isInteger(key) && key >= 0 && key < value.length ? value[key] : null;",
+        "    if (!Number.isInteger(key)) return null;",
+        "    const index = key < 0 ? value.length + key : key;",
+        "    return index >= 0 && index < value.length ? value[index] : null;",
         "  }",
         "  const item = Map.prototype.get.call(value, key);",
         "  return item === undefined ? null : item;",
@@ -179,41 +197,99 @@ export class JavaScriptEmitter {
         "  return output;",
         "}",
         "",
-        "function __velarCollectionAppend(value, item) {",
+        "function __velarListAppend(value, item) {",
         "  if (value.length >= __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
         "  Array.prototype.push.call(value, item);",
         "  return null;",
         "}",
         "",
-        "function __velarCollectionExtend(value, items) {",
-        "  const source = __velarValidateDenseList(items, \"List.extend\");",
-        "  const count = source.length;",
-        "  if (value.length + count > __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
-        "  for (let index = 0; index < count; index += 1) Array.prototype.push.call(value, Object.getOwnPropertyDescriptor(source, index).value);",
+        "function __velarListExtend(value, items) {",
+        "  items = __velarValidateDenseList(items, \"List.extend\");",
+        "  if (value.length + items.length > __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
+        "  const count = items.length;",
+        "  for (let index = 0; index < count; index += 1) Array.prototype.push.call(value, Object.getOwnPropertyDescriptor(items, index).value);",
         "  return null;",
         "}",
         "",
-        "function __velarCollectionAdd(value, item) {",
+        "function __velarListInsert(value, index, item) {",
+        "  if (!Number.isInteger(index) || index < 0 || index > value.length) throw new RangeError(\"List.insert index must be an integer from 0 through size\");",
+        "  if (value.length >= __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
+        "  value.length += 1;",
+        "  for (let cursor = value.length - 1; cursor > index; cursor -= 1) value[cursor] = value[cursor - 1];",
+        "  value[index] = item;",
+        "  return null;",
+        "}",
+        "",
+        "function __velarListPop(value, requested = -1) {",
+        "  if (!Number.isInteger(requested)) return null;",
+        "  const index = requested < 0 ? value.length + requested : requested;",
+        "  if (index < 0 || index >= value.length) return null;",
+        "  const item = value[index];",
+        "  for (let cursor = index; cursor < value.length - 1; cursor += 1) value[cursor] = value[cursor + 1];",
+        "  value.length -= 1;",
+        "  return item;",
+        "}",
+        "function __velarListRemove(value, item) { for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) { __velarListPop(value, index); return true; } return false; }",
+        "function __velarListCopy(value) { return Array.prototype.slice.call(value); }",
+        "function __velarListCount(value, item) { let count = 0; for (const entry of value) if (__velarSameValueZero(entry, item)) count += 1; return count; }",
+        "function __velarListFind(value, predicate) { __velarValidateDenseList(value, \"List.find\"); for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.find predicate must return bool\"); if (accepted) return value[index]; } return null; }",
+        "function __velarListIndex(value, item) { for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(value[index], item)) return index; return null; }",
+        "function __velarListSome(value, predicate) { __velarValidateDenseList(value, \"List.some\"); for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.some predicate must return bool\"); if (accepted) return true; } return false; }",
+        "function __velarListEvery(value, predicate) { __velarValidateDenseList(value, \"List.every\"); for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.every predicate must return bool\"); if (!accepted) return false; } return true; }",
+        "function __velarListMap(value, transform) { __velarValidateDenseList(value, \"List.map\"); const output = new Array(value.length); for (let index = 0; index < value.length; index += 1) output[index] = transform(value[index]); return output; }",
+        "function __velarListFilter(value, predicate) { __velarValidateDenseList(value, \"List.filter\"); const output = []; for (let index = 0; index < value.length; index += 1) { const accepted = predicate(value[index]); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.filter predicate must return bool\"); if (accepted) output.push(value[index]); } return output; }",
+        "function __velarListReduce(value, combine, initial) { __velarValidateDenseList(value, \"List.reduce\"); let result = initial; for (let index = 0; index < value.length; index += 1) result = combine(result, value[index]); return result; }",
+        "function __velarListJoin(value, separator = \"\") { __velarValidateDenseList(value, \"List.join\"); if (typeof separator !== \"string\") throw new TypeError(\"List.join separator must be string\"); for (const item of value) if (typeof item !== \"string\") throw new TypeError(\"List.join requires string values\"); return Array.prototype.join.call(value, separator); }",
+        "function __velarListSorted(value, compare = null) { __velarValidateDenseList(value, \"List.sorted\"); const output = Array.prototype.slice.call(value); const compareValues = compare ?? ((left, right) => { if ((typeof left !== \"string\" && typeof left !== \"number\") || typeof left !== typeof right || (typeof left === \"number\" && (!Number.isFinite(left) || !Number.isFinite(right)))) throw new TypeError(\"List.sorted() requires uniform finite numbers or strings\"); return left < right ? -1 : left > right ? 1 : 0; }); Array.prototype.sort.call(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== \"number\" || !Number.isFinite(order)) throw new TypeError(\"List.sorted comparator must return a finite number\"); return order; }); return output; }",
+        "function __velarListReversed(value) { const output = Array.prototype.slice.call(value); Array.prototype.reverse.call(output); return output; }",
+        "",
+        "function __velarSetAdd(value, item) {",
         "  const size = Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value);",
         "  if (size >= __velarMaxCollectionItems && !Set.prototype.has.call(value, item)) throw new RangeError(\"A Set cannot exceed 1000000 items\");",
         "  Set.prototype.add.call(value, item);",
         "  return null;",
         "}",
         "",
-        "function __velarCollectionSet(value, key, item) {",
+        "function __velarSetUpdate(value, items) {",
+        "  if (!Array.isArray(items) && !(items instanceof Set)) throw new TypeError(\"Set.update requires a List or Set\");",
+        "  const entries = Array.isArray(items) ? __velarValidateDenseList(items, \"Set.update\") : [...Set.prototype.values.call(items)];",
+        "  if (entries.length > __velarMaxCollectionItems) throw new RangeError(\"A Set cannot exceed 1000000 items\");",
+        "  const additions = new Set();",
+        "  for (const item of entries) if (!Set.prototype.has.call(value, item)) Set.prototype.add.call(additions, item);",
+        "  const size = Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value);",
+        "  const added = Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(additions);",
+        "  if (size + added > __velarMaxCollectionItems) throw new RangeError(\"A Set cannot exceed 1000000 items\");",
+        "  for (const item of Set.prototype.values.call(additions)) Set.prototype.add.call(value, item);",
+        "  return null;",
+        "}",
+        "function __velarSetCopy(value) { const size = Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A Set cannot exceed 1000000 items\"); return new Set(Set.prototype.values.call(value)); }",
+        "",
+        "function __velarMapSet(value, key, item) {",
         "  const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value);",
         "  if (size >= __velarMaxCollectionItems && !Map.prototype.has.call(value, key)) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
         "  Map.prototype.set.call(value, key, item);",
         "  return null;",
         "}",
         "",
+        "function __velarMapUpdate(value, items) {",
+        "  if (!(items instanceof Map)) throw new TypeError(\"Map.update requires a Map\");",
+        "  const sourceSize = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(items);",
+        "  if (sourceSize > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
+        "  const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value);",
+        "  let additions = 0;",
+        "  for (const key of Map.prototype.keys.call(items)) if (!Map.prototype.has.call(value, key)) additions += 1;",
+        "  if (size + additions > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
+        "  for (const [key, item] of Map.prototype.entries.call(items)) __velarMapSet(value, key, item);",
+        "  return null;",
+        "}",
+        "function __velarMapCopy(value) { const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\"); return new Map(Map.prototype.entries.call(value)); }",
+        "",
+        "function __velarCollectionHas(value, item) {",
+        "  if (Array.isArray(value)) { for (const entry of value) if (__velarSameValueZero(entry, item)) return true; return false; }",
+        "  return value instanceof Map ? Map.prototype.has.call(value, item) : Set.prototype.has.call(value, item);",
+        "}",
+        "",
         "function __velarCollectionRemove(value, item) {",
-        "  if (Array.isArray(value)) {",
-        "    const index = Array.prototype.indexOf.call(value, item);",
-        "    if (index === -1) return false;",
-        "    Array.prototype.splice.call(value, index, 1);",
-        "    return true;",
-        "  }",
         "  return value instanceof Map ? Map.prototype.delete.call(value, item) : Set.prototype.delete.call(value, item);",
         "}",
         "",
@@ -242,40 +318,56 @@ export class JavaScriptEmitter {
       ].join("\n"));
     }
 
-    const chunks = [
-      ...helpers.map((code) => ({ code, span: null as Span | null })),
-      ...statements,
+    const chunks: readonly { readonly code: string; readonly node: JavaScriptNode | null }[] = [
+      ...helpers.map((code) => ({ code, node: null })),
+      ...statements.map((node) => ({ code: node.code, node })),
     ];
-    const lineSpans: (Span | null)[] = [];
-    for (let index = 0; index < chunks.length; index += 1) {
-      if (index > 0) lineSpans.push(null);
-      const chunk = chunks[index]!;
-      for (const _line of chunk.code.split("\n")) lineSpans.push(chunk.span);
+    let output = "";
+    const mappings: GeneratedMapping[] = [];
+    for (const chunk of chunks) {
+      if (output.length > 0) output += "\n\n";
+      const offset = output.length;
+      output += chunk.code;
+      if (chunk.node) this.collectGeneratedMappings(chunk.node, offset, mappings);
     }
-    this.generatedLineSpans = lineSpans;
-    const output = chunks.map((chunk) => chunk.code).join("\n\n");
-    return `${output}${output.length > 0 ? "\n" : ""}`;
+    this.generatedCode = `${output}${output.length > 0 ? "\n" : ""}`;
+    this.generatedMappings = mappings.sort((left, right) => left.offset - right.offset);
+    return this.generatedCode;
   }
 
   sourceMap(source: SourceText): string {
+    const lineStarts = [0];
+    for (let index = 0; index < this.generatedCode.length; index += 1) {
+      if (this.generatedCode[index] === "\n") lineStarts.push(index + 1);
+    }
+    const byLine = new Map<number, Array<{ column: number; span: Span }>>();
+    for (const mapping of this.generatedMappings) {
+      const line = generatedLineAt(lineStarts, mapping.offset);
+      const entries = byLine.get(line) ?? [];
+      entries.push({ column: mapping.offset - lineStarts[line]!, span: mapping.sourceSpan });
+      byLine.set(line, entries);
+    }
     let previousSource = 0;
     let previousLine = 0;
     let previousColumn = 0;
-    const mappings = this.generatedLineSpans.map((mappedSpan) => {
-      if (!mappedSpan) return "";
-      const location = source.location(mappedSpan.start);
-      const originalLine = location.line - 1;
-      const originalColumn = location.column - 1;
-      const segment = [
-        encodeVlq(0),
-        encodeVlq(-previousSource),
-        encodeVlq(originalLine - previousLine),
-        encodeVlq(originalColumn - previousColumn),
-      ].join("");
-      previousSource = 0;
-      previousLine = originalLine;
-      previousColumn = originalColumn;
-      return segment;
+    const mappings = lineStarts.map((_, line) => {
+      let previousGeneratedColumn = 0;
+      return (byLine.get(line) ?? []).sort((left, right) => left.column - right.column).map((mapped) => {
+        const location = source.location(mapped.span.start);
+        const originalLine = location.line - 1;
+        const originalColumn = location.column - 1;
+        const segment = [
+          encodeVlq(mapped.column - previousGeneratedColumn),
+          encodeVlq(-previousSource),
+          encodeVlq(originalLine - previousLine),
+          encodeVlq(originalColumn - previousColumn),
+        ].join("");
+        previousGeneratedColumn = mapped.column;
+        previousSource = 0;
+        previousLine = originalLine;
+        previousColumn = originalColumn;
+        return segment;
+      }).join(",");
     }).join(";");
     return JSON.stringify({
       version: 3,
@@ -284,6 +376,32 @@ export class JavaScriptEmitter {
       names: [],
       mappings,
     });
+  }
+
+  private emitJavaScriptNode(sourceSpan: Span, render: () => string): JavaScriptNode {
+    const children: JavaScriptNode[] = [];
+    this.generationFrames.push(children);
+    let code: string;
+    try {
+      code = render();
+    } finally {
+      this.generationFrames.pop();
+    }
+    const node = { code: code!, sourceSpan, children } satisfies JavaScriptNode;
+    this.generationFrames.at(-1)?.push(node);
+    return node;
+  }
+
+  private collectGeneratedMappings(node: JavaScriptNode, offset: number, output: GeneratedMapping[]): void {
+    output.push({ offset, sourceSpan: node.sourceSpan });
+    const nextSearch = new Map<string, number>();
+    for (const child of node.children) {
+      if (child.code.length === 0) continue;
+      const childOffset = node.code.indexOf(child.code, nextSearch.get(child.code) ?? 0);
+      if (childOffset === -1) continue;
+      this.collectGeneratedMappings(child, offset + childOffset, output);
+      nextSearch.set(child.code, childOffset + child.code.length);
+    }
   }
 
   protected additionalHelpers(_program: Program): readonly string[] {
@@ -316,7 +434,7 @@ export class JavaScriptEmitter {
       }
     }
     for (const name of [...this.runtimeTypes]) {
-      this.markRuntimeType(name);
+      this.markRuntimeType({ kind: "named", name });
     }
   }
 
@@ -354,7 +472,7 @@ export class JavaScriptEmitter {
           visitExpression(expression.elseValue);
           break;
         case "IsExpression":
-          this.markRuntimeType(expression.type.text);
+          this.markRuntimeType(resolveTypeReference(expression.type));
           visitExpression(expression.value);
           break;
         case "ArrowFunctionExpression":
@@ -365,7 +483,7 @@ export class JavaScriptEmitter {
             && expression.callee.object.kind === "IdentifierExpression"
             && expression.callee.property === "parse"
             && this.typeDeclarations.has(expression.callee.object.name)) {
-            this.markRuntimeType(expression.callee.object.name);
+            this.markRuntimeType({ kind: "named", name: expression.callee.object.name });
           }
           if (expression.callee.kind === "MemberExpression"
             && this.collectionHelper(expression.callee)) {
@@ -385,7 +503,9 @@ export class JavaScriptEmitter {
         case "LiteralExpression":
           break;
         case "IdentifierExpression":
-          if (this.typeDeclarations.has(expression.name)) this.markRuntimeType(expression.name);
+          if (this.typeDeclarations.has(expression.name)) {
+            this.markRuntimeType({ kind: "named", name: expression.name });
+          }
           break;
         case "SuperExpression":
         case "DynamicImportExpression":
@@ -401,7 +521,7 @@ export class JavaScriptEmitter {
         case "ClassDeclaration":
           statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
           statement.base?.arguments.forEach(visitExpression);
-          statement.fields.forEach((field) => visitExpression(field.initializer));
+          statement.fields.forEach((field) => { if (field.initializer) visitExpression(field.initializer); });
           statement.initialization?.body.forEach(visitStatement);
           statement.getters.forEach(visitStatement);
           statement.methods.forEach(visitStatement);
@@ -412,7 +532,12 @@ export class JavaScriptEmitter {
         case "IfStatement": visitExpression(statement.condition); statement.thenBody.forEach(visitStatement); statement.elseBody?.forEach(visitStatement); break;
         case "MatchStatement":
           visitExpression(statement.value);
-          statement.cases.forEach((branch) => branch.body.forEach(visitStatement));
+          statement.cases.forEach((branch) => {
+            if (branch.pattern.kind === "MatchValuePattern") branch.pattern.values.forEach(visitExpression);
+            else this.markRuntimeType(resolveTypeReference(branch.pattern.type));
+            if (branch.guard) visitExpression(branch.guard);
+            branch.body.forEach(visitStatement);
+          });
           statement.elseBody?.forEach(visitStatement);
           break;
         case "ForStatement": visitExpression(statement.iterable); statement.body.forEach(visitStatement); break;
@@ -435,8 +560,8 @@ export class JavaScriptEmitter {
     program.body.forEach(visitStatement);
   }
 
-  private markRuntimeType(text: string): void {
-    const type = parseType(text);
+  private markRuntimeType(type: ValueType): void {
+    this.needsRuntimeTypeHelpers = true;
     const visit = (value: ValueType): void => {
       if (value.kind === "named" && this.typeDeclarations.has(value.name) && !this.runtimeTypes.has(value.name)) {
         this.runtimeTypes.add(value.name);
@@ -445,9 +570,9 @@ export class JavaScriptEmitter {
         this.expandedRuntimeTypes.add(value.name);
         const declaration = this.typeDeclarations.get(value.name)!;
         if (declaration.kind === "TypeDeclaration") {
-          declaration.fields.forEach((field) => visit(parseType(field.type.text)));
+          declaration.fields.forEach((field) => visit(resolveTypeReference(field.type)));
         } else {
-          visit(parseType(declaration.target.text));
+          visit(resolveTypeReference(declaration.target));
         }
       } else if (value.kind === "optional") {
         visit(value.inner);
@@ -467,6 +592,10 @@ export class JavaScriptEmitter {
     visit(type);
   }
 
+  protected emitMappedStatement(statement: Statement, depth: number): string {
+    return this.emitJavaScriptNode(statement.span, () => this.emitStatement(statement, depth)).code;
+  }
+
   protected emitStatement(statement: Statement, depth: number): string {
     const indentation = "  ".repeat(depth);
     switch (statement.kind) {
@@ -483,21 +612,21 @@ export class JavaScriptEmitter {
       case "ClassDeclaration":
         return this.emitClass(statement, depth);
       case "VariableDeclaration":
-        return `${indentation}${statement.exported ? "export " : ""}${statement.binding} ${this.emitBindingPattern(statement.pattern)} = ${this.emitExpression(statement.initializer)};`;
+        return `${indentation}${statement.exported ? "export " : ""}${statement.binding} ${this.emitBindingPattern(statement.pattern)} = ${this.emitMappedExpression(statement.initializer)};`;
       case "FunctionDeclaration": {
         const prefix = `${statement.exported || this.forcedFunctionExports.has(statement.name) ? "export " : ""}${statement.asynchronous ? "async " : ""}function`;
         const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-        const lines = statement.body.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean);
+        const lines = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean);
         if (!this.blockAlwaysReturns(statement.body)) lines.push(`${"  ".repeat(depth + 1)}return null;`);
         const body = lines.join("\n");
         return `${indentation}${prefix} ${statement.name}(${parameters}) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
       }
       case "ReturnStatement":
-        return `${indentation}return${statement.value ? ` ${this.emitExpression(statement.value)}` : ""};`;
+        return `${indentation}return${statement.value ? ` ${this.emitMappedExpression(statement.value)}` : ""};`;
       case "ThrowStatement":
-        return `${indentation}throw ${this.emitExpression(statement.value)};`;
+        return `${indentation}throw ${this.emitMappedExpression(statement.value)};`;
       case "AssertStatement": {
-        const message = statement.message ? this.emitExpression(statement.message) : JSON.stringify("Assertion failed");
+        const message = statement.message ? this.emitMappedExpression(statement.message) : JSON.stringify("Assertion failed");
         return [
           `${indentation}if (!(${this.emitCondition(statement.condition)})) {`,
           `${indentation}  const __velarAssertionError = new Error(${message});`,
@@ -507,48 +636,65 @@ export class JavaScriptEmitter {
         ].join("\n");
       }
       case "IfStatement": {
-        const thenBody = statement.thenBody.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const thenBody = statement.thenBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
         let output = `${indentation}if (${this.emitCondition(statement.condition)}) {${thenBody.length > 0 ? `\n${thenBody}\n${indentation}` : ""}}`;
         if (statement.elseBody) {
           const chained = statement.elseBody.length === 1 && statement.elseBody[0]?.kind === "IfStatement"
-            ? this.emitStatement(statement.elseBody[0], depth).slice(indentation.length)
+            ? this.emitMappedStatement(statement.elseBody[0], depth).slice(indentation.length)
             : null;
           if (chained) {
             output += ` else ${chained}`;
           } else {
-            const elseBody = statement.elseBody.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
+            const elseBody = statement.elseBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
             output += ` else {${elseBody.length > 0 ? `\n${elseBody}\n${indentation}` : ""}}`;
           }
         }
         return output;
       }
       case "MatchStatement": {
-        const branches = statement.cases.flatMap((branch) => {
-          const labels = branch.values.map((value) => `${indentation}  case ${this.emitExpression(value)}:`);
-          const body = branch.body.map((child) => this.emitStatement(child, depth + 2)).filter(Boolean);
-          return [
-            ...labels,
-            `${indentation}  {`,
-            ...body,
-            `${indentation}    break;`,
-            `${indentation}  }`,
-          ];
-        });
-        if (statement.elseBody) {
-          branches.push(`${indentation}  default: {`);
-          branches.push(...statement.elseBody.map((child) => this.emitStatement(child, depth + 2)).filter(Boolean));
-          branches.push(`${indentation}  }`);
+        const suffix = statement.span.start;
+        const valueName = `__velarMatchValue${suffix}`;
+        const matchedName = `__velarMatchDone${suffix}`;
+        const lines = [
+          `${indentation}{`,
+          `${indentation}  const ${valueName} = ${this.emitMappedExpression(statement.value)};`,
+          `${indentation}  let ${matchedName} = false;`,
+        ];
+        for (const branch of statement.cases) {
+          const condition = branch.pattern.kind === "MatchValuePattern"
+            ? branch.pattern.values.map((value) => `${valueName} === ${this.emitMappedExpression(value)}`).join(" || ") || "false"
+            : this.emitTypeCheck(resolveTypeReference(branch.pattern.type), valueName);
+          lines.push(`${indentation}  if (!${matchedName} && (${condition})) {`);
+          if (branch.pattern.kind === "MatchTypePattern" && branch.pattern.binding) {
+            lines.push(`${indentation}    const ${branch.pattern.binding.name} = ${valueName};`);
+          }
+          if (branch.guard) {
+            lines.push(`${indentation}    if (${this.emitCondition(branch.guard)}) {`);
+            lines.push(`${indentation}      ${matchedName} = true;`);
+            lines.push(...branch.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean));
+            lines.push(`${indentation}    }`);
+          } else {
+            lines.push(`${indentation}    ${matchedName} = true;`);
+            lines.push(...branch.body.map((child) => this.emitMappedStatement(child, depth + 2)).filter(Boolean));
+          }
+          lines.push(`${indentation}  }`);
         }
-        return `${indentation}switch (${this.emitExpression(statement.value)}) {${branches.length > 0 ? `\n${branches.join("\n")}\n${indentation}` : ""}}`;
+        if (statement.elseBody) {
+          lines.push(`${indentation}  if (!${matchedName}) {`);
+          lines.push(...statement.elseBody.map((child) => this.emitMappedStatement(child, depth + 2)).filter(Boolean));
+          lines.push(`${indentation}  }`);
+        }
+        lines.push(`${indentation}}`);
+        return lines.join("\n");
       }
       case "ForStatement": {
-        const body = statement.body.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
-        const iterable = this.emitExpression(statement.iterable);
+        const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const iterable = this.emitMappedExpression(statement.iterable);
         const emittedIterable = this.hints.mapLoops.has(statement.span.start) ? `${iterable}.keys()` : iterable;
         return `${indentation}for (const ${this.emitBindingPattern(statement.pattern)} of ${emittedIterable}) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
       }
       case "WhileStatement": {
-        const body = statement.body.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
         return `${indentation}while (${this.emitCondition(statement.condition)}) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
       }
       case "BreakStatement":
@@ -558,16 +704,16 @@ export class JavaScriptEmitter {
       case "PassStatement":
         return "";
       case "TryStatement": {
-        const tryBody = statement.tryBody.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const tryBody = statement.tryBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
         let output = `${indentation}try {${tryBody.length > 0 ? `\n${tryBody}\n${indentation}` : ""}}`;
         if (statement.catchBody) {
-          const catchBody = statement.catchBody.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
+          const catchBody = statement.catchBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
           const catchName = statement.catchName ?? "error";
           const normalization = `${"  ".repeat(depth + 1)}${catchName} = ${catchName} instanceof Error ? ${catchName} : new Error(String(${catchName}), { cause: ${catchName} });`;
           output += ` catch (${catchName}) {\n${normalization}${catchBody.length > 0 ? `\n${catchBody}` : ""}\n${indentation}}`;
         }
         if (statement.finallyBody) {
-          const finallyBody = statement.finallyBody.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
+          const finallyBody = statement.finallyBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
           output += ` finally {${finallyBody.length > 0 ? `\n${finallyBody}\n${indentation}` : ""}}`;
         }
         return output;
@@ -575,16 +721,16 @@ export class JavaScriptEmitter {
       case "AssignmentStatement":
         if (statement.target.kind === "IndexExpression") {
           this.needsIndexHelpers = true;
-          const object = this.emitExpression(statement.target.object);
-          const index = this.emitExpression(statement.target.index);
+          const object = this.emitMappedExpression(statement.target.object);
+          const index = this.emitMappedExpression(statement.target.index);
           const value = statement.operator === "="
-            ? this.emitExpression(statement.value)
-            : `__velarIndex(${object}, ${index}) ${statement.operator.slice(0, -1)} ${this.emitExpression(statement.value)}`;
+            ? this.emitMappedExpression(statement.value)
+            : `__velarIndex(${object}, ${index}) ${statement.operator.slice(0, -1)} ${this.emitMappedExpression(statement.value)}`;
           return `${indentation}__velarSetIndex(${object}, ${index}, ${value});`;
         }
-        return `${indentation}${this.emitExpression(statement.target)} ${statement.operator} ${this.emitExpression(statement.value)};`;
+        return `${indentation}${this.emitMappedExpression(statement.target)} ${statement.operator} ${this.emitMappedExpression(statement.value)};`;
       case "ExpressionStatement":
-        return `${indentation}${this.emitExpression(statement.expression)};`;
+        return `${indentation}${this.emitMappedExpression(statement.expression)};`;
       default:
         return "";
     }
@@ -608,7 +754,7 @@ export class JavaScriptEmitter {
     const checkName = this.runtimeTypeCheckName(statement.name);
     const checks = statement.fields.map((field) => {
       const access = `value[${JSON.stringify(field.name)}]`;
-      return this.emitTypeCheck(parseType(field.type.text), access, "__state");
+      return this.emitTypeCheck(resolveTypeReference(field.type), access, "__state");
     });
     const predicate = checks.length > 0 ? checks.join(" && ") : "true";
     const exportPrefix = statement.exported ? "export " : "";
@@ -638,7 +784,7 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
-      `${indentation}      throw new ValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
       `${indentation}    }`,
       `${indentation}    return value;`,
       `${indentation}  },`,
@@ -649,7 +795,7 @@ export class JavaScriptEmitter {
   private emitTypeAliasDeclaration(statement: TypeAliasDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
     const checkName = this.runtimeTypeCheckName(statement.name);
-    const predicate = this.emitTypeCheck(parseType(statement.target.text), "value", "__state");
+    const predicate = this.emitTypeCheck(resolveTypeReference(statement.target), "value", "__state");
     const exportPrefix = statement.exported ? "export " : "";
     return [
       `${indentation}function ${checkName}(value, __state = { active: new WeakMap(), depth: 0 }) {`,
@@ -662,7 +808,7 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
-      `${indentation}      throw new ValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
       `${indentation}    }`,
       `${indentation}    return value;`,
       `${indentation}  },`,
@@ -685,7 +831,7 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${statement.name}.is(value)) {`,
-      `${indentation}      throw new ValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
       `${indentation}    }`,
       `${indentation}    return value;`,
       `${indentation}  },`,
@@ -698,7 +844,7 @@ export class JavaScriptEmitter {
       case "unknown":
       case "any":
         return "true";
-      case "none":
+      case "null":
         return `${value} == null`;
       case "string":
       case "number":
@@ -758,8 +904,14 @@ export class JavaScriptEmitter {
     const indentation = "  ".repeat(depth);
     const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
     const constructorLines: string[] = [];
+    const constructorBody = [...(statement.initialization?.body ?? [])];
+    const explicitSuper = constructorBody[0]?.kind === "ExpressionStatement"
+      && constructorBody[0].expression.kind === "CallExpression"
+      && constructorBody[0].expression.callee.kind === "SuperExpression";
     if (statement.base) {
-      constructorLines.push(`${indentation}    super(${statement.base.arguments.map((argument) => this.emitExpression(argument)).join(", ")});`);
+      constructorLines.push(explicitSuper
+        ? this.emitMappedStatement(constructorBody.shift()!, depth + 2)
+        : `${indentation}    super();`);
     }
     for (const parameter of statement.parameters) {
       if (parameter.binding) {
@@ -767,7 +919,7 @@ export class JavaScriptEmitter {
       }
     }
     for (const field of statement.fields) {
-      if (!field.static) constructorLines.push(`${indentation}    this.${field.private ? "#" : ""}${field.name} = ${this.emitExpression(field.initializer)};`);
+      if (!field.static && field.initializer) constructorLines.push(`${indentation}    this.${field.private ? "#" : ""}${field.name} = ${this.emitMappedExpression(field.initializer)};`);
     }
     for (const method of statement.methods) {
       if (method.static || method.abstract || method.private) continue;
@@ -775,7 +927,7 @@ export class JavaScriptEmitter {
     }
     if (statement.initialization) {
       constructorLines.push(`${indentation}    const self = this;`);
-      constructorLines.push(...statement.initialization.body.map((child) => this.emitStatement(child, depth + 2)).filter(Boolean));
+      constructorLines.push(...constructorBody.map((child) => this.emitMappedStatement(child, depth + 2)).filter(Boolean));
     }
     const constructor = [
       `${indentation}  constructor(${parameters}) {`,
@@ -787,7 +939,7 @@ export class JavaScriptEmitter {
         ? [`${"  ".repeat(methodDepth)}throw new Error(${JSON.stringify(`Abstract ${"accessor" in method ? "getter" : "method"} ${statement.name}.${method.name}${"accessor" in method ? "" : "()"} must be implemented`)});`]
         : [
           ...(method.static ? [] : [`${"  ".repeat(methodDepth)}const self = this;`]),
-          ...method.body.map((child) => this.emitStatement(child, methodDepth)).filter(Boolean),
+          ...method.body.map((child) => this.emitMappedStatement(child, methodDepth)).filter(Boolean),
         ];
       if (!method.abstract && !this.blockAlwaysReturns(method.body)) lines.push(`${"  ".repeat(methodDepth)}return null;`);
       return lines;
@@ -815,14 +967,18 @@ export class JavaScriptEmitter {
     ].map((name) => `${indentation}  #${name};`);
     const staticFields = statement.fields
       .filter((field) => field.static)
-      .map((field) => `${indentation}  static ${field.private ? "#" : ""}${field.name} = ${this.emitExpression(field.initializer)};`);
+      .map((field) => `${indentation}  static ${field.private ? "#" : ""}${field.name} = ${field.initializer ? this.emitMappedExpression(field.initializer) : "null"};`);
     const extension = statement.base ? ` extends ${statement.base.name}` : "";
     return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...privateMethods, ...staticFields, constructor, ...getters, ...methods].join("\n\n")}\n${indentation}}`;
   }
 
   protected emitParameter(name: string, defaultValue: Expression | null, rest = false): string {
     if (rest) return `...${name}`;
-    return defaultValue ? `${name} = ${this.emitExpression(defaultValue)}` : name;
+    return defaultValue ? `${name} = ${this.emitMappedExpression(defaultValue)}` : name;
+  }
+
+  protected emitMappedExpression(expression: Expression): string {
+    return this.emitJavaScriptNode(expression.span, () => this.emitExpression(expression)).code;
   }
 
   protected emitExpression(expression: Expression): string {
@@ -830,7 +986,7 @@ export class JavaScriptEmitter {
       case "LiteralExpression":
         return expression.value === null ? "null" : typeof expression.value === "string" ? JSON.stringify(expression.value) : String(expression.value);
       case "FStringExpression":
-        return `\`${expression.parts.map((part) => part.kind === "text" ? this.escapeTemplateText(part.value) : `\${${this.emitExpression(part.value)}}`).join("")}\``;
+        return `\`${expression.parts.map((part) => part.kind === "text" ? this.escapeTemplateText(part.value) : `\${${this.emitMappedExpression(part.value)}}`).join("")}\``;
       case "IdentifierExpression":
         if (expression.name === "number") {
           this.needsNumberHelper = true;
@@ -847,51 +1003,51 @@ export class JavaScriptEmitter {
         if (expression.elements.some((element) => element.kind === "SpreadExpression")) {
           this.needsCollectionHelpers = true;
           const parts = expression.elements.map((element) => element.kind === "SpreadExpression"
-            ? `[true, () => ${this.emitExpression(element.value)}]`
-            : `[false, () => ${this.emitExpression(element)}]`);
+            ? `[true, () => ${this.emitMappedExpression(element.value)}]`
+            : `[false, () => ${this.emitMappedExpression(element)}]`);
           return `__velarCreateList([${parts.join(", ")}])`;
         }
-        return `[${expression.elements.map((element) => this.emitExpression(element)).join(", ")}]`;
+        return `[${expression.elements.map((element) => this.emitMappedExpression(element)).join(", ")}]`;
       case "ObjectExpression":
-        return `{ ${expression.properties.map((property) => property.kind === "ObjectProperty" ? `${this.emitObjectKey(property.name)}: ${this.emitExpression(property.value)}` : `...${this.emitExpression(property.value)}`).join(", ")} }`;
+        return `{ ${expression.properties.map((property) => property.kind === "ObjectProperty" ? `${this.emitObjectKey(property.name)}: ${this.emitMappedExpression(property.value)}` : `...${this.emitMappedExpression(property.value)}`).join(", ")} }`;
       case "SpreadExpression":
-        return `...${this.emitExpression(expression.value)}`;
+        return `...${this.emitMappedExpression(expression.value)}`;
       case "UnaryExpression":
         if (expression.operator === "await") {
-          return `await ${this.emitExpression(expression.operand)}`;
+          return `await ${this.emitMappedExpression(expression.operand)}`;
         }
         return expression.operator === "not"
           ? this.hints.optionalNegations.has(expression.span.start)
-            ? `(${this.emitExpression(expression.operand)} == null)`
-            : `!(${this.emitExpression(expression.operand)})`
-          : `${expression.operator}(${this.emitExpression(expression.operand)})`;
+            ? `(${this.emitMappedExpression(expression.operand)} == null)`
+            : `!(${this.emitMappedExpression(expression.operand)})`
+          : `${expression.operator}(${this.emitMappedExpression(expression.operand)})`;
       case "BinaryExpression": {
         if (expression.operator === "in") {
           const method = this.hints.membershipChecks.get(expression.span.start) ?? "includes";
-          return `${this.emitPostfixReceiver(expression.right)}.${method}(${this.emitExpression(expression.left)})`;
+          return `${this.emitPostfixReceiver(expression.right)}.${method}(${this.emitMappedExpression(expression.left)})`;
         }
         const operator = expression.operator === "and" ? "&&" : expression.operator === "or" ? "||" : expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
-          ? `(${this.emitExpression(expression.left)})`
-          : this.emitExpression(expression.left);
-        return `(${left} ${operator} ${this.emitExpression(expression.right)})`;
+          ? `(${this.emitMappedExpression(expression.left)})`
+          : this.emitMappedExpression(expression.left);
+        return `(${left} ${operator} ${this.emitMappedExpression(expression.right)})`;
       }
       case "ComparisonChainExpression":
         return this.emitComparisonChain(expression);
       case "ConditionalExpression":
-        return `(${this.emitCondition(expression.condition)} ? ${this.emitExpression(expression.thenValue)} : ${this.emitExpression(expression.elseValue)})`;
+        return `(${this.emitCondition(expression.condition)} ? ${this.emitMappedExpression(expression.thenValue)} : ${this.emitMappedExpression(expression.elseValue)})`;
       case "IsExpression":
         if (this.hints.classChecks.has(expression.span.start)) {
-          return `${this.emitExpression(expression.value)} instanceof ${this.typeRuntimeName(expression.type.text)}`;
+          return `${this.emitMappedExpression(expression.value)} instanceof ${this.typeRuntimeName(expression.type)}`;
         }
         {
-          const checked = parseType(expression.type.text);
+          const checked = resolveTypeReference(expression.type);
           return checked.kind === "named"
-            ? `${checked.name}.is(${this.emitExpression(expression.value)})`
-            : this.emitTypeCheck(checked, this.emitExpression(expression.value));
+            ? `${checked.name}.is(${this.emitMappedExpression(expression.value)})`
+            : this.emitTypeCheck(checked, this.emitMappedExpression(expression.value));
         }
       case "ArrowFunctionExpression": {
-        const body = this.emitExpression(expression.body);
+        const body = this.emitMappedExpression(expression.body);
         const emittedBody = expression.body.kind === "ObjectExpression" ? `(${body})` : body;
         return `${expression.asynchronous ? "async " : ""}${expression.parameters.length === 1 && !expression.parameters[0]!.rest && !expression.parameters[0]!.defaultValue
           ? expression.parameters[0]!.name
@@ -902,8 +1058,8 @@ export class JavaScriptEmitter {
           const helper = this.collectionHelper(expression.callee);
           if (helper) {
             this.needsCollectionHelpers = true;
-            const object = this.emitExpression(expression.callee.object);
-            const arguments_ = expression.arguments.map((argument) => this.emitExpression(argument));
+            const object = this.emitMappedExpression(expression.callee.object);
+            const arguments_ = expression.arguments.map((argument) => this.emitMappedExpression(argument));
             if (this.hints.optionalCallees.has(expression.span.start)) {
               const invocation = `${helper}(__value${arguments_.length > 0 ? `, ${arguments_.join(", ")}` : ""})`;
               return `(__velarOptionalCollection(${object}, __value => ${invocation}) ?? null)`;
@@ -911,7 +1067,7 @@ export class JavaScriptEmitter {
             return `${helper}(${[object, ...arguments_].join(", ")})`;
           }
         }
-        const sourceArguments = expression.arguments.map((argument) => this.emitExpression(argument));
+        const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
         const namedOrder = this.hints.namedArgumentOrders.get(expression.span.start);
         const arguments_ = namedOrder
           ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
@@ -921,7 +1077,7 @@ export class JavaScriptEmitter {
           : value;
         if (this.hints.optionalCallees.has(expression.span.start)) {
           const call = expression.callee.kind === "MemberExpression"
-            ? `${this.emitPostfixReceiver(expression.callee.object)}${expression.callee.optional || this.hints.optionalChainMembers.has(expression.callee.span.start) ? "?." : "."}${expression.callee.property}?.(${arguments_.join(", ")})`
+            ? `${this.emitPostfixReceiver(expression.callee.object)}${expression.callee.optional ? "?." : "."}${expression.callee.property}?.(${arguments_.join(", ")})`
             : `${this.emitPostfixReceiver(expression.callee)}?.(${arguments_.join(", ")})`;
           return wrapNamed(`(${call} ?? null)`);
         }
@@ -935,7 +1091,7 @@ export class JavaScriptEmitter {
           callee = expression.callee.name === "Map" ? "__velarCreateMap" : "__velarCreateSet";
         } else {
           callee = this.hints.constructorCalls.has(`${expression.span.start}:${expression.span.end}`)
-            ? `new ${this.emitExpression(expression.callee)}`
+            ? `new ${this.emitMappedExpression(expression.callee)}`
             : this.emitPostfixReceiver(expression.callee);
         }
         const formRead = this.hints.formReads.get(expression.span.start);
@@ -944,27 +1100,28 @@ export class JavaScriptEmitter {
         return wrapNamed(this.hints.optionalCalls.has(expression.span.start) ? `(${call} ?? null)` : call);
       }
       case "MemberExpression": {
-        const property = `${this.hints.privateMembers.has(expression.span.start) ? "#" : ""}${expression.property}`;
-        const access = `${this.emitPostfixReceiver(expression.object)}${expression.optional || this.hints.optionalChainMembers.has(expression.span.start) ? "?." : "."}${property}`;
+        const publicProperty = this.hints.listSizes.has(expression.span.end) ? "length" : expression.property;
+        const property = `${this.hints.privateMembers.has(expression.span.start) ? "#" : ""}${publicProperty}`;
+        const access = `${this.emitPostfixReceiver(expression.object)}${expression.optional ? "?." : "."}${property}`;
         return this.hints.optionalMembers.has(expression.span.start) ? `(${access} ?? null)` : access;
       }
       case "IndexExpression":
         this.needsIndexHelpers = true;
         return this.hints.optionalIndexes.has(expression.span.start)
-          ? `__velarOptionalIndex(${this.emitExpression(expression.object)}, () => ${this.emitExpression(expression.index)})`
-          : `__velarIndex(${this.emitExpression(expression.object)}, ${this.emitExpression(expression.index)})`;
+          ? `__velarOptionalIndex(${this.emitMappedExpression(expression.object)}, () => ${this.emitMappedExpression(expression.index)})`
+          : `__velarIndex(${this.emitMappedExpression(expression.object)}, ${this.emitMappedExpression(expression.index)})`;
       default:
         return "null";
     }
   }
 
   protected emitCondition(expression: Expression): string {
-    const value = this.emitExpression(expression);
+    const value = this.emitMappedExpression(expression);
     return this.hints.presenceConditions.has(expression.span.start) ? `(${value} != null)` : value;
   }
 
   private emitPostfixReceiver(expression: Expression): string {
-    const emitted = this.emitExpression(expression);
+    const emitted = this.emitMappedExpression(expression);
     if (expression.kind === "ArrowFunctionExpression"
       || expression.kind === "UnaryExpression"
       || expression.kind === "IsExpression"
@@ -976,9 +1133,9 @@ export class JavaScriptEmitter {
 
   private emitComparisonChain(expression: Extract<Expression, { kind: "ComparisonChainExpression" }>): string {
     const prefix = `$velarCompare${expression.span.start}`;
-    const body = [`const ${prefix}_0 = ${this.emitExpression(expression.operands[0]!)};`];
+    const body = [`const ${prefix}_0 = ${this.emitMappedExpression(expression.operands[0]!)};`];
     for (let index = 1; index < expression.operands.length; index += 1) {
-      body.push(`const ${prefix}_${index} = ${this.emitExpression(expression.operands[index]!)};`);
+      body.push(`const ${prefix}_${index} = ${this.emitMappedExpression(expression.operands[index]!)};`);
       const sourceOperator = expression.operators[index - 1]!;
       const operator = sourceOperator === "==" ? "===" : sourceOperator === "!=" ? "!==" : sourceOperator;
       body.push(`if (!(${prefix}_${index - 1} ${operator} ${prefix}_${index})) return false;`);
@@ -1030,19 +1187,39 @@ export class JavaScriptEmitter {
     }
   }
 
-  private typeRuntimeName(text: string): string {
-    const type = parseType(text);
-    return type.kind === "named" ? type.name : text;
+  private typeRuntimeName(reference: TypeReference): string {
+    const type = resolveTypeReference(reference);
+    return type.kind === "named" ? type.name : formatTypeReference(reference);
   }
 
   private collectionHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {
-    switch (this.hints.collectionCalls.get(expression.span.start)) {
+    switch (this.hints.collectionCalls.get(expression.span.end)) {
       case "get": return "__velarCollectionGet";
       case "slice": return "__velarCollectionSlice";
-      case "append": return "__velarCollectionAppend";
-      case "extend": return "__velarCollectionExtend";
-      case "add": return "__velarCollectionAdd";
-      case "set": return "__velarCollectionSet";
+      case "listAppend": return "__velarListAppend";
+      case "listExtend": return "__velarListExtend";
+      case "listInsert": return "__velarListInsert";
+      case "listRemove": return "__velarListRemove";
+      case "listPop": return "__velarListPop";
+      case "listCopy": return "__velarListCopy";
+      case "listCount": return "__velarListCount";
+      case "listFind": return "__velarListFind";
+      case "listIndex": return "__velarListIndex";
+      case "listSome": return "__velarListSome";
+      case "listEvery": return "__velarListEvery";
+      case "listMap": return "__velarListMap";
+      case "listFilter": return "__velarListFilter";
+      case "listReduce": return "__velarListReduce";
+      case "listJoin": return "__velarListJoin";
+      case "listSorted": return "__velarListSorted";
+      case "listReversed": return "__velarListReversed";
+      case "setAdd": return "__velarSetAdd";
+      case "setUpdate": return "__velarSetUpdate";
+      case "setCopy": return "__velarSetCopy";
+      case "mapSet": return "__velarMapSet";
+      case "mapUpdate": return "__velarMapUpdate";
+      case "mapCopy": return "__velarMapCopy";
+      case "has": return "__velarCollectionHas";
       case "remove": return "__velarCollectionRemove";
       case "clear": return "__velarCollectionClear";
       case "keys": return "__velarCollectionKeys";
@@ -1104,4 +1281,15 @@ function encodeVlq(value: number): string {
     output += base64[digit];
   } while (remaining > 0);
   return output;
+}
+
+function generatedLineAt(lineStarts: readonly number[], offset: number): number {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (lineStarts[middle]! <= offset) low = middle + 1;
+    else high = middle - 1;
+  }
+  return Math.max(0, high);
 }

@@ -8,13 +8,20 @@ export type TrafficPoint:
     x: number
 
 /// Converts metric values into bounded SVG coordinates.
-export class ChartScale(const maxValue: number, const height: number = 120, const baseline: number = 150):
+export class ChartScale:
     static const defaultHeight: number = 120
-    private const pixels: number = height / maxValue
+    const maxValue: number
+    const height: number
+    const baseline: number
+    private const pixels: number
 
-    init:
+    constructor(maxValue: number, height: number = 120, baseline: number = 150):
         assert 0 < maxValue <= 1000000, "Chart maximum must be between 0 and 1000000"
         assert 0 < height <= 10000, "Chart height must be between 0 and 10000"
+        self.maxValue = maxValue
+        self.height = height
+        self.baseline = baseline
+        self.pixels = height / maxValue
 
     /// Returns the upper SVG boundary of the plotted value range.
     get top() -> number:

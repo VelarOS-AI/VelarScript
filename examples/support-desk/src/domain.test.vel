@@ -7,7 +7,7 @@ const sample = [
 
 def test_ticket_selection_and_pagination():
     const selected = selectTickets(sample, "ada", TicketFilter.all, TicketSort.recent)
-    if selected.length != 1:
+    if selected.size != 1:
         throw Error("expected one requester match")
     if pageTickets(sample, 2, 1)[0].id != "two":
         throw Error("expected second page")

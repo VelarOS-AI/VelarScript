@@ -9,8 +9,9 @@ uniform resolved-value contracts for asynchronous declarations,
 unambiguous object-returning arrows and checked power precedence,
 single-evaluation strict comparison chains,
 bounded `///` declaration documentation in the semantic index,
-native classes with constructor, explicitly typed instance/static body fields,
-typed read-only getters, native private fields/getters/methods, and one synchronous `init:` construction block.
+native classes with one synchronous body-owned `constructor(...)`, explicitly
+typed instance/static fields, typed read-only getters, and native private
+fields/getters/methods.
 JSX, components, reactivity, lifecycle, Look, Web types, and Web modules
 are not enabled by Core; they are contributed by `@velarscript/web` through the
 extension contract. That contract separates parsing, analysis, semantic
@@ -29,9 +30,9 @@ The ABI covers generated application/error documents, deployment projection,
 base paths, source-map policy, and browser-test discovery, while filesystem,
 server, bundler, and browser-driver work stays outside the compiler.
 
-`init` is a contextual class-body word, not a globally reserved identifier, so
-record/object fields and JavaScript-facing APIs may continue to use that common
-member name.
+Construction uses the familiar class-body `constructor(...)` form. Derived
+constructors call `super(...)` first. `init` is an ordinary identifier, so
+record/object fields and JavaScript-facing APIs may use that common member name.
 `get` follows the same contextual rule: only the direct class-member form opens
 a getter declaration, while ordinary bindings and property names remain valid.
 

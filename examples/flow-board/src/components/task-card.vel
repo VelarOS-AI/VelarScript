@@ -12,14 +12,14 @@ def statusAction(status: TaskStatus) -> string:
 
 def cardLook(high: bool, done: bool) -> Look:
     return look:
-        display = grid
+        display = "grid"
         gap = 12px
         padding = 16px
-        border = line(1px, rgb(224, 230, 240))
-        borderLeft = line(high ? 4px : 1px, high ? rgb(229, 72, 77) : rgb(224, 230, 240))
-        radius = 15px
+        border = border(1px, rgb(224, 230, 240))
+        borderLeft = border(high ? 4px : 1px, high ? rgb(229, 72, 77) : rgb(224, 230, 240))
+        borderRadius = 15px
         background = rgb(255, 255, 255)
-        shadow = dropShadow(0px, 8px, 24px, rgba(38, 54, 88, 0.06))
+        boxShadow = shadow(0px, 8px, 24px, rgba(38, 54, 88, 0.06))
         opacity = done ? 0.72 : 1
 
 const titleLook = look:
@@ -34,35 +34,33 @@ const descriptionLook = look:
     lineHeight = 1.45
 
 const rowLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
     gap = 8px
 
 const priorityLook = look:
-    padding = space(4px, 8px)
-    radius = pill
+    padding = spacing(4px, 8px)
+    borderRadius = 9999px
     color = rgb(67, 80, 106)
     background = rgb(237, 241, 248)
     fontSize = 12px
     fontWeight = 700
-    textCase = capitalize
-
+    textTransform = "capitalize"
 const timeLook = look:
     color = rgb(125, 135, 156)
     fontSize = 11px
 
 def actionLook(dangerous: bool = false) -> Look:
     return look:
-        border = line(0px, transparent)
-        padding = space(7px, 10px)
-        radius = 9px
+        border = border(0px, color("transparent"))
+        padding = spacing(7px, 10px)
+        borderRadius = 9px
         color = dangerous ? rgb(159, 45, 45) : rgb(35, 69, 174)
-        background = dangerous ? transparent : rgb(233, 239, 255)
+        background = dangerous ? "transparent" : rgb(233, 239, 255)
         fontSize = 13px
         fontWeight = 700
-        cursor = pointer
-
+        cursor = "pointer"
 export component TaskCard(task: Task, onAdvance: TaskIdHandler, onDelete: TaskIdHandler):
     return <article class="card" look={cardLook(task.priority == TaskPriority.high, task.status == TaskStatus.done)} data-task data-task-id={task.id}>
         <h3 look={titleLook} data-task-title>{task.title}</h3>

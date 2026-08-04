@@ -102,7 +102,7 @@ export async function startProductionPreview(
 
 export async function runProductionPreview(build: VerifiedProductionBuild, port: number): Promise<void> {
   const preview = await startProductionPreview(build, port);
-  process.stdout.write(`Velar production preview: ${preview.url}\n`);
+  process.stdout.write(`VelarScript production preview: ${preview.url}\n`);
   process.stdout.write(`Verified build: ${build.manifest.buildId}\n`);
   await new Promise<void>((resolvePromise) => {
     let settled = false;

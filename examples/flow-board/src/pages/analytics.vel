@@ -29,26 +29,25 @@ def progressLabel(progress: number) -> string:
         return "Not started"
 
 def lastUpdated(values: List<Task>) -> string:
-    if values.length == 0:
+    if values.size == 0:
         return "No activity yet"
     const ordered = sortBy(values, task => task.updatedAt, true)
     const latest = ordered.get(0)
-    assert latest != none, "A non-empty task list must have a latest task"
+    assert latest != null, "A non-empty task list must have a latest task"
     return format(latest.updatedAt)
 
 const pageLook = look:
-    display = grid
+    display = "grid"
     gap = 24px
     width = 100%
     maxWidth = 980px
-    marginInline = auto
-    padding = edges(42px, 16px, 64px, 16px)
+    marginInline = "auto"
+    padding = spacing(42px, 16px, 64px, 16px)
 
 const backLook = look:
     color = rgb(49, 87, 213)
     fontWeight = 700
-    textDecoration = undecorated
-
+    textDecoration = "none"
 const titleLook = look:
     margin = 0
     color = rgb(21, 32, 58)
@@ -56,26 +55,26 @@ const titleLook = look:
     letterSpacing = -0.04em
 
 const leadLook = look:
-    margin = edges(8px, 0px, 0px, 0px)
+    margin = spacing(8px, 0px, 0px, 0px)
     color = rgb(110, 121, 141)
 
 const metricsLook = look:
-    display = grid
-    columns = repeat(4, 1fr)
+    display = "grid"
+    gridTemplateColumns = repeat(4, 1fr)
     gap = 12px
 
     if viewport.width <= 720px:
-        columns = repeat(2, 1fr)
+        gridTemplateColumns = repeat(2, 1fr)
 
 const surfaceLook = look:
-    border = line(1px, rgb(220, 227, 239))
-    radius = 18px
+    border = border(1px, rgb(220, 227, 239))
+    borderRadius = 18px
     background = rgb(255, 255, 255)
-    shadow = dropShadow(0px, 12px, 34px, rgba(35, 50, 82, 0.06))
+    boxShadow = shadow(0px, 12px, 34px, rgba(35, 50, 82, 0.06))
 
 const metricLook = look:
     ...surfaceLook
-    display = grid
+    display = "grid"
     gap = 7px
     padding = 18px
 
@@ -90,20 +89,20 @@ const metricLabelLook = look:
 const progressLook = look:
     gridColumn = "1 / -1"
     height = 9px
-    overflow = hidden
-    radius = pill
+    overflow = "hidden"
+    borderRadius = 9999px
     background = rgb(232, 237, 245)
 
 def progressFillLook(progress: number) -> Look:
     return look:
         width = progress * 1%
         height = 100%
-        radius = pill
+        borderRadius = 9999px
         background = linearGradient(90deg, rgb(49, 87, 213), rgb(92, 125, 240))
 
 const sectionLook = look:
     ...surfaceLook
-    display = grid
+    display = "grid"
     gap = 14px
     padding = 20px
 
@@ -111,33 +110,31 @@ const sectionTitleLook = look:
     margin = 0
 
 const priorityGridLook = look:
-    display = grid
-    columns = repeat(3, 1fr)
+    display = "grid"
+    gridTemplateColumns = repeat(3, 1fr)
     gap = 10px
 
 const priorityLook = look:
-    display = flex
-    alignItems = center
-    justifyContent = spaceBetween
-    padding = space(12px, 14px)
-    radius = 12px
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
+    padding = spacing(12px, 14px)
+    borderRadius = 12px
     color = rgb(70, 81, 106)
     background = rgb(241, 244, 249)
-    textCase = capitalize
-
+    textTransform = "capitalize"
 const activityListLook = look:
-    display = grid
+    display = "grid"
     gap = 10px
     margin = 0
     padding = 0
-    listStyle = gone
-
+    listStyle = "none"
 const activityItemLook = look:
-    display = flex
-    justifyContent = spaceBetween
+    display = "flex"
+    justifyContent = "space-between"
     gap = 16px
     paddingTop = 10px
-    borderTop = line(1px, rgb(237, 240, 245))
+    borderTop = border(1px, rgb(237, 240, 245))
     color = rgb(49, 60, 84)
 
 const timeLook = look:
@@ -145,24 +142,24 @@ const timeLook = look:
     fontSize = 12px
 
 export component Analytics:
-    computed progress = completion(tasks.length, doneCount)
+    computed progress = completion(tasks.size, doneCount)
     computed progressState = progressLabel(progress)
-    computed priorityRows = countBy(tasks, task => task.priority).entries()
-    const recent = sortBy(tasks, task => task.updatedAt, true)
+    computed priorityRows = countBy(tasks.copy(), task => task.priority).entries()
+    const recent = sortBy(tasks.copy(), task => task.updatedAt, true)
 
     return <main class="page" look={pageLook} data-analytics>
         <Head title="FlowBoard analytics" description="Project flow and recent task activity" themeColor="#f6f8fc" />
         <Link look={backLook} to="/">← Back to board</Link>
         <header><h1 look={titleLook}>Project pulse</h1><p class="lead" look={leadLook}>A compact view of throughput and the work that changed most recently.</p></header>
         <section class="metrics" look={metricsLook} aria-label="Project metrics">
-            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(tasks.length)}</strong><span look={metricLabelLook}>Total tasks</span></article>
+            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(tasks.size)}</strong><span look={metricLabelLook}>Total tasks</span></article>
             <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(todoCount)}</strong><span look={metricLabelLook}>Waiting</span></article>
             <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(doingCount)}</strong><span look={metricLabelLook}>In progress</span></article>
             <article class="metric" look={metricLook}><strong look={metricValueLook} data-completion>{metricText(f"{progress}%")}</strong><span look={metricLabelLook} data-progress-label>{progressState}</span></article>
             <div class="progress" look={progressLook} role="progressbar" aria-label="Completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><div class="fill" look={progressFillLook(progress)}></div></div>
         </section>
         <section class="activity" look={sectionLook}>
-            <div><h2 look={sectionTitleLook}>Recent activity</h2><p>{lastUpdated(tasks)}</p></div>
+            <div><h2 look={sectionTitleLook}>Recent activity</h2><p>{lastUpdated(tasks.copy())}</p></div>
             <ol look={activityListLook}>{recent.map(task => <li look={activityItemLook} key={task.id}><span>{task.title}</span><time look={timeLook}>{format(task.updatedAt)}</time></li>)}</ol>
         </section>
         <section class="priorities" look={sectionLook}>

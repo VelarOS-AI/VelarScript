@@ -132,12 +132,12 @@ export async function compileProjectEntries(
   const velarImports = new Map<string, string>();
   const unsafeCssOwners = new Map<string, string>();
   if (initialEntries.length > MAX_VELAR_PROJECT_MODULES) {
-    failures.push({ path: entryPath, message: `A Velar project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
+    failures.push({ path: entryPath, message: `A VelarScript project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
   }
   const enqueue = (module: PendingModule): void => {
     if (scheduled.has(module.inputPath)) return;
     if (scheduled.size >= MAX_VELAR_PROJECT_MODULES) {
-      failures.push({ path: entryPath, message: `A Velar project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
+      failures.push({ path: entryPath, message: `A VelarScript project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
       return;
     }
     scheduled.add(module.inputPath);
@@ -149,7 +149,7 @@ export async function compileProjectEntries(
     const inputPath = pendingModule.inputPath;
     if (visited.has(inputPath)) continue;
     if (visited.size >= MAX_VELAR_PROJECT_MODULES) {
-      failures.push({ path: entryPath, message: `A Velar project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
+      failures.push({ path: entryPath, message: `A VelarScript project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
       break;
     }
     visited.add(inputPath);
@@ -169,7 +169,7 @@ export async function compileProjectEntries(
     const pathWithinBoundary = relative(boundary, inputPath);
     if (escapesRoot(pathWithinBoundary)) {
       failures.push({ path: inputPath, message: pendingModule.package
-        ? `Velar package '${pendingModule.package.name}' cannot load source outside its package root`
+        ? `VelarScript package '${pendingModule.package.name}' cannot load source outside its package root`
         : "Relative VelarScript imports cannot escape the entry source directory" });
       continue;
     }
@@ -186,7 +186,7 @@ export async function compileProjectEntries(
       const target = resolve(dirname(inputPath), resource.source);
       if (escapesRoot(relative(boundary, target))) {
         failures.push({ path: inputPath, message: pendingModule.package
-          ? `Resource '${resource.source}' cannot escape Velar package '${pendingModule.package.name}'`
+          ? `Resource '${resource.source}' cannot escape VelarScript package '${pendingModule.package.name}'`
           : `Resource '${resource.source}' cannot escape the entry source directory` });
         continue;
       }
@@ -217,14 +217,14 @@ export async function compileProjectEntries(
           const package_ = await resolveVelarSourcePackage(dependency.source, inputPath);
           const existing = velarPackages.get(package_.name);
           if (existing && existing.root !== package_.root) {
-            failures.push({ path: inputPath, message: `Velar package '${package_.name}' resolves to multiple installed versions; use one package instance per application build` });
+            failures.push({ path: inputPath, message: `VelarScript package '${package_.name}' resolves to multiple installed versions; use one package instance per application build` });
             continue;
           }
           velarPackages.set(package_.name, package_);
           velarImports.set(projectImportKey(inputPath, dependency.source), package_.entryPath);
           enqueue({ inputPath: package_.entryPath, package: package_ });
         } catch (error) {
-          failures.push({ path: inputPath, message: `Cannot resolve Velar package import '${dependency.source}': ${error instanceof Error ? error.message : String(error)}` });
+          failures.push({ path: inputPath, message: `Cannot resolve VelarScript package import '${dependency.source}': ${error instanceof Error ? error.message : String(error)}` });
         }
         continue;
       }
@@ -235,7 +235,7 @@ export async function compileProjectEntries(
       const target = resolve(dirname(inputPath), dependency.source);
       if (escapesRoot(relative(boundary, target))) {
         failures.push({ path: inputPath, message: pendingModule.package
-          ? `Relative import '${dependency.source}' cannot escape Velar package '${pendingModule.package.name}'`
+          ? `Relative import '${dependency.source}' cannot escape VelarScript package '${pendingModule.package.name}'`
           : `Relative import '${dependency.source}' cannot escape the entry source directory` });
         continue;
       }

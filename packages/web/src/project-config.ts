@@ -35,7 +35,7 @@ function webConfig(value: unknown, manifestPath: string): VelarWebConfig {
     readonly deployment?: unknown;
   } | undefined;
   if (web) knownFields(web as Record<string, unknown>, new Set(["title", "base", "publicConfig", "build", "security", "deployment"]), "web", manifestPath);
-  const title = stringField(web?.title, "web.title", "Velar App");
+  const title = stringField(web?.title, "web.title", "VelarScript App");
   let base = stringField(web?.base, "web.base", "/");
   if (!base.startsWith("/")) throw new Error(`${manifestPath}: 'web.base' must start with '/'`);
   if (!base.endsWith("/")) base += "/";

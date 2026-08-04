@@ -1,6 +1,6 @@
 # SupportDesk
 
-SupportDesk is the second independent real application used to mature Velar's
+SupportDesk is the second independent real application used to mature VelarScript's
 language and Web platform. It validates typed route context, route-pattern
 contracts, static HTTP data loading, native-form extraction, accessible field
 errors, enum parsing, pagination, sorting, persisted edits, and browser-driven

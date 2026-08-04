@@ -27,7 +27,7 @@ Project creation delegates to the exact matching `create-velar` package, the
 same implementation used by `npm create velar@latest`. Available templates are
 `web`, `docs`, `library`, and `component`; creation never installs or initializes Git.
 
-Velar deliberately uses npm as its package registry, resolver, installer, and
+VelarScript deliberately uses npm as its package registry, resolver, installer, and
 lockfile authority. After the initial `npm install`, the project-aware commands
 provide a smaller everyday surface:
 
@@ -43,7 +43,7 @@ npm exec velar -- update
 raw npm flags. Packages that publish `velar.extension` metadata are also added
 to `velar.json`; removal deletes that declaration and its owned manifest field.
 The npm operation remains authoritative for `package.json`, `package-lock.json`,
-and `node_modules`, while Velar atomically owns only its project manifest.
+and `node_modules`, while VelarScript atomically owns only its project manifest.
 
 ```sh
 npm exec velar -- test --browser

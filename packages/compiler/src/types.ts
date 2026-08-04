@@ -1,3 +1,5 @@
+import type { TypeReference, TypeSyntax } from "./ast.ts";
+
 export interface EnumInfo {
   readonly identity: string;
   readonly members: ReadonlySet<string>;
@@ -6,7 +8,7 @@ export interface EnumInfo {
 export type ValueType =
   | { readonly kind: "unknown" }
   | { readonly kind: "any" }
-  | { readonly kind: "none" }
+  | { readonly kind: "null" }
   | { readonly kind: "string" }
   | { readonly kind: "number" }
   | { readonly kind: "bool" }
@@ -31,7 +33,7 @@ export type ValueType =
 
 export const unknownType: ValueType = { kind: "unknown" };
 export const anyType: ValueType = { kind: "any" };
-export const noneType: ValueType = { kind: "none" };
+export const nullType: ValueType = { kind: "null" };
 export const stringType: ValueType = { kind: "string" };
 export const numberType: ValueType = { kind: "number" };
 export const boolType: ValueType = { kind: "bool" };
@@ -41,72 +43,61 @@ export interface TypeEnvironment {
   isSubclassOf(actual: string, expected: string): boolean;
 }
 
-function parameterTypeText(value: string): { readonly name: string; readonly type: string } {
-  const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$/u.exec(value);
-  return match ? { name: match[1]!, type: match[2]! } : { name: "", type: value };
+export function resolveTypeReference(reference: TypeReference): ValueType {
+  return typeFromSyntax(reference.syntax);
 }
 
-export function parseType(text: string): ValueType {
-  const trimmed = text.trim();
-  const functionType = splitFunctionType(trimmed);
-  if (functionType) {
-    const parameters = splitTopLevel(functionType.parameters, ",");
-    const restText = parameters.at(-1)?.startsWith("...") ? parameterTypeText(parameters.at(-1)!.slice(3).trim()).type : null;
-    const fixed = (restText ? parameters.slice(0, -1) : parameters).map(parameterTypeText);
-    return {
-      kind: "function",
-      parameters: fixed.map((parameter) => parseType(parameter.type)),
-      ...(fixed.some((parameter) => parameter.name) ? { parameterNames: fixed.map((parameter) => parameter.name) } : {}),
-      requiredParameters: fixed.length,
-      ...(restText ? { rest: parseType(restText) } : {}),
-      result: parseType(functionType.result),
-    };
+export function typeFromSyntax(syntax: TypeSyntax): ValueType {
+  switch (syntax.kind) {
+    case "NamedTypeSyntax":
+      switch (syntax.name) {
+        case "string": return stringType;
+        case "number": return numberType;
+        case "bool": return boolType;
+        case "null": return nullType;
+        case "unknown": return unknownType;
+        case "any": return anyType;
+        case "WebNode": return { kind: "node" };
+        default: return { kind: "named", name: syntax.name };
+      }
+    case "GenericTypeSyntax": {
+      const arguments_ = syntax.arguments.map(typeFromSyntax);
+      if (syntax.name === "List") return { kind: "list", element: arguments_[0] ?? unknownType };
+      if (syntax.name === "Set") return { kind: "set", element: arguments_[0] ?? unknownType };
+      if (syntax.name === "Map") return { kind: "map", key: arguments_[0] ?? unknownType, value: arguments_[1] ?? unknownType };
+      if (syntax.name === "Promise") return { kind: "promise", value: arguments_[0] ?? unknownType };
+      return { kind: "named", name: formatTypeSyntax(syntax) };
+    }
+    case "OptionalTypeSyntax":
+      return optionalOf(typeFromSyntax(syntax.inner));
+    case "UnionTypeSyntax":
+      return unionOf(syntax.members.map(typeFromSyntax));
+    case "FunctionTypeSyntax": {
+      const fixed = syntax.parameters.filter((parameter) => !parameter.rest);
+      const rest = syntax.parameters.find((parameter) => parameter.rest);
+      return {
+        kind: "function",
+        parameters: fixed.map((parameter) => typeFromSyntax(parameter.type)),
+        ...(fixed.some((parameter) => parameter.name) ? { parameterNames: fixed.map((parameter) => parameter.name ?? "") } : {}),
+        requiredParameters: fixed.length,
+        ...(rest ? { rest: typeFromSyntax(rest.type) } : {}),
+        result: typeFromSyntax(syntax.result),
+      };
+    }
   }
-  if (hasOuterParentheses(trimmed)) return parseType(trimmed.slice(1, -1));
-  const unionParts = splitTopLevel(trimmed, "|");
-  if (unionParts.length > 1) {
-    return unionOf(unionParts.map((part) => parseType(part)));
-  }
+}
 
-  if (trimmed.endsWith("?")) {
-    return optionalOf(parseType(trimmed.slice(0, -1)));
-  }
+export function formatTypeReference(reference: TypeReference): string {
+  return formatTypeSyntax(reference.syntax);
+}
 
-  const generic = /^([A-Za-z_][A-Za-z0-9_]*)<(.*)>$/.exec(trimmed);
-  if (generic) {
-    const name = generic[1] ?? "";
-    const arguments_ = splitTopLevel(generic[2] ?? "", ",").map((part) => parseType(part));
-    if (name === "List") {
-      return { kind: "list", element: arguments_[0] ?? unknownType };
-    }
-    if (name === "Set") {
-      return { kind: "set", element: arguments_[0] ?? unknownType };
-    }
-    if (name === "Map") {
-      return { kind: "map", key: arguments_[0] ?? unknownType, value: arguments_[1] ?? unknownType };
-    }
-    if (name === "Promise") {
-      return { kind: "promise", value: arguments_[0] ?? unknownType };
-    }
-  }
-
-  switch (trimmed) {
-    case "string":
-      return stringType;
-    case "number":
-      return numberType;
-    case "bool":
-      return boolType;
-    case "none":
-      return noneType;
-    case "unknown":
-      return unknownType;
-    case "any":
-      return anyType;
-    case "WebNode":
-      return { kind: "node" };
-    default:
-      return { kind: "named", name: trimmed };
+export function formatTypeSyntax(syntax: TypeSyntax): string {
+  switch (syntax.kind) {
+    case "NamedTypeSyntax": return syntax.name;
+    case "GenericTypeSyntax": return `${syntax.name}<${syntax.arguments.map(formatTypeSyntax).join(", ")}>`;
+    case "OptionalTypeSyntax": return `${syntax.inner.kind === "UnionTypeSyntax" || syntax.inner.kind === "FunctionTypeSyntax" ? `(${formatTypeSyntax(syntax.inner)})` : formatTypeSyntax(syntax.inner)}?`;
+    case "UnionTypeSyntax": return syntax.members.map(formatTypeSyntax).join(" | ");
+    case "FunctionTypeSyntax": return `(${syntax.parameters.map((parameter) => `${parameter.rest ? "..." : ""}${parameter.name ? `${parameter.name}: ` : ""}${formatTypeSyntax(parameter.type)}`).join(", ")}) -> ${formatTypeSyntax(syntax.result)}`;
   }
 }
 
@@ -114,7 +105,7 @@ export function optionalOf(type: ValueType): ValueType {
   if (type.kind === "optional") {
     return type;
   }
-  if (type.kind === "none") {
+  if (type.kind === "null") {
     return { kind: "optional", inner: unknownType };
   }
   return { kind: "optional", inner: type };
@@ -153,10 +144,10 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
   if (right.kind === "optional" && sameType(right.inner, left)) {
     return right;
   }
-  if (left.kind === "none") {
+  if (left.kind === "null") {
     return optionalOf(right);
   }
-  if (right.kind === "none") {
+  if (right.kind === "null") {
     return optionalOf(left);
   }
   return unionOf([left, right]);
@@ -189,26 +180,31 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   const pair = `${typeIdentityKey(actual)}\u0000${typeIdentityKey(expected)}`;
   if (seen.has(pair)) return true;
   seen.add(pair);
+  if (actual.kind === "union") {
+    return actual.members.every((member) => isAssignable(member, expected, environment, new Set(seen)));
+  }
+  if (actual.kind === "optional") {
+    return isAssignable(nullType, expected, environment, new Set(seen))
+      && isAssignable(actual.inner, expected, environment, new Set(seen));
+  }
   if (expected.kind === "optional") {
-    return actual.kind === "none" || isAssignable(actual, expected.inner, environment, seen);
+    return actual.kind === "null" || isAssignable(actual, expected.inner, environment, seen);
   }
   if (expected.kind === "union") {
     return expected.members.some((member) => isAssignable(actual, member, environment, new Set(seen)));
-  }
-  if (actual.kind === "union") {
-    return actual.members.every((member) => isAssignable(member, expected, environment, new Set(seen)));
   }
   if (actual.kind === "enum" && expected.kind === "string") {
     return true;
   }
   if (actual.kind === "list" && expected.kind === "list") {
-    return isAssignable(actual.element, expected.element, environment, seen);
+    return invariant(actual.element, expected.element, environment, seen);
   }
   if (actual.kind === "set" && expected.kind === "set") {
-    return isAssignable(actual.element, expected.element, environment, seen);
+    return invariant(actual.element, expected.element, environment, seen);
   }
   if (actual.kind === "map" && expected.kind === "map") {
-    return isAssignable(actual.key, expected.key, environment, new Set(seen)) && isAssignable(actual.value, expected.value, environment, seen);
+    return invariant(actual.key, expected.key, environment, seen)
+      && invariant(actual.value, expected.value, environment, seen);
   }
   if (actual.kind === "promise" && expected.kind === "promise") {
     return isAssignable(actual.value, expected.value, environment, seen);
@@ -218,6 +214,11 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     const fields = environment.fieldsOf(expected.name);
     return fields ? fieldsAssignable(actual.fields, fields, environment, seen) : false;
   }
+  if (actual.kind === "named" && expected.kind === "object") {
+    if (opaqueWebTypeNames.has(actual.name)) return false;
+    const fields = environment.fieldsOf(actual.name);
+    return fields ? writableFieldsAssignable(fields, expected.fields, environment, seen) : false;
+  }
   if (actual.kind === "named" && expected.kind === "named") {
     if (actual.name === expected.name) return true;
     const opaqueCompatibility = opaqueWebTypeAssignable(actual.name, expected.name);
@@ -225,7 +226,7 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     const actualFields = environment.fieldsOf(actual.name);
     const expectedFields = environment.fieldsOf(expected.name);
     return actualFields !== null && expectedFields !== null
-      ? fieldsAssignable(actualFields, expectedFields, environment, seen)
+      ? writableFieldsAssignable(actualFields, expectedFields, environment, seen)
       : false;
   }
   if (actual.kind === "class" && expected.kind === "class") {
@@ -308,7 +309,7 @@ export function describeType(type: ValueType): string {
   switch (type.kind) {
     case "unknown":
     case "any":
-    case "none":
+    case "null":
     case "string":
     case "number":
     case "bool":
@@ -371,55 +372,19 @@ function fieldsAssignable(actual: ReadonlyMap<string, ValueType>, expected: Read
   return true;
 }
 
-function splitTopLevel(text: string, separator: string): string[] {
-  const parts: string[] = [];
-  let angleDepth = 0;
-  let parenthesisDepth = 0;
-  let start = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === "<") {
-      angleDepth += 1;
-    } else if (character === ">") {
-      angleDepth = Math.max(0, angleDepth - 1);
-    } else if (character === "(") {
-      parenthesisDepth += 1;
-    } else if (character === ")") {
-      parenthesisDepth = Math.max(0, parenthesisDepth - 1);
-    } else if (character === separator && angleDepth === 0 && parenthesisDepth === 0) {
-      parts.push(text.slice(start, index).trim());
-      start = index + 1;
-    }
-  }
-  parts.push(text.slice(start).trim());
-  return parts.filter((part) => part.length > 0);
+function invariant(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string>): boolean {
+  return isAssignable(actual, expected, environment, new Set(seen))
+    && isAssignable(expected, actual, environment, new Set(seen));
 }
 
-function splitFunctionType(text: string): { readonly parameters: string; readonly result: string } | null {
-  if (!text.startsWith("(")) return null;
-  let depth = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === "(") depth += 1;
-    else if (character === ")") {
-      depth -= 1;
-      if (depth === 0) {
-        const remainder = text.slice(index + 1).trimStart();
-        if (!remainder.startsWith("->")) return null;
-        const result = remainder.slice(2).trim();
-        return result.length > 0 ? { parameters: text.slice(1, index), result } : null;
-      }
+function writableFieldsAssignable(actual: ReadonlyMap<string, ValueType>, expected: ReadonlyMap<string, ValueType>, environment: TypeEnvironment, seen: Set<string>): boolean {
+  for (const [name, expectedType] of expected) {
+    const actualType = actual.get(name);
+    if (!actualType) {
+      if (expectedType.kind === "optional") continue;
+      return false;
     }
+    if (!invariant(actualType, expectedType, environment, seen)) return false;
   }
-  return null;
-}
-
-function hasOuterParentheses(text: string): boolean {
-  if (!text.startsWith("(") || !text.endsWith(")")) return false;
-  let depth = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === "(") depth += 1;
-    else if (text[index] === ")" && --depth === 0) return index === text.length - 1;
-  }
-  return false;
+  return true;
 }

@@ -5,6 +5,7 @@ import type {
   Statement,
   LoweringHints,
 } from "@velarscript/compiler/extension";
+import { cssPropertyName } from "./look.ts";
 import { JavaScriptEmitter } from "@velarscript/compiler/extension";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
@@ -153,18 +154,18 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (statement.kind === "ComponentDeclaration") return this.emitComponent(statement, depth);
     if (statement.kind === "StateDeclaration") {
       const indentation = "  ".repeat(depth);
-      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarState(${this.emitExpression(statement.initializer)});`;
+      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarState(${this.emitMappedExpression(statement.initializer)});`;
     }
     if (statement.kind === "ComputedDeclaration") {
       const indentation = "  ".repeat(depth);
-      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarComputed(() => ${this.emitExpression(statement.initializer)}, __velarGlobalScope);`;
+      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarComputed(() => ${this.emitMappedExpression(statement.initializer)}, __velarGlobalScope);`;
     }
     if (statement.kind === "ResourceDeclaration" || statement.kind === "ActionDeclaration") return "";
     if (statement.kind === "WatchDeclaration") {
       const indentation = "  ".repeat(depth);
       const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");
-      const body = statement.body.map((child) => this.emitStatement(child, depth + 1)).filter(Boolean).join("\n");
-      return `${indentation}__velarWatch(() => ${this.emitExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope);`;
+      const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+      return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope);`;
     }
     if (statement.kind === "AssignmentStatement") {
       const reactive = this.emitReactiveAssignment(statement, depth);
@@ -197,26 +198,17 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && expression.callee.name === "mount" && expression.arguments.length === 2) {
-      return `__velarMount(() => ${this.emitExpression(expression.arguments[0]!)}, ${this.emitExpression(expression.arguments[1]!)})`;
+      return `__velarMount(() => ${this.emitMappedExpression(expression.arguments[0]!)}, ${this.emitMappedExpression(expression.arguments[1]!)})`;
     }
     const controlledCall = expression.kind === "CallExpression" ? this.hints.extensionCalls.get(expression.span.start) : undefined;
     if (controlledCall !== undefined && expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
-      const sourceArguments = expression.arguments.map((argument) => this.emitExpression(argument));
+      const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
       const namedOrder = this.hints.namedArgumentOrders.get(expression.span.start);
       const arguments_ = namedOrder
         ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
         : sourceArguments;
       const call = `__velarLookCall(${JSON.stringify(controlledCall)}, [${arguments_.join(", ")}])`;
       return namedOrder ? `((__namedArguments) => ${call})([${sourceArguments.join(", ")}])` : call;
-    }
-    if (expression.kind === "CallExpression" && expression.callee.kind === "MemberExpression"
-      && expression.callee.object.kind === "IdentifierExpression"
-      && this.reactive.get(expression.callee.object.name) === "state"
-      && ["append", "extend", "set", "remove", "clear"].includes(expression.callee.property)) {
-      const state = expression.callee.object.name;
-      const helper = collectionMutationHelper(expression.callee.property);
-      const arguments_ = expression.arguments.map((argument) => this.emitExpression(argument));
-      return `${state}.mutate((__value) => ${helper}(__value${arguments_.length > 0 ? `, ${arguments_.join(", ")}` : ""}))`;
     }
     return super.emitExpression(expression);
   }
@@ -229,7 +221,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const parts: string[] = [];
     for (const entry of entries) {
       if (entry.kind === "LookSpread") {
-        parts.push(this.emitExpression(entry.value));
+        parts.push(this.emitMappedExpression(entry.value));
         continue;
       }
       if (entry.kind === "LookIf") {
@@ -243,7 +235,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         parts.push(...this.emitLookEntries(entry.entries, contexts, entry.name));
         continue;
       }
-      const property = LOOK_PROPERTY_MAP.get(entry.name) ?? entry.name;
+      const property = cssPropertyName(entry.name);
       for (const context of contexts) {
         const token = lookToken(context.staticAtoms, target, property);
         const rule = `{ rules: { ${JSON.stringify(token)}: ${this.emitLookValue(entry.value)} } }`;
@@ -260,19 +252,19 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private emitLookValue(expression: Expression): string {
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
       && expression.operand.kind === "UnitLiteralExpression") {
-      return this.emitExpression(expression);
+      return this.emitMappedExpression(expression);
     }
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {
-      return `__velarLookUnary(${JSON.stringify(expression.operator)}, ${this.emitExpression(expression.operand)})`;
+      return `__velarLookUnary(${JSON.stringify(expression.operator)}, ${this.emitMappedExpression(expression.operand)})`;
     }
     if (expression.kind === "BinaryExpression" && ["+", "-", "*", "/"].includes(expression.operator)) {
       return this.emitLookArithmetic(expression);
     }
-    return this.emitExpression(expression);
+    return this.emitMappedExpression(expression);
   }
 
   private emitLookArithmetic(expression: Extract<Expression, { readonly kind: "BinaryExpression" }>): string {
-    return `__velarLookMath(${JSON.stringify(expression.operator)}, ${this.emitExpression(expression.left)}, ${this.emitExpression(expression.right)})`;
+    return `__velarLookMath(${JSON.stringify(expression.operator)}, ${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
   }
 
   private emitComponent(statement: ComponentDeclaration, depth: number): string {
@@ -293,7 +285,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const lines: string[] = [];
     for (const parameter of statement.parameters) {
       if (parameter.defaultValue) {
-        lines.push(`${bodyIndent}const ${parameter.name} = __props.${parameter.name} === undefined ? ${this.emitExpression(parameter.defaultValue)} : __props.${parameter.name};`);
+        lines.push(`${bodyIndent}const ${parameter.name} = __props.${parameter.name} === undefined ? ${this.emitMappedExpression(parameter.defaultValue)} : __props.${parameter.name};`);
       } else {
         lines.push(`${bodyIndent}const ${parameter.name} = __velarRequiredProp(__props, ${JSON.stringify(parameter.name)}, ${JSON.stringify(statement.name)});`);
       }
@@ -304,21 +296,21 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     let cleanupBody: readonly Statement[] = [];
     for (const item of statement.body) {
       if (item.kind === "StateDeclaration") {
-        lines.push(`${bodyIndent}const ${item.name} = __velarState(${this.emitExpression(item.initializer)});`);
+        lines.push(`${bodyIndent}const ${item.name} = __velarState(${this.emitMappedExpression(item.initializer)});`);
       } else if (item.kind === "ComputedDeclaration") {
-        lines.push(`${bodyIndent}const ${item.name} = __velarComputed(() => ${this.emitExpression(item.initializer)}, __scope);`);
+        lines.push(`${bodyIndent}const ${item.name} = __velarComputed(() => ${this.emitMappedExpression(item.initializer)}, __scope);`);
       } else if (item.kind === "ResourceDeclaration") {
-        lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitExpression(item.initializer)}, __scope, ${JSON.stringify(item.name)});`);
+        lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitMappedExpression(item.initializer)}, __scope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "ActionDeclaration") {
         const parameters = item.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-        const actionLines = item.body.map((child) => this.emitStatement(child, depth + 3)).filter(Boolean);
+        const actionLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean);
         if (!this.blockAlwaysReturns(item.body)) actionLines.push(`${"  ".repeat(depth + 3)}return null;`);
         const actionBody = actionLines.join("\n");
         lines.push(`${bodyIndent}const ${item.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${bodyIndent}` : ""}}, __scope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "WatchDeclaration") {
         const parameters = [item.currentName, item.previousName].filter((name): name is string => name !== null).join(", ");
-        const watchLines = item.body.map((child) => this.emitStatement(child, depth + 3)).filter(Boolean).join("\n");
-        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __scope);`);
+        const watchLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
+        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __scope);`);
       } else if (item.kind === "MountedBlock") {
         mountedBody = item.body;
       } else if (item.kind === "CleanupBlock") {
@@ -326,22 +318,22 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       } else if (item.kind === "ReturnStatement") {
         render = item.value;
       } else {
-        lines.push(this.emitStatement(item, depth + 2));
+        lines.push(this.emitMappedStatement(item, depth + 2));
       }
     }
 
     const renderedRoot = render?.kind === "JSXElementExpression" && /^[A-Z]/u.test(render.tag)
       ? `(() => { const __rootFragment = document.createDocumentFragment(); __velarDynamic(__rootFragment, (__childScope) => ${this.emitJsx(render, "__childScope", true, "__namespace")}, __scope); return __rootFragment; })()`
-      : render ? this.emitExpression(render) : "document.createComment(\"missing render\")";
+      : render ? this.emitMappedExpression(render) : "document.createComment(\"missing render\")";
     lines.push(`${bodyIndent}const __root = ${renderedRoot};`);
     lines.push(`${bodyIndent}if (__props.class !== undefined) __velarClassBindRoot(__root, () => __props.class, __scope);`);
     lines.push(`${bodyIndent}if (__props.look !== undefined) __velarLookBindRoot(__root, () => __props.look, __scope);`);
-    const mounted = mountedBody.map((child) => this.emitStatement(child, depth + 3)).filter(Boolean).join("\n");
+    const mounted = mountedBody.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
     const cleanup = cleanupBody.map((child) => {
       if (["VariableDeclaration", "FunctionDeclaration", "ClassDeclaration", "TypeDeclaration", "EnumDeclaration"].includes(child.kind)) {
-        return this.emitStatement(child, depth + 3);
+        return this.emitMappedStatement(child, depth + 3);
       }
-      const inner = this.emitStatement(child, depth + 4);
+      const inner = this.emitMappedStatement(child, depth + 4);
       if (!inner) return "";
       const cleanupIndent = "  ".repeat(depth + 3);
       return `${cleanupIndent}__velarCleanupStep(() => {\n${inner}\n${cleanupIndent}}, __scope);`;
@@ -372,25 +364,9 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const indentation = "  ".repeat(depth);
     if (statement.target.kind === "IdentifierExpression" && this.reactive.get(statement.target.name) === "state") {
       const state = statement.target.name;
-      const value = this.emitExpression(statement.value);
+      const value = this.emitMappedExpression(statement.value);
       if (statement.operator === "=") return `${indentation}${state}.set(${value});`;
       return `${indentation}${state}.set(${state}.get() ${statement.operator.slice(0, -1)} ${value});`;
-    }
-    if (statement.target.kind === "MemberExpression" && statement.target.object.kind === "IdentifierExpression"
-      && this.reactive.get(statement.target.object.name) === "state") {
-      const state = statement.target.object.name;
-      const property = JSON.stringify(statement.target.property);
-      const value = this.emitExpression(statement.value);
-      const next = statement.operator === "=" ? value : `__value[${property}] ${statement.operator.slice(0, -1)} ${value}`;
-      return `${indentation}${state}.mutate((__value) => (__value[${property}] = ${next}));`;
-    }
-    if (statement.target.kind === "IndexExpression" && statement.target.object.kind === "IdentifierExpression"
-      && this.reactive.get(statement.target.object.name) === "state") {
-      const state = statement.target.object.name;
-      const index = this.emitExpression(statement.target.index);
-      const value = this.emitExpression(statement.value);
-      const next = statement.operator === "=" ? value : `__velarIndex(__value, ${index}) ${statement.operator.slice(0, -1)} ${value}`;
-      return `${indentation}${state}.mutate((__value) => __velarSetIndex(__value, ${index}, ${next}));`;
     }
     return null;
   }
@@ -398,7 +374,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private emitJsx(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string): string {
     if (/^[A-Z]/u.test(expression.tag)) {
       const properties = expression.attributes
-        .filter((attribute) => attribute.name !== "key" && !isJsxControlAttribute(attribute))
+        .filter((attribute) => attribute.name !== "key")
         .map((attribute) => `${this.emitObjectKey(attribute.name)}: ${this.emitJsxAttributeValue(attribute)}`);
       if (hasMeaningfulChildren(expression.children)) properties.push(`children: ${this.emitJsxChildren(expression.children, scope, namespace)}`);
       const props = properties.join(", ");
@@ -415,12 +391,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       : `const ${element} = document.createDocumentFragment();`];
     for (const attribute of expression.attributes) {
       const value = attribute.value;
-      if (attribute.name === "key" || isJsxControlAttribute(attribute)) continue;
+      if (attribute.name === "key") continue;
       if (attribute.name === "ref" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
         lines.push(`${value.name} = ${element}; ${scope}.cleanups.push(() => { if (${value.name} === ${element}) ${value.name} = null; });`);
       } else if (attribute.name.startsWith("on:") && value && typeof value !== "string") {
         const [event, ...modifiers] = attribute.name.slice(3).split(".");
-        lines.push(`__velarOn(${element}, ${JSON.stringify(event)}, ${this.emitExpression(value)}, ${scope}, ${JSON.stringify(modifiers)});`);
+        lines.push(`__velarOn(${element}, ${JSON.stringify(event)}, ${this.emitMappedExpression(value)}, ${scope}, ${JSON.stringify(modifiers)});`);
       } else if (attribute.name === "bind:value" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
         const numeric = expression.tag === "input" && expression.attributes.some((item) => item.name === "type" && item.value === "number");
         const enumName = this.hints.enumValueBindings.get(attribute.span.start);
@@ -428,58 +404,33 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       } else if (attribute.name === "bind:checked" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
         lines.push(`__velarBindChecked(${element}, ${value.name}, ${scope});`);
       } else if (attribute.name.startsWith("class:") && value && typeof value !== "string") {
-        lines.push(`__velarClass(${element}, ${JSON.stringify(attribute.name.slice(6))}, () => ${this.emitExpression(value)}, ${scope});`);
+        lines.push(`__velarClass(${element}, ${JSON.stringify(attribute.name.slice(6))}, () => ${this.emitMappedExpression(value)}, ${scope});`);
       } else if (attribute.name === "host") {
         lines.push(`${element}.__velarHost = true;`);
       } else if (attribute.name === "look" && value && typeof value !== "string") {
-        lines.push(`__velarLookBind(${element}, () => ${this.emitExpression(value)}, ${scope});`);
+        lines.push(`__velarLookBind(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`);
       } else if (attribute.name === "class" && value && typeof value !== "string") {
-        lines.push(`__velarClassBind(${element}, () => ${this.emitExpression(value)}, ${scope});`);
+        lines.push(`__velarClassBind(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`);
       } else if (attribute.name === "unsafe:html" && value && typeof value !== "string") {
-        lines.push(`__velarHtml(${element}, () => ${this.emitExpression(value)}, ${scope});`);
+        lines.push(`__velarHtml(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`);
       } else if (typeof value === "string" || value === null) {
         lines.push(`__velarStaticAttr(${element}, ${JSON.stringify(attribute.name)}, ${value === null ? "true" : JSON.stringify(value)});`);
       } else {
-        lines.push(`__velarAttr(${element}, ${JSON.stringify(attribute.name)}, () => ${this.emitExpression(value)}, ${scope});`);
+        lines.push(`__velarAttr(${element}, ${JSON.stringify(attribute.name)}, () => ${this.emitMappedExpression(value)}, ${scope});`);
       }
     }
-    for (let index = 0; index < expression.children.length;) {
-      const child = expression.children[index]!;
+    for (const child of expression.children) {
       if (child.kind === "JSXText") {
         const text = normalizeJsxText(child.value);
         if (text) lines.push(`${element}.append(document.createTextNode(${JSON.stringify(text)}));`);
-        index += 1;
       } else if (child.kind === "JSXElementExpression") {
-        const control = child.attributes.find(isJsxControlAttribute);
-        if (control?.name === "if") {
-          const branches: { element: JSXElementExpression; control: JSXAttribute }[] = [{ element: child, control }];
-          let cursor = index + 1;
-          let sawElse = false;
-          while (cursor < expression.children.length) {
-            const next = expression.children[cursor]!;
-            if (next.kind === "JSXText" && next.value.trim().length === 0) {
-              cursor += 1;
-              continue;
-            }
-            if (next.kind !== "JSXElementExpression") break;
-            const nextControl = next.attributes.find(isJsxControlAttribute);
-            if (!nextControl || (nextControl.name !== "else-if" && nextControl.name !== "else") || sawElse) break;
-            branches.push({ element: next, control: nextControl });
-            sawElse = nextControl.name === "else";
-            cursor += 1;
-          }
-          lines.push(this.emitJsxConditionalBranches(element, branches, scope, childNamespace));
-          index = cursor;
-        } else if (/^[A-Z]/u.test(child.tag)) {
+        if (/^[A-Z]/u.test(child.tag)) {
           lines.push(`__velarDynamic(${element}, (__childScope) => ${this.emitJsx(child, "__childScope", true, childNamespace)}, ${scope});`);
-          index += 1;
         } else {
           lines.push(`__velarAppend(${element}, ${this.emitJsx(child, scope, true, childNamespace)});`);
-          index += 1;
         }
       } else {
         lines.push(this.emitDynamicChild(element, child.expression, scope, childNamespace));
-        index += 1;
       }
     }
     lines.push(`return ${element};`);
@@ -498,7 +449,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     this.currentScope = "__childScope";
     this.currentJsxNamespace = namespace;
     if (keyed) {
-      const source = this.emitExpression(keyed.source);
+      const source = this.emitMappedExpression(keyed.source);
       const parameter = keyed.arrow.parameters[0]!.name;
       const key = this.emitJsxAttributeValue(keyed.key);
       const render = this.emitJsx(keyed.arrow.body, "__childScope", true, namespace);
@@ -506,41 +457,16 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       this.currentJsxNamespace = previousJsxNamespace;
       return `__velarKeyed(${parent}, () => ${source}, (${parameter}) => ${key}, (${parameter}, __childScope) => ${render}, ${scope});`;
     }
-    const value = this.emitExpression(expression);
+    const value = this.emitMappedExpression(expression);
     this.currentScope = previousScope;
     this.currentJsxNamespace = previousJsxNamespace;
     return `__velarDynamic(${parent}, (__childScope) => ${value}, ${scope});`;
   }
 
-  private emitJsxConditionalBranches(
-    parent: string,
-    branches: readonly { element: JSXElementExpression; control: JSXAttribute }[],
-    scope: string,
-    namespace: string,
-  ): string {
-    const previousScope = this.currentScope;
-    const previousJsxNamespace = this.currentJsxNamespace;
-    this.currentScope = "__childScope";
-    this.currentJsxNamespace = namespace;
-    let selection = "null";
-    for (let index = branches.length - 1; index >= 0; index -= 1) {
-      const branch = branches[index]!;
-      const rendered = this.emitJsx(branch.element, "__childScope", true, namespace);
-      if (branch.control.name === "else") {
-        selection = rendered;
-      } else if (branch.control.value && typeof branch.control.value !== "string") {
-        selection = `(${this.emitCondition(branch.control.value)} ? ${rendered} : ${selection})`;
-      }
-    }
-    this.currentScope = previousScope;
-    this.currentJsxNamespace = previousJsxNamespace;
-    return `__velarDynamic(${parent}, (__childScope) => ${selection}, ${scope});`;
-  }
-
   private emitJsxAttributeValue(attribute: JSXAttribute): string {
     if (attribute.value === null) return "true";
     if (typeof attribute.value === "string") return JSON.stringify(attribute.value);
-    return this.emitExpression(attribute.value);
+    return this.emitMappedExpression(attribute.value);
   }
 
   private prepareLooks(program: Program): void {
@@ -552,7 +478,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         const collect = (entries: readonly LookEntry[], contexts: readonly LookConditionTerm[] = [EMPTY_LOOK_TERM], target = ""): void => {
           for (const entry of entries) {
             if (entry.kind === "LookProperty") {
-              const property = LOOK_PROPERTY_MAP.get(entry.name) ?? entry.name;
+              const property = cssPropertyName(entry.name);
               for (const context of contexts) {
                 const token = lookToken(context.staticAtoms, target, property);
                 rules.set(token, { token, property, target, staticAtoms: context.staticAtoms });
@@ -602,14 +528,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 }
 
-function collectionMutationHelper(property: string): string {
-  if (property === "append") return "__velarCollectionAppend";
-  if (property === "extend") return "__velarCollectionExtend";
-  if (property === "set") return "__velarCollectionSet";
-  if (property === "remove") return "__velarCollectionRemove";
-  return "__velarCollectionClear";
-}
-
 function normalizeJsxText(value: string): string {
   const normalized = value.replace(/\s+/gu, " ");
   if (!value.includes("\n")) return normalized;
@@ -618,10 +536,6 @@ function normalizeJsxText(value: string): string {
 
 function hasMeaningfulChildren(children: JSXElementExpression["children"]): boolean {
   return children.some((child) => child.kind !== "JSXText" || child.value.trim().length > 0);
-}
-
-function isJsxControlAttribute(attribute: JSXAttribute): boolean {
-  return attribute.name === "if" || attribute.name === "else-if" || attribute.name === "else";
 }
 
 function keyedListExpression(expression: Expression): {
@@ -635,24 +549,6 @@ function keyedListExpression(expression: Expression): {
   const key = callback.body.attributes.find((attribute) => attribute.name === "key");
   return key ? { source: expression.callee.object, arrow: callback as typeof callback & { readonly body: JSXElementExpression }, key } : null;
 }
-
-const LOOK_PROPERTY_MAP = new Map<string, string>([
-  ["display", "display"], ["position", "position"], ["columns", "grid-template-columns"], ["rows", "grid-template-rows"], ["flow", "grid-auto-flow"],
-  ["gap", "gap"], ["rowGap", "row-gap"], ["columnGap", "column-gap"], ["alignItems", "align-items"], ["justifyContent", "justify-content"],
-  ["alignContent", "align-content"], ["alignSelf", "align-self"], ["justifySelf", "justify-self"], ["placeItems", "place-items"], ["wrap", "flex-wrap"], ["zIndex", "z-index"], ["gridColumn", "grid-column"], ["gridRow", "grid-row"],
-  ["width", "width"], ["height", "height"], ["minWidth", "min-width"], ["maxWidth", "max-width"], ["minHeight", "min-height"], ["maxHeight", "max-height"], ["aspectRatio", "aspect-ratio"],
-  ["inset", "inset"], ["top", "top"], ["right", "right"], ["bottom", "bottom"], ["left", "left"],
-  ["padding", "padding"], ["paddingTop", "padding-top"], ["paddingRight", "padding-right"], ["paddingBottom", "padding-bottom"], ["paddingLeft", "padding-left"], ["paddingInline", "padding-inline"], ["paddingBlock", "padding-block"],
-  ["margin", "margin"], ["marginTop", "margin-top"], ["marginRight", "margin-right"], ["marginBottom", "margin-bottom"], ["marginLeft", "margin-left"], ["marginInline", "margin-inline"], ["marginBlock", "margin-block"],
-  ["overflow", "overflow"], ["overflowX", "overflow-x"], ["overflowY", "overflow-y"], ["objectFit", "object-fit"], ["visibility", "visibility"], ["clip", "clip"], ["clipPath", "clip-path"],
-  ["background", "background"], ["backgroundImage", "background-image"], ["fill", "fill"], ["stroke", "stroke"], ["strokeWidth", "stroke-width"], ["border", "border"], ["borderTop", "border-top"], ["borderRight", "border-right"],
-  ["borderBottom", "border-bottom"], ["borderLeft", "border-left"], ["radius", "border-radius"], ["shadow", "box-shadow"], ["outline", "outline"], ["opacity", "opacity"], ["content", "content"],
-  ["color", "color"], ["font", "font-family"], ["fontSize", "font-size"], ["fontWeight", "font-weight"], ["fontStyle", "font-style"], ["lineHeight", "line-height"],
-  ["letterSpacing", "letter-spacing"], ["textAlign", "text-align"], ["textDecoration", "text-decoration"], ["textCase", "text-transform"], ["whiteSpace", "white-space"], ["textOverflow", "text-overflow"], ["wordBreak", "word-break"], ["listStyle", "list-style"],
-  ["translateX", "translate-x"], ["translateY", "translate-y"], ["scale", "scale"], ["scaleX", "scale-x"], ["scaleY", "scale-y"], ["rotate", "rotate"], ["transformOrigin", "transform-origin"],
-  ["transition", "transition"], ["transitionDuration", "transition-duration"], ["transitionDelay", "transition-delay"], ["easing", "transition-timing-function"], ["animation", "animation"],
-  ["cursor", "cursor"], ["pointerEvents", "pointer-events"], ["userSelect", "user-select"], ["touchAction", "touch-action"], ["scrollBehavior", "scroll-behavior"], ["backdropFilter", "backdrop-filter"],
-]);
 
 const EMPTY_LOOK_TERM: LookConditionTerm = Object.freeze({ staticAtoms: [], runtimeAtoms: [] });
 const LOOK_CONDITION_TERM_LIMIT = 32;
@@ -709,10 +605,6 @@ function lookVariable(token: string): string {
 
 function lookDeclaration(token: string, property: string): string {
   const value = `var(${lookVariable(token)})`;
-  if (property === "translate-x") return `translate:${value} 0`;
-  if (property === "translate-y") return `translate:0 ${value}`;
-  if (property === "scale-x") return `scale:${value} 1`;
-  if (property === "scale-y") return `scale:1 ${value}`;
   return `${property}:${value}`;
 }
 
@@ -807,8 +699,11 @@ __velarRuntime.watchQueue ??= new Set();
 __velarRuntime.flushPending ??= false;
 __velarRuntime.activeObserver ??= null;
 __velarRuntime.errorHandlers ??= new Set();
+__velarRuntime.actionFailures ??= new WeakSet();
 __velarRuntime.lookSources ??= new WeakMap();
 __velarRuntime.classSources ??= new WeakMap();
+try { WeakSet.prototype.has.call(__velarRuntime.actionFailures, __velarRuntime.actionFailures); }
+catch { throw new TypeError("VelarScript action failure registry is invalid"); }
 __velarRuntime.report ??= (value, options = {}) => {
   const error = value instanceof Error ? value : new Error(String(value), { cause: value });
   const report = Object.freeze({
@@ -834,9 +729,14 @@ function __velarReport(value, phase, scope = null, detail = "", unhandled = true
   return __velarRuntime.report(value, { phase, detail, component: scope?.component || "", unhandled });
 }
 
+function __velarReportEvent(value, scope, detail) {
+  if (value instanceof Error && WeakSet.prototype.delete.call(__velarRuntime.actionFailures, value)) return null;
+  return __velarReport(value, "event", scope, detail);
+}
+
 function __velarSchedule(observer) {
   const queue = observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue;
-  if (!queue.has(observer) && queue.size >= 100000) throw new RangeError("Velar reactive queues cannot exceed 100000 observers");
+  if (!queue.has(observer) && queue.size >= 100000) throw new RangeError("VelarScript reactive queues cannot exceed 100000 observers");
   queue.add(observer);
   if (!__velarRuntime.flushPending) {
     __velarRuntime.flushPending = true;
@@ -898,11 +798,6 @@ function __velarState(initial) {
       value = next;
       for (const observer of [...subscribers]) observer.notify();
       return next;
-    },
-    mutate(change) {
-      const result = change(value);
-      for (const observer of [...subscribers]) observer.notify();
-      return result;
     },
   };
 }
@@ -989,7 +884,9 @@ function __velarAction(execute, scope, name) {
   let disposed = false;
 
   const run = (...arguments_) => {
-    if (disposed) return Promise.resolve(null);
+    if (disposed) return Promise.reject(new Error(
+      "Action '" + String(name || "anonymous") + "' cannot run after its component is destroyed",
+    ));
     const current = ++generation;
     active += 1;
     pending.set(true);
@@ -1002,14 +899,17 @@ function __velarAction(execute, scope, name) {
       },
       (failure) => {
         active -= 1;
+        let actionError = failure instanceof Error ? failure : new Error(String(failure), { cause: failure });
         if (!disposed) {
           pending.set(active > 0);
           if (current === generation) {
             const report = __velarRuntime.report(failure, { phase: "action", detail: String(name || ""), component: scope.component || "", unhandled: false });
             error.set(report.error);
+            actionError = report.error;
+            WeakSet.prototype.add.call(__velarRuntime.actionFailures, actionError);
           }
         }
-        return null;
+        throw actionError;
       },
     );
   };
@@ -1075,9 +975,9 @@ function __velarComponent(node, scope, mounted, cleanup) {
     __velarComponent: true,
     node,
     mount(target, before = null) {
-      if (destroyed) throw new Error("Cannot mount a destroyed Velar component");
+      if (destroyed) throw new Error("Cannot mount a destroyed VelarScript component");
       const parent = typeof target === "string" ? document.querySelector(target) : target;
-      if (!parent) throw new Error("Velar mount target was not found");
+      if (!parent) throw new Error("VelarScript mount target was not found");
       parent.insertBefore(node, before);
       __velarMountScope(scope);
       return null;
@@ -1127,7 +1027,7 @@ function __velarFatal(parent, error) {
 
 function __velarMount(create, target) {
   const parent = typeof target === "string" ? document.querySelector(target) : target;
-  if (!parent) throw new Error("Velar mount target was not found");
+  if (!parent) throw new Error("VelarScript mount target was not found");
   let value;
   try {
     value = typeof create === "function" ? create() : create;
@@ -1455,14 +1355,15 @@ function __velarClassBind(element, read, scope) {
 }
 
 function __velarLookCall(name, args) {
+  if (name === "color") return String(args[0]);
   if (name === "rgb") return "rgb(" + args.slice(0, 3).join(" ") + ")";
   if (name === "rgba") return "rgb(" + args.slice(0, 3).join(" ") + " / " + args[3] + ")";
   if (name === "hsl") return "hsl(" + args[0] + " " + args[1] + "% " + args[2] + "%)";
   if (name === "alpha") return "color-mix(in srgb, " + args[0] + " " + Number(args[1]) * 100 + "%, transparent)";
   if (name === "lighten") return "color-mix(in srgb, " + args[0] + ", white " + Number(args[1]) * 100 + "%)";
   if (name === "darken") return "color-mix(in srgb, " + args[0] + ", black " + Number(args[1]) * 100 + "%)";
-  if (name === "line") return args[0] + " solid " + args[1];
-  if (name === "dropShadow") {
+  if (name === "border") return args[0] + " " + (args[2] ?? "solid") + " " + args[1];
+  if (name === "shadow") {
     const spread = args[4] ?? "0px";
     return (args[5] ? "inset " : "") + args[0] + " " + args[1] + " " + args[2] + " " + spread + " " + args[3];
   }
@@ -1471,10 +1372,8 @@ function __velarLookCall(name, args) {
   if (name === "minmax") return "minmax(" + args[0] + ", " + args[1] + ")";
   if (name === "repeat") return "repeat(" + args[0] + ", " + args[1] + ")";
   if (name === "tracks") return args.join(" ");
-  if (name === "change") return args[0] + " " + args[1] + " " + (args[2] ?? "ease") + (args[3] ? " " + args[3] : "");
-  if (name === "space") return args[0] + " " + args[1];
-  if (name === "edges") return args.join(" ");
-  if (name === "inset") return "inset 0 0 0 " + args[0];
+  if (name === "transition") return args[0] + " " + args[1] + " " + (args[2] ?? "ease") + (args[3] ? " " + args[3] : "");
+  if (name === "spacing") return args.filter((value) => value !== undefined).join(" ");
   if (name === "min" || name === "max" || name === "clamp") return name + "(" + args.join(", ") + ")";
   throw new TypeError("Unknown Look builder " + name);
 }
@@ -1492,8 +1391,8 @@ function __velarOn(element, event, handler, scope, modifiers = []) {
     if (modifiers.includes("stop")) value.stopPropagation();
     try {
       const result = handler(value);
-      if (result && typeof result.then === "function") result.catch((error) => __velarReport(error, "event", scope, event));
-    } catch (error) { __velarReport(error, "event", scope, event); }
+      if (result && typeof result.then === "function") result.catch((error) => __velarReportEvent(error, scope, event));
+    } catch (error) { __velarReportEvent(error, scope, event); }
   };
   element.addEventListener(event, listener, options);
   scope.cleanups.push(() => element.removeEventListener(event, listener, capture));

@@ -19,7 +19,7 @@ test("publication rehearsal emits reproducible verified package identities witho
     await runRelease(["rehearse", "--output-dir", second]);
     const firstManifest = JSON.parse(await readFile(join(first, "velar-toolchain-release.json"), "utf8"));
     const secondManifest = JSON.parse(await readFile(join(second, "velar-toolchain-release.json"), "utf8"));
-    assert.equal(firstManifest.version, "0.9.0-dev");
+    assert.equal(firstManifest.version, "0.10.0-dev");
     assert.equal(firstManifest.mode, "rehearse");
     assert.equal(firstManifest.publish.performed, false);
     assert.equal(firstManifest.publish.publishable, false);

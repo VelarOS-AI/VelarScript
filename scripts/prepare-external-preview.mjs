@@ -60,7 +60,7 @@ async function assertReplaceableOutput(output) {
   try {
     await verifyProductionBuild(output);
   } catch {
-    throw new Error(`refusing to replace '${output}' because it is not an existing Velar Web build`);
+    throw new Error(`refusing to replace '${output}' because it is not an existing VelarScript Web build`);
   }
 }
 
@@ -92,7 +92,7 @@ function parseArguments(arguments_) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const result = await prepareExternalPreview(parseArguments(process.argv.slice(2)));
-    process.stdout.write(`Prepared verified Velar external preview ${result.manifest.buildId} -> ${result.outputDirectory}\n`);
+    process.stdout.write(`Prepared verified VelarScript external preview ${result.manifest.buildId} -> ${result.outputDirectory}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

@@ -34,7 +34,7 @@ export interface FrameworkBrowserTestContract {
 
 /**
  * Tooling ABI implemented by an optional framework package and dynamically
- * composed by hosts such as the Velar CLI. It deliberately contains no file,
+ * composed by hosts such as the VelarScript CLI. It deliberately contains no file,
  * process, network, browser-driver, or compiler implementation.
  */
 export interface FrameworkHostExtension {

@@ -1,8 +1,8 @@
-# Velar Toolchain Release Process
+# VelarScript Toolchain Release Process
 
-Status: Velar 0.9 release contract retained but execution deferred
+Status: VelarScript 0.10 release contract retained but execution deferred
 
-Velar builds the compiler, official Web framework, project creator, and CLI into four
+VelarScript builds the compiler, official Web framework, project creator, and CLI into four
 independently installable npm packages, but treats them as one version-locked
 release set. Web pins the exact compiler version; CLI pins compiler and creator
 while loading Web only when a project explicitly declares `@velarscript/web`.

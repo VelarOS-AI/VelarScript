@@ -5,7 +5,7 @@ import {
   boolType,
   describeType,
   isAssignable,
-  noneType,
+  nullType,
   nonOptional,
   numberType,
   optionalOf,
@@ -19,45 +19,16 @@ import {
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
+import { LOOK_BUILDERS, LOOK_HOOKS, LOOK_PROPERTIES, LOOK_TARGETS } from "./look.ts";
 type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
 type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
 type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
 type JSXAttribute = JSXElementExpression["attributes"][number];
 
-const jsxControlAttributes = new Set(["if", "else-if", "else"]);
+const removedJsxControlAttributes = new Set(["if", "else-if", "else"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
-const LOOK_HOOKS = new Set(["hover", "focus", "focusVisible", "active", "current", "disabled", "checked", "invalid", "open"]);
-const LOOK_TARGETS = new Set(["before", "after", "backdrop", "placeholder", "selection", "marker", "fileSelectorButton"]);
-const LOOK_BUILDERS = new Set(["rgb", "rgba", "hsl", "alpha", "lighten", "darken", "line", "dropShadow", "linearGradient", "asset", "minmax", "repeat", "tracks", "change", "space", "edges", "inset", "min", "max", "clamp"]);
 const LOOK_CONDITION_TERM_LIMIT = 32;
-const LOOK_VALUE_IDENTIFIERS = new Map<string, string>([
-  ["grid", "grid"], ["flex", "flex"], ["block", "block"], ["inline", "inline"], ["inlineFlex", "inline-flex"], ["inlineGrid", "inline-grid"], ["gone", "none"],
-  ["auto", "auto"], ["hidden", "hidden"], ["visible", "visible"], ["scroll", "scroll"], ["pointer", "pointer"], ["defaultCursor", "default"],
-  ["center", "center"], ["start", "start"], ["end", "end"], ["stretch", "stretch"], ["spaceBetween", "space-between"], ["spaceAround", "space-around"],
-  ["spaceEvenly", "space-evenly"], ["wrap", "wrap"], ["nowrap", "nowrap"], ["pill", "9999px"],
-  ["relative", "relative"], ["absolute", "absolute"], ["fixed", "fixed"], ["sticky", "sticky"], ["transparent", "transparent"],
-  ["inherit", "inherit"], ["contain", "contain"], ["currentColor", "currentColor"], ["canvas", "Canvas"], ["canvasText", "CanvasText"],
-  ["ease", "ease"], ["easeIn", "ease-in"], ["easeOut", "ease-out"], ["easeInOut", "ease-in-out"], ["column", "column"], ["row", "row"],
-  ["undecorated", "none"], ["strike", "line-through"], ["uppercase", "uppercase"], ["lowercase", "lowercase"], ["capitalize", "capitalize"], ["ellipsis", "ellipsis"],
-  ["italic", "italic"], ["normal", "normal"],
-  ["noPointer", "none"], ["noSelect", "none"],
-]);
-const LOOK_PROPERTIES = new Set([
-  "display", "position", "columns", "rows", "flow", "gap", "rowGap", "columnGap",
-  "alignItems", "justifyContent", "alignContent", "alignSelf", "justifySelf", "placeItems", "wrap", "zIndex", "gridColumn", "gridRow",
-  "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "aspectRatio",
-  "inset", "top", "right", "bottom", "left",
-  "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock",
-  "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock",
-  "overflow", "overflowX", "overflowY", "objectFit", "visibility", "clip", "clipPath",
-  "background", "backgroundImage", "fill", "stroke", "strokeWidth", "border", "borderTop", "borderRight", "borderBottom", "borderLeft",
-  "radius", "shadow", "outline", "opacity", "content",
-  "color", "font", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "textAlign", "textDecoration", "textCase", "whiteSpace", "textOverflow", "wordBreak", "listStyle",
-  "translateX", "translateY", "scale", "scaleX", "scaleY", "rotate", "transformOrigin",
-  "transition", "transitionDuration", "transitionDelay", "easing", "animation",
-  "cursor", "pointerEvents", "userSelect", "touchAction", "scrollBehavior", "backdropFilter",
-]);
 
 const lookLength: ValueType = { kind: "named", name: "Length" };
 const lookPercentage: ValueType = { kind: "named", name: "Percentage" };
@@ -73,14 +44,15 @@ const lookTransition: ValueType = { kind: "named", name: "Transition" };
 const lookSpacing: ValueType = { kind: "named", name: "Spacing" };
 const lookMetricOrSpacing: ValueType = { kind: "union", members: [lookMetric, lookSpacing] };
 const LOOK_PROPERTY_TYPES = new Map<string, ValueType>([
-  ...["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inset", "top", "right", "bottom", "left", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "radius", "fontSize", "letterSpacing", "translateX", "translateY"].map((name) => [name, lookMetricOrSpacing] as const),
-  ["columns", lookTrackList], ["rows", lookTrackList],
-  ["background", { kind: "union", members: [lookColor, lookImage] }], ["backgroundImage", lookImage], ["fill", lookColor], ["stroke", lookColor], ["strokeWidth", lookMetric],
-  ["border", lookBorder], ["borderTop", lookBorder], ["borderRight", lookBorder], ["borderBottom", lookBorder], ["borderLeft", lookBorder], ["outline", lookBorder], ["shadow", lookShadow],
-  ["color", lookColor], ["content", stringType], ["font", stringType],
-  ["opacity", numberType], ["zIndex", numberType], ["fontWeight", numberType], ["aspectRatio", numberType], ["scale", numberType], ["scaleX", numberType], ["scaleY", numberType],
+  ...["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inset", "top", "right", "bottom", "left", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "borderRadius", "fontSize", "letterSpacing", "translate", "flexBasis", "borderWidth"].map((name) => [name, { kind: "union", members: [lookMetricOrSpacing, stringType] } as ValueType] as const),
+  ["gridTemplateColumns", { kind: "union", members: [lookTrackList, stringType] }], ["gridTemplateRows", { kind: "union", members: [lookTrackList, stringType] }],
+  ["background", { kind: "union", members: [lookColor, lookImage, stringType] }], ["backgroundColor", { kind: "union", members: [lookColor, stringType] }], ["backgroundImage", { kind: "union", members: [lookImage, stringType] }], ["fill", { kind: "union", members: [lookColor, stringType] }], ["stroke", { kind: "union", members: [lookColor, stringType] }], ["strokeWidth", { kind: "union", members: [lookMetric, stringType] }],
+  ["border", { kind: "union", members: [lookBorder, stringType] }], ["borderTop", { kind: "union", members: [lookBorder, stringType] }], ["borderRight", { kind: "union", members: [lookBorder, stringType] }], ["borderBottom", { kind: "union", members: [lookBorder, stringType] }], ["borderLeft", { kind: "union", members: [lookBorder, stringType] }], ["outline", { kind: "union", members: [lookBorder, stringType] }], ["boxShadow", { kind: "union", members: [lookShadow, stringType] }],
+  ["color", { kind: "union", members: [lookColor, stringType] }], ["content", stringType], ["font", stringType], ["fontFamily", stringType],
+  ["opacity", numberType], ["zIndex", numberType], ["fontWeight", { kind: "union", members: [numberType, stringType] }], ["aspectRatio", { kind: "union", members: [numberType, stringType] }], ["scale", { kind: "union", members: [numberType, lookSpacing, stringType] }],
+  ["flexGrow", numberType], ["flexShrink", numberType], ["order", numberType],
   ["lineHeight", { kind: "union", members: [numberType, lookLength] }], ["rotate", lookAngle],
-  ["transition", lookTransition], ["transitionDuration", lookDuration], ["transitionDelay", lookDuration], ["animation", stringType], ["backdropFilter", stringType],
+  ["transition", { kind: "union", members: [lookTransition, stringType] }], ["transitionDuration", lookDuration], ["transitionDelay", lookDuration], ["animation", stringType], ["backdropFilter", stringType],
 ]);
 
 export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
@@ -123,7 +95,7 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         return anyType;
       }
       if (moduleType.kind !== "object") {
-        context.typeError("A lazy loader must load a checked Velar module", arguments_[0]?.span ?? callSpan);
+        context.typeError("A lazy loader must load a checked VelarScript module", arguments_[0]?.span ?? callSpan);
         return anyType;
       }
       const exported = moduleType.fields.get(name);
@@ -135,11 +107,11 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         context.typeError(`Dynamic export '${name}' is ${describeType(exported)}, not a component`, arguments_[1]?.span ?? callSpan);
         return anyType;
       }
-      if (arguments_[2] && loadingFallback.kind !== "none" && loadingFallback.kind !== "any") {
+      if (arguments_[2] && loadingFallback.kind !== "null" && loadingFallback.kind !== "any") {
         if (loadingFallback.kind !== "componentConstructor") context.typeError("A lazy loading fallback must be a component", arguments_[2]!.span);
         else if (loadingFallback.requiredProps.size > 0) context.typeError("A lazy loading fallback cannot require props", arguments_[2]!.span);
       }
-      if (arguments_[3] && failedFallback.kind !== "none" && failedFallback.kind !== "any") {
+      if (arguments_[3] && failedFallback.kind !== "null" && failedFallback.kind !== "any") {
         if (failedFallback.kind !== "componentConstructor") context.typeError("A lazy failure fallback must be a component accepting error: Error", arguments_[3]!.span);
         else {
           const error = failedFallback.props.get("error");
@@ -175,7 +147,7 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       arity(1, 1);
       const value = inferAt(0);
       if (context.jsonSerializable(value) === false && arguments_[0]) context.typeError(`Realtime JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, arguments_[0]!.span);
-      return noneType;
+      return nullType;
     }
     case "config.public":
       arity(1, 1);
@@ -199,7 +171,7 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
       callbackAt(2, [optionalOf(parsed), optionalOf(parsed)], unknownType);
-      return { kind: "function", parameters: [], requiredParameters: 0, result: noneType };
+      return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
     }
     case "forms.read": {
       arity(2, 2);
@@ -429,6 +401,51 @@ export class VelarWebAnalyzer extends Analyzer {
         }
         this.flowFrameDepth -= 1;
         return true;
+      case "VariableDeclaration": {
+        const reactive = this.mutableReactiveReferences(statement.initializer)[0];
+        if (reactive) {
+          this.diagnostics.push(diagnostic(
+            "VEL5046",
+            `Reactive state '${reactive.name}' cannot be aliased; derive a new value or use copy() before local mutation`,
+            statement.initializer.span,
+          ));
+        }
+        return false;
+      }
+      case "ReturnStatement": {
+        const reactive = statement.value ? this.mutableReactiveReferences(statement.value)[0] : null;
+        if (reactive) {
+          this.diagnostics.push(diagnostic(
+            "VEL5046",
+            `Reactive state '${reactive.name}' cannot escape by reference; return a derived value or an explicit copy`,
+            statement.value!.span,
+          ));
+        }
+        return false;
+      }
+      case "AssignmentStatement": {
+        const target = statement.target;
+        const root = target.kind === "MemberExpression" || target.kind === "IndexExpression"
+          ? this.reactiveReference(target.object)
+          : null;
+        if (root) {
+          this.diagnostics.push(diagnostic(
+            "VEL5046",
+            `Reactive state '${root.name}' updates by assigning a new value to the state binding; nested mutation is intentionally not reactive`,
+            target.span,
+          ));
+        }
+        const value = this.mutableReactiveReferences(statement.value)[0];
+        if (value
+          && !(target.kind === "IdentifierExpression" && target.name === value.name)) {
+          this.diagnostics.push(diagnostic(
+            "VEL5046",
+            `Reactive state '${value.name}' cannot be assigned into another alias; assign a derived value or an explicit copy`,
+            statement.value.span,
+          ));
+        }
+        return false;
+      }
       case "UnsafeCssImportDeclaration": {
         if (this.unsafeCssImports.has(statement.source)) {
           this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' is imported more than once; each stylesheet must have one explicit order position`, statement.span));
@@ -450,12 +467,31 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
+    if (expression.kind === "CallExpression" && expression.callee.kind === "MemberExpression"
+      && this.reactiveReference(expression.callee.object)
+      && ["append", "extend", "insert", "pop", "add", "set", "update", "remove", "clear"].includes(expression.callee.property)) {
+      const reactive = this.reactiveReference(expression.callee.object)!;
+      this.diagnostics.push(diagnostic(
+        "VEL5046",
+        `Reactive state '${reactive.name}' updates by assigning a new value to the state binding; mutating collection calls do not publish state`,
+        expression.span,
+      ));
+    }
+    if (expression.kind === "CallExpression" && !this.safeReactiveCopyCall(expression)) {
+      for (const argument of expression.arguments) {
+        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+        for (const reactive of this.mutableReactiveReferences(value)) {
+          this.diagnostics.push(diagnostic(
+            "VEL5046",
+            `Reactive state '${reactive.name}' cannot cross an ordinary call by mutable reference; pass a derived value or an explicit copy`,
+            value.span,
+          ));
+        }
+      }
+    }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && LOOK_BUILDERS.has(expression.callee.name) && !this.lookup(expression.callee.name)) {
       this.extensionCalls.set(expression.span.start, expression.callee.name);
-    }
-    if (expression.kind === "IdentifierExpression" && LOOK_VALUE_IDENTIFIERS.has(expression.name) && !this.lookup(expression.name)) {
-      this.extensionLiterals.set(expression.span.start, LOOK_VALUE_IDENTIFIERS.get(expression.name)!);
     }
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {
       const operand = this.inferExpression(expression.operand);
@@ -490,6 +526,65 @@ export class VelarWebAnalyzer extends Analyzer {
       return unknownType;
     }
     return undefined;
+  }
+
+  private reactiveReference(expression: Expression): { readonly name: string; readonly type: ValueType } | null {
+    if (expression.kind === "IdentifierExpression") {
+      if (!this.componentStates?.has(expression.name) && this.reactiveBindings.get(expression.name) !== "state") return null;
+      return { name: expression.name, type: this.lookup(expression.name)?.type ?? unknownType };
+    }
+    if (expression.kind === "MemberExpression") {
+      const parent = this.reactiveReference(expression.object);
+      if (!parent) return null;
+      const owner = nonOptional(this.expandAliases(parent.type));
+      return { name: parent.name, type: this.semanticMembersOf(owner).get(expression.property) ?? unknownType };
+    }
+    if (expression.kind === "IndexExpression") {
+      const parent = this.reactiveReference(expression.object);
+      if (!parent) return null;
+      const owner = nonOptional(this.expandAliases(parent.type));
+      const type = owner.kind === "list" ? owner.element : owner.kind === "map" ? owner.value : unknownType;
+      return { name: parent.name, type };
+    }
+    return null;
+  }
+
+  private mutableReactiveReference(type: ValueType): boolean {
+    const value = nonOptional(this.expandAliases(type));
+    return value.kind === "list" || value.kind === "set" || value.kind === "map"
+      || value.kind === "object" || value.kind === "named" || value.kind === "class"
+      || value.kind === "any" || value.kind === "unknown";
+  }
+
+  private mutableReactiveReferences(expression: Expression): readonly { readonly name: string; readonly type: ValueType }[] {
+    const direct = this.reactiveReference(expression);
+    if (direct) return this.mutableReactiveReference(direct.type) ? [direct] : [];
+    const nested = (values: readonly Expression[]): readonly { readonly name: string; readonly type: ValueType }[] => {
+      const references = values.flatMap((value) => this.mutableReactiveReferences(value));
+      return references.filter((reference, index) => references.findIndex((candidate) => candidate.name === reference.name) === index);
+    };
+    switch (expression.kind) {
+      case "ListExpression":
+        return nested(expression.elements.map((item) => item.kind === "SpreadExpression" ? item.value : item));
+      case "ObjectExpression":
+        return nested(expression.properties.map((property) => property.value));
+      case "SpreadExpression":
+        return this.mutableReactiveReferences(expression.value);
+      case "ConditionalExpression":
+        return nested([expression.thenValue, expression.elseValue]);
+      case "BinaryExpression":
+        return expression.operator === "??" ? nested([expression.left, expression.right]) : [];
+      case "ArrowFunctionExpression":
+        return this.mutableReactiveReferences(expression.body);
+      default:
+        return [];
+    }
+  }
+
+  private safeReactiveCopyCall(expression: Extract<Expression, { kind: "CallExpression" }>): boolean {
+    if (expression.callee.kind === "IdentifierExpression" && expression.arguments.length <= 1
+      && (expression.callee.name === "Map" || expression.callee.name === "Set")) return true;
+    return false;
   }
 
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
@@ -527,18 +622,17 @@ export class VelarWebAnalyzer extends Analyzer {
       this.diagnostics.push(diagnostic("VEL4016", `A resource initializer must return Promise<T>, received ${describeType(actual)}`, statement.initializer.span));
     }
     const fields = new Map<string, ValueType>([
-      ["value", value.kind === "none" ? noneType : optionalOf(value)],
+      ["value", value.kind === "null" ? nullType : optionalOf(value)],
       ["loading", boolType],
       ["ready", boolType],
       ["error", optionalOf({ kind: "class", name: "Error" })],
-      ["reload", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: noneType } }],
+      ["reload", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: nullType } }],
     ]);
     this.declareBinding(statement.name, false, { kind: "object", fields }, statement.span);
   }
 
   private actionType(statement: ActionDeclaration): ValueType {
     const declaredResult = this.resolvedAsyncResult(this.resolveResult(statement.returnType));
-    const callValue = declaredResult.kind === "none" ? noneType : optionalOf(declaredResult);
     const rest = statement.parameters.find((parameter) => parameter.rest);
     return {
       kind: "action",
@@ -546,7 +640,7 @@ export class VelarWebAnalyzer extends Analyzer {
       parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
       requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
       ...(rest ? { rest: this.resolveAnnotation(rest.type) } : {}),
-      result: { kind: "promise", value: callValue },
+      result: { kind: "promise", value: declaredResult },
     };
   }
 
@@ -556,7 +650,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private analyzeComponent(statement: ComponentDeclaration): void {
-    const outerClassInitDepth = this.classInitDepth;
+    const outerConstructorDepth = this.constructorDepth;
     if (!this.isPredeclared(statement)) this.declareBinding(statement.name, false, this.componentType(statement), statement.span);
     this.enterScope();
     this.flowFrameDepth += 1;
@@ -568,7 +662,7 @@ export class VelarWebAnalyzer extends Analyzer {
       if (parameter.defaultValue) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       this.declareBinding(parameter.name, false, type, parameter.span);
     }
-    this.classInitDepth = 0;
+    this.constructorDepth = 0;
     let renders = 0;
     let renderValue: Expression | null = null;
     let mounted = 0;
@@ -614,7 +708,7 @@ export class VelarWebAnalyzer extends Analyzer {
         renders += 1;
         renderValue = item.value;
         this.flowFrameDepth += 1;
-        const rendered = item.value ? this.inferExpression(item.value) : noneType;
+        const rendered = item.value ? this.inferExpression(item.value) : nullType;
         this.flowFrameDepth -= 1;
         if (rendered.kind !== "node" && rendered.kind !== "any") this.typeError("A component must return JSX", item.span);
       } else {
@@ -628,7 +722,7 @@ export class VelarWebAnalyzer extends Analyzer {
     this.componentStates = previousStates;
     this.flowFrameDepth -= 1;
     this.exitScope();
-    this.classInitDepth = outerClassInitDepth;
+    this.constructorDepth = outerConstructorDepth;
   }
 
   private validateComponentHost(render: JSXElementExpression, component: ComponentDeclaration): void {
@@ -686,9 +780,9 @@ export class VelarWebAnalyzer extends Analyzer {
       if (!LOOK_PROPERTIES.has(entry.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look property '${entry.name}'`, entry.span));
       if (seenProperties.has(entry.name)) this.diagnostics.push(diagnostic("VEL5039", `Look property '${entry.name}' is defined more than once in the same scope`, entry.span));
       seenProperties.add(entry.name);
-      const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? unknownType;
+      const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? stringType;
       const actual = this.inferExpression(entry.value, expected);
-      if (actual.kind !== "none" && expected.kind !== "unknown") this.requireAssignable(actual, expected, entry.value.span);
+      if (actual.kind !== "null" && expected.kind !== "unknown") this.requireAssignable(actual, expected, entry.value.span);
     }
   }
 
@@ -715,14 +809,16 @@ export class VelarWebAnalyzer extends Analyzer {
     return boolType;
   }
 
-  private inferJsx(expression: JSXElementExpression, controlHandled = false): ValueType {
+  private inferJsx(expression: JSXElementExpression): ValueType {
     const attributes = new Map(expression.attributes.map((attribute) => [attribute.name, attribute]));
-    const controls = expression.attributes.filter((attribute) => jsxControlAttributes.has(attribute.name));
     if (attributes.size !== expression.attributes.length) this.diagnostics.push(diagnostic("VEL5014", `JSX element '${expression.tag}' has duplicate attributes`, expression.span));
-    if (controls.length > 1) this.diagnostics.push(diagnostic("VEL5029", "A JSX branch can have only one of 'if', 'else-if', or 'else'", expression.span));
-    if (!controlHandled && controls.length > 0) this.diagnostics.push(diagnostic("VEL5029", `JSX '${controls[0]!.name}' must be part of an adjacent child branch sequence`, controls[0]!.span));
+    for (const attribute of expression.attributes) {
+      if (removedJsxControlAttributes.has(attribute.name)) {
+        this.diagnostics.push(diagnostic("VEL5029", `JSX '${attribute.name}' was removed; branch with an ordinary expression such as {condition ? <A /> : <B />}`, attribute.span));
+      }
+    }
     if (expression.tag && !/^[A-Z]/u.test(expression.tag)) {
-      for (const attribute of expression.attributes) if (!jsxControlAttributes.has(attribute.name)) this.analyzeNativeJsxAttribute(expression, attribute);
+      for (const attribute of expression.attributes) if (!removedJsxControlAttributes.has(attribute.name)) this.analyzeNativeJsxAttribute(expression, attribute);
       if (attributes.has("unsafe:html") && expression.children.length > 0) this.diagnostics.push(diagnostic("VEL5015", "unsafe:html cannot be combined with JSX children", expression.span));
       if (expression.tag === "img" && !attributes.has("alt")) this.diagnostics.push(diagnostic("VEL5016", "An img element requires an alt attribute", expression.span));
       if (expression.tag === "button" && !attributes.has("aria-label") && !attributes.has("aria-labelledby") && !hasAccessibleJsxContent(expression)) this.diagnostics.push(diagnostic("VEL5026", "A button requires text content, aria-label, or aria-labelledby", expression.span));
@@ -734,41 +830,14 @@ export class VelarWebAnalyzer extends Analyzer {
         this.diagnostics.push(diagnostic("VEL5028", "An anchor with target='_blank' requires rel='noopener'", expression.span));
       }
     }
-    for (let index = 0; index < expression.children.length;) {
-      const child = expression.children[index]!;
+    for (const child of expression.children) {
       if (child.kind === "JSXExpressionChild") {
         const childType = this.inferExpression(child.expression);
         if (containsPromise(this.expandAliases(childType))) this.diagnostics.push(diagnostic("VEL5031", "JSX cannot render a Promise; await it before rendering", child.expression.span));
         const list = jsxMapExpression(child.expression);
         if (list && !list.body.attributes.some((attribute) => attribute.name === "key")) this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", list.body.span));
-        index += 1;
-      } else if (child.kind === "JSXText") {
-        index += 1;
-      } else {
-        const control = child.attributes.find((attribute) => jsxControlAttributes.has(attribute.name));
-        if (control?.name === "if") {
-          let rejected = this.inferJsxConditionalBranch(child, control);
-          let cursor = index + 1;
-          let sawElse = false;
-          while (cursor < expression.children.length) {
-            const next = expression.children[cursor]!;
-            if (next.kind === "JSXText" && next.value.trim().length === 0) { cursor += 1; continue; }
-            if (next.kind !== "JSXElementExpression") break;
-            const nextControl = next.attributes.find((attribute) => jsxControlAttributes.has(attribute.name));
-            if (!nextControl || (nextControl.name !== "else-if" && nextControl.name !== "else") || sawElse) break;
-            rejected = this.inferJsxConditionalBranch(next, nextControl, rejected);
-            sawElse = nextControl.name === "else";
-            cursor += 1;
-          }
-          index = cursor;
-        } else if (control) {
-          this.diagnostics.push(diagnostic("VEL5029", `JSX '${control.name}' requires an adjacent preceding 'if' branch`, control.span));
-          this.inferJsxConditionalBranch(child, control);
-          index += 1;
-        } else {
-          this.inferJsx(child);
-          index += 1;
-        }
+      } else if (child.kind === "JSXElementExpression") {
+        this.inferJsx(child);
       }
     }
     if (/^[A-Z]/u.test(expression.tag)) this.analyzeComponentElement(expression);
@@ -781,7 +850,7 @@ export class VelarWebAnalyzer extends Analyzer {
       this.diagnostics.push(diagnostic("VEL5011", `Unknown component '${expression.tag}'`, expression.span));
       return;
     }
-    const provided = new Set(expression.attributes.filter((attribute) => attribute.name !== "key" && !jsxControlAttributes.has(attribute.name)).map((attribute) => attribute.name));
+    const provided = new Set(expression.attributes.filter((attribute) => attribute.name !== "key" && !removedJsxControlAttributes.has(attribute.name)).map((attribute) => attribute.name));
     const hasChildren = expression.children.some((child) => child.kind !== "JSXText" || child.value.trim().length > 0);
     if (hasChildren && provided.has("children")) this.diagnostics.push(diagnostic("VEL5014", `Component '${expression.tag}' receives children both as a prop and as JSX content`, expression.span));
     else if (hasChildren && !binding.type.props.has("children")) this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children`, expression.span));
@@ -791,11 +860,20 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     for (const required of binding.type.requiredProps) if (!provided.has(required)) this.diagnostics.push(diagnostic("VEL5012", `Component '${expression.tag}' requires prop '${required}'`, expression.span));
     for (const attribute of expression.attributes) {
-      if (jsxControlAttributes.has(attribute.name)) continue;
+      if (removedJsxControlAttributes.has(attribute.name)) continue;
       if (attribute.name === "key") {
         const key = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
         if (key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
         continue;
+      }
+      if (attribute.value && typeof attribute.value !== "string") {
+        for (const reactive of this.mutableReactiveReferences(attribute.value)) {
+          this.diagnostics.push(diagnostic(
+            "VEL5046",
+            `Reactive state '${reactive.name}' cannot cross a component prop by mutable reference; pass a derived value or an explicit copy`,
+            attribute.value.span,
+          ));
+        }
       }
       const expected = binding.type.props.get(attribute.name);
       if (attribute.name === "look") {
@@ -814,39 +892,11 @@ export class VelarWebAnalyzer extends Analyzer {
       }
       this.semanticJsxAttributeOwners.set(`${attribute.span.start}:${attribute.name}`, { ...binding.type, name: expression.tag });
       const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-      if (binding.type.intrinsic === "web.router" && attribute.name === "fallback" && actual.kind !== "none" && actual.kind !== "any") {
+      if (binding.type.intrinsic === "web.router" && attribute.name === "fallback" && actual.kind !== "null" && actual.kind !== "any") {
         this.checkWebRouteComponent(actual, attribute.span, "A Router fallback");
       }
       this.requireAssignable(actual, expected, attribute.span);
     }
-  }
-
-  private inferJsxConditionalBranch(expression: JSXElementExpression, control: JSXAttribute, inherited: ReadonlyMap<string, ValueType> = new Map()): ReadonlyMap<string, ValueType> {
-    this.enterScope();
-    this.applyNarrowings(inherited, expression.span);
-    if (control.name === "else") {
-      if (control.value !== null) this.diagnostics.push(diagnostic("VEL5029", "JSX 'else' does not accept a value", control.span));
-      this.inferJsx(expression, true);
-      this.exitScope();
-      return inherited;
-    }
-    if (control.value === null || typeof control.value === "string") {
-      this.diagnostics.push(diagnostic("VEL5029", `JSX '${control.name}' requires an expression value`, control.span));
-      this.inferJsx(expression, true);
-      this.exitScope();
-      return inherited;
-    }
-    const condition = this.inferExpression(control.value);
-    this.requireCondition(condition, control.value);
-    const narrowed = this.narrowingFor(control.value, condition);
-    this.enterScope();
-    this.applyNarrowings(narrowed, expression.span);
-    this.inferJsx(expression, true);
-    this.exitScope();
-    const rejected = new Map(inherited);
-    for (const [key, type] of this.negativeNarrowingFor(control.value)) rejected.set(key, type);
-    this.exitScope();
-    return rejected;
   }
 
   private analyzeNativeJsxAttribute(expression: JSXElementExpression, attribute: JSXAttribute): void {
@@ -856,7 +906,7 @@ export class VelarWebAnalyzer extends Analyzer {
     const eventHandlerType: ValueType | null = expectedEvent ? { kind: "function", parameters: [expectedEvent], requiredParameters: 1, result: unknownType } : null;
     const inferred = typeof value === "string" ? stringType : value ? this.inferExpression(value, eventHandlerType ?? unknownType) : boolType;
     if (attribute.name === "style" || attribute.name.startsWith("style:")) {
-      this.diagnostics.push(diagnostic("VEL5041", "Controlled Velar components do not expose inline style; use a Look or an unsafe CSS import", attribute.span));
+      this.diagnostics.push(diagnostic("VEL5041", "Controlled VelarScript components do not expose inline style; use a Look or an unsafe CSS import", attribute.span));
     } else if (attribute.name === "look") {
       if (!value || typeof value === "string") this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
       else if (!this.isLookInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(inferred)}`, attribute.span));
@@ -883,7 +933,7 @@ export class VelarWebAnalyzer extends Analyzer {
         const bindingType = this.lookup(value.name)!.type;
         const target = nonOptional(bindingType);
         const expected = expression.tag === "canvas" ? "CanvasElement" : expression.tag === "dialog" ? "DialogElement" : ["input", "select", "textarea"].includes(expression.tag) ? "InputElement" : "Element";
-        if (bindingType.kind !== "any" && bindingType.kind !== "optional") this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element? so cleanup can restore none`, attribute.span));
+        if (bindingType.kind !== "any" && bindingType.kind !== "optional") this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element? so cleanup can restore null`, attribute.span));
         else if (target.kind !== "any" && (target.kind !== "named" || (target.name !== expected && target.name !== "Element"))) this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element?`, attribute.span));
       }
     } else if (attribute.name.startsWith("on:")) {
@@ -908,7 +958,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private isLookInput(type: ValueType): boolean {
-    if (type.kind === "any" || type.kind === "unknown" || type.kind === "none") return true;
+    if (type.kind === "any" || type.kind === "unknown" || type.kind === "null") return true;
     if (type.kind === "named") return type.name === "Look";
     if (type.kind === "optional") return this.isLookInput(type.inner);
     if (type.kind === "list") return this.isLookInput(type.element);
@@ -917,7 +967,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private isClassInput(type: ValueType): boolean {
-    if (type.kind === "any" || type.kind === "unknown" || type.kind === "none" || type.kind === "string") return true;
+    if (type.kind === "any" || type.kind === "unknown" || type.kind === "null" || type.kind === "string") return true;
     if (type.kind === "optional") return this.isClassInput(type.inner);
     if (type.kind === "list") return this.isClassInput(type.element);
     if (type.kind === "union") return type.members.every((member) => this.isClassInput(member));
@@ -939,14 +989,14 @@ export class VelarWebAnalyzer extends Analyzer {
 function webTypeFields(name: string): ReadonlyMap<string, ValueType> | null {
   const functionType = (parameters: readonly ValueType[], result: ValueType): ValueType => ({ kind: "function", parameters, requiredParameters: parameters.length, result });
   const eventFields = (): Map<string, ValueType> => new Map([
-    ["type", stringType], ["defaultPrevented", boolType], ["preventDefault", functionType([], noneType)], ["stopPropagation", functionType([], noneType)],
+    ["type", stringType], ["defaultPrevented", boolType], ["preventDefault", functionType([], nullType)], ["stopPropagation", functionType([], nullType)],
   ]);
   if (name === "Event") return eventFields();
   if (name === "KeyboardEvent") return new Map([...eventFields(), ["key", stringType], ["code", stringType], ["repeat", boolType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "PointerEvent") return new Map([...eventFields(), ["pointerId", numberType], ["pointerType", stringType], ["pressure", numberType], ["button", numberType], ["buttons", numberType], ["clientX", numberType], ["clientY", numberType], ["movementX", numberType], ["movementY", numberType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "InputEvent") return new Map([...eventFields(), ["data", optionalOf(stringType)], ["inputType", stringType], ["isComposing", boolType]]);
   if (name === "Element" || name === "InputElement" || name === "CanvasElement" || name === "DialogElement") {
-    const fields = new Map<string, ValueType>([["focus", functionType([], noneType)], ["remove", functionType([], noneType)]]);
+    const fields = new Map<string, ValueType>([["focus", functionType([], nullType)], ["remove", functionType([], nullType)]]);
     if (name === "InputElement") { fields.set("value", stringType); fields.set("checked", boolType); }
     if (name === "CanvasElement") { fields.set("width", numberType); fields.set("height", numberType); fields.set("getContext", functionType([stringType], anyType)); }
     return fields;

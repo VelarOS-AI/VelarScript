@@ -58,7 +58,7 @@ export async function copyPublicAssets(publicRoot: string, outputDirectory: stri
   const state = { files: 0 };
   for (const entry of entries) {
     if (reservedRootFiles.has(entry.name)) {
-      throw new Error(`public asset '${entry.name}' is reserved by the Velar production builder`);
+      throw new Error(`public asset '${entry.name}' is reserved by the VelarScript production builder`);
     }
     await copySafe(join(publicRoot, entry.name), join(outputDirectory, entry.name), publicRoot, state);
   }

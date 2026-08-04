@@ -1,6 +1,7 @@
 import type { AnalysisContext, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
 import type { Analyzer } from "./analyzer.ts";
 import type { Expression, Program, Statement, TypeReference } from "./ast.ts";
+import type { Diagnostic } from "./diagnostic.ts";
 import type { Parser } from "./parser.ts";
 import type { SourceText, Span } from "./source.ts";
 import type { CompilerSemanticExtension, SemanticSymbol } from "./semantic.ts";
@@ -24,7 +25,7 @@ export {
   boolType,
   describeType,
   isAssignable,
-  noneType,
+  nullType,
   nonOptional,
   numberType,
   optionalOf,
@@ -49,9 +50,22 @@ export interface CompilerStyleSegments {
 export interface CompilerLexicalExtension {
   readonly keywords?: Readonly<Record<string, string>>;
   readonly forbiddenIdentifiers?: Readonly<Record<string, string>>;
-  readonly jsx?: boolean;
-  readonly embeddedBlocks?: ReadonlySet<string>;
   readonly numericSuffixes?: ReadonlySet<string>;
+  readonly scan?: (context: CompilerLexicalScanContext) => CompilerLexicalScanResult | null;
+}
+
+export interface CompilerLexicalScanContext {
+  readonly source: string;
+  readonly offset: number;
+  readonly currentIndent: number;
+  readonly tokens: readonly Token[];
+}
+
+export interface CompilerLexicalScanResult {
+  readonly token: Token;
+  readonly nextOffset: number;
+  readonly diagnostics?: readonly Diagnostic[];
+  readonly startsLine?: boolean;
 }
 
 export interface CompilerAnalysisExtension {

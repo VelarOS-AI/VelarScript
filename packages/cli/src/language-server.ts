@@ -58,40 +58,40 @@ const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
 
 const keywordDocumentation = new Map<string, string>([
   ["assert", "Requires a boolean or optional invariant and narrows stable values in following statements."],
-  ["init", "Runs synchronous construction logic once after a class instance is initialized."],
+  ["constructor", "Initializes class fields and calls super(...) first when the class extends another class."],
   ["type", "Declares one data shape used for static checking and runtime validation."],
   ["enum", "Declares a finite set of string-backed values for application states."],
   ["abstract", "Marks a class, instance method, or getter as an incomplete behavior contract."],
-  ["extends", "Declares one base class and optionally passes its constructor arguments."],
+  ["extends", "Declares one base class; pass base arguments through super(...) in the constructor."],
   ["override", "Explicitly replaces a compatible inherited instance method or getter."],
   ["private", "Keeps one class field, getter, or method inside its declaring class."],
   ["static", "Declares a field, getter, or method on the class rather than an instance."],
   ["get", "Declares a typed read-only property computed when it is read."],
-  ["super", "Reads or calls an inherited getter or instance method from an override."],
+  ["super", "Calls the base constructor or reads and calls inherited behavior."],
   ["def", "Declares a named function with an indentation-based body."],
-  ["match", "Selects one strict literal case without fallthrough."],
+  ["match", "Selects literal, enum, or type patterns with optional bindings and guards, without fallthrough."],
   ["case", "Declares one or more literal values inside a match block."],
   ["const", "Declares an initialized binding that cannot be rebound."],
   ["let", "Declares an initialized binding that can be rebound."],
-  ["none", "The only empty value in ordinary VelarScript source."],
+  ["null", "The only empty value in ordinary VelarScript source; undefined is not exposed."],
 ]);
 
 const builtinTypeDocumentation = new Map<string, string>([
-  ["string", "A JavaScript string with Velar text operations."],
+  ["string", "A JavaScript string with VelarScript text operations."],
   ["number", "A JavaScript number type; number(text) strictly parses complete finite decimal text and returns number?."],
   ["bool", "The `true` or `false` boolean type."],
   ["unknown", "An unchecked boundary value that must be validated before ordinary use."],
-  ["List", "An ordered JavaScript array with one checked element type."],
+  ["List", "An ordered collection with one checked element type."],
   ["Map", "An insertion-ordered JavaScript Map with checked key and value types."],
   ["Set", "An insertion-ordered JavaScript Set with one checked element type."],
   ["Promise", "A JavaScript Promise with one checked resolved-value type."],
 ]);
 
 const coreCompletionItems = [
-  ...["const", "let", "def", "async", "await", "type", "enum", "abstract", "class", "init", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "none", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
+  ...["const", "let", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
   { label: "str", kind: 3, detail: "str(value) -> string" },
-  { label: "print", kind: 3, detail: "print(value) -> none" },
+  { label: "print", kind: 3, detail: "print(value) -> null" },
   { label: "velar/collections", kind: 9, detail: "Typed collection transforms and Python-style iteration helpers" },
   { label: "velar/text", kind: 9, detail: "Unicode-aware text normalization and formatting helpers" },
   { label: "velar/math", kind: 9, detail: "Numeric constants, transforms, and random helpers" },
@@ -144,7 +144,7 @@ export async function runLanguageServer(): Promise<void> {
     }
     const value = message as Record<string, unknown>;
     const fallback = value.id !== undefined
-      ? { jsonrpc: "2.0", id: value.id ?? null, error: { code: -32603, message: "Velar LSP response exceeds the 16 MiB transport limit" } }
+      ? { jsonrpc: "2.0", id: value.id ?? null, error: { code: -32603, message: "VelarScript LSP response exceeds the 16 MiB transport limit" } }
       : value.method === "textDocument/publishDiagnostics"
         ? oversizedDiagnosticsFallback(value.params)
         : null;
@@ -221,7 +221,7 @@ export async function runLanguageServer(): Promise<void> {
   const respondError = (id: RpcMessage["id"], message: string, code = -32803): void => send({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
   const handle = async (message: RpcMessage): Promise<void> => {
     if (shuttingDown && message.method !== "exit") {
-      if (message.id !== undefined) respondError(message.id, "Velar Language Server is shutting down", -32600);
+      if (message.id !== undefined) respondError(message.id, "VelarScript Language Server is shutting down", -32600);
       return;
     }
     const params = message.params as Record<string, unknown> | undefined;
@@ -249,7 +249,7 @@ export async function runLanguageServer(): Promise<void> {
               velar: { protocolVersion: VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION },
             },
           },
-          serverInfo: { name: "Velar Language Server", version: VELAR_VERSION },
+          serverInfo: { name: "VelarScript Language Server", version: VELAR_VERSION },
         });
         break;
       case "shutdown":
@@ -378,7 +378,7 @@ export async function runLanguageServer(): Promise<void> {
         const document = documents.get(descriptor.uri);
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
-        const renamed = document && path && project ? projectRenameAt(project, path, offsetAt(document.text, position), newName) : "No renameable Velar symbol at this position";
+        const renamed = document && path && project ? projectRenameAt(project, path, offsetAt(document.text, position), newName) : "No renameable VelarScript symbol at this position";
         if (typeof renamed === "string") respondError(message.id, renamed);
         else if (renamed.edits.length > MAX_LSP_RESULT_ITEMS) respondError(message.id, `Rename affects more than ${MAX_LSP_RESULT_ITEMS} locations`);
         else respond(message.id, project ? workspaceEdit(project, renamed.edits, newName) : null);
@@ -548,7 +548,7 @@ function oversizedDiagnosticsFallback(params: unknown): unknown {
         severity: 1,
         code: "VEL9003",
         source: "velar",
-        message: "Velar diagnostics exceeded the 16 MiB LSP transport limit",
+        message: "VelarScript diagnostics exceeded the 16 MiB LSP transport limit",
       }],
     },
   };
@@ -631,7 +631,7 @@ function lspRange(source: SourceText, span: Span): Range {
 
 function sourceFor(project: ProjectResult, path: string): SourceText {
   const module = project.modules.find((item) => item.inputPath === path);
-  if (!module) throw new Error(`Velar project has no source for ${path}`);
+  if (!module) throw new Error(`VelarScript project has no source for ${path}`);
   return module.result.source;
 }
 
@@ -673,7 +673,7 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
   const actions: unknown[] = [];
   for (const value of diagnostics.slice(0, MAX_LSP_RESULT_ITEMS)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    const diagnostic = value as { readonly code?: unknown; readonly range?: unknown };
+    const diagnostic = value as { readonly code?: unknown; readonly message?: unknown; readonly range?: unknown };
     if (!diagnostic.range || typeof diagnostic.range !== "object" || Array.isArray(diagnostic.range)) continue;
     const range = diagnostic.range as Range;
     const start = offsetAt(document.text, range.start);
@@ -681,22 +681,64 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
     const original = document.text.slice(start, end);
     let replacement: string | null = null;
     let title: string | null = null;
+    let editRange = range;
     if (diagnostic.code === "VEL1005" && original === "===") {
       replacement = "==";
-      title = "Use Velar strict equality '=='";
+      title = "Use VelarScript strict equality '=='";
     } else if (diagnostic.code === "VEL1005" && original === "!==") {
       replacement = "!=";
-      title = "Use Velar strict inequality '!='";
+      title = "Use VelarScript strict inequality '!='";
     } else if (diagnostic.code === "VEL1002" && original === "\t") {
       replacement = "    ";
       title = "Replace the indentation tab with four spaces";
+    } else if (diagnostic.code === "VEL1005") {
+      const direct = new Map<string, readonly [string, string]>([
+        ["undefined", ["null", "Use VelarScript null"]],
+        ["none", ["null", "Use VelarScript null"]],
+        ["None", ["null", "Use VelarScript null"]],
+        ["True", ["true", "Use lowercase true"]],
+        ["False", ["false", "Use lowercase false"]],
+        ["elif", ["else if", "Use 'else if'"]],
+        ["int", ["number", "Use the VelarScript number type"]],
+        ["float", ["number", "Use the VelarScript number type"]],
+        ["&&", ["and", "Use readable 'and'"]],
+        ["||", ["or", "Use readable 'or'"]],
+        ["!", ["not", "Use readable 'not'"]],
+      ]).get(original);
+      if (direct) [replacement, title] = direct;
+    } else if (diagnostic.code === "VEL2024") {
+      let colon = end;
+      while (colon < document.text.length && (document.text[colon] === " " || document.text[colon] === "\t")) colon += 1;
+      if (document.text[colon] === ":") {
+        editRange = { start: positionAt(document.text, colon), end: positionAt(document.text, colon + 1) };
+        replacement = "=";
+        title = "Use '=' for the named argument";
+      }
+    } else if (diagnostic.code === "VEL4001" && typeof diagnostic.message === "string") {
+      const member = /\.([A-Za-z][A-Za-z0-9_]*)$/u.exec(original);
+      const guidance = member ? new Map<string, readonly [string, string]>([
+        ["length", ["size", "Use collection size"]],
+        ["push", ["append", "Use List.append"]],
+        ["includes", ["has", "Use collection has"]],
+        ["delete", ["remove", "Use collection remove"]],
+        ["findIndex", ["index", "Use List.index"]],
+        ["indexOf", ["index", "Use List.index"]],
+        ["any", ["some", "Use List.some"]],
+        ["all", ["every", "Use List.every"]],
+        ["sort", ["sorted", "Use non-mutating List.sorted"]],
+        ["reverse", ["reversed", "Use non-mutating List.reversed"]],
+      ]).get(member[1]!) : null;
+      if (member && guidance && diagnostic.message.includes("Use")) {
+        editRange = { start: positionAt(document.text, end - member[1]!.length), end: positionAt(document.text, end) };
+        [replacement, title] = guidance;
+      }
     }
     if (!replacement || !title) continue;
     actions.push({
       title,
       kind: "quickfix",
       isPreferred: true,
-      edit: { changes: { [document.uri]: [{ range, newText: replacement }] } },
+      edit: { changes: { [document.uri]: [{ range: editRange, newText: replacement }] } },
     });
   }
   return actions;
@@ -810,6 +852,19 @@ function offsetAt(text: string, position: Position): number {
     offset = newline === -1 ? text.length : newline + 1;
   }
   return Math.min(text.length, offset + requestedCharacter);
+}
+
+function positionAt(text: string, requestedOffset: number): Position {
+  const offset = Math.max(0, Math.min(text.length, requestedOffset));
+  let line = 0;
+  let lineStart = 0;
+  for (let index = 0; index < offset; index += 1) {
+    if (text[index] === "\n") {
+      line += 1;
+      lineStart = index + 1;
+    }
+  }
+  return { line, character: offset - lineStart };
 }
 
 function wordAt(text: string, offset: number): string {

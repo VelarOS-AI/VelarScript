@@ -21,7 +21,7 @@ const parsed = parseJson("{\"name\":\"Nova\",\"role\":\"admin\"}", User)
 
 await sleep(1)
 print(title("velar standard library"))
-print(grouped.get("admin")?.length ?? 0)
+print(grouped.get("admin")?.size ?? 0)
 print(sum(range(1, 5)))
 print(round(pi, 2))
 print(parsed.name)

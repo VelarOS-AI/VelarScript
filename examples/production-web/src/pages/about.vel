@@ -1,16 +1,16 @@
 import {Head} from "velar/web"
 
 const pageLook = look:
-    display = grid
+    display = "grid"
     gap = 16px
     width = 100%
     maxWidth = 752px
-    marginInline = auto
-    padding = space(64px, 16px)
+    marginInline = "auto"
+    padding = spacing(64px, 16px)
 
 export component About:
     return <main class="page" look={pageLook}>
-        <Head title="About · Velar Release Studio" description="About the Velar production application" />
+        <Head title="About · VelarScript Release Studio" description="About the VelarScript production application" />
         <h1>About</h1>
-        <p>A routed Velar application built from independent compiler, Web, package, and Workbench boundaries.</p>
+        <p>A routed VelarScript application built from independent compiler, Web, package, and Workbench boundaries.</p>
     </main>

@@ -1,16 +1,16 @@
-# Velar Web API 0.9
+# VelarScript Web API
 
-Status: stable for the Velar 0.9 internal line
+Status: active clean-break design
 Runtime: existing browser JavaScript engine; no virtual DOM
 
-Velar Web applications install and declare `@velarscript/web`. The extension
+VelarScript Web applications install and declare `@velarscript/web`. The extension
 owns JSX, components, reactivity, lifecycle, controlled Look values, Web types, editor
 contributions, and explicit Web modules instead of implicit
 browser globals. The compiler reports `VEL3008` for direct source-level use of
 `console`, `document`, `window`, `navigator`, `location`, `history`, `fetch`,
 `JSON`, `Math`, or `Date` and points to the official module or an explicit
-JavaScript boundary. Additions within API 0.9 must be backward compatible;
-removals or semantic changes require a new Web API version.
+JavaScript boundary. This document defines the current API; removed experiments
+do not remain as compatibility aliases.
 
 ## `velar/app`
 
@@ -19,7 +19,11 @@ import {onError, reportError} from "velar/app"
 
 component RuntimeStatus:
     state message = "ready"
-    const stopErrors = onError(report => message = report.phase + ":" + report.error.message)
+
+    def capture(phase: string, detail: string):
+        message = phase + ":" + detail
+
+    const stopErrors = onError(report => capture(report.phase, report.error.message))
 
     def failDeliberately():
         reportError(Error("Manual failure"), "manual", "diagnostic action")
@@ -83,18 +87,18 @@ const config = publicConfig(RuntimeConfig)
 ```
 
 - `publicConfig(Type)` validates the complete manifest value through the same
-  Velar `type` declaration used everywhere else and returns the named type.
+  VelarScript `type` declaration used everywhere else and returns the named type.
   `has(key)` and sorted `keys()` support optional capability discovery.
 - Only `velar.json.web.publicConfig` is read. It must be a JSON object, is
   limited to 64 KiB, rejects non-finite/non-JSON values and the reserved keys
   `__proto__`, `prototype`, and `constructor`, and is recursively frozen.
 - Public configuration is baked into the content-hashed application entry at
-  build time. Velar never implicitly reads `.env`, `process.env`, server
+  build time. VelarScript never implicitly reads `.env`, `process.env`, server
   configuration, or secrets, and this boundary must contain public values only.
 
 ## `velar/web`
 
-```velar
+```velar fragment
 import {Head, Link, NavLink, RouteContext, Router, announce, back, currentRoute, domId, forward, lazy, navigate, redirect, reload, route} from "velar/web"
 
 component PageLoading:
@@ -118,11 +122,11 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   non-terminal wildcards, non-components, wrong route props, and other required
   props fail checking before browser execution. Dynamic route strings retain
   the same runtime validation.
-- `lazy(loader, exportName, loading=none, failed=none)` returns the exported
+- `lazy(loader, exportName, loading=null, failed=null)` returns the exported
   component with its original prop contract. It owns one cached successful
   module load, retries after a failed load, mounts only the active child, and
   destroys loading or resolved children when the route leaves. The loader must
-  be a zero-argument checked dynamic Velar import and `exportName` must be a
+  be a zero-argument checked dynamic VelarScript import and `exportName` must be a
   literal component export. Failures report through `velar/app` with the
   `resource` phase and render either the supplied failure component or an
   accessible default alert.
@@ -133,7 +137,7 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   by a built-in accessible alert rather than becoming an unhandled rejection.
   Loading and failure fallbacks must actually return components; a callable
   returning an arbitrary DOM value is rejected.
-- `Router(routes, fallback=none)` renders the first matching component. Its
+- `Router(routes, fallback=null)` renders the first matching component. Its
   route context contains application-relative `path`, decoded `params`, parsed
   `query`, and `hash`. When no route matches, an omitted fallback renders a
   small accessible `Page not found` view instead of an empty router. A custom
@@ -187,14 +191,14 @@ child Lists use the same dense data-element boundary as Core.
 
 ### Native SVG JSX
 
-Inline `<svg>` is part of native Velar JSX rather than an image-string or
+Inline `<svg>` is part of native VelarScript JSX rather than an image-string or
 framework adapter. SVG namespace ownership crosses nested elements, reactive
 branches, keyed Lists, fragments, and ordinary or lazy user components. A lazy
 SVG boundary uses a native `<g>` host and forwards the namespace to loading,
 failure, and resolved components instead of inserting an HTML wrapper. `<foreignObject>` owns
 an HTML child subtree, while a nested `<svg>` re-enters SVG. Scoped CSS,
 reactive attributes, events, stable keys, refs, and component cleanup retain
-their ordinary Velar behavior across the boundary.
+their ordinary VelarScript behavior across the boundary.
 
 SVG roots require an accessible name through `<title>`, `aria-label`, or
 `aria-labelledby`, unless a decorative graphic explicitly uses
@@ -210,7 +214,7 @@ fallback contract.
 
 ## `velar/http`
 
-```velar
+```velar fragment
 import {HttpAbortError, HttpError, http} from "velar/http"
 
 const request = http.get("/api/profile", {timeout: 5000})
@@ -219,7 +223,7 @@ const profile = await request.parse(Profile)
 
 Multipart uploads use an explicit body builder and opaque file records:
 
-```velar
+```velar fragment
 import {formBody, http} from "velar/http"
 import {pick} from "velar/files"
 
@@ -260,7 +264,7 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   unless one was supplied. Non-2xx responses throw `HttpError` with `status`,
   `url`, and an `unknown` body.
 - JSON request bodies use the same strict lossless data boundary as
-  `velar/json`: records, dense Lists, finite primitives, and `none` are accepted;
+  `velar/json`: records, dense Lists, finite primitives, and `null` are accepted;
   Map, Set, class/function values, cycles, sparse Lists, and non-finite numbers
   fail before `fetch` starts. Other bodies are explicit text, Blob, or form
   bodies; primitives are not silently converted, and GET/HEAD bodies fail.
@@ -277,9 +281,9 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
 - Headers are capped at 100 fields/64 KiB, text and form values at 16 MiB, and
   multipart bodies at 100,000 fields. Timeout uses the host timer range; these
   limits are checked before Fetch or FormData mutation.
-- `parse(Type)` uses the existing Velar `type` runtime validator; there is no
+- `parse(Type)` uses the existing VelarScript `type` runtime validator; there is no
   second schema system. The browser still performs cancellation underneath,
-  while Velar normalizes the observable failure contract. A dynamic invalid
+  while VelarScript normalizes the observable failure contract. A dynamic invalid
   Type fails before a lazy request starts or a response body is consumed.
 
 ## `velar/storage`
@@ -311,7 +315,7 @@ component PreferencesPanel:
 
 - `storage` and `session` wrap local and session storage. Both provide typed
   `get`, JSON `set`, `has`, `keys`, `remove`, `clear`, and `watch`.
-- Read/watch validators must be actual compiler-known Velar runtime types even
+- Read/watch validators must be actual compiler-known VelarScript runtime types even
   when invoked through a dynamic JavaScript boundary; an arbitrary object
   cannot silently disable validation or register a delayed invalid watch.
 - Record Types, runtime aliases, and enums use the same registered identity
@@ -326,7 +330,7 @@ component PreferencesPanel:
   the listener normally.
 - `database(name)` provides asynchronous IndexedDB `get`, `set`, `has`,
   `keys`, `remove`, and `clear`. Values are JSON-serializable and typed reads
-  use the same Velar `type` validator and fallback rules.
+  use the same VelarScript `type` validator and fallback rules.
 - IndexedDB operations resolve only when their transaction commits, not merely
   when the individual request reports success. A later transaction abort is
   observable as rejection. Failed/blocked opens reset the cached connection so
@@ -348,12 +352,12 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
 - `textValue(form, name, fallback="")`, `numberValue(form, name)`,
   `checkedValue(form, name)`, and `fieldValues(form, name)` expose common native
   form shapes without leaking `FormData` or forcing application code through
-  `unknown`. Blank or non-finite numeric fields return `none`; textual helpers
+  `unknown`. Blank or non-finite numeric fields return `null`; textual helpers
   reject native file values instead of coercing them silently.
 - `read(form, Type)` decodes a flat native form into the existing colon-form
   record type. It supports `string`, finite `number`, `bool` checkboxes, enums,
   `List<string>` repeated fields, and optional string/number/enum fields. Blank
-  optional numbers and missing optional scalars become `none`; invalid required
+  optional numbers and missing optional scalars become `null`; invalid required
   numbers, enums, native files, nested records, and unsupported collections fail
   explicitly. The compiler supplies the private decoder description and the
   existing `Type.parse` validator checks the result.
@@ -364,7 +368,7 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
 - Submitted/decoder/error field names are limited to 1,024 characters, error
   messages and owned accessibility metadata to 64 KiB, and textual fallbacks
   to 16 MiB. Values returned from native form/error nodes are checked before
-  becoming a Velar Map.
+  becoming a VelarScript Map.
 - `read` does not create another schema language or infer business rules.
   Required text, trimming, minimums, custom messages, and submission behavior
   remain application code and ordinary HTML attributes.
@@ -376,7 +380,7 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
 - `reset(form)` restores pending/error ownership and then performs the native
   form reset.
 - Helpers require a real form element. Submission remains explicit through
-  ordinary Velar event directives.
+  ordinary VelarScript event directives.
 - Event directives pass native browser events. Contextual `KeyboardEvent`,
   `PointerEvent`, and `InputEvent` parameters expose bounded stable fields;
   zero-parameter handlers remain valid and no synthetic event runtime is added.
@@ -402,7 +406,7 @@ component EnvironmentStatus:
 ```
 
 `after(milliseconds, callback)` schedules one callback and `every(milliseconds,
-callback)` schedules repeated work. Each returns an idempotent `() -> none`
+callback)` schedules repeated work. Each returns an idempotent `() -> null`
 stop function. Durations must be finite and non-negative; `every` requires a
 positive duration. Repeating work schedules its next turn only after the
 current synchronous or asynchronous callback settles, so slow polling cannot
@@ -412,7 +416,7 @@ prevents every later turn. Callback failures are normalized through
 
 Timer handles are explicit component resources: start them during component
 setup or `mounted`, retain the returned stop function, and release it from the
-sibling `cleanup` block. Velar does not expose `setTimeout`, `setInterval`, or a
+sibling `cleanup` block. VelarScript does not expose `setTimeout`, `setInterval`, or a
 React-style effect API.
 
 - `location()` and `environment()` return typed snapshots rather than exposing
@@ -420,7 +424,7 @@ React-style effect API.
 - Snapshot language lists are limited to 1,000 entries of at most 256
   characters. Layout rectangles and animation-frame timestamps must contain
   finite numbers, and dialog results remain bounded strings before they cross
-  back into Velar source.
+  back into VelarScript source.
 - `media`, `watchMedia`, `watchOnline`, and `watchVisibility` expose common
   environment state. Every watcher returns a cleanup function, and callback
   failures are owned by the application error channel.
@@ -448,13 +452,13 @@ React-style effect API.
 import {download, pick, readText} from "velar/files"
 
 const selected = await pick({accept: ".json", multiple: false})
-if selected.length > 0:
+if selected.size > 0:
     const source = await readText(selected[0])
     download("copy.json", source, "application/json")
 ```
 
 `pick` uses the native file-input path supported by Chromium, Firefox, and
-WebKit. It returns stable Velar file records with `name`, `size`, `type`, and
+WebKit. It returns stable VelarScript file records with `name`, `size`, `type`, and
 `modified`; only records returned by `pick` may be read with `readText` or
 `readDataUrl` or attached to `velar/http.formBody`. Picker options are a
 data-only `accept` string/`multiple` bool record. `download` accepts actual text
@@ -465,7 +469,7 @@ created. `readText(file, maxBytes=16777216)` and
 the explicit ceiling is 64 MiB. One picker result is limited to 10,000 files,
 and text downloads are likewise limited to 64 MiB. Directory access,
 persistent file handles, and the File System Access API are deliberately not
-part of Web API 0.9.
+part of Web API 0.10.
 
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque record is registered. Invalid native picker results reject
@@ -524,7 +528,7 @@ component LiveStatus:
 `toEqual` uses exactly the public `velar/json.deepEqual` contract: it does not
 invent a test-only structural model, invoke record getters, accept sparse Lists,
 or treat distinct class instances/cycles as equal.
-`toBe` follows Velar `==` value/reference semantics. The truthy/falsy spellings
+`toBe` follows VelarScript `==` value/reference semantics. The truthy/falsy spellings
 accept only actual booleans; they do not reintroduce JS truthiness. Specialized
 matchers are exposed only for compatible checked subjects, then validate the
 same rule at dynamic boundaries. In particular, `toThrow` requires a function,
@@ -541,7 +545,7 @@ import {browser} from "velar/web-test"
 
 async def test_home_page():
     await browser.open("/")
-    await browser.waitForText("h1", "My Velar App")
+    await browser.waitForText("h1", "My VelarScript App")
     expect(await browser.currentPath()).toBe("/")
 ```
 
@@ -559,7 +563,7 @@ install.
 
 ## Deliberate boundaries
 
-Web API 0.9 does not define SSR/server execution, workers, service workers/PWA,
+Web API 0.10 does not define SSR/server execution, workers, service workers/PWA,
 WebRTC, WebGPU, directory handles, persistent file handles, or a game runtime.
 JavaScript packages remain available through checked declarations or an
 explicit unsafe boundary when an application needs capabilities outside the
@@ -574,7 +578,7 @@ CLI dynamically loads the project-declared `/compiler` and optional `/host`
 entries. Web owns HTML/CSP/reload/deployment projection and browser-test
 metadata; CLI owns generic routing, filesystem, bundling, transport,
 verification, and browser-driver mechanics.
-`standardModuleApi()` reports Web API `0.7` under the extension ID, and compiler tests protect
+`standardModuleApi()` reports Web API `0.10` under the extension ID, and compiler tests protect
 exact names and types, and the Chromium, Firefox, and WebKit
 development/production matrix protects runtime behavior. Workbench does not
 copy these rules; completion and diagnostics arrive through the project's

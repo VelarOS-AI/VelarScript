@@ -64,7 +64,7 @@ async def test_direct_detail_route_recovers_data():
     await browser.open("/tickets/ticket-auth")
     await browser.waitForText("[data-ticket-detail]", "Cannot sign in after password reset")
     expect(await browser.text("[data-route-id]")).toBe("Route ID: ticket-auth")
-    expect(await browser.attribute("[data-primary] a", "aria-current")).toBe(none)
+    expect(await browser.attribute("[data-primary] a", "aria-current")).toBe(null)
     await browser.open("/tickets/not-a-ticket")
     await browser.waitForText("[data-ticket-detail]", "Ticket not found")
     expect(await browser.count("[data-route-id]")).toBe(0)

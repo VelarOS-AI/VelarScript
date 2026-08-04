@@ -55,8 +55,8 @@ try {
   assert.equal(installedManifest.license, "Apache-2.0");
   assert.match(await readFile(join(directory, "node_modules", "@velarscript", "cli", "LICENSE"), "utf8"), /Apache License\s+Version 2\.0/u);
   assert.equal(installedManifest.dependencies.playwright, "^1.58.2");
-  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.9.0-dev");
-  assert.equal(installedManifest.dependencies["create-velar"], "0.9.0-dev");
+  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.10.0-dev");
+  assert.equal(installedManifest.dependencies["create-velar"], "0.10.0-dev");
   assert.equal(installedManifest.peerDependencies?.["@velarscript/web"], undefined);
   assert.equal(installedManifest.dependencies["@velarscript/web"], undefined);
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
@@ -64,7 +64,7 @@ try {
   };
   assert.equal(installedWebManifest.velar?.extension?.manifestKey, "web");
   const version = await run(process.execPath, [installedCli, "--version"], directory);
-  assert.equal(version.stdout, "velar 0.9.0-dev\n");
+  assert.equal(version.stdout, "velar 0.10.0-dev\n");
   const help = await run(process.execPath, [installedCli, "help", "build"], directory);
   assert.match(help.stdout, /Usage: velar build/u);
   assert.match(help.stdout, /isolated framework application output/u);
@@ -91,7 +91,7 @@ print(answer)
   const framework = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.9' || VELAR_WEB_MODULES.length !== 10 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
+    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.10' || VELAR_WEB_MODULES.length !== 10 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
   ], directory);
   assert.match(framework.stdout, /velar\/app,velar\/config,velar\/web/u);
   const host = await run(process.execPath, [
@@ -103,16 +103,16 @@ print(answer)
 
   const docsProject = join(directory, "created-docs");
   const created = await run(process.execPath, [installedCreate, docsProject, "--template", "docs"], directory);
-  assert.match(created.stdout, /Created Velar docs project/u);
+  assert.match(created.stdout, /Created VelarScript docs project/u);
   const docsManifest = JSON.parse(await readFile(join(docsProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.9.0-dev");
+  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.10.0-dev");
   await run(process.execPath, [installedCli, "check", docsProject], directory);
 
   const componentProject = join(directory, "created-component");
   const componentCreated = await run(process.execPath, [installedCreate, componentProject, "--template", "component"], directory);
-  assert.match(componentCreated.stdout, /Created Velar component project/u);
+  assert.match(componentCreated.stdout, /Created VelarScript component project/u);
   const componentManifest = JSON.parse(await readFile(join(componentProject, "package.json"), "utf8")) as {
     files: string[];
     velar: { entry: string };
@@ -120,7 +120,7 @@ print(answer)
   };
   assert.deepEqual(componentManifest.files, ["src/index.vel", "README.md"]);
   assert.equal(componentManifest.velar.entry, "src/index.vel");
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "0.9.0-dev");
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "0.10.0-dev");
   await run(process.execPath, [installedCli, "check", componentProject], directory);
 
   const localDependency = join(directory, "local-dependency");
@@ -143,10 +143,10 @@ print(answer)
   }, null, 2)}\n`, "utf8");
   await writeFile(join(managedProject, "src", "main.vel"), "export const value = 1\n", "utf8");
   const installedDependencies = await run(process.execPath, [installedCli, "install"], managedProject);
-  assert.match(installedDependencies.stdout, /Installed and validated Velar project dependencies/u);
+  assert.match(installedDependencies.stdout, /Installed and validated VelarScript project dependencies/u);
   assert.equal(JSON.parse(await readFile(join(managedProject, "node_modules", "local-dependency", "package.json"), "utf8")).name, "local-dependency");
   assert.equal(JSON.parse(await readFile(join(managedProject, "package-lock.json"), "utf8")).lockfileVersion, 3);
-  process.stdout.write("Velar packed toolchain consumer acceptance passed\n");
+  process.stdout.write("VelarScript packed toolchain consumer acceptance passed\n");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

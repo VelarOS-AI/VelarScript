@@ -12,24 +12,24 @@ export state query = ""
 export state filter: TicketFilter = TicketFilter.all
 export state sort: TicketSort = TicketSort.recent
 export state page = 1
-export computed selectedTickets: List<Ticket> = selectTickets(tickets, query, filter, sort)
+export computed selectedTickets: List<Ticket> = selectTickets(tickets.copy(), query, filter, sort)
 export computed visibleTickets: List<Ticket> = pageTickets(selectedTickets, page, pageSize)
-export computed totalPages: number = max(1, ceil(selectedTickets.length / pageSize))
+export computed totalPages: number = max(1, ceil(selectedTickets.size / pageSize))
 
 def persist():
-    deskStorage.set("desk", {tickets})
+    deskStorage.set("desk", {tickets: tickets.copy()})
 
 def clampPage():
     page = min(max(1, page), totalPages)
 
 export async def loadTickets() -> List<Ticket>:
-    if tickets.length > 0:
-        return tickets
+    if tickets.size > 0:
+        return tickets.copy()
     const catalog = await http.get("/data/tickets.json", {cache: "no-store"}).parse(TicketCatalog)
     tickets = catalog.tickets
     clampPage()
     persist()
-    return tickets
+    return tickets.copy()
 
 export def addTicket(draft: TicketDraft):
     tickets = [...tickets, createTicket(draft)]
@@ -37,11 +37,11 @@ export def addTicket(draft: TicketDraft):
     persist()
 
 export def resolveTicket(id: string):
-    tickets = resolveInList(tickets, id)
+    tickets = resolveInList(tickets.copy(), id)
     persist()
 
 export def ticketById(id: string) -> Ticket?:
-    return findInList(tickets, id)
+    return findInList(tickets.copy(), id)
 
 export def nextPage():
     if page < totalPages:
@@ -56,5 +56,5 @@ export def setPage(next: number):
         page = 1
     else:
         page = next
-        if tickets.length > 0:
+        if tickets.size > 0:
             clampPage()

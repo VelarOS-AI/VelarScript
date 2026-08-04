@@ -32,7 +32,7 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const devOutput = collectOutput(devServer);
-  await waitFor(() => devOutput.text.includes("Velar dev server:"), 8_000, () => devOutput.text);
+  await waitFor(() => devOutput.text.includes("VelarScript dev server:"), 8_000, () => devOutput.text);
 
   const baseUrl = `http://127.0.0.1:${appPort}/app/`;
   const status = await (await fetch(`${baseUrl}__velar/status`)).json() as {
@@ -41,7 +41,7 @@ try {
     notices: readonly string[];
     compilation: { moduleCount: number; compiledModules: number };
   };
-  assert.equal(status.apiVersion, "0.9");
+  assert.equal(status.apiVersion, "0.10");
   assert.equal(status.ready, true);
   assert.deepEqual(status.notices, []);
   assert.ok(status.compilation.moduleCount >= 5);
@@ -65,7 +65,7 @@ try {
   await prepareExternalPreview(externalDirectory);
   externalPreview = await startProductionPreview(await verifyProductionBuild(externalDirectory), 0);
   await acceptExternalPreview(externalPreview);
-  process.stdout.write(`Velar development and CSP production browser matrices passed\n`);
+  process.stdout.write(`VelarScript development and CSP production browser matrices passed\n`);
 } finally {
   await stop(devServer);
   await closeServer(staticServer);
@@ -88,7 +88,7 @@ async function acceptExternalPreview(preview: ProductionPreviewHandle): Promise<
     assert.equal(response?.status(), 200);
     assert.match(response?.headers()["content-security-policy"] ?? "", /script-src 'self'/u);
     assert.equal(new URL(page.url()).pathname, "/");
-    assert.equal(await page.locator("h1").textContent(), "Velar Release Studio");
+    assert.equal(await page.locator("h1").textContent(), "VelarScript Release Studio");
     assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://velar.example/");
     assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/share.svg");
     assert.equal((await page.request.get(new URL("share.svg", preview.url).href)).status(), 200);
@@ -133,10 +133,10 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
 
     const response = await page.goto(baseUrl, { waitUntil: "networkidle" });
     if (production) assert.match(response?.headers()["content-security-policy"] ?? "", /script-src 'self'/u);
-    assert.equal(await page.locator("h1").textContent(), "Velar Release Studio");
+    assert.equal(await page.locator("h1").textContent(), "VelarScript Release Studio");
     assert.equal(new URL(page.url()).pathname, "/app/");
-    assert.equal(await page.title(), "Velar Release Studio");
-    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "Velar 0.9 Web platform application");
+    assert.equal(await page.title(), "VelarScript Release Studio");
+    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "VelarScript 0.10 Web platform application");
     assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://velar.example/app/");
     assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "index,follow");
     assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/app/share.svg");
@@ -145,7 +145,7 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     assert.equal(await page.locator("[data-format]").textContent(), "Safe JS package value: 42 items · en-US: 1.5 / 2.5 · class number/en-US: 3.5 / 4.5");
     assert.equal(await page.getByRole("progressbar").count(), 8);
     assert.equal(await page.locator('[data-project="parser"] strong').textContent(), "Parser");
-    assert.equal(await page.locator('[data-project="velar-integration"] strong').textContent(), "Velar Integration");
+    assert.equal(await page.locator('[data-project="velar-integration"] strong').textContent(), "VelarScript Integration");
     assert.equal(await page.locator('.metrics .metric:first-child .value').textContent(), "8");
     await page.waitForFunction(() => document.querySelector("[data-database]")?.textContent === "database-ready");
     assert.equal(await page.locator("[data-browser]").textContent(), "/app/");
@@ -155,7 +155,7 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     await page.waitForFunction(() => document.querySelector("[data-frame]")?.textContent === "frame-ready");
     assert.equal(await page.locator("[data-frame]").textContent(), "frame-ready");
     assert.equal(await page.locator("[data-layout]").textContent(), "measured");
-    assert.equal(await page.locator("[data-error]").textContent(), "Velar recovery ready");
+    assert.equal(await page.locator("[data-error]").textContent(), "VelarScript recovery ready");
     assert.equal(await page.locator("[data-recovery]").textContent(), "finalized");
     assert.equal(await page.locator("[data-remainder]").textContent(), "3");
     assert.equal(await page.locator("[data-set]").textContent(), "4:set-ready");
@@ -189,8 +189,8 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     const chooserPromise = page.waitForEvent("filechooser");
     await page.getByRole("button", { name: "Choose text file" }).click();
     const chooser = await chooserPromise;
-    await chooser.setFiles({ name: "velar.txt", mimeType: "text/plain", buffer: Buffer.from("Velar file API") });
-    await page.waitForFunction(() => document.querySelector("[data-file-text]")?.textContent === "Velar file API");
+    await chooser.setFiles({ name: "velar.txt", mimeType: "text/plain", buffer: Buffer.from("VelarScript file API") });
+    await page.waitForFunction(() => document.querySelector("[data-file-text]")?.textContent === "VelarScript file API");
     assert.equal(await page.locator("[data-file]").textContent(), "velar.txt");
     await page.waitForFunction(() => document.querySelector("[data-upload]")?.textContent === "release-studio:velar.txt:14");
     assert.equal(uploadRequests, 1);
@@ -257,8 +257,8 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     await page.getByRole("link", { name: "About" }).click();
     await page.waitForURL("**/app/about");
     assert.equal(await page.locator("h1").textContent(), "About");
-    assert.equal(await page.title(), "About · Velar Release Studio");
-    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "About the Velar production application");
+    assert.equal(await page.title(), "About · VelarScript Release Studio");
+    assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "About the VelarScript production application");
     assert.equal(await page.evaluate(() => sessionStorage.getItem("cleanup")), '{"label":"continued"}');
     await page.reload({ waitUntil: "networkidle" });
     assert.equal(await page.locator("h1").textContent(), "About");

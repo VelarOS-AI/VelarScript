@@ -95,7 +95,7 @@ export async function buildProductionFramework(project: ProjectResult, outputDir
     logLevel: "silent",
   });
   const entryOutput = Object.entries(result.metafile.outputs).find(([, output]) => Boolean(output.entryPoint));
-  if (!entryOutput) throw new Error("The production bundler did not emit the Velar entry module");
+  if (!entryOutput) throw new Error("The production bundler did not emit the VelarScript entry module");
   const entryPath = relative(outputDirectory, resolve(project.projectRoot, entryOutput[0])).replaceAll("\\", "/");
 
   const css = projectStyles(project);
@@ -231,7 +231,7 @@ function velarModules(project: ProjectResult): Plugin {
     setup(context) {
       context.onLoad({ filter: /\.vel$/, namespace: "file" }, (arguments_) => {
         const module = moduleAt(arguments_.path);
-        if (!module) return { errors: [{ text: `Velar module '${arguments_.path}' was not compiled` }] };
+        if (!module) return { errors: [{ text: `VelarScript module '${arguments_.path}' was not compiled` }] };
         const sourceMap = module.result.sourceMap
           ? `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(module.result.sourceMap).toString("base64")}\n`
           : "";
@@ -244,7 +244,7 @@ function velarModules(project: ProjectResult): Plugin {
       context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
       context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
         const contents = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
-        return contents ? { contents, loader: "js" } : { errors: [{ text: `Unknown Velar standard module '${arguments_.path}'` }] };
+        return contents ? { contents, loader: "js" } : { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] };
       });
       context.onResolve({ filter: /^\.\.?\// }, (arguments_) => {
         const sourceModule = moduleAt(arguments_.importer);
@@ -264,7 +264,7 @@ function velarModules(project: ProjectResult): Plugin {
             const velarTarget = project.velarImports.get(projectImportKey(sourceModule.inputPath, arguments_.path));
             if (velarTarget) {
               const targetModule = moduleAt(velarTarget);
-              if (!targetModule) return { errors: [{ text: `Velar package module '${arguments_.path}' was not compiled` }] };
+              if (!targetModule) return { errors: [{ text: `VelarScript package module '${arguments_.path}' was not compiled` }] };
               return { path: targetModule.inputPath };
             }
           }

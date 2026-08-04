@@ -5,7 +5,7 @@ const barLook = look:
 
 const labelLook = look:
     fill = rgb(96, 112, 139)
-    font = "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
     fontSize = 12px
 
 export component TrafficBar(point: TrafficPoint, scale: ChartScale):

@@ -5,7 +5,7 @@
   "publicDir": "public",
   "extensions": ["@velarscript/web"],
   "web": {
-    "title": "Velar Release Studio",
+    "title": "VelarScript Release Studio",
     "base": "/",
     "publicConfig": {
       "apiBase": "/api",

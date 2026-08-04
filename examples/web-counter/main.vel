@@ -1,8 +1,8 @@
 def counterLook(active: bool) -> Look:
     return look:
-        padding = space(10px, 14px)
-        border = line(0px, transparent)
-        radius = 10px
+        padding = spacing(10px, 14px)
+        border = border(0px, color("transparent"))
+        borderRadius = 10px
 
         if active:
             color = rgb(37, 99, 235)

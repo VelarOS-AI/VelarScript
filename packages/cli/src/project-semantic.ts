@@ -82,7 +82,7 @@ interface MemberTarget {
 const reservedNames = new Set([
   "abstract", "and", "as", "async", "await", "break", "case", "catch", "class", "const", "continue",
   "def", "else", "enum", "export", "extends", "extern", "false", "finally", "for", "from", "if", "import", "in", "is", "js", "let",
-  "match", "module", "none", "not", "or", "override", "pass", "private", "return", "static", "super", "throw", "assert", "true", "try", "type", "unsafe", "while",
+  "match", "module", "null", "not", "or", "override", "pass", "private", "return", "static", "super", "throw", "assert", "true", "try", "type", "unsafe", "while",
 ]);
 
 function reservedName(project: ProjectResult, name: string): boolean {
@@ -160,10 +160,10 @@ export function projectRenameAt(
   offset: number,
   newName: string,
 ): ProjectRename | ProjectRenameFailure {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(newName)) return "The new name is not a valid Velar identifier";
-  if (reservedName(project, newName)) return "The new name is reserved by Velar";
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(newName)) return "The new name is not a valid VelarScript identifier";
+  if (reservedName(project, newName)) return "The new name is reserved by VelarScript";
   const module = moduleAt(project, path);
-  if (!module) return "No renameable Velar symbol at this position";
+  if (!module) return "No renameable VelarScript symbol at this position";
   const enumMember = enumMemberTargetAt(project, module, offset);
   if (enumMember) {
     if (enumMember.name === newName) return { edits: [], placeholder: enumMember.name };
@@ -174,13 +174,13 @@ export function projectRenameAt(
   if (member) {
     const protection = extensionRenameProtection(project, member);
     if (protection) return protection;
-    if (!renameableMember(member)) return "No renameable Velar symbol at this position";
+    if (!renameableMember(member)) return "No renameable VelarScript symbol at this position";
     if (member.symbol.name === newName) return { edits: [], placeholder: member.symbol.name };
     if (memberRenameCollides(project, member, newName)) return "The new name collides with another declaration";
     return { edits: memberRenameEdits(project, member, newName), placeholder: member.symbol.name };
   }
   const target = targetAt(project, module, offset, "rename");
-  if (!target || !renameable(target.symbol)) return "No renameable Velar symbol at this position";
+  if (!target || !renameable(target.symbol)) return "No renameable VelarScript symbol at this position";
   if (target.symbol.name === newName) return { edits: [], placeholder: target.symbol.name };
   if (renameCollides(project, target, newName)) return "The new name collides with another declaration";
   const locations = target.kind === "export"

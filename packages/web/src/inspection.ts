@@ -9,17 +9,16 @@ import type {
 } from "@velarscript/compiler/extension";
 
 const publicBuilderTypes = new Map<string, ValueType>([
-  ...["rgb", "rgba", "hsl", "alpha", "lighten", "darken"].map((name) => [name, { kind: "named", name: "Color" } as ValueType] as const),
-  ["line", { kind: "named", name: "Border" }],
-  ["dropShadow", { kind: "named", name: "Shadow" }],
+  ...["color", "rgb", "rgba", "hsl", "alpha", "lighten", "darken"].map((name) => [name, { kind: "named", name: "Color" } as ValueType] as const),
+  ["border", { kind: "named", name: "Border" }],
+  ["shadow", { kind: "named", name: "Shadow" }],
   ["linearGradient", { kind: "named", name: "Image" }],
   ["asset", { kind: "named", name: "Image" }],
   ["minmax", { kind: "named", name: "Track" }],
   ["repeat", { kind: "named", name: "TrackList" }],
   ["tracks", { kind: "named", name: "TrackList" }],
-  ["change", { kind: "named", name: "Transition" }],
-  ["space", { kind: "named", name: "Spacing" }],
-  ["edges", { kind: "named", name: "Spacing" }],
+  ["transition", { kind: "named", name: "Transition" }],
+  ["spacing", { kind: "named", name: "Spacing" }],
   ["min", { kind: "named", name: "Length" }],
   ["max", { kind: "named", name: "Length" }],
   ["clamp", { kind: "named", name: "Length" }],

@@ -5,7 +5,7 @@ authority for the `velar/app`, `velar/config`, `velar/web`, `velar/forms`,
 `velar/http`, `velar/storage`, `velar/browser`, `velar/files`,
 `velar/realtime`, and `velar/web-test` language modules. It also owns the
 component/JSX, reactive, lifecycle, Look, DOM/CSS lowering, project-manifest,
-and editor contributions that a Core-only Velar project does not load. Its
+and editor contributions that a Core-only VelarScript project does not load. Its
 compiler entry owns the Web parser, analyzer, semantic index contribution,
 intrinsic API rules, dependency/public-interface inspection, and emitter as
 one versioned extension boundary. Its separate `./host` entry owns Web document
@@ -41,7 +41,7 @@ activation without teaching the CLI this package's name.
 version. It has no dependency on VelarOS Workbench and does not define the
 future Canvas-oriented `velar/game` framework.
 
-The package also owns Look, the checked visual language integrated with Velar
+The package also owns Look, the checked visual language integrated with VelarScript
 values and JSX. `look:` values, ordinary functions, imports/exports, typed
 builders, unit-aware properties, bounded `if` conditions, `@state` hooks, and
 `@target` blocks lower to extracted standard CSS with stable readable markers.

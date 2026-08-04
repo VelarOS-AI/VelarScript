@@ -25,7 +25,7 @@ export async function createVelarProject(input: string, options: CreateProjectOp
   const root = resolve(cwd, input);
   const template = options.template ?? "web";
   if (!(VELAR_PROJECT_TEMPLATES as readonly string[]).includes(template)) {
-    throw new Error(`unsupported Velar project template '${String(template)}'`);
+    throw new Error(`unsupported VelarScript project template '${String(template)}'`);
   }
   const existing = await pathState(root);
   if (existing !== "missing") {

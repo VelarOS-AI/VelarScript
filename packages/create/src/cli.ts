@@ -22,7 +22,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
   try {
     const result = await createVelarProject(parsed.directory, { template: parsed.template });
-    process.stdout.write(`Created Velar ${result.template} project -> ${result.root}\n`);
+    process.stdout.write(`Created VelarScript ${result.template} project -> ${result.root}\n`);
     return 0;
   } catch (error) {
     process.stderr.write(`create-velar: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -32,7 +32,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
 
 function printHelp(): void {
   process.stdout.write([
-    "Create Velar",
+    "Create VelarScript",
     "",
     "Usage: create-velar <project-directory> [--template <web|docs|library|component>]",
     "",

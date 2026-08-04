@@ -20,6 +20,6 @@ def construct_invalid_scale():
 def construct_oversized_scale():
     ChartScale(1000001)
 
-def test_chart_scale_init_rejects_invalid_construction():
+def test_chart_scale_constructor_rejects_invalid_values():
     expect(construct_invalid_scale).toThrow()
     expect(construct_oversized_scale).toThrow()

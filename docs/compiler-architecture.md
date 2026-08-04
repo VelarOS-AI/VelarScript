@@ -1,16 +1,16 @@
-# Velar Compiler Architecture
+# VelarScript Compiler Architecture
 
-Status: Velar 0.9 internal language, Standard API, secure static Web, semantic-tooling,
+Status: VelarScript 0.10 internal language, Standard API, secure static Web, semantic-tooling,
 and incremental pipeline implemented
 
 ## Pipeline
 
 ```text
 .vel source
--> Core lexer plus an extension-selected parser when a framework owns syntax
--> source-spanned internal syntax carriers
+-> one Core lexer with extension-owned structured token scanners
+-> one source-spanned AST, including structured type, JSX, and Look nodes
 -> extension-selected analysis, semantic indexing, intrinsic typing, dependency inspection, and module-interface contribution
--> extension-selected JavaScript emitter
+-> extension-selected JavaScript emitter and mapped JavaScript node IR
 -> readable ESM JavaScript and optional extension artifacts
 -> development source maps / explicitly enabled production source maps
 ```
@@ -27,7 +27,7 @@ scheduler. Safe JavaScript imports without a usable declaration remain
 Project compilation returns structural statistics for module count, compiled,
 reused, and affected modules plus elapsed time. The language server owns a
 multi-entry incremental session; the development server owns an entry-graph
-incremental session and dynamically watches resolved npm Velar package roots.
+incremental session and dynamically watches resolved npm VelarScript package roots.
 Both reuse the compiler's reverse-dependency invalidation rather than creating
 their own semantic cache.
 
@@ -46,25 +46,37 @@ semantic hover/signature text, manual extern declarations, and the limited
 `.d.ts` bridge all consume the same element contract. Emission is the final
 native JavaScript `...name` lowering; there is no runtime argument wrapper.
 
-Source classes keep constructor inputs, instance fields, static fields,
-initialization, getters, and methods as separate AST collections. Class-body fields require an annotation,
+Type syntax is parsed once into named, generic, optional, union, and function
+nodes. Analysis, public interfaces, semantic tooling, and emission resolve that
+same tree; no later stage reparses a formatted type string. Web lexical scanning
+likewise produces structured JSX elements, attributes, children, and Look lines
+during the Core token pass. The Web parser only sends embedded VelarScript
+expression slices through the normal nested Core parser; it never receives an
+opaque JSX or Look source block to split a second time.
+
+Source classes keep constructor inputs, one constructor body, instance fields,
+static fields, getters, and methods as separate AST collections. Class-body fields require an annotation,
 so the project interface can publish their contract before analyzing consumers
 without whole-program field inference. Instance initializers are checked in the
-constructor-parameter scope and emitted after `super(...)` and parameter-field
-assignment; static initializers remain outside that scope and emit as native
-class fields. One optional `init:` block executes after instance fields and
-method binding. The analyzer gives it a synchronous, non-returning execution
-boundary while allowing nested functions to own their own boundary; the emitter
-places its statements inside the native constructor without publishing it as a
-member. The analyzer, module interface, semantic index, and project member
-resolver all preserve the static/instance bit, preventing completion,
+constructor-parameter scope and emitted after `super(...)`; static initializers
+remain outside that scope and emit as native
+class fields. The explicit `constructor(...)` body owns invariant checks and
+direct field initialization. A derived constructor must call `super(...)`
+before using `self`; the emitter preserves that order in the native JavaScript
+constructor. The analyzer, module interface, semantic index, and project member
+resolver preserve the static/instance bit, preventing completion,
 definition, reference, or rename from resolving a same-named member in the
 wrong namespace.
+
+Manual JavaScript class declarations use the same visible shape: body fields,
+one `constructor(...)` signature, and body methods. Extern declarations have no
+constructor implementation, but they do not reintroduce class-head parameters
+or parameter-field shorthand.
 
 Getter contracts remain read-only fields at the public type boundary while a
 separate accessor identity preserves native emission, `super.name`, abstract
 implementation, explicit override checking, and property-shaped LSP symbols.
-Concrete getters lower to native JavaScript `get`; Velar deliberately exposes no
+Concrete getters lower to native JavaScript `get`; VelarScript deliberately exposes no
 setter form because writable state already has the explicit `let` contract.
 
 Visibility is one bit rather than a hierarchy. Public members remain in the
@@ -72,7 +84,7 @@ module `ClassInfo`; `private` constructor/body fields, getters, and concrete met
 in analyzer-owned class maps, so consumers and subclasses cannot accidentally
 observe them. Private member-expression spans carry a lowering hint to native
 JavaScript `#` access. Instance private methods lower to private arrow fields so
-they retain Velar's stable callback receiver; static private methods remain
+they retain VelarScript's stable callback receiver; static private methods remain
 native class methods. The semantic index marks private declarations, exposes
 them only to expressions analyzed inside the owner class, and prevents
 project-wide inheritance rename from absorbing them.
@@ -81,7 +93,7 @@ Core `List`, `Set`, and `Map` types remain distinct compiler values. `Set()`
 construction accepts zero arguments or one checked List/Set, first mutation can
 refine an empty local binding, and the refined type is written back to the
 semantic index for editor hover. Set iteration emits native iteration, while
-the small mutation helpers normalize `add`/`clear` to Velar `none` without
+the controlled helpers normalize mutating results to VelarScript `null` without
 replacing JavaScript identity, insertion order, or membership semantics.
 
 ## Package ownership
@@ -124,7 +136,7 @@ replacing JavaScript identity, insertion order, or membership semantics.
   and composes at most one application host. CLI source neither identifies the
   official Web npm package nor constructs Web HTML/CSP/JSX-editor/lifecycle
   behavior.
-- VelarOS Workbench owns the generic editor and LSP host. Its default Velar
+- VelarOS Workbench owns the generic editor and LSP host. Its default VelarScript
   contribution owns presentation and connection metadata, but never copies or
   embeds compiler semantics.
 
@@ -161,8 +173,12 @@ then compares hosted bytes, MIME types, declared headers, and routing behavior
 at an explicit origin.
 
 Production bundling loads compiled modules through stable real `.vel` paths and
-inline compiler maps rather than random temporary `.js` paths. This keeps
-content hashes and source maps reproducible across output locations. Linked
+inline compiler maps rather than random temporary `.js` paths. JavaScript
+generation is retained as a parent/child node IR for statements and expressions;
+the renderer records exact generated offsets for those nodes and emits line-and-
+column source-map segments instead of assigning one source span to a whole
+generated statement. This keeps content hashes and source maps reproducible
+across output locations. Linked
 production maps are disabled by default and remain an explicit manifest input.
 
 Release packaging is outside compiler semantics. A repository script builds
@@ -174,7 +190,7 @@ remote, stable version, and publishable license. It contains no publish step.
 
 The compiler rejects a source module above 4 MiB before lexing. Lexing stops at
 250,000 tokens or 512 delimiter/indent levels, parser stack exhaustion is
-normalized to `VEL2008`, and project discovery/resolution stops at 4,096 Velar
+normalized to `VEL2008`, and project discovery/resolution stops at 4,096 VelarScript
 modules. LSP framing rejects messages above 16 MiB. Project/package manifests
 are read through bounded regular-file paths; JavaScript package inspection is
 limited to 16 MiB and `.d.ts` consumption to 2 MiB.
@@ -183,7 +199,7 @@ Production build and verification inventory is limited to 100,000 assets.
 Hashing, verified preview responses, and remote deployment identity checks use
 streams rather than whole-file buffers; declared or observed remote length
 mismatches are cancelled immediately. These bounds protect the existing Node
-and browser runtimes and do not define a separate Velar memory model.
+and browser runtimes and do not define a separate VelarScript memory model.
 
 ## Runtime invariants
 
@@ -205,7 +221,7 @@ and browser runtimes and do not define a separate Velar memory model.
 - Root mounting evaluates lazily and renders an accessible fatal state on
   failure. Dynamic and keyed updates construct their replacement transactionally
   and retain the last valid DOM when rendering fails.
-- Adjacent JSX conditional branches lower through the same dynamic replacement
+- Ordinary conditional JSX expressions lower through the same dynamic replacement
   transaction. Each selected branch receives a child scope; ref assignment adds
   identity-checked cleanup so an old branch cannot retain a removed node or
   clear the ref installed by its replacement.
@@ -222,13 +238,13 @@ and browser runtimes and do not define a separate Velar memory model.
 - Primitive conversion does not delegate source semantics to ambient JavaScript
   constructors. `str` lowers intentionally to string display conversion;
   `number(text)` lowers to a compiler helper that validates the complete decimal
-  grammar and finite result before returning a value or `none`.
+  grammar and finite result before returning a value or `null`.
 - Explicit structural equality lives in `velar/json`, not the `==` operator or
   a reflection feature. Its bounded runtime understands owned records, Lists,
   Maps, and Sets, preserves class/non-data reference identity, and terminates
   safely when separate cyclic graphs are encountered.
 - Source-level React effects, React lifecycle names, deep Proxy state, and a
-  parallel schema declaration are not part of Velar.
+  parallel schema declaration are not part of VelarScript.
 - Arrow expressions carry their async boundary in the AST. The analyzer owns
   contextual parameters, Promise adoption, and `await` placement; JavaScript
   emission only writes the checked `async` form. JSX analysis rejects Promise

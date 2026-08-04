@@ -64,7 +64,7 @@ export async function resolveVelarProject(input: string | null, cwd = process.cw
   if (!manifestPath || await pathKind(manifestPath) !== "file") {
     throw new Error(input
       ? `'${input}' is neither a .vel file nor a directory containing velar.json`
-      : "velar.json was not found; run this command in a Velar project or pass an entry .vel file");
+      : "velar.json was not found; run this command in a VelarScript project or pass an entry .vel file");
   }
   return loadManifest(manifestPath);
 }
@@ -267,7 +267,7 @@ function resolveProjectPath(root: string, value: string, field: string): string 
   const path = resolve(root, value);
   const pathFromRoot = relative(root, path);
   if (pathFromRoot === ".." || pathFromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(pathFromRoot)) {
-    throw new Error(`'${field}' cannot escape the Velar project`);
+    throw new Error(`'${field}' cannot escape the VelarScript project`);
   }
   return path;
 }
