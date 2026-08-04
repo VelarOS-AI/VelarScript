@@ -82,7 +82,9 @@ component RuntimeStatus:
   failure runs sibling cleanup, destroys the incomplete scope, and preserves
   the original error. Dynamic and keyed updates build the replacement first,
   so a failed update retains the last valid DOM and discards its incomplete
-  scope.
+  scope. Ordinary and keyed JSX Lists both read one checked dense List snapshot;
+  mutation during rendering and JavaScript iterator overrides cannot change the
+  values participating in that update.
 - Root construction passed to `mount` is synchronous so the runtime can own its
   failure transaction. Await module-level preload work into a binding before
   calling `mount`; component data continues to use `resource`.

@@ -15307,6 +15307,31 @@ component ListView:
   assert.deepEqual(keyed.diagnostics, []);
   assert.match(keyed.code ?? "", /__velarKeyed/);
   assert.match(keyed.code ?? "", /Duplicate JSX key/);
+  assert.match(keyed.code ?? "", /__velarListSnapshot\(read\(\) \?\? \[\], "Keyed JSX"\)/u);
+
+  const execution = executeModule(`${keyed.code ?? ""}
+let iteratorReads = 0;
+let getterReads = 0;
+class HostileList extends Array {
+  [Symbol.iterator]() { iteratorReads += 1; throw new Error("iterator override"); }
+}
+const source = new HostileList("Ada", "Lin");
+const snapshot = __velarListSnapshot(source, "Keyed JSX");
+source[0] = "Changed";
+console.log(snapshot[0] + ":" + snapshot[1] + ":" + iteratorReads);
+const sparse = []; sparse.length = 1;
+const extended = ["Ada"]; extended.label = "hidden";
+const accessor = [];
+Object.defineProperty(accessor, 0, { enumerable: true, configurable: true, get() { getterReads += 1; return "Ada"; } });
+accessor.length = 1;
+for (const value of [sparse, extended, accessor, Object.freeze([])]) {
+  try { __velarListSnapshot(value, "Keyed JSX"); console.log("accepted"); }
+  catch (error) { console.log(error.name); }
+}
+console.log(getterReads);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada:Lin:0\nTypeError\nTypeError\nTypeError\nTypeError\n0\n");
 });
 
 test("checks accessible button names and safe native links", () => {

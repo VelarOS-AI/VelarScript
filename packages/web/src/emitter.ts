@@ -1110,6 +1110,29 @@ function __velarCreateElement(tag, namespace) {
     : document.createElement(tag);
 }
 
+function __velarListSnapshot(value, name) {
+  if (!Array.isArray(value)) throw new TypeError(name + " requires a List");
+  if (value.length > 1000000) throw new RangeError(name + " cannot exceed 1000000 items");
+  if (Object.getOwnPropertySymbols(value).length > 0
+    || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    throw new TypeError(name + " requires a dense List without extra fields");
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable
+    || lengthDescriptor.configurable || !("value" in lengthDescriptor)) {
+    throw new TypeError(name + " requires an ordinary mutable List length");
+  }
+  const output = new Array(value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) {
+      throw new TypeError(name + " requires ordinary mutable List elements");
+    }
+    output[index] = descriptor.value;
+  }
+  return output;
+}
+
 function __velarAppend(parent, value, state = null) {
   state ??= { active: new Set(), depth: 0, values: 0, text: 0 };
   if (value == null || value === false || value === true) return;
@@ -1130,17 +1153,11 @@ function __velarAppend(parent, value, state = null) {
   if (Array.isArray(value)) {
     if (state.depth >= 128) throw new RangeError("JSX Lists cannot exceed 128 nested levels");
     if (state.active.has(value)) throw new TypeError("JSX cannot render a cyclic List");
-    if (value.length > 1000000 || Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
-      throw new TypeError("JSX requires dense Lists without extra fields");
-    }
+    const values = __velarListSnapshot(value, "JSX children");
     state.active.add(value);
     state.depth += 1;
     try {
-      for (let index = 0; index < value.length; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, index);
-        if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) throw new TypeError("JSX requires ordinary mutable List elements");
-        __velarAppend(parent, descriptor.value, state);
-      }
+      for (const item of values) __velarAppend(parent, item, state);
     } finally {
       state.depth -= 1;
       state.active.delete(value);
@@ -1180,7 +1197,7 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
   let entries = new Map();
   scope.mounts.push(() => { for (const entry of entries.values()) __velarMountScope(entry.scope); });
   __velarObserver(() => {
-    const values = read() ?? [];
+    const values = __velarListSnapshot(read() ?? [], "Keyed JSX");
     const next = new Map();
     const created = [];
     try {
