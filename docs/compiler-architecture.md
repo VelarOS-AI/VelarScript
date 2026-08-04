@@ -240,6 +240,11 @@ Short-circuit `and`/`or` analysis evaluates the right operand under the facts
 that make it reachable, records only facts valid for the complete result path,
 and lowers optional conditions to explicit presence checks. `while` bodies use
 the same successful-condition facts rather than a separate loop rule.
+Optional indexes and calls apply their successful-chain facts only while
+checking the deferred index or arguments. A statically skipped index is checked
+for diagnostics in isolated flow, so code that cannot execute cannot erase a
+continuing fact. Optional callable contexts unwrap only for contextual function
+inference and remain optional at the declared storage boundary.
 Flow facts snapshot the complete binding state around mutually exclusive `if`,
 `match`, `try`/`catch`, and inline conditional branches and around loop bodies.
 Only invalidations from paths that can reach the next statement are merged;

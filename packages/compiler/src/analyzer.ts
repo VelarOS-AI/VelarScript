@@ -93,7 +93,7 @@ function continuesOptionalChain(expression: Expression): boolean {
     return expression.optional || continuesOptionalChain(expression.object);
   }
   if (expression.kind === "IndexExpression") {
-    return continuesOptionalChain(expression.object);
+    return expression.optional || continuesOptionalChain(expression.object);
   }
   if (expression.kind === "CallExpression") {
     return continuesOptionalChain(expression.callee);
@@ -2391,12 +2391,21 @@ export class Analyzer implements TypeEnvironment {
           this.typeError(`Use optional index '?.[...]' for ${describeType(original)}`, expression.span);
         }
         if (original.kind === "null" && expression.optional) {
-          this.inferExpression(expression.index);
+          const baseline = this.snapshotFlowFacts();
+          this.analyzeIsolatedFlow(baseline, () => {
+            this.inferExpression(expression.index);
+          });
           this.optionalIndexes.add(spanIdentity(expression.span));
           return optionalOf(unknownType);
         }
         const object = guarded && original.kind === "optional" ? original.inner : original;
-        const index = this.inferExpression(expression.index);
+        const index = guarded
+          ? this.withTemporaryNarrowings(
+            this.optionalExecutionNarrowings(expression.object),
+            expression.index.span,
+            () => this.inferExpression(expression.index),
+          )
+          : this.inferExpression(expression.index);
         if (isInvalidType(object)) return invalidType;
         if (object.kind === "list") {
           this.requireAssignable(index, numberType, expression.index.span);
@@ -2512,7 +2521,12 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private inferArrow(expression: ArrowFunctionExpression, contextualType: ValueType): ValueType {
-    const expected = contextualType.kind === "function" ? contextualType : null;
+    const expandedContext = this.expandAliases(contextualType);
+    const expected = expandedContext.kind === "function"
+      ? expandedContext
+      : expandedContext.kind === "optional" && expandedContext.inner.kind === "function"
+        ? expandedContext.inner
+        : null;
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
@@ -2603,12 +2617,16 @@ export class Analyzer implements TypeEnvironment {
       const callee = original.kind === "optional" ? original.inner : original;
       if (isInvalidType(callee)) return invalidType;
       if (callee.kind === "function" || callee.kind === "action") {
-        this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
+        this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
+          this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
+        });
         this.optionalCallees.add(spanIdentity(callSpan));
         return optionalOf(callee.result);
       }
       if (callee.kind === "any") {
-        for (const argument of arguments_) this.inferExpression(argument);
+        this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
+          for (const argument of arguments_) this.inferExpression(argument);
+        });
         this.optionalCallees.add(spanIdentity(callSpan));
         return anyType;
       }
@@ -2677,13 +2695,16 @@ export class Analyzer implements TypeEnvironment {
       return callee.result;
     }
     if (callee.kind === "optional" && (callee.inner.kind === "function" || callee.inner.kind === "action")) {
-      this.checkArguments(arguments_, callee.inner.parameters, callSpan, callee.inner.requiredParameters, callee.inner.rest, argumentNames, callee.inner.parameterNames);
+      const inner = callee.inner;
+      this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
+        this.checkArguments(arguments_, inner.parameters, callSpan, inner.requiredParameters, inner.rest, argumentNames, inner.parameterNames);
+      });
       if (!continuesOptionalChain(calleeExpression)) {
         this.typeError("Use a presence check or an optional access chain before calling an optional function", calleeExpression.span);
       }
       this.optionalCalls.add(spanIdentity(callSpan));
       this.optionalCallees.add(spanIdentity(callSpan));
-      return optionalOf(callee.inner.result);
+      return optionalOf(inner.result);
     }
     if (callee.kind === "any") {
       if (hasNamed) this.typeError("Named arguments require a statically known callable signature", callSpan);
@@ -3859,12 +3880,45 @@ export class Analyzer implements TypeEnvironment {
     narrowed: ReadonlyMap<string, ValueType>,
     contextualType: ValueType,
   ): ValueType {
-    if (narrowed.size === 0) return this.inferExpression(expression, contextualType);
+    return this.withTemporaryNarrowings(narrowed, expression.span, () => this.inferExpression(expression, contextualType));
+  }
+
+  private withTemporaryNarrowings<T>(
+    narrowed: ReadonlyMap<string, ValueType>,
+    narrowingSpan: Span,
+    analyze: () => T,
+  ): T {
+    if (narrowed.size === 0) return analyze();
     this.enterScope();
-    this.applyNarrowings(narrowed, expression.span);
-    const result = this.inferExpression(expression, contextualType);
-    this.exitScope();
-    return result;
+    try {
+      this.applyNarrowings(narrowed, narrowingSpan);
+      return analyze();
+    } finally {
+      this.exitScope();
+    }
+  }
+
+  private optionalExecutionNarrowings(expression: Expression): ReadonlyMap<string, ValueType> {
+    const narrowed = new Map<string, ValueType>();
+    const visit = (candidate: Expression): void => {
+      const known = this.inferredExpressionTypes.get(spanIdentity(candidate.span));
+      const expanded = known ? this.expandAliases(known) : null;
+      if (expanded?.kind === "optional") {
+        if (candidate.kind === "IdentifierExpression" && this.lookup(candidate.name)) {
+          narrowed.set(candidate.name, expanded.inner);
+        } else if (candidate.kind === "MemberExpression") {
+          const path = this.stableOptionalMemberAccessPath(candidate);
+          if (path) narrowed.set(`${memberNarrowingPrefix}${path}`, expanded.inner);
+        }
+      }
+      if (candidate.kind === "MemberExpression" || candidate.kind === "IndexExpression") {
+        visit(candidate.object);
+      } else if (candidate.kind === "CallExpression") {
+        visit(candidate.callee);
+      }
+    };
+    visit(expression);
+    return narrowed;
   }
 
   private inferConditionWithNarrowings(
@@ -4856,6 +4910,17 @@ export class Analyzer implements TypeEnvironment {
     }
     if (expression.kind !== "MemberExpression" || expression.optional) return null;
     const base = this.stableMemberAccessPath(expression.object);
+    if (!base || !this.stableDataMember(expression.object, expression.property)) return null;
+    return `${base}.${expression.property}`;
+  }
+
+  private stableOptionalMemberAccessPath(expression: Expression): string | null {
+    if (expression.kind === "IdentifierExpression") {
+      const binding = this.lookup(expression.name);
+      return binding ? `${binding.span.start}:${expression.name}` : null;
+    }
+    if (expression.kind !== "MemberExpression") return null;
+    const base = this.stableOptionalMemberAccessPath(expression.object);
     if (!base || !this.stableDataMember(expression.object, expression.property)) return null;
     return `${base}.${expression.property}`;
   }

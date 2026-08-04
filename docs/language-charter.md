@@ -257,7 +257,10 @@ const result = callback?.()
 ```
 
 Skipped indexes and call arguments are not evaluated. Optional chains cannot
-be assignment targets.
+be assignment targets. On the path where an optional index or call continues,
+its guarded receiver or callable is known to be present inside the index and
+argument expressions. Optional function annotations also contextually type a
+function expression assigned to them.
 
 ## 6. Records, aliases, and enums
 

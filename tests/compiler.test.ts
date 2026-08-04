@@ -10083,6 +10083,72 @@ const called = hooks.handler()
   assert.ok(invalid.diagnostics.some((item) => /presence check or an optional access chain/u.test(item.message)));
 });
 
+test("optional calls and indexes carry successful-chain facts into deferred expressions", () => {
+  const result = compileCore(`
+class Service:
+    const name: string
+
+    constructor(name: string):
+        self.name = name
+
+    def format(value: string) -> string:
+        return f"{self.name}:{value}"
+
+def use(service: Service?) -> string?:
+    return service?.format(service.name)
+
+def invoke(callback: ((string) -> string)?) -> string?:
+    return callback?.(callback("inner"))
+
+def last(values: List<string>?) -> string?:
+    return values?.[values.size - 1]
+
+def first(callbacks: List<() -> string>?) -> string?:
+    return callbacks?.[0]()
+
+const service: Service? = Service("Ada")
+const shout: ((string) -> string)? = value => value
+const callbacks: List<() -> string> = [() => "ready"]
+const noCallbacks: List<() -> string>? = null
+print(use(null) == null)
+print(use(service))
+print(invoke(null) == null)
+print(invoke(shout))
+print(last(null) == null)
+print(last(["a", "b"]))
+print(first(noCallbacks) == null)
+print(first(callbacks))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\nAda:Ada\ntrue\ninner\ntrue\nb\ntrue\nready\n");
+
+  const skippedIndex = compileCore(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> number:
+    box.user = null
+    return 0
+
+def keep(box: Box) -> string:
+    assert box.user
+    const skipped = null?.[clear(box)]
+    return box.user.name
+
+print(keep({user: {name: "Ada"}}))
+`.trimStart());
+  assert.deepEqual(skippedIndex.diagnostics, []);
+  const skippedExecution = executeModule(skippedIndex.code ?? "");
+  assert.equal(skippedExecution.status, 0, String(skippedExecution.stderr));
+  assert.equal(skippedExecution.stdout, "Ada\n");
+});
+
 test("conditional expressions narrow optional values in their owned branch", () => {
   const result = compile(`
 type User:

@@ -64,6 +64,9 @@ Compiler and framework changes:
   condition facts; their effects no longer erase facts on the successful path.
 - `List.reduce(callback, initial)` analysis now follows runtime argument order
   without losing contextual typing for an effect-free literal arrow callback.
+- Optional indexes and calls now expose successful-chain facts to their deferred
+  expressions, optional index calls continue safely, and optional function
+  annotations contextually type assigned arrows.
 
 Tooling and documentation changes:
 
