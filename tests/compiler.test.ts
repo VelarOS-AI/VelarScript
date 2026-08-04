@@ -1232,6 +1232,29 @@ const rejected = Promise.reject(new Error("failed"));
   const execution = executeModule(executable);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfailed\n");
+
+  const forged = compileCore(`
+import js {hostile, reads} from "fixture"
+
+try:
+    await hostile
+    print("accepted")
+catch error:
+    print(error.name)
+print(reads())
+`.trimStart(), { analysis: { imports: new Map<string, ValueType>([
+    ["hostile", promiseNull],
+    ["reads", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "number" } }],
+  ]) } });
+  assert.deepEqual(forged.diagnostics, []);
+  const forgedExecutable = (forged.code ?? "").replace(/import .*?;\n+/u, `
+let thenReads = 0;
+const hostile = Object.defineProperty({}, "then", { get() { thenReads += 1; return resolve => resolve(undefined); } });
+const reads = () => thenReads;
+`);
+  const forgedExecution = executeModule(forgedExecutable);
+  assert.equal(forgedExecution.status, 0, String(forgedExecution.stderr));
+  assert.equal(forgedExecution.stdout, "TypeError\n0\n");
 });
 
 test("collection callbacks cannot return JavaScript undefined into VelarScript values", () => {
@@ -5470,6 +5493,35 @@ console.log(reads);
 `);
   assert.equal(typeExecution.status, 0, String(typeExecution.stderr));
   assert.equal(typeExecution.stdout, "false\n0\n");
+});
+
+test("List index failures never coerce hostile dynamic values", () => {
+  const result = compileCore(`
+import js {hostile, reads} from "fixture"
+
+let values = [1]
+try:
+    print(values[hostile])
+catch error:
+    print(error.name)
+try:
+    values[hostile] = 2
+catch error:
+    print(error.name)
+print(reads())
+`.trimStart(), { analysis: { imports: new Map<string, ValueType>([
+    ["hostile", { kind: "any" }],
+    ["reads", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "number" } }],
+  ]) } });
+  assert.deepEqual(result.diagnostics, []);
+  const executable = (result.code ?? "").replace(/import .*?;\n+/u, `
+let coercions = 0;
+const hostile = { [Symbol.toPrimitive]() { coercions += 1; return 0; } };
+const reads = () => coercions;
+`);
+  const execution = executeModule(executable);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "IndexError\nIndexError\n0\n");
 });
 
 test("0.10 Web APIs reject invalid typed boundaries before browser execution", async () => {

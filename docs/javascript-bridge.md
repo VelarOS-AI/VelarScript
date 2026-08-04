@@ -111,7 +111,10 @@ Promise values whose checked result can contain `null`, an optional, or
 they are awaited. The adapter is rejection-preserving and its cache is shared
 by generated VelarScript modules, so the same Promise remains the same
 VelarScript Promise even when it is exported, stored, compared, imported through
-any supported module form, or passed through `velar/async` before awaiting.
+any supported module form, or passed through `velar/async` before awaiting. A
+JavaScript export declared as `Promise<T>` must return an actual native Promise
+(including one from another realm); arbitrary thenables are rejected without
+reading a `then` accessor.
 
 An exported constant whose interface contains ordinary methods remains a plain
 checked object boundary. For example, `request(path: string): Promise<string>`

@@ -1106,7 +1106,8 @@ its checked type alone. The same rule applies through assignment,
 destructuring, objects, collections, members, functions, classes, aliases,
 cycles, namespace imports, and dynamic imports. Repeated normalization is
 idempotent. Errors and Promise behavior are unchanged; Promise normalization
-uses one cross-module identity cache. Unsafe JavaScript `any` imports
+uses one cross-module identity cache and accepts only actual Promises at checked
+JavaScript boundaries, never magic thenables. Unsafe JavaScript `any` imports
 deliberately remain outside this guarantee. A discarded expression result is
 not wrapped.
 
