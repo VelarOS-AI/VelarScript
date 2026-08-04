@@ -291,6 +291,12 @@ using JavaScript `Date` rollover (`2024-02-31` never becomes March). Years are
 numeric offset, which keeps results identical across JavaScript engines and
 host time zones. Non-ISO/native locale text is deliberately unsupported.
 Locale and named-time-zone arguments must be actual strings.
+Returned timestamps are checked as finite values inside JavaScript's supported
+date range. Host clock and internationalization results are validated before
+they cross back into VelarScript: invalid clocks, non-string formatting output,
+missing/duplicate time-zone parts, accessors, and impossible calendar fields
+fail explicitly rather than leaking `NaN` or guessed values through the typed
+API. Formatted output is limited to 65,536 characters.
 
 ```velar
 import {iso, now, parts, utc} from "velar/time"
@@ -305,7 +311,9 @@ and named-time-zone projection still use the host internationalization data.
 VelarScript does not invent a second timezone database or datetime object model.
 ISO input longer than 64 characters is invalid without entering the matching
 engine. Locale and time-zone names are limited to 1,024 characters before the
-host internationalization API is called.
+host internationalization API is called. Explicit time-zone projection also
+keeps astronomical year numbering (`1 BC` is year `0`), matching JavaScript
+`Date` and the local `parts` result.
 
 ## `velar/id`
 
@@ -363,6 +371,9 @@ component BuildStatus:
   1,024 characters, messages to 64 KiB, scopes to 1,024 characters, and an
   application may install at most 1,000 sinks. These limits are checked before
   dispatch; native Map iteration is used without invoking subclass overrides.
+- Record timestamps are accepted only when the host clock returns a finite
+  value inside JavaScript's date range. The fallback console must expose data
+  methods; logging will not execute accessor properties to discover a writer.
 - Without a custom sink, the runtime writes through the host console internally.
   VelarScript source still receives no `console` global. Sink failures fall back to
   the internal host logger and cannot recursively invoke the failing sink.

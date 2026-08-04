@@ -6074,6 +6074,31 @@ for (const parts of [[2024, 2, 30], [2024, 0, 1], [2024, 1, 1, 24]]) {
 try { parse(42); console.log("accepted"); } catch (error) { console.log(error.name); }
 try { format(utc(2024, 1, 1), 42); console.log("accepted"); } catch (error) { console.log(error.name); }
 try { parts(utc(2024, 1, 1), 42); console.log("accepted"); } catch (error) { console.log(error.name); }
+try { iso(8_640_000_000_000_001); console.log("accepted"); } catch (error) { console.log(error.name); }
+const originalDateNow = Date.now;
+Date.now = () => NaN;
+try { now(); console.log("accepted"); } catch (error) { console.log(error.name); }
+try { iso(); console.log("accepted"); } catch (error) { console.log(error.name); }
+Date.now = originalDateNow;
+const originalPerformance = globalThis.performance;
+globalThis.performance = { now: () => Infinity };
+try { monotonic(); console.log("accepted"); } catch (error) { console.log(error.name); }
+globalThis.performance = originalPerformance;
+const originalDateTimeFormat = Intl.DateTimeFormat;
+let timeCoercions = 0;
+let timeGetterReads = 0;
+Intl.DateTimeFormat = class {
+  format() { return { toString() { timeCoercions += 1; return "unsafe"; } }; }
+  formatToParts() {
+    const part = { type: "year" };
+    Object.defineProperty(part, "value", { enumerable: true, get() { timeGetterReads += 1; return "2024"; } });
+    return [part];
+  }
+};
+try { format(0); console.log("accepted"); } catch (error) { console.log(error.name); }
+try { parts(0, "UTC"); console.log("accepted"); } catch (error) { console.log(error.name); }
+Intl.DateTimeFormat = originalDateTimeFormat;
+console.log(timeCoercions + ":" + timeGetterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
@@ -6083,7 +6108,8 @@ try { parts(utc(2024, 1, 1), 42); console.log("accepted"); } catch (error) { con
     "true",
     "2024-1-2-3-4-5",
     "true", "true", "true", "true", "true", "true",
-    "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "TypeError", "",
+    "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "TypeError",
+    "RangeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "0:0", "",
   ].join("\n"));
 });
 
@@ -6326,13 +6352,27 @@ for (const operation of [
 ]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
+const originalLogDateNow = Date.now;
+Date.now = () => NaN;
+try { log.info("invalid clock"); console.log("accepted"); } catch (error) { console.log(error.name); }
+Date.now = originalLogDateNow;
+const originalConsoleDescriptor = Object.getOwnPropertyDescriptor(globalThis, "console");
+const hostileConsole = {};
+let consoleGetterReads = 0;
+Object.defineProperty(hostileConsole, "info", { get() { consoleGetterReads += 1; return () => null; } });
+Object.defineProperty(globalThis, "console", { ...originalConsoleDescriptor, value: hostileConsole });
+let consoleBoundaryFailure = "accepted";
+try { log.info("invalid console"); } catch (error) { consoleBoundaryFailure = error.name; }
+Object.defineProperty(globalThis, "console", originalConsoleDescriptor);
+console.log(consoleBoundaryFailure + ":" + consoleGetterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "first:cross-realm:runtime|second:cross-realm:runtime|first:ready:compiler|second:ready:compiler",
     "[velar/log] Log sink failed:A non-Error value was thrown by JavaScript",
     "debug",
-    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "",
+    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
+    "TypeError", "TypeError:0", "",
   ].join("\n"));
 });
 

@@ -920,8 +920,70 @@ export function decode(value) { return decodeURIComponent(urlText(value, "decode
 export function normalize(value, base = "") { const url = urlOf(value, base); return restore(value, url); }
 `.trimStart()],
   ["velar/time", String.raw`
-function valid(value) { if (!Number.isFinite(value)) throw new TypeError("velar/time requires a finite timestamp"); return value; }
+const maximumDateMilliseconds = 8_640_000_000_000_000;
+const weekdays = new Map([["Sun", 0], ["Mon", 1], ["Tue", 2], ["Wed", 3], ["Thu", 4], ["Fri", 5], ["Sat", 6]]);
+function finiteNumber(value, name) { if (!Number.isFinite(value)) throw new TypeError(name + " must be a finite number"); return value; }
+function valid(value) { finiteNumber(value, "velar/time timestamp"); if (Math.abs(value) > maximumDateMilliseconds) throw new RangeError("velar/time timestamp is outside the JavaScript date range"); return value; }
 function timeText(value, name) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > 1024) throw new RangeError(name + " cannot exceed 1024 characters"); return value; }
+function timeResultText(value, name, maximum = 65536) { if (typeof value !== "string") throw new TypeError(name + " must return a string"); if (value.length > maximum) throw new RangeError(name + " returned too much text"); return value; }
+function ownData(container, key, name) {
+  if (container === null || typeof container !== "object") throw new TypeError(name + " must belong to an object");
+  const descriptor = Object.getOwnPropertyDescriptor(container, key);
+  if (!descriptor || !("value" in descriptor)) throw new TypeError(name + " must be an own data field");
+  return descriptor.value;
+}
+function boundedInteger(value, name, minimum, maximum) {
+  if (!Number.isInteger(value)) throw new TypeError(name + " must be an integer");
+  if (value < minimum || value > maximum) throw new RangeError(name + " is out of range");
+  return value;
+}
+function partInteger(value, name, minimum, maximum) {
+  if (typeof value !== "string" || !/^\d{1,6}$/u.test(value)) throw new TypeError("Time " + name + " part must be decimal text");
+  return boundedInteger(Number(value), "Time " + name + " part", minimum, maximum);
+}
+function daysInMonth(year, month) {
+  if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+function zonedParts(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "numeric", day: "numeric", weekday: "short", hour: "numeric", minute: "numeric", second: "numeric", era: "short", hourCycle: "h23" });
+  const parts = formatter.formatToParts(date);
+  if (!Array.isArray(parts)) throw new TypeError("Intl.DateTimeFormat.formatToParts must return a List");
+  if (parts.length > 32) throw new RangeError("Intl.DateTimeFormat returned too many time parts");
+  const entries = new Map();
+  const required = new Set(["year", "month", "day", "weekday", "hour", "minute", "second", "era"]);
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = ownData(parts, String(index), "Intl time part");
+    const type = ownData(part, "type", "Intl time part type");
+    const value = ownData(part, "value", "Intl time part value");
+    timeResultText(type, "Intl time part type", 32);
+    timeResultText(value, "Intl time part value", 64);
+    if (type === "literal") continue;
+    if (!required.has(type)) throw new TypeError("Intl.DateTimeFormat returned an unsupported time part");
+    if (entries.has(type)) throw new TypeError("Intl.DateTimeFormat returned a duplicate " + type + " part");
+    entries.set(type, value);
+  }
+  for (const name of required) if (!entries.has(name)) throw new TypeError("Intl.DateTimeFormat omitted the " + name + " part");
+  const era = entries.get("era");
+  if (era !== "AD" && era !== "BC") throw new TypeError("Intl.DateTimeFormat returned an unsupported era");
+  const displayedYear = partInteger(entries.get("year"), "year", 1, 999999);
+  const year = era === "BC" ? 1 - displayedYear : displayedYear;
+  const month = partInteger(entries.get("month"), "month", 1, 12);
+  const day = partInteger(entries.get("day"), "day", 1, 31);
+  if (day > daysInMonth(year, month)) throw new RangeError("Intl.DateTimeFormat returned an impossible calendar date");
+  const weekday = weekdays.get(entries.get("weekday"));
+  if (weekday === undefined) throw new TypeError("Intl.DateTimeFormat returned an unsupported weekday");
+  return Object.freeze({
+    year,
+    month,
+    day,
+    weekday,
+    hour: partInteger(entries.get("hour"), "hour", 0, 23),
+    minute: partInteger(entries.get("minute"), "minute", 0, 59),
+    second: partInteger(entries.get("second"), "second", 0, 59),
+    millisecond: boundedInteger(date.getUTCMilliseconds(), "Time millisecond part", 0, 999),
+  });
+}
 function calendarParts(year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0) {
   for (const value of [year, month, day, hour, minute, second, millisecond]) if (!Number.isInteger(value)) throw new TypeError("velar/time date parts must be integers");
   if (year < 0 || year > 9999) throw new RangeError("velar/time year must be from 0 through 9999");
@@ -952,8 +1014,8 @@ function build(utc, year, month, day, hour = 0, minute = 0, second = 0, millisec
   }
   return valid(value.getTime());
 }
-export function now() { return Date.now(); }
-export function monotonic() { return typeof performance === "undefined" ? Date.now() : performance.now(); }
+export function now() { return valid(Date.now()); }
+export function monotonic() { return typeof performance === "undefined" ? now() : finiteNumber(performance.now(), "velar/time monotonic clock"); }
 export function parse(value) {
   if (typeof value !== "string") throw new TypeError("velar/time parse requires an ISO string");
   if (value.length > 64) return null;
@@ -962,8 +1024,8 @@ export function parse(value) {
   try {
     const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
     if (!match[4]) return build(true, year, month, day);
-    const hour = Number(match[4]), minute = Number(match[5]), second = Number(match[6] || 0);
-    const millisecond = Number((match[7] || "").padEnd(3, "0") || 0);
+    const hour = Number(match[4]), minute = Number(match[5]), second = Number(match[6] ?? 0);
+    const millisecond = Number((match[7] ?? "").padEnd(3, "0") || 0);
     const zone = match[8];
     let offset = 0;
     if (zone !== "Z") {
@@ -972,20 +1034,27 @@ export function parse(value) {
       if (offsetHour > 23 || offsetMinute > 59) return null;
       offset = sign * (offsetHour * 60 + offsetMinute);
     }
-    return build(true, year, month, day, hour, minute, second, millisecond) - offset * 60_000;
+    return valid(build(true, year, month, day, hour, minute, second, millisecond) - offset * 60_000);
   } catch { return null; }
 }
-export function iso(value = Date.now()) { return new Date(valid(value)).toISOString(); }
-export function format(value, locale = "", timeZone = "") { locale = timeText(locale, "Time locale"); timeZone = timeText(timeZone, "Time zone"); return new Intl.DateTimeFormat(locale || undefined, timeZone ? { dateStyle: "medium", timeStyle: "medium", timeZone } : { dateStyle: "medium", timeStyle: "medium" }).format(new Date(valid(value))); }
+export function iso(value = now()) { return timeResultText(new Date(valid(value)).toISOString(), "Date.toISOString", 64); }
+export function format(value, locale = "", timeZone = "") { locale = timeText(locale, "Time locale"); timeZone = timeText(timeZone, "Time zone"); const output = new Intl.DateTimeFormat(locale || undefined, timeZone ? { dateStyle: "medium", timeStyle: "medium", timeZone } : { dateStyle: "medium", timeStyle: "medium" }).format(new Date(valid(value))); return timeResultText(output, "Intl.DateTimeFormat.format"); }
 export function date(year, month, day, hour = 0, minute = 0, second = 0) { return build(false, year, month, day, hour, minute, second); }
 export function utc(year, month, day, hour = 0, minute = 0, second = 0) { return build(true, year, month, day, hour, minute, second); }
 export function parts(value, timeZone = "") {
   const date = new Date(valid(value));
   timeZone = timeText(timeZone, "Time zone");
-  if (!timeZone) return Object.freeze({ year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate(), weekday: date.getDay(), hour: date.getHours(), minute: date.getMinutes(), second: date.getSeconds(), millisecond: date.getMilliseconds() });
-  const entries = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "numeric", day: "numeric", weekday: "short", hour: "numeric", minute: "numeric", second: "numeric", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value]));
-  const weekdays = new Map([["Sun", 0], ["Mon", 1], ["Tue", 2], ["Wed", 3], ["Thu", 4], ["Fri", 5], ["Sat", 6]]);
-  return Object.freeze({ year: Number(entries.year), month: Number(entries.month), day: Number(entries.day), weekday: weekdays.get(entries.weekday) ?? 0, hour: Number(entries.hour), minute: Number(entries.minute), second: Number(entries.second), millisecond: date.getUTCMilliseconds() });
+  if (!timeZone) return Object.freeze({
+    year: boundedInteger(date.getFullYear(), "Time year part", -271821, 275760),
+    month: boundedInteger(date.getMonth() + 1, "Time month part", 1, 12),
+    day: boundedInteger(date.getDate(), "Time day part", 1, 31),
+    weekday: boundedInteger(date.getDay(), "Time weekday part", 0, 6),
+    hour: boundedInteger(date.getHours(), "Time hour part", 0, 23),
+    minute: boundedInteger(date.getMinutes(), "Time minute part", 0, 59),
+    second: boundedInteger(date.getSeconds(), "Time second part", 0, 59),
+    millisecond: boundedInteger(date.getMilliseconds(), "Time millisecond part", 0, 999),
+  });
+  return zonedParts(date, timeZone);
 }
 `.trimStart()],
   ["velar/id", String.raw`
@@ -1010,8 +1079,27 @@ let threshold = "info";
 const sinks = new Set();
 const maxLogFields = 1000;
 const maxLogSinks = 1000;
+const maximumLogTimestamp = 8_640_000_000_000_000;
 
 function logText(value, name, maximum = 65536) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > maximum) throw new RangeError(name + " is too long"); return value; }
+function logTimestamp() {
+  const value = Date.now();
+  if (!Number.isFinite(value)) throw new TypeError("The host clock must return a finite timestamp");
+  if (Math.abs(value) > maximumLogTimestamp) throw new RangeError("The host clock returned a timestamp outside the JavaScript date range");
+  return value;
+}
+function hostMethod(target, name) {
+  let owner = target;
+  for (let depth = 0; owner !== null && depth < 32; depth += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    if (descriptor) {
+      if (!("value" in descriptor) || typeof descriptor.value !== "function") throw new TypeError("Host console method " + name + " must be a data function");
+      return descriptor.value;
+    }
+    owner = Object.getPrototypeOf(owner);
+  }
+  return null;
+}
 
 function fieldsOf(value) {
   if (value == null) return new Map();
@@ -1029,15 +1117,18 @@ function fieldsOf(value) {
 }
 
 function defaultSink(record) {
-  const target = globalThis.console;
-  if (!target) return;
-  const write = typeof target[record.level] === "function" ? target[record.level] : target.log;
-  write.call(target, record.scope ? "[" + record.scope + "] " + record.message : record.message, Object.fromEntries(record.fields), record.error || "");
+  const consoleDescriptor = Object.getOwnPropertyDescriptor(globalThis, "console");
+  if (!consoleDescriptor) return;
+  if (!("value" in consoleDescriptor) || consoleDescriptor.value === null || typeof consoleDescriptor.value !== "object") throw new TypeError("Host console must be an own data object");
+  const target = consoleDescriptor.value;
+  const write = hostMethod(target, record.level) ?? hostMethod(target, "log");
+  if (!write) throw new TypeError("Host console must provide a callable log method");
+  write.call(target, record.scope ? "[" + record.scope + "] " + record.message : record.message, Object.fromEntries(record.fields), record.error ?? "");
 }
 
 function sinkFailure(value) {
   const error = __velarNormalizeError(value);
-  defaultSink(Object.freeze({ timestamp: Date.now(), level: "error", scope: "velar/log", message: "Log sink failed", fields: new Map(), error }));
+  defaultSink(Object.freeze({ timestamp: logTimestamp(), level: "error", scope: "velar/log", message: "Log sink failed", fields: new Map(), error }));
 }
 
 function emit(scope, level, message, fields, error = null) {
@@ -1045,7 +1136,7 @@ function emit(scope, level, message, fields, error = null) {
   fields = fieldsOf(fields);
   if (error != null && !Error.isError(error)) throw new TypeError("Logger error must be an Error");
   if ((ranks.get(level) ?? 100) < (ranks.get(threshold) ?? 20)) return null;
-  const record = Object.freeze({ timestamp: Date.now(), level, scope, message, fields, error });
+  const record = Object.freeze({ timestamp: logTimestamp(), level, scope, message, fields, error });
   if (!sinks.size) defaultSink(record);
   else for (const sink of sinks) {
     try {
