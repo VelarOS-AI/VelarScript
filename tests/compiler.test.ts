@@ -42,6 +42,11 @@ import { parseDependencyArguments, runDependencyCommand } from "../packages/cli/
 import { asHostError, hostErrorCode, hostErrorMessage, hostErrorStack } from "../packages/cli/src/host-error.ts";
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
+const unavailableOfficialParameterNames = new Set([
+  ...Object.keys(keywordKinds),
+  ...Object.keys(velarCompilerExtension.lexical?.keywords ?? {}),
+  ...Object.keys(velarCompilerExtension.lexical?.forbiddenIdentifiers ?? {}),
+]);
 
 function compile(text: string, options: Parameters<typeof compileCore>[1] = {}) {
   return compileCore(text, { ...options, extensions: options.extensions ?? webCompilerExtensions });
@@ -4195,15 +4200,10 @@ test("the official Web package owns the framework contract and CLI only composes
   assert.match(webModuleSource("velar/web", { base: "/framework/" }) ?? "", /const appBase = "\/framework\/"/u);
   assert.equal(webModuleSource("velar/collections"), null);
 
-  const unavailableParameterNames = new Set([
-    ...Object.keys(keywordKinds),
-    ...Object.keys(velarCompilerExtension.lexical?.keywords ?? {}),
-    ...Object.keys(velarCompilerExtension.lexical?.forbiddenIdentifiers ?? {}),
-  ]);
   const assertParameterNames = (type: Extract<ValueType, { kind: "function" | "action" | "intrinsic" }>, path: string): void => {
     assert.equal(type.parameterNames?.length, type.parameters.length, `${path} must expose stable parameter names`);
     assert.ok(type.parameterNames?.every(Boolean), `${path} must not expose an empty parameter name`);
-    for (const name of type.parameterNames ?? []) assert.ok(!unavailableParameterNames.has(name), `${path} parameter '${name}' must be writable at a call site`);
+    for (const name of type.parameterNames ?? []) assert.ok(!unavailableOfficialParameterNames.has(name), `${path} parameter '${name}' must be writable at a call site`);
   };
   const assertNamedSurface = (type: ValueType, path: string): void => {
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") {
@@ -4224,7 +4224,7 @@ test("the official Web package owns the framework contract and CLI only composes
     for (const [name, info] of interface_.classes) {
       assert.equal(info.parameterNames?.length, info.parameters.length, `${source}.${name} constructor must expose stable parameter names`);
       assert.ok(info.parameterNames?.every(Boolean), `${source}.${name} constructor must not expose an empty parameter name`);
-      for (const parameter of info.parameterNames ?? []) assert.ok(!unavailableParameterNames.has(parameter), `${source}.${name} constructor parameter '${parameter}' must be writable at a call site`);
+      for (const parameter of info.parameterNames ?? []) assert.ok(!unavailableOfficialParameterNames.has(parameter), `${source}.${name} constructor parameter '${parameter}' must be writable at a call site`);
     }
   }
   for (const [name, type] of velarCompilerExtension.analysis?.globals ?? []) {
@@ -5531,15 +5531,30 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
     ["velar/math", new Set(["min", "max", "randomInt"])],
     ["velar/url", new Set(["join"])],
   ]);
+  const assertNamedSurface = (type: ValueType, path: string, intentionallyUnnamed = false): void => {
+    if (type.kind === "function" || type.kind === "intrinsic" || type.kind === "action") {
+      if (!intentionallyUnnamed) {
+        assert.equal(type.parameterNames?.length, type.parameters.length, `${path} must expose stable parameter names`);
+        assert.ok(type.parameterNames?.every(Boolean), `${path} must not expose an empty parameter name`);
+        for (const name of type.parameterNames ?? []) assert.ok(!unavailableOfficialParameterNames.has(name), `${path} parameter '${name}' must be writable at a call site`);
+      }
+      assertNamedSurface(type.result, `${path} return`);
+      return;
+    }
+    if (type.kind === "object") {
+      for (const [name, field] of type.fields) assertNamedSurface(field, `${path}.${name}`);
+      return;
+    }
+    if (type.kind === "promise") assertNamedSurface(type.value, `${path} value`);
+    if (type.kind === "optional") assertNamedSurface(type.inner, `${path} value`);
+    if (type.kind === "union") for (const member of type.members) assertNamedSurface(member, `${path} member`);
+  };
   for (const source of [
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async",
     "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
   ]) {
     for (const [name, type] of standardModuleInterface(source)!.exports) {
-      if (type.kind !== "function" && type.kind !== "intrinsic" && type.kind !== "action") continue;
-      if (intentionallyPositional.get(source)?.has(name)) continue;
-      assert.equal(type.parameterNames?.length, type.parameters.length, `${source}.${name} must expose stable parameter names`);
-      assert.ok(type.parameterNames?.every(Boolean), `${source}.${name} must not expose an empty parameter name`);
+      assertNamedSurface(type, `${source}.${name}`, intentionallyPositional.get(source)?.has(name));
     }
   }
 

@@ -34,7 +34,7 @@ function object(fields: Readonly<Record<string, ValueType>>): ValueType {
 
 const unknownType: ValueType = { kind: "unknown" };
 const errorType: ValueType = { kind: "class", name: "Error" };
-const cleanupType = functionType([], nullType);
+const cleanupType = apiFunction([], [], nullType);
 const listAny: ValueType = { kind: "list", element: anyType };
 const listNumber: ValueType = { kind: "list", element: numberType };
 const listString: ValueType = { kind: "list", element: stringType };
