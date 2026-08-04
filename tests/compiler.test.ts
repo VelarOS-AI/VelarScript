@@ -6937,6 +6937,16 @@ let runtimeTypeReads = 0;
 const forgedType = Object.defineProperty({ is() { return true; } }, "parse", { enumerable: true, get() { runtimeTypeReads += 1; return value => value; } });
 storage.set("valid", { value: 1 });
 console.log(globalThis.localStorage.getItem("valid"));
+let webJsonValueReads = 0;
+const changingRecord = new Proxy({ value: 1 }, {
+  get(target, key) { webJsonValueReads += 1; return key === "value" ? 2 : Reflect.get(target, key); },
+});
+storage.set("snapshot", changingRecord);
+console.log(data.get("snapshot"), webJsonValueReads);
+let webJsonGetterReads = 0;
+const accessorRecord = Object.defineProperty({}, "value", { enumerable: true, get() { webJsonGetterReads += 1; return 1; } });
+try { storage.set("accessor", accessorRecord); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(!data.has("accessor"), webJsonGetterReads);
 const beforeInvalid = storageReads;
 try { storage.set("invalid", new Map([["value", 1]])); console.log("accepted"); } catch (error) { console.log(error.name); }
 console.log(!data.has("invalid"));
@@ -6948,7 +6958,7 @@ try { storage.scope(42); console.log("accepted"); } catch (error) { console.log(
 console.log(runtimeTypeReads, storageReads === beforeInvalid);
 `);
   assert.equal(storageExecution.status, 0, String(storageExecution.stderr));
-  assert.equal(storageExecution.stdout, '{"value":1}\nTypeError\ntrue\nTypeError\nTypeError\nTypeError\nTypeError\nTypeError\n0 true\n');
+  assert.equal(storageExecution.stdout, '{"value":1}\n{"value":1} 0\nTypeError\ntrue 0\nTypeError\ntrue\nTypeError\nTypeError\nTypeError\nTypeError\nTypeError\n0 true\n');
 
   const http = standardModuleSource("velar/http") ?? "";
   const httpExecution = executeModule(`${http}

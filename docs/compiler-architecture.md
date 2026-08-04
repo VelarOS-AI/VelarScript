@@ -379,6 +379,14 @@ through its extension seam; Web events, resources, actions, routing, timers,
 application reports, and the Standard logging sink reuse that one source
 instead of maintaining local error wrappers.
 
+Strict JSON follows the same single-source rule. The compiler extension seam
+exports the descriptor-based validation, snapshot, size-budget, and stringify
+fragment used by both `velar/json` and the Web HTTP, storage, database, and
+realtime modules. Those packages still own their public APIs, but they cannot
+silently diverge on what counts as JSON or serialize a mutable host object after
+validating an earlier view of it. Accessors are rejected without invocation,
+and accepted values are serialized from the validated data snapshot.
+
 The Node tooling boundary follows the same non-coercion rule without sharing a
 browser runtime. CLI extension loading, project compilation, language-server
 requests, package resolution, previews, verification, and test reporting read
