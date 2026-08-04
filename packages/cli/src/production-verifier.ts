@@ -6,6 +6,7 @@ import { PRODUCTION_MANIFEST_NAME } from "./production-build.ts";
 import { resolveVelarProject } from "./config.ts";
 import type { StaticDeploymentManifest } from "./static-deployment.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
+import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 
 export interface VerifiedProductionBuild {
   readonly directory: string;
@@ -124,7 +125,7 @@ async function productionFiles(root: string): Promise<Set<string>> {
     if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a production build directory`);
     await visit(root);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+    if (isHostErrorCode(error, "ENOENT")) {
       throw new Error(`${root} does not contain a production build; run 'velar build' first`);
     }
     throw error;
@@ -252,7 +253,7 @@ async function readJson(path: string, label: string): Promise<unknown> {
     if (Buffer.byteLength(source, "utf8") > 64 * 1024 * 1024) throw new RangeError("JSON file exceeds 64 MiB");
     return JSON.parse(source) as unknown;
   } catch (error) {
-    throw new Error(`Cannot read ${label} ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Cannot read ${label} ${path}: ${hostErrorMessage(error)}`);
   }
 }
 

@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { SourceMap } from "node:module";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
 import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
@@ -37,6 +38,7 @@ import { verifyProductionBuild } from "../packages/cli/src/production-verifier.t
 import { startProductionPreview } from "../packages/cli/src/preview-server.ts";
 import { verifyRemoteDeployment, type DeploymentFetch } from "../packages/cli/src/deployment-verifier.ts";
 import { parseDependencyArguments, runDependencyCommand } from "../packages/cli/src/package-manager.ts";
+import { asHostError, hostErrorCode, hostErrorMessage, hostErrorStack } from "../packages/cli/src/host-error.ts";
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
 
@@ -1760,6 +1762,38 @@ catch error:
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Error\nA non-Error value was thrown by JavaScript\nError\nA non-Error value was thrown by JavaScript\n");
+});
+
+test("host tooling reports foreign failures without invoking object hooks", () => {
+  let traps = 0;
+  const hostile = new Proxy({}, {
+    get() { traps += 1; throw new Error("get trap ran"); },
+    getOwnPropertyDescriptor() { traps += 1; throw new Error("descriptor trap ran"); },
+    getPrototypeOf() { traps += 1; throw new Error("prototype trap ran"); },
+    has() { traps += 1; throw new Error("has trap ran"); },
+  });
+  assert.equal(hostErrorMessage(hostile), "A non-Error value was thrown by JavaScript");
+  assert.equal(hostErrorStack(hostile), "A non-Error value was thrown by JavaScript");
+  assert.equal(hostErrorCode(hostile), null);
+  const wrapped = asHostError(hostile);
+  assert.equal(wrapped.message, "A non-Error value was thrown by JavaScript");
+  assert.equal(wrapped.cause, hostile);
+  assert.equal(traps, 0);
+
+  let getterReads = 0;
+  const poisoned = new Error("original");
+  Object.defineProperty(poisoned, "message", { configurable: true, get() { getterReads += 1; throw new Error("message getter ran"); } });
+  assert.equal(hostErrorMessage(poisoned), "An Error was thrown without a message");
+  assert.equal(getterReads, 0);
+
+  const foreign = runInNewContext('Object.assign(new Error("foreign failure"), {code: "ENOENT"})') as unknown;
+  assert.equal(hostErrorMessage(foreign), "foreign failure");
+  assert.equal(hostErrorCode(foreign), "ENOENT");
+  assert.equal(asHostError(foreign), foreign);
+
+  const bounded = hostErrorMessage("x".repeat(70_000));
+  assert.equal(bounded.length, 65_537);
+  assert.ok(bounded.endsWith("…"));
 });
 
 test("finally cannot silently override return or leave an outer loop", () => {
@@ -5799,6 +5833,34 @@ export const velarFrameworkHost = {
   await writeExtension("fixture-two", 1, "two");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["fixture-one", "fixture-two"] }), "utf8");
   await assert.rejects(resolveVelarProject(directory), /only one application framework host/u);
+});
+
+test("compiler extension loading reports hostile thrown values deterministically", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-hostile-extension-"));
+  await writeFile(join(directory, "main.vel"), "const value = 1\n", "utf8");
+  const root = join(directory, "node_modules", "hostile-extension");
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, "package.json"), JSON.stringify({
+    name: "hostile-extension",
+    type: "module",
+    exports: { "./compiler": "./compiler.js" },
+  }), "utf8");
+  await writeFile(join(root, "compiler.js"), `
+throw {
+  toString() { throw new Error("hostile conversion hook ran") },
+  [Symbol.toPrimitive]() { throw new Error("hostile primitive hook ran") },
+}
+`.trimStart(), "utf8");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({
+    formatVersion: 2,
+    entry: "main.vel",
+    extensions: ["hostile-extension"],
+  }), "utf8");
+
+  await assert.rejects(
+    resolveVelarProject(directory),
+    /cannot load compiler extension 'hostile-extension': A non-Error value was thrown by JavaScript/u,
+  );
 });
 
 test("Netlify adapter translates the root static deployment contract", async () => {

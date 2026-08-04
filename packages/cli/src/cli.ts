@@ -21,6 +21,7 @@ import { runProductionPreview } from "./preview-server.ts";
 import { createDeploymentVerificationReport, verifyRemoteDeployment } from "./deployment-verifier.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile } from "./source-limits.ts";
 import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
+import { hostErrorMessage } from "./host-error.ts";
 
 
 interface CommandArguments {
@@ -114,7 +115,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stdout.write(`Created VelarScript ${result.template} project -> ${result.root}\n`);
       return 0;
     } catch (error) {
-      process.stderr.write(`velar create: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar create: ${hostErrorMessage(error)}\n`);
       return 1;
     }
   }
@@ -130,7 +131,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stdout.write(dependencyResultMessage(command, result.root, result.packages, result.activatedExtensions, result.removedExtensions));
       return 0;
     } catch (error) {
-      process.stderr.write(`velar ${command}: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar ${command}: ${hostErrorMessage(error)}\n`);
       return 1;
     }
   }
@@ -146,7 +147,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stdout.write(`Verified production ${verified.manifest.framework.capability} build ${verified.manifest.buildId} -> ${verified.directory}\n`);
       return 0;
     } catch (error) {
-      process.stderr.write(`velar verify: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar verify: ${hostErrorMessage(error)}\n`);
       return 1;
     }
   }
@@ -162,7 +163,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       await runProductionPreview(verified, parsed.port);
       return 0;
     } catch (error) {
-      process.stderr.write(`velar preview: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar preview: ${hostErrorMessage(error)}\n`);
       return 1;
     }
   }
@@ -191,7 +192,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       }
       return 0;
     } catch (error) {
-      process.stderr.write(`velar verify-deployment: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar verify-deployment: ${hostErrorMessage(error)}\n`);
       return 1;
     }
   }
@@ -218,7 +219,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
         inputs = await discoverVelarSources(config);
       }
     } catch (error) {
-      process.stderr.write(`velar format: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar format: ${hostErrorMessage(error)}\n`);
       return 1;
     }
     if (inputs.length === 0) {
@@ -235,7 +236,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
         if (!parsed.check) await writeFile(input, formatted, "utf8");
       }
     } catch (error) {
-      process.stderr.write(`velar format: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar format: ${hostErrorMessage(error)}\n`);
       return 1;
     }
     if (parsed.check && changed.length > 0) {
@@ -265,7 +266,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       if (!projectConfig.framework) throw new Error("the project does not declare an application framework host");
       await runDevServer(projectConfig, parsed.port);
     } catch (error) {
-      process.stderr.write(`velar dev: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar dev: ${hostErrorMessage(error)}\n`);
       return 1;
     }
     return 0;
@@ -292,7 +293,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
         projectConfig = await resolveVelarProject(projectConfig.root);
       }
     } catch (error) {
-      process.stderr.write(`velar test: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar test: ${hostErrorMessage(error)}\n`);
       return 1;
     }
     return parsed.browser
@@ -310,7 +311,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
   try {
     projectConfig = await resolveVelarProject(parsed.input);
   } catch (error) {
-    process.stderr.write(`velar ${command}: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`velar ${command}: ${hostErrorMessage(error)}\n`);
     return 1;
   }
 
@@ -374,7 +375,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       await rename(staging, outputDirectory);
     } catch (error) {
       await rm(staging, { recursive: true, force: true });
-      process.stderr.write(`velar build: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
     }
     process.stdout.write(`Built production ${project.framework.host.displayName} app -> ${outputDirectory}\n`);
@@ -701,6 +702,6 @@ function dependencyResultMessage(
 try {
   process.exitCode = await main(process.argv.slice(2));
 } catch (error) {
-  process.stderr.write(`velar: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`velar: ${hostErrorMessage(error)}\n`);
   process.exitCode = 1;
 }

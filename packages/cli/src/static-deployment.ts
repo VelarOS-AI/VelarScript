@@ -4,6 +4,7 @@ import type { FrameworkStaticDeployment } from "@velarscript/compiler/framework-
 import { MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { VELAR_VERSION } from "./version.ts";
 import type { ProductionFrameworkIdentity } from "./production-build.ts";
+import { isHostErrorCode } from "./host-error.ts";
 
 export const STATIC_DEPLOYMENT_MANIFEST_NAME = "velar-deploy.json";
 export const STATIC_FALLBACK_NAME = "404.html";
@@ -51,7 +52,7 @@ export async function copyPublicAssets(publicRoot: string, outputDirectory: stri
   try {
     entries = await readdir(publicRoot, { withFileTypes: true });
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    if (isHostErrorCode(error, "ENOENT")) return;
     throw error;
   }
   await mkdir(outputDirectory, { recursive: true });

@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { VerifiedProductionBuild } from "./production-verifier.ts";
+import { asHostError, hostErrorMessage } from "./host-error.ts";
 
 export interface ProductionPreviewHandle {
   readonly server: Server;
@@ -81,8 +82,8 @@ export async function startProductionPreview(
       if (request.method === "HEAD") response.end();
       else await pipeline(createReadStream(servedFile), response);
     } catch (error) {
-      if (response.headersSent) response.destroy(error instanceof Error ? error : new Error(String(error)));
-      else response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+      if (response.headersSent) response.destroy(asHostError(error));
+      else response.writeHead(500).end(hostErrorMessage(error));
     }
   });
   await new Promise<void>((resolvePromise, reject) => {

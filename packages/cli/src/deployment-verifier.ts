@@ -3,6 +3,7 @@ import { extname, join } from "node:path";
 import { PRODUCTION_MANIFEST_NAME } from "./production-build.ts";
 import type { VerifiedProductionBuild } from "./production-verifier.ts";
 import { fileIdentity } from "./file-integrity.ts";
+import { hostErrorMessage } from "./host-error.ts";
 
 export interface VerifiedRemoteDeployment {
   readonly origin: string;
@@ -247,7 +248,7 @@ async function request(url: URL, fetcher: DeploymentFetch, accept: string): Prom
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
   } catch (error) {
-    throw new Error(`Cannot reach deployment '${url.href}': ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Cannot reach deployment '${url.href}': ${hostErrorMessage(error)}`);
   }
   if (response.status >= 300 && response.status < 400) {
     throw new Error(`Deployment redirected '${url.pathname}' with HTTP ${response.status}; verify the exact public deployment URL and access policy`);

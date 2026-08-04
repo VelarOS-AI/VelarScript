@@ -11,6 +11,7 @@ import { standardModuleSource, standardModuleSources } from "./standard-modules.
 import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "./preview-server.ts";
+import { hostErrorStack } from "./host-error.ts";
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 export type BrowserEngineSelection = BrowserEngine | "all";
@@ -254,5 +255,5 @@ async function discoverBrowserTestFiles(root: string, excluded: ReadonlySet<stri
 }
 
 function stackOf(error: unknown): string {
-  return error instanceof Error ? error.stack ?? error.message : String(error);
+  return hostErrorStack(error);
 }

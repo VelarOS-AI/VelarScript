@@ -4,6 +4,7 @@ import { compile, formatSource, type Diagnostic, type SourceText, type Span } fr
 import { compileProjectEntries, type ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
+import { hostErrorMessage } from "./host-error.ts";
 import {
   type ProjectSemanticToken,
   projectDefinitionAt,
@@ -202,7 +203,7 @@ export async function runLanguageServer(): Promise<void> {
       }
     } catch (error) {
       const result = compile(document.text, { path: document.uri });
-      diagnostics = [{ code: "VEL9001", message: error instanceof Error ? error.message : String(error), span: { start: 0, end: 1 } }];
+      diagnostics = [{ code: "VEL9001", message: hostErrorMessage(error), span: { start: 0, end: 1 } }];
       source = result.source;
     }
     if (documents.get(document.uri)?.version !== document.version) return;
@@ -492,7 +493,7 @@ export async function runLanguageServer(): Promise<void> {
       }
       const message = parsed;
       queue = queue.then(() => handle(message)).catch((error) => {
-        if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } });
+        if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: hostErrorMessage(error) } });
       });
     }
   });

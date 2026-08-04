@@ -7,6 +7,7 @@ import {
   VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
+import { hostErrorCode, hostErrorMessage } from "./host-error.ts";
 
 export interface ResolvedFrameworkHost {
   readonly host: FrameworkHostExtension;
@@ -78,7 +79,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     if (Buffer.byteLength(source, "utf8") > 1024 * 1024) throw new RangeError("project manifest exceeds 1 MiB");
     manifest = JSON.parse(source) as ManifestShape;
   } catch (error) {
-    throw new Error(`Cannot read ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Cannot read ${manifestPath}: ${hostErrorMessage(error)}`);
   }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`${manifestPath} must contain a JSON object`);
   if (manifest.formatVersion === undefined) throw new Error(`${manifestPath}: 'formatVersion' is required; this compiler does not load legacy project formats`);
@@ -174,7 +175,7 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
       const host = await loadFrameworkHost(require, name);
       if (host) hosts.push(validateFrameworkHost(host, extension as CompilerExtension, name));
     } catch (error) {
-      throw new Error(`${manifestPath}: cannot load compiler extension '${name}': ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`${manifestPath}: cannot load compiler extension '${name}': ${hostErrorMessage(error)}`);
     }
   }
   if (new Set(project.map((extension) => extension.manifestKey)).size !== project.length) {
@@ -188,8 +189,8 @@ async function loadFrameworkHost(require: NodeJS.Require, name: string): Promise
   try {
     entry = require.resolve(`${name}/host`);
   } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-    const message = error instanceof Error ? error.message : String(error);
+    const code = hostErrorCode(error);
+    const message = hostErrorMessage(error);
     if (code === "ERR_PACKAGE_PATH_NOT_EXPORTED"
       || (code === "MODULE_NOT_FOUND" && message.includes(`'${name}/host'`))) return null;
     throw error;

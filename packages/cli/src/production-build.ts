@@ -11,6 +11,7 @@ import { standardModuleSource } from "./standard-modules.ts";
 import { VELAR_VERSION } from "./version.ts";
 import type { StaticDeploymentSummary } from "./static-deployment.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
+import { hostErrorMessage } from "./host-error.ts";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -272,7 +273,7 @@ function velarModules(project: ProjectResult): Plugin {
           const require = createRequire(pathToFileURL(join(base, "__velar_resolve__.js")));
           return { path: require.resolve(arguments_.path) };
         } catch (error) {
-          return { errors: [{ text: `Cannot resolve browser import '${arguments_.path}': ${error instanceof Error ? error.message : String(error)}` }] };
+          return { errors: [{ text: `Cannot resolve browser import '${arguments_.path}': ${hostErrorMessage(error)}` }] };
         }
       });
     },

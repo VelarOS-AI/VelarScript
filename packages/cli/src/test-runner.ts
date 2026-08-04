@@ -7,6 +7,7 @@ import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.ts";
+import { hostErrorStack } from "./host-error.ts";
 
 export async function runTests(config: VelarProjectConfig, explicitInput: string | null): Promise<number> {
   const files = explicitInput?.endsWith(".test.vel")
@@ -111,5 +112,5 @@ async function prepareStandardModules(root: string, config: VelarProjectConfig):
 }
 
 function stackOf(error: unknown): string {
-  return error instanceof Error ? error.stack ?? error.message : String(error);
+  return hostErrorStack(error);
 }

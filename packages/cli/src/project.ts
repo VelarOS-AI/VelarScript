@@ -17,6 +17,7 @@ import { isStandardModule, standardModuleInterface } from "./standard-modules.ts
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./typescript-declarations.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
+import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 
 export interface ProjectModule {
   readonly inputPath: string;
@@ -163,7 +164,7 @@ export async function compileProjectEntries(
         ? await readVelarSourceFile(inputPath)
         : validateVelarSourceText(overridden, inputPath);
     } catch (error) {
-      failures.push({ path: inputPath, message: error instanceof Error ? error.message : String(error) });
+      failures.push({ path: inputPath, message: hostErrorMessage(error) });
       continue;
     }
 
@@ -206,7 +207,7 @@ export async function compileProjectEntries(
       try {
         resourceContents.set(resource.source, overrides.get(target) ?? await readBoundedText(target, 4 * 1024 * 1024, `${resource.kind} resource '${resource.source}'`));
       } catch (error) {
-        failures.push({ path: inputPath, message: `Cannot load ${resource.kind} resource '${resource.source}': ${error instanceof Error ? error.message : String(error)}` });
+        failures.push({ path: inputPath, message: `Cannot load ${resource.kind} resource '${resource.source}': ${hostErrorMessage(error)}` });
       }
     }
     loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package, resourceContents });
@@ -226,7 +227,7 @@ export async function compileProjectEntries(
           velarImports.set(projectImportKey(inputPath, dependency.source), package_.entryPath);
           enqueue({ inputPath: package_.entryPath, package: package_ });
         } catch (error) {
-          failures.push({ path: inputPath, message: `Cannot resolve VelarScript package import '${dependency.source}': ${error instanceof Error ? error.message : String(error)}` });
+          failures.push({ path: inputPath, message: `Cannot resolve VelarScript package import '${dependency.source}': ${hostErrorMessage(error)}` });
         }
         continue;
       }
@@ -698,8 +699,7 @@ async function resolveVelarSourcePackage(source: string, importerPath: string): 
       return { name, root, entryPath };
     } catch (error) {
       if (error instanceof SyntaxError) throw error;
-      const value = error as NodeJS.ErrnoException;
-      if (value.code !== "ENOENT") throw error;
+      if (!isHostErrorCode(error, "ENOENT")) throw error;
     }
     const parent = dirname(directory);
     if (parent === directory) throw new Error(`package '${name}' is not installed`);

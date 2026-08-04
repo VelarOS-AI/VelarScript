@@ -228,6 +228,14 @@ through its extension seam; Web events, resources, actions, routing, timers,
 application reports, and the Standard logging sink reuse that one source
 instead of maintaining local error wrappers.
 
+The Node tooling boundary follows the same non-coercion rule without sharing a
+browser runtime. CLI extension loading, project compilation, language-server
+requests, package resolution, previews, verification, and test reporting read
+only bounded own data from native Error values. Foreign objects are summarized
+without invoking getters, prototype traps, `toString`, or primitive-conversion
+hooks. Node error codes therefore remain usable across realms while an
+extension failure cannot break the diagnostic path that reports it.
+
 Release packaging is outside compiler semantics. A repository script builds
 all four npm packages, records source and tarball identities, verifies every
 SHA-256, and refuses candidate status without a clean exact tag, matching

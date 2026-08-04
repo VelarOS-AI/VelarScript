@@ -4,6 +4,7 @@ import { lstat, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, parse, resolve } from "node:path";
 import { CURRENT_PROJECT_FORMAT_VERSION, resolveVelarProject } from "./config.ts";
+import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 
 const MAX_PACKAGE_ARGUMENTS = 32;
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -101,7 +102,7 @@ export async function runDependencyCommand(
     try {
       addedMetadata = await extensionMetadata(project.root, parsed.packageNames);
     } catch (error) {
-      throw new Error(`Dependency was installed but its VelarScript metadata is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Dependency was installed but its VelarScript metadata is invalid: ${hostErrorMessage(error)}`);
     }
   }
   const declaredBefore = extensionNames(project.manifest);
@@ -120,7 +121,7 @@ export async function runDependencyCommand(
       } catch (error) {
         await writeSourceAtomically(project.manifestPath, project.manifestSource);
         const verb = action === "add" ? "installed but could not be activated" : "removed but its project declaration could not be updated";
-        throw new Error(`Dependency was ${verb}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Dependency was ${verb}: ${hostErrorMessage(error)}`);
       }
     } else {
       await resolveVelarProject(project.root);
@@ -271,7 +272,7 @@ async function readJsonObject(path: string, label: string): Promise<{ readonly s
   if (Buffer.byteLength(source, "utf8") > MAX_JSON_BYTES) throw new RangeError(`${path}: ${label} exceeds 1 MiB`);
   let value: unknown;
   try { value = JSON.parse(source); }
-  catch (error) { throw new Error(`${path}: cannot parse ${label}: ${error instanceof Error ? error.message : String(error)}`); }
+  catch (error) { throw new Error(`${path}: cannot parse ${label}: ${hostErrorMessage(error)}`); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path}: ${label} must be a JSON object`);
   return { source, value: value as Record<string, unknown> };
 }
@@ -281,7 +282,7 @@ async function ordinaryFile(path: string): Promise<boolean> {
     const information = await lstat(path);
     return information.isFile() && !information.isSymbolicLink();
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    if (isHostErrorCode(error, "ENOENT")) return false;
     throw error;
   }
 }

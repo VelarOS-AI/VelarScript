@@ -10,6 +10,7 @@ import { moduleOutput, publicAsset } from "./module-assets.ts";
 import { npmAsset, resolveBrowserNpm, type BrowserNpmPackage } from "./npm.ts";
 import type { VelarProjectConfig } from "./config.ts";
 import { standardModuleAsset } from "./standard-modules.ts";
+import { asHostError, hostErrorMessage } from "./host-error.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
@@ -86,7 +87,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
         ? `VelarScript app rebuilt in ${next.project.stats.durationMs}ms (${next.project.stats.compiledModules} compiled, ${next.project.stats.reusedModules} reused)\n`
         : `VelarScript app has ${next.errors.length} error${next.errors.length === 1 ? "" : "s"}\n`);
     }).catch((error: unknown) => {
-      const message = `VelarScript rebuild failed: ${error instanceof Error ? error.message : String(error)}`;
+      const message = `VelarScript rebuild failed: ${hostErrorMessage(error)}`;
       snapshot = { ...snapshot, errors: [message] };
       revision += 1;
       const update = JSON.stringify({ revision, errors: snapshot.errors, compilation: snapshot.compilation });
@@ -349,7 +350,7 @@ async function sendFile(
   });
   if (head) { response.end(); return; }
   try { await pipeline(createReadStream(asset.path), response); }
-  catch (error) { if (!response.destroyed) response.destroy(error instanceof Error ? error : new Error(String(error))); }
+  catch (error) { if (!response.destroyed) response.destroy(asHostError(error)); }
 }
 
 interface SourceMapShape {

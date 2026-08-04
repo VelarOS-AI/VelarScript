@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import type { ProjectResult } from "./project.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { frameworkBase } from "./framework-host.ts";
+import { hostErrorMessage } from "./host-error.ts";
 
 const MAX_BROWSER_NPM_PACKAGES = 4096;
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
@@ -59,7 +60,7 @@ export async function resolveBrowserNpm(project: ProjectResult): Promise<Browser
       packages.set(name, { name, root, route, entryRoute });
       imports[specifier] = withBase(base, entryRoute);
     } catch (error) {
-      failures.push(`Cannot resolve browser npm import '${specifier}': ${error instanceof Error ? error.message : String(error)}`);
+      failures.push(`Cannot resolve browser npm import '${specifier}': ${hostErrorMessage(error)}`);
     }
   }
   for (const package_ of project.velarPackages) {
