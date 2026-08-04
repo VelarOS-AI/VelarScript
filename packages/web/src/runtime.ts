@@ -1,4 +1,5 @@
 import { VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
+import { WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
 
 const ownedCallbackRuntime = String.raw`
 ${VELAR_ERROR_NORMALIZATION_RUNTIME}
@@ -227,43 +228,20 @@ function __velarRequireRuntimeType(value, name, optional = false) {
 
 export const webModuleSources: ReadonlyMap<string, string> = new Map([
   ["velar/app", String.raw`
-${VELAR_ERROR_NORMALIZATION_RUNTIME}
-const runtimeKey = Symbol.for("velar.runtime.v1");
-const runtime = globalThis[runtimeKey] ??= {};
-runtime.errorHandlers ??= new Set();
-runtime.report ??= (value, options = {}) => {
-  const error = __velarNormalizeError(value);
-  const report = Object.freeze({
-    error,
-    phase: String(options.phase || "runtime"),
-    detail: String(options.detail || ""),
-    component: String(options.component || ""),
-    timestamp: Date.now(),
-  });
-  let handled = false;
-  for (const handler of runtime.errorHandlers) {
-    handled = true;
-    try {
-      const result = handler(report);
-      if (result && typeof result.then === "function") result.catch((failure) => queueMicrotask(() => { throw __velarNormalizeError(failure); }));
-    } catch (failure) { queueMicrotask(() => { throw __velarNormalizeError(failure); }); }
-  }
-  if (options.unhandled && !handled) queueMicrotask(() => { throw error; });
-  return report;
-};
+${WEB_RUNTIME_FOUNDATION}
 
 export function onError(handler) {
   if (typeof handler !== "function") throw new TypeError("onError requires a callback");
-  if (!runtime.errorHandlers.has(handler) && runtime.errorHandlers.size >= 1000) throw new RangeError("An application cannot install more than 1000 error handlers");
-  runtime.errorHandlers.add(handler);
-  return () => { runtime.errorHandlers.delete(handler); return null; };
+  if (!__velarRuntime.errorHandlers.has(handler) && __velarRuntime.errorHandlers.size >= 1000) throw new RangeError("An application cannot install more than 1000 error handlers");
+  __velarRuntime.errorHandlers.add(handler);
+  return () => { __velarRuntime.errorHandlers.delete(handler); return null; };
 }
 
 export function reportError(error, phase = "manual", detail = "") {
   if (!Error.isError(error)) throw new TypeError("reportError requires an Error");
   if (typeof phase !== "string" || typeof detail !== "string") throw new TypeError("reportError phase and detail must be strings");
   if (phase.length > 256 || detail.length > 65536) throw new RangeError("reportError phase/detail text is too long");
-  runtime.report(error, { phase, detail, unhandled: false });
+  __velarRuntime.report(error, { phase, detail, unhandled: false });
   return null;
 }
   `.trimStart()],

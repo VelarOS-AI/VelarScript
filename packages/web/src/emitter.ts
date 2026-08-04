@@ -7,7 +7,8 @@ import type {
   ValueType,
 } from "@velarscript/compiler/extension";
 import { cssPropertyName } from "./look.ts";
-import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
+import { JavaScriptEmitter, spanIdentity } from "@velarscript/compiler/extension";
+import { WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
 type ComponentDeclaration = Extract<Statement, { readonly kind: "ComponentDeclaration" }>;
@@ -750,42 +751,10 @@ function containsWebSyntax(value: unknown): boolean {
 }
 
 const WEB_RUNTIME = String.raw`
-${VELAR_ERROR_NORMALIZATION_RUNTIME}
-const __velarRuntimeKey = Symbol.for("velar.runtime.v1");
-const __velarRuntime = globalThis[__velarRuntimeKey] ??= {};
-__velarRuntime.domQueue ??= new Set();
-__velarRuntime.watchQueue ??= new Set();
-__velarRuntime.flushPending ??= false;
-__velarRuntime.activeObserver ??= null;
-__velarRuntime.errorHandlers ??= new Set();
-__velarRuntime.actionFailures ??= new WeakSet();
-__velarRuntime.lookSources ??= new WeakMap();
-__velarRuntime.classSources ??= new WeakMap();
-try { WeakSet.prototype.has.call(__velarRuntime.actionFailures, __velarRuntime.actionFailures); }
-catch { throw new TypeError("VelarScript action failure registry is invalid"); }
-__velarRuntime.report ??= (value, options = {}) => {
-  const error = __velarNormalizeError(value);
-  const report = Object.freeze({
-    error,
-    phase: String(options.phase || "runtime"),
-    detail: String(options.detail || ""),
-    component: String(options.component || ""),
-    timestamp: globalThis.Date.now(),
-  });
-  let handled = false;
-  for (const handler of __velarRuntime.errorHandlers) {
-    handled = true;
-    try {
-      const result = handler(report);
-      if (result && typeof result.then === "function") result.catch((failure) => queueMicrotask(() => { throw __velarNormalizeError(failure); }));
-    } catch (failure) { queueMicrotask(() => { throw __velarNormalizeError(failure); }); }
-  }
-  if (options.unhandled && !handled) queueMicrotask(() => { throw error; });
-  return report;
-};
+${WEB_RUNTIME_FOUNDATION}
 
 function __velarReport(value, phase, scope = null, detail = "", unhandled = true) {
-  return __velarRuntime.report(value, { phase, detail, component: scope?.component || "", unhandled });
+  return __velarRuntime.report(value, { phase, detail, component: scope ? scope.component : "", unhandled });
 }
 
 function __velarReportEvent(value, scope, detail) {
@@ -915,7 +884,7 @@ function __velarResource(load, scope, name) {
       },
       (failure) => {
         if (disposed || current !== generation) return null;
-        const report = __velarRuntime.report(failure, { phase: "resource", detail: String(name || ""), component: scope.component || "", unhandled: false });
+        const report = __velarRuntime.report(failure, { phase: "resource", detail: name, component: scope.component, unhandled: false });
         error.set(report.error);
         ready.set(true);
         loading.set(false);
@@ -944,7 +913,7 @@ function __velarAction(execute, scope, name) {
 
   const run = (...arguments_) => {
     if (disposed) return Promise.reject(new Error(
-      "Action '" + String(name || "anonymous") + "' cannot run after its component is destroyed",
+      "Action '" + name + "' cannot run after its component is destroyed",
     ));
     const current = ++generation;
     active += 1;
@@ -962,7 +931,7 @@ function __velarAction(execute, scope, name) {
         if (!disposed) {
           pending.set(active > 0);
           if (current === generation) {
-            const report = __velarRuntime.report(failure, { phase: "action", detail: String(name || ""), component: scope.component || "", unhandled: false });
+            const report = __velarRuntime.report(failure, { phase: "action", detail: name, component: scope.component, unhandled: false });
             error.set(report.error);
             actionError = report.error;
             WeakSet.prototype.add.call(__velarRuntime.actionFailures, actionError);
@@ -1423,7 +1392,7 @@ function __velarApplyExternalLook(element, value) {
   };
 }
 
-__velarRuntime.applyLook ??= __velarApplyExternalLook;
+__velarRuntime.installLook(__velarApplyExternalLook);
 
 function __velarRootHost(root, capability) {
   if (root?.nodeType === 1) return root;

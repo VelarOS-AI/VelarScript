@@ -60,6 +60,10 @@ component RuntimeStatus:
   and `timestamp`; foreign JavaScript values are normalized to `Error`.
 - `reportError(error, phase="manual", detail="")` deliberately submits an
   application error without throwing it again.
+- Error metadata is controlled text, never an implicitly converted object.
+  Reports cap `phase`, `detail`, and `component` lengths, reject accessors and
+  unknown fields at dynamic boundaries, and reuse one versioned runtime owner
+  across application modules and lazy chunks.
 - The compiler reports failures from initial `mount`, reactive `render` and
   `watch`, synchronous or asynchronous events, `mounted`, and `cleanup`.
 - Managed callbacks from browser/media/online/visibility watchers, storage

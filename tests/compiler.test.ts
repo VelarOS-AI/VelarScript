@@ -6293,12 +6293,66 @@ const stop = onError(report => reports.push(report.phase + ":" + report.detail +
 reportError(new Error("expected"), "manual", "test");
 stop(); stop();
 console.log(reports.join("|"));
+const runtimeDescriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1"));
+console.log(String(runtimeDescriptor.enumerable) + ":" + String(runtimeDescriptor.configurable) + ":" + String(runtimeDescriptor.writable));
+console.log(String(Object.getPrototypeOf(runtimeDescriptor.value) === null) + ":" + String(Object.isExtensible(runtimeDescriptor.value)) + ":" + runtimeDescriptor.value.version);
+let coercions = 0;
+let getterReads = 0;
+const hostile = { toString() { coercions += 1; return "hostile"; } };
+const accessor = Object.defineProperty({}, "phase", { enumerable: true, get() { getterReads += 1; return "manual"; } });
 for (const operation of [() => reportError("failed"), () => reportError(new Error("failed"), 42), () => reportError(new Error("failed"), "manual", 42)]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
+for (const operation of [
+  () => runtimeDescriptor.value.report(new Error("failed"), { phase: hostile }),
+  () => runtimeDescriptor.value.report(new Error("failed"), accessor),
+  () => runtimeDescriptor.value.report(new Error("failed"), { unknown: true }),
+  () => runtimeDescriptor.value.report(new Error("failed"), { component: "x".repeat(1025) }),
+  () => runtimeDescriptor.value.report(new Error("failed"), { unhandled: "yes" }),
+]) {
+  try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
+}
+console.log(coercions + ":" + getterReads);
 `);
   assert.equal(appExecution.status, 0, String(appExecution.stderr));
-  assert.equal(appExecution.stdout, "manual:test:expected\nTypeError\nTypeError\nTypeError\n");
+  assert.equal(appExecution.stdout, [
+    "manual:test:expected",
+    "false:false:false",
+    "true:false:0.10",
+    "TypeError", "TypeError", "TypeError",
+    "TypeError", "TypeError", "TypeError", "RangeError", "TypeError",
+    "0:0",
+    "",
+  ].join("\n"));
+
+  const forgedRuntimeExecution = executeModule(`
+let getterReads = 0;
+process.on("exit", () => console.log(getterReads));
+Object.defineProperty(globalThis, Symbol.for("velar.runtime.v1"), {
+  get() { getterReads += 1; return {}; },
+  enumerable: false,
+  configurable: false,
+});
+${appSource}
+`);
+  assert.notEqual(forgedRuntimeExecution.status, 0);
+  assert.equal(forgedRuntimeExecution.stdout, "0\n");
+  assert.match(String(forgedRuntimeExecution.stderr), /runtime registry ownership is invalid/u);
+
+  const webResult = compile("component App:\n    return <main>Ready</main>\n");
+  assert.deepEqual(webResult.diagnostics, []);
+  const appUrl = `data:text/javascript;base64,${Buffer.from(appSource).toString("base64")}`;
+  const webUrl = `data:text/javascript;base64,${Buffer.from(webResult.code ?? "").toString("base64")}`;
+  const sharedRuntimeExecution = executeModule(`
+const app = await import(${JSON.stringify(appUrl)});
+const reports = [];
+app.onError(report => reports.push(report.phase + ":" + report.error.message));
+await import(${JSON.stringify(webUrl)});
+globalThis[Symbol.for("velar.runtime.v1")].report(new Error("shared"), { phase: "manual" });
+console.log(reports.join("|"));
+`);
+  assert.equal(sharedRuntimeExecution.status, 0, String(sharedRuntimeExecution.stderr));
+  assert.equal(sharedRuntimeExecution.stdout, "manual:shared\n");
 
   const configSource = standardModuleSource("velar/config", { base: "/", publicConfig: { apiBase: "/api" } }) ?? "";
   const configExecution = executeModule(`${configSource}
@@ -14516,13 +14570,20 @@ globalThis.document = {
   createComment() { return new FakeNode(); },
   querySelector() { return target; },
 };
-const runtime = globalThis[Symbol.for("velar.runtime.v1")] = { errorHandlers: new Set([report => console.log(report.phase + ":" + report.error.message)]) };
 `;
-  const execution = executeModule(`${dom}\n${failedMount.code ?? ""}\nconsole.log(target.replaced.role + ":" + target.replaced.textContent);\n`);
+  const failedCode = (failedMount.code ?? "").replace(
+    "let activeHandles = 0;",
+    '__velarRuntime.errorHandlers.add(report => console.log(report.phase + ":" + report.error.message));\nlet activeHandles = 0;',
+  );
+  const execution = executeModule(`${dom}\n${failedCode}\nconsole.log(target.replaced.role + ":" + target.replaced.textContent);\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "construction-cleanup\ncleanup:Construction cleanup failed\nmount:Boot failed\n0\nalert:The application could not start: Boot failed\n");
 
-  const cleanupExecution = executeModule(`${dom}\n${cleanup.code ?? ""}\nconst app = Recovering();\napp.mount("#app");\napp.destroy();\n`);
+  const cleanupCode = (cleanup.code ?? "").replace(
+    "function Recovering",
+    '__velarRuntime.errorHandlers.add(report => console.log(report.phase + ":" + report.error.message));\nfunction Recovering',
+  );
+  const cleanupExecution = executeModule(`${dom}\n${cleanupCode}\nconst app = Recovering();\napp.mount("#app");\napp.destroy();\n`);
   assert.equal(cleanupExecution.status, 0, String(cleanupExecution.stderr));
   assert.equal(cleanupExecution.stdout, "cleanup-before\ncleanup:Cleanup failed\ncleanup-after\n");
 });
