@@ -714,10 +714,42 @@ const maxTextItems = 1000000;
 const nativeRegExpPrototype = Object.getPrototypeOf(/(?:)/u);
 const NativeRegExp = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "constructor").value;
 const nativeRegExpExec = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "exec").value;
+const nativeStringIndexOf = Object.getOwnPropertyDescriptor(String.prototype, "indexOf").value;
+const nativeStringReplace = Object.getOwnPropertyDescriptor(String.prototype, "replace").value;
+const nativeStringReplaceAll = Object.getOwnPropertyDescriptor(String.prototype, "replaceAll").value;
 function valueOf(value) { if (typeof value !== "string") throw new TypeError("velar/text requires strings"); if (value.length > maxTextCodeUnits) throw new RangeError("velar/text strings cannot exceed 16 MiB"); return value; }
 function textOutput(value, name) { if (value.length > maxTextCodeUnits) throw new RangeError(name + " output cannot exceed 16 MiB"); return value; }
 function textCount(value, name) { if (!Number.isSafeInteger(value) || value < 0 || value > maxTextCodeUnits) throw new RangeError(name + " must be an integer from 0 through " + maxTextCodeUnits); return value; }
 function textList(values, name) { if (values.length > maxTextItems) throw new RangeError(name + " cannot produce more than " + maxTextItems + " items"); return values; }
+function replacementOutputUnits(value, search, replacement, all) {
+  let matches = 0;
+  if (search === "") matches = all ? value.length + 1 : 1;
+  else {
+    let cursor = 0;
+    while (true) {
+      const index = nativeStringIndexOf.call(value, search, cursor);
+      if (index < 0) break;
+      matches += 1;
+      if (!all) break;
+      cursor = index + search.length;
+    }
+  }
+  if (replacement.length <= search.length || matches === 0) return value.length;
+  const growth = replacement.length - search.length;
+  if (matches > Math.floor((maxTextCodeUnits - value.length) / growth)) return maxTextCodeUnits + 1;
+  return value.length + matches * growth;
+}
+function htmlOutputUnits(value) {
+  let units = value.length;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "&" || character === "'") units += 4;
+    else if (character === "<" || character === ">") units += 3;
+    else if (character === '"') units += 5;
+    if (units > maxTextCodeUnits) return units;
+  }
+  return units;
+}
 function codePointLength(value) { let length = 0; for (const _ of value) length += 1; return length; }
 function codePointPrefix(value, count) { let output = "", length = 0; for (const character of value) { if (length >= count) break; output += character; length += 1; } return output; }
 function patternOptions(value) {
@@ -796,8 +828,8 @@ export function startsWith(value, prefix) { return valueOf(value).startsWith(val
 export function endsWith(value, suffix) { return valueOf(value).endsWith(valueOf(suffix)); }
 export function includes(value, part) { return valueOf(value).includes(valueOf(part)); }
 export function split(value, separator) { value = valueOf(value); separator = valueOf(separator); if (!separator && value.length > maxTextItems) throw new RangeError("split cannot produce more than " + maxTextItems + " items"); const result = value.split(separator, maxTextItems + 1); return textList(result, "split"); }
-export function replace(value, search, replacement) { return textOutput(valueOf(value).replace(valueOf(search), valueOf(replacement)), "replace"); }
-export function replaceAll(value, search, replacement) { value = valueOf(value); search = valueOf(search); replacement = valueOf(replacement); const matches = search ? Math.floor((value.length - value.replaceAll(search, "").length) / search.length) : value.length + 1; const estimated = value.length + matches * (replacement.length - search.length); if (!Number.isSafeInteger(estimated) || estimated > maxTextCodeUnits) throw new RangeError("replaceAll output cannot exceed 16 MiB"); return value.replaceAll(search, replacement); }
+export function replace(value, search, replacement) { value = valueOf(value); search = valueOf(search); replacement = valueOf(replacement); if (replacementOutputUnits(value, search, replacement, false) > maxTextCodeUnits) throw new RangeError("replace output cannot exceed 16 MiB"); return nativeStringReplace.call(value, search, replacement); }
+export function replaceAll(value, search, replacement) { value = valueOf(value); search = valueOf(search); replacement = valueOf(replacement); if (replacementOutputUnits(value, search, replacement, true) > maxTextCodeUnits) throw new RangeError("replaceAll output cannot exceed 16 MiB"); return nativeStringReplaceAll.call(value, search, replacement); }
 export function repeat(value, count) { value = valueOf(value); count = textCount(count, "text.repeat count"); if (value.length > 0 && count > Math.floor(maxTextCodeUnits / value.length)) throw new RangeError("text.repeat output cannot exceed 16 MiB"); return value.repeat(count); }
 export function padStart(value, length, fill = " ") { return valueOf(value).padStart(textCount(length, "padStart length"), valueOf(fill)); }
 export function padEnd(value, length, fill = " ") { return valueOf(value).padEnd(textCount(length, "padEnd length"), valueOf(fill)); }
@@ -819,7 +851,14 @@ export function indent(value, prefix = "    ") {
 export function dedent(value) { const rows = lines(valueOf(value)); let width = null; for (const line of rows) if (line.trim()) { const current = line.match(/^[ \t]*/u)[0].length; width = width === null ? current : Math.min(width, current); } return rows.map((line) => line.slice(width ?? 0)).join("\n"); }
 export function normalizeWhitespace(value) { return valueOf(value).trim().replace(/\s+/gu, " "); }
 export function isBlank(value) { return valueOf(value).trim().length === 0; }
-export function escapeHtml(value) { return textOutput(valueOf(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"), "escapeHtml"); }
+export function escapeHtml(value) {
+  value = valueOf(value);
+  if (htmlOutputUnits(value) > maxTextCodeUnits) throw new RangeError("escapeHtml output cannot exceed 16 MiB");
+  for (const [character, escaped] of [["&", "&amp;"], ["<", "&lt;"], [">", "&gt;"], ['"', "&quot;"], ["'", "&#39;"]]) {
+    value = nativeStringReplaceAll.call(value, character, escaped);
+  }
+  return value;
+}
 export function matches(value, expression, options = {}) { value = valueOf(value); return nativeRegExpExec.call(patternOf(expression, options), value) !== null; }
 export function findMatch(value, expression, options = {}) { value = valueOf(value); const match = nativeRegExpExec.call(patternOf(expression, options), value); return match === null ? null : matchValue(match, value); }
 export function findMatches(value, expression, options = {}) { value = valueOf(value); const output = []; eachMatch(value, patternOf(expression, options, true), match => output.push(match)); return output; }
@@ -936,7 +975,30 @@ export async function series(tasks) { tasks = __velarRequireList(tasks, "async.s
   ["velar/url", String.raw`
 ${listRuntime}
 const fallbackBase = "https://velar.invalid/";
-function urlText(value, name = "velar/url") { if (typeof value !== "string") throw new TypeError(name + " requires a string"); if (value.length > 2 * 1024 * 1024) throw new RangeError(name + " cannot exceed 2 MiB"); return value; }
+const maxUrlCodeUnits = 2 * 1024 * 1024;
+const nativeEncodeURIComponent = globalThis.encodeURIComponent;
+const nativeDecodeURIComponent = globalThis.decodeURIComponent;
+function urlText(value, name = "velar/url") { if (typeof value !== "string") throw new TypeError(name + " requires a string"); if (value.length > maxUrlCodeUnits) throw new RangeError(name + " cannot exceed 2 MiB"); return value; }
+function encodedComponentUnits(value) {
+  let units = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57)
+      || code === 45 || code === 95 || code === 46 || code === 33 || code === 126
+      || code === 42 || code === 39 || code === 40 || code === 41) units += 1;
+    else if (code < 0x80) units += 3;
+    else if (code < 0x800) units += 6;
+    else if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xDC00 || next > 0xDFFF) throw new URIError("URI malformed");
+      units += 12;
+      index += 1;
+    } else if (code >= 0xDC00 && code <= 0xDFFF) throw new URIError("URI malformed");
+    else units += 9;
+    if (units > maxUrlCodeUnits) return units;
+  }
+  return units;
+}
 function baseOf(base) { return base !== "" ? urlText(base, "URL base") : (typeof location !== "undefined" ? urlText(location.href, "Browser URL base") : fallbackBase); }
 function urlOf(value, base = "") { return new URL(urlText(value), baseOf(base)); }
 function urlSnapshot(url) {
@@ -1014,17 +1076,23 @@ export function join(...parts) {
     const value = urlText(part, "url.join");
     if (!value) continue;
     const segment = value.replace(/^\/+|\/+$/gu, "");
-    output = output.endsWith("://") ? output + segment : output.replace(/\/+$/u, "") + "/" + segment;
+    const scheme = output.endsWith("://");
+    const prefix = scheme ? output : output.replace(/\/+$/u, "");
+    const separator = scheme ? "" : "/";
+    if (separator.length + segment.length > maxUrlCodeUnits - prefix.length) {
+      throw new RangeError("url.join output cannot exceed 2 MiB");
+    }
+    output = prefix + separator + segment;
   }
-  return urlText(output, "url.join output");
+  return output;
 }
 export function query(params) { const output = new URLSearchParams(); appendParams(params, output); return urlText(output.toString(), "URL query output"); }
 export function parseQuery(value) { return queryMap(urlText(value, "parseQuery").replace(/^\?/u, ""), "URL query"); }
 export function withQuery(value, params) { const url = urlOf(value); url.search = ""; appendParams(params, url.searchParams); return restore(value, url); }
 export function withHash(value, hash) { const url = urlOf(value); hash = urlText(hash, "withHash"); url.hash = hash ? "#" + hash.replace(/^#/u, "") : ""; return restore(value, url); }
 export function isExternal(value, base = "") { value = urlText(value, "isExternal"); if (base) urlText(base, "URL base"); try { const url = urlOf(value, base); const origin = urlText(new URL(baseOf(base)).origin, "URL origin"); return urlText(url.origin, "URL origin") !== origin || !/^https?:$/u.test(urlText(url.protocol, "URL protocol")); } catch { return true; } }
-export function encode(value) { return encodeURIComponent(urlText(value, "encode")); }
-export function decode(value) { return decodeURIComponent(urlText(value, "decode")); }
+export function encode(value) { value = urlText(value, "encode"); if (encodedComponentUnits(value) > maxUrlCodeUnits) throw new RangeError("encode output cannot exceed 2 MiB"); return urlText(nativeEncodeURIComponent(value), "encode output"); }
+export function decode(value) { return urlText(nativeDecodeURIComponent(urlText(value, "decode")), "decode output"); }
 export function normalize(value, base = "") { const url = urlOf(value, base); return restore(value, url); }
 `.trimStart()],
   ["velar/time", String.raw`

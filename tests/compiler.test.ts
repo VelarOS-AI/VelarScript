@@ -6609,12 +6609,32 @@ Array.prototype.join = originalJoin;
 
   const text = standardModuleSource("velar/text") ?? "";
   const textExecution = executeModule(`${text}
-for (const operation of [() => repeat("ab", 9000000), () => padStart("x", 20000000), () => split("x".repeat(1000001), ""), () => indent("a\\nb", "x".repeat(9 * 1024 * 1024))]) {
+const originalReplace = String.prototype.replace;
+const originalReplaceAll = String.prototype.replaceAll;
+let replacementCalls = 0;
+String.prototype.replace = () => { replacementCalls += 1; throw new Error("late replacement allocation"); };
+String.prototype.replaceAll = () => { replacementCalls += 1; throw new Error("late replacement allocation"); };
+for (const operation of [
+  () => repeat("ab", 9000000),
+  () => padStart("x", 20000000),
+  () => split("x".repeat(1000001), ""),
+  () => indent("a\\nb", "x".repeat(9 * 1024 * 1024)),
+  () => replace("xx", "x", "y".repeat(16 * 1024 * 1024)),
+  () => replaceAll("xx", "x", "y".repeat(9 * 1024 * 1024)),
+  () => escapeHtml("&".repeat(4 * 1024 * 1024)),
+]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
+console.log(replace("abc", "b", "x"));
+console.log(replaceAll("aaa", "aa", "x"));
+console.log(replaceAll("ab", "", "-"));
+console.log(escapeHtml('<a href="x">'));
+console.log(replacementCalls);
+String.prototype.replace = originalReplace;
+String.prototype.replaceAll = originalReplaceAll;
 `);
   assert.equal(textExecution.status, 0, String(textExecution.stderr));
-  assert.equal(textExecution.stdout, "RangeError\nRangeError\nRangeError\nRangeError\n");
+  assert.equal(textExecution.stdout, "RangeError\nRangeError\nRangeError\nRangeError\nRangeError\nRangeError\nRangeError\naxc\nxa\n-a-b-\n&lt;a href=&quot;x&quot;&gt;\n0\n");
 
   const json = standardModuleSource("velar/json") ?? "";
   const jsonExecution = executeModule(`${json}
@@ -6635,14 +6655,23 @@ console.log(getterReads);
   const url = standardModuleSource("velar/url") ?? "";
   const urlExecution = executeModule(`${url}
 let getterReads = 0;
+let encodeCalls = 0;
 const accessor = Object.defineProperty({}, "page", { enumerable: true, get() { getterReads += 1; return 1; } });
-for (const operation of [() => query(accessor), () => query(new Map([["value", "x".repeat(300000)]]))]) {
+globalThis.encodeURIComponent = () => { encodeCalls += 1; throw new Error("late encoding allocation"); };
+for (const operation of [
+  () => query(accessor),
+  () => query(new Map([["value", "x".repeat(300000)]])),
+  () => encode(" ".repeat(700000)),
+  () => join("x".repeat(2 * 1024 * 1024), "tail"),
+]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 console.log(getterReads);
+console.log(encode("Velar Script"));
+console.log(encodeCalls);
 `);
   assert.equal(urlExecution.status, 0, String(urlExecution.stderr));
-  assert.equal(urlExecution.stdout, "TypeError\nRangeError\n0\n");
+  assert.equal(urlExecution.stdout, "TypeError\nRangeError\nRangeError\nRangeError\n0\nVelar%20Script\n0\n");
 
   const asyncModule = standardModuleSource("velar/async") ?? "";
   const asyncExecution = executeModule(`${asyncModule}

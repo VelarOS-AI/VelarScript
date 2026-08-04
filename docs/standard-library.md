@@ -145,8 +145,8 @@ Text counts used by `repeat`, `padStart`, `padEnd`, and `truncate` are
 non-negative safe integers; native string-to-number coercion is not exposed.
 Dynamic pattern options must be plain enumerable data fields, so getters,
 symbols, and class instances are rejected without hidden evaluation. Text
-composition such as `indent` checks its complete output budget before joining
-the final string.
+composition such as `replace`, `replaceAll`, `escapeHtml`, and `indent` checks
+its complete output budget before allocating the final string.
 
 ```velar
 import {findMatch, matches, splitPattern} from "velar/text"
@@ -279,8 +279,9 @@ returned `Map`. Query numbers must be finite. URL text operations validate
 actual strings at dynamic boundaries rather than inheriting JavaScript
 `String(...)` coercion; this includes the browser's current base URL and every
 field copied from a native `URL` result. URL text and encoded query output are
-limited to 2 MiB; parsed names/values share the same text budget, and query maps
-contain at most 100,000 fields.
+limited to 2 MiB; component encoding and multi-part joining check the resulting
+length before allocation. Parsed names/values share the same text budget, and
+query maps contain at most 100,000 fields.
 
 ## `velar/time`
 
