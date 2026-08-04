@@ -1751,6 +1751,132 @@ def inspect(value: number) -> null:
   assert.ok(impossible.diagnostics.some((item) => /can never match number/u.test(item.message)));
 });
 
+test("match patterns narrow stable locations on success and fallthrough", () => {
+  const result = compileCore(`
+type User:
+    name: string
+
+class Animal:
+    pass
+
+class Dog extends Animal:
+    def sound() -> string:
+        return "woof"
+
+def label(user: User?) -> string:
+    match user:
+        case User if user.name != "":
+            return user.name
+        case User:
+            return "empty"
+        case null:
+            return "missing"
+
+def fallback(user: User?) -> string:
+    match user:
+        case null:
+            return "missing"
+        else:
+            return user.name
+
+def afterMatch(user: User?) -> string:
+    match user:
+        case null:
+            return "missing"
+    return user.name
+
+def increment(value: string | number) -> number:
+    match value:
+        case string:
+            return 0
+        else:
+            return value + 1
+
+def first(values: List<string>?) -> string:
+    match values:
+        case [item, ...rest]:
+            return values[0]
+        case []:
+            return "empty"
+        case null:
+            return "missing"
+
+def sound(animal: Animal) -> string:
+    match animal:
+        case Dog:
+            return animal.sound()
+        case Animal:
+            return "unknown"
+
+print(label({name: "Ada"}))
+print(label(null))
+print(fallback({name: "Lin"}))
+print(afterMatch({name: "Mira"}))
+print(increment(4))
+print(first(["Velar"]))
+print(first([]))
+print(sound(Dog()))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\nmissing\nLin\nMira\n5\nVelar\nempty\nwoof\n");
+
+  const invalidatedGuard = compileCore(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> bool:
+    box.user = null
+    return true
+
+def clearAndReject(box: Box) -> bool:
+    box.user = null
+    return false
+
+def invalid(box: Box) -> string:
+    match box.user:
+        case User if clear(box):
+            return box.user.name
+        else:
+            return "missing"
+
+def invalidElse(box: Box) -> string:
+    match box.user:
+        case null:
+            return "missing"
+        case User if clearAndReject(box):
+            return "unreachable"
+        else:
+            return box.user.name
+`.trimStart());
+  assert.equal(invalidatedGuard.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 2);
+
+  const effectfulTypeCheck = compileCore(`
+extern module "sdk":
+    export class Remote:
+        const name: string
+        constructor()
+
+import js {Remote} from "sdk"
+
+type Holder:
+    value: Remote?
+
+def invalid(holder: Holder) -> string:
+    match holder.value:
+        case Remote:
+            return holder.value.name
+        case null:
+            return "missing"
+`.trimStart());
+  assert.equal(effectfulTypeCheck.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+});
+
 test("match guards narrow the successful branch", () => {
   const result = compile(`
 type User:

@@ -1170,15 +1170,27 @@ export class Analyzer implements TypeEnvironment {
         const coveredListLengths = new Set<number>();
         let coveredListMinimum: number | null = null;
         let universalCovered = false;
+        let fallthroughType = matched;
+        let fallthroughNarrowings = this.matchLocationNarrowing(statement.value, matched);
         for (const branch of statement.cases) {
           const branchReachable = !universalCovered;
           if (!branchReachable) {
             this.diagnostics.push(diagnostic("VEL4014", "This match branch is already covered", branch.pattern.span));
           }
           const bindings = new Map<string, { readonly type: ValueType; readonly span: Span }>();
+          let patternNarrowings: ReadonlyMap<string, ValueType> = new Map();
+          let patternSurviving: ReadonlyMap<string, ValueType> = new Map();
           const patternBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
           const patternInvalidations = this.analyzeIsolatedFlow(patternBaseline, () => {
-            this.analyzeMatchPattern(branch.pattern, matched, bindings);
+            this.enterScope();
+            try {
+              this.applyNarrowings(fallthroughNarrowings, branch.pattern.span);
+              const narrowedMatch = this.analyzeMatchPattern(branch.pattern, fallthroughType, bindings);
+              patternSurviving = this.survivingNarrowings(fallthroughNarrowings);
+              patternNarrowings = this.retargetNarrowings(patternSurviving, narrowedMatch);
+            } finally {
+              this.exitScope();
+            }
           });
           if (branchReachable) fallthroughInvalidations.push(patternInvalidations);
           const rootPattern = this.unwrapMatchAs(branch.pattern);
@@ -1233,6 +1245,7 @@ export class Analyzer implements TypeEnvironment {
           }
 
           let guardNarrowings: ReadonlyMap<string, ValueType> = new Map();
+          let guardFallthroughNarrowings: ReadonlyMap<string, ValueType> = patternSurviving;
           if (branch.guard) {
             const guardBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
             const guardInvalidations = this.analyzeIsolatedFlow(guardBaseline, () => {
@@ -1241,9 +1254,9 @@ export class Analyzer implements TypeEnvironment {
                 for (const [name, binding] of bindings) {
                   this.declareBinding(name, false, binding.type, binding.span);
                 }
-                const guard = this.inferExpression(branch.guard!);
-                this.requireCondition(guard, branch.guard!);
-                guardNarrowings = this.narrowingFor(branch.guard!, guard);
+                const guard = this.inferConditionWithNarrowings(branch.guard!, patternNarrowings);
+                guardNarrowings = this.combineNarrowings(guard.surviving, guard.truthy);
+                guardFallthroughNarrowings = this.retargetNarrowings(guard.surviving, fallthroughType);
               } finally {
                 this.exitScope();
               }
@@ -1259,7 +1272,7 @@ export class Analyzer implements TypeEnvironment {
               for (const [name, binding] of bindings) {
                 this.declareBinding(name, false, binding.type, binding.span);
               }
-              this.applyNarrowings(guardNarrowings, branch.body[0]?.span ?? branch.span);
+              this.applyNarrowings(branch.guard ? guardNarrowings : patternNarrowings, branch.body[0]?.span ?? branch.span);
               this.analyzeStatements(branch.body);
               branchFacts = this.narrowingsForVisibleBindings(visibleAtMatch);
             } finally {
@@ -1270,6 +1283,14 @@ export class Analyzer implements TypeEnvironment {
             continuingInvalidations.push(...fallthroughInvalidations, branchInvalidations);
             continuingFacts.push(branchFacts);
           }
+          if (branchReachable) {
+            if (branch.guard) {
+              fallthroughNarrowings = guardFallthroughNarrowings;
+            } else {
+              fallthroughType = this.matchFallthroughType(fallthroughType, rootPattern);
+              fallthroughNarrowings = this.retargetNarrowings(patternSurviving, fallthroughType);
+            }
+          }
         }
         if (statement.elseBody) {
           if (universalCovered) {
@@ -1278,7 +1299,7 @@ export class Analyzer implements TypeEnvironment {
           const elseBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
           let elseFacts: ReadonlyMap<string, ValueType> = new Map();
           const elseInvalidations = this.analyzeIsolatedFlow(elseBaseline, () => {
-            elseFacts = this.analyzeBlock(statement.elseBody!);
+            elseFacts = this.analyzeBlock(statement.elseBody!, fallthroughNarrowings);
           });
           if (!universalCovered && !this.blockAlwaysReturns(statement.elseBody)) {
             continuingInvalidations.push(...fallthroughInvalidations, elseInvalidations);
@@ -1305,7 +1326,10 @@ export class Analyzer implements TypeEnvironment {
         if (!exhaustive) {
           const unmatched = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
           continuingInvalidations.push(...fallthroughInvalidations);
-          continuingFacts.push(this.narrowingsInSnapshot(unmatched, visibleAtMatch, flowBaseline));
+          continuingFacts.push(this.combineNarrowings(
+            this.narrowingsInSnapshot(unmatched, visibleAtMatch, flowBaseline),
+            fallthroughNarrowings,
+          ));
         }
         this.restoreFlowFacts(flowBaseline);
         this.applyFlowInvalidations(continuingInvalidations);
@@ -4372,6 +4396,48 @@ export class Analyzer implements TypeEnvironment {
         return eligible.length > 0 ? unionOf(eligible) : unknownType;
       }
     }
+  }
+
+  private matchLocationNarrowing(expression: Expression, type: ValueType): ReadonlyMap<string, ValueType> {
+    const narrowed = new Map<string, ValueType>();
+    this.addLocationNarrowing(narrowed, expression, type);
+    return narrowed;
+  }
+
+  private retargetNarrowings(source: ReadonlyMap<string, ValueType>, type: ValueType): ReadonlyMap<string, ValueType> {
+    return new Map([...source.keys()].map((key) => [key, type]));
+  }
+
+  private matchFallthroughType(input: ValueType, pattern: MatchPattern): ValueType {
+    const source = this.expandAliases(input);
+    const members = source.kind === "union" ? source.members
+      : source.kind === "optional" ? [source.inner, nullType]
+        : null;
+    if (!members) return input;
+    const remaining = members.filter((member) => !this.matchPatternCoversWholeType(pattern, member));
+    return remaining.length > 0 && remaining.length < members.length ? unionOf(remaining) : input;
+  }
+
+  private matchPatternCoversWholeType(pattern: MatchPattern, input: ValueType): boolean {
+    if (pattern.kind === "MatchAsPattern") return this.matchPatternCoversWholeType(pattern.pattern, input);
+    if (pattern.kind === "MatchWildcardPattern" || pattern.kind === "MatchCapturePattern") return true;
+    if (pattern.kind === "MatchTypePattern") {
+      return isAssignable(input, this.resolveAnnotation(pattern.type), this);
+    }
+    if (pattern.kind === "MatchValuePattern") {
+      if (input.kind === "null") {
+        return pattern.values.some((value) => value.kind === "LiteralExpression" && value.value === null);
+      }
+      if (input.kind === "bool") {
+        const values = new Set<boolean>();
+        for (const value of pattern.values) {
+          if (value.kind === "LiteralExpression" && typeof value.value === "boolean") values.add(value.value);
+        }
+        return values.has(true) && values.has(false);
+      }
+      return false;
+    }
+    return this.matchPatternCoversType(pattern, input);
   }
 
   private unwrapMatchAs(pattern: MatchPattern): MatchPattern {

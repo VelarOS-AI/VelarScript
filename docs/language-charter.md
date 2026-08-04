@@ -522,10 +522,17 @@ pattern is an error.
 
 The matched expression evaluates once. Guards run only after their pattern
 matches, and a successful guard narrows its case body by the same rules as
-`if`. A failed guard continues to the next case after retaining any effects it
-already performed. Cases are mutually exclusive: a write in one case cannot
-erase a fact used only by a sibling, but facts invalidated by a case that reaches
-the code after `match` stay invalidated. Facts established by every continuing
+`if`. A successful pattern also narrows the original matched identifier or
+stable data field in its guard and body, so `case User:` makes the matched value
+a `User` without requiring an `as` alias. Pattern failure also carries facts to
+later cases and `else`, so the path after `case null` treats an optional matched
+location as present. Checks owned by a host JavaScript class may execute
+`Symbol.hasInstance`; use `as` when a stable captured value is needed across
+that boundary. A failed guard continues to the next case after
+retaining any effects it already performed. Cases are mutually exclusive: a
+write in one case cannot erase a fact used only by a sibling, but facts
+invalidated by a case that reaches the code after `match` stay invalidated.
+Facts established by every continuing
 case remain available after an exhaustive match. Guarded cases do not count as
 exhaustive because the guard may be false. Complete enum matches, an unguarded
 wildcard, exhaustive List length patterns, and irrefutable patterns over

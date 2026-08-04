@@ -404,6 +404,13 @@ and browser runtimes and do not define a separate VelarScript memory model.
   in source order and later links short-circuit; a chain containing direct
   `await` uses an immediately awaited async IIFE, preserving a boolean source
   result.
+- Match analysis carries the successful pattern type back to a stable matched
+  identifier or owned data-field path. Guard analysis begins with that fact and
+  publishes it to the body only if guard effects did not invalidate it.
+  Representable exclusions such as a rejected `null` or union member feed later
+  cases, `else`, and the unmatched continuation. Runtime checks that may invoke
+  host JavaScript hooks discard any re-read location fact the hook can
+  invalidate; an explicit `as` binding still captures the already matched value.
 - Binary operands retain source grouping when JavaScript has a lower-precedence
   form such as an arrow function; emitted code never relies on discarded source
   parentheses to remain syntactically valid.

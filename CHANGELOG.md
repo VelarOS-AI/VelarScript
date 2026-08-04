@@ -73,6 +73,9 @@ Compiler and framework changes:
   Map values, including transparent collection aliases.
 - Null-coalescing fallbacks now receive the expected or present-value context,
   retain null-path flow facts, and preserve arrow operands in emitted JavaScript.
+- Match success and fallthrough now narrow the original stable identifier or
+  data field through guards, later cases, and else; effects invalidate stale
+  facts.
 
 Tooling and documentation changes:
 
