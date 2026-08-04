@@ -131,6 +131,10 @@ const label = accepted ? "Accepted" : "Rejected"
 const fallback = optionalValue ?? defaultValue
 ```
 
+The fallback is checked only for the null path and receives the expected result
+type. This keeps direct fallbacks such as `names ?? []`, `scores ?? Map()`, and
+`callback ?? (value => value)` fully typed without extra annotations.
+
 Logical operators are `and`, `or`, and `not`. They require checked boolean or
 optional conditions; they are not general value-selection operators. `and` and
 `or` short-circuit in source order. The right side receives facts established

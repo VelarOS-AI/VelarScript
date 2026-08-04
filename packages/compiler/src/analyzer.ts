@@ -2321,7 +2321,7 @@ export class Analyzer implements TypeEnvironment {
         return numberType;
       }
       case "BinaryExpression":
-        return this.inferBinary(expression.left, expression.operator, expression.right, expression.span);
+        return this.inferBinary(expression.left, expression.operator, expression.right, expression.span, contextualType);
       case "ComparisonChainExpression": {
         const types: ValueType[] = [this.inferExpression(expression.operands[0]!)];
         let successful = new Map<string, ValueType>();
@@ -2447,7 +2447,13 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private inferBinary(leftExpression: Expression, operator: string, rightExpression: Expression, operationSpan: Span): ValueType {
+  private inferBinary(
+    leftExpression: Expression,
+    operator: string,
+    rightExpression: Expression,
+    operationSpan: Span,
+    contextualType: ValueType,
+  ): ValueType {
     const left = this.inferExpression(leftExpression);
     if (operator === "and" || operator === "or") {
       this.requireCondition(left, leftExpression);
@@ -2461,14 +2467,22 @@ export class Analyzer implements TypeEnvironment {
       });
       return isInvalidType(left) || isInvalidType(rightCondition.type) ? invalidType : boolType;
     }
-    const right = this.inferExpression(rightExpression);
-    if (isInvalidType(left) || isInvalidType(right)) return invalidType;
     if (operator === "??") {
-      if (left.kind !== "optional" && left.kind !== "null" && left.kind !== "any") {
+      const expandedLeft = this.expandAliases(left);
+      const fallbackContext = this.coalescingFallbackContext(expandedLeft, contextualType);
+      const right = this.inferNarrowedExpression(
+        rightExpression,
+        this.negativeNarrowingFor(leftExpression, left),
+        fallbackContext,
+      );
+      if (isInvalidType(left) || isInvalidType(right)) return invalidType;
+      if (expandedLeft.kind !== "optional" && expandedLeft.kind !== "null" && expandedLeft.kind !== "any") {
         this.typeError(`Left side of '??' is not optional: ${describeType(left)}`, leftExpression.span);
       }
-      return mergeTypes(nonOptional(left), right);
+      return mergeTypes(nonOptional(expandedLeft), right);
     }
+    const right = this.inferExpression(rightExpression);
+    if (isInvalidType(left) || isInvalidType(right)) return invalidType;
     if (operator === "in") {
       if (right.kind === "list" || right.kind === "set") {
         this.requireAssignable(left, right.element, leftExpression.span);
@@ -2499,6 +2513,12 @@ export class Analyzer implements TypeEnvironment {
     this.requireAssignable(left, numberType, leftExpression.span);
     this.requireAssignable(right, numberType, rightExpression.span);
     return numberType;
+  }
+
+  private coalescingFallbackContext(left: ValueType, contextualType: ValueType): ValueType {
+    const expandedContext = this.expandAliases(contextualType);
+    if (expandedContext.kind !== "unknown" && !isInvalidType(expandedContext)) return contextualType;
+    return left.kind === "optional" ? left.inner : unknownType;
   }
 
   private requireOrderedComparison(

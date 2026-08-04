@@ -1279,8 +1279,8 @@ export class JavaScriptEmitter {
         const operator = expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
           ? `(${this.emitMappedExpression(expression.left)})`
-          : this.emitMappedExpression(expression.left);
-        return `(${left} ${operator} ${this.emitMappedExpression(expression.right)})`;
+          : this.emitBinaryOperand(expression.left);
+        return `(${left} ${operator} ${this.emitBinaryOperand(expression.right)})`;
       }
       case "ComparisonChainExpression":
         return this.emitComparisonChain(expression);
@@ -1376,6 +1376,11 @@ export class JavaScriptEmitter {
   protected emitCondition(expression: Expression): string {
     const value = this.emitMappedExpression(expression);
     return this.hints.presenceConditions.has(spanIdentity(expression.span)) ? `(${value} != null)` : value;
+  }
+
+  private emitBinaryOperand(expression: Expression): string {
+    const emitted = this.emitMappedExpression(expression);
+    return expression.kind === "ArrowFunctionExpression" ? `(${emitted})` : emitted;
   }
 
   private emitPostfixReceiver(expression: Expression): string {

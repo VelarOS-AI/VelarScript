@@ -71,6 +71,8 @@ Compiler and framework changes:
   into bodies controlled by the complete truthy chain.
 - Optional collection annotations now contextually type empty List, Set, and
   Map values, including transparent collection aliases.
+- Null-coalescing fallbacks now receive the expected or present-value context,
+  retain null-path flow facts, and preserve arrow operands in emitted JavaScript.
 
 Tooling and documentation changes:
 

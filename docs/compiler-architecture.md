@@ -121,6 +121,9 @@ still runs only after all call arguments have evaluated.
 Optional collection contexts unwrap only while checking the present value, so
 empty literals and constructors receive their collection contract without
 changing the declared optional storage type.
+Null coalescing applies the same rule to its deferred fallback: the fallback
+receives the outer result context when one exists, otherwise the present side
+of the optional left type. It is analyzed under the left side's null-path facts.
 Native slot checks accept cross-realm Map/Set values while instance overrides,
 custom iterators, and Array species cannot change language semantics. Mutating
 results normalize to VelarScript `null` without replacing
@@ -401,6 +404,9 @@ and browser runtimes and do not define a separate VelarScript memory model.
   in source order and later links short-circuit; a chain containing direct
   `await` uses an immediately awaited async IIFE, preserving a boolean source
   result.
+- Binary operands retain source grouping when JavaScript has a lower-precedence
+  form such as an arrow function; emitted code never relies on discarded source
+  parentheses to remain syntactically valid.
 - `///` documentation is recovered from the authoritative source immediately
   before semantic declarations rather than becoming runtime AST statements.
   The semantic index stores a bounded Markdown string on each symbol; project

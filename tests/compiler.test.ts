@@ -7265,6 +7265,33 @@ print(tags?.size)
   assert.equal(execution.stdout, "0\n0\n0\n");
 });
 
+test("null coalescing contextually types its deferred fallback", () => {
+  const result = compileCore(`
+type Mapper = (string) -> string
+
+const optionalNames: List<string>? = null
+const optionalScores: Map<string, number>? = null
+const optionalTags: Set<string>? = null
+const optionalMapper: Mapper? = null
+
+const names: List<string> = optionalNames ?? []
+const scores: Map<string, number> = optionalScores ?? Map()
+const tags: Set<string> = optionalTags ?? Set()
+const mapper: Mapper = optionalMapper ?? (value => value)
+
+print(names.size)
+print(scores.size)
+print(tags.size)
+print(mapper("Ada"))
+print((value => value) == (value => value))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "0\n0\n0\nAda\nfalse\n");
+});
+
 test("empty collection inference follows runtime aliases instead of individual bindings", () => {
   const valid = compile(`
 const values = []
