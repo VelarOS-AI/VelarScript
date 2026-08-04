@@ -72,6 +72,11 @@ compose, while incompatible ones produce a “different Item contract” diagnos
 instead of the nonsensical appearance that `Item` was assignable to every other
 module's `Item`.
 
+Semantic type identities use length-delimited nodes rather than punctuation
+concatenation. Module paths, extension-provided names, and structural field names
+therefore cannot make distinct types collide in equality, union normalization,
+declaration caches, or cyclic-interface convergence.
+
 Literal dynamic `.vel` imports are part of that same graph rather than a
 bundler-only escape hatch. Inspection records them as dynamic dependencies,
 analysis exposes a typed Promise of the target module interface, reverse graph

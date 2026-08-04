@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { analysisTypeIdentity, isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
+import { analysisTypeIdentity, isAssignable, sameType, type StorageOriginEffect, type ValueType } from "../packages/compiler/src/types.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { compileProject as compileProjectCore, moduleInterfaceIdentity, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
@@ -915,6 +915,14 @@ const unsafeSpread: Outer = {...aliasedOuter}
     ["name", { kind: "string" as const }],
   ]) };
   assert.equal(sameType(leftObject, rightObject), true);
+  assert.equal(sameType(
+    { kind: "object", fields: new Map([["a", { kind: "string" }], ["b", { kind: "number" }]]) },
+    { kind: "object", fields: new Map([["a:string,b", { kind: "number" }]]) },
+  ), false);
+  assert.equal(sameType(
+    { kind: "map", key: { kind: "named", name: "Left", identity: "x:named:y" }, value: { kind: "string" } },
+    { kind: "map", key: { kind: "named", name: "Left", identity: "x" }, value: { kind: "named", name: "Right", identity: "y:string" } },
+  ), false);
   assert.notEqual(analysisTypeIdentity(leftObject), analysisTypeIdentity({ ...leftObject, external: true }));
   assert.equal(sameType(leftObject, { ...leftObject, containsExternal: true }), true);
   assert.notEqual(analysisTypeIdentity(leftObject), analysisTypeIdentity({ ...leftObject, containsExternal: true }));
@@ -10530,6 +10538,22 @@ export class Widget:
     ...interface_,
     namedTypeIdentities: new Map([["WidgetData", "velar:/other.vel#type:WidgetData"]]),
   }), identity);
+  assert.notEqual(
+    moduleInterfaceIdentity({ ...interface_, namedTypeIdentities: new Map([["a", "b|c:d"]]) }),
+    moduleInterfaceIdentity({ ...interface_, namedTypeIdentities: new Map([["a", "b"], ["c", "d"]]) }),
+  );
+
+  const withGetterEffects = (effect: StorageOriginEffect) => moduleInterfaceIdentity({
+    ...interface_,
+    classes: new Map([["Widget", {
+      ...info,
+      getterStorageOriginEffects: new Map([["label", [effect]]]),
+    }]]),
+  });
+  assert.equal(
+    withGetterEffects({ targetParameter: 0, sourceReceiver: true, sourceParameters: [2, 1] }),
+    withGetterEffects({ sourceParameters: [1, 2], sourceReceiver: true, targetParameter: 0 }),
+  );
 
   const extensionInterface = (version: number) => ({
     ...interface_,

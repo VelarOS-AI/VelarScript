@@ -474,39 +474,65 @@ export function moduleInterfaceIdentity(
   interface_: ModuleInspection["moduleInterface"],
   extensions: readonly CompilerExtension[] = [],
 ): string {
-  const typeMap = (values: ReadonlyMap<string, ValueType>): string => [...values]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, type]) => `${name}:${analysisTypeIdentity(type)}`)
-    .join("|");
-  const names = (values: ReadonlySet<string>): string => [...values].sort().join(",");
-  const types = (values: readonly ValueType[]): string => values.map(analysisTypeIdentity).join(",");
-  const namedTypes = [...interface_.namedTypes]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, fields]) => `${name}{${typeMap(fields)}}`)
-    .join("|");
-  const namedTypeIdentities = [...interface_.namedTypeIdentities]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, identity]) => `${name}:${identity}`)
-    .join("|");
-  const enums = [...interface_.enums]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, info]) => `${name}:${info.identity}:${[...info.members].sort().join(",")}`)
-    .join("|");
-  const getterEffects = (values: ReadonlyMap<string, readonly StorageOriginEffect[]> | undefined): string => (
-    [...values ?? []]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, effects]) => `${name}:${JSON.stringify(effects)}`)
-      .join("|")
+  const node = (kind: string, parts: readonly string[] = []): string => (
+    `${kind.length}:${kind}${parts.map((part) => `${part.length}:${part}`).join("")}`
   );
-  const classes = [...interface_.classes]
+  const typeMap = (values: ReadonlyMap<string, ValueType>): string => node("type-map", [...values]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:abstract:${info.abstract ? "yes" : "no"}:parameters:${info.parameterNames?.join(",") ?? ""}:${info.requiredParameters}:${types(info.parameters)}:rest:${info.constructorRest ? analysisTypeIdentity(info.constructorRest) : ""}:origin:${info.constructorOriginParameters?.join(",") ?? ""}:${info.constructorOriginRest ? "rest" : ""}:${info.constructorContainsExternal ? "contains-external" : ""}:defaults:${info.constructorExternalDefaults?.join(",") ?? ""}:getters:${names(info.getters)}:abstract-getters:${names(info.abstractGetters)}:getter-effects:${getterEffects(info.getterStorageOriginEffects)}:abstract-methods:${names(info.abstractMethods)}:static-getters:${names(info.staticGetters)}:static-getter-effects:${getterEffects(info.staticGetterStorageOriginEffects)}:${typeMap(new Map([
-      ...[...info.fields].map(([field, value]) => [`field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
-      ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
-      ...[...info.staticFields].map(([field, value]) => [`static-field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
-      ...[...info.staticMethods].map(([method, type]) => [`static-method:${method}`, type] as const),
-    ]))}`)
-    .join("|");
+    .map(([name, type]) => node("type-entry", [name, analysisTypeIdentity(type)])));
+  const names = (values: ReadonlySet<string>): string => node("names", [...values].sort());
+  const numbers = (values: readonly number[] | undefined): string => node("numbers", (values ?? []).map(String));
+  const types = (values: readonly ValueType[]): string => node("types", values.map(analysisTypeIdentity));
+  const namedTypes = node("named-types", [...interface_.namedTypes]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, fields]) => node("named-type", [name, typeMap(fields)])));
+  const namedTypeIdentities = node("named-type-identities", [...interface_.namedTypeIdentities]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, identity]) => node("named-type-identity", [name, identity])));
+  const enums = node("enums", [...interface_.enums]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, info]) => node("enum", [name, info.identity, names(info.members)])));
+  const effectIdentity = (effect: StorageOriginEffect): string => node("storage-origin", [
+    effect.targetReceiver ? "receiver" : effect.targetRest ? "rest" : `parameter:${effect.targetParameter ?? ""}`,
+    effect.sourceReceiver ? "receiver" : "",
+    effect.sourceRest ? "rest" : "",
+    effect.external ? "external" : "",
+    numbers([...(effect.sourceExternalDefaults ?? [])].sort((a, b) => a - b)),
+    numbers([...(effect.sourceParameters ?? [])].sort((a, b) => a - b)),
+  ]);
+  const getterEffects = (values: ReadonlyMap<string, readonly StorageOriginEffect[]> | undefined): string => (
+    node("getter-effects", [...values ?? []]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, effects]) => node("getter-effect", [name, node("effects", effects.map(effectIdentity).sort())])))
+  );
+  const classes = node("classes", [...interface_.classes]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, info]) => node("class", [
+      name,
+      info.identity ?? "",
+      info.base ?? "",
+      info.abstract ? "abstract" : "",
+      node("parameter-names", info.parameterNames ?? []),
+      String(info.requiredParameters),
+      types(info.parameters),
+      info.constructorRest ? analysisTypeIdentity(info.constructorRest) : "",
+      numbers(info.constructorOriginParameters),
+      info.constructorOriginRest ? "rest" : "",
+      info.constructorContainsExternal ? "contains-external" : "",
+      numbers(info.constructorExternalDefaults),
+      names(info.getters),
+      names(info.abstractGetters),
+      getterEffects(info.getterStorageOriginEffects),
+      names(info.abstractMethods),
+      names(info.staticGetters),
+      getterEffects(info.staticGetterStorageOriginEffects),
+      typeMap(new Map([
+        ...[...info.fields].map(([field, value]) => [`field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
+        ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
+        ...[...info.staticFields].map(([field, value]) => [`static-field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
+        ...[...info.staticMethods].map(([method, type]) => [`static-method:${method}`, type] as const),
+      ])),
+    ])));
   const extensionOwners = new Map(extensions.map((extension) => [extension.id, extension]));
   let extensionIdentitySize = 0;
   const extensionSegment = (value: string): string => {
@@ -516,7 +542,7 @@ export function moduleInterfaceIdentity(
     }
     return `${value.length}:${value}`;
   };
-  const extensionExports = [...interface_.extensionExports]
+  const extensionExports = node("extension-exports", [...interface_.extensionExports]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([extensionId, values]) => {
       const identify = extensionOwners.get(extensionId)?.inspection?.interfaceExportIdentity;
@@ -530,23 +556,24 @@ export function moduleInterfaceIdentity(
           if (typeof identity !== "string" || identity.length > 1024 * 1024) {
             throw new Error(`Compiler extension '${extensionId}' returned an invalid interface identity for '${name}'`);
           }
-          return `${extensionSegment(name)}${extensionSegment(identity)}`;
-        });
-      return `${extensionSegment(extensionId)}${entries.join("")}`;
-    })
-    .join("");
-  return [
-    `exports:${typeMap(interface_.exports)}`,
-    `mutable:${[...interface_.mutableExports].sort().join(",")}`,
-    `named:${namedTypes}`,
-    `named-identities:${namedTypeIdentities}`,
-    `aliases:${typeMap(interface_.typeAliases)}`,
-    `enums:${enums}`,
-    `classes:${classes}`,
-    `reactive:${[...interface_.reactiveExports].sort(([left], [right]) => left.localeCompare(right)).map(([name, kind]) => `${name}:${kind}`).join(",")}`,
-    `tests:${[...interface_.testFunctions].sort().join(",")}`,
-    `extension-exports:${extensionExports}`,
-  ].join("#");
+          return node("extension-export", [extensionSegment(name), extensionSegment(identity)]);
+      });
+      return node("extension", [extensionSegment(extensionId), ...entries]);
+    }));
+  return node("module-interface", [
+    typeMap(interface_.exports),
+    names(interface_.mutableExports),
+    namedTypes,
+    namedTypeIdentities,
+    typeMap(interface_.typeAliases),
+    enums,
+    classes,
+    node("reactive", [...interface_.reactiveExports]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, kind]) => node("reactive-entry", [name, kind]))),
+    node("tests", [...interface_.testFunctions].sort()),
+    extensionExports,
+  ]);
 }
 
 async function createAnalysisContext(

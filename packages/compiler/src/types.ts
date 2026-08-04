@@ -182,12 +182,14 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
 }
 
 function storageOriginEffectIdentity(effect: StorageOriginEffect): string {
-  return `${effect.targetReceiver ? "receiver" : effect.targetRest ? "rest" : `parameter:${effect.targetParameter ?? ""}`}`
-    + `<-${effect.sourceReceiver ? "receiver:" : ""}`
-    + `${effect.sourceRest ? "rest:" : ""}`
-    + `${effect.external ? "external:" : ""}`
-    + `${effect.sourceExternalDefaults?.length ? `defaults:${[...effect.sourceExternalDefaults].sort((a, b) => a - b).join(",")}:` : ""}`
-    + `${[...(effect.sourceParameters ?? [])].sort((a, b) => a - b).join(",")}`;
+  return identityNode("storage-origin", [
+    effect.targetReceiver ? "receiver" : effect.targetRest ? "rest" : `parameter:${effect.targetParameter ?? ""}`,
+    effect.sourceReceiver ? "receiver" : "",
+    effect.sourceRest ? "rest" : "",
+    effect.external ? "external" : "",
+    [...(effect.sourceExternalDefaults ?? [])].sort((a, b) => a - b).join(","),
+    [...(effect.sourceParameters ?? [])].sort((a, b) => a - b).join(","),
+  ]);
 }
 
 function mergeStorageOriginEffects(
@@ -410,51 +412,81 @@ export function analysisTypeIdentity(type: ValueType): string {
 }
 
 function typeIdentity(type: ValueType, includeExternal: boolean): string {
-  const external = includeExternal && "external" in type && type.external === true ? ":external" : "";
+  const external = includeExternal && "external" in type && type.external === true ? "external" : "";
+  const containsExternal = includeExternal && "containsExternal" in type && type.containsExternal === true ? "contains-external" : "";
   const nested = (value: ValueType): string => typeIdentity(value, includeExternal);
   switch (type.kind) {
     case "unknown":
-      return isInvalidType(type) ? "unknown:diagnosed" : type.restricted ? "unknown:restricted" : "unknown";
+      return identityNode("unknown", [isInvalidType(type) ? "diagnosed" : type.restricted ? "restricted" : ""]);
+    case "any":
+    case "null":
+    case "string":
+    case "number":
+    case "bool":
+    case "node":
+      return identityNode(type.kind);
     case "class":
-      return `class${external}${includeExternal && type.containsExternal ? ":contains-external" : ""}:${type.identity ?? type.name}`;
+      return identityNode("class", [external, containsExternal, type.identity ?? type.name]);
     case "classConstructor":
-      return `${type.kind}:${type.identity ?? type.name}`;
+      return identityNode("class-constructor", [type.identity ?? type.name]);
     case "named":
-      return `named${external}${includeExternal && type.containsExternal ? ":contains-external" : ""}:${type.identity ?? type.name}`;
+      return identityNode("named", [external, containsExternal, type.identity ?? type.name]);
     case "enum":
     case "enumObject":
-      return `${type.kind}:${type.identity}`;
+      return identityNode(type.kind, [type.identity]);
+    case "typeObject":
+      return identityNode("type-object", [type.name]);
     case "optional":
-      return `optional:${nested(type.inner)}`;
+      return identityNode("optional", [nested(type.inner)]);
     case "list":
-      return `list${external}:${nested(type.element)}`;
+      return identityNode("list", [external, nested(type.element)]);
     case "set":
-      return `set${external}:${nested(type.element)}`;
+      return identityNode("set", [external, nested(type.element)]);
     case "map":
-      return `map${external}:${nested(type.key)}:${nested(type.value)}`;
+      return identityNode("map", [external, nested(type.key), nested(type.value)]);
     case "promise":
-      return `promise:${nested(type.value)}`;
+      return identityNode("promise", [nested(type.value)]);
     case "object":
-      return `object${external}${includeExternal && type.containsExternal ? ":contains-external" : ""}:${[...type.fields]
+      return identityNode("object", [external, containsExternal, ...[...type.fields]
         .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-        .map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly:" : ""}${type.optionalFields?.has(name) ? "optional:" : ""}${name}:${value}`)
-        .join(",")}`;
+        .map(([name, value]) => identityNode("field", [
+          type.readonlyFields?.has(name) ? "readonly" : "",
+          type.optionalFields?.has(name) ? "optional" : "",
+          name,
+          value,
+        ]))]);
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(nested).join(",")}:${type.rest ? nested(type.rest) : ""}:${nested(type.result)}${includeExternal ? `:origin:${type.resultOriginParameters?.join(",") ?? ""}:${type.resultOriginRest ? "rest" : ""}:${type.resultOriginReceiver ? "receiver" : ""}:defaults:${type.resultOriginExternalDefaults?.join(",") ?? ""}:storage:${(type.storageOriginEffects ?? []).map(storageOriginEffectIdentity).sort().join(";")}` : ""}`;
+      return identityNode(type.kind, [
+        type.kind === "intrinsic" ? type.name : "",
+        identityNode("parameter-names", type.parameterNames ?? []),
+        String(type.requiredParameters),
+        identityNode("parameters", type.parameters.map(nested)),
+        type.rest ? nested(type.rest) : "",
+        nested(type.result),
+        ...(includeExternal ? [
+          identityNode("result-origin-parameters", (type.resultOriginParameters ?? []).map(String)),
+          type.resultOriginRest ? "rest" : "",
+          type.resultOriginReceiver ? "receiver" : "",
+          identityNode("result-origin-defaults", (type.resultOriginExternalDefaults ?? []).map(String)),
+          identityNode("storage-origin-effects", (type.storageOriginEffects ?? []).map(storageOriginEffectIdentity).sort()),
+        ] : []),
+      ]);
     case "componentConstructor":
-      return `component:${type.intrinsic ?? ""}:${type.name}:${[...type.props]
+      return identityNode("component", [type.intrinsic ?? "", type.name, ...[...type.props]
         .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-        .map(([name, value]) => `${name}:${value}`)
-        .join(",")}:${[...type.requiredProps].sort().join(",")}`;
+        .map(([name, value]) => identityNode("prop", [name, value])),
+      identityNode("required-props", [...type.requiredProps].sort())]);
     case "union":
-      return `union:${type.members.map(nested).sort().join("|")}`;
-    default:
-      return `${type.kind}:${describeType(type)}`;
+      return identityNode("union", type.members.map(nested).sort());
   }
+}
+
+function identityNode(kind: string, parts: readonly string[] = []): string {
+  return `${kind.length}:${kind}${parts.map((part) => `${part.length}:${part}`).join("")}`;
 }
 
 export function isInvalidType(type: ValueType): boolean {
