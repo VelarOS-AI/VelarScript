@@ -531,8 +531,11 @@ Returned file names/MIME types, sizes, and modification times are validated
 before an opaque `File` is registered. Invalid native picker results reject
 the Promise instead of escaping an event callback or leaving it pending.
 Missing or malformed native file lists are failures, not implicit empty
-selections, and picker results are copied by bounded index reads rather than a
-host-provided iterator.
+selections. Picker results snapshot the native `FileList` length once and use
+captured platform prototype operations rather than indexed properties, custom
+iterators, or instance overrides. File metadata and text reads use the native
+`File`/`Blob` brands and likewise cannot invoke own getters or a replaced
+instance `text` method.
 `readText` and `readDataUrl` also verify the asynchronous reader result and its
 maximum encoded expansion before returning a string.
 

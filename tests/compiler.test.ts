@@ -5343,9 +5343,30 @@ let textReads = 0;
 let readerCalls = 0;
 let blobCalls = 0;
 const listeners = new Map();
-const selected = { name: "large.txt", size: 16 * 1024 * 1024 + 1, type: "text/plain", lastModified: 0, text() { textReads += 1; return Promise.resolve("data"); } };
+const fileState = new WeakMap();
+const fileListState = new WeakMap();
+class FakeBlob {
+  constructor(parts = null) { if (parts !== null) blobCalls += 1; }
+  get size() { return fileState.get(this).size; }
+  get type() { return fileState.get(this).type; }
+  text() { textReads += 1; return Promise.resolve(fileState.get(this).text); }
+}
+class FakeFile extends FakeBlob {
+  constructor(fields) { super(); fileState.set(this, fields); }
+  get name() { return fileState.get(this).name; }
+  get lastModified() { return fileState.get(this).lastModified; }
+}
+class FakeFileList {
+  constructor(files) { fileListState.set(this, files); }
+  get length() { return fileListState.get(this).length; }
+  item(index) { return fileListState.get(this)[index] ?? null; }
+}
+globalThis.Blob = FakeBlob;
+globalThis.File = FakeFile;
+globalThis.FileList = FakeFileList;
+const selected = new FakeFile({ name: "large.txt", size: 16 * 1024 * 1024 + 1, type: "text/plain", lastModified: 0, text: "data" });
 const input = {
-  files: [selected],
+  files: new FakeFileList([selected]),
   addEventListener(name, listener) { listeners.set(name, listener); },
   remove() {},
   click() { listeners.get("change")(); },
@@ -5354,7 +5375,6 @@ globalThis.document = { createElement() { return input; }, body: { append() {} }
 globalThis.addEventListener = () => {};
 globalThis.removeEventListener = () => {};
 globalThis.FileReader = class { constructor() { readerCalls += 1; } };
-globalThis.Blob = class { constructor() { blobCalls += 1; } };
 globalThis.URL = { createObjectURL() { return "blob:test"; } };
 const hostileFileRegistry = new WeakMap();
 hostileFileRegistry.get = () => { throw new Error("instance get must not run"); };
@@ -5382,9 +5402,31 @@ console.log([textReads, readerCalls, blobCalls].join(":"));
 test("file picker and reader host results reject instead of hanging or escaping budgets", () => {
   const source = standardModuleSource("velar/files") ?? "";
   const execution = executeModule(`
-let selectedFile = { name: "invalid.txt", size: Number.NaN, type: "text/plain", lastModified: 0 };
-let selectedFiles = [selectedFile];
 let removals = 0;
+let fileListLengthReads = 0;
+let fileListIndexReads = 0;
+const fileState = new WeakMap();
+const fileListState = new WeakMap();
+class FakeBlob {
+  get size() { return fileState.get(this).size; }
+  get type() { return fileState.get(this).type; }
+  text() { return Promise.resolve(fileState.get(this).text); }
+}
+class FakeFile extends FakeBlob {
+  constructor(fields) { super(); fileState.set(this, fields); }
+  get name() { return fileState.get(this).name; }
+  get lastModified() { return fileState.get(this).lastModified; }
+}
+class FakeFileList {
+  constructor(files) { fileListState.set(this, files); }
+  get length() { fileListLengthReads += 1; return fileListState.get(this).length; }
+  item(index) { return fileListState.get(this)[index] ?? null; }
+}
+globalThis.Blob = FakeBlob;
+globalThis.File = FakeFile;
+globalThis.FileList = FakeFileList;
+let selectedFile = new FakeFile({ name: "invalid.txt", size: Number.NaN, type: "text/plain", lastModified: 0, text: "" });
+let selectedFiles = new FakeFileList([selectedFile]);
 globalThis.document = {
   createElement() {
     const listeners = new Map();
@@ -5404,17 +5446,18 @@ globalThis.FileReader = class {
 };
 ${source}
 try { await pick(); console.log("accepted"); } catch (error) { console.log(error.name); }
-selectedFile = { name: "valid.txt", size: 1, type: "text/plain", lastModified: 0, text() { return Promise.resolve("xx"); } };
+selectedFile = new FakeFile({ name: "valid.txt", size: 1, type: "text/plain", lastModified: 0, text: "xx" });
 selectedFiles = null;
 try { await pick(); console.log("accepted"); } catch (error) { console.log(error.name); }
-selectedFiles = [selectedFile];
+selectedFiles = new FakeFileList([selectedFile]);
+Object.defineProperty(selectedFiles, "0", { get() { fileListIndexReads += 1; throw new Error("Indexed FileList access must not run"); } });
 const [file] = await pick();
 try { await readText(file, 1); console.log("accepted"); } catch (error) { console.log(error.name); }
 try { await readDataUrl(file, 1); console.log("accepted"); } catch (error) { console.log(error.name); }
-console.log(removals);
+console.log(removals, fileListLengthReads, fileListIndexReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "TypeError\nTypeError\nRangeError\nRangeError\n3\n");
+  assert.equal(execution.stdout, "TypeError\nTypeError\nRangeError\nRangeError\n3 2 0\n");
 });
 
 test("realtime validates handlers, payloads, and close metadata before native effects", () => {
@@ -7242,6 +7285,12 @@ let getterReads = 0;
 const accessorOptions = {};
 Object.defineProperty(accessorOptions, "timeout", { enumerable: true, get() { getterReads += 1; return 10; } });
 const forgedType = Object.defineProperty({ is() { return true; } }, "parse", { enumerable: true, get() { getterReads += 1; return value => value; } });
+let forgedFileGetterReads = 0;
+const forgedFileRecord = Object.freeze({ name: "forged.txt", size: 1, type: "text/plain", modified: 0 });
+const forgedNativeFile = Object.defineProperty({}, "name", { get() { forgedFileGetterReads += 1; return "forged.txt"; } });
+Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.file.registry.v1")).value.set(forgedFileRecord, forgedNativeFile);
+try { formBody().file("upload", forgedFileRecord); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(forgedFileGetterReads);
 for (const operation of [
   () => http.get(42),
   () => http.request("TRACE", "/items"),
@@ -7266,6 +7315,7 @@ console.log(getterReads, fetchCount);
   assert.equal(execution.stdout, [
     "2",
     '/items POST {"value":1} application/json include no-cache 1',
+    "TypeError", "0",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "RangeError",
     "TypeError", "TypeError", "0 1", "",

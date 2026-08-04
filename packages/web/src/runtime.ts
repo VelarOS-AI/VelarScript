@@ -44,6 +44,25 @@ const nativeFiles = (() => {
   Object.defineProperty(globalThis, nativeFilesKey, { value: registry, enumerable: false, configurable: false, writable: false });
   return registry;
 })();
+const __velarNativeFileName = typeof File === "function" ? Object.getOwnPropertyDescriptor(File.prototype, "name")?.get : null;
+const __velarNativeFileModified = typeof File === "function" ? Object.getOwnPropertyDescriptor(File.prototype, "lastModified")?.get : null;
+const __velarNativeBlobSize = typeof Blob === "function" ? Object.getOwnPropertyDescriptor(Blob.prototype, "size")?.get : null;
+const __velarNativeBlobType = typeof Blob === "function" ? Object.getOwnPropertyDescriptor(Blob.prototype, "type")?.get : null;
+const __velarNativeBlobText = typeof Blob === "function" ? Object.getOwnPropertyDescriptor(Blob.prototype, "text")?.value : null;
+function __velarReadNativeFileField(operation, file) {
+  if (typeof operation !== "function") throw new TypeError("The browser does not expose the required native File API");
+  try { return operation.call(file); }
+  catch { throw new TypeError("A file picker returned an invalid native File"); }
+}
+function __velarNativeFile(value, message) {
+  const file = value && WeakMap.prototype.get.call(nativeFiles, value);
+  if (!file) throw new TypeError(message);
+  try {
+    if (typeof __velarNativeFileName !== "function") throw new TypeError();
+    __velarNativeFileName.call(file);
+  } catch { throw new TypeError(message); }
+  return file;
+}
 `.trimStart();
 
 const listRuntime = String.raw`
@@ -1023,9 +1042,7 @@ function fieldName(value) {
 }
 
 function nativeFile(value) {
-  const file = value && WeakMap.prototype.get.call(nativeFiles, value);
-  if (!(file instanceof File)) throw new TypeError("Form body files must come from velar/files pick()");
-  return file;
+  return __velarNativeFile(value, "Form body files must come from velar/files pick()");
 }
 
 export function formBody() {
@@ -1047,7 +1064,9 @@ export function formBody() {
     },
     files(name, values) {
       name = fieldName(name);
-      const files = __velarRequireList(values, "Form body files").map(nativeFile);
+      const input = __velarRequireList(values, "Form body files");
+      const files = new Array(input.length);
+      for (let index = 0; index < input.length; index += 1) files[index] = nativeFile(input[index]);
       reserve(files.length);
       for (const file of files) data.append(name, file);
       return null;
@@ -1581,16 +1600,23 @@ ${optionsRuntime}
 ${fileRegistryRuntime}
 const defaultFileReadBytes = 16 * 1024 * 1024;
 const maxFileReadBytes = 64 * 1024 * 1024;
+const nativeFileListLength = typeof FileList === "function" ? Object.getOwnPropertyDescriptor(FileList.prototype, "length")?.get : null;
+const nativeFileListItem = typeof FileList === "function" ? Object.getOwnPropertyDescriptor(FileList.prototype, "item")?.value : null;
 function readLimit(value) {
   if (!Number.isSafeInteger(value) || value < 1 || value > maxFileReadBytes) throw new RangeError("File maxBytes must be an integer from 1 through 67108864");
   return value;
 }
 function fileText(value, name, maximum) { value = __velarString(value, name); if (value.length > maximum) throw new RangeError(name + " is too long"); return value; }
+function nativePickerField(operation, files, index = null) {
+  if (typeof operation !== "function") throw new TypeError("The browser does not expose the required native FileList API");
+  try { return index === null ? operation.call(files) : operation.call(files, index); }
+  catch { throw new TypeError("A file picker returned an invalid native FileList"); }
+}
 function wrap(file) {
-  const name = fileText(file.name, "Selected file name", 4096);
-  const type = fileText(file.type, "Selected file MIME type", 1024);
-  const size = file.size;
-  const modified = file.lastModified;
+  const name = fileText(__velarReadNativeFileField(__velarNativeFileName, file), "Selected file name", 4096);
+  const type = fileText(__velarReadNativeFileField(__velarNativeBlobType, file), "Selected file MIME type", 1024);
+  const size = __velarReadNativeFileField(__velarNativeBlobSize, file);
+  const modified = __velarReadNativeFileField(__velarNativeFileModified, file);
   if (!Number.isSafeInteger(size) || size < 0) throw new TypeError("Selected file size must be a non-negative safe integer");
   if (!Number.isFinite(modified) || modified < 0) throw new TypeError("Selected file modified time must be a non-negative finite number");
   const value = { name, size, type, modified };
@@ -1598,7 +1624,7 @@ function wrap(file) {
   WeakMap.prototype.set.call(nativeFiles, value, file);
   return value;
 }
-function native(file) { const value = WeakMap.prototype.get.call(nativeFiles, file); if (!value) throw new TypeError("Expected a file returned by velar/files"); return value; }
+function native(file) { return __velarNativeFile(file, "Expected a file returned by velar/files"); }
 export function pick(options = {}) {
   options = __velarOptions(options, "File picker options", new Set(["accept", "multiple"]));
   const accept = options.accept == null ? "" : __velarString(options.accept, "File accept filter");
@@ -1618,14 +1644,20 @@ export function pick(options = {}) {
       globalThis.removeEventListener("focus", focused);
       try {
         const selected = input.files;
-        if (!selected || typeof selected !== "object" || !Number.isSafeInteger(selected.length) || selected.length < 0) throw new TypeError("A file picker returned an invalid file list");
-        if (selected.length > 10000) {
+        if (!selected || typeof selected !== "object") throw new TypeError("A file picker returned an invalid file list");
+        const count = nativePickerField(nativeFileListLength, selected);
+        if (!Number.isSafeInteger(count) || count < 0) throw new TypeError("A file picker returned an invalid file list length");
+        if (count > 10000) {
           input.remove();
           reject(new RangeError("A file picker cannot return more than 10000 files"));
           return;
         }
         const files = [];
-        for (let index = 0; index < selected.length; index += 1) files.push(wrap(selected[index]));
+        for (let index = 0; index < count; index += 1) {
+          const file = nativePickerField(nativeFileListItem, selected, index);
+          if (file === null) throw new TypeError("A file picker returned an incomplete native FileList");
+          files.push(wrap(file));
+        }
         input.remove();
         resolve(files);
       } catch (error) {
@@ -1643,8 +1675,9 @@ export function pick(options = {}) {
 export function readText(file, maxBytes = defaultFileReadBytes) {
   const value = native(file);
   maxBytes = readLimit(maxBytes);
-  if (value.size > maxBytes) throw new RangeError("File exceeds maxBytes");
-  return Promise.resolve(value.text()).then((result) => {
+  if (__velarReadNativeFileField(__velarNativeBlobSize, value) > maxBytes) throw new RangeError("File exceeds maxBytes");
+  if (typeof __velarNativeBlobText !== "function") throw new TypeError("The browser does not expose native Blob text reading");
+  return Promise.resolve(__velarNativeBlobText.call(value)).then((result) => {
     if (typeof result !== "string") throw new TypeError("File text result was not a string");
     if (result.length > maxBytes) throw new RangeError("File text result exceeds maxBytes");
     return result;
@@ -1653,7 +1686,7 @@ export function readText(file, maxBytes = defaultFileReadBytes) {
 export function readDataUrl(file, maxBytes = defaultFileReadBytes) {
   const value = native(file);
   maxBytes = readLimit(maxBytes);
-  if (value.size > maxBytes) throw new RangeError("File exceeds maxBytes");
+  if (__velarReadNativeFileField(__velarNativeBlobSize, value) > maxBytes) throw new RangeError("File exceeds maxBytes");
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
