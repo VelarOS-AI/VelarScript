@@ -171,7 +171,6 @@ export interface LoweringHints {
   readonly reactiveBindings: ReadonlyMap<string, "state" | "computed">;
   readonly enumValueBindings: ReadonlyMap<number, string>;
   readonly exhaustiveMatches: ReadonlySet<number>;
-  readonly membershipChecks: ReadonlyMap<string, "collection" | "string">;
   readonly formReads: ReadonlyMap<string, readonly FormReadField[]>;
   readonly namedArgumentOrders: ReadonlyMap<string, readonly number[]>;
   readonly extensionLiterals: ReadonlyMap<string, string>;
@@ -245,7 +244,6 @@ export class Analyzer implements TypeEnvironment {
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
   protected readonly enumValueBindings = new Map<number, string>();
   private readonly exhaustiveMatches = new Set<number>();
-  private readonly membershipChecks = new Map<string, "collection" | "string">();
   private readonly formReads = new Map<string, readonly FormReadField[]>();
   private readonly namedArgumentOrders = new Map<string, readonly number[]>();
   protected readonly extensionLiterals = new Map<string, string>();
@@ -616,7 +614,6 @@ export class Analyzer implements TypeEnvironment {
       reactiveBindings: this.reactiveBindings,
       enumValueBindings: this.enumValueBindings,
       exhaustiveMatches: this.exhaustiveMatches,
-      membershipChecks: this.membershipChecks,
       formReads: this.formReads,
       namedArgumentOrders: this.namedArgumentOrders,
       extensionLiterals: this.extensionLiterals,
@@ -1113,7 +1110,15 @@ export class Analyzer implements TypeEnvironment {
         const condition = this.inferExpression(statement.condition);
         this.requireCondition(condition, statement.condition);
         if (statement.message) {
-          this.requireAssignable(this.inferExpression(statement.message, stringType), stringType, statement.message.span);
+          const baseline = this.snapshotFlowFacts();
+          this.analyzeIsolatedFlow(baseline, () => {
+            const message = this.inferNarrowedExpression(
+              statement.message!,
+              this.negativeNarrowingFor(statement.condition, condition),
+              stringType,
+            );
+            this.requireAssignable(message, stringType, statement.message!.span);
+          });
         }
         this.persistNarrowings(this.narrowingFor(statement.condition, condition));
         break;
@@ -2017,6 +2022,7 @@ export class Analyzer implements TypeEnvironment {
         statement.target.optional,
         statement.target.span,
         statement.operator !== "=",
+        statement.operator !== "=",
       );
       const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
       effectfulMemberWrite = owner.kind === "any"
@@ -2439,13 +2445,10 @@ export class Analyzer implements TypeEnvironment {
     if (operator === "in") {
       if (right.kind === "list" || right.kind === "set") {
         this.requireAssignable(left, right.element, leftExpression.span);
-        this.membershipChecks.set(spanIdentity(operationSpan), "collection");
       } else if (right.kind === "map") {
         this.requireAssignable(left, right.key, leftExpression.span);
-        this.membershipChecks.set(spanIdentity(operationSpan), "collection");
       } else if (right.kind === "string") {
         this.requireAssignable(left, stringType, leftExpression.span);
-        this.membershipChecks.set(spanIdentity(operationSpan), "string");
       } else if (right.kind !== "any") {
         this.typeError(`Membership requires a List, Set, Map, or string, received ${describeType(right)}`, rightExpression.span);
       }
@@ -3063,11 +3066,14 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "reduce") {
         this.collectionCalls.set(member.span.end, "listReduce");
+        const callbackArgument = arguments_[0];
+        const deferredArrow = callbackArgument?.kind === "ArrowFunctionExpression";
+        let callback = callbackArgument && !deferredArrow ? this.inferExpression(callbackArgument) : unknownType;
         const initial = arguments_[1] ? this.inferExpression(arguments_[1]) : unknownType;
         const callbackExpected: ValueType = { kind: "function", parameters: [initial, object.element], requiredParameters: 2, result: initial };
-        if (arguments_[0]) {
-          const callback = this.inferExpression(arguments_[0], callbackExpected);
-          this.requireAssignable(callback, callbackExpected, arguments_[0].span);
+        if (callbackArgument) {
+          if (deferredArrow) callback = this.inferExpression(callbackArgument, callbackExpected);
+          this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         }
         if (arguments_.length !== 2) this.typeError(`Expected 2 arguments but received ${arguments_.length}`, callSpan);
         return initial;
@@ -3298,6 +3304,7 @@ export class Analyzer implements TypeEnvironment {
     optional: boolean,
     memberSpan: Span,
     useNarrowing = true,
+    readValue = true,
   ): ValueType {
     if (objectExpression.kind === "SuperExpression") {
       if (optional) this.typeError("Optional access is not valid on 'super'", memberSpan);
@@ -3333,7 +3340,7 @@ export class Analyzer implements TypeEnvironment {
     const basePath = this.stableMemberAccessPath(objectExpression);
     const narrowedMember = basePath ? this.lookupMemberNarrowing(`${basePath}.${property}`) : null;
     let result = unknownType;
-    let effectfulRead = false;
+    let effectfulRead = object.kind === "any";
 
     if (object.kind === "any") {
       result = anyType;
@@ -3435,7 +3442,7 @@ export class Analyzer implements TypeEnvironment {
 
     result = this.displayExternalClasses(result);
     if (useNarrowing && narrowedMember) result = narrowedMember;
-    if (effectfulRead) this.invalidateEffectfulFlowFacts();
+    if (readValue && effectfulRead) this.invalidateEffectfulFlowFacts();
 
     if (optional) {
       const finalType = resolvedOriginal.kind === "optional" || resolvedOriginal.kind === "null" ? optionalOf(result) : result;

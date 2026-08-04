@@ -157,6 +157,10 @@ if input is User:
     print(input.name)
 ```
 
+Membership evaluates the candidate first and the collection second, exactly
+once each in source order. The controlled helper uses that same source-shaped
+argument order.
+
 ## 5. Core types
 
 The built-in Core types are:
@@ -632,7 +636,9 @@ assert 0 < width <= 4096, "Width is outside the supported range"
 ```
 
 A successful assertion narrows checked optional and type facts in the current
-scope.
+scope. An assertion message belongs only to the failing path: it is checked
+with the condition's rejected facts, evaluated only on failure, and cannot
+invalidate facts on the successful continuation.
 
 ## 12. Modules and JavaScript boundaries
 

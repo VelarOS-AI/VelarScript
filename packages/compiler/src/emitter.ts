@@ -385,7 +385,7 @@ export class JavaScriptEmitter {
         "  __velarCollectionSize(value);",
         "  return __velarIsMap(value) ? Map.prototype.has.call(value, item) : Set.prototype.has.call(value, item);",
         "}",
-        "function __velarMembership(value, item) {",
+        "function __velarContains(item, value) {",
         "  if (typeof value === \"string\") { if (typeof item !== \"string\") throw new TypeError(\"String membership requires a string\"); return value.includes(item); }",
         "  return __velarCollectionHas(value, item);",
         "}",
@@ -1273,13 +1273,8 @@ export class JavaScriptEmitter {
           return `(${this.emitCondition(expression.left)} ${operator} ${this.emitCondition(expression.right)})`;
         }
         if (expression.operator === "in") {
-          const membership = this.hints.membershipChecks.get(spanIdentity(expression.span));
-          if (membership === "string") {
-            return `${this.emitPostfixReceiver(expression.right)}.includes(${this.emitMappedExpression(expression.left)})`;
-          }
           this.needsCollectionHelpers = true;
-          const helper = membership === "collection" ? "__velarCollectionHas" : "__velarMembership";
-          return `${helper}(${this.emitMappedExpression(expression.right)}, ${this.emitMappedExpression(expression.left)})`;
+          return `__velarContains(${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
         }
         const operator = expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"

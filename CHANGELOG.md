@@ -54,6 +54,16 @@ Compiler and framework changes:
 - Named calls now retain native callee-first evaluation, member receivers, and
   optional-call short-circuiting while still evaluating argument expressions
   once in source order before arranging them in declaration order.
+- Membership expressions now evaluate their candidate before their collection,
+  using a source-shaped controlled helper signature instead of reversing the
+  operands during lowering.
+- Plain member assignment no longer invents a getter read before its right-hand
+  expression; host setter effects occur afterward, while compound assignment
+  still models its required old-value read first.
+- Assertion messages are checked only on the failing path with rejected
+  condition facts; their effects no longer erase facts on the successful path.
+- `List.reduce(callback, initial)` analysis now follows runtime argument order
+  without losing contextual typing for an effect-free literal arrow callback.
 
 Tooling and documentation changes:
 

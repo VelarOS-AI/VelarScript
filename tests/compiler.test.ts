@@ -1111,6 +1111,42 @@ const initial = null;
   assert.equal(execution.stdout, "true\ntrue\n");
 });
 
+test("List.reduce analyzes its callback before its initial value", () => {
+  const result = compileCore(`
+type User:
+    name: string
+
+class Box:
+    let user: User? = {name: "Ada"}
+
+class Callbacks:
+    const box: Box
+
+    constructor(box: Box):
+        self.box = box
+
+    get combine() -> (string, string) -> string:
+        self.box.user = null
+        return (left, value) => left
+
+def invalid(box: Box) -> string:
+    assert box.user
+    const callbacks = Callbacks(box)
+    return ["value"].reduce(callbacks.combine, box.user.name)
+`.trimStart());
+
+  assert.equal(result.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const contextualArrow = compileCore(`
+const total = [1, 2, 3].reduce((sum, value) => sum + value, 0)
+print(total)
+`.trimStart());
+  assert.deepEqual(contextualArrow.diagnostics, []);
+  const execution = executeModule(contextualArrow.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "6\n");
+});
+
 test("assertions enforce runtime invariants and narrow following stable values", () => {
   const source = `
 type Draft:
@@ -1154,6 +1190,34 @@ assert true, 42
 `);
   assert.ok(invalid.diagnostics.some((item) => /Condition must be bool or optional/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
+
+  const messageFlow = compileCore(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> string:
+    box.user = null
+    return "failed"
+
+def keep(box: Box) -> string:
+    assert box.user
+    assert true, clear(box)
+    return box.user.name
+
+def failureMessage(user: User?) -> string:
+    assert user == null, user.name
+    return "empty"
+
+print(keep({user: {name: "Ada"}}))
+print(failureMessage(null))
+`.trimStart());
+  assert.deepEqual(messageFlow.diagnostics, []);
+  const messageExecution = executeModule(messageFlow.code ?? "");
+  assert.equal(messageExecution.status, 0, String(messageExecution.stderr));
+  assert.equal(messageExecution.stdout, "Ada\nempty\n");
 
   const scoped = compile(`
 let value: number? = 1
@@ -1371,14 +1435,43 @@ print("web" in tags)
 print("Ada" in scores)
 print("Script" in "VelarScript")
 print(not ("missing" in names))
+
+let order: List<string> = []
+
+def needle() -> string:
+    order.append("needle")
+    return "Ada"
+
+def haystack() -> List<string>:
+    order.append("haystack")
+    return names
+
+print(needle() in haystack())
+print(order.join(","))
+
+order.clear()
+
+async def asyncNeedle() -> string:
+    order.append("async needle")
+    return "Lin"
+
+async def asyncHaystack() -> List<string>:
+    order.append("async haystack")
+    return names
+
+async def containsAsync() -> bool:
+    return await asyncNeedle() in await asyncHaystack()
+
+print(await containsAsync())
+print(order.join(","))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarCollectionHas\(names, "Ada"\)/u);
-  assert.match(result.code ?? "", /__velarCollectionHas\(scores, "Ada"\)/u);
+  assert.match(result.code ?? "", /__velarContains\("Ada", names\)/u);
+  assert.match(result.code ?? "", /__velarContains\("Ada", scores\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\n");
+  assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\nneedle,haystack\ntrue\nasync needle,async haystack\n");
 
   const invalid = compile("print(1 in \"123\")\nprint(\"x\" in {x: 1})\n");
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
@@ -1393,10 +1486,27 @@ print(2 in values)
     ["values", { kind: "any" }],
   ]) } });
   assert.deepEqual(dynamic.diagnostics, []);
-  assert.match(dynamic.code ?? "", /__velarMembership/u);
+  assert.match(dynamic.code ?? "", /__velarContains/u);
   const dynamicExecution = executeModule((dynamic.code ?? "").replace(/^import .*?;\n+/mu, 'const text = "VelarScript";\nconst values = [1, 2];\n'));
   assert.equal(dynamicExecution.status, 0, String(dynamicExecution.stderr));
   assert.equal(dynamicExecution.stdout, "true\ntrue\n");
+
+  const effects = compileCore(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> string:
+    box.user = null
+    return "Ada"
+
+def invalid(box: Box) -> bool:
+    assert box.user
+    return clear(box) in [box.user.name]
+`.trimStart());
+  assert.equal(effects.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 });
 
 test("exponentiation is numeric and right-associative", () => {
@@ -10569,6 +10679,42 @@ def invalid(client: Client, initial: User?) -> string:
     return user.name
 `.trimStart());
   assert.equal(externalSetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const setterOrderSource = `
+type User:
+    name: string
+
+extern module "host-sdk":
+    export class Client:
+        let value: number
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def invalid(client: Client, initial: User?) -> string:
+    let user = initial
+    assert user
+    client.value = user.name.length
+    return user.name
+`.trimStart();
+  const setterOrder = compile(setterOrderSource);
+  const setterOrderErrors = setterOrder.diagnostics.filter((item) => /optional access/u.test(item.message));
+  assert.equal(setterOrderErrors.length, 1);
+  assert.equal(setterOrderErrors[0]?.span.start, setterOrderSource.lastIndexOf("user.name"));
+
+  const unsafeCompoundRead = compileCore(`
+type User:
+    name: string
+
+import js unsafe {client} from "host-sdk"
+
+def invalid(initial: User?) -> string:
+    let user = initial
+    assert user
+    client.value += user.name.length
+    return user.name
+`.trimStart());
+  assert.equal(unsafeCompoundRead.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 2);
 
   const stableLocal = compile(`
 type User:

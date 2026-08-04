@@ -111,6 +111,13 @@ record fields, freezes when the value crosses an open typed boundary, and is
 written back to the semantic index for editor hover. Iteration, membership,
 size, indexing, copying, and mutation lower through controlled helpers that
 validate dense Lists and invoke native Map/Set prototype operations directly.
+Membership lowers to a source-shaped `candidate, collection` helper signature,
+so ordinary JavaScript argument evaluation preserves the language order without
+an extra generated function boundary.
+`List.reduce(callback, initial)` likewise analyzes a callable getter or factory
+before the initial expression. A literal arrow can receive the initial value's
+context afterward because creating that arrow executes no user code; its body
+still runs only after all call arguments have evaluated.
 Native slot checks accept cross-realm Map/Set values while instance overrides,
 custom iterators, and Array species cannot change language semantics. Mutating
 results normalize to VelarScript `null` without replacing
@@ -251,6 +258,10 @@ inside their current flow frame, so analyzing a deferred function, callback,
 component, or instance initializer does not pretend that declaration is an
 immediate execution.
 
+Assertion messages are analyzed on an isolated failing path with the condition's
+negative facts. That path always throws, so message effects never contaminate
+the successful continuation where the positive assertion facts apply.
+
 Bindings separately record assignment permission and stability across effects.
 Local `let` has both, an imported `export let` is read-only locally but remains
 effect-mutable, and `export const` has neither. `ModuleInterface.mutableExports`
@@ -260,8 +271,11 @@ avoiding an untrackable mixture of property syntax and ES-module live bindings.
 
 Member writes clear aliased member-path facts even when their source bindings
 differ. Safe-JavaScript writes additionally clear mutable binding facts because
-the declared field may be implemented by a setter. Object interpolation in an
-f-string performs the same operation for a possible `toString` call, and
+the declared field may be implemented by a setter. A plain assignment only
+locates its target before evaluating the right side and applies that setter
+boundary afterward; compound assignment also performs an effectful old-value
+read before the right side. Object interpolation in an f-string performs the
+same operation for a possible `toString` call, and
 `instanceof` checks against safe-JavaScript classes do so for a possible
 `Symbol.hasInstance` hook. The Web analyzer checks component JSX in emitted
 order—props, children, invocation—and marks the final invocation as an effect
