@@ -18,6 +18,10 @@ function __velarInvokeOwnedCallback(callback, arguments_, phase, detail) {
     __velarReportOwnedCallback(failure, phase, detail);
   }
 }
+function __velarInvokeOwnedRead(read, callback, phase, detail) {
+  try { __velarInvokeOwnedCallback(callback, [read()], phase, detail); }
+  catch (failure) { __velarReportOwnedCallback(failure, phase, detail); }
+}
 `.trimStart();
 
 const fileRegistryRuntime = String.raw`
@@ -692,7 +696,7 @@ function matchRoute(routes, pathname) {
     const params = new Map();
     let decodable = true;
     for (const [index, name] of item.matcher.names.entries()) {
-      try { params.set(name, decodeURIComponent(result[index + 1] || "")); }
+      try { params.set(name, decodeURIComponent(result[index + 1] ?? "")); }
       catch { decodable = false; break; }
     }
     if (!decodable) continue;
@@ -798,6 +802,13 @@ const pendingFields = new WeakMap();
 const maxFormFields = 100000;
 const maxFormTextCodeUnits = 16 * 1024 * 1024;
 function formText(value, name, maximum = 1024) { value = __velarString(value, name); if (value.length > maximum) throw new RangeError(name + " is too long"); return value; }
+function formNumber(value) {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(text)) return null;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
+}
 function formValue(value, name) {
   if (typeof value === "string" && value.length > maxFormTextCodeUnits) throw new RangeError(name + " cannot exceed 16 MiB");
   return value;
@@ -807,6 +818,7 @@ function formList(values, name) {
   return values;
 }
 function formElements(form) {
+  if (!Number.isSafeInteger(form.elements.length) || form.elements.length < 0) throw new TypeError("Form controls have an invalid length");
   if (form.elements.length > maxFormFields) throw new RangeError("Forms cannot exceed 100000 controls");
   return form.elements;
 }
@@ -871,10 +883,10 @@ export function read(form, type, fields) {
       if (value == null || (typeof value === "string" && value.trim() === "")) {
         if (field.optional) output[name] = null;
         else throw new TypeError("Form field '" + name + "' requires a finite number");
-      } else if (typeof value === "string" && Number.isFinite(Number(value))) {
-        output[name] = Number(value);
       } else {
-        throw new TypeError("Form field '" + name + "' requires a finite number");
+        const number = formNumber(value);
+        if (number === null) throw new TypeError("Form field '" + name + "' requires a finite decimal number");
+        output[name] = number;
       }
     } else if (field.kind === "bool") {
       output[name] = data.has(name);
@@ -915,10 +927,7 @@ export function textValue(form, name, fallback = "") {
 }
 
 export function numberValue(form, name) {
-  const value = textValue(form, name).trim();
-  if (!value) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  return formNumber(textValue(form, name));
 }
 
 export function checkedValue(form, name) {
@@ -953,7 +962,7 @@ export function setError(form, name, message) {
   }
   error.textContent = message;
   field.setAttribute("aria-invalid", "true");
-  const describedText = formText(field.getAttribute("aria-describedby") || "", "Form aria-describedby", 65536);
+  const describedText = formText(field.getAttribute("aria-describedby") ?? "", "Form aria-describedby", 65536);
   const described = new Set(describedText.split(/\s+/u).filter(Boolean));
   described.add(error.id);
   field.setAttribute("aria-describedby", [...described].join(" "));
@@ -968,7 +977,7 @@ export function clearError(form, name) {
   if (error) error.remove();
   if (field) {
     field.removeAttribute("aria-invalid");
-    const describedText = formText(field.getAttribute("aria-describedby") || "", "Form aria-describedby", 65536);
+    const describedText = formText(field.getAttribute("aria-describedby") ?? "", "Form aria-describedby", 65536);
     const described = describedText.split(/\s+/u).filter((id) => id && id !== error?.id);
     if (described.length) field.setAttribute("aria-describedby", described.join(" "));
     else field.removeAttribute("aria-describedby");
@@ -987,8 +996,8 @@ export function errors(form) {
   const nodes = formErrorNodes(form);
   const output = new Map();
   for (const item of nodes) {
-    const name = formText(item.getAttribute("data-velar-field-error") || "", "Form error field name");
-    const message = formText(item.textContent || "", "Form error message", 65536);
+    const name = formText(item.getAttribute("data-velar-field-error") ?? "", "Form error field name");
+    const message = formText(item.textContent ?? "", "Form error message", 65536);
     if (name) output.set(name, message);
   }
   return output;
@@ -997,7 +1006,7 @@ export function errors(form) {
 export function focusFirstError(form) {
   requireForm(form);
   const error = form.querySelector("[data-velar-field-error]");
-  const field = error ? namedField(form, formText(error.getAttribute("data-velar-field-error") || "", "Form error field name")) : null;
+  const field = error ? namedField(form, formText(error.getAttribute("data-velar-field-error") ?? "", "Form error field name")) : null;
   if (!field) return false;
   field.focus();
   return true;
@@ -1008,12 +1017,18 @@ export function setPending(form, pending) {
   if (typeof pending !== "boolean") throw new TypeError("setPending requires a boolean");
   if (pending) {
     const elements = formElements(form);
-    if (!pendingFields.has(form)) pendingFields.set(form, Array.from(elements).map((field) => [field, Boolean(field.disabled)]));
+    const snapshot = [];
+    for (let index = 0; index < elements.length; index += 1) {
+      const field = elements[index];
+      if (!field || typeof field !== "object" || typeof field.disabled !== "boolean") throw new TypeError("Form controls must expose a bool disabled state");
+      snapshot.push([field, field.disabled]);
+    }
+    if (!pendingFields.has(form)) pendingFields.set(form, snapshot);
     form.setAttribute("aria-busy", "true");
-    for (const field of elements) field.disabled = true;
+    for (const [field] of snapshot) field.disabled = true;
   } else {
     form.removeAttribute("aria-busy");
-    for (const [field, disabled] of pendingFields.get(form) || []) field.disabled = disabled;
+    for (const [field, disabled] of pendingFields.get(form) ?? []) field.disabled = disabled;
     pendingFields.delete(form);
   }
   return null;
@@ -1450,6 +1465,7 @@ ${optionsRuntime}
 const timerRuntimeKey = Symbol.for("velar.runtime.v1");
 
 function browserNumber(value, name) { if (!Number.isFinite(value)) throw new TypeError(name + " must be a finite number"); return value; }
+function browserBool(value, name) { if (typeof value !== "boolean") throw new TypeError(name + " must be bool"); return value; }
 function browserText(value, name, maximum) { value = __velarString(value, name); if (value.length > maximum) throw new RangeError(name + " is too long"); return value; }
 function browserQuery(search) {
   search = browserText(search, "Browser location query", 2 * 1024 * 1024);
@@ -1588,23 +1604,26 @@ export function measure(element) {
     bottom: browserNumber(value.bottom, "Element bottom"), left: browserNumber(value.left, "Element left"),
   });
 }
-export function media(query) { return matchMedia(browserText(query, "Media query", 4096)).matches; }
+export function media(query) { return browserBool(matchMedia(browserText(query, "Media query", 4096)).matches, "Media query result"); }
 export function watchMedia(query, callback) {
   if (typeof callback !== "function") throw new TypeError("watchMedia requires a callback");
   const matcher = matchMedia(browserText(query, "Media query", 4096));
-  const changed = (event) => __velarInvokeOwnedCallback(callback, [event.matches], "observer", "media");
+  const changed = (event) => __velarInvokeOwnedRead(() => browserBool(event.matches, "Media watcher result"), callback, "observer", "media");
   matcher.addEventListener("change", changed);
   return () => { matcher.removeEventListener("change", changed); return null; };
 }
 export function watchOnline(callback) {
   if (typeof callback !== "function") throw new TypeError("watchOnline requires a callback");
-  const changed = () => __velarInvokeOwnedCallback(callback, [navigator.onLine], "observer", "online");
+  const changed = () => __velarInvokeOwnedRead(() => browserBool(navigator.onLine, "Browser online state"), callback, "observer", "online");
   addEventListener("online", changed); addEventListener("offline", changed);
   return () => { removeEventListener("online", changed); removeEventListener("offline", changed); return null; };
 }
 export function watchVisibility(callback) {
   if (typeof callback !== "function") throw new TypeError("watchVisibility requires a callback");
-  const changed = () => __velarInvokeOwnedCallback(callback, [document.visibilityState === "visible"], "observer", "visibility");
+  const changed = () => __velarInvokeOwnedRead(() => {
+    if (document.visibilityState !== "visible" && document.visibilityState !== "hidden") throw new TypeError("Browser visibility state is invalid");
+    return document.visibilityState === "visible";
+  }, callback, "observer", "visibility");
   document.addEventListener("visibilitychange", changed);
   return () => { document.removeEventListener("visibilitychange", changed); return null; };
 }
@@ -1620,7 +1639,7 @@ export function closeDialog(dialog, result = "") {
   if (dialog.open) dialog.close(result);
   return null;
 }
-export function dialogResult(dialog) { requireDialog(dialog); return browserText(dialog.returnValue || "", "Dialog result", 65536); }
+export function dialogResult(dialog) { requireDialog(dialog); return browserText(dialog.returnValue, "Dialog result", 65536); }
 export function frame() { return new Promise((resolve, reject) => requestAnimationFrame((value) => { try { resolve(browserNumber(value, "Animation frame timestamp")); } catch (error) { reject(error); } })); }
 function requireElement(value) { if (!(value instanceof Element)) throw new TypeError("Browser element helpers require an Element"); }
 function requireFocusableElement(value) {
@@ -1671,14 +1690,15 @@ export function pick(options = {}) {
       finished = true;
       globalThis.removeEventListener("focus", focused);
       try {
-        const selected = input.files || [];
-        if (!Number.isSafeInteger(selected.length) || selected.length < 0) throw new TypeError("A file picker returned an invalid file list");
+        const selected = input.files;
+        if (!selected || typeof selected !== "object" || !Number.isSafeInteger(selected.length) || selected.length < 0) throw new TypeError("A file picker returned an invalid file list");
         if (selected.length > 10000) {
           input.remove();
           reject(new RangeError("A file picker cannot return more than 10000 files"));
           return;
         }
-        const files = [...selected].map(wrap);
+        const files = [];
+        for (let index = 0; index < selected.length; index += 1) files.push(wrap(selected[index]));
         input.remove();
         resolve(files);
       } catch (error) {
@@ -1714,7 +1734,7 @@ export function readDataUrl(file, maxBytes = defaultFileReadBytes) {
       if (reader.result.length > Math.ceil(maxBytes * 4 / 3) + 4096) { reject(new RangeError("File data URL result exceeds maxBytes expansion")); return; }
       resolve(reader.result);
     };
-    reader.onerror = () => reject(reader.error || new Error("File reading failed"));
+    reader.onerror = () => reject(Error.isError(reader.error) ? reader.error : new Error("File reading failed"));
     reader.readAsDataURL(value);
   });
 }
@@ -1761,36 +1781,61 @@ function handler(value, allowed) {
   }
   return value;
 }
-function socketState(value) { return value.readyState === 0 ? "connecting" : value.readyState === 1 ? "open" : value.readyState === 2 ? "closing" : "closed"; }
+function webSocketState(value) {
+  if (value.readyState === 0) return "connecting";
+  if (value.readyState === 1) return "open";
+  if (value.readyState === 2) return "closing";
+  if (value.readyState === 3) return "closed";
+  throw new TypeError("WebSocket returned an invalid state");
+}
+function eventStreamState(value) {
+  if (value.readyState === 0) return "connecting";
+  if (value.readyState === 1) return "open";
+  if (value.readyState === 2) return "closed";
+  throw new TypeError("Event stream returned an invalid state");
+}
 export function socket(url, handlers = {}) {
   handlers = handler(handlers, new Set(["open", "message", "error", "close"]));
   const value = new WebSocket(realtimeUrl(url, "WebSocket URL"));
+  let resolvedUrl;
+  try { resolvedUrl = realtimeUrl(value.url, "WebSocket resolved URL"); }
+  catch (failure) { try { value.close(); } catch {} throw failure; }
   value.addEventListener("open", () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "socket:open"));
   value.addEventListener("message", (event) => {
     if (typeof event.data !== "string") {
       __velarInvokeOwnedCallback(handlers.error, ["Binary WebSocket messages are not supported by VelarScript Web API 0.10"], "realtime", "socket:error");
-      if (value.readyState < WebSocket.CLOSING) value.close(1003, "Text messages only");
+      const state = webSocketState(value);
+      if (state === "connecting" || state === "open") value.close(1003, "Text messages only");
       return;
     }
     if (event.data.length > maxRealtimeTextCodeUnits) {
       __velarInvokeOwnedCallback(handlers.error, ["WebSocket message exceeded 16 MiB"], "realtime", "socket:error");
-      if (value.readyState < WebSocket.CLOSING) value.close(1009, "Message too large");
+      const state = webSocketState(value);
+      if (state === "connecting" || state === "open") value.close(1009, "Message too large");
       return;
     }
     __velarInvokeOwnedCallback(handlers.message, [event.data], "realtime", "socket:message");
   });
   value.addEventListener("error", () => __velarInvokeOwnedCallback(handlers.error, ["WebSocket connection error"], "realtime", "socket:error"));
-  value.addEventListener("close", (event) => __velarInvokeOwnedCallback(handlers.close, [event.code, event.reason || ""], "realtime", "socket:close"));
+  value.addEventListener("close", (event) => {
+    try {
+      if (!Number.isSafeInteger(event.code) || event.code < 0 || event.code > 65535) throw new TypeError("WebSocket close event returned an invalid code");
+      const reason = realtimeMessage(event.reason, "WebSocket close event reason");
+      if (new TextEncoder().encode(reason).length > 123) throw new RangeError("WebSocket close event reason cannot exceed 123 UTF-8 bytes");
+      __velarInvokeOwnedCallback(handlers.close, [event.code, reason], "realtime", "socket:close");
+    } catch (failure) { __velarReportOwnedCallback(failure, "realtime", "socket:close"); }
+  });
   return Object.freeze({
-    url: value.url,
-    state: () => socketState(value),
-    send(data) { data = realtimeMessage(data, "WebSocket message"); if (value.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not open"); value.send(data); return null; },
-    sendJson(data) { if (value.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not open"); value.send(__velarJsonStringify(data)); return null; },
+    url: resolvedUrl,
+    state: () => webSocketState(value),
+    send(data) { data = realtimeMessage(data, "WebSocket message"); if (webSocketState(value) !== "open") throw new Error("WebSocket is not open"); value.send(data); return null; },
+    sendJson(data) { if (webSocketState(value) !== "open") throw new Error("WebSocket is not open"); value.send(__velarJsonStringify(data)); return null; },
     close(code = 1000, reason = "") {
       if (!Number.isSafeInteger(code) || (code !== 1000 && (code < 3000 || code > 4999))) throw new RangeError("WebSocket close code must be 1000 or from 3000 through 4999");
       reason = __velarString(reason, "WebSocket close reason");
       if (new TextEncoder().encode(reason).length > 123) throw new RangeError("WebSocket close reason cannot exceed 123 UTF-8 bytes");
-      if (value.readyState < WebSocket.CLOSING) value.close(code, reason);
+      const state = webSocketState(value);
+      if (state === "connecting" || state === "open") value.close(code, reason);
       return null;
     },
   });
@@ -1799,6 +1844,9 @@ export function eventStream(url, handlers = {}, credentials = false) {
   handlers = handler(handlers, new Set(["open", "message", "error"]));
   credentials = __velarBool(credentials, "Event stream credentials");
   const value = new EventSource(realtimeUrl(url, "Event stream URL"), { withCredentials: credentials });
+  let resolvedUrl;
+  try { resolvedUrl = realtimeUrl(value.url, "Event stream resolved URL"); }
+  catch (failure) { try { value.close(); } catch {} throw failure; }
   value.addEventListener("open", () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "event-stream:open"));
   value.addEventListener("message", (event) => {
     if (typeof event.data !== "string" || event.data.length > maxRealtimeTextCodeUnits || typeof event.lastEventId !== "string" || event.lastEventId.length > 65536) {
@@ -1810,8 +1858,8 @@ export function eventStream(url, handlers = {}, credentials = false) {
   });
   value.addEventListener("error", () => __velarInvokeOwnedCallback(handlers.error, ["Event stream connection error"], "realtime", "event-stream:error"));
   return Object.freeze({
-    url: value.url,
-    state: () => socketState(value),
+    url: resolvedUrl,
+    state: () => eventStreamState(value),
     close() { value.close(); return null; },
   });
 }

@@ -4960,6 +4960,42 @@ try { errors(form); console.log("accepted"); } catch (error) { console.log(error
   assert.equal(execution.stdout, "RangeError\nRangeError\nRangeError\nRangeError\n");
 });
 
+test("form numbers use strict decimal text and pending state preserves bool controls", () => {
+  const source = standardModuleSource("velar/forms") ?? "";
+  const execution = executeModule(`
+let current = "";
+let formMutations = 0;
+globalThis.HTMLFormElement = class {
+  constructor() { this.elements = []; }
+  setAttribute() { formMutations += 1; }
+  removeAttribute() { formMutations += 1; }
+  querySelectorAll() { return []; }
+};
+globalThis.FormData = class {
+  get() { return current; }
+  getAll() { return [current]; }
+  has() { return false; }
+};
+${source}
+const form = new HTMLFormElement();
+for (const text of ["42", " .5 ", "1.", "1e3", "+2", "0x10", "Infinity", "1_0", "   "]) {
+  current = text;
+  console.log(numberValue(form, "amount"));
+}
+const Amount = __velarRegisterRuntimeType(Object.freeze({ is() { return true; }, parse(value) { return value; } }));
+current = "0x10";
+try { read(form, Amount, [{ name: "amount", kind: "number", optional: false, enumValues: null }]); console.log("accepted"); }
+catch (error) { console.log(error.name); }
+let coercions = 0;
+form.elements = [{ disabled: { valueOf() { coercions += 1; return false; } } }];
+try { setPending(form, true); console.log("accepted"); }
+catch (error) { console.log(error.name); }
+console.log(coercions + ":" + formMutations);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "42\n0.5\n1\n1000\n2\nnull\nnull\nnull\nnull\nTypeError\nTypeError\n0:0\n");
+});
+
 test("browser helpers reject invalid values before invoking browser capabilities", () => {
   const source = standardModuleSource("velar/browser") ?? "";
   const execution = executeModule(`
@@ -5218,12 +5254,13 @@ test("file picker and reader host results reject instead of hanging or escaping 
   const source = standardModuleSource("velar/files") ?? "";
   const execution = executeModule(`
 let selectedFile = { name: "invalid.txt", size: Number.NaN, type: "text/plain", lastModified: 0 };
+let selectedFiles = [selectedFile];
 let removals = 0;
 globalThis.document = {
   createElement() {
     const listeners = new Map();
     return {
-      get files() { return [selectedFile]; },
+      get files() { return selectedFiles; },
       addEventListener(name, listener) { listeners.set(name, listener); },
       remove() { removals += 1; },
       click() { listeners.get("change")(); },
@@ -5239,13 +5276,16 @@ globalThis.FileReader = class {
 ${source}
 try { await pick(); console.log("accepted"); } catch (error) { console.log(error.name); }
 selectedFile = { name: "valid.txt", size: 1, type: "text/plain", lastModified: 0, text() { return Promise.resolve("xx"); } };
+selectedFiles = null;
+try { await pick(); console.log("accepted"); } catch (error) { console.log(error.name); }
+selectedFiles = [selectedFile];
 const [file] = await pick();
 try { await readText(file, 1); console.log("accepted"); } catch (error) { console.log(error.name); }
 try { await readDataUrl(file, 1); console.log("accepted"); } catch (error) { console.log(error.name); }
 console.log(removals);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "TypeError\nRangeError\nRangeError\n2\n");
+  assert.equal(execution.stdout, "TypeError\nTypeError\nRangeError\nRangeError\n3\n");
 });
 
 test("realtime validates handlers, payloads, and close metadata before native effects", () => {
@@ -5299,6 +5339,52 @@ console.log([getterReads, constructed, sent, closed].join(":"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,RangeError,RangeError\n0:1:0:0\n");
+});
+
+test("realtime validates resolved URLs, states, and inbound close metadata", () => {
+  const source = standardModuleSource("velar/realtime") ?? "";
+  const execution = executeModule(`
+let coercions = 0;
+let resolvedUrl = { toString() { coercions += 1; return "wss://coerced.test"; } };
+let socketValue;
+let streamValue;
+let invalidCloses = 0;
+const reports = [];
+globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.detail + ":" + error.name); } };
+class FakeSocket {
+  constructor() { this.url = resolvedUrl; this.readyState = 1; this.listeners = new Map(); socketValue = this; }
+  addEventListener(name, listener) { this.listeners.set(name, listener); }
+  send() {}
+  close() { invalidCloses += 1; this.readyState = 3; }
+}
+class FakeEventSource {
+  constructor() { this.url = resolvedUrl; this.readyState = 1; this.listeners = new Map(); streamValue = this; }
+  addEventListener(name, listener) { this.listeners.set(name, listener); }
+  close() { invalidCloses += 1; this.readyState = 2; }
+}
+globalThis.WebSocket = FakeSocket;
+globalThis.EventSource = FakeEventSource;
+${source}
+for (const operation of [() => socket("wss://example.test"), () => eventStream("https://example.test")]) {
+  try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
+}
+resolvedUrl = "wss://example.test";
+const channel = socket("wss://example.test", { close() {} });
+socketValue.readyState = 4;
+try { channel.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
+socketValue.readyState = 3;
+socketValue.listeners.get("close")({ code: 1000, reason: 0 });
+resolvedUrl = "https://example.test";
+const stream = eventStream("https://example.test");
+streamValue.readyState = 2;
+console.log(stream.state());
+streamValue.readyState = 3;
+try { stream.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(reports.join("|"));
+console.log(coercions + ":" + invalidCloses);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "TypeError\nTypeError\nTypeError\nclosed\nTypeError\nsocket:close:TypeError\n0:2\n");
 });
 
 test("realtime closes oversized inbound messages and rejects oversized sends", () => {

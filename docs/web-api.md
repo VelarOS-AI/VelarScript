@@ -385,8 +385,10 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
 - `textValue(form, name, fallback="")`, `numberValue(form, name)`,
   `checkedValue(form, name)`, and `fieldValues(form, name)` expose common native
   form shapes without leaking `FormData` or forcing application code through
-  `unknown`. Blank or non-finite numeric fields return `null`; textual helpers
-  reject native file values instead of coercing them silently.
+  `unknown`. Numbers use the same signed decimal/exponent grammar as
+  `number(text)`; blank, hexadecimal, numeric-separator, and non-finite text
+  return `null`. Textual helpers reject native file values instead of coercing
+  them silently.
 - `read(form, Type)` decodes a flat native form into the existing colon-form
   record type. It supports `string`, finite `number`, `bool` checkboxes, enums,
   `List<string>` repeated fields, and optional string/number/enum fields. Blank
@@ -409,7 +411,8 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
   unrelated `aria-describedby` tokens. `errors(form)` returns current messages
   and `focusFirstError(form)` focuses the first invalid field.
 - `setPending(form, bool)` owns `aria-busy` and temporarily disables fields,
-  restoring their previous disabled state afterward.
+  restoring their previous disabled state afterward. It validates every
+  control's native `disabled` value as bool before mutating the form.
 - `reset(form)` restores pending/error ownership and then performs the native
   form reset.
 - Helpers require a real form element. Submission remains explicit through
@@ -512,6 +515,9 @@ part of Web API 0.10.
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque `File` is registered. Invalid native picker results reject
 the Promise instead of escaping an event callback or leaving it pending.
+Missing or malformed native file lists are failures, not implicit empty
+selections, and picker results are copied by bounded index reads rather than a
+host-provided iterator.
 `readText` and `readDataUrl` also verify the asynchronous reader result and its
 maximum encoded expansion before returning a string.
 
@@ -541,7 +547,9 @@ component LiveStatus:
   Known non-data types fail checking; dynamic Map/Set/class/function, cyclic,
   sparse, or non-finite values fail before WebSocket `send` is called.
 - `eventStream` wraps server-sent events and exposes `state` and `close`, with
-  optional credentials.
+  optional credentials. Event streams report `connecting`, `open`, or `closed`;
+  WebSockets additionally expose `closing`. Unknown native state numbers fail
+  rather than being mislabeled.
 - URLs are strings, EventSource credentials are bool, and handler records
   accept only documented enumerable callable data fields. Accessors and unknown
   fields fail before constructing the native connection. Handler throws and
@@ -552,6 +560,10 @@ component LiveStatus:
   messages close with code `1009`, and oversized server-sent events close their
   stream after reporting the boundary error. Server-sent event IDs are limited
   to 64 KiB on the same checked return path.
+- Resolved native connection URLs are validated again before becoming public
+  fields. Inbound WebSocket close codes/reasons are also checked before the
+  typed callback runs; malformed host metadata is reported through
+  `velar/app` without implicit conversion.
 - WebSocket close codes are `1000` or application codes `3000`–`4999`; reasons
   are strings no longer than 123 UTF-8 bytes. Invalid messages, JSON payloads,
   codes, and reasons fail before native `send` or `close` effects.
