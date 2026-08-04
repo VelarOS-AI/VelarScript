@@ -280,7 +280,9 @@ actual strings at dynamic boundaries rather than inheriting JavaScript
 `String(...)` coercion; this includes the browser's current base URL and every
 field copied from a native `URL` result. URL text and encoded query output are
 limited to 2 MiB; component encoding and multi-part joining check the resulting
-length before allocation. Parsed names/values share the same text budget, and
+length before allocation. Normalization and query/hash replacement likewise
+budget every native URL fragment before concatenating the returned relative or
+protocol-relative text. Parsed names/values share the same text budget, and
 query maps contain at most 100,000 fields.
 
 ## `velar/time`
@@ -311,7 +313,9 @@ date range. Host clock and internationalization results are validated before
 they cross back into VelarScript: invalid clocks, non-string formatting output,
 missing/duplicate time-zone parts, accessors, and impossible calendar fields
 fail explicitly rather than leaking `NaN` or guessed values through the typed
-API. Formatted output is limited to 65,536 characters.
+API. A time-zone parts List has one bounded length snapshot, so a changing host
+collection cannot extend validation midway. Formatted output is limited to
+65,536 characters.
 
 ```velar
 import {iso, now, parts, utc} from "velar/time"

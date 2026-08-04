@@ -880,11 +880,21 @@ function urlSnapshot(url) {
     query: queryMap(search, "URL query"), hash: urlText(url.hash, "URL hash"), origin: urlText(url.origin, "URL origin"),
   });
 }
+function joinedUrlOutput(parts) {
+  let units = 0;
+  for (const part of parts) {
+    if (part.length > maxUrlCodeUnits - units) throw new RangeError("URL output cannot exceed 2 MiB");
+    units += part.length;
+  }
+  let output = "";
+  for (const part of parts) output += part;
+  return output;
+}
 function restore(original, url) {
   const href = urlText(url.href, "URL href"), host = urlText(url.host, "URL host"), path = urlText(url.pathname, "URL path");
   const search = urlText(url.search, "URL query"), hash = urlText(url.hash, "URL hash");
-  const output = /^[a-z][a-z\d+.-]*:/iu.test(original) ? href : original.startsWith("//") ? "//" + host + path + search + hash : path + search + hash;
-  return urlText(output, "URL output");
+  if (/^[a-z][a-z\d+.-]*:/iu.test(original)) return href;
+  return original.startsWith("//") ? joinedUrlOutput(["//", host, path, search, hash]) : joinedUrlOutput([path, search, hash]);
 }
 function queryMap(search, name) {
   search = urlText(search, name);
@@ -996,10 +1006,12 @@ function zonedParts(date, timeZone) {
   const formatter = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "numeric", day: "numeric", weekday: "short", hour: "numeric", minute: "numeric", second: "numeric", era: "short", hourCycle: "h23" });
   const parts = formatter.formatToParts(date);
   if (!Array.isArray(parts)) throw new TypeError("Intl.DateTimeFormat.formatToParts must return a List");
-  if (parts.length > 32) throw new RangeError("Intl.DateTimeFormat returned too many time parts");
+  const partCount = parts.length;
+  if (!Number.isSafeInteger(partCount) || partCount < 0) throw new TypeError("Intl.DateTimeFormat returned an invalid time part count");
+  if (partCount > 32) throw new RangeError("Intl.DateTimeFormat returned too many time parts");
   const entries = new Map();
   const required = new Set(["year", "month", "day", "weekday", "hour", "minute", "second", "era"]);
-  for (let index = 0; index < parts.length; index += 1) {
+  for (let index = 0; index < partCount; index += 1) {
     const part = ownData(parts, String(index), "Intl time part");
     const type = ownData(part, "type", "Intl time part type");
     const value = ownData(part, "value", "Intl time part value");

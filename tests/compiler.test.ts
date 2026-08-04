@@ -6352,6 +6352,15 @@ Intl.DateTimeFormat = class {
 };
 try { format(0); console.log("accepted"); } catch (error) { console.log(error.name); }
 try { parts(0, "UTC"); console.log("accepted"); } catch (error) { console.log(error.name); }
+let timePartLengthReads = 0;
+const validTimeParts = [
+  { type: "year", value: "1970" }, { type: "month", value: "1" }, { type: "day", value: "1" }, { type: "weekday", value: "Thu" },
+  { type: "hour", value: "0" }, { type: "minute", value: "0" }, { type: "second", value: "0" }, { type: "era", value: "AD" },
+];
+Intl.DateTimeFormat = class {
+  formatToParts() { return new Proxy(validTimeParts, { get(target, key, receiver) { if (key === "length") { timePartLengthReads += 1; return timePartLengthReads === 1 ? target.length : 100; } return Reflect.get(target, key, receiver); } }); }
+};
+console.log(parts(0, "UTC").year, timePartLengthReads);
 Intl.DateTimeFormat = originalDateTimeFormat;
 console.log(timeCoercions + ":" + timeGetterReads);
 `);
@@ -6364,7 +6373,7 @@ console.log(timeCoercions + ":" + timeGetterReads);
     "2024-1-2-3-4-5",
     "true", "true", "true", "true", "true", "true",
     "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "TypeError",
-    "RangeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "0:0", "",
+    "RangeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "1970 1", "0:0", "",
   ].join("\n"));
 });
 
@@ -6771,6 +6780,18 @@ console.log(encodeCalls);
 `);
   assert.equal(urlExecution.status, 0, String(urlExecution.stderr));
   assert.equal(urlExecution.stdout, "TypeError\nRangeError\nRangeError\nRangeError\n0\nVelar%20Script\n0\n");
+
+  const tinyUrl = url.replace("const maxUrlCodeUnits = 2 * 1024 * 1024;", "const maxUrlCodeUnits = 16;");
+  const tinyUrlExecution = executeModule(`${tinyUrl}
+const NativeUrl = globalThis.URL;
+globalThis.URL = class {
+  constructor() { this.href = "x:/"; this.protocol = "x:"; this.host = "host"; this.hostname = "host"; this.port = ""; this.pathname = "/123456789"; this.search = "?123456789"; this.hash = "#123456789"; this.origin = "null"; }
+};
+try { normalize("/"); console.log("accepted"); } catch (error) { console.log(error.name); }
+globalThis.URL = NativeUrl;
+`);
+  assert.equal(tinyUrlExecution.status, 0, String(tinyUrlExecution.stderr));
+  assert.equal(tinyUrlExecution.stdout, "RangeError\n");
 
   const asyncModule = standardModuleSource("velar/async") ?? "";
   const asyncExecution = executeModule(`${asyncModule}
