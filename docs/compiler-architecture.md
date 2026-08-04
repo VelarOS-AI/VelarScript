@@ -90,6 +90,15 @@ arrows, getters, and methods. Call sites apply the summary to arguments in
 formal-parameter order while preserving source evaluation order. Public class
 interfaces consume the analyzed member tables, so the same contract survives
 module boundaries instead of being reconstructed from annotations.
+Constructor analysis maintains a separate fixed-point summary for arguments or
+captured values stored by the instance, including `super(...)` forwarding. A
+local instance that stores one of those values receives `containsExternal`
+metadata rather than the `external` marker used for a host-owned object. Member
+analysis can therefore keep the local receiver inert while retaining host origin
+on aggregate values exposed from it. Callable and constructor summaries are
+refined together so hoisted factories cannot observe a declaration-order gap.
+External default metadata is keyed by formal parameter and applied only when a
+positional or named call omits that parameter.
 
 Runtime validation proves a value's current shape; it does not prove that a
 Proxy will preserve that shape on its next operation. `Type.parse`, `is`, and

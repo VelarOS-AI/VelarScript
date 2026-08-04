@@ -100,6 +100,15 @@ Compiler and framework changes:
   boundaries instead of being rebuilt from source annotations.
 - Contextually typed List literals now retain host origin in their element
   types while the newly allocated List itself remains owned.
+- Local class construction now distinguishes a host object from a locally
+  allocated instance that contains host-origin references. Constructor field
+  initializers, parameter assignments, named calls, default values, `super`
+  forwarding, hoisted calls, methods returning `self`, runtime checks, and
+  module interfaces preserve that distinction without making unrelated
+  primitive fields effectful.
+- Callable and constructor default provenance is applied only when that
+  parameter is omitted; an explicit owned argument is not contaminated by an
+  external default it replaces.
 
 Tooling and documentation changes:
 

@@ -88,6 +88,11 @@ interface CallableOriginSummary {
   readonly parameters: ReadonlySet<number>;
   readonly rest: boolean;
   readonly receiver: boolean;
+  readonly externalDefaults?: ReadonlySet<number>;
+}
+
+interface ClassConstructorOriginSummary extends CallableOriginSummary {
+  readonly containsExternal: boolean;
 }
 
 type CallableValueType = Extract<ValueType, { readonly kind: "function" | "action" | "intrinsic" }>;
@@ -126,6 +131,10 @@ export interface ClassInfo {
   readonly parameterNames?: readonly string[];
   readonly requiredParameters: number;
   readonly constructorRest?: ValueType;
+  readonly constructorOriginParameters?: readonly number[];
+  readonly constructorOriginRest?: true;
+  readonly constructorContainsExternal?: true;
+  readonly constructorExternalDefaults?: readonly number[];
   readonly base: string | null;
   readonly abstract: boolean;
   readonly fields: ReadonlyMap<string, ClassField>;
@@ -359,17 +368,17 @@ export class Analyzer implements TypeEnvironment {
     this.validateExternDeclarations(program);
     this.registerExternModules(program);
     this.predeclareTopLevel(program);
-    this.refineCallableReturnOrigins(program);
+    this.refineProgramOrigins(program);
     this.callableOriginChanged = false;
     for (const statement of program.body) {
       this.analyzeStatement(statement);
       const externalBinding = statement.kind === "VariableDeclaration" && this.bindingPatternHasExternalOrigin(statement.pattern);
       if (externalBinding || this.callableOriginChanged) {
-        this.refineCallableReturnOrigins(program);
+        this.refineProgramOrigins(program);
         this.callableOriginChanged = false;
       }
     }
-    this.refineCallableReturnOrigins(program);
+    this.refineProgramOrigins(program);
     this.callableOriginChanged = false;
     return this.diagnostics;
   }
@@ -2070,11 +2079,16 @@ export class Analyzer implements TypeEnvironment {
   private withCallableResultOrigin<T extends CallableValueType>(callable: T, origin?: CallableOriginSummary): T {
     if (!origin) return callable;
     const parameters = [...new Set([...(callable.resultOriginParameters ?? []), ...origin.parameters])].sort((a, b) => a - b);
+    const externalDefaults = [...new Set([
+      ...(callable.resultOriginExternalDefaults ?? []),
+      ...(origin.externalDefaults ?? []),
+    ])].sort((a, b) => a - b);
     return {
       ...callable,
       ...(parameters.length > 0 ? { resultOriginParameters: parameters } : {}),
       ...(callable.resultOriginRest || origin.rest ? { resultOriginRest: true as const } : {}),
       ...(callable.resultOriginReceiver || origin.receiver ? { resultOriginReceiver: true as const } : {}),
+      ...(externalDefaults.length > 0 ? { resultOriginExternalDefaults: externalDefaults } : {}),
     };
   }
 
@@ -2088,7 +2102,16 @@ export class Analyzer implements TypeEnvironment {
       || Boolean(pattern.rest && this.bindingPatternHasExternalOrigin(pattern.rest));
   }
 
-  private refineCallableReturnOrigins(program: Program): void {
+  private refineProgramOrigins(program: Program): void {
+    const declarationCount = program.body.filter((statement) => statement.kind === "FunctionDeclaration" || statement.kind === "ClassDeclaration").length;
+    for (let pass = 0; pass <= declarationCount; pass += 1) {
+      const callableChanged = this.refineCallableReturnOrigins(program);
+      const constructorChanged = this.refineClassConstructorOrigins(program);
+      if (!callableChanged && !constructorChanged) return;
+    }
+  }
+
+  private refineCallableReturnOrigins(program: Program): boolean {
     const callables: Array<{ readonly statement: AnalyzableFunctionDeclaration; readonly className: string | null }> = [];
     for (const statement of program.body) {
       if (statement.kind === "FunctionDeclaration") callables.push({ statement, className: null });
@@ -2097,6 +2120,7 @@ export class Analyzer implements TypeEnvironment {
         for (const method of statement.methods) if (!method.abstract) callables.push({ statement: method, className: statement.name });
       }
     }
+    let anyChanged = false;
     for (let pass = 0; pass <= callables.length; pass += 1) {
       let changed = false;
       for (const callable of callables) {
@@ -2111,31 +2135,209 @@ export class Analyzer implements TypeEnvironment {
           const shaped = this.preserveDeclaredOrigin(this.clearExternalOrigin(resolvedCurrent), returned);
           observed = observed ? mergeTypes(observed, shaped) : shaped;
         }
-        const origin = this.callableReturnOrigin(callable.statement, callable.className);
+        let origin = this.callableReturnOrigin(callable.statement, callable.className);
         const fixedParameters = callable.statement.parameters.filter((parameter) => !parameter.rest);
+        const externalDefaults = new Set(origin.externalDefaults ?? []);
         for (const index of origin.parameters) {
           const defaultValue = fixedParameters[index]?.defaultValue;
           if (!defaultValue) continue;
           const defaultType = this.refinedReturnExpressionType(defaultValue, callable.className);
-          if (!this.hasExternalOrigin(defaultType)) continue;
-          const shaped = this.markExternalAggregate(this.clearExternalOrigin(resolvedCurrent));
-          observed = observed ? mergeTypes(observed, shaped) : shaped;
+          if (this.hasExternalOrigin(defaultType)) externalDefaults.add(index);
         }
+        if (externalDefaults.size > 0) origin = { ...origin, externalDefaults };
         if (observed) {
           const next = mergeTypes(resolvedCurrent, observed);
           const callableChanged = this.updateCallableReturnOrigin(callable.statement, callable.className, next, asynchronous, origin);
           changed = callableChanged || changed;
-        } else if (origin.parameters.size > 0 || origin.rest || origin.receiver) {
+          anyChanged = callableChanged || anyChanged;
+        } else if (origin.parameters.size > 0 || origin.rest || origin.receiver || externalDefaults.size > 0) {
           const callableChanged = this.updateCallableReturnOrigin(callable.statement, callable.className, resolvedCurrent, asynchronous, origin);
           changed = callableChanged || changed;
+          anyChanged = callableChanged || anyChanged;
         }
       }
-      if (!changed) return;
+      if (!changed) return anyChanged;
+    }
+    return anyChanged;
+  }
+
+  private refineClassConstructorOrigins(program: Program): boolean {
+    const declarations = program.body.filter((statement): statement is ClassDeclaration => statement.kind === "ClassDeclaration");
+    let anyChanged = false;
+    for (let pass = 0; pass <= declarations.length; pass += 1) {
+      let changed = false;
+      for (const declaration of declarations) {
+        const origin = this.classConstructorOrigin(declaration);
+        const info = this.classes.get(declaration.name);
+        if (!info) continue;
+        const parameters = [...origin.parameters].sort((left, right) => left - right);
+        const externalDefaults = [...(origin.externalDefaults ?? [])].sort((left, right) => left - right);
+        const unchanged = (info.constructorOriginParameters ?? []).join(",") === parameters.join(",")
+          && Boolean(info.constructorOriginRest) === origin.rest
+          && Boolean(info.constructorContainsExternal) === origin.containsExternal
+          && (info.constructorExternalDefaults ?? []).join(",") === externalDefaults.join(",");
+        if (unchanged) continue;
+        const {
+          constructorOriginParameters: _originParameters,
+          constructorOriginRest: _originRest,
+          constructorContainsExternal: _containsExternal,
+          constructorExternalDefaults: _externalDefaults,
+          ...baseInfo
+        } = info;
+        this.classes.set(declaration.name, {
+          ...baseInfo,
+          ...(parameters.length > 0 ? { constructorOriginParameters: parameters } : {}),
+          ...(origin.rest ? { constructorOriginRest: true } : {}),
+          ...(origin.containsExternal ? { constructorContainsExternal: true } : {}),
+          ...(externalDefaults.length > 0 ? { constructorExternalDefaults: externalDefaults } : {}),
+        });
+        changed = true;
+        anyChanged = true;
+      }
+      if (!changed) return anyChanged;
+    }
+    return anyChanged;
+  }
+
+  private bindCallableOriginPattern(
+    pattern: BindingPattern,
+    origin: CallableOriginSummary,
+    bindings: Map<string, CallableOriginSummary>,
+  ): void {
+    if (pattern.kind === "NameBindingPattern") {
+      bindings.set(pattern.name, origin);
+      return;
+    }
+    if (pattern.kind === "ListBindingPattern") {
+      for (const element of pattern.elements) if (element) this.bindCallableOriginPattern(element, origin, bindings);
+      if (pattern.rest) bindings.set(pattern.rest.name, origin);
+      return;
+    }
+    for (const entry of pattern.entries) this.bindCallableOriginPattern(entry.pattern, origin, bindings);
+    if (pattern.rest) bindings.set(pattern.rest.name, origin);
+  }
+
+  private bindCallableMatchOriginPattern(
+    pattern: MatchPattern,
+    origin: CallableOriginSummary,
+    bindings: Map<string, CallableOriginSummary>,
+  ): void {
+    if (pattern.kind === "MatchCapturePattern") bindings.set(pattern.binding.name, origin);
+    else if (pattern.kind === "MatchAsPattern") {
+      this.bindCallableMatchOriginPattern(pattern.pattern, origin, bindings);
+      bindings.set(pattern.binding.name, origin);
+    } else if (pattern.kind === "MatchObjectPattern") {
+      for (const entry of pattern.entries) this.bindCallableMatchOriginPattern(entry.pattern, origin, bindings);
+      if (pattern.rest) bindings.set(pattern.rest.name, origin);
+    } else if (pattern.kind === "MatchListPattern") {
+      for (const element of pattern.elements) this.bindCallableMatchOriginPattern(element, origin, bindings);
+      if (pattern.rest) bindings.set(pattern.rest.name, origin);
     }
   }
 
+  private classConstructorOrigin(statement: ClassDeclaration): ClassConstructorOriginSummary {
+    const bindings = new Map<string, CallableOriginSummary>();
+    let fixedIndex = 0;
+    let stored = this.emptyCallableOrigin();
+    let containsExternal = false;
+    for (const parameter of statement.parameters) {
+      const origin: CallableOriginSummary = parameter.rest
+        ? { parameters: new Set(), rest: true, receiver: false }
+        : { parameters: new Set([fixedIndex++]), rest: false, receiver: false };
+      bindings.set(parameter.name, origin);
+      if (parameter.binding) stored = this.mergeCallableOrigins(stored, origin);
+    }
+
+    const recordStored = (expression: Expression, environment: ReadonlyMap<string, CallableOriginSummary>): void => {
+      const origin = this.callableExpressionOrigin(expression, environment, statement.name);
+      stored = this.mergeCallableOrigins(stored, origin);
+      const inferred = this.inferredExpressionTypes.get(spanIdentity(expression.span));
+      if (inferred && (inferred.kind !== "unknown" || isInvalidType(inferred))) {
+        containsExternal ||= this.hasExternalOrigin(inferred);
+      } else if (origin.parameters.size === 0 && !origin.rest && !origin.receiver) {
+        containsExternal ||= this.hasExternalOrigin(this.refinedReturnExpressionType(expression, statement.name));
+      }
+    };
+    for (const field of statement.fields) {
+      if (!field.static && field.initializer) recordStored(field.initializer, bindings);
+    }
+
+    const visit = (statements: readonly Statement[], environment: Map<string, CallableOriginSummary>): void => {
+      for (const child of statements) {
+        if (child.kind === "VariableDeclaration") {
+          this.bindCallableOriginPattern(child.pattern, this.callableExpressionOrigin(child.initializer, environment, statement.name), environment);
+        } else if (child.kind === "AssignmentStatement" && child.operator === "=") {
+          if (child.target.kind === "IdentifierExpression" && environment.has(child.target.name)) {
+            environment.set(child.target.name, this.callableExpressionOrigin(child.value, environment, statement.name));
+          } else if (child.target.kind === "MemberExpression"
+            && child.target.object.kind === "IdentifierExpression" && child.target.object.name === "self") {
+            recordStored(child.value, environment);
+          }
+        } else if (child.kind === "IfStatement") {
+          visit(child.thenBody, new Map(environment));
+          if (child.elseBody) visit(child.elseBody, new Map(environment));
+        } else if (child.kind === "MatchStatement") {
+          const matched = this.callableExpressionOrigin(child.value, environment, statement.name);
+          for (const branch of child.cases) {
+            const branchBindings = new Map(environment);
+            this.bindCallableMatchOriginPattern(branch.pattern, matched, branchBindings);
+            visit(branch.body, branchBindings);
+          }
+          if (child.elseBody) visit(child.elseBody, new Map(environment));
+        } else if (child.kind === "ForStatement") {
+          const bodyBindings = new Map(environment);
+          this.bindCallableOriginPattern(child.pattern, this.callableExpressionOrigin(child.iterable, environment, statement.name), bodyBindings);
+          visit(child.body, bodyBindings);
+        } else if (child.kind === "WhileStatement") visit(child.body, new Map(environment));
+        else if (child.kind === "TryStatement") {
+          visit(child.tryBody, new Map(environment));
+          if (child.catchBody) visit(child.catchBody, new Map(environment));
+          if (child.finallyBody) visit(child.finallyBody, new Map(environment));
+        }
+      }
+    };
+    if (statement.initialization) visit(statement.initialization.body, bindings);
+
+    const base = statement.base ? this.classes.get(statement.base.name) : null;
+    if (base) {
+      containsExternal ||= base.constructorContainsExternal === true;
+      const first = statement.initialization?.body[0];
+      const superCall = first?.kind === "ExpressionStatement" && first.expression.kind === "CallExpression"
+        && first.expression.callee.kind === "SuperExpression" ? first.expression : null;
+      for (const index of base.constructorOriginParameters ?? []) {
+        const argument = superCall
+          ? this.argumentForParameterNames(superCall.arguments, superCall.argumentNames, base.parameterNames, index)
+          : null;
+        if (!argument) continue;
+        stored = this.mergeCallableOrigins(stored, this.callableExpressionOrigin(argument, bindings, statement.name));
+        containsExternal ||= this.hasExternalOrigin(this.refinedReturnExpressionType(argument, statement.name));
+      }
+      if (base.constructorOriginRest && superCall) {
+        for (const argument of superCall.arguments.slice(base.parameters.length)) {
+          stored = this.mergeCallableOrigins(stored, this.callableExpressionOrigin(argument, bindings, statement.name));
+          containsExternal ||= this.hasExternalOrigin(this.refinedReturnExpressionType(argument, statement.name));
+        }
+      }
+      for (const index of base.constructorExternalDefaults ?? []) {
+        const argument = superCall
+          ? this.argumentForParameterNames(superCall.arguments, superCall.argumentNames, base.parameterNames, index)
+          : null;
+        if (!argument) containsExternal = true;
+      }
+    }
+    const fixedParameters = statement.parameters.filter((parameter) => !parameter.rest);
+    const externalDefaults = new Set<number>();
+    for (const index of stored.parameters) {
+      const defaultValue = fixedParameters[index]?.defaultValue;
+      if (defaultValue && this.hasExternalOrigin(this.refinedReturnExpressionType(defaultValue, statement.name))) {
+        externalDefaults.add(index);
+      }
+    }
+    return { ...stored, containsExternal, externalDefaults };
+  }
+
   private emptyCallableOrigin(): CallableOriginSummary {
-    return { parameters: new Set(), rest: false, receiver: false };
+    return { parameters: new Set(), rest: false, receiver: false, externalDefaults: new Set() };
   }
 
   private mergeCallableOrigins(...origins: readonly CallableOriginSummary[]): CallableOriginSummary {
@@ -2143,6 +2345,7 @@ export class Analyzer implements TypeEnvironment {
       parameters: new Set(origins.flatMap((origin) => [...origin.parameters])),
       rest: origins.some((origin) => origin.rest),
       receiver: origins.some((origin) => origin.receiver),
+      externalDefaults: new Set(origins.flatMap((origin) => [...(origin.externalDefaults ?? [])])),
     };
   }
 
@@ -2185,6 +2388,28 @@ export class Analyzer implements TypeEnvironment {
       return this.callableExpressionOrigin(expression.body, captured, className);
     }
     if (expression.kind === "CallExpression") {
+      if (expression.callee.kind === "IdentifierExpression") {
+        const constructor = this.lookup(expression.callee.name)?.type;
+        if (constructor?.kind === "classConstructor") {
+          const info = this.classes.get(constructor.identity ?? constructor.name) ?? this.classes.get(constructor.name);
+          const origins: CallableOriginSummary[] = [];
+          for (const index of info?.constructorOriginParameters ?? []) {
+            const argument = this.argumentForParameterNames(
+              expression.arguments,
+              expression.argumentNames,
+              info?.parameterNames,
+              index,
+            );
+            if (argument) origins.push(this.callableExpressionOrigin(argument, bindings, className));
+          }
+          if (info?.constructorOriginRest) {
+            for (const argument of expression.arguments.slice(info.parameters.length)) {
+              origins.push(this.callableExpressionOrigin(argument, bindings, className));
+            }
+          }
+          return this.mergeCallableOrigins(...origins);
+        }
+      }
       const callable = this.callableTypeForOrigin(expression.callee, className);
       if (!callable) return this.emptyCallableOrigin();
       const origins: CallableOriginSummary[] = [];
@@ -2224,34 +2449,6 @@ export class Analyzer implements TypeEnvironment {
     const staticMember = "static" in statement && statement.static === true;
     if (className && !staticMember) environment.set("self", { parameters: new Set(), rest: false, receiver: true });
 
-    const bindPattern = (pattern: BindingPattern, origin: CallableOriginSummary, bindings: Map<string, CallableOriginSummary>): void => {
-      if (pattern.kind === "NameBindingPattern") {
-        bindings.set(pattern.name, origin);
-        return;
-      }
-      if (pattern.kind === "ListBindingPattern") {
-        for (const element of pattern.elements) if (element) bindPattern(element, origin, bindings);
-        if (pattern.rest) bindings.set(pattern.rest.name, origin);
-        return;
-      }
-      for (const entry of pattern.entries) bindPattern(entry.pattern, origin, bindings);
-      if (pattern.rest) bindings.set(pattern.rest.name, origin);
-    };
-    const bindMatchPattern = (pattern: MatchPattern, origin: CallableOriginSummary, bindings: Map<string, CallableOriginSummary>): void => {
-      if (pattern.kind === "MatchCapturePattern") {
-        bindings.set(pattern.binding.name, origin);
-      } else if (pattern.kind === "MatchAsPattern") {
-        bindMatchPattern(pattern.pattern, origin, bindings);
-        bindings.set(pattern.binding.name, origin);
-      } else if (pattern.kind === "MatchObjectPattern") {
-        for (const entry of pattern.entries) bindMatchPattern(entry.pattern, origin, bindings);
-        if (pattern.rest) bindings.set(pattern.rest.name, origin);
-      } else if (pattern.kind === "MatchListPattern") {
-        for (const element of pattern.elements) bindMatchPattern(element, origin, bindings);
-        if (pattern.rest) bindings.set(pattern.rest.name, origin);
-      }
-    };
-
     let returned = this.emptyCallableOrigin();
     const mergeBranchBindings = (
       target: Map<string, CallableOriginSummary>,
@@ -2265,7 +2462,7 @@ export class Analyzer implements TypeEnvironment {
     const visit = (statements: readonly Statement[], bindings: Map<string, CallableOriginSummary>): void => {
       for (const child of statements) {
         if (child.kind === "VariableDeclaration") {
-          bindPattern(child.pattern, this.callableExpressionOrigin(child.initializer, bindings, className), bindings);
+          this.bindCallableOriginPattern(child.pattern, this.callableExpressionOrigin(child.initializer, bindings, className), bindings);
         } else if (child.kind === "AssignmentStatement" && child.target.kind === "IdentifierExpression" && child.operator === "=") {
           if (bindings.has(child.target.name)) {
             bindings.set(child.target.name, this.callableExpressionOrigin(child.value, bindings, className));
@@ -2285,7 +2482,7 @@ export class Analyzer implements TypeEnvironment {
           const matchedOrigin = this.callableExpressionOrigin(child.value, bindings, className);
           const branches = child.cases.map((branch) => {
             const branchBindings = new Map(bindings);
-            bindMatchPattern(branch.pattern, matchedOrigin, branchBindings);
+            this.bindCallableMatchOriginPattern(branch.pattern, matchedOrigin, branchBindings);
             visit(branch.body, branchBindings);
             return branchBindings;
           });
@@ -2297,7 +2494,7 @@ export class Analyzer implements TypeEnvironment {
           mergeBranchBindings(bindings, branches);
         } else if (child.kind === "ForStatement") {
           const bodyBindings = new Map(bindings);
-          bindPattern(child.pattern, this.callableExpressionOrigin(child.iterable, bindings, className), bodyBindings);
+          this.bindCallableOriginPattern(child.pattern, this.callableExpressionOrigin(child.iterable, bindings, className), bodyBindings);
           visit(child.body, bodyBindings);
           mergeBranchBindings(bindings, [bodyBindings]);
         } else if (child.kind === "WhileStatement") {
@@ -2399,12 +2596,19 @@ export class Analyzer implements TypeEnvironment {
 
   private refinedReturnExpressionType(expression: Expression, className: string | null): ValueType {
     const inferred = this.inferredExpressionTypes.get(spanIdentity(expression.span)) ?? unknownType;
-    if (expression.kind === "IdentifierExpression") return this.lookup(expression.name)?.type ?? inferred;
+    if (expression.kind === "IdentifierExpression") {
+      return inferred.kind !== "unknown" || isInvalidType(inferred)
+        ? inferred
+        : this.lookup(expression.name)?.type ?? inferred;
+    }
     if (expression.kind === "CallExpression") {
       if (expression.callee.kind === "IdentifierExpression") {
         const callable = this.lookup(expression.callee.name)?.type;
         if (callable?.kind === "function" || callable?.kind === "action") {
           return this.refinedCallableCallResult(expression, callable, className);
+        }
+        if (callable?.kind === "classConstructor") {
+          return this.refinedClassConstructorCallResult(expression, callable, className);
         }
       }
       if (expression.callee.kind === "MemberExpression") {
@@ -2488,28 +2692,64 @@ export class Analyzer implements TypeEnvironment {
     return inferred;
   }
 
+  private refinedClassConstructorCallResult(
+    call: Extract<Expression, { kind: "CallExpression" }>,
+    constructor: Extract<ValueType, { readonly kind: "classConstructor" }>,
+    className: string | null,
+  ): ValueType {
+    const info = this.classes.get(constructor.identity ?? constructor.name) ?? this.classes.get(constructor.name);
+    let containsExternal = info?.constructorContainsExternal === true;
+    for (const index of info?.constructorOriginParameters ?? []) {
+      const argument = this.argumentForParameterNames(call.arguments, call.argumentNames, info?.parameterNames, index);
+      if (argument && this.hasExternalOrigin(this.refinedReturnExpressionType(argument, className))) containsExternal = true;
+    }
+    for (const index of info?.constructorExternalDefaults ?? []) {
+      if (!this.argumentForParameterNames(call.arguments, call.argumentNames, info?.parameterNames, index)) containsExternal = true;
+    }
+    if (info?.constructorOriginRest) {
+      containsExternal ||= call.arguments.slice(info.parameters.length)
+        .some((argument) => this.hasExternalOrigin(this.refinedReturnExpressionType(argument, className)));
+    }
+    return {
+      kind: "class",
+      name: constructor.name,
+      ...(constructor.identity ? { identity: constructor.identity } : {}),
+      ...((constructor.identity ?? constructor.name).startsWith("js:") ? { external: true as const } : {}),
+      ...(containsExternal ? { containsExternal: true as const } : {}),
+    };
+  }
+
   private refinedCallableCallResult(
     call: Extract<Expression, { kind: "CallExpression" }>,
     callable: CallableValueType,
     className: string | null,
   ): ValueType {
-    let external = false;
+    let result = callable.result;
     for (const index of callable.resultOriginParameters ?? []) {
       const argument = this.callArgumentForParameter(call, callable, index);
-      if (argument && this.hasExternalOrigin(this.refinedReturnExpressionType(
-        argument.kind === "SpreadExpression" ? argument.value : argument,
-        className,
-      ))) external = true;
+      if (argument) {
+        const source = this.refinedReturnExpressionType(
+          argument.kind === "SpreadExpression" ? argument.value : argument,
+          className,
+        );
+        result = this.preserveDeclaredOrigin(result, source);
+      }
+    }
+    for (const index of callable.resultOriginExternalDefaults ?? []) {
+      if (!this.callArgumentForParameter(call, callable, index)) result = this.markExternalAggregate(result);
     }
     if (callable.resultOriginRest) {
-      external ||= this.callRestArguments(call, callable).some((argument) => this.hasExternalOrigin(
-        this.refinedReturnExpressionType(argument.kind === "SpreadExpression" ? argument.value : argument, className),
-      ));
+      for (const argument of this.callRestArguments(call, callable)) {
+        result = this.preserveDeclaredOrigin(result, this.refinedReturnExpressionType(
+          argument.kind === "SpreadExpression" ? argument.value : argument,
+          className,
+        ));
+      }
     }
     if (callable.resultOriginReceiver && call.callee.kind === "MemberExpression") {
-      external ||= this.hasExternalOrigin(this.refinedReturnExpressionType(call.callee.object, className));
+      result = this.preserveDeclaredOrigin(result, this.refinedReturnExpressionType(call.callee.object, className));
     }
-    return external ? this.markExternalAggregate(callable.result) : callable.result;
+    return result;
   }
 
   protected analyzeBlock(
@@ -3198,15 +3438,16 @@ export class Analyzer implements TypeEnvironment {
         ? { parameters: new Set(), rest: true, receiver: false }
         : { parameters: new Set([originIndex++]), rest: false, receiver: false });
     }
-    const resultOrigin = this.callableExpressionOrigin(expression.body, originBindings, this.currentClass);
-    let originAwareResult = result;
+    let resultOrigin = this.callableExpressionOrigin(expression.body, originBindings, this.currentClass);
+    const externalDefaults = new Set<number>();
     const fixedParameters = expression.parameters.filter((parameter) => !parameter.rest);
     for (const index of resultOrigin.parameters) {
       const defaultValue = fixedParameters[index]?.defaultValue;
       if (defaultValue && this.hasExternalOrigin(this.inferredExpressionType(defaultValue))) {
-        originAwareResult = this.markExternalAggregate(originAwareResult);
+        externalDefaults.add(index);
       }
     }
+    if (externalDefaults.size > 0) resultOrigin = { ...resultOrigin, externalDefaults };
     this.asynchronousFunctions.pop();
     this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
@@ -3218,7 +3459,7 @@ export class Analyzer implements TypeEnvironment {
       parameterNames: expression.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
       requiredParameters: expression.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
       ...(rest ? { rest } : {}),
-      result: originAwareResult,
+      result,
     }, resultOrigin);
   }
 
@@ -3306,11 +3547,24 @@ export class Analyzer implements TypeEnvironment {
       const info = this.classes.get(callee.identity ?? callee.name) ?? this.classes.get(callee.name);
       if (info?.abstract) this.typeError(`Cannot instantiate abstract class '${callee.name}'`, callSpan);
       this.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
+      let containsExternal = info?.constructorContainsExternal === true;
+      for (const index of info?.constructorOriginParameters ?? []) {
+        const argument = this.argumentForParameterNames(arguments_, argumentNames, info?.parameterNames, index);
+        if (argument && this.hasExternalOrigin(this.inferredExpressionType(argument))) containsExternal = true;
+      }
+      for (const index of info?.constructorExternalDefaults ?? []) {
+        if (!this.argumentForParameterNames(arguments_, argumentNames, info?.parameterNames, index)) containsExternal = true;
+      }
+      if (info?.constructorOriginRest) {
+        containsExternal ||= arguments_.slice(info.parameters.length)
+          .some((argument) => this.hasExternalOrigin(this.inferredExpressionType(argument)));
+      }
       return {
         kind: "class",
         name: callee.name,
         ...(callee.identity ? { identity: callee.identity } : {}),
         ...((callee.identity ?? callee.name).startsWith("js:") ? { external: true } : {}),
+        ...(containsExternal ? { containsExternal: true } : {}),
       };
     }
     if (callee.kind === "intrinsic") {
@@ -4066,7 +4320,9 @@ export class Analyzer implements TypeEnvironment {
       } else if (!field && !getter && !method) {
         this.typeError(`Class '${object.name}' has no member '${property}'`, memberSpan);
       }
-      if (object.external) result = this.markExternalAggregate(result);
+      if (object.external || object.containsExternal && !method && !privateMethod) {
+        result = this.markExternalAggregate(result);
+      }
     } else if (object.kind === "classConstructor") {
       const key = object.identity ?? object.name;
       const privateField = this.privateFieldForAccess(key, property, true);
@@ -4255,21 +4511,28 @@ export class Analyzer implements TypeEnvironment {
     arguments_: readonly Expression[],
     argumentNames: readonly (string | null)[] | undefined,
   ): ValueType {
-    let external = false;
+    let originAwareResult = result;
     for (const index of callable.resultOriginParameters ?? []) {
       const argument = this.argumentForCallableParameter(arguments_, argumentNames, callable, index);
-      if (argument && this.hasExternalOrigin(this.inferredExpressionType(argument))) external = true;
+      if (argument) originAwareResult = this.preserveDeclaredOrigin(originAwareResult, this.inferredExpressionType(argument));
+    }
+    for (const index of callable.resultOriginExternalDefaults ?? []) {
+      if (!this.argumentForCallableParameter(arguments_, argumentNames, callable, index)) {
+        originAwareResult = this.markExternalAggregate(originAwareResult);
+      }
     }
     if (callable.resultOriginRest) {
-      external ||= this.restArgumentsForCallable(arguments_, argumentNames, callable)
-        .some((argument) => this.hasExternalOrigin(this.inferredExpressionType(argument)));
+      for (const argument of this.restArgumentsForCallable(arguments_, argumentNames, callable)) {
+        originAwareResult = this.preserveDeclaredOrigin(originAwareResult, this.inferredExpressionType(argument));
+      }
     }
     if (callable.resultOriginReceiver && calleeExpression.kind === "MemberExpression") {
-      external ||= this.hasExternalOrigin(
+      originAwareResult = this.preserveDeclaredOrigin(
+        originAwareResult,
         this.inferredExpressionTypes.get(spanIdentity(calleeExpression.object.span)) ?? unknownType,
       );
     }
-    return external ? this.markExternalAggregate(result) : result;
+    return originAwareResult;
   }
 
   private inferredExpressionType(expression: Expression): ValueType {
@@ -4283,8 +4546,17 @@ export class Analyzer implements TypeEnvironment {
     callable: CallableValueType,
     parameterIndex: number,
   ): Expression | null {
+    return this.argumentForParameterNames(arguments_, argumentNames, callable.parameterNames, parameterIndex);
+  }
+
+  private argumentForParameterNames(
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    parameterNames: readonly string[] | undefined,
+    parameterIndex: number,
+  ): Expression | null {
     if (!argumentNames?.some((name) => name !== null)) return arguments_[parameterIndex] ?? null;
-    const parameterName = callable.parameterNames?.[parameterIndex];
+    const parameterName = parameterNames?.[parameterIndex];
     if (!parameterName) return null;
     let nextPositional = 0;
     for (let index = 0; index < arguments_.length; index += 1) {
@@ -4485,6 +4757,7 @@ export class Analyzer implements TypeEnvironment {
     if ((type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list") && type.external) {
       return true;
     }
+    if (type.kind === "class" && type.containsExternal) return true;
     if (type.kind === "optional") return this.hasExternalOrigin(type.inner);
     if (type.kind === "list" || type.kind === "set") return this.hasExternalOrigin(type.element);
     if (type.kind === "map") return this.hasExternalOrigin(type.key) || this.hasExternalOrigin(type.value);
@@ -4537,12 +4810,24 @@ export class Analyzer implements TypeEnvironment {
         ...(source.external ? { external: true } : {}),
       };
     }
+    if (declared.kind === "class" && source.kind === "class"
+      && (declared.identity ?? declared.name) === (source.identity ?? source.name)) {
+      return {
+        ...declared,
+        ...(source.external ? { external: true as const } : {}),
+        ...(source.containsExternal ? { containsExternal: true as const } : {}),
+      };
+    }
     return this.hasExternalOrigin(source) ? this.markExternalAggregate(declared) : declared;
   }
 
   private clearExternalOrigin(type: ValueType): ValueType {
-    if (type.kind === "named" || type.kind === "class") {
+    if (type.kind === "named") {
       const { external: _external, ...owned } = type;
+      return owned;
+    }
+    if (type.kind === "class") {
+      const { external: _external, containsExternal: _containsExternal, ...owned } = type;
       return owned;
     }
     if (type.kind === "object") {
@@ -5892,7 +6177,7 @@ export class Analyzer implements TypeEnvironment {
     const type = this.expandAliases(input);
     if (type.kind === "unknown" || type.kind === "any") return true;
     if (type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list") {
-      return type.external === true;
+      return type.external === true || type.kind === "class" && type.containsExternal === true;
     }
     if (type.kind === "optional") return this.runtimeValidationMayRetainHostOrigin(type.inner);
     if (type.kind === "union") return type.members.some((member) => this.runtimeValidationMayRetainHostOrigin(member));
@@ -5900,7 +6185,9 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private runtimeCheckedType(input: ValueType, checked: ValueType): ValueType {
-    return this.runtimeValidationMayRetainHostOrigin(input) ? this.markExternalAggregate(checked) : checked;
+    const source = this.expandAliases(input);
+    if (source.kind === "unknown" || source.kind === "any") return this.markExternalAggregate(checked);
+    return this.hasExternalOrigin(source) ? this.preserveDeclaredOrigin(checked, source) : checked;
   }
 
   private recordReflectionMayExecute(input: ValueType): boolean {

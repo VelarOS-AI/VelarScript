@@ -459,7 +459,7 @@ function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]
     .join("|");
   const classes = [...interface_.classes]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:${typeMap(new Map([
+    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:origin:${info.constructorOriginParameters?.join(",") ?? ""}:${info.constructorOriginRest ? "rest" : ""}:${info.constructorContainsExternal ? "contains-external" : ""}:defaults:${info.constructorExternalDefaults?.join(",") ?? ""}:${typeMap(new Map([
       ...[...info.fields].map(([field, value]) => [`field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
       ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
       ...[...info.staticFields].map(([field, value]) => [`static-field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
@@ -852,6 +852,10 @@ function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): Cla
     ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
     requiredParameters: info.requiredParameters,
     ...(info.constructorRest ? { constructorRest: renameType(info.constructorRest, aliases) } : {}),
+    ...(info.constructorOriginParameters ? { constructorOriginParameters: info.constructorOriginParameters } : {}),
+    ...(info.constructorOriginRest ? { constructorOriginRest: true } : {}),
+    ...(info.constructorContainsExternal ? { constructorContainsExternal: true } : {}),
+    ...(info.constructorExternalDefaults ? { constructorExternalDefaults: info.constructorExternalDefaults } : {}),
     base: info.base ? aliases.get(info.base) ?? info.base : null,
     abstract: info.abstract,
     fields: new Map([...info.fields].map(([name, field]) => [name, { mutable: field.mutable, type: renameType(field.type, aliases) }])),
@@ -923,7 +927,12 @@ function resolveKnownNominals(
 ): ValueType {
   if (type.kind === "named" && classes.has(type.name)) {
     const identity = classes.get(type.name)?.identity;
-    return { kind: "class", name: type.name, ...(identity ? { identity } : {}), ...(type.external ? { external: true } : {}) };
+    return {
+      kind: "class",
+      name: type.name,
+      ...(identity ? { identity } : {}),
+      ...(type.external ? { external: true } : {}),
+    };
   }
   if (type.kind === "named" && enums.has(type.name)) return { kind: "enum", name: type.name, identity: enums.get(type.name)!.identity };
   if (type.kind === "named" && !type.identity && namedTypeIdentities.has(type.name)) {

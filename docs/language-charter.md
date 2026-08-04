@@ -282,6 +282,17 @@ returns an owned `Profile` for an owned argument and a host-origin `Profile` for
 a host-origin argument. This relationship is part of the analyzed module
 contract but is not another source-level type feature or editor-visible syntax.
 
+Local class construction keeps the instance itself locally owned. If a
+constructor stores a host-origin argument or captured value, the compiler tracks
+that the instance contains host references. Reading an ordinary primitive field
+remains inert; a field or getter that can expose an aggregate is treated as
+host-origin. Constructor parameter forwarding, named calls, defaults, base
+constructors, methods returning `self`, and module boundaries preserve this
+distinction. Create an explicit owned snapshot before construction when the
+class should contain only stable local data.
+An external default contributes origin only when the caller omits that
+parameter; passing an explicit owned value keeps the result owned.
+
 An f-string converts each embedded value at its source position. Primitive and
 enum conversion is inert. Converting an object may invoke its `toString`, so
 object interpolation is an ordinary effect boundary; save any checked value

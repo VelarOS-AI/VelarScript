@@ -862,6 +862,10 @@ const unsafeSpread: Outer = {...aliasedOuter}
     analysisTypeIdentity({ kind: "list", element: leftObject }),
     analysisTypeIdentity({ kind: "list", element: { ...leftObject, external: true } }),
   );
+  const ownedClass = { kind: "class" as const, name: "Box" };
+  const containingClass = { ...ownedClass, containsExternal: true as const };
+  assert.equal(sameType(ownedClass, containingClass), true);
+  assert.notEqual(analysisTypeIdentity(ownedClass), analysisTypeIdentity(containingClass));
   const readonlyObject = { ...leftObject, readonlyFields: new Set(["name"]) };
   const structuralEnvironment = { fieldsOf: () => null, isSubclassOf: () => false };
   assert.equal(sameType(leftObject, readonlyObject), false);
@@ -11617,6 +11621,9 @@ export def throughLocal() -> Profile:
 export def identity(value: Profile) -> Profile:
     return value
 
+export def defaultIdentity(value: Profile = profile) -> Profile:
+    return value
+
 export def namedIdentity(prefix: string, value: Profile) -> Profile:
     return value
 
@@ -11691,6 +11698,14 @@ const ownedIdentity = identity({label: "owned"})
 if ownedIdentity.label:
     const repeated: string = ownedIdentity.label
 
+const defaultedValue = defaultIdentity()
+if defaultedValue.label:
+    const repeated: string = defaultedValue.label
+
+const explicitDefaultValue = defaultIdentity({label: "owned"})
+if explicitDefaultValue.label:
+    const repeated: string = explicitDefaultValue.label
+
 const namedValue = namedIdentity(value=profile, prefix="host")
 if namedValue.label:
     const repeated: string = namedValue.label
@@ -11760,8 +11775,8 @@ const staticEchoValue = Store.echoStatic(profile)
 if staticEchoValue.label:
     const repeated: string = staticEchoValue.label
 `.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(forwardedExternalValues.diagnostics.length, 22);
-  assert.equal(forwardedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 22);
+  assert.equal(forwardedExternalValues.diagnostics.length, 23);
+  assert.equal(forwardedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 23);
   for (const name of ["hoisted", "fromForwarded", "direct", "earlier", "throughLocal", "asynchronous"]) {
     const exported = forwardedExternalValues.moduleInterface.exports.get(name);
     const result = exported?.kind === "function" ? exported.result : null;
@@ -11771,6 +11786,9 @@ if staticEchoValue.label:
   const identityExport = forwardedExternalValues.moduleInterface.exports.get("identity");
   assert.deepEqual(identityExport?.kind === "function" ? identityExport.resultOriginParameters : null, [0]);
   assert.equal(identityExport?.kind === "function" && identityExport.result.kind === "named" ? identityExport.result.external ?? false : false, false);
+  const defaultIdentityExport = forwardedExternalValues.moduleInterface.exports.get("defaultIdentity");
+  assert.deepEqual(defaultIdentityExport?.kind === "function" ? defaultIdentityExport.resultOriginExternalDefaults : null, [0]);
+  assert.equal(defaultIdentityExport?.kind === "function" && defaultIdentityExport.result.kind === "named" ? defaultIdentityExport.result.external ?? false : false, false);
   for (const name of ["namedIdentity", "wrapped", "nestedIdentity", "makeGetter", "matched", "asyncIdentity"]) {
     const exported = forwardedExternalValues.moduleInterface.exports.get(name);
     assert.deepEqual(exported?.kind === "function" ? exported.resultOriginParameters : null, [name === "namedIdentity" ? 1 : 0]);
@@ -11790,6 +11808,119 @@ if staticEchoValue.label:
   assert.equal(loadInterface?.kind === "function" && loadInterface.result.kind === "named" ? loadInterface.result.external : false, true);
   const currentInterface = storeInterface?.fields.get("current")?.type;
   assert.equal(currentInterface?.kind === "named" ? currentInterface.external : false, true);
+
+  const constructorStoredExternalValue = compileCore(`
+type Profile:
+    label: string?
+
+import js {profile} from "host-sdk"
+
+const earlyBox = ProfileBox(profile=profile)
+
+class ProfileBox:
+    const profile: Profile
+    const title: string? = "Profile"
+
+    constructor(profile: Profile):
+        self.profile = profile
+
+    def same() -> ProfileBox:
+        return self
+
+export const box = ProfileBox(profile)
+if box.profile.label:
+    const repeated: string = box.profile.label
+if box.title:
+    const repeated: string = box.title
+
+const returned = box.same()
+if returned.profile.label:
+    const repeated: string = returned.profile.label
+if returned.title:
+    const repeated: string = returned.title
+
+if earlyBox.profile.label:
+    const repeated: string = earlyBox.profile.label
+
+if box is ProfileBox:
+    if box.profile.label:
+        const repeated: string = box.profile.label
+
+const owned = ProfileBox({label: "owned"})
+if owned.profile.label:
+    const repeated: string = owned.profile.label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(constructorStoredExternalValue.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
+  const profileBox = constructorStoredExternalValue.moduleInterface.classes.get("ProfileBox");
+  assert.deepEqual(profileBox?.constructorOriginParameters, [0]);
+  assert.equal(profileBox?.constructorContainsExternal ?? false, false);
+  const boxInterface = constructorStoredExternalValue.moduleInterface.exports.get("box");
+  assert.equal(boxInterface?.kind === "class" ? boxInterface.containsExternal : false, true);
+  assert.equal(boxInterface?.kind === "class" ? boxInterface.external ?? false : false, false);
+
+  const constructorCapturedExternalValue = compileCore(`
+type Profile:
+    label: string?
+
+import js {profile as source} from "host-sdk"
+
+class CapturedBox:
+    const profile: Profile = source
+
+const box = CapturedBox()
+if box.profile.label:
+    const repeated: string = box.profile.label
+`.trimStart(), { analysis: { imports: new Map([["source", externalMutableRecordType]]) } });
+  assert.equal(constructorCapturedExternalValue.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
+  assert.equal(constructorCapturedExternalValue.moduleInterface.classes.get("CapturedBox")?.constructorContainsExternal, true);
+
+  const constructorExternalDefault = compileCore(`
+type Profile:
+    label: string?
+
+import js {profile as source} from "host-sdk"
+
+class DefaultBox:
+    const profile: Profile
+
+    constructor(profile: Profile = source):
+        self.profile = profile
+
+const defaulted = DefaultBox()
+if defaulted.profile.label:
+    const repeated: string = defaulted.profile.label
+
+const explicit = DefaultBox({label: "owned"})
+if explicit.profile.label:
+    const repeated: string = explicit.profile.label
+`.trimStart(), { analysis: { imports: new Map([["source", externalMutableRecordType]]) } });
+  assert.equal(constructorExternalDefault.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
+  const defaultBox = constructorExternalDefault.moduleInterface.classes.get("DefaultBox");
+  assert.deepEqual(defaultBox?.constructorExternalDefaults, [0]);
+  assert.equal(defaultBox?.constructorContainsExternal ?? false, false);
+
+  const inheritedConstructorOrigin = compileCore(`
+type Profile:
+    label: string?
+
+import js {profile} from "host-sdk"
+
+class BaseBox:
+    const profile: Profile
+
+    constructor(profile: Profile):
+        self.profile = profile
+
+class ChildBox extends BaseBox:
+    constructor(profile: Profile):
+        super(profile)
+
+const child = ChildBox(profile)
+if child.profile.label:
+    const repeated: string = child.profile.label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(inheritedConstructorOrigin.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
+  assert.deepEqual(inheritedConstructorOrigin.moduleInterface.classes.get("ChildBox")?.constructorOriginParameters, [0]);
 });
 
 test("f-strings invalidate facts only when object coercion can execute user code", () => {
