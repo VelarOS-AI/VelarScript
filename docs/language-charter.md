@@ -929,7 +929,8 @@ errors are never silently converted into successful `null` results. Use
 `try`/`catch` when the caller owns recovery.
 
 `watch expression as current, previous:` runs an explicit side effect when the
-tracked value changes.
+tracked value changes. A watch body is synchronous. Async component work belongs
+in an `action`; lifecycle setup that must wait belongs in `mounted`.
 
 ## 16. Lifecycle
 

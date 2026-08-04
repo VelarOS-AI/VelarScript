@@ -361,6 +361,7 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
   private mountedDepth = 0;
+  private watchDepth = 0;
   private readonly resources: ReadonlyMap<string, string>;
   private readonly unsafeCssImports = new Set<string>();
 
@@ -418,7 +419,9 @@ export class VelarWebAnalyzer extends Analyzer {
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
+          this.watchDepth += 1;
           this.analyzeStatements(statement.body);
+          this.watchDepth -= 1;
           this.exitScope();
         }
         this.flowFrameDepth -= 1;
@@ -614,7 +617,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override invalidExtensionAwaitContext(): boolean {
-    return this.componentStates !== null && this.mountedDepth === 0;
+    return this.watchDepth > 0 || (this.componentStates !== null && this.mountedDepth === 0);
   }
 
   private componentType(statement: ComponentDeclaration): ValueType {
@@ -712,7 +715,9 @@ export class VelarWebAnalyzer extends Analyzer {
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
+        this.watchDepth += 1;
         this.analyzeStatements(item.body);
+        this.watchDepth -= 1;
         this.exitScope();
         this.flowFrameDepth -= 1;
       } else if (item.kind === "MountedBlock") {

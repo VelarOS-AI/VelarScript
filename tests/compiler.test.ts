@@ -3585,6 +3585,17 @@ component Counter:
   assert.match(result.code ?? "", /export const doubled = __velarComputed\(\(\) => \(count\.get\(\) \* 2\)/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarWatch\(\(\) => count\.get\(\)/);
+
+  const asynchronousWatch = compile(`
+async def later():
+    return null
+
+state ready = false
+watch ready:
+    await later()
+`.trimStart());
+  assert.equal(asynchronousWatch.code, null);
+  assert.ok(asynchronousWatch.diagnostics.some((item) => item.code === "VEL4007" && /mounted block/u.test(item.message)));
 });
 
 test("reactive reference state cannot escape through aliases, calls, returns, or nested mutation", () => {
@@ -6637,6 +6648,12 @@ const stop = onError(report => reports.push(report.phase + ":" + report.detail +
 reportError(new Error("expected"), "manual", "test");
 stop(); stop();
 console.log(reports.join("|"));
+let thenReads = 0;
+const fakeThenable = Object.defineProperty({}, "then", { get() { thenReads += 1; return () => null; } });
+const stopThenable = onError(() => fakeThenable);
+reportError(new Error("ordinary result"));
+stopThenable();
+console.log(thenReads);
 const runtimeDescriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1"));
 console.log(String(runtimeDescriptor.enumerable) + ":" + String(runtimeDescriptor.configurable) + ":" + String(runtimeDescriptor.writable));
 console.log(String(Object.getPrototypeOf(runtimeDescriptor.value) === null) + ":" + String(Object.isExtensible(runtimeDescriptor.value)) + ":" + runtimeDescriptor.value.version);
@@ -6661,6 +6678,7 @@ console.log(coercions + ":" + getterReads);
   assert.equal(appExecution.status, 0, String(appExecution.stderr));
   assert.equal(appExecution.stdout, [
     "manual:test:expected",
+    "0",
     "false:false:false",
     "true:false:0.10",
     "TypeError", "TypeError", "TypeError",
@@ -6697,6 +6715,17 @@ console.log(reports.join("|"));
 `);
   assert.equal(sharedRuntimeExecution.status, 0, String(sharedRuntimeExecution.stderr));
   assert.equal(sharedRuntimeExecution.stdout, "manual:shared\n");
+
+  const browserSource = standardModuleSource("velar/browser") ?? "";
+  const timerExecution = executeModule(`${browserSource}
+let thenReads = 0;
+const fakeThenable = Object.defineProperty({}, "then", { get() { thenReads += 1; return () => null; } });
+after(0, () => fakeThenable);
+await new Promise((resolve) => setTimeout(resolve, 10));
+console.log(thenReads);
+`);
+  assert.equal(timerExecution.status, 0, String(timerExecution.stderr));
+  assert.equal(timerExecution.stdout, "0\n");
 
   const configSource = standardModuleSource("velar/config", { base: "/", publicConfig: { apiBase: "/api" } }) ?? "";
   const configExecution = executeModule(`${configSource}
@@ -14759,8 +14788,13 @@ const eventScope = __velarScope("EventProbe");
 const ownedFailure = __velarAction(() => Promise.reject(Error("Owned failure")), eventScope, "owned");
 __velarOn(eventTarget, "owned", ownedFailure, eventScope);
 __velarOn(eventTarget, "plain", () => Promise.reject(Error("Plain failure")), eventScope);
+let eventThenReads = 0;
+const fakeThenable = Object.defineProperty({}, "then", { get() { eventThenReads += 1; return () => null; } });
+__velarOn(eventTarget, "ordinary", () => fakeThenable, eventScope);
 eventTarget.dispatchEvent(new Event("owned"));
 eventTarget.dispatchEvent(new Event("plain"));
+eventTarget.dispatchEvent(new Event("ordinary"));
+console.log("event-then:" + eventThenReads);
 await new Promise((resolve) => setTimeout(resolve, 0));
 const hostile = __velarAction(() => Promise.reject({ toString() { console.log("action conversion hook ran"); throw Error("conversion failure"); } }), scope, "hostile");
 try { await hostile(); }
@@ -14778,6 +14812,7 @@ catch (error) { console.log(error.message + ":" + pending.length); }
     "Stale failure:false:null",
     "action:save:Save failed",
     "Save failed:false:Save failed",
+    "event-then:0",
     "event:plain:Plain failure",
     "action:owned:Owned failure",
     "action:hostile:A non-Error value was thrown by JavaScript",

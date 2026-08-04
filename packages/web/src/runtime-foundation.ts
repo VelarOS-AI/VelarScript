@@ -44,6 +44,12 @@ function __velarReportOptions(value) {
   return output;
 }
 
+function __velarObservePromise(value, onRejected) {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return null;
+  try { return Promise.prototype.then.call(value, undefined, onRejected); }
+  catch { return null; }
+}
+
 function __velarCreateRuntime() {
   const runtime = Object.create(null);
   const domQueue = Object.freeze(new Set());
@@ -70,7 +76,7 @@ function __velarCreateRuntime() {
       handled = true;
       try {
         const result = handler(errorReport);
-        if (result && typeof result.then === "function") result.catch((failure) => queueMicrotask(() => { throw __velarNormalizeError(failure); }));
+        __velarObservePromise(result, (failure) => queueMicrotask(() => { throw __velarNormalizeError(failure); }));
       } catch (failure) { queueMicrotask(() => { throw __velarNormalizeError(failure); }); }
     }
     if (checked.unhandled && !handled) queueMicrotask(() => { throw error; });

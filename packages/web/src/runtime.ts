@@ -9,11 +9,16 @@ function __velarReportOwnedCallback(failure, phase, detail) {
   if (runtime && typeof runtime.report === "function") runtime.report(error, { phase, detail, unhandled: true });
   else queueMicrotask(() => { throw error; });
 }
+function __velarObserveOwnedPromise(value, onRejected) {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return null;
+  try { return Promise.prototype.then.call(value, undefined, onRejected); }
+  catch { return null; }
+}
 function __velarInvokeOwnedCallback(callback, arguments_, phase, detail) {
   if (callback == null) return;
   try {
     const result = callback(...arguments_);
-    if (result && typeof result.then === "function") result.catch((failure) => __velarReportOwnedCallback(failure, phase, detail));
+    __velarObserveOwnedPromise(result, (failure) => __velarReportOwnedCallback(failure, phase, detail));
   } catch (failure) {
     __velarReportOwnedCallback(failure, phase, detail);
   }
@@ -1509,7 +1514,13 @@ function reportTimerFailure(failure, detail) {
 }
 
 async function invokeTimer(callback, detail) {
-  try { await callback(); }
+  try {
+    const observed = __velarObserveOwnedPromise(
+      callback(),
+      (failure) => __velarReportOwnedCallback(failure, "timer", detail),
+    );
+    if (observed) await observed;
+  }
   catch (error) { reportTimerFailure(error, detail); }
 }
 

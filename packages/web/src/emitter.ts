@@ -962,7 +962,7 @@ function __velarMountScope(scope) {
   for (const mount of scope.mounts) {
     try {
       const result = mount();
-      if (result && typeof result.then === "function") result.catch((error) => __velarReport(error, "mounted", scope));
+      __velarObservePromise(result, (error) => __velarReport(error, "mounted", scope));
     } catch (error) { __velarReport(error, "mounted", scope); }
   }
 }
@@ -971,7 +971,7 @@ function __velarDestroyScope(scope) {
   for (const cleanup of [...scope.cleanups].reverse()) {
     try {
       const result = cleanup();
-      if (result && typeof result.then === "function") result.catch((error) => __velarReport(error, "cleanup", scope));
+      __velarObservePromise(result, (error) => __velarReport(error, "cleanup", scope));
     } catch (error) { __velarReport(error, "cleanup", scope); }
   }
   scope.cleanups.length = 0;
@@ -980,7 +980,7 @@ function __velarDestroyScope(scope) {
 function __velarCleanupStep(run, scope) {
   try {
     const result = run();
-    if (result && typeof result.then === "function") result.catch((error) => __velarReport(error, "cleanup", scope));
+    __velarObservePromise(result, (error) => __velarReport(error, "cleanup", scope));
   } catch (error) { __velarReport(error, "cleanup", scope); }
 }
 
@@ -1017,7 +1017,7 @@ function __velarComponent(node, scope, mounted, cleanup) {
       if (cleanup) {
         try {
           const result = cleanup();
-          if (result && typeof result.then === "function") result.catch((error) => __velarReport(error, "cleanup", scope));
+          __velarObservePromise(result, (error) => __velarReport(error, "cleanup", scope));
         } catch (error) { __velarReport(error, "cleanup", scope); }
       }
       __velarDestroyScope(scope);
@@ -1543,7 +1543,7 @@ function __velarOn(element, event, handler, scope, modifiers = []) {
     if (modifiers.includes("stop")) value.stopPropagation();
     try {
       const result = handler(value);
-      if (result && typeof result.then === "function") result.catch((error) => __velarReportEvent(error, scope, event));
+      __velarObservePromise(result, (error) => __velarReportEvent(error, scope, event));
     } catch (error) { __velarReportEvent(error, scope, event); }
   };
   element.addEventListener(event, listener, options);

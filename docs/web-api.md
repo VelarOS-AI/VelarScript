@@ -65,11 +65,14 @@ component RuntimeStatus:
   unknown fields at dynamic boundaries, and reuse one versioned runtime owner
   across application modules and lazy chunks.
 - The compiler reports failures from initial `mount`, reactive `render` and
-  `watch`, synchronous or asynchronous events, `mounted`, and `cleanup`.
+  synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
+  and `cleanup`.
 - Managed callbacks from browser/media/online/visibility watchers, storage
   watches, WebSocket handlers, and server-sent-event handlers report both
   synchronous failures and rejected promises through the same `velar/app`
-  channel. They do not escape as unowned native event failures.
+  channel. Only actual Promises are observed; arbitrary thenables remain ordinary
+  callback results and their properties are not probed. Failures do not escape
+  as unowned native event failures.
 - Root mounting is lazy. If the initial render fails, the application receives
   the report and renders a compiler-owned accessible fatal state instead of a
   blank page. Component setup and initial JSX construction are transactional:
