@@ -555,7 +555,7 @@ async function createAnalysisContext(
       for (const specifier of dependency.specifiers) {
         if (specifier.namespace) {
           const fields = new Map([...declarations.exports].map(([name, type]) => [name, renameType(type, aliases)]));
-          imports.set(specifier.local, { kind: "object", fields, readonlyFields: new Set(fields.keys()) });
+          imports.set(specifier.local, { kind: "object", fields, readonlyFields: new Set(fields.keys()), external: true });
           continue;
         }
         const type = declarations.exports.get(specifier.imported);
@@ -878,7 +878,7 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
     case "optional":
       return optionalOf(renameType(type.inner, aliases));
     case "list":
-      return { kind: "list", element: renameType(type.element, aliases) };
+      return { ...type, element: renameType(type.element, aliases) };
     case "set":
       return { kind: "set", element: renameType(type.element, aliases) };
     case "map":
@@ -933,7 +933,7 @@ function resolveKnownNominals(
     case "optional":
       return optionalOf(resolveKnownNominals(type.inner, classes, enums, namedTypeIdentities));
     case "list":
-      return { kind: "list", element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
+      return { ...type, element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
     case "set":
       return { kind: "set", element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
     case "map":
@@ -972,7 +972,7 @@ function expandKnownAliases(type: ValueType, aliases: ReadonlyMap<string, ValueT
     case "optional":
       return optionalOf(expandKnownAliases(type.inner, aliases, seen));
     case "list":
-      return { kind: "list", element: expandKnownAliases(type.element, aliases, seen) };
+      return { ...type, element: expandKnownAliases(type.element, aliases, seen) };
     case "set":
       return { kind: "set", element: expandKnownAliases(type.element, aliases, seen) };
     case "map":

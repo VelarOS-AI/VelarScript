@@ -82,6 +82,9 @@ Compiler and framework changes:
 - Record construction now defines controlled own data fields, makes
   `__proto__` an ordinary name, rejects accessor and symbol spreads, normalizes
   unsafe `undefined`, and preserves explicit async evaluation.
+- Safe JavaScript records and Lists now retain host-origin metadata through
+  declared results and type composition, so reads, reflection, destructuring,
+  iteration, spread, and structural matching invalidate stale flow facts.
 
 Tooling and documentation changes:
 

@@ -7619,6 +7619,34 @@ const mirrored: string = namespaceTools.version
   assert.deepEqual(valid.diagnostics, []);
   assert.doesNotMatch(valid.code ?? "", /extern module/);
 
+  const externalAggregates = compile(`
+type Profile:
+    label: string?
+
+extern module "host-data":
+    export const profile: Profile
+    export const values: List<number>
+    export def loadValues() -> List<number>
+
+import js {loadValues, profile, values} from "host-data"
+
+let current: string? = "ready"
+if profile.label:
+    const repeated: string = profile.label
+
+current = "ready"
+if current:
+    const first = values[0]
+    const afterConstant: string = current
+
+const loaded = loadValues()
+current = "ready"
+if current:
+    const first = loaded[0]
+    const afterResult: string = current
+`.trimStart());
+  assert.equal(externalAggregates.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 3);
+
   const invalid = compile(`
 extern module "text-tools":
     export const version: string
@@ -7756,6 +7784,8 @@ export declare function unique(values: readonly string[]): ReadonlySet<string>;
 export declare function consume(values: readonly string[]): void;
 export declare function supply(handler: (values: readonly string[]) => void): void;
 export declare function createValues(): readonly string[];
+export declare function mutableValues(): string[];
+export declare function acceptValues(values: string[]): void;
 export declare function dictionary(): Record<string, number>;
 export declare function setMode(value: "fast" | "safe"): void;
 export declare function visit(handler: (value: string) => void): void;
@@ -7795,6 +7825,13 @@ export declare function identity<T>(value: T): T;
   assert.equal(describeType(declarations.exports.get("consume")!), "(List<string>) -> null");
   assert.equal(describeType(declarations.exports.get("supply")!), "((unknown) -> null) -> null");
   assert.equal(describeType(declarations.exports.get("createValues")!), "() -> unknown");
+  assert.equal(describeType(declarations.exports.get("mutableValues")!), "() -> List<string>");
+  const mutableValues = declarations.exports.get("mutableValues");
+  const mutableValuesResult = mutableValues?.kind === "function" ? mutableValues.result : null;
+  assert.equal(mutableValuesResult?.kind === "list" ? mutableValuesResult.external : false, true);
+  const acceptValues = declarations.exports.get("acceptValues");
+  const acceptedValues = acceptValues?.kind === "function" ? acceptValues.parameters[0] : null;
+  assert.equal(acceptedValues?.kind === "list" ? acceptedValues.external ?? false : null, false);
   assert.equal(describeType(declarations.exports.get("dictionary")!), "() -> unknown");
   assert.equal(describeType(declarations.exports.get("setMode")!), "(unknown) -> null");
   assert.equal(describeType(declarations.exports.get("visit")!), "((string) -> null) -> null");
@@ -7803,6 +7840,11 @@ export declare function identity<T>(value: T): T;
   assert.equal(describeType(declarations.exports.get("absent")!), "() -> null");
   assert.equal(describeType(declarations.exports.get("version")!), "string");
   assert.equal(describeType(declarations.exports.get("client")!), "{ readonly version: string, request: (string, number = default) -> Promise<string>, close?: () -> null }");
+  const declaredClient = declarations.exports.get("client");
+  assert.equal(declaredClient?.kind === "object" ? declaredClient.external : false, true);
+  const declaredFormat = declarations.exports.get("format");
+  const formatOptions = declaredFormat?.kind === "function" ? declaredFormat.parameters[1] : null;
+  assert.equal(formatOptions?.kind === "object" ? formatOptions.external ?? false : null, false);
   assert.equal(describeType(declarations.exports.get("recursiveClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("genericClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("Formatter")!), "Formatter");
@@ -11304,6 +11346,144 @@ def length(client: Client) -> number:
     return 0
 `.trimStart());
   assert.deepEqual(stableExternalValue.diagnostics, []);
+
+  const externalRecordType: ValueType = {
+    kind: "object",
+    fields: new Map([
+      ["label", { kind: "optional", inner: { kind: "string" } }],
+    ]),
+    readonlyFields: new Set(["label"]),
+    external: true,
+  };
+  const externalRecord = compileCore(`
+import js {payload} from "host-sdk"
+
+let current: string? = "ready"
+if current:
+    const label = payload.label
+    const stale: string = current
+
+if payload.label:
+    const repeated: string = payload.label
+`.trimStart(), { analysis: { imports: new Map([["payload", externalRecordType]]) } });
+  assert.equal(externalRecord.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 2);
+
+  const externalRequiredRecordType: ValueType = {
+    kind: "object",
+    fields: new Map([["label", { kind: "string" }]]),
+    external: true,
+  };
+  const mergedExternalRecord = compileCore(`
+import js {payload} from "host-sdk"
+
+const local = {label: "local"}
+const selected = true ? local : payload
+let current: string? = "ready"
+
+if current:
+    const copied = {...selected}
+    const stale: string = current
+`.trimStart(), { analysis: { imports: new Map([["payload", externalRequiredRecordType]]) } });
+  assert.equal(mergedExternalRecord.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
+
+  const optionalMergedExternalRecord = compileCore(`
+import js {payload} from "host-sdk"
+
+const maybeLocal = true ? {label: "local"} : null
+const selected = true ? maybeLocal : payload
+let current: string? = "ready"
+
+if current:
+    const label = selected?.label
+    const stale: string = current
+`.trimStart(), { analysis: { imports: new Map([["payload", externalRequiredRecordType]]) } });
+  assert.equal(optionalMergedExternalRecord.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
+
+  const stableRecordCopy = compileCore(`
+import js {payload} from "host-sdk"
+
+const label = payload.label
+if label:
+    const stable: string = label
+`.trimStart(), { analysis: { imports: new Map([["payload", externalRecordType]]) } });
+  assert.deepEqual(stableRecordCopy.diagnostics, []);
+
+  const externalRecordWrite = compileCore(`
+import js {payload} from "host-sdk"
+
+let current: string? = "ready"
+if current:
+    payload.label = current
+    const stale: string = current
+`.trimStart(), { analysis: { imports: new Map([["payload", externalRequiredRecordType]]) } });
+  assert.equal(externalRecordWrite.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
+
+  const externalListType: ValueType = { kind: "list", element: { kind: "number" }, external: true };
+  const externalList = compileCore(`
+import js {values} from "host-sdk"
+
+let current: string? = "ready"
+if current:
+    const first = values[0]
+    const afterIndex: string = current
+
+current = "ready"
+if current:
+    const size = values.size
+    const afterSize: string = current
+
+current = "ready"
+if current:
+    const copied = [...values, current.length]
+    const afterSpread: string = current
+
+current = "ready"
+if current:
+    const [first] = values
+    const afterBinding: string = current
+
+current = "ready"
+if current:
+    for item in values:
+        const seen = item
+    const afterIteration: string = current
+
+current = "ready"
+if current:
+    match values:
+        case [first, ...rest]:
+            const seen = first
+    const afterMatch: string = current
+
+const owned = values.copy()
+current = "ready"
+if current:
+    const first = owned[0]
+    const afterCopy: string = current
+
+current = "ready"
+if current:
+    values[0] = current.length
+    const afterWrite: string = current
+`.trimStart(), { analysis: { imports: new Map([["values", externalListType]]) } });
+  assert.equal(externalList.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 7);
+
+  const internalList = compile(`
+const values = [1]
+let current: string? = "ready"
+
+if current:
+    const first = values[0]
+    const copied = [...values, current.length]
+    const [bound] = values
+    for item in values:
+        const seen = item
+    match values:
+        case [matched]:
+            const seen = matched
+    const stable: string = current
+`.trimStart());
+  assert.deepEqual(internalList.diagnostics, []);
 });
 
 test("f-strings invalidate facts only when object coercion can execute user code", () => {

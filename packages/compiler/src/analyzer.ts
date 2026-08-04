@@ -544,13 +544,13 @@ export class Analyzer implements TypeEnvironment {
         for (const parameter of declaration.parameters) {
           if (parameter.binding) fields.set(parameter.name, {
             mutable: parameter.binding === "let",
-            type: this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames),
+            type: this.markExternalAggregate(this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames)),
           });
         }
         for (const field of declaration.fields) {
           (field.static ? staticFields : fields).set(field.name, {
             mutable: field.mutable,
-            type: this.resolveValidatedExternAnnotation(field.type, statement.source, classNames),
+            type: this.markExternalAggregate(this.resolveValidatedExternAnnotation(field.type, statement.source, classNames)),
           });
         }
         const methods = new Map<string, ValueType>();
@@ -586,7 +586,7 @@ export class Analyzer implements TypeEnvironment {
         }
         exports.set(declaration.name, "parameters" in declaration
           ? this.externFunctionType(declaration, (reference) => this.resolveValidatedExternAnnotation(reference, statement.source, classNames))
-          : this.resolveValidatedExternAnnotation(declaration.type, statement.source, classNames));
+          : this.markExternalAggregate(this.resolveValidatedExternAnnotation(declaration.type, statement.source, classNames)));
       }
       this.externModules.set(statement.source, exports);
     }
@@ -728,7 +728,7 @@ export class Analyzer implements TypeEnvironment {
         return resolved;
       }
       if (type.kind === "optional") return optionalOf(expand(type.inner));
-      if (type.kind === "list") return { kind: "list", element: expand(type.element) };
+      if (type.kind === "list") return { ...type, element: expand(type.element) };
       if (type.kind === "set") return { kind: "set", element: expand(type.element) };
       if (type.kind === "map") return { kind: "map", key: expand(type.key), value: expand(type.value) };
       if (type.kind === "promise") return { kind: "promise", value: expand(type.value) };
@@ -756,7 +756,7 @@ export class Analyzer implements TypeEnvironment {
     }
     if (type.kind === "list" || type.kind === "set") {
       const element = this.expandAliases(type.element, seen);
-      return element === type.element ? type : { kind: type.kind, element };
+      return element === type.element ? type : { ...type, element };
     }
     if (type.kind === "map") {
       const key = this.expandAliases(type.key, seen);
@@ -1061,6 +1061,7 @@ export class Analyzer implements TypeEnvironment {
         const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
         const declared = annotationValid ? annotated ?? actual : invalidType;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
+        if (this.bindingPatternReflectionMayExecute(statement.pattern, actual)) this.invalidateEffectfulFlowFacts();
         this.declarePattern(statement.pattern, statement.binding === "let", declared);
         this.validateKnownBindingShape(statement.pattern, statement.initializer);
         if (!annotated && statement.pattern.kind === "NameBindingPattern") {
@@ -1185,6 +1186,7 @@ export class Analyzer implements TypeEnvironment {
             this.enterScope();
             try {
               this.applyNarrowings(fallthroughNarrowings, branch.pattern.span);
+              if (this.matchPatternReflectionMayExecute(branch.pattern, fallthroughType)) this.invalidateEffectfulFlowFacts();
               const narrowedMatch = this.analyzeMatchPattern(branch.pattern, fallthroughType, bindings);
               patternSurviving = this.survivingNarrowings(fallthroughNarrowings);
               patternNarrowings = this.retargetNarrowings(patternSurviving, narrowedMatch);
@@ -1340,6 +1342,7 @@ export class Analyzer implements TypeEnvironment {
       }
       case "ForStatement": {
         const iterable = this.inferExpression(statement.iterable);
+        if (this.listReflectionMayExecute(iterable)) this.invalidateEffectfulFlowFacts();
         const element = iterable.kind === "list" || iterable.kind === "set"
           ? iterable.element
           : iterable.kind === "map" ? iterable.key : iterable.kind === "string" ? stringType : unknownType;
@@ -1350,6 +1353,7 @@ export class Analyzer implements TypeEnvironment {
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.enterScope();
           try {
+            if (this.bindingPatternReflectionMayExecute(statement.pattern, element)) this.invalidateEffectfulFlowFacts();
             this.declarePattern(statement.pattern, false, element);
             if (statement.iterable.kind === "ListExpression"
               && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
@@ -2021,6 +2025,7 @@ export class Analyzer implements TypeEnvironment {
     let targetBinding: Binding | null = null;
     let targetWritable = true;
     let effectfulMemberWrite = false;
+    let effectfulIndexWrite = false;
 
     if (statement.target.kind !== "IdentifierExpression" && continuesOptionalChain(statement.target)) {
       this.diagnostics.push(diagnostic("VEL3002", "Optional chains cannot be assignment targets", statement.target.span));
@@ -2050,6 +2055,7 @@ export class Analyzer implements TypeEnvironment {
       );
       const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
       effectfulMemberWrite = owner.kind === "any"
+        || (owner.kind === "object" || owner.kind === "named") && owner.external === true
         || (owner.kind === "class" || owner.kind === "classConstructor")
           && (owner.identity ?? owner.name).startsWith("js:");
       if (owner.kind === "class") {
@@ -2107,6 +2113,8 @@ export class Analyzer implements TypeEnvironment {
       if (objectType.kind === "list") {
         this.requireAssignable(indexType, numberType, statement.target.index.span);
         targetType = objectType.element;
+        effectfulIndexWrite = objectType.external === true;
+        if (effectfulIndexWrite && statement.operator !== "=") this.invalidateEffectfulFlowFacts();
       } else if (objectType.kind === "map") {
         this.typeError("Use Map.set(key, value) instead of bracket assignment", statement.target.span);
         targetWritable = false;
@@ -2127,6 +2135,8 @@ export class Analyzer implements TypeEnvironment {
       if (statement.target.kind === "MemberExpression") {
         if (effectfulMemberWrite) this.invalidateEffectfulFlowFacts();
         else this.invalidateCurrentMemberNarrowings();
+      } else if (statement.target.kind === "IndexExpression" && effectfulIndexWrite) {
+        this.invalidateEffectfulFlowFacts();
       } else if (statement.operator === "=") {
         this.invalidateAssignmentNarrowings(statement.target, targetBinding);
         if (targetBinding?.mutable) {
@@ -2229,6 +2239,7 @@ export class Analyzer implements TypeEnvironment {
         for (const item of expression.elements) {
           const itemType = this.inferExpression(item, expectedElement);
           if (item.kind === "SpreadExpression") {
+            if (this.listReflectionMayExecute(itemType)) this.invalidateEffectfulFlowFacts();
             if (itemType.kind === "list") {
               element = mergeTypes(element, itemType.element);
               if (expectedElement.kind !== "unknown") {
@@ -2280,6 +2291,7 @@ export class Analyzer implements TypeEnvironment {
           } else {
             containsSpread = true;
             const spread = this.inferExpression(property.value);
+            if (this.recordReflectionMayExecute(spread)) this.invalidateEffectfulFlowFacts();
             const spreadFields = spread.kind === "object" ? spread.fields : spread.kind === "named" ? this.fieldsOf(spread.identity ?? spread.name) : null;
             if (spreadFields) {
               for (const [name, type] of spreadFields) {
@@ -2451,6 +2463,7 @@ export class Analyzer implements TypeEnvironment {
         if (isInvalidType(object)) return invalidType;
         if (object.kind === "list") {
           this.requireAssignable(index, numberType, expression.index.span);
+          if (this.listReflectionMayExecute(object)) this.invalidateEffectfulFlowFacts();
           if (guarded) {
             this.optionalIndexes.add(spanIdentity(expression.span));
             return optionalOf(object.element);
@@ -2464,6 +2477,7 @@ export class Analyzer implements TypeEnvironment {
         if (object.kind !== "any") {
           this.typeError(`Cannot index ${describeType(object)}`, expression.span);
         }
+        if (object.kind === "any") this.invalidateEffectfulFlowFacts();
         return object.kind === "any" ? anyType : unknownType;
       }
       default:
@@ -3147,7 +3161,7 @@ export class Analyzer implements TypeEnvironment {
           this.requireAssignable(callback, callbackExpected, arguments_[0].span);
         }
         if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
-        return object;
+        return { kind: "list", element: object.element };
       }
       if (member.property === "reduce") {
         this.collectionCalls.set(member.span.end, "listReduce");
@@ -3209,7 +3223,7 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "clear" || member.property === "copy" || member.property === "reversed") {
         this.collectionCalls.set(member.span.end, member.property === "clear" ? "clear" : member.property === "copy" ? "listCopy" : "listReversed");
         this.checkArguments(arguments_, [], callSpan);
-        return member.property === "clear" ? nullType : object;
+        return member.property === "clear" ? nullType : { kind: "list", element: object.element };
       }
       if (member.property === "has" || member.property === "count") {
         this.collectionCalls.set(member.span.end, member.property === "has" ? "has" : "listCount");
@@ -3223,7 +3237,7 @@ export class Analyzer implements TypeEnvironment {
         if (arguments_.length === 0 && !this.defaultSortableType(object.element)) {
           this.typeError(`List<${describeType(object.element)}>.sorted() requires an explicit comparator`, callSpan);
         }
-        return object;
+        return { kind: "list", element: object.element };
       }
       if (["some", "every", "find"].includes(member.property)) {
         const callbackExpected: ValueType = { kind: "function", parameters: [object.element], requiredParameters: 1, result: boolType };
@@ -3260,7 +3274,7 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "slice") {
         this.collectionCalls.set(member.span.end, "slice");
         this.checkArguments(arguments_, [numberType, numberType], callSpan, 0);
-        return object;
+        return { kind: "list", element: object.element };
       }
     }
 
@@ -3425,7 +3439,8 @@ export class Analyzer implements TypeEnvironment {
     const basePath = this.stableMemberAccessPath(objectExpression);
     const narrowedMember = basePath ? this.lookupMemberNarrowing(`${basePath}.${property}`) : null;
     let result = unknownType;
-    let effectfulRead = object.kind === "any";
+    let effectfulRead = object.kind === "any"
+      || (object.kind === "object" || object.kind === "named" || object.kind === "list") && object.external === true;
 
     if (object.kind === "any") {
       result = anyType;
@@ -3456,12 +3471,14 @@ export class Analyzer implements TypeEnvironment {
       if (!object.fields.has(property)) {
         this.typeError(`Object has no field '${property}'`, memberSpan);
       }
+      if (object.external) result = this.markExternalAggregate(result);
     } else if (object.kind === "named") {
       const fields = this.fieldsOf(object.identity ?? object.name);
       result = fields?.get(property) ?? unknownType;
       if (!fields?.has(property)) {
         this.typeError(`Type '${object.name}' has no field '${property}'`, memberSpan);
       }
+      if (object.external) result = this.markExternalAggregate(result);
     } else if (object.kind === "class") {
       const classKey = object.identity ?? object.name;
       const privateField = this.privateFieldForAccess(classKey, property, false);
@@ -3557,13 +3574,14 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private listMember(list: Extract<ValueType, { kind: "list" }>, property: string): ValueType | null {
+    const owned: ValueType = { kind: "list", element: list.element };
     switch (property) {
       case "size":
         return numberType;
       case "get":
         return { kind: "function", parameters: [numberType], requiredParameters: 1, result: optionalOf(list.element) };
       case "slice":
-        return { kind: "function", parameters: [numberType, numberType], requiredParameters: 0, result: list };
+        return { kind: "function", parameters: [numberType, numberType], requiredParameters: 0, result: owned };
       case "append":
         return { kind: "function", parameters: [list.element], requiredParameters: 1, result: nullType };
       case "extend":
@@ -3578,17 +3596,17 @@ export class Analyzer implements TypeEnvironment {
         return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
       case "copy":
       case "reversed":
-        return { kind: "function", parameters: [], requiredParameters: 0, result: list };
+        return { kind: "function", parameters: [], requiredParameters: 0, result: owned };
       case "has":
         return { kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType };
       case "count":
         return { kind: "function", parameters: [list.element], requiredParameters: 1, result: numberType };
       case "sorted":
-        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element, list.element], requiredParameters: 2, result: numberType }], requiredParameters: 0, result: list };
+        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element, list.element], requiredParameters: 2, result: numberType }], requiredParameters: 0, result: owned };
       case "map":
         return { kind: "function", parameters: [{ kind: "function", parameters: [list.element], requiredParameters: 1, result: unknownType }], requiredParameters: 1, result: { kind: "list", element: unknownType } };
       case "filter":
-        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType }], requiredParameters: 1, result: list };
+        return { kind: "function", parameters: [{ kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType }], requiredParameters: 1, result: owned };
       case "reduce":
         return { kind: "function", parameters: [unknownType, unknownType], requiredParameters: 2, result: unknownType };
       case "some":
@@ -3681,6 +3699,7 @@ export class Analyzer implements TypeEnvironment {
         if (argument.kind === "SpreadExpression") {
           sawSpread = true;
           const type = this.inferExpression(argument.value);
+          if (this.listReflectionMayExecute(type)) this.invalidateEffectfulFlowFacts();
           if (!rest) this.typeError("Call spread requires a callable with a rest parameter", argument.span);
           else if (fixedIndex < parameters.length) {
             this.typeError(`Provide all ${parameters.length} fixed argument${parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
@@ -3792,7 +3811,7 @@ export class Analyzer implements TypeEnvironment {
     statement: ExternFunctionDeclaration,
     resolve: (reference: TypeReference | null) => ValueType = (reference) => this.resolveAnnotation(reference),
   ): ValueType {
-    const result = statement.returnType ? resolve(statement.returnType) : nullType;
+    const result = this.markExternalAggregate(statement.returnType ? resolve(statement.returnType) : nullType);
     const rest = statement.parameters.find((parameter) => parameter.rest);
     return {
       kind: "function",
@@ -3808,6 +3827,29 @@ export class Analyzer implements TypeEnvironment {
     return this.resolveAnnotation(statement.type);
   }
 
+  private markExternalAggregate(type: ValueType): ValueType {
+    if (type.kind === "named") return { ...type, external: true };
+    if (type.kind === "object") return {
+      ...type,
+      external: true,
+      fields: new Map([...type.fields].map(([name, field]) => [name, this.markExternalAggregate(field)])),
+    };
+    if (type.kind === "list") return { ...type, external: true, element: this.markExternalAggregate(type.element) };
+    if (type.kind === "set") return { ...type, element: this.markExternalAggregate(type.element) };
+    if (type.kind === "map") return {
+      ...type,
+      key: this.markExternalAggregate(type.key),
+      value: this.markExternalAggregate(type.value),
+    };
+    if (type.kind === "optional") return optionalOf(this.markExternalAggregate(type.inner));
+    if (type.kind === "promise") return { kind: "promise", value: this.markExternalAggregate(type.value) };
+    if (type.kind === "union") return unionOf(type.members.map((member) => this.markExternalAggregate(member)));
+    if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") {
+      return { ...type, result: this.markExternalAggregate(type.result) };
+    }
+    return type;
+  }
+
   private externClassIdentity(source: string, name: string): string {
     return `js:${source}#${name}`;
   }
@@ -3818,7 +3860,7 @@ export class Analyzer implements TypeEnvironment {
         return { kind: "class", name: type.name, identity: this.externClassIdentity(source, type.name) };
       }
       if (type.kind === "optional") return optionalOf(resolve(type.inner));
-      if (type.kind === "list") return { kind: "list", element: resolve(type.element) };
+      if (type.kind === "list") return { ...type, element: resolve(type.element) };
       if (type.kind === "set") return { kind: "set", element: resolve(type.element) };
       if (type.kind === "map") return { kind: "map", key: resolve(type.key), value: resolve(type.value) };
       if (type.kind === "promise") return { kind: "promise", value: resolve(type.value) };
@@ -3851,7 +3893,7 @@ export class Analyzer implements TypeEnvironment {
     if (statement.unsafe) return anyType;
     const declarations = this.externModules.get(statement.source);
     if (namespace) return declarations
-      ? { kind: "object", fields: declarations, readonlyFields: new Set(declarations.keys()) }
+      ? { kind: "object", fields: declarations, readonlyFields: new Set(declarations.keys()), external: true }
       : this.importBindings.get(local) ?? unknownType;
     const type = declarations?.get(imported) ?? this.importBindings.get(local) ?? unknownType;
     if (type.kind === "classConstructor" && type.identity) {
@@ -4213,7 +4255,7 @@ export class Analyzer implements TypeEnvironment {
       return optionalOf(this.resolveNamedClasses(type.inner));
     }
     if (type.kind === "list") {
-      return { kind: "list", element: this.resolveNamedClasses(type.element) };
+      return { ...type, element: this.resolveNamedClasses(type.element) };
     }
     if (type.kind === "set") {
       return { kind: "set", element: this.resolveNamedClasses(type.element) };
@@ -4500,7 +4542,9 @@ export class Analyzer implements TypeEnvironment {
     const fields = candidate.kind === "object"
       ? candidate.fields
       : candidate.kind === "named" ? this.fieldsOf(candidate.identity ?? candidate.name) : null;
-    return fields?.get(property) ?? null;
+    const field = fields?.get(property) ?? null;
+    const external = (candidate.kind === "object" || candidate.kind === "named") && candidate.external;
+    return field && external ? this.markExternalAggregate(field) : field;
   }
 
   private matchObjectRestType(candidates: readonly ValueType[], selected: ReadonlySet<string>): ValueType {
@@ -4860,7 +4904,7 @@ export class Analyzer implements TypeEnvironment {
       return { ...type, name: this.classDisplayNames.get(type.identity) ?? type.name };
     }
     if (type.kind === "optional") return optionalOf(this.displayExternalClasses(type.inner));
-    if (type.kind === "list") return { kind: "list", element: this.displayExternalClasses(type.element) };
+    if (type.kind === "list") return { ...type, element: this.displayExternalClasses(type.element) };
     if (type.kind === "set") return { kind: "set", element: this.displayExternalClasses(type.element) };
     if (type.kind === "map") return { kind: "map", key: this.displayExternalClasses(type.key), value: this.displayExternalClasses(type.value) };
     if (type.kind === "promise") return { kind: "promise", value: this.displayExternalClasses(type.value) };
@@ -4904,9 +4948,12 @@ export class Analyzer implements TypeEnvironment {
         this.semanticBindingEntryOwners.set(`${entry.span.start}:${entry.property}`, type);
       }
       const fieldValue = fields?.get(entry.property) ?? (type.kind === "any" ? anyType : unknownType);
+      const externalFieldValue = (type.kind === "object" || type.kind === "named") && type.external
+        ? this.markExternalAggregate(fieldValue)
+        : fieldValue;
       const structurallyOptional = type.kind === "object" && type.optionalFields?.has(entry.property);
-      const field = structurallyOptional ? optionalOf(fieldValue) : fieldValue;
-      if (structurallyOptional || this.expandAliases(fieldValue).kind === "optional") {
+      const field = structurallyOptional ? optionalOf(externalFieldValue) : externalFieldValue;
+      if (structurallyOptional || this.expandAliases(externalFieldValue).kind === "optional") {
         this.optionalBindingEntries.add(entry.span.start);
       }
       if (fields && !fields.has(entry.property)) this.typeError(`Object has no field '${entry.property}'`, entry.span);
@@ -5037,8 +5084,9 @@ export class Analyzer implements TypeEnvironment {
       ?? (objectExpression.kind === "IdentifierExpression" ? this.lookup(objectExpression.name)?.type : null);
     if (!inferred) return false;
     const owner = nonOptional(this.expandAliases(inferred));
-    if (owner.kind === "object") return owner.fields.has(property);
-    if (owner.kind === "named") return this.fieldsOf(owner.identity ?? owner.name)?.has(property) ?? false;
+    if (owner.kind === "object") return owner.external !== true && owner.fields.has(property);
+    if (owner.kind === "named") return owner.external !== true
+      && (this.fieldsOf(owner.identity ?? owner.name)?.has(property) ?? false);
     if (owner.kind === "class") {
       const key = owner.identity ?? owner.name;
       if (key.startsWith("js:")) return false;
@@ -5112,6 +5160,69 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "optional") return this.stringCoercionMayExecute(type.inner);
     if (type.kind === "union") return type.members.some((member) => this.stringCoercionMayExecute(member));
     return true;
+  }
+
+  private recordReflectionMayExecute(input: ValueType): boolean {
+    const type = this.expandAliases(input);
+    if (type.kind === "any") return true;
+    if (type.kind === "object" || type.kind === "named") return type.external === true;
+    if (type.kind === "optional") return this.recordReflectionMayExecute(type.inner);
+    if (type.kind === "union") return type.members.some((member) => this.recordReflectionMayExecute(member));
+    return false;
+  }
+
+  private listReflectionMayExecute(input: ValueType): boolean {
+    const type = this.expandAliases(input);
+    if (type.kind === "any") return true;
+    if (type.kind === "list") return type.external === true;
+    if (type.kind === "optional") return this.listReflectionMayExecute(type.inner);
+    if (type.kind === "union") return type.members.some((member) => this.listReflectionMayExecute(member));
+    return false;
+  }
+
+  private bindingPatternReflectionMayExecute(pattern: BindingPattern, input: ValueType): boolean {
+    if (pattern.kind === "NameBindingPattern") return false;
+    const type = this.expandAliases(input);
+    if (type.kind === "union") {
+      return type.members.some((member) => this.bindingPatternReflectionMayExecute(pattern, member));
+    }
+    if (type.kind === "optional") return this.bindingPatternReflectionMayExecute(pattern, type.inner);
+    if (pattern.kind === "ListBindingPattern") {
+      if (this.listReflectionMayExecute(type)) return true;
+      const element = type.kind === "list" ? type.element : type.kind === "any" ? anyType : unknownType;
+      return pattern.elements.some((child) => child !== null && this.bindingPatternReflectionMayExecute(child, element));
+    }
+    if (this.recordReflectionMayExecute(type)) return true;
+    const fields = type.kind === "object" ? type.fields
+      : type.kind === "named" ? this.fieldsOf(type.identity ?? type.name)
+        : null;
+    return pattern.entries.some((entry) => this.bindingPatternReflectionMayExecute(
+      entry.pattern,
+      fields?.get(entry.property) ?? (type.kind === "any" ? anyType : unknownType),
+    ));
+  }
+
+  private matchPatternReflectionMayExecute(pattern: MatchPattern, input: ValueType): boolean {
+    if (pattern.kind === "MatchAsPattern") return this.matchPatternReflectionMayExecute(pattern.pattern, input);
+    const type = this.expandAliases(input);
+    if (type.kind === "union") {
+      return type.members.some((member) => this.matchPatternReflectionMayExecute(pattern, member));
+    }
+    if (type.kind === "optional") return this.matchPatternReflectionMayExecute(pattern, type.inner);
+    if (pattern.kind === "MatchListPattern") {
+      if (this.listReflectionMayExecute(type)) return true;
+      const element = type.kind === "list" ? type.element : type.kind === "any" ? anyType : unknownType;
+      return pattern.elements.some((child) => this.matchPatternReflectionMayExecute(child, element));
+    }
+    if (pattern.kind !== "MatchObjectPattern") return false;
+    if (this.recordReflectionMayExecute(type)) return true;
+    const fields = type.kind === "object" ? type.fields
+      : type.kind === "named" ? this.fieldsOf(type.identity ?? type.name)
+        : null;
+    return pattern.entries.some((entry) => this.matchPatternReflectionMayExecute(
+      entry.pattern,
+      fields?.get(entry.property) ?? (type.kind === "any" ? anyType : unknownType),
+    ));
   }
 
   private snapshotFlowFacts(): FlowFactsSnapshot {

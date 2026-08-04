@@ -1050,11 +1050,19 @@ function parseTsType(
     const type = unionOf(members);
     return hasNull || (hasUndefined && direction === "from-js") ? optionalOf(type) : type;
   }
-  if (value.endsWith("[]")) return { kind: "list", element: parseTsType(value.slice(0, -2), aliases, warnings, stack, classTypes, "invariant") };
+  if (value.endsWith("[]")) return {
+    kind: "list",
+    element: parseTsType(value.slice(0, -2), aliases, warnings, stack, classTypes, "invariant"),
+    ...(direction !== "to-js" ? { external: true } : {}),
+  };
   const generic = /^([A-Za-z_$][\w$]*)\s*<([\s\S]+)>$/u.exec(value);
   if (generic) {
     const arguments_ = splitTopLevel(generic[2] ?? "", ",");
-    if (generic[1] === "Array") return { kind: "list", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant") };
+    if (generic[1] === "Array") return {
+      kind: "list",
+      element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant"),
+      ...(direction !== "to-js" ? { external: true } : {}),
+    };
     if (generic[1] === "Set") return { kind: "set", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant") };
     if (generic[1] === "ReadonlyArray" || generic[1] === "ReadonlySet") {
       if (direction === "to-js") {
@@ -1173,6 +1181,7 @@ function objectType(source: string, aliases: ReadonlyMap<string, string>, warnin
     fields,
     ...(readonlyFields.size > 0 ? { readonlyFields } : {}),
     ...(optionalFields.size > 0 ? { optionalFields } : {}),
+    ...(direction !== "to-js" ? { external: true } : {}),
   };
 }
 

@@ -260,6 +260,15 @@ An `is` check against a safe-JavaScript class also accounts for its possible
 the suspension. Declaring a nested function does not itself invalidate facts;
 invoking it does.
 
+Structural records and Lists produced by safe JavaScript declarations retain
+that host origin through functions, Promises, conditionals, and VelarScript
+module exports. Record reads and reflective operations on those values are
+effect boundaries because a getter or Proxy hook may execute. List indexing,
+spreading, binding, iteration, and structural matching likewise account for
+host reflection. Saving one field in a local `const`, object-spreading into a
+new record, or copying a List creates an owned value with ordinary local rules.
+Writing a field or List index on a host-origin value is also an effect boundary.
+
 An f-string converts each embedded value at its source position. Primitive and
 enum conversion is inert. Converting an object may invoke its `toString`, so
 object interpolation is an ordinary effect boundary; save any checked value

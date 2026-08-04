@@ -71,6 +71,13 @@ during the Core token pass. The Web parser only sends embedded VelarScript
 expression slices through the normal nested Core parser; it never receives an
 opaque JSX or Look source block to split a second time.
 
+Structural object and List types also carry non-display host-origin metadata.
+The TypeScript declaration bridge and explicit extern results attach it, type
+composition preserves it without changing assignability or editor spelling,
+and fresh VelarScript copies intentionally remove it. Flow analysis uses this
+metadata wherever descriptor or index reflection could execute host Proxy or
+accessor behavior.
+
 Source classes keep constructor inputs, one constructor body, instance fields,
 static fields, getters, and methods as separate AST collections. Class-body fields require an annotation,
 so the project interface can publish their contract before analyzing consumers

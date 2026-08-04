@@ -13,7 +13,7 @@ export type ValueType =
   | { readonly kind: "number" }
   | { readonly kind: "bool" }
   | { readonly kind: "optional"; readonly inner: ValueType }
-  | { readonly kind: "list"; readonly element: ValueType }
+  | { readonly kind: "list"; readonly element: ValueType; readonly external?: true }
   | { readonly kind: "set"; readonly element: ValueType }
   | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType }
   | { readonly kind: "promise"; readonly value: ValueType }
@@ -22,8 +22,9 @@ export type ValueType =
       readonly fields: ReadonlyMap<string, ValueType>;
       readonly readonlyFields?: ReadonlySet<string>;
       readonly optionalFields?: ReadonlySet<string>;
+      readonly external?: true;
     }
-  | { readonly kind: "named"; readonly name: string; readonly identity?: string }
+  | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly external?: true }
   | { readonly kind: "class"; readonly name: string; readonly identity?: string }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
   | { readonly kind: "enumObject"; readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> }
@@ -130,9 +131,9 @@ export function unionOf(types: readonly ValueType[]): ValueType {
     const candidates = type.kind === "union" ? type.members : [type];
     for (const candidate of candidates) {
       if (isInvalidType(candidate)) return invalidType;
-      if (!members.some((existing) => sameType(existing, candidate))) {
-        members.push(candidate);
-      }
+      const existing = members.findIndex((member) => sameType(member, candidate));
+      if (existing < 0) members.push(candidate);
+      else members[existing] = mergeEquivalentMetadata(members[existing]!, candidate);
     }
   }
   return members.length === 0 ? unknownType : members.length === 1 ? members[0]! : { kind: "union", members };
@@ -149,13 +150,13 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
     return left;
   }
   if (sameType(left, right)) {
-    return left;
+    return mergeEquivalentMetadata(left, right);
   }
   if (left.kind === "optional" && sameType(left.inner, right)) {
-    return left;
+    return optionalOf(mergeEquivalentMetadata(left.inner, right));
   }
   if (right.kind === "optional" && sameType(right.inner, left)) {
-    return right;
+    return optionalOf(mergeEquivalentMetadata(left, right.inner));
   }
   if (left.kind === "null") {
     return optionalOf(right);
@@ -164,6 +165,64 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
     return optionalOf(left);
   }
   return unionOf([left, right]);
+}
+
+function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
+  if (left.kind === "object" && right.kind === "object") {
+    return {
+      ...left,
+      fields: new Map([...left.fields].map(([name, value]) => [
+        name,
+        right.fields.has(name) ? mergeEquivalentMetadata(value, right.fields.get(name)!) : value,
+      ])),
+      ...(left.external || right.external ? { external: true as const } : {}),
+    };
+  }
+  if (left.kind === "named" && right.kind === "named") {
+    return left.external || right.external ? { ...left, external: true } : left;
+  }
+  if (left.kind === "optional" && right.kind === "optional") {
+    return { kind: "optional", inner: mergeEquivalentMetadata(left.inner, right.inner) };
+  }
+  if (left.kind === "list" && right.kind === "list") {
+    return {
+      kind: "list",
+      element: mergeEquivalentMetadata(left.element, right.element),
+      ...(left.external || right.external ? { external: true } : {}),
+    };
+  }
+  if (left.kind === "set" && right.kind === "set") {
+    return { kind: "set", element: mergeEquivalentMetadata(left.element, right.element) };
+  }
+  if (left.kind === "map" && right.kind === "map") {
+    return {
+      kind: "map",
+      key: mergeEquivalentMetadata(left.key, right.key),
+      value: mergeEquivalentMetadata(left.value, right.value),
+    };
+  }
+  if (left.kind === "promise" && right.kind === "promise") {
+    return { kind: "promise", value: mergeEquivalentMetadata(left.value, right.value) };
+  }
+  if (left.kind === "union" && right.kind === "union") {
+    return {
+      kind: "union",
+      members: left.members.map((member) => {
+        const matching = right.members.find((candidate) => sameType(member, candidate));
+        return matching ? mergeEquivalentMetadata(member, matching) : member;
+      }),
+    };
+  }
+  if ((left.kind === "function" || left.kind === "action" || left.kind === "intrinsic")
+    && right.kind === left.kind) {
+    return {
+      ...left,
+      parameters: left.parameters.map((parameter, index) => mergeEquivalentMetadata(parameter, right.parameters[index]!)),
+      ...(left.rest && right.rest ? { rest: mergeEquivalentMetadata(left.rest, right.rest) } : {}),
+      result: mergeEquivalentMetadata(left.result, right.result),
+    };
+  }
+  return left;
 }
 
 export function resolvedAsyncType(type: ValueType): ValueType {
