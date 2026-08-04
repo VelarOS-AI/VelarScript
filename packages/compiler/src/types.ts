@@ -324,44 +324,56 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
 }
 
 export function semanticTypeIdentity(type: ValueType): string {
+  return typeIdentity(type, false);
+}
+
+export function analysisTypeIdentity(type: ValueType): string {
+  return typeIdentity(type, true);
+}
+
+function typeIdentity(type: ValueType, includeExternal: boolean): string {
+  const external = includeExternal && "external" in type && type.external === true ? ":external" : "";
+  const nested = (value: ValueType): string => typeIdentity(value, includeExternal);
   switch (type.kind) {
     case "unknown":
       return isInvalidType(type) ? "unknown:diagnosed" : type.restricted ? "unknown:restricted" : "unknown";
     case "class":
+      return `class${external}:${type.identity ?? type.name}`;
     case "classConstructor":
       return `${type.kind}:${type.identity ?? type.name}`;
     case "named":
-      return `named:${type.identity ?? type.name}`;
+      return `named${external}:${type.identity ?? type.name}`;
     case "enum":
     case "enumObject":
       return `${type.kind}:${type.identity}`;
     case "optional":
-      return `optional:${semanticTypeIdentity(type.inner)}`;
+      return `optional:${nested(type.inner)}`;
     case "list":
+      return `list${external}:${nested(type.element)}`;
     case "set":
-      return `${type.kind}:${semanticTypeIdentity(type.element)}`;
+      return `set:${nested(type.element)}`;
     case "map":
-      return `map:${semanticTypeIdentity(type.key)}:${semanticTypeIdentity(type.value)}`;
+      return `map:${nested(type.key)}:${nested(type.value)}`;
     case "promise":
-      return `promise:${semanticTypeIdentity(type.value)}`;
+      return `promise:${nested(type.value)}`;
     case "object":
-      return `object:${[...type.fields]
-        .map(([name, value]) => [name, semanticTypeIdentity(value)] as const)
+      return `object${external}:${[...type.fields]
+        .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly:" : ""}${type.optionalFields?.has(name) ? "optional:" : ""}${name}:${value}`)
         .join(",")}`;
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(semanticTypeIdentity).join(",")}:${type.rest ? semanticTypeIdentity(type.rest) : ""}:${semanticTypeIdentity(type.result)}`;
+      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(nested).join(",")}:${type.rest ? nested(type.rest) : ""}:${nested(type.result)}`;
     case "componentConstructor":
       return `component:${type.intrinsic ?? ""}:${type.name}:${[...type.props]
-        .map(([name, value]) => [name, semanticTypeIdentity(value)] as const)
+        .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([name, value]) => `${name}:${value}`)
         .join(",")}:${[...type.requiredProps].sort().join(",")}`;
     case "union":
-      return `union:${type.members.map(semanticTypeIdentity).sort().join("|")}`;
+      return `union:${type.members.map(nested).sort().join("|")}`;
     default:
       return `${type.kind}:${describeType(type)}`;
   }

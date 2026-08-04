@@ -88,6 +88,10 @@ Compiler and framework changes:
 - Runtime `Type.parse`, `is`, and type-pattern checks now preserve host origin
   when they validate an unchecked value; safe-JavaScript class instances carry
   the same non-display provenance through constructors and method results.
+- Cyclic module fixed points now include non-display host-origin metadata in
+  their analysis identity without changing visible type equality.
+- Explicit variable annotations and mutable rebinding now preserve the current
+  value's host origin instead of silently turning an external reference local.
 
 Tooling and documentation changes:
 

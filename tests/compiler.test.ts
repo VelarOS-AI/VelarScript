@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
+import { analysisTypeIdentity, isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
 import { compileProject as compileProjectCore, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
@@ -857,6 +857,11 @@ const unsafeSpread: Outer = {...aliasedOuter}
     ["name", { kind: "string" as const }],
   ]) };
   assert.equal(sameType(leftObject, rightObject), true);
+  assert.notEqual(analysisTypeIdentity(leftObject), analysisTypeIdentity({ ...leftObject, external: true }));
+  assert.notEqual(
+    analysisTypeIdentity({ kind: "list", element: leftObject }),
+    analysisTypeIdentity({ kind: "list", element: { ...leftObject, external: true } }),
+  );
   const readonlyObject = { ...leftObject, readonlyFields: new Set(["name"]) };
   const structuralEnvironment = { fieldsOf: () => null, isSubclassOf: () => false };
   assert.equal(sameType(leftObject, readonlyObject), false);
@@ -11423,6 +11428,42 @@ if current:
     const stale: string = current
 `.trimStart(), { analysis: { imports: new Map([["payload", externalRequiredRecordType]]) } });
   assert.equal(externalRecordWrite.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
+
+  const externalMutableRecordType: ValueType = {
+    kind: "object",
+    fields: externalRecordType.fields,
+    external: true,
+  };
+  const annotatedExternalValues = compileCore(`
+type Profile:
+    label: string?
+
+type Wrapper:
+    profile: Profile
+
+import js {profile} from "host-sdk"
+
+export const annotated: Profile = profile
+if annotated.label:
+    const repeated: string = annotated.label
+
+const wrapper: Wrapper = {profile}
+if wrapper.profile.label:
+    const repeated: string = wrapper.profile.label
+
+let rebound: Profile = {label: "local"}
+rebound = profile
+if rebound.label:
+    const repeated: string = rebound.label
+
+rebound = {label: "owned"}
+if rebound.label:
+    const repeated: string = rebound.label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(annotatedExternalValues.diagnostics.length, 3);
+  assert.equal(annotatedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 3);
+  const annotatedExport = annotatedExternalValues.moduleInterface.exports.get("annotated");
+  assert.equal(annotatedExport?.kind === "named" ? annotatedExport.external : false, true);
 
   const externalListType: ValueType = { kind: "list", element: { kind: "number" }, external: true };
   const externalList = compileCore(`

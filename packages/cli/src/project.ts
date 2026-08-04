@@ -1,9 +1,9 @@
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  analysisTypeIdentity,
   compile,
   inspectModule,
   optionalOf,
-  semanticTypeIdentity,
   type AnalysisContext,
   type ClassInfo,
   type CompilerExtension,
@@ -447,7 +447,7 @@ function moduleDependencies(
 function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]): string {
   const typeMap = (values: ReadonlyMap<string, ValueType>): string => [...values]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, type]) => `${name}:${semanticTypeIdentity(type)}`)
+    .map(([name, type]) => `${name}:${analysisTypeIdentity(type)}`)
     .join("|");
   const namedTypes = [...interface_.namedTypes]
     .sort(([left], [right]) => left.localeCompare(right))

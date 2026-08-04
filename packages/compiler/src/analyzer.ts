@@ -1059,7 +1059,9 @@ export class Analyzer implements TypeEnvironment {
           ? this.lookup(statement.initializer.name)
           : null;
         const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
-        const declared = annotationValid ? annotated ?? actual : invalidType;
+        const declared = annotationValid
+          ? annotated ? this.preserveDeclaredOrigin(annotated, actual) : actual
+          : invalidType;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
         if (this.bindingPatternReflectionMayExecute(statement.pattern, actual)) this.invalidateEffectfulFlowFacts();
         this.declarePattern(statement.pattern, statement.binding === "let", declared);
@@ -2140,6 +2142,10 @@ export class Analyzer implements TypeEnvironment {
       } else if (statement.operator === "=") {
         this.invalidateAssignmentNarrowings(statement.target, targetBinding);
         if (targetBinding?.mutable) {
+          const visibleStorage = this.clearExternalOrigin(targetBinding.declaredType);
+          const rebound = this.preserveDeclaredOrigin(visibleStorage, valueType);
+          targetBinding.declaredType = rebound;
+          targetBinding.type = rebound;
           this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
         }
       }
@@ -3863,6 +3869,90 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") {
       return { ...type, result: this.markExternalAggregate(type.result) };
     }
+    return type;
+  }
+
+  private hasExternalOrigin(input: ValueType): boolean {
+    const type = this.expandAliases(input);
+    if ((type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list") && type.external) {
+      return true;
+    }
+    if (type.kind === "optional") return this.hasExternalOrigin(type.inner);
+    if (type.kind === "list" || type.kind === "set") return this.hasExternalOrigin(type.element);
+    if (type.kind === "map") return this.hasExternalOrigin(type.key) || this.hasExternalOrigin(type.value);
+    if (type.kind === "promise") return this.hasExternalOrigin(type.value);
+    if (type.kind === "object") return [...type.fields.values()].some((field) => this.hasExternalOrigin(field));
+    if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") {
+      return type.parameters.some((parameter) => this.hasExternalOrigin(parameter))
+        || Boolean(type.rest && this.hasExternalOrigin(type.rest))
+        || this.hasExternalOrigin(type.result);
+    }
+    if (type.kind === "union") return type.members.some((member) => this.hasExternalOrigin(member));
+    return false;
+  }
+
+  private preserveDeclaredOrigin(declared: ValueType, actual: ValueType): ValueType {
+    if (sameType(declared, actual)) return mergeTypes(declared, actual);
+    const source = this.expandAliases(actual);
+    if (declared.kind === "optional") {
+      if (source.kind === "optional") return optionalOf(this.preserveDeclaredOrigin(declared.inner, source.inner));
+      if (source.kind === "null") return declared;
+      return optionalOf(this.preserveDeclaredOrigin(declared.inner, source));
+    }
+    if (declared.kind === "list" && source.kind === "list") {
+      return {
+        ...declared,
+        element: this.preserveDeclaredOrigin(declared.element, source.element),
+        ...(source.external ? { external: true } : {}),
+      };
+    }
+    if (declared.kind === "set" && source.kind === "set") {
+      return { ...declared, element: this.preserveDeclaredOrigin(declared.element, source.element) };
+    }
+    if (declared.kind === "map" && source.kind === "map") {
+      return {
+        ...declared,
+        key: this.preserveDeclaredOrigin(declared.key, source.key),
+        value: this.preserveDeclaredOrigin(declared.value, source.value),
+      };
+    }
+    if (declared.kind === "promise" && source.kind === "promise") {
+      return { ...declared, value: this.preserveDeclaredOrigin(declared.value, source.value) };
+    }
+    if (declared.kind === "object" && source.kind === "object") {
+      return {
+        ...declared,
+        fields: new Map([...declared.fields].map(([name, field]) => [
+          name,
+          source.fields.has(name) ? this.preserveDeclaredOrigin(field, source.fields.get(name)!) : field,
+        ])),
+        ...(source.external ? { external: true } : {}),
+      };
+    }
+    return this.hasExternalOrigin(source) ? this.markExternalAggregate(declared) : declared;
+  }
+
+  private clearExternalOrigin(type: ValueType): ValueType {
+    if (type.kind === "named" || type.kind === "class") {
+      const { external: _external, ...owned } = type;
+      return owned;
+    }
+    if (type.kind === "object") {
+      const { external: _external, ...owned } = type;
+      return { ...owned, fields: new Map([...type.fields].map(([name, field]) => [name, this.clearExternalOrigin(field)])) };
+    }
+    if (type.kind === "list") return { kind: "list", element: this.clearExternalOrigin(type.element) };
+    if (type.kind === "set") return { kind: "set", element: this.clearExternalOrigin(type.element) };
+    if (type.kind === "map") return { kind: "map", key: this.clearExternalOrigin(type.key), value: this.clearExternalOrigin(type.value) };
+    if (type.kind === "promise") return { kind: "promise", value: this.clearExternalOrigin(type.value) };
+    if (type.kind === "optional") return optionalOf(this.clearExternalOrigin(type.inner));
+    if (type.kind === "union") return unionOf(type.members.map((member) => this.clearExternalOrigin(member)));
+    if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
+      ...type,
+      parameters: type.parameters.map((parameter) => this.clearExternalOrigin(parameter)),
+      ...(type.rest ? { rest: this.clearExternalOrigin(type.rest) } : {}),
+      result: this.clearExternalOrigin(type.result),
+    };
     return type;
   }
 

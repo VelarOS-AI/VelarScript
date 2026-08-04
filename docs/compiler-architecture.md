@@ -77,6 +77,9 @@ composition preserves it without changing assignability or editor spelling,
 and fresh VelarScript copies intentionally remove it. Flow analysis uses this
 metadata wherever descriptor or index reflection could execute host Proxy or
 accessor behavior.
+Declared storage overlays this metadata onto its visible annotated shape rather
+than replacing the analyzed value type. Rebinding mutable storage recomputes
+the overlay, so provenance follows the current runtime reference.
 
 Runtime validation proves a value's current shape; it does not prove that a
 Proxy will preserve that shape on its next operation. `Type.parse`, `is`, and
@@ -260,7 +263,8 @@ same treatment when `T` has that nullish contract. This rule survives values,
 objects, collections, classes, aliases, cycles, namespace imports, and dynamic
 imports without a second propagation model. Unsafe JavaScript `any` remains
 outside the guarantee. Cross-module fixed-point analysis therefore converges on
-complete semantic interface identities, not hidden boundary metadata.
+analysis identities that include hidden host-origin metadata, while ordinary
+type equality and editor spelling continue to use the visible semantic identity.
 Assignment targets are a separate lowering context: they never receive the
 read-side `?? null` normalization. Flow-narrowed reads use the current fact,
 while plain assignment is checked against the declared location type and

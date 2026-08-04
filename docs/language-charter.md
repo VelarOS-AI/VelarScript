@@ -268,6 +268,10 @@ spreading, binding, iteration, and structural matching likewise account for
 host reflection. Saving one field in a local `const`, object-spreading into a
 new record, or copying a List creates an owned value with ordinary local rules.
 Writing a field or List index on a host-origin value is also an effect boundary.
+An explicit type annotation constrains the visible shape but never claims
+ownership: assigning a host-origin value to `const value: T` or `let value: T`
+preserves that origin, and assigning a fresh owned value back to a `let` restores
+ordinary local behavior.
 
 An f-string converts each embedded value at its source position. Primitive and
 enum conversion is inert. Converting an object may invoke its `toString`, so
