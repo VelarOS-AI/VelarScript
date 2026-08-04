@@ -244,8 +244,13 @@ remote, stable version, and publishable license. It contains no publish step.
 ## Resource ceilings
 
 The compiler rejects a source module above 4 MiB before lexing. Lexing stops at
-250,000 tokens or 512 delimiter/indent levels, parser stack exhaustion is
-normalized to `VEL2008`, and project discovery/resolution stops at 4,096 VelarScript
+250,000 tokens or 512 delimiter/indent levels, and Core parsing has an explicit
+512-level syntax budget reported as `VEL2008`. Only the compiler-owned budget
+sentinel becomes that diagnostic; a compiler extension's own `RangeError`
+remains an extension failure instead of being hidden as source complexity.
+Terminal lexer ceilings stop before parser or extension-parser execution, so
+their more precise `VEL1005`/`VEL1006` diagnostics cannot be overwritten.
+Project discovery/resolution stops at 4,096 VelarScript
 modules. LSP framing rejects messages above 16 MiB. Project/package manifests
 are read through bounded regular-file paths; JavaScript package inspection is
 limited to 16 MiB and `.d.ts` consumption to 2 MiB.

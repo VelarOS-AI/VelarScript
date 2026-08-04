@@ -4,7 +4,7 @@ import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
 import type { CompilerEmitter, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
-import { Parser } from "./parser.ts";
+import { isParserComplexityFailure, Parser } from "./parser.ts";
 import { SourceText } from "./source.ts";
 import { buildSemanticIndex, type SemanticIndex } from "./semantic.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
@@ -185,6 +185,13 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
   try {
     const lexicalExtensions = extensions.flatMap((extension) => extension.lexical ? [extension.lexical] : []);
     const lexed = new Lexer(text, lexicalExtensions).lex();
+    if (lexed.diagnostics.some((item) => item.code === "VEL1005" || item.code === "VEL1006")) {
+      return {
+        source,
+        program: { kind: "Program", body: [], span: { start: 0, end: text.length } },
+        diagnostics: lexed.diagnostics,
+      };
+    }
     const parserExtensions = extensions.filter((extension) => extension.parser);
     if (parserExtensions.length > 1) throw new Error("Only one compiler extension may own syntax parsing");
     const parser = parserExtensions[0]?.parser?.create(lexed.tokens, lexicalExtensions)
@@ -192,7 +199,7 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
     const parsed = parser.parse();
     return { source, program: parsed.program, diagnostics: [...lexed.diagnostics, ...parsed.diagnostics] };
   } catch (error) {
-    if (!(error instanceof RangeError)) throw error;
+    if (!isParserComplexityFailure(error)) throw error;
     return {
       source,
       program: { kind: "Program", body: [], span: { start: 0, end: 0 } },

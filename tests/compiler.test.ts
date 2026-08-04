@@ -2048,9 +2048,24 @@ test("compiler and CLI reject oversized source modules before parsing", async ()
   const unaryNesting = compile(`${"not ".repeat(10000)}true\n`);
   assert.equal(unaryNesting.code, null);
   assert.ok(unaryNesting.diagnostics.some((item) => item.code === "VEL2008"));
+  const powerNesting = compileCore(`${"1 ** ".repeat(1_000)}1\n`);
+  assert.equal(powerNesting.code, null);
+  assert.ok(powerNesting.diagnostics.some((item) => item.code === "VEL2008"));
+  const typeNesting = compileCore(`type Deep = ${"List<".repeat(1_000)}number${">".repeat(1_000)}\n`);
+  assert.equal(typeNesting.code, null);
+  assert.ok(typeNesting.diagnostics.some((item) => item.code === "VEL2008"));
   const delimiterNesting = compile(`${"(".repeat(513)}1${")".repeat(513)}\n`);
   assert.equal(delimiterNesting.code, null);
   assert.ok(delimiterNesting.diagnostics.some((item) => item.code === "VEL1006"));
+  let extensionParserCalled = false;
+  const limitedBeforeExtension = compileCore(`${"(".repeat(513)}1${")".repeat(513)}\n`, {
+    extensions: [{
+      id: "fixture-terminal-lexer-limit",
+      parser: { create() { extensionParserCalled = true; throw new Error("parser should not run"); } },
+    }],
+  });
+  assert.ok(limitedBeforeExtension.diagnostics.some((item) => item.code === "VEL1006"));
+  assert.equal(extensionParserCalled, false);
 
   const directory = await mkdtemp(join(tmpdir(), "velar-source-limit-"));
   const entry = join(directory, "main.vel");
@@ -2061,6 +2076,24 @@ test("compiler and CLI reject oversized source modules before parsing", async ()
   });
   assert.equal(execution.status, 1);
   assert.match(execution.stderr, /exceeds the 4 MiB VelarScript source-module limit/u);
+});
+
+test("compiler complexity diagnostics never hide extension RangeErrors", () => {
+  const lexicalFailure = new RangeError("lexical extension failed");
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [{
+      id: "fixture-lexical-range",
+      lexical: { scan() { throw lexicalFailure; } },
+    }],
+  }), (error) => error === lexicalFailure);
+
+  const parserFailure = new RangeError("parser extension failed");
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [{
+      id: "fixture-parser-range",
+      parser: { create() { throw parserFailure; } },
+    }],
+  }), (error) => error === parserFailure);
 });
 
 test("compiler APIs contain deterministic malformed input without escaping internal exceptions", () => {

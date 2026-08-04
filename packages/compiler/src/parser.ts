@@ -44,6 +44,12 @@ import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
 const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ...Object.values(keywordKinds)]);
+const MAX_PARSE_DEPTH = 512;
+const PARSER_COMPLEXITY_FAILURE = Object.freeze({ kind: "VelarParserComplexityFailure" });
+
+export function isParserComplexityFailure(value: unknown): boolean {
+  return value === PARSER_COMPLEXITY_FAILURE;
+}
 
 export interface ParseResult {
   readonly program: Program;
@@ -97,6 +103,7 @@ export class Parser {
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
   private index = 0;
+  private parseDepth = 0;
 
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[] = []) {
     this.tokens = tokens;
@@ -140,6 +147,10 @@ export class Parser {
   }
 
   protected parseStatement(): Statement | null {
+    return this.withParseDepth(() => this.parseStatementBody());
+  }
+
+  private parseStatementBody(): Statement | null {
     const start = this.current().span.start;
 
     if (this.check("import") && this.tokens[this.index + 1]?.kind !== "leftParen") {
@@ -492,6 +503,10 @@ export class Parser {
   }
 
   private parseBindingPattern(): BindingPattern {
+    return this.withParseDepth(() => this.parseBindingPatternBody());
+  }
+
+  private parseBindingPatternBody(): BindingPattern {
     if (this.match("identifier")) {
       const name = this.previous();
       return { kind: "NameBindingPattern", name: name.value, span: name.span };
@@ -932,6 +947,10 @@ export class Parser {
   }
 
   private parseIf(start: number): IfStatement {
+    return this.withParseDepth(() => this.parseIfBody(start));
+  }
+
+  private parseIfBody(start: number): IfStatement {
     const condition = this.parseExpression();
     const thenBody = this.parseBlock();
     this.consumeNewlines();
@@ -1001,6 +1020,10 @@ export class Parser {
   }
 
   private parseMatchPattern(root: boolean): MatchStatement["cases"][number]["pattern"] {
+    return this.withParseDepth(() => this.parseMatchPatternBody(root));
+  }
+
+  private parseMatchPatternBody(root: boolean): MatchStatement["cases"][number]["pattern"] {
     const start = this.current().span.start;
     let pattern: MatchStatement["cases"][number]["pattern"];
 
@@ -1166,6 +1189,10 @@ export class Parser {
   }
 
   protected parseTypeReference(): TypeReference {
+    return this.withParseDepth(() => this.parseTypeReferenceBody());
+  }
+
+  private parseTypeReferenceBody(): TypeReference {
     const start = this.current().span.start;
     const members: TypeSyntax[] = [this.parseSingleTypeReference()];
     while (this.match("pipe")) {
@@ -1248,6 +1275,10 @@ export class Parser {
   }
 
   protected parseExpression(minimumPrecedence = 0): Expression {
+    return this.withParseDepth(() => this.parseExpressionBody(minimumPrecedence));
+  }
+
+  private parseExpressionBody(minimumPrecedence = 0): Expression {
     const asynchronousArrow = minimumPrecedence === 0
       && this.check("async")
       && ((this.peekKind(1) === "leftParen" && this.isParenthesizedArrow(1))
@@ -1356,13 +1387,15 @@ export class Parser {
   private parseUnary(): Expression {
     if (this.match("not") || this.match("plus") || this.match("minus")) {
       const operator = this.previous();
-      const operand = this.parseUnary();
-      return {
-        kind: "UnaryExpression",
-        operator: operator.kind === "not" ? "not" : operator.kind === "plus" ? "+" : "-",
-        operand,
-        span: span(operator.span.start, operand.span.end),
-      };
+      return this.withParseDepth(() => {
+        const operand = this.parseUnary();
+        return {
+          kind: "UnaryExpression",
+          operator: operator.kind === "not" ? "not" : operator.kind === "plus" ? "+" : "-",
+          operand,
+          span: span(operator.span.start, operand.span.end),
+        };
+      });
     }
     return this.parsePower();
   }
@@ -1371,28 +1404,32 @@ export class Parser {
     const left = this.parsePowerBase();
     if (!this.match("starStar")) return left;
     const operator = this.previous();
-    const right = this.parseUnary();
-    return {
-      kind: "BinaryExpression",
-      operator: "**",
-      left,
-      right,
-      span: span(left.span.start, right.span.end),
-    };
+    return this.withParseDepth(() => {
+      const right = this.parseUnary();
+      return {
+        kind: "BinaryExpression",
+        operator: "**",
+        left,
+        right,
+        span: span(left.span.start, right.span.end),
+      };
+    });
   }
 
   private parsePowerBase(): Expression {
     if (!this.match("await")) return this.parsePostfix();
     const operator = this.previous();
-    const operand = this.check("not") || this.check("plus") || this.check("minus")
-      ? this.parseUnary()
-      : this.parsePowerBase();
-    return {
-      kind: "UnaryExpression",
-      operator: "await",
-      operand,
-      span: span(operator.span.start, operand.span.end),
-    };
+    return this.withParseDepth(() => {
+      const operand = this.check("not") || this.check("plus") || this.check("minus")
+        ? this.parseUnary()
+        : this.parsePowerBase();
+      return {
+        kind: "UnaryExpression",
+        operator: "await",
+        operand,
+        span: span(operator.span.start, operand.span.end),
+      };
+    });
   }
 
   private parsePostfix(): Expression {
@@ -1722,6 +1759,19 @@ export class Parser {
 
   protected createNestedParser(tokens: readonly Token[]): Parser {
     return new Parser(tokens, this.lexicalExtensions);
+  }
+
+  private withParseDepth<T>(parse: () => T): T {
+    this.parseDepth += 1;
+    if (this.parseDepth > MAX_PARSE_DEPTH) {
+      this.parseDepth -= 1;
+      throw PARSER_COMPLEXITY_FAILURE;
+    }
+    try {
+      return parse();
+    } finally {
+      this.parseDepth -= 1;
+    }
   }
 
   private binaryOperator(token: Token): BinaryExpression["operator"] {
