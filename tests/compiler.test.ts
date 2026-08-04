@@ -6956,9 +6956,21 @@ try { storage.watch("missing", {}, () => null); console.log("accepted"); } catch
 try { storage.set(42, {value: 1}); console.log("accepted"); } catch (error) { console.log(error.name); }
 try { storage.scope(42); console.log("accepted"); } catch (error) { console.log(error.name); }
 console.log(runtimeTypeReads, storageReads === beforeInvalid);
+let hostLengthReads = 0;
+globalThis.localStorage = {
+  get length() { hostLengthReads += 1; return hostLengthReads === 1 ? 1 : 100001; },
+  key(index) { return index === 0 ? "safe" : null; },
+};
+console.log(storage.keys().join(","), hostLengthReads);
+let hostileStorageKeyReads = 0;
+const hostileStorageKey = Object.defineProperty({}, "startsWith", { get() { hostileStorageKeyReads += 1; throw new Error("unexpected key method read"); } });
+globalThis.localStorage = { length: 1, key() { return hostileStorageKey; } };
+try { storage.keys(); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(hostileStorageKeyReads);
+try { storage.scope("a".repeat(4095)).scope("b"); console.log("accepted"); } catch (error) { console.log(error.name); }
 `);
   assert.equal(storageExecution.status, 0, String(storageExecution.stderr));
-  assert.equal(storageExecution.stdout, '{"value":1}\n{"value":1} 0\nTypeError\ntrue 0\nTypeError\ntrue\nTypeError\nTypeError\nTypeError\nTypeError\nTypeError\n0 true\n');
+  assert.equal(storageExecution.stdout, '{"value":1}\n{"value":1} 0\nTypeError\ntrue 0\nTypeError\ntrue\nTypeError\nTypeError\nTypeError\nTypeError\nTypeError\n0 true\nsafe 1\nTypeError\n0\nRangeError\n');
 
   const http = standardModuleSource("velar/http") ?? "";
   const httpExecution = executeModule(`${http}

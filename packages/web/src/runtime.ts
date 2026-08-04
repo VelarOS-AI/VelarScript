@@ -1221,9 +1221,13 @@ ${VELAR_STRICT_JSON_RUNTIME}
 ${listRuntime}
 ${runtimeTypeRuntime}
 const changeEvent = "velar-storage-change";
+const storageMaxKeyCodeUnits = 4096;
+const storageMaxListingCodeUnits = 16 * 1024 * 1024;
+const storageStringSlice = Object.getOwnPropertyDescriptor(String.prototype, "slice").value;
+const storageListSort = Object.getOwnPropertyDescriptor(Array.prototype, "sort").value;
 
 function storageType(Type) { return __velarRequireRuntimeType(Type, "Storage reads"); }
-function storageText(value, name) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > 4096) throw new RangeError(name + " cannot exceed 4096 characters"); return value; }
+function storageText(value, name) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > storageMaxKeyCodeUnits) throw new RangeError(name + " cannot exceed 4096 characters"); return value; }
 function parsed(raw, Type, fallback) {
   Type = storageType(Type);
   if (raw == null) return fallback;
@@ -1236,7 +1240,11 @@ function createStore(storageName, prefix = "", areaName = "local") {
     if (!value) throw new Error("velar/storage requires a browser storage environment");
     return value;
   };
-  const full = (key) => prefix + storageText(key, "Storage key");
+  const full = (key) => {
+    const value = storageText(key, "Storage key");
+    if (prefix.length > storageMaxKeyCodeUnits - value.length) throw new RangeError("Scoped storage keys cannot exceed 4096 characters");
+    return prefix + value;
+  };
   const emit = (key, oldValue, newValue) => dispatchEvent(new CustomEvent(changeEvent, { detail: { areaName, key, oldValue, newValue } }));
   const api = {
     get(key, Type, fallback = null) {
@@ -1256,10 +1264,23 @@ function createStore(storageName, prefix = "", areaName = "local") {
     has(key) { const name = full(key); return area().getItem(name) != null; },
     keys() {
       const target = area();
-      if (!Number.isSafeInteger(target.length) || target.length < 0 || target.length > 100000) throw new RangeError("Browser storage cannot exceed 100000 keys");
-      return Array.from({ length: target.length }, (_, index) => target.key(index))
-        .filter((key) => key != null && key.startsWith(prefix))
-        .map((key) => key.slice(prefix.length)).sort();
+      const count = target.length;
+      if (!Number.isSafeInteger(count) || count < 0 || count > 100000) throw new RangeError("Browser storage cannot exceed 100000 keys");
+      const output = [];
+      let outputUnits = 0;
+      for (let index = 0; index < count; index += 1) {
+        const key = target.key(index);
+        if (key === null) continue;
+        if (typeof key !== "string") throw new TypeError("Browser storage returned a non-string key");
+        if (key.length < prefix.length || storageStringSlice.call(key, 0, prefix.length) !== prefix) continue;
+        if (key.length > storageMaxKeyCodeUnits) throw new RangeError("Browser storage keys cannot exceed 4096 characters");
+        const visible = storageStringSlice.call(key, prefix.length);
+        outputUnits += visible.length;
+        if (outputUnits > storageMaxListingCodeUnits) throw new RangeError("Browser storage key listings cannot exceed 16 MiB");
+        output.push(visible);
+      }
+      storageListSort.call(output);
+      return output;
     },
     remove(key) {
       const name = full(key);
@@ -1273,6 +1294,7 @@ function createStore(storageName, prefix = "", areaName = "local") {
     scope(name) {
       const value = storageText(name, "Storage scope").trim();
       if (!value) throw new TypeError("Storage scope cannot be empty");
+      if (prefix.length > storageMaxKeyCodeUnits - value.length - 1) throw new RangeError("Storage scope paths cannot exceed 4096 characters");
       return createStore(storageName, prefix + value + ":", areaName);
     },
     watch(key, Type, callback) {

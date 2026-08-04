@@ -377,10 +377,12 @@ component PreferencesPanel:
   when the individual request reports success. A later transaction abort is
   observable as rejection. Failed/blocked opens reset the cached connection so
   a later operation may retry, and version changes close stale handles.
-- Storage, scope, database, and key names remain actual strings. Key listings
-  are copied into an application-owned mutable List and sorted for deterministic
-  behavior without invoking host array methods or iterators; an externally
-  injected malformed or non-string IndexedDB key fails instead of being coerced.
+- Storage, scope, database, and key names remain actual strings. Scoped browser
+  keys have one bounded 4096-character path, and a key listing snapshots the
+  host length once, validates every result, caps its aggregate text, and returns
+  an application-owned mutable List sorted for deterministic behavior. Listings
+  never invoke methods on host-provided key values. IndexedDB listings likewise
+  reject malformed or non-string keys instead of coercing them.
 - Every write uses the strict `velar/json` data contract. Unsupported or lossy
   values that are visible to the compiler fail during checking; dynamic values
   are validated again at runtime before local/session storage or IndexedDB is
