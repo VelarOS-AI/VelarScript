@@ -5078,7 +5078,7 @@ export class Analyzer implements TypeEnvironment {
         : object.kind === "set"
           ? setCollectionOperations.get(property) ?? null
           : null;
-    if (resolvedOriginal.kind === "optional" && optional && guardedCollectionOperation) {
+    if (guardedCollectionOperation) {
       this.collectionCalls.set(memberSpan.end, guardedCollectionOperation);
     }
     const basePath = this.stableMemberAccessPath(objectExpression);

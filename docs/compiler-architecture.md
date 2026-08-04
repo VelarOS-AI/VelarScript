@@ -207,6 +207,9 @@ record fields, freezes when the value crosses an open typed boundary, and is
 written back to the semantic index for editor hover. Iteration, membership,
 size, indexing, copying, and mutation lower through controlled helpers that
 validate dense Lists and invoke native Map/Set prototype operations directly.
+Reading a collection method as a value lowers to a receiver-once bound wrapper
+around the same helper, including optional access; it never leaks a nonexistent
+or overridable JavaScript instance method.
 Membership lowers to a source-shaped `candidate, collection` helper signature,
 so ordinary JavaScript argument evaluation preserves the language order without
 an extra generated function boundary.

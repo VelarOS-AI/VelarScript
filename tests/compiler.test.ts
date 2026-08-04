@@ -9011,6 +9011,46 @@ values.insert(index=0, index=1, value=2)
   assert.match(nameMessages, /Parameter 'index' is provided more than once/u);
 });
 
+test("collection methods remain callable when stored as first-class values", () => {
+  const result = compileCore(`
+let values = [1]
+const append = values.append
+const get = values.get
+append(value=2)
+print(get(index=-1))
+let receiverReads = 0
+def source() -> List<number>:
+    receiverReads += 1
+    return values
+const appendFromSource = source().append
+appendFromSource(3)
+print(receiverReads)
+const present: List<number>? = values
+const optionalAppend = present?.append
+optionalAppend?.(value=4)
+const absent: List<number>? = null
+print(absent?.append == null)
+print(values.get(-1))
+
+const tags: Set<string> = Set()
+const add = tags.add
+const has = tags.has
+add(value="web")
+print(has(value="web"))
+
+const scores: Map<string, number> = Map()
+const setScore = scores.set
+const getScore = scores.get
+setScore(value=9, key="Ada")
+print(getScore(key="Ada"))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.doesNotMatch(result.code ?? "", /values\.append|tags\.add|scores\.set/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "2\n1\ntrue\n4\ntrue\n9\n");
+});
+
 test("empty Lists infer one element type from append or extend", () => {
   const result = compile(`
 let appended = []

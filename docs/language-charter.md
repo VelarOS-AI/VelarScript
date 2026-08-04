@@ -519,6 +519,11 @@ For example, `slice(end=5, start=1)`, `Map.set(value=user, key=user.id)`, and
 `Set.add(value="web")` are checked exactly like calls to user-defined
 functions. Source expressions still evaluate from left to right even when the
 named values are reordered for the runtime call.
+Collection methods are first-class bound values. `const add = tags.add` keeps
+the checked `tags` receiver, and calling `add(value="web")` uses the same typed
+helper as `tags.add(value="web")`; the receiver expression is evaluated once
+when the method value is created. Optional collection method access returns
+either that bound callable or `null`.
 
 All collection growth is bounded. Every language collection operation validates
 its JavaScript boundary and calls compiler-owned helpers rather than an

@@ -1502,6 +1502,15 @@ export class JavaScriptEmitter {
         return this.hints.optionalCalls.has(spanIdentity(expression.span)) ? `(${call} ?? null)` : call;
       }
       case "MemberExpression": {
+        const collectionHelper = this.collectionHelper(expression);
+        if (collectionHelper) {
+          this.needsCollectionHelpers = true;
+          const object = this.emitMappedExpression(expression.object);
+          const bound = `(...__velarArguments) => ${collectionHelper}(__value, ...__velarArguments)`;
+          return expression.optional
+            ? `(__value => __value == null ? null : ${bound})(${object})`
+            : `(__value => ${bound})(${object})`;
+        }
         if (this.hints.collectionSizes.has(expression.span.end)) {
           this.needsCollectionHelpers = true;
           const object = this.emitMappedExpression(expression.object);
