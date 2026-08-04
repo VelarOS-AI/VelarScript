@@ -1133,7 +1133,9 @@ function parseTsType(
     return unknownType;
   }
   const classType = classTypes.get(value);
-  if (classType) return classType;
+  if (classType) return direction !== "to-js" && classType.kind === "class"
+    ? { ...classType, external: true }
+    : classType;
   const alias = aliases.get(value);
   if (alias && !stack.has(value)) return parseTsType(alias, aliases, warnings, new Set([...stack, value]), classTypes, direction);
   if (alias) warnings.push(`Recursive declaration '${value}' is outside the VelarScript declaration bridge and was kept as unknown`);

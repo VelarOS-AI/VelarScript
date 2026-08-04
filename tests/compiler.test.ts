@@ -7856,6 +7856,12 @@ export declare function identity<T>(value: T): T;
   assert.equal(describeType(declarations.classes.get("Formatter")!.methods.get("format")!), "(number, string = default) -> string");
   assert.equal(describeType(declarations.classes.get("Formatter")!.methods.get("setPrecision")!), "(number) -> Formatter");
   assert.equal(describeType(declarations.classes.get("Formatter")!.staticMethods.get("create")!), "(string) -> Formatter");
+  const setPrecision = declarations.classes.get("Formatter")!.methods.get("setPrecision");
+  const setPrecisionResult = setPrecision?.kind === "function" ? setPrecision.result : null;
+  assert.equal(setPrecisionResult?.kind === "class" ? setPrecisionResult.external : false, true);
+  const createFormatter = declarations.classes.get("Formatter")!.staticMethods.get("create");
+  const createFormatterResult = createFormatter?.kind === "function" ? createFormatter.result : null;
+  assert.equal(createFormatterResult?.kind === "class" ? createFormatterResult.external : false, true);
   assert.equal(describeType(declarations.classes.get("Formatter")!.staticFields.get("version")!.type), "string");
   assert.equal(describeType(declarations.exports.get("overloaded")!), "unknown");
   assert.equal(describeType(declarations.exports.get("identity")!), "unknown");
@@ -11484,6 +11490,57 @@ if current:
     const stable: string = current
 `.trimStart());
   assert.deepEqual(internalList.diagnostics, []);
+
+  const runtimeValidatedHostValues = compileCore(`
+type Profile:
+    label: string?
+
+class LocalProfile:
+    let label: string?
+
+    constructor(label: string):
+        self.label = label
+
+import js {raw} from "host-sdk"
+
+const parsed = Profile.parse(raw)
+if parsed.label:
+    const repeated: string = parsed.label
+
+if raw is Profile:
+    if raw.label:
+        const repeated: string = raw.label
+
+match raw:
+    case Profile as matched:
+        if matched.label:
+            const repeated: string = matched.label
+
+if raw is LocalProfile:
+    if raw.label:
+        const repeated: string = raw.label
+`.trimStart(), { analysis: { imports: new Map([["raw", { kind: "unknown" }]]) } });
+  assert.equal(runtimeValidatedHostValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
+
+  const runtimeValidatedOwnedValues = compile(`
+type Profile:
+    label: string?
+
+class LocalProfile:
+    let label: string?
+
+    constructor(label: string):
+        self.label = label
+
+const parsed = Profile.parse({label: "owned"})
+if parsed.label:
+    const repeated: string = parsed.label
+
+const local = LocalProfile("owned")
+if local.label:
+    const repeated: string = local.label
+`.trimStart());
+  assert.deepEqual(runtimeValidatedOwnedValues.diagnostics, []);
 });
 
 test("f-strings invalidate facts only when object coercion can execute user code", () => {

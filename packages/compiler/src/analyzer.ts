@@ -2056,8 +2056,8 @@ export class Analyzer implements TypeEnvironment {
       const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
       effectfulMemberWrite = owner.kind === "any"
         || (owner.kind === "object" || owner.kind === "named") && owner.external === true
-        || (owner.kind === "class" || owner.kind === "classConstructor")
-          && (owner.identity ?? owner.name).startsWith("js:");
+        || owner.kind === "class" && (owner.external === true || (owner.identity ?? owner.name).startsWith("js:"))
+        || owner.kind === "classConstructor" && (owner.identity ?? owner.name).startsWith("js:");
       if (owner.kind === "class") {
         const key = owner.identity ?? owner.name;
         const info = this.classes.get(key) ?? this.classes.get(owner.name);
@@ -2751,7 +2751,12 @@ export class Analyzer implements TypeEnvironment {
       const info = this.classes.get(callee.identity ?? callee.name) ?? this.classes.get(callee.name);
       if (info?.abstract) this.typeError(`Cannot instantiate abstract class '${callee.name}'`, callSpan);
       this.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
-      return { kind: "class", name: callee.name, ...(callee.identity ? { identity: callee.identity } : {}) };
+      return {
+        kind: "class",
+        name: callee.name,
+        ...(callee.identity ? { identity: callee.identity } : {}),
+        ...((callee.identity ?? callee.name).startsWith("js:") ? { external: true } : {}),
+      };
     }
     if (callee.kind === "intrinsic") {
       const ordered = this.orderNamedArguments(arguments_, argumentNames, callee.parameters, callee.parameterNames, callee.requiredParameters, callSpan, callee.rest);
@@ -2770,6 +2775,15 @@ export class Analyzer implements TypeEnvironment {
       }
       this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
       if (callee.result.kind === "optional") this.optionalCalls.add(spanIdentity(callSpan));
+      if (calleeExpression.kind === "MemberExpression" && calleeExpression.property === "parse"
+        && this.expandAliases(
+          this.inferredExpressionTypes.get(spanIdentity(calleeExpression.object.span)) ?? unknownType,
+        ).kind === "typeObject"
+        && arguments_[0] && this.runtimeValidationMayRetainHostOrigin(
+          this.inferredExpressionTypes.get(spanIdentity(arguments_[0].span)) ?? unknownType,
+        )) {
+        return this.markExternalAggregate(callee.result);
+      }
       return callee.result;
     }
     if (callee.kind === "optional" && (callee.inner.kind === "function" || callee.inner.kind === "action")) {
@@ -3487,7 +3501,7 @@ export class Analyzer implements TypeEnvironment {
       const getter = this.findGetter(classKey, property);
       const method = this.findMethod(classKey, property);
       result = privateField?.type ?? privateMethod ?? field?.type ?? getter?.type ?? method?.type ?? unknownType;
-      effectfulRead = Boolean(getter
+      effectfulRead = object.external === true || Boolean(getter
         || privateField && (this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false)
         || classKey.startsWith("js:") && !privateMethod && !method && (privateField || field));
       if (privateField || privateMethod) {
@@ -3497,6 +3511,7 @@ export class Analyzer implements TypeEnvironment {
       } else if (!field && !getter && !method) {
         this.typeError(`Class '${object.name}' has no member '${property}'`, memberSpan);
       }
+      if (object.external) result = this.markExternalAggregate(result);
     } else if (object.kind === "classConstructor") {
       const key = object.identity ?? object.name;
       const privateField = this.privateFieldForAccess(key, property, true);
@@ -3829,6 +3844,7 @@ export class Analyzer implements TypeEnvironment {
 
   private markExternalAggregate(type: ValueType): ValueType {
     if (type.kind === "named") return { ...type, external: true };
+    if (type.kind === "class") return { ...type, external: true };
     if (type.kind === "object") return {
       ...type,
       external: true,
@@ -3943,7 +3959,8 @@ export class Analyzer implements TypeEnvironment {
     } else if (expression.kind === "IsExpression") {
       const checked = this.resolveAnnotation(expression.type);
       if (truthy) {
-        this.addLocationNarrowing(narrowed, expression.value, checked);
+        const current = this.inferredExpressionTypes.get(spanIdentity(expression.value.span)) ?? unknownType;
+        this.addLocationNarrowing(narrowed, expression.value, this.runtimeCheckedType(current, checked));
       } else {
         const current = this.inferredExpressionTypes.get(spanIdentity(expression.value.span));
         const remaining = current ? this.excludeCheckedType(current, checked) : null;
@@ -4241,12 +4258,22 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "named") {
       const imported = this.lookup(type.name)?.type ?? this.importBindings.get(type.name) ?? this.externTypeImports.get(type.name);
       if (imported?.kind === "classConstructor") {
-        return { kind: "class", name: type.name, ...(imported.identity ? { identity: imported.identity } : {}) };
+        return {
+          kind: "class",
+          name: type.name,
+          ...(imported.identity ? { identity: imported.identity } : {}),
+          ...(type.external ? { external: true } : {}),
+        };
       }
     }
     if (type.kind === "named" && this.classes.has(type.name)) {
       const info = this.classes.get(type.name);
-      return { kind: "class", name: type.name, ...(info?.identity ? { identity: info.identity } : {}) };
+      return {
+        kind: "class",
+        name: type.name,
+        ...(info?.identity ? { identity: info.identity } : {}),
+        ...(type.external ? { external: true } : {}),
+      };
     }
     if (type.kind === "named" && !type.identity && this.namedTypeIdentities.has(type.name)) {
       return { ...type, identity: this.namedTypeIdentities.get(type.name)! };
@@ -4568,7 +4595,7 @@ export class Analyzer implements TypeEnvironment {
 
   private narrowMatchType(input: ValueType, checked: ValueType): ValueType {
     const source = this.expandAliases(input);
-    if (source.kind === "any" || source.kind === "unknown") return checked;
+    if (source.kind === "any" || source.kind === "unknown") return this.markExternalAggregate(checked);
     if (source.kind === "union") {
       const members = source.members
         .filter((member) => this.matchTypesOverlap(member, checked))
@@ -5088,6 +5115,7 @@ export class Analyzer implements TypeEnvironment {
     if (owner.kind === "named") return owner.external !== true
       && (this.fieldsOf(owner.identity ?? owner.name)?.has(property) ?? false);
     if (owner.kind === "class") {
+      if (owner.external) return false;
       const key = owner.identity ?? owner.name;
       if (key.startsWith("js:")) return false;
       if (this.findGetter(key, property)) return false;
@@ -5160,6 +5188,21 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "optional") return this.stringCoercionMayExecute(type.inner);
     if (type.kind === "union") return type.members.some((member) => this.stringCoercionMayExecute(member));
     return true;
+  }
+
+  private runtimeValidationMayRetainHostOrigin(input: ValueType): boolean {
+    const type = this.expandAliases(input);
+    if (type.kind === "unknown" || type.kind === "any") return true;
+    if (type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list") {
+      return type.external === true;
+    }
+    if (type.kind === "optional") return this.runtimeValidationMayRetainHostOrigin(type.inner);
+    if (type.kind === "union") return type.members.some((member) => this.runtimeValidationMayRetainHostOrigin(member));
+    return false;
+  }
+
+  private runtimeCheckedType(input: ValueType, checked: ValueType): ValueType {
+    return this.runtimeValidationMayRetainHostOrigin(input) ? this.markExternalAggregate(checked) : checked;
   }
 
   private recordReflectionMayExecute(input: ValueType): boolean {

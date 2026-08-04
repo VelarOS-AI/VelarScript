@@ -729,6 +729,13 @@ Inherited fields and accessors do not satisfy a record contract, and validation
 never invokes a getter. This is the same owned-record invariant used by
 structural `match`.
 
+Validation establishes the shape observed at that operation; it does not turn
+an unchecked Proxy into a VelarScript-owned value. A successful `Type.parse`,
+`is`, or type-pattern match therefore retains host origin when its input was
+`unknown`, `any`, or already host-origin. Repeated record or class reads keep
+the host effect rules. Validating an already owned VelarScript record or class
+keeps its ordinary local behavior.
+
 Native JavaScript is explicit:
 
 ```velar

@@ -85,6 +85,9 @@ Compiler and framework changes:
 - Safe JavaScript records and Lists now retain host-origin metadata through
   declared results and type composition, so reads, reflection, destructuring,
   iteration, spread, and structural matching invalidate stale flow facts.
+- Runtime `Type.parse`, `is`, and type-pattern checks now preserve host origin
+  when they validate an unchecked value; safe-JavaScript class instances carry
+  the same non-display provenance through constructors and method results.
 
 Tooling and documentation changes:
 

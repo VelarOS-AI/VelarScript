@@ -25,7 +25,7 @@ export type ValueType =
       readonly external?: true;
     }
   | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly external?: true }
-  | { readonly kind: "class"; readonly name: string; readonly identity?: string }
+  | { readonly kind: "class"; readonly name: string; readonly identity?: string; readonly external?: true }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
   | { readonly kind: "enumObject"; readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> }
   | { readonly kind: "typeObject"; readonly name: string }
@@ -179,6 +179,9 @@ function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
     };
   }
   if (left.kind === "named" && right.kind === "named") {
+    return left.external || right.external ? { ...left, external: true } : left;
+  }
+  if (left.kind === "class" && right.kind === "class") {
     return left.external || right.external ? { ...left, external: true } : left;
   }
   if (left.kind === "optional" && right.kind === "optional") {

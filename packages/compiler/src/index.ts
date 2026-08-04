@@ -542,7 +542,12 @@ function resolveNominals(
 ): ValueType {
   if (type.kind === "named" && classIdentities.has(type.name)) {
     const identity = classIdentities.get(type.name)!;
-    return { kind: "class", name: type.name, ...(identity === type.name ? {} : { identity }) };
+    return {
+      kind: "class",
+      name: type.name,
+      ...(identity === type.name ? {} : { identity }),
+      ...(type.external ? { external: true } : {}),
+    };
   }
   if (type.kind === "named" && enumNames.has(type.name)) return { kind: "enum", name: type.name, identity: enumNames.get(type.name)!.identity };
   if (type.kind === "named" && namedTypeIdentities.has(type.name)) {
