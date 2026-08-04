@@ -3,6 +3,7 @@ import type {
   BindingPattern,
   EnumDeclaration,
   Expression,
+  MatchPattern,
   Program,
   Statement,
   TypeAliasDeclaration,
@@ -627,8 +628,7 @@ export class JavaScriptEmitter {
         case "MatchStatement":
           visitExpression(statement.value);
           statement.cases.forEach((branch) => {
-            if (branch.pattern.kind === "MatchValuePattern") branch.pattern.values.forEach(visitExpression);
-            else this.markRuntimeType(resolveTypeReference(branch.pattern.type));
+            visitMatchPattern(branch.pattern);
             if (branch.guard) visitExpression(branch.guard);
             branch.body.forEach(visitStatement);
           });
@@ -647,6 +647,19 @@ export class JavaScriptEmitter {
         case "BreakStatement":
         case "ContinueStatement":
         case "PassStatement":
+          break;
+      }
+    };
+
+    const visitMatchPattern = (pattern: MatchPattern): void => {
+      switch (pattern.kind) {
+        case "MatchValuePattern": pattern.values.forEach(visitExpression); break;
+        case "MatchTypePattern": this.markRuntimeType(resolveTypeReference(pattern.type)); break;
+        case "MatchAsPattern": visitMatchPattern(pattern.pattern); break;
+        case "MatchObjectPattern": pattern.entries.forEach((entry) => visitMatchPattern(entry.pattern)); break;
+        case "MatchListPattern": pattern.elements.forEach(visitMatchPattern); break;
+        case "MatchWildcardPattern":
+        case "MatchCapturePattern":
           break;
       }
     };
@@ -755,13 +768,16 @@ export class JavaScriptEmitter {
           `${indentation}  let ${matchedName} = false;`,
         ];
         for (const branch of statement.cases) {
-          const condition = branch.pattern.kind === "MatchValuePattern"
-            ? branch.pattern.values.map((value) => `${valueName} === ${this.emitMappedExpression(value)}`).join(" || ") || "false"
-            : this.emitTypeCheck(resolveTypeReference(branch.pattern.type), valueName);
-          lines.push(`${indentation}  if (!${matchedName} && (${condition})) {`);
-          if (branch.pattern.kind === "MatchTypePattern" && branch.pattern.binding) {
-            lines.push(`${indentation}    const ${branch.pattern.binding.name} = ${valueName};`);
-          }
+          const attemptName = `__velarMatchCase${branch.pattern.span.start}`;
+          const attempt = this.emitMatchPatternAttempt(branch.pattern, valueName, `${indentation}      `);
+          lines.push(`${indentation}  let ${attemptName} = null;`);
+          lines.push(`${indentation}  if (!${matchedName} && (${attemptName} = (() => {`);
+          lines.push(...attempt.lines);
+          lines.push(`${indentation}      return [${attempt.bindings.map((binding) => binding.value).join(", ")}];`);
+          lines.push(`${indentation}    })()) !== null) {`);
+          attempt.bindings.forEach((binding, index) => {
+            lines.push(`${indentation}    const ${binding.name} = ${attemptName}[${index}];`);
+          });
           if (branch.guard) {
             lines.push(`${indentation}    if (${this.emitCondition(branch.guard)}) {`);
             lines.push(`${indentation}      ${matchedName} = true;`);
@@ -857,9 +873,14 @@ export class JavaScriptEmitter {
   private emitTypeDeclaration(statement: TypeDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
     const checkName = this.runtimeTypeCheckName(statement.name);
-    const checks = statement.fields.map((field) => {
-      const access = `value[${JSON.stringify(field.name)}]`;
-      return this.emitTypeCheck(resolveTypeReference(field.type), access, "__state");
+    const fields = statement.fields.map((field, index) => ({
+      field,
+      descriptor: `__velarField${index}`,
+      type: resolveTypeReference(field.type),
+    }));
+    const checks = fields.map(({ descriptor, type }) => {
+      const present = `${descriptor}?.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__state")}`;
+      return type.kind === "optional" ? `(${descriptor} === undefined || (${present}))` : present;
     });
     const predicate = checks.length > 0 ? checks.join(" && ") : "true";
     const exportPrefix = statement.exported ? "export " : "";
@@ -875,7 +896,8 @@ export class JavaScriptEmitter {
       `${indentation}  __active.add(${checkName});`,
       `${indentation}  __state.depth += 1;`,
       `${indentation}  try {`,
-      `${indentation}    return ${predicate};`,
+      ...fields.map(({ field, descriptor }) => `${indentation}    const ${descriptor} = Object.getOwnPropertyDescriptor(value, ${JSON.stringify(field.name)});`),
+      `${indentation}    return Boolean(${predicate});`,
       `${indentation}  } finally {`,
       `${indentation}    __state.depth -= 1;`,
       `${indentation}    __active.delete(${checkName});`,
@@ -1366,6 +1388,104 @@ export class JavaScriptEmitter {
 
   protected emitObjectKey(name: string): string {
     return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
+  }
+
+  private emitMatchPatternAttempt(
+    pattern: MatchPattern,
+    valueName: string,
+    indentation: string,
+  ): {
+    readonly lines: readonly string[];
+    readonly bindings: readonly { readonly name: string; readonly value: string }[];
+  } {
+    const lines: string[] = [];
+    const bindings = new Map<string, string>();
+    let nextTemporary = 0;
+    const temporary = (label: string): string => `__velarPattern${pattern.span.start}${label}${nextTemporary++}`;
+    const bind = (name: string, value: string): void => {
+      if (name !== "_" && !bindings.has(name)) bindings.set(name, value);
+    };
+    const rejectUnless = (condition: string): void => {
+      lines.push(`${indentation}if (!(${condition})) return null;`);
+    };
+
+    const emit = (current: MatchPattern, value: string): void => {
+      switch (current.kind) {
+        case "MatchWildcardPattern":
+          break;
+        case "MatchCapturePattern":
+          bind(current.binding.name, value);
+          break;
+        case "MatchAsPattern":
+          emit(current.pattern, value);
+          bind(current.binding.name, value);
+          break;
+        case "MatchValuePattern":
+          rejectUnless(current.values.map((candidate) => `${value} === ${this.emitMappedExpression(candidate)}`).join(" || ") || "false");
+          break;
+        case "MatchTypePattern":
+          rejectUnless(this.emitTypeCheck(resolveTypeReference(current.type), value));
+          break;
+        case "MatchListPattern": {
+          const items = temporary("List");
+          const length = current.elements.length;
+          rejectUnless(`Array.isArray(${value}) && ${value}.length <= 1000000 && ${value}.length ${current.rest ? ">=" : "==="} ${length} && Object.getOwnPropertySymbols(${value}).length === 0 && Object.getOwnPropertyNames(${value}).length === ${value}.length + 1`);
+          const lengthDescriptor = temporary("Length");
+          lines.push(`${indentation}const ${lengthDescriptor} = Object.getOwnPropertyDescriptor(${value}, "length");`);
+          rejectUnless(`${lengthDescriptor} && ${lengthDescriptor}.writable && !${lengthDescriptor}.enumerable && !${lengthDescriptor}.configurable && "value" in ${lengthDescriptor}`);
+          lines.push(`${indentation}const ${items} = [];`);
+          const cursor = temporary("Index");
+          const descriptor = temporary("Item");
+          lines.push(`${indentation}for (let ${cursor} = 0; ${cursor} < ${value}.length; ${cursor} += 1) {`);
+          lines.push(`${indentation}  const ${descriptor} = Object.getOwnPropertyDescriptor(${value}, ${cursor});`);
+          lines.push(`${indentation}  if (!${descriptor}?.enumerable || !${descriptor}.configurable || !${descriptor}.writable || !("value" in ${descriptor})) return null;`);
+          lines.push(`${indentation}  Object.defineProperty(${items}, ${items}.length, { value: ${descriptor}.value, writable: true, enumerable: true, configurable: true });`);
+          lines.push(`${indentation}}`);
+          current.elements.forEach((child, index) => emit(child, `${items}[${index}]`));
+          if (current.rest) {
+            const rest = temporary("Rest");
+            const restCursor = temporary("RestIndex");
+            lines.push(`${indentation}const ${rest} = [];`);
+            lines.push(`${indentation}for (let ${restCursor} = ${length}; ${restCursor} < ${items}.length; ${restCursor} += 1) {`);
+            lines.push(`${indentation}  Object.defineProperty(${rest}, ${rest}.length, { value: ${items}[${restCursor}], writable: true, enumerable: true, configurable: true });`);
+            lines.push(`${indentation}}`);
+            bind(current.rest.name, rest);
+          }
+          break;
+        }
+        case "MatchObjectPattern": {
+          rejectUnless(`${value} !== null && typeof ${value} === "object" && !Array.isArray(${value})`);
+          for (const entry of current.entries) {
+            const descriptor = temporary("Field");
+            const fieldValue = temporary("Value");
+            lines.push(`${indentation}const ${descriptor} = Object.getOwnPropertyDescriptor(${value}, ${JSON.stringify(entry.property)});`);
+            rejectUnless(`${descriptor}?.enumerable && "value" in ${descriptor}`);
+            lines.push(`${indentation}const ${fieldValue} = ${descriptor}.value;`);
+            emit(entry.pattern, fieldValue);
+          }
+          if (current.rest) {
+            const rest = temporary("Rest");
+            const key = temporary("Key");
+            const descriptor = temporary("RestField");
+            const selected = current.entries.map((entry) => `${key} === ${JSON.stringify(entry.property)}`).join(" || ") || "false";
+            rejectUnless(`Object.getOwnPropertySymbols(${value}).length === 0`);
+            lines.push(`${indentation}const ${rest} = {};`);
+            lines.push(`${indentation}for (const ${key} of Object.getOwnPropertyNames(${value})) {`);
+            lines.push(`${indentation}  if (${selected}) continue;`);
+            lines.push(`${indentation}  const ${descriptor} = Object.getOwnPropertyDescriptor(${value}, ${key});`);
+            lines.push(`${indentation}  if (!${descriptor}?.enumerable) continue;`);
+            lines.push(`${indentation}  if (!("value" in ${descriptor})) return null;`);
+            lines.push(`${indentation}  Object.defineProperty(${rest}, ${key}, { value: ${descriptor}.value, writable: true, enumerable: true, configurable: true });`);
+            lines.push(`${indentation}}`);
+            bind(current.rest.name, rest);
+          }
+          break;
+        }
+      }
+    };
+
+    emit(pattern, valueName);
+    return { lines, bindings: [...bindings].map(([name, value]) => ({ name, value })) };
   }
 
   protected emitBindingPattern(pattern: BindingPattern): string {

@@ -417,7 +417,14 @@ export interface MatchCase {
   readonly span: Span;
 }
 
-export type MatchPattern = MatchValuePattern | MatchTypePattern;
+export type MatchPattern =
+  | MatchValuePattern
+  | MatchTypePattern
+  | MatchObjectPattern
+  | MatchListPattern
+  | MatchWildcardPattern
+  | MatchCapturePattern
+  | MatchAsPattern;
 
 export interface MatchValuePattern {
   readonly kind: "MatchValuePattern";
@@ -428,7 +435,44 @@ export interface MatchValuePattern {
 export interface MatchTypePattern {
   readonly kind: "MatchTypePattern";
   readonly type: TypeReference;
-  readonly binding: MatchBinding | null;
+  readonly span: Span;
+}
+
+export interface MatchObjectPattern {
+  readonly kind: "MatchObjectPattern";
+  readonly entries: readonly MatchObjectEntry[];
+  readonly rest: MatchBinding | null;
+  readonly span: Span;
+}
+
+export interface MatchObjectEntry {
+  readonly property: string;
+  readonly pattern: MatchPattern;
+  readonly span: Span;
+}
+
+export interface MatchListPattern {
+  readonly kind: "MatchListPattern";
+  readonly elements: readonly MatchPattern[];
+  readonly rest: MatchBinding | null;
+  readonly span: Span;
+}
+
+export interface MatchWildcardPattern {
+  readonly kind: "MatchWildcardPattern";
+  readonly span: Span;
+}
+
+export interface MatchCapturePattern {
+  readonly kind: "MatchCapturePattern";
+  readonly binding: MatchBinding;
+  readonly span: Span;
+}
+
+export interface MatchAsPattern {
+  readonly kind: "MatchAsPattern";
+  readonly pattern: MatchPattern;
+  readonly binding: MatchBinding;
   readonly span: Span;
 }
 

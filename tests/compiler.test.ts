@@ -783,6 +783,28 @@ const variadic: (...number) -> null = one
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign \(value: number\) -> null to \(\.\.\.number\) -> null/u.test(item.message)));
 });
 
+test("contextual record returns preserve positional callable contracts", () => {
+  const result = compile(`
+type Composer:
+    text: (string, string) -> string
+    update: (string) -> null
+
+def createComposer() -> Composer:
+    return {
+        text: (english, chinese) => english + chinese,
+        update: value => print(value),
+    }
+
+const composer = createComposer()
+print(composer.text("Velar", "Script"))
+composer.update("ready")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "VelarScript\nready\n");
+});
+
 test("compound index assignment evaluates its receiver and key once", () => {
   const result = compile(`
 let receiverCalls = 0
@@ -1371,7 +1393,7 @@ print(animalKind(Dog()))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /const text = __velarMatchValue\d+;/u);
+  assert.match(result.code ?? "", /const text = __velarMatchCase\d+\[0\];/u);
   assert.match(result.code ?? "", /typeof __velarMatchValue\d+ === "string"/u);
   assert.match(result.code ?? "", /__velarMatchValue\d+ instanceof Dog/u);
   const execution = executeModule(result.code ?? "");
@@ -1386,6 +1408,161 @@ def inspect(value: number) -> null:
     return null
 `.trimStart());
   assert.ok(impossible.diagnostics.some((item) => /can never match number/u.test(item.message)));
+});
+
+test("match structurally destructures records and Lists with safe scoped bindings", () => {
+  const result = compile(`
+type Payload:
+    kind: string
+    name: string
+    scores: List<number>
+    active: bool
+
+def describe(payload: Payload) -> string:
+    match payload:
+        case {kind: "user", name, scores: [first, ...rest], ...details} as whole if details.active:
+            return f"{whole.kind}:{name}:{first}:{rest.size}"
+        case {kind: "user", name}:
+            return name
+        case _:
+            return "other"
+
+def listShape(values: List<number>) -> string:
+    match values:
+        case []:
+            return "empty"
+        case [only]:
+            return f"one:{only}"
+        case [first, second] as pair:
+            return f"pair:{first + second}:{pair.size}"
+        case [first, ...rest]:
+            return f"many:{first}:{rest.size}"
+
+const payload: Payload = {kind: "user", name: "Ada", scores: [7, 8, 9], active: true}
+print(describe(payload))
+print(listShape([]))
+print(listShape([4]))
+print(listShape([4, 5]))
+print(listShape([4, 5, 6]))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /Object\.getOwnPropertyDescriptor\(__velarMatchValue\d+, "kind"\)/u);
+  assert.match(result.code ?? "", /Object\.getOwnPropertyNames/u);
+  assert.match(result.code ?? "", /Array\.isArray/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "user:Ada:7:2\nempty\none:4\npair:9:2\nmany:4:2\n");
+});
+
+test("match structural patterns diagnose impossible shapes and ambiguous bindings", () => {
+  const impossibleList = compile(`
+match "text":
+    case [first]:
+        print(first)
+`.trimStart());
+  assert.ok(impossibleList.diagnostics.some((item) => /List pattern can never match string/u.test(item.message)));
+
+  const missingField = compile(`
+type User:
+    name: string
+
+const user: User = {name: "Ada"}
+match user:
+    case {missing}:
+        print(missing)
+`.trimStart());
+  assert.ok(missingField.diagnostics.some((item) => /field 'missing' does not exist on User/u.test(item.message)));
+
+  const duplicates = compile(`
+match [1, 2]:
+    case [value, value]:
+        print(value)
+    case _:
+        pass
+    case [last]:
+        print(last)
+`.trimStart());
+  assert.ok(duplicates.diagnostics.some((item) => item.code === "VEL4019" && /binding 'value'.*more than once/u.test(item.message)));
+  assert.ok(duplicates.diagnostics.some((item) => item.code === "VEL4014" && /already covered/u.test(item.message)));
+
+  const malformedRest = compile(`
+match [1, 2]:
+    case [first, ...rest, last]:
+        pass
+`.trimStart());
+  assert.ok(malformedRest.diagnostics.some((item) => item.code === "VEL2015" && /rest pattern must be last/u.test(item.message)));
+
+  const impossibleUnionShape = compile(`
+type Left:
+    left: string
+
+type Right:
+    right: number
+
+def inspect(value: Left | Right):
+    match value:
+        case {left, right}:
+            print(left, right)
+`.trimStart());
+  assert.ok(impossibleUnionShape.diagnostics.some((item) => /fields cannot occur together on Left \| Right/u.test(item.message)));
+
+  const unreachableElse = compile(`
+match true:
+    case _:
+        pass
+    else:
+        pass
+`.trimStart());
+  assert.ok(unreachableElse.diagnostics.some((item) => item.code === "VEL4014" && /else branch is already covered/u.test(item.message)));
+});
+
+test("match structural bindings carry precise semantic types and lexical references", () => {
+  const source = `
+type Payload:
+    name: string
+    scores: List<number>
+
+def inspect(payload: Payload):
+    match payload:
+        case {name, scores: [first, ...rest]} as whole:
+            print(name)
+            print(first)
+            print(rest.size)
+            print(whole.name)
+`.trimStart();
+  const result = compile(source, { path: "/tmp/match-patterns.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  const symbols = new Map(result.semanticIndex.symbols.map((symbol) => [symbol.name, symbol]));
+  assert.equal(symbols.get("name")?.type, "string");
+  assert.equal(symbols.get("first")?.type, "number");
+  assert.equal(symbols.get("rest")?.type, "List<number>");
+  assert.equal(symbols.get("whole")?.type, "Payload");
+  for (const name of ["name", "first", "rest", "whole"]) {
+    assert.equal(result.semanticIndex.references.filter((reference) => reference.name === name).length, 1);
+  }
+  assert.ok(result.semanticIndex.memberReferences.some((reference) => reference.name === "name" && reference.syntax === "binding-key"));
+
+  const union = compile(`
+type Left:
+    left: string
+
+type Right:
+    right: number
+
+def inspect(value: Left | Right):
+    match value:
+        case {left} as selectedLeft:
+            print(left)
+            print(selectedLeft.left)
+        case {right} as selectedRight:
+            print(right)
+            print(selectedRight.right)
+`.trimStart());
+  assert.deepEqual(union.diagnostics, []);
+  const unionSymbols = new Map(union.semanticIndex.symbols.map((symbol) => [symbol.name, symbol.type]));
+  assert.equal(unionSymbols.get("selectedLeft"), "Left");
+  assert.equal(unionSymbols.get("selectedRight"), "Right");
 });
 
 test("match participates in component reactivity and scoped case bindings", () => {
@@ -1450,7 +1627,7 @@ print(label(parsed))
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "parsed")?.type, "TaskStatus");
   assert.match(result.code ?? "", /export const TaskStatus = __velarRegisterType\(Object\.freeze/u);
   assert.match(result.code ?? "", /__velarMatchValue\d+ === TaskStatus\.doing/u);
-  assert.match(result.code ?? "", /TaskStatus\.is\(value\["status"\]\)/u);
+  assert.match(result.code ?? "", /TaskStatus\.is\(__velarField\d+\.value\)/u);
   assert.match(result.code ?? "", /__velarBindValue\([^\n]+TaskStatus\.parse\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
@@ -2179,6 +2356,33 @@ const avatar = user?.avatar ?? "default.png"
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /User\.parse\(raw\)/);
   assert.match(result.code ?? "", /user\?\.avatar \?\? null\) \?\? "default\.png"/);
+});
+
+test("runtime record checks require own data fields without invoking accessors", () => {
+  const result = compile(`
+type User:
+    name: string
+    avatar: string?
+
+const checked = User.parse({name: "Ada"})
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}
+let getterReads = 0;
+const accessor = {};
+Object.defineProperty(accessor, "name", { enumerable: true, get() { getterReads += 1; return "Ada"; } });
+const inherited = Object.create({ name: "Ada" });
+const optionalAccessor = { name: "Ada" };
+Object.defineProperty(optionalAccessor, "avatar", { enumerable: true, get() { getterReads += 1; return "photo.png"; } });
+console.log(User.is({ name: "Ada" }));
+console.log(User.is(accessor));
+console.log(User.is(inherited));
+console.log(User.is(optionalAccessor));
+try { User.parse(accessor); } catch (error) { console.log(error.name); }
+console.log(getterReads);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\nfalse\nfalse\nfalse\nValidationError\n0\n");
 });
 
 test("type checker rejects incompatible assignments", () => {
@@ -7047,7 +7251,7 @@ print(tags.size)
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const tags = __velarCreateSet\(\["velar", "web", "velar"\]\);/u);
   assert.match(result.code ?? "", /__velarSetAdd\(tags, "game"\)/u);
-  assert.match(result.code ?? "", /__velarSetTypeIs\(value\["values"\]/u);
+  assert.match(result.code ?? "", /__velarSetTypeIs\(__velarField\d+\.value/u);
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "inferred")?.type, "Set<number>");
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
@@ -7144,6 +7348,16 @@ const same = TaskPriority.is(TaskPriority.high)
 def find(value: Ticket?, previous: Ticket?) -> Ticket?:
     return [ready ? value : previous]
 `);
+  assert.equal(formatSource(formatted), formatted);
+});
+
+test("formatter keeps structural match patterns compact and unambiguous", () => {
+  const formatted = formatSource("match value:\n  case {kind:\"user\",data:[first,...rest],...details} as payload if details.active:\n    print(payload)\n");
+  assert.equal(formatted, `match value:
+    case {kind: "user", data: [first, ...rest], ...details} as payload if details.active:
+        print(payload)
+`);
+  assert.deepEqual(inspectModule(formatted).diagnostics, []);
   assert.equal(formatSource(formatted), formatted);
 });
 

@@ -260,6 +260,10 @@ and browser runtimes and do not define a separate VelarScript memory model.
   and embedded per build. Structured logging is the source-level replacement
   for `console`; custom sinks have explicit disposable ownership.
 - `type` is the only data-shape declaration for static and runtime checks.
+  Generated record validators inspect own enumerable data descriptors instead
+  of reading properties. Required fields must be present; optional fields may
+  be absent but cannot be inherited or accessor-backed. Getters never run
+  during validation.
 - Primitive conversion does not delegate source semantics to ambient JavaScript
   constructors. `str` lowers intentionally to string display conversion;
   `number(text)` lowers to a compiler helper that validates the complete decimal

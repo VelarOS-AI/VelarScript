@@ -965,28 +965,7 @@ export class Parser {
         if (elseBody) {
           this.diagnostics.push(diagnostic("VEL2015", "A match case cannot follow else", this.previous().span));
         }
-        const patternStart = this.current().span.start;
-        let pattern: MatchStatement["cases"][number]["pattern"];
-        if (this.startsMatchValue()) {
-          const values: Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchValuePattern" }>["values"][number][] = [];
-          do {
-            const value = this.parseMatchValue();
-            if (value) values.push(value);
-          } while (this.match("comma") && !this.check("if") && !this.check("colon"));
-          const patternEnd = values.at(-1)?.span.end ?? this.current().span.start;
-          pattern = { kind: "MatchValuePattern", values, span: span(patternStart, patternEnd) };
-        } else {
-          const type = this.parseTypeReference();
-          const binding = this.match("as")
-            ? this.expect("identifier", "Expected a binding name after 'as'")
-            : null;
-          pattern = {
-            kind: "MatchTypePattern",
-            type,
-            binding: binding ? { name: binding.value, span: binding.span } : null,
-            span: span(patternStart, binding?.span.end ?? type.span.end),
-          };
-        }
+        const pattern = this.parseMatchPattern(true);
         const guard = this.match("if") ? this.parseExpression() : null;
         const body = this.parseBlock();
         cases.push({ pattern, guard, body, span: span(branchStart, body.at(-1)?.span.end ?? this.previous().span.end) });
@@ -1019,6 +998,90 @@ export class Parser {
       || kind === "false"
       || kind === "null"
       || (kind === "identifier" && this.peekKind(1) === "dot");
+  }
+
+  private parseMatchPattern(root: boolean): MatchStatement["cases"][number]["pattern"] {
+    const start = this.current().span.start;
+    let pattern: MatchStatement["cases"][number]["pattern"];
+
+    if (this.match("leftBrace")) {
+      const entries: Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchObjectPattern" }>["entries"][number][] = [];
+      let rest: Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchObjectPattern" }>["rest"] = null;
+      while (!this.check("rightBrace") && !this.check("eof")) {
+        if (this.match("ellipsis")) {
+          const binding = this.expect("identifier", "Expected an object rest binding after '...'");
+          rest = { name: binding.value, span: binding.span };
+          if (this.match("comma") && !this.check("rightBrace")) {
+            this.diagnostics.push(diagnostic("VEL2015", "An object rest pattern must be last", this.current().span));
+          }
+          break;
+        }
+        const property = this.expect("identifier", "Expected a field name in an object pattern");
+        const child = this.match("colon")
+          ? this.parseMatchPattern(false)
+          : {
+              kind: "MatchCapturePattern" as const,
+              binding: { name: property.value, span: property.span },
+              span: property.span,
+            };
+        entries.push({ property: property.value, pattern: child, span: span(property.span.start, child.span.end) });
+        if (!this.match("comma")) break;
+      }
+      const close = this.expect("rightBrace", "Expected '}' after an object pattern");
+      pattern = { kind: "MatchObjectPattern", entries, rest, span: span(start, close.span.end) };
+    } else if (this.match("leftBracket")) {
+      const elements: Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchListPattern" }>["elements"][number][] = [];
+      let rest: Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchListPattern" }>["rest"] = null;
+      while (!this.check("rightBracket") && !this.check("eof")) {
+        if (this.match("ellipsis")) {
+          const binding = this.expect("identifier", "Expected a List rest binding after '...'");
+          rest = { name: binding.value, span: binding.span };
+          if (this.match("comma") && !this.check("rightBracket")) {
+            this.diagnostics.push(diagnostic("VEL2015", "A List rest pattern must be last", this.current().span));
+          }
+          break;
+        }
+        elements.push(this.parseMatchPattern(false));
+        if (!this.match("comma")) break;
+      }
+      const close = this.expect("rightBracket", "Expected ']' after a List pattern");
+      pattern = { kind: "MatchListPattern", elements, rest, span: span(start, close.span.end) };
+    } else if (this.check("identifier") && this.current().value === "_") {
+      const wildcard = this.advance();
+      pattern = { kind: "MatchWildcardPattern", span: wildcard.span };
+    } else if (this.startsMatchValue()) {
+      const values: Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchValuePattern" }>["values"][number][] = [];
+      do {
+        const value = this.parseMatchValue();
+        if (value) values.push(value);
+      } while (root && this.match("comma") && !this.check("as") && !this.check("if") && !this.check("colon"));
+      pattern = {
+        kind: "MatchValuePattern",
+        values,
+        span: span(start, values.at(-1)?.span.end ?? this.current().span.start),
+      };
+    } else if (!root && this.check("identifier")) {
+      const binding = this.advance();
+      pattern = {
+        kind: "MatchCapturePattern",
+        binding: { name: binding.value, span: binding.span },
+        span: binding.span,
+      };
+    } else {
+      const type = this.parseTypeReference();
+      pattern = { kind: "MatchTypePattern", type, span: span(start, type.span.end) };
+    }
+
+    if (this.match("as")) {
+      const binding = this.expect("identifier", "Expected a binding name after 'as'");
+      pattern = {
+        kind: "MatchAsPattern",
+        pattern,
+        binding: { name: binding.value, span: binding.span },
+        span: span(start, binding.span.end),
+      };
+    }
+    return pattern;
   }
 
   private parseMatchValue(): Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchValuePattern" }>["values"][number] | null {

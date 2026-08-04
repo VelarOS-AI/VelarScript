@@ -1,5 +1,5 @@
 import { Analyzer, type AnalysisContext, type ClassInfo } from "./analyzer.ts";
-import type { BindingPattern, Expression, FunctionDeclaration, Program, Statement, TypeReference } from "./ast.ts";
+import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
 import type { CompilerEmitter, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
@@ -283,6 +283,18 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
     }
   };
   const visitBlock = (body: readonly Statement[]): void => { for (const statement of body) visitStatement(statement); };
+  const visitMatchPattern = (pattern: MatchPattern): void => {
+    switch (pattern.kind) {
+      case "MatchValuePattern": for (const value of pattern.values) visitExpression(value); break;
+      case "MatchAsPattern": visitMatchPattern(pattern.pattern); break;
+      case "MatchObjectPattern": for (const entry of pattern.entries) visitMatchPattern(entry.pattern); break;
+      case "MatchListPattern": for (const element of pattern.elements) visitMatchPattern(element); break;
+      case "MatchTypePattern":
+      case "MatchWildcardPattern":
+      case "MatchCapturePattern":
+        break;
+    }
+  };
   const visitStatement = (statement: Statement): void => {
     for (const extension of dependencyExtensions) if (extension.visitDependencyStatement?.(statement, dependencyContext)) return;
     switch (statement.kind) {
@@ -308,9 +320,7 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       case "MatchStatement":
         visitExpression(statement.value);
         for (const branch of statement.cases) {
-          if (branch.pattern.kind === "MatchValuePattern") {
-            for (const value of branch.pattern.values) visitExpression(value);
-          }
+          visitMatchPattern(branch.pattern);
           if (branch.guard) visitExpression(branch.guard);
           visitBlock(branch.body);
         }

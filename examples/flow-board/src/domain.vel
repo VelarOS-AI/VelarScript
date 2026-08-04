@@ -46,17 +46,18 @@ export def seedTasks() -> List<Task>:
     ]
 
 export def newTask(draft: TaskDraft) -> Task:
-    const {title, description, priority} = draft
     const timestamp = now()
-    return {
-        id: uuid(),
-        title: trim(title),
-        description: trim(description),
-        status: TaskStatus.todo,
-        priority,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-    }
+    match draft:
+        case {title, description, priority}:
+            return {
+                id: uuid(),
+                title: trim(title),
+                description: trim(description),
+                status: TaskStatus.todo,
+                priority,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+            }
 
 export def advanceStatus(status: TaskStatus) -> TaskStatus:
     match status:

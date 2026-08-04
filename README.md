@@ -115,8 +115,8 @@ the explicit `@velarscript/web` package.
 - Records and aliases share one `type` keyword.
 - Optional values use `T?`; small unions use `A | B`.
 - Functions use `def`, and named arguments use `name=value`.
-- `match` supports literals, enum members, type patterns, `as` bindings, and
-  guards.
+- `match` supports literals, enum members, type patterns, nested record/List
+  destructuring, `_`, `...rest`, `as` bindings, and guards.
 - Classes use body fields and an explicit `constructor(...)`.
 - Public collections are `List`, `Set`, and `Map` with direct APIs such as
   `append`, `add`, `set`, `remove`, `some`, and `every`.
@@ -126,6 +126,9 @@ the explicit `@velarscript/web` package.
 
 ```velar fragment
 match response:
+    case {kind: "success", users: [first, ...rest]}:
+        print(first.name)
+        print(rest.size)
     case User as user if user.active:
         print(user.name)
     case Error as error:

@@ -376,8 +376,8 @@ Python's sentence-like inline `x if condition else y` form is not used.
 
 ### Match
 
-`match` handles finite values and runtime type branches without JavaScript
-fallthrough.
+`match` handles finite values, runtime type branches, and structural record or
+List patterns without JavaScript fallthrough.
 
 ```velar fragment
 match status:
@@ -387,7 +387,8 @@ match status:
         print("Closed")
 ```
 
-Type patterns may bind the checked value and add a guard:
+Any pattern may bind the whole matched value with `as`. Type patterns may also
+add a guard:
 
 ```velar fragment
 match result:
@@ -403,9 +404,37 @@ match result:
         print("Unsupported")
 ```
 
+Record patterns use the same field spelling as records and object
+destructuring. A shorthand field captures that field, a nested pattern follows
+`:`, and `...rest` captures the remaining fields:
+
+```velar fragment
+match response:
+    case {kind: "success", users: [first, ...rest], requestId} as result:
+        print(first.name)
+        print(rest.size)
+        print(result.kind)
+    case {kind: "failure", message}:
+        print(message)
+    case _:
+        print("Unsupported response")
+```
+
+`[first, second]` matches a List of exactly two items. `[first, ...rest]`
+matches one or more items and creates a new List for `rest`; `[]` matches only
+an empty List. Object patterns require each named field to be a present own data
+field, permit additional fields, and never invoke accessors while checking or
+capturing. Nested object and List patterns follow the same rules. `_` is the
+only wildcard and never creates a binding. Reusing a binding name inside one
+pattern is an error.
+
 The matched expression evaluates once. Guards run only after their pattern
 matches. Guarded cases do not count as exhaustive because the guard may be
-false. Complete enum matches participate in required-return analysis.
+false. Complete enum matches, an unguarded wildcard, exhaustive List length
+patterns, and irrefutable patterns over required typed record fields participate
+in required-return analysis. `match` remains a statement;
+branches use ordinary `return` or assignments instead of introducing a second
+expression form.
 
 `switch` is not VelarScript syntax.
 
@@ -533,6 +562,13 @@ const user: Account = loadUser()
 
 Different modules may use the same record display name; their field metadata is
 kept separate until ordinary structural assignability is checked.
+
+Every runtime `Type.is(value)` and `Type.parse(value)` record check requires its
+non-optional fields to be present own enumerable data properties. Optional
+fields may be absent; when present they must follow the same owned-data rule.
+Inherited fields and accessors do not satisfy a record contract, and validation
+never invokes a getter. This is the same owned-record invariant used by
+structural `match`.
 
 Native JavaScript is explicit:
 

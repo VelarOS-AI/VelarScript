@@ -3,6 +3,7 @@ import type {
   Expression,
   FunctionDeclaration,
   ImportDeclaration,
+  MatchPattern,
   Program,
   Statement,
   TypeReference,
@@ -383,6 +384,51 @@ export function buildSemanticIndex(
     }
   };
 
+  const visitMatchPattern = (pattern: MatchPattern): void => {
+    switch (pattern.kind) {
+      case "MatchValuePattern":
+        for (const value of pattern.values) visitExpression(value);
+        break;
+      case "MatchTypePattern":
+        typeReferences(pattern.type);
+        break;
+      case "MatchWildcardPattern":
+        break;
+      case "MatchCapturePattern":
+        if (pattern.binding.name !== "_") {
+          declare(pattern.binding, pattern.binding.name, "variable", pattern.binding.span, pattern.binding.span);
+        }
+        break;
+      case "MatchAsPattern":
+        visitMatchPattern(pattern.pattern);
+        if (pattern.binding.name !== "_") {
+          declare(pattern.binding, pattern.binding.name, "variable", pattern.binding.span, pattern.binding.span);
+        }
+        break;
+      case "MatchListPattern":
+        for (const element of pattern.elements) visitMatchPattern(element);
+        if (pattern.rest && pattern.rest.name !== "_") {
+          declare(pattern.rest, pattern.rest.name, "variable", pattern.rest.span, pattern.rest.span);
+        }
+        break;
+      case "MatchObjectPattern":
+        for (const entry of pattern.entries) {
+          const owner = bindingEntryOwners.get(`${entry.span.start}:${entry.property}`);
+          if (owner) {
+            const shorthand = entry.pattern.kind === "MatchCapturePattern"
+              && entry.pattern.binding.name === entry.property
+              && entry.pattern.span.start === entry.span.start;
+            recordMemberReference(entry.property, nameSpan(entry.span, entry.property), owner, "binding-key", shorthand);
+          }
+          visitMatchPattern(entry.pattern);
+        }
+        if (pattern.rest && pattern.rest.name !== "_") {
+          declare(pattern.rest, pattern.rest.name, "variable", pattern.rest.span, pattern.rest.span);
+        }
+        break;
+    }
+  };
+
   const visitExpression = (expression: Expression, write = false): void => {
     const expressionKey = `${expression.span.start}:${expression.span.end}`;
     const expressionType = expressionTypes.get(expressionKey);
@@ -634,21 +680,8 @@ export function buildSemanticIndex(
       case "MatchStatement":
         visitExpression(statement.value);
         for (const branch of statement.cases) {
-          if (branch.pattern.kind === "MatchValuePattern") {
-            for (const value of branch.pattern.values) visitExpression(value);
-          } else {
-            typeReferences(branch.pattern.type);
-          }
           enterScope(branch.span);
-          if (branch.pattern.kind === "MatchTypePattern" && branch.pattern.binding) {
-            declare(
-              branch.pattern.binding,
-              branch.pattern.binding.name,
-              "variable",
-              branch.pattern.binding.span,
-              branch.pattern.binding.span,
-            );
-          }
+          visitMatchPattern(branch.pattern);
           if (branch.guard) visitExpression(branch.guard);
           for (const child of branch.body) visitStatement(child);
           exitScope();

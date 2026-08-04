@@ -8,6 +8,7 @@ import type {
   ExternFunctionDeclaration,
   ExternConstantDeclaration,
   FunctionDeclaration,
+  MatchPattern,
   MatchValue,
   Program,
   Statement,
@@ -949,7 +950,7 @@ export class Analyzer implements TypeEnvironment {
         const expected = this.returnTypes.at(-1) ?? unknownType;
         const actual = statement.value ? this.inferExpression(statement.value, expected) : nullType;
         const returned = this.asynchronousFunctions.at(-1) ? this.resolvedAsyncResult(actual) : actual;
-        this.requireAssignable(returned, expected, statement.span);
+        this.requireAssignable(returned, expected, statement.value?.span ?? statement.span);
         break;
       }
       case "ThrowStatement": {
@@ -989,41 +990,69 @@ export class Analyzer implements TypeEnvironment {
         const coveredValues = new Set<string>();
         const coveredEnumMembers = new Set<string>();
         const coveredTypes: ValueType[] = [];
+        const coveredListLengths = new Set<number>();
+        let coveredListMinimum: number | null = null;
+        let universalCovered = false;
         for (const branch of statement.cases) {
-          let bindingType: ValueType | null = null;
-          if (branch.pattern.kind === "MatchValuePattern") {
-            for (const value of branch.pattern.values) {
-              const literal = this.inferExpression(value);
+          if (universalCovered) {
+            this.diagnostics.push(diagnostic("VEL4014", "This match branch is already covered", branch.pattern.span));
+          }
+          const bindings = new Map<string, { readonly type: ValueType; readonly span: Span }>();
+          this.analyzeMatchPattern(branch.pattern, matched, bindings);
+          const rootPattern = this.unwrapMatchAs(branch.pattern);
+          if (rootPattern.kind === "MatchValuePattern") {
+            for (const value of rootPattern.values) {
               const key = this.matchValueKey(value);
               if (!branch.guard && coveredValues.has(key)) {
                 this.diagnostics.push(diagnostic("VEL4013", `Match value '${key}' is declared more than once`, value.span));
               }
               if (!branch.guard) coveredValues.add(key);
-              if (!branch.guard && matched.kind === "enum" && literal.kind === "enum" && value.kind === "MemberExpression") {
+              if (!branch.guard && matched.kind === "enum" && value.kind === "MemberExpression") {
                 coveredEnumMembers.add(value.property);
               }
-              if (matched.kind !== "unknown" && !this.matchLiteralCompatible(matched, literal)) {
-                this.typeError(`Cannot match ${describeType(matched)} against ${describeType(literal)}`, value.span);
-              }
             }
-          } else {
-            const checked = this.resolveAnnotation(branch.pattern.type);
-            this.validateType(checked, branch.pattern.type.span);
-            if (matched.kind !== "unknown" && !this.matchTypesOverlap(matched, checked)) {
-              this.typeError(`Type pattern ${describeType(checked)} can never match ${describeType(matched)}`, branch.pattern.span);
-            }
-            bindingType = checked;
+          } else if (rootPattern.kind === "MatchTypePattern") {
+            const checked = this.resolveAnnotation(rootPattern.type);
             if (!branch.guard) {
               if (coveredTypes.some((covered) => isAssignable(checked, covered, this))) {
-                this.diagnostics.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, branch.pattern.span));
+                this.diagnostics.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, rootPattern.span));
               }
               coveredTypes.push(checked);
+              if (isAssignable(matched, checked, this)) universalCovered = true;
             }
+          } else if (rootPattern.kind === "MatchWildcardPattern" && !branch.guard) {
+            universalCovered = true;
+          } else if (rootPattern.kind === "MatchListPattern" && !branch.guard
+            && rootPattern.elements.every((element) => this.matchPatternIsIrrefutable(element))) {
+            if (rootPattern.rest) {
+              coveredListMinimum = coveredListMinimum === null
+                ? rootPattern.elements.length
+                : Math.min(coveredListMinimum, rootPattern.elements.length);
+            } else {
+              coveredListLengths.add(rootPattern.elements.length);
+            }
+          } else if (rootPattern.kind === "MatchObjectPattern" && !branch.guard) {
+            for (const candidate of this.matchObjectCandidates(matched)) {
+              if (candidate.kind !== "any" && this.matchPatternCoversType(rootPattern, candidate)
+                && !coveredTypes.some((covered) => sameType(covered, candidate))) {
+                coveredTypes.push(candidate);
+              }
+            }
+          }
+          if (!branch.guard && !universalCovered && this.matchTypeFullyCovered(
+            matched,
+            coveredTypes,
+            coveredValues,
+            coveredEnumMembers,
+            coveredListLengths,
+            coveredListMinimum,
+          )) {
+            universalCovered = true;
           }
 
           this.enterScope();
-          if (branch.pattern.kind === "MatchTypePattern" && branch.pattern.binding) {
-            this.declareBinding(branch.pattern.binding.name, false, bindingType ?? unknownType, branch.pattern.binding.span);
+          for (const [name, binding] of bindings) {
+            this.declareBinding(name, false, binding.type, binding.span);
           }
           if (branch.guard) {
             this.requireCondition(this.inferExpression(branch.guard), branch.guard);
@@ -1031,8 +1060,20 @@ export class Analyzer implements TypeEnvironment {
           for (const child of branch.body) this.analyzeStatement(child);
           this.exitScope();
         }
-        if (statement.elseBody) this.analyzeBlock(statement.elseBody);
-        if (statement.elseBody || this.matchTypeFullyCovered(matched, coveredTypes, coveredValues, coveredEnumMembers)) {
+        if (statement.elseBody) {
+          if (universalCovered) {
+            this.diagnostics.push(diagnostic("VEL4014", "The match else branch is already covered", statement.elseBody[0]?.span ?? statement.span));
+          }
+          this.analyzeBlock(statement.elseBody);
+        }
+        if (statement.elseBody || universalCovered || this.matchTypeFullyCovered(
+          matched,
+          coveredTypes,
+          coveredValues,
+          coveredEnumMembers,
+          coveredListLengths,
+          coveredListMinimum,
+        )) {
           this.exhaustiveMatches.add(statement.span.start);
         } else if (matched.kind === "enum") {
           const missing = [...(this.enums.get(matched.identity)?.members ?? this.enums.get(matched.name)?.members ?? [])]
@@ -3606,6 +3647,203 @@ export class Analyzer implements TypeEnvironment {
     this.diagnostics.push(diagnostic("VEL4001", message, errorSpan));
   }
 
+  private analyzeMatchPattern(
+    pattern: MatchPattern,
+    input: ValueType,
+    bindings: Map<string, { readonly type: ValueType; readonly span: Span }>,
+  ): ValueType {
+    switch (pattern.kind) {
+      case "MatchAsPattern": {
+        const narrowed = this.analyzeMatchPattern(pattern.pattern, input, bindings);
+        this.addMatchBinding(bindings, pattern.binding.name, narrowed, pattern.binding.span);
+        return narrowed;
+      }
+      case "MatchWildcardPattern":
+        return input;
+      case "MatchCapturePattern":
+        this.addMatchBinding(bindings, pattern.binding.name, input, pattern.binding.span);
+        return input;
+      case "MatchValuePattern": {
+        const values: ValueType[] = [];
+        for (const value of pattern.values) {
+          const literal = this.inferExpression(value);
+          values.push(literal);
+          if (input.kind !== "unknown" && !this.matchLiteralCompatible(this.expandAliases(input), literal)) {
+            this.typeError(`Cannot match ${describeType(input)} against ${describeType(literal)}`, value.span);
+          }
+        }
+        return values.length > 0 ? unionOf(values) : unknownType;
+      }
+      case "MatchTypePattern": {
+        const checked = this.resolveAnnotation(pattern.type);
+        this.validateType(checked, pattern.type.span);
+        if (input.kind !== "unknown" && !this.matchTypesOverlap(this.expandAliases(input), checked)) {
+          this.typeError(`Type pattern ${describeType(checked)} can never match ${describeType(input)}`, pattern.span);
+        }
+        return this.narrowMatchType(input, checked);
+      }
+      case "MatchListPattern": {
+        const candidates = this.matchListCandidates(input);
+        if (candidates.length === 0) {
+          this.typeError(`A List pattern can never match ${describeType(input)}`, pattern.span);
+        }
+        const elementTypes = candidates.map((candidate) => candidate.kind === "list" ? candidate.element : anyType);
+        const element = elementTypes.length > 0 ? unionOf(elementTypes) : unknownType;
+        for (const child of pattern.elements) this.analyzeMatchPattern(child, element, bindings);
+        if (pattern.rest) {
+          this.addMatchBinding(bindings, pattern.rest.name, { kind: "list", element }, pattern.rest.span);
+        }
+        return candidates.length > 0 ? unionOf(candidates) : unknownType;
+      }
+      case "MatchObjectPattern": {
+        const candidates = this.matchObjectCandidates(input);
+        if (candidates.length === 0) {
+          this.typeError(`An object pattern can never match ${describeType(input)}`, pattern.span);
+        }
+        const seen = new Set<string>();
+        const eligible = candidates.filter((candidate) => candidate.kind === "any"
+          || pattern.entries.every((entry) => this.matchObjectField(candidate, entry.property) !== null));
+        if (candidates.length > 0 && eligible.length === 0) {
+          this.typeError(`Object pattern fields cannot occur together on ${describeType(input)}`, pattern.span);
+        }
+        for (const entry of pattern.entries) {
+          if (seen.has(entry.property)) {
+            this.diagnostics.push(diagnostic("VEL4019", `Object pattern field '${entry.property}' is declared more than once`, entry.span));
+          }
+          seen.add(entry.property);
+          const fieldCandidates = eligible
+            .map((candidate) => this.matchObjectField(candidate, entry.property))
+            .filter((field): field is ValueType => field !== null);
+          if (fieldCandidates.length === 0 && candidates.length > 0
+            && !candidates.some((candidate) => this.matchObjectField(candidate, entry.property) !== null)) {
+            this.typeError(`Object pattern field '${entry.property}' does not exist on ${describeType(input)}`, entry.span);
+          }
+          const owners = eligible.filter((candidate): candidate is Extract<ValueType, { kind: "named" }> => candidate.kind === "named"
+            && this.matchObjectField(candidate, entry.property) !== null);
+          if (owners.length === 1) {
+            this.semanticBindingEntryOwners.set(`${entry.span.start}:${entry.property}`, owners[0]!);
+          }
+          this.analyzeMatchPattern(
+            entry.pattern,
+            fieldCandidates.length > 0 ? unionOf(fieldCandidates) : unknownType,
+            bindings,
+          );
+        }
+        if (pattern.rest) {
+          this.addMatchBinding(bindings, pattern.rest.name, this.matchObjectRestType(eligible, seen), pattern.rest.span);
+        }
+        return eligible.length > 0 ? unionOf(eligible) : unknownType;
+      }
+    }
+  }
+
+  private unwrapMatchAs(pattern: MatchPattern): MatchPattern {
+    return pattern.kind === "MatchAsPattern" ? this.unwrapMatchAs(pattern.pattern) : pattern;
+  }
+
+  private matchPatternIsIrrefutable(pattern: MatchPattern): boolean {
+    if (pattern.kind === "MatchWildcardPattern" || pattern.kind === "MatchCapturePattern") return true;
+    return pattern.kind === "MatchAsPattern" && this.matchPatternIsIrrefutable(pattern.pattern);
+  }
+
+  private matchPatternCoversType(pattern: MatchPattern, input: ValueType): boolean {
+    if (pattern.kind === "MatchWildcardPattern" || pattern.kind === "MatchCapturePattern") return true;
+    if (pattern.kind === "MatchAsPattern") return this.matchPatternCoversType(pattern.pattern, input);
+    const type = this.expandAliases(input);
+    if (type.kind === "union") return type.members.every((member) => this.matchPatternCoversType(pattern, member));
+    if (pattern.kind === "MatchTypePattern") {
+      return isAssignable(type, this.resolveAnnotation(pattern.type), this);
+    }
+    if (pattern.kind === "MatchListPattern") {
+      return type.kind === "list" && pattern.rest !== null && pattern.elements.length === 0;
+    }
+    if (pattern.kind !== "MatchObjectPattern") return false;
+    const fields = type.kind === "object"
+      ? type.fields
+      : type.kind === "named" ? this.fieldsOf(type.identity ?? type.name) : null;
+    if (!fields) return false;
+    return pattern.entries.every((entry) => {
+      if (type.kind === "object" && type.optionalFields?.has(entry.property)) return false;
+      const field = fields.get(entry.property);
+      return Boolean(field && field.kind !== "optional" && this.matchPatternCoversType(entry.pattern, field));
+    });
+  }
+
+  private addMatchBinding(
+    bindings: Map<string, { readonly type: ValueType; readonly span: Span }>,
+    name: string,
+    type: ValueType,
+    bindingSpan: Span,
+  ): void {
+    if (name === "_") return;
+    if (bindings.has(name)) {
+      this.diagnostics.push(diagnostic("VEL4019", `Match binding '${name}' is declared more than once`, bindingSpan));
+      return;
+    }
+    bindings.set(name, { type, span: bindingSpan });
+  }
+
+  private matchListCandidates(input: ValueType): ValueType[] {
+    const type = this.expandAliases(input);
+    if (type.kind === "union") return type.members.flatMap((member) => this.matchListCandidates(member));
+    if (type.kind === "optional") return this.matchListCandidates(type.inner);
+    return type.kind === "list" || type.kind === "any" ? [type] : [];
+  }
+
+  private matchObjectCandidates(input: ValueType): ValueType[] {
+    const type = this.expandAliases(input);
+    if (type.kind === "union") return type.members.flatMap((member) => this.matchObjectCandidates(member));
+    if (type.kind === "optional") return this.matchObjectCandidates(type.inner);
+    if (type.kind === "object" || type.kind === "any") return [type];
+    return type.kind === "named" && this.fieldsOf(type.identity ?? type.name) ? [type] : [];
+  }
+
+  private matchObjectField(candidate: ValueType, property: string): ValueType | null {
+    if (candidate.kind === "any") return anyType;
+    const fields = candidate.kind === "object"
+      ? candidate.fields
+      : candidate.kind === "named" ? this.fieldsOf(candidate.identity ?? candidate.name) : null;
+    return fields?.get(property) ?? null;
+  }
+
+  private matchObjectRestType(candidates: readonly ValueType[], selected: ReadonlySet<string>): ValueType {
+    if (candidates.some((candidate) => candidate.kind === "any")) return anyType;
+    const rests = candidates.map((candidate): ValueType => {
+      const fields = candidate.kind === "object"
+        ? candidate.fields
+        : candidate.kind === "named" ? this.fieldsOf(candidate.identity ?? candidate.name) : null;
+      const remaining = new Map([...(fields ?? [])].filter(([name]) => !selected.has(name)));
+      const optionalFields = candidate.kind === "object"
+        ? new Set([...(candidate.optionalFields ?? [])].filter((name) => !selected.has(name)))
+        : new Set<string>();
+      return {
+        kind: "object",
+        fields: remaining,
+        ...(optionalFields.size > 0 ? { optionalFields } : {}),
+      };
+    });
+    return rests.length > 0 ? unionOf(rests) : { kind: "object", fields: new Map() };
+  }
+
+  private narrowMatchType(input: ValueType, checked: ValueType): ValueType {
+    const source = this.expandAliases(input);
+    if (source.kind === "any" || source.kind === "unknown") return checked;
+    if (source.kind === "union") {
+      const members = source.members
+        .filter((member) => this.matchTypesOverlap(member, checked))
+        .map((member) => this.narrowMatchType(member, checked));
+      return members.length > 0 ? unionOf(members) : checked;
+    }
+    if (source.kind === "optional") {
+      const members = [source.inner, nullType]
+        .filter((member) => this.matchTypesOverlap(member, checked))
+        .map((member) => this.narrowMatchType(member, checked));
+      return members.length > 0 ? unionOf(members) : checked;
+    }
+    if (isAssignable(source, checked, this)) return source;
+    return checked;
+  }
+
   private matchLiteralCompatible(matched: ValueType, literal: ValueType): boolean {
     if (matched.kind === "any") return true;
     if (matched.kind === "union") return matched.members.some((member) => this.matchLiteralCompatible(member, literal));
@@ -3644,14 +3882,23 @@ export class Analyzer implements TypeEnvironment {
     coveredTypes: readonly ValueType[],
     coveredValues: ReadonlySet<string>,
     coveredEnumMembers: ReadonlySet<string>,
+    coveredListLengths: ReadonlySet<number>,
+    coveredListMinimum: number | null,
   ): boolean {
     if (coveredTypes.some((covered) => isAssignable(target, covered, this))) return true;
     if (target.kind === "union") {
-      return target.members.every((member) => this.matchTypeFullyCovered(member, coveredTypes, coveredValues, coveredEnumMembers));
+      return target.members.every((member) => this.matchTypeFullyCovered(
+        member,
+        coveredTypes,
+        coveredValues,
+        coveredEnumMembers,
+        coveredListLengths,
+        coveredListMinimum,
+      ));
     }
     if (target.kind === "optional") {
-      return this.matchTypeFullyCovered(target.inner, coveredTypes, coveredValues, coveredEnumMembers)
-        && this.matchTypeFullyCovered(nullType, coveredTypes, coveredValues, coveredEnumMembers);
+      return this.matchTypeFullyCovered(target.inner, coveredTypes, coveredValues, coveredEnumMembers, coveredListLengths, coveredListMinimum)
+        && this.matchTypeFullyCovered(nullType, coveredTypes, coveredValues, coveredEnumMembers, coveredListLengths, coveredListMinimum);
     }
     if (target.kind === "enum") {
       const members = this.enums.get(target.identity)?.members ?? this.enums.get(target.name)?.members ?? new Set<string>();
@@ -3659,6 +3906,12 @@ export class Analyzer implements TypeEnvironment {
     }
     if (target.kind === "bool") return coveredValues.has("boolean:true") && coveredValues.has("boolean:false");
     if (target.kind === "null") return coveredValues.has("null");
+    if (target.kind === "list" && coveredListMinimum !== null) {
+      for (let length = 0; length < coveredListMinimum; length += 1) {
+        if (!coveredListLengths.has(length)) return false;
+      }
+      return true;
+    }
     return false;
   }
 
