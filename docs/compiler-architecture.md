@@ -229,11 +229,14 @@ Short-circuit `and`/`or` analysis evaluates the right operand under the facts
 that make it reachable, records only facts valid for the complete result path,
 and lowers optional conditions to explicit presence checks. `while` bodies use
 the same successful-condition facts rather than a separate loop rule.
-Flow facts are snapshotted around mutually exclusive `if`, `match`, and inline
-conditional branches and around loop bodies. Only invalidations from paths that
-can reach the next statement are merged; unreachable tails cannot mutate the
-continuing fact set. Successful match guards and terminating guard clauses reuse
-the same fact model.
+Flow facts snapshot the complete binding state around mutually exclusive `if`,
+`match`, `try`/`catch`, and inline conditional branches and around loop bodies.
+Only invalidations from paths that can reach the next statement are merged;
+unreachable tails cannot mutate the continuing fact set. Facts created with the
+same semantic type on every continuing path are intersected back into the outer
+scope. Match pattern values and guards are processed in runtime order, so a
+failed effectful guard changes the facts available to later cases. Successful
+match guards and terminating guard clauses reuse the same fact model.
 Every ordinary call clears mutable binding facts and member-path facts before
 later expressions are checked, matching JavaScript closure and reference
 semantics. Getter reads and safe-JavaScript class fields are handled as the same
@@ -243,6 +246,13 @@ non-optional `const` is the explicit stable-value boundary. Invalidations remain
 inside their current flow frame, so analyzing a deferred function, callback,
 component, or instance initializer does not pretend that declaration is an
 immediate execution.
+
+Member writes clear aliased member-path facts even when their source bindings
+differ. Safe-JavaScript writes additionally clear mutable binding facts because
+the declared field may be implemented by a setter. Object interpolation in an
+f-string performs the same operation for a possible `toString` call. The Web
+analyzer checks component JSX in emitted order—props, children, invocation—and
+marks the final invocation as an effect boundary.
 
 Catch lowering uses the host's cross-realm Error brand check, then converts
 foreign non-Error throws without applying JavaScript string coercion to objects

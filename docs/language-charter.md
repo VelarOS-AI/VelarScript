@@ -206,8 +206,9 @@ and preserves the checked non-null value.
 
 Mutually exclusive branches are analyzed independently. A write in one branch
 does not contaminate a sibling that cannot execute it, while any write that can
-reach the following statement invalidates the merged fact. A terminating guard
-therefore reads naturally:
+reach the following statement invalidates the merged fact. Facts established
+with the same type on every continuing branch remain available after the
+branch. A terminating guard therefore reads naturally:
 
 ```velar fragment
 if user == null:
@@ -229,10 +230,17 @@ if form:
 Getters and fields supplied by safe JavaScript imports use the same boundary:
 their implementation may run code or expose an accessor. Read once into a local
 `const`, then check and reuse that value. Plain VelarScript record and class
-fields remain stable until an assignment or effect boundary can change them.
+fields remain stable until an assignment or effect boundary can change them. A
+member write invalidates facts reached through every alias of that object;
+writes to safe-JavaScript fields additionally account for a possible setter.
 `await` is also an effect boundary because other event-loop work can run during
 the suspension. Declaring a nested function does not itself invalidate facts;
 invoking it does.
+
+An f-string converts each embedded value at its source position. Primitive and
+enum conversion is inert. Converting an object may invoke its `toString`, so
+object interpolation is an ordinary effect boundary; save any checked value
+that must survive it in a local `const`.
 
 Optional access is explicit at each optional continuation:
 
@@ -493,14 +501,16 @@ pattern is an error.
 
 The matched expression evaluates once. Guards run only after their pattern
 matches, and a successful guard narrows its case body by the same rules as
-`if`. Cases are mutually exclusive: a write in one case cannot erase a fact
-used only by a sibling, but facts invalidated by a case that reaches the code
-after `match` stay invalidated. Guarded cases do not count as exhaustive because
-the guard may be false. Complete enum matches, an unguarded wildcard, exhaustive
-List length patterns, and irrefutable patterns over required typed record fields
-participate in required-return analysis. `match` remains a statement;
-branches use ordinary `return` or assignments instead of introducing a second
-expression form.
+`if`. A failed guard continues to the next case after retaining any effects it
+already performed. Cases are mutually exclusive: a write in one case cannot
+erase a fact used only by a sibling, but facts invalidated by a case that reaches
+the code after `match` stay invalidated. Facts established by every continuing
+case remain available after an exhaustive match. Guarded cases do not count as
+exhaustive because the guard may be false. Complete enum matches, an unguarded
+wildcard, exhaustive List length patterns, and irrefutable patterns over
+required typed record fields participate in required-return analysis. `match`
+remains a statement; branches use ordinary `return` or assignments instead of
+introducing a second expression form.
 
 `switch` is not VelarScript syntax.
 
@@ -599,6 +609,12 @@ binding. Primitive thrown values retain a readable message. Objects and
 functions receive a stable generic message and remain available as the
 JavaScript `cause`; normalization never calls their conversion hooks.
 
+The `try` body and `catch` body are separate execution paths. A mutation in a
+catch that returns cannot erase a fact used only by the normal try continuation,
+while mutations that can precede a caught failure are visible inside the catch.
+Facts established by every continuing path merge after the statement.
+`finally` is analyzed after those paths and its effects apply to all of them.
+
 `finally` is cleanup, not a hidden control-flow override. It cannot `return` or
 use `break`/`continue` to leave the block, because those operations can silently
 replace a pending return or exception. A loop wholly inside `finally` may still
@@ -663,6 +679,10 @@ imports do not silently gain trustworthy VelarScript types. See
 
 Core does not contain JSX, components, reactivity, lifecycle, or styling.
 Projects enable those features with `@velarscript/web` in `velar.json`.
+Component JSX follows JavaScript evaluation order: props evaluate from left to
+right, then JSX children, then the component function. Calling the component is
+an effect boundary just like an ordinary function call. Native JSX remains an
+owned DOM construction rather than a hidden Core-language operation.
 
 The source package then exposes the following language extension:
 

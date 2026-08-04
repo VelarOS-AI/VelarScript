@@ -1616,6 +1616,92 @@ def invalid(box: Box, kind: string):
   assert.equal(merged.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
 });
 
+test("match fallthrough keeps guard and pattern effects in execution order", () => {
+  const common = compile(`
+type User:
+    name: string
+
+def label(user: User?, kind: string) -> string:
+    match kind:
+        case "first":
+            assert user
+        else:
+            assert user
+    return user.name
+
+print(label({name: "Ada"}, "first"))
+print(label({name: "Lin"}, "other"))
+`.trimStart());
+  assert.deepEqual(common.diagnostics, []);
+  const execution = executeModule(common.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\nLin\n");
+
+  const guarded = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clearAndReject(box: Box) -> bool:
+    box.user = null
+    return false
+
+def invalid(box: Box, kind: string) -> string:
+    assert box.user
+    match kind:
+        case "first" if clearAndReject(box):
+            return "matched"
+        case _:
+            return box.user.name
+`.trimStart());
+  assert.equal(guarded.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const patternEffect = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+const shared: Box = {user: {name: "Ada"}}
+
+class Keys:
+    static get first() -> string:
+        shared.user = null
+        return "first"
+
+def invalid(kind: string) -> string:
+    assert shared.user
+    match kind:
+        case Keys.first:
+            return "matched"
+        else:
+            return shared.user.name
+`.trimStart());
+  assert.equal(patternEffect.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const unreachable = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def label(box: Box, kind: string) -> string:
+    assert box.user
+    match kind:
+        case _:
+            pass
+        case "never":
+            box.user = null
+    return box.user.name
+`.trimStart());
+  assert.equal(unreachable.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
+  assert.ok(unreachable.diagnostics.some((item) => /already covered/u.test(item.message)));
+});
+
 test("match structurally destructures records and Lists with safe scoped bindings", () => {
   const result = compile(`
 type Payload:
@@ -9977,6 +10063,108 @@ def invalid(initial: User?) -> string:
   assert.equal(reassignedContinuation.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 });
 
+test("continuing branches preserve facts established on every path", () => {
+  const result = compile(`
+type User:
+    name: string
+
+def label(user: User?, alternate: bool) -> string:
+    if alternate:
+        assert user
+    else:
+        assert user
+    return user.name
+
+print(label({name: "Ada"}, false))
+print(label({name: "Lin"}, true))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\nLin\n");
+});
+
+test("try catch and finally merge only paths that can continue", () => {
+  const result = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def normalOrCaught(box: Box, fail: bool) -> string:
+    assert box.user
+    try:
+        if fail:
+            throw Error("stop")
+    catch error:
+        box.user = null
+        return "caught"
+    return box.user.name
+
+def assertedOnBothPaths(initial: User?, fail: bool) -> string:
+    let user = initial
+    try:
+        if fail:
+            throw Error("stop")
+        assert user
+    catch error:
+        assert user
+    return user.name
+
+def assertedInFinally(user: User?) -> string:
+    try:
+        pass
+    finally:
+        assert user
+    return user.name
+
+print(normalOrCaught({user: {name: "Ada"}}, false))
+print(normalOrCaught({user: {name: "Ada"}}, true))
+print(assertedOnBothPaths({name: "Mira"}, false))
+print(assertedOnBothPaths({name: "Mira"}, true))
+print(assertedInFinally({name: "Kai"}))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\ncaught\nMira\nMira\nKai\n");
+
+  const invalidCatch = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box) -> string:
+    assert box.user
+    try:
+        box.user = null
+        throw Error("stop")
+    catch error:
+        return box.user.name
+`.trimStart());
+  assert.equal(invalidCatch.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const invalidFinally = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box) -> string:
+    assert box.user
+    try:
+        pass
+    finally:
+        box.user = null
+    return box.user.name
+`.trimStart());
+  assert.equal(invalidFinally.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+});
+
 test("unreachable writes do not corrupt continuing flow facts", () => {
   const result = compile(`
 type User:
@@ -10203,6 +10391,61 @@ def invalid(box: Box) -> string:
   assert.equal(invokedClosure.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 });
 
+test("member writes invalidate aliased facts and external setters invalidate captured facts", () => {
+  const aliased = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box) -> string:
+    const alias = box
+    assert box.user
+    alias.user = null
+    return box.user.name
+`.trimStart());
+  assert.equal(aliased.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const externalSetter = compile(`
+type User:
+    name: string
+
+extern module "host-sdk":
+    export class Client:
+        let value: number
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def invalid(client: Client, initial: User?) -> string:
+    let user = initial
+    assert user
+    client.value = 1
+    return user.name
+`.trimStart());
+  assert.equal(externalSetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const stableLocal = compile(`
+type User:
+    name: string
+
+extern module "host-sdk":
+    export class Client:
+        let value: number
+        constructor()
+
+import js {Client} from "host-sdk"
+
+def label(client: Client, initial: User?) -> string:
+    const user = initial
+    assert user
+    client.value = 1
+    return user.name
+`.trimStart());
+  assert.deepEqual(stableLocal.diagnostics, []);
+});
+
 test("conditional expression branches isolate and merge call effects", () => {
   const result = compile(`
 type User:
@@ -10340,6 +10583,109 @@ def length(client: Client) -> number:
     return 0
 `.trimStart());
   assert.deepEqual(stableExternalValue.diagnostics, []);
+});
+
+test("f-strings invalidate facts only when object coercion can execute user code", () => {
+  const unsafeCoercion = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+class Mutator:
+    const box: Box
+
+    constructor(box: Box):
+        self.box = box
+
+    def toString() -> string:
+        self.box.user = null
+        return "changed"
+
+def invalid(box: Box) -> string:
+    const mutator = Mutator(box)
+    assert box.user
+    const text = f"{mutator}"
+    return box.user.name
+`.trimStart());
+  assert.equal(unsafeCoercion.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const primitiveCoercion = compile(`
+type User:
+    name: string
+
+def label(initial: User?) -> string:
+    let user = initial
+    assert user
+    const prefix = f"{1}:{true}:{null}"
+    return f"{prefix}:{user.name}"
+
+print(label({name: "Ada"}))
+`.trimStart());
+  assert.deepEqual(primitiveCoercion.diagnostics, []);
+  const execution = executeModule(primitiveCoercion.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1:true:null:Ada\n");
+});
+
+test("component JSX follows props children and invocation effect order", () => {
+  const componentEffect = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+component Clear(box: Box):
+    box.user = null
+    return <span>cleared</span>
+
+def invalid(box: Box) -> string:
+    assert box.user
+    const view = <Clear box={box} />
+    return box.user.name
+`.trimStart());
+  assert.equal(componentEffect.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const propBeforeChildren = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+component Panel(label: string, children: WebNode):
+    return <section>{label}{children}</section>
+
+def clear(box: Box) -> string:
+    box.user = null
+    return "cleared"
+
+def invalid(box: Box) -> WebNode:
+    assert box.user
+    return <Panel label={clear(box)}>{box.user.name}</Panel>
+`.trimStart());
+  assert.equal(propBeforeChildren.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const stableLocal = compile(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+component Clear(box: Box):
+    box.user = null
+    return <span>cleared</span>
+
+def label(box: Box) -> string:
+    assert box.user
+    const user = box.user
+    const view = <Clear box={box} />
+    return user.name
+`.trimStart());
+  assert.deepEqual(stableLocal.diagnostics, []);
 });
 
 test("await invalidates facts that can change during suspension", () => {

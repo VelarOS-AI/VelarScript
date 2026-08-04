@@ -67,7 +67,7 @@ interface MemberNarrowing {
 interface FlowFactsSnapshot {
   readonly bindings: ReadonlyMap<Binding, {
     readonly type: ValueType;
-    readonly frame: number;
+    readonly frame: number | null;
   }>;
   readonly members: readonly ReadonlyMap<string, MemberNarrowing>[];
 }
@@ -1136,6 +1136,9 @@ export class Analyzer implements TypeEnvironment {
         if (!statement.elseBody && thenReturns) this.persistNarrowings(falsy);
         else if (statement.elseBody && thenReturns && !elseReturns) this.persistNarrowings(elseFacts);
         else if (statement.elseBody && elseReturns && !thenReturns) this.persistNarrowings(thenFacts);
+        else if (statement.elseBody && !thenReturns && !elseReturns) {
+          this.persistNarrowings(this.commonNarrowings([thenFacts, elseFacts]));
+        }
         break;
       }
       case "MatchStatement": {
@@ -1144,7 +1147,10 @@ export class Analyzer implements TypeEnvironment {
           this.typeError("Validate an unknown value before matching it", statement.value.span);
         }
         const flowBaseline = this.snapshotFlowFacts();
+        const visibleAtMatch = this.visibleBindings();
         const continuingInvalidations: FlowFactInvalidations[] = [];
+        const continuingFacts: ReadonlyMap<string, ValueType>[] = [];
+        const fallthroughInvalidations: FlowFactInvalidations[] = [];
         const coveredValues = new Set<string>();
         const coveredEnumMembers = new Set<string>();
         const coveredTypes: ValueType[] = [];
@@ -1152,11 +1158,16 @@ export class Analyzer implements TypeEnvironment {
         let coveredListMinimum: number | null = null;
         let universalCovered = false;
         for (const branch of statement.cases) {
-          if (universalCovered) {
+          const branchReachable = !universalCovered;
+          if (!branchReachable) {
             this.diagnostics.push(diagnostic("VEL4014", "This match branch is already covered", branch.pattern.span));
           }
           const bindings = new Map<string, { readonly type: ValueType; readonly span: Span }>();
-          this.analyzeMatchPattern(branch.pattern, matched, bindings);
+          const patternBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
+          const patternInvalidations = this.analyzeIsolatedFlow(patternBaseline, () => {
+            this.analyzeMatchPattern(branch.pattern, matched, bindings);
+          });
+          if (branchReachable) fallthroughInvalidations.push(patternInvalidations);
           const rootPattern = this.unwrapMatchAs(branch.pattern);
           if (rootPattern.kind === "MatchValuePattern") {
             for (const value of rootPattern.values) {
@@ -1208,41 +1219,68 @@ export class Analyzer implements TypeEnvironment {
             universalCovered = true;
           }
 
-          const branchInvalidations = this.analyzeIsolatedFlow(flowBaseline, () => {
+          let guardNarrowings: ReadonlyMap<string, ValueType> = new Map();
+          if (branch.guard) {
+            const guardBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
+            const guardInvalidations = this.analyzeIsolatedFlow(guardBaseline, () => {
+              this.enterScope();
+              try {
+                for (const [name, binding] of bindings) {
+                  this.declareBinding(name, false, binding.type, binding.span);
+                }
+                const guard = this.inferExpression(branch.guard!);
+                this.requireCondition(guard, branch.guard!);
+                guardNarrowings = this.narrowingFor(branch.guard!, guard);
+              } finally {
+                this.exitScope();
+              }
+            });
+            if (branchReachable) fallthroughInvalidations.push(guardInvalidations);
+          }
+
+          const bodyBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
+          let branchFacts: ReadonlyMap<string, ValueType> = new Map();
+          const branchInvalidations = this.analyzeIsolatedFlow(bodyBaseline, () => {
             this.enterScope();
             try {
               for (const [name, binding] of bindings) {
                 this.declareBinding(name, false, binding.type, binding.span);
               }
-              if (branch.guard) {
-                const guard = this.inferExpression(branch.guard);
-                this.requireCondition(guard, branch.guard);
-                this.persistNarrowings(this.narrowingFor(branch.guard, guard));
-              }
+              this.applyNarrowings(guardNarrowings, branch.body[0]?.span ?? branch.span);
               this.analyzeStatements(branch.body);
+              branchFacts = this.narrowingsForVisibleBindings(visibleAtMatch);
             } finally {
               this.exitScope();
             }
           });
-          if (!this.blockAlwaysReturns(branch.body)) continuingInvalidations.push(branchInvalidations);
+          if (branchReachable && !this.blockAlwaysReturns(branch.body)) {
+            continuingInvalidations.push(...fallthroughInvalidations, branchInvalidations);
+            continuingFacts.push(branchFacts);
+          }
         }
         if (statement.elseBody) {
           if (universalCovered) {
             this.diagnostics.push(diagnostic("VEL4014", "The match else branch is already covered", statement.elseBody[0]?.span ?? statement.span));
           }
-          const elseInvalidations = this.analyzeIsolatedFlow(flowBaseline, () => {
-            this.analyzeBlock(statement.elseBody!);
+          const elseBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
+          let elseFacts: ReadonlyMap<string, ValueType> = new Map();
+          const elseInvalidations = this.analyzeIsolatedFlow(elseBaseline, () => {
+            elseFacts = this.analyzeBlock(statement.elseBody!);
           });
-          if (!this.blockAlwaysReturns(statement.elseBody)) continuingInvalidations.push(elseInvalidations);
+          if (!universalCovered && !this.blockAlwaysReturns(statement.elseBody)) {
+            continuingInvalidations.push(...fallthroughInvalidations, elseInvalidations);
+            continuingFacts.push(elseFacts);
+          }
         }
-        if (statement.elseBody || universalCovered || this.matchTypeFullyCovered(
+        const exhaustive = Boolean(statement.elseBody) || universalCovered || this.matchTypeFullyCovered(
           matched,
           coveredTypes,
           coveredValues,
           coveredEnumMembers,
           coveredListLengths,
           coveredListMinimum,
-        )) {
+        );
+        if (exhaustive) {
           this.exhaustiveMatches.add(statement.span.start);
         } else if (matched.kind === "enum") {
           const missing = [...(this.enums.get(matched.identity)?.members ?? this.enums.get(matched.name)?.members ?? [])]
@@ -1251,7 +1289,16 @@ export class Analyzer implements TypeEnvironment {
             this.diagnostics.push(diagnostic("VEL4015", `Match on ${matched.name} is missing: ${missing.join(", ")}`, statement.span));
           }
         }
+        if (!exhaustive) {
+          const unmatched = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
+          continuingInvalidations.push(...fallthroughInvalidations);
+          continuingFacts.push(this.narrowingsInSnapshot(unmatched, visibleAtMatch, flowBaseline));
+        }
+        this.restoreFlowFacts(flowBaseline);
         this.applyFlowInvalidations(continuingInvalidations);
+        if (continuingFacts.length > 0) {
+          this.persistNarrowings(this.commonNarrowings(continuingFacts));
+        }
         break;
       }
       case "ForStatement": {
@@ -1306,22 +1353,72 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic("VEL3015", `'${statement.kind === "BreakStatement" ? "break" : "continue"}' cannot leave a finally block`, statement.span));
         }
         break;
-      case "TryStatement":
-        this.analyzeBlock(statement.tryBody);
-        if (statement.catchBody) {
-          this.enterScope();
-          if (statement.catchName) {
-            this.declareBinding(statement.catchName, false, { kind: "class", name: "Error" }, statement.span);
-          }
-          this.analyzeStatements(statement.catchBody);
-          this.exitScope();
+      case "TryStatement": {
+        const baseline = this.snapshotFlowFacts();
+        let tryFacts: ReadonlyMap<string, ValueType> = new Map();
+        const tryInvalidations = this.analyzeIsolatedFlow(baseline, () => {
+          tryFacts = this.analyzeBlock(statement.tryBody);
+        });
+        const continuingInvalidations: FlowFactInvalidations[][] = [];
+        const continuingFacts: ReadonlyMap<string, ValueType>[] = [];
+        if (!this.blockAlwaysReturns(statement.tryBody)) {
+          continuingInvalidations.push([tryInvalidations]);
+          continuingFacts.push(tryFacts);
         }
+
+        let catchInvalidations: FlowFactInvalidations | null = null;
+        if (statement.catchBody) {
+          const catchBaseline = this.flowSnapshotAfterInvalidations(baseline, [tryInvalidations]);
+          let catchFacts: ReadonlyMap<string, ValueType> = new Map();
+          catchInvalidations = this.analyzeIsolatedFlow(catchBaseline, () => {
+            const visible = this.visibleBindings();
+            this.enterScope();
+            try {
+              if (statement.catchName) {
+                this.declareBinding(statement.catchName, false, { kind: "class", name: "Error" }, statement.span);
+              }
+              this.analyzeStatements(statement.catchBody!);
+              catchFacts = this.narrowingsForVisibleBindings(visible);
+            } finally {
+              this.exitScope();
+            }
+          });
+          if (!this.blockAlwaysReturns(statement.catchBody)) {
+            continuingInvalidations.push([tryInvalidations, catchInvalidations]);
+            continuingFacts.push(catchFacts);
+          }
+        }
+
         if (statement.finallyBody) {
-          this.finallyLoopDepths.push(this.loopDepth);
-          this.analyzeBlock(statement.finallyBody);
-          this.finallyLoopDepths.pop();
+          const beforeFinally = this.flowSnapshotAfterInvalidations(
+            baseline,
+            catchInvalidations ? [tryInvalidations, catchInvalidations] : [tryInvalidations],
+          );
+          let finallyFacts: ReadonlyMap<string, ValueType> = new Map();
+          const finallyInvalidations = this.analyzeIsolatedFlow(beforeFinally, () => {
+            this.finallyLoopDepths.push(this.loopDepth);
+            try {
+              finallyFacts = this.analyzeBlock(statement.finallyBody!);
+            } finally {
+              this.finallyLoopDepths.pop();
+            }
+          });
+          if (!this.blockAlwaysReturns(statement.finallyBody) && continuingFacts.length > 0) {
+            this.restoreFlowFacts(beforeFinally);
+            this.applyFlowInvalidations([finallyInvalidations]);
+            this.persistNarrowings(finallyFacts);
+          } else {
+            this.restoreFlowFacts(baseline);
+          }
+        } else {
+          this.restoreFlowFacts(baseline);
+          this.applyFlowInvalidations(continuingInvalidations.flat());
+          if (continuingFacts.length > 0) {
+            this.persistNarrowings(this.commonNarrowings(continuingFacts));
+          }
         }
         break;
+      }
       case "PassStatement":
         break;
       case "AssignmentStatement":
@@ -1846,10 +1943,11 @@ export class Analyzer implements TypeEnvironment {
     statements: readonly Statement[],
     narrowed: ReadonlyMap<string, ValueType> = new Map(),
   ): ReadonlyMap<string, ValueType> {
+    const visible = this.visibleBindings();
     this.enterScope();
     this.applyNarrowings(narrowed, statements[0]?.span ?? { start: 0, end: 0 });
     this.analyzeStatements(statements);
-    const surviving = this.survivingNarrowings(narrowed);
+    const surviving = this.narrowingsForVisibleBindings(visible);
     this.exitScope();
     return surviving;
   }
@@ -1885,6 +1983,7 @@ export class Analyzer implements TypeEnvironment {
     let targetType = unknownType;
     let targetBinding: Binding | null = null;
     let targetWritable = true;
+    let effectfulMemberWrite = false;
 
     if (statement.target.kind !== "IdentifierExpression" && continuesOptionalChain(statement.target)) {
       this.diagnostics.push(diagnostic("VEL3002", "Optional chains cannot be assignment targets", statement.target.span));
@@ -1912,6 +2011,9 @@ export class Analyzer implements TypeEnvironment {
         statement.operator !== "=",
       );
       const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
+      effectfulMemberWrite = owner.kind === "any"
+        || (owner.kind === "class" || owner.kind === "classConstructor")
+          && (owner.identity ?? owner.name).startsWith("js:");
       if (owner.kind === "class") {
         const key = owner.identity ?? owner.name;
         const info = this.classes.get(key) ?? this.classes.get(owner.name);
@@ -1983,10 +2085,15 @@ export class Analyzer implements TypeEnvironment {
     }
     const assignmentValid = this.contextuallyAssignable(valueType, targetType, statement.value.span);
     this.requireAssignable(valueType, targetType, statement.value.span);
-    if (statement.operator === "=" && targetWritable && assignmentValid) {
-      this.invalidateAssignmentNarrowings(statement.target, targetBinding);
-      if (targetBinding?.mutable) {
-        this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
+    if (targetWritable && assignmentValid) {
+      if (statement.target.kind === "MemberExpression") {
+        if (effectfulMemberWrite) this.invalidateEffectfulFlowFacts();
+        else this.invalidateCurrentMemberNarrowings();
+      } else if (statement.operator === "=") {
+        this.invalidateAssignmentNarrowings(statement.target, targetBinding);
+        if (targetBinding?.mutable) {
+          this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
+        }
       }
     }
   }
@@ -2057,7 +2164,8 @@ export class Analyzer implements TypeEnvironment {
       case "FStringExpression":
         for (const part of expression.parts) {
           if (part.kind === "expression") {
-            this.inferExpression(part.value);
+            const value = this.inferExpression(part.value);
+            if (this.stringCoercionMayExecute(value)) this.invalidateEffectfulFlowFacts();
           }
         }
         return stringType;
@@ -4780,7 +4888,7 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private invalidateEffectfulFlowFacts(): void {
+  protected invalidateEffectfulFlowFacts(): void {
     for (const scope of this.scopes) {
       for (const binding of scope.values()) {
         if (binding.mutable && binding.narrowingFrame === this.flowFrameDepth) {
@@ -4789,6 +4897,10 @@ export class Analyzer implements TypeEnvironment {
         }
       }
     }
+    this.invalidateCurrentMemberNarrowings();
+  }
+
+  private invalidateCurrentMemberNarrowings(): void {
     for (const scope of this.memberNarrowings) {
       for (const [path, narrowing] of scope) {
         if (narrowing.frame === this.flowFrameDepth) scope.delete(path);
@@ -4796,13 +4908,20 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  private stringCoercionMayExecute(input: ValueType): boolean {
+    const type = this.expandAliases(input);
+    if (type.kind === "string" || type.kind === "number" || type.kind === "bool"
+      || type.kind === "null" || type.kind === "enum") return false;
+    if (type.kind === "optional") return this.stringCoercionMayExecute(type.inner);
+    if (type.kind === "union") return type.members.some((member) => this.stringCoercionMayExecute(member));
+    return true;
+  }
+
   private snapshotFlowFacts(): FlowFactsSnapshot {
-    const bindings = new Map<Binding, { readonly type: ValueType; readonly frame: number }>();
+    const bindings = new Map<Binding, { readonly type: ValueType; readonly frame: number | null }>();
     for (const scope of this.scopes) {
       for (const binding of scope.values()) {
-        if (binding.narrowingFrame !== null) {
-          bindings.set(binding, { type: binding.type, frame: binding.narrowingFrame });
-        }
+        bindings.set(binding, { type: binding.type, frame: binding.narrowingFrame });
       }
     }
     return {
@@ -4829,7 +4948,8 @@ export class Analyzer implements TypeEnvironment {
     analyze();
     const bindings = new Set<Binding>();
     for (const [binding, state] of snapshot.bindings) {
-      if (binding.narrowingFrame !== state.frame || !sameType(binding.type, state.type)) bindings.add(binding);
+      if (state.frame !== null
+        && (binding.narrowingFrame !== state.frame || !sameType(binding.type, state.type))) bindings.add(binding);
     }
     const members = new Map<number, ReadonlySet<string>>();
     snapshot.members.forEach((source, index) => {
@@ -4843,6 +4963,72 @@ export class Analyzer implements TypeEnvironment {
     });
     this.restoreFlowFacts(snapshot);
     return { bindings, members };
+  }
+
+  private flowSnapshotAfterInvalidations(
+    baseline: FlowFactsSnapshot,
+    invalidations: readonly FlowFactInvalidations[],
+  ): FlowFactsSnapshot {
+    this.restoreFlowFacts(baseline);
+    this.applyFlowInvalidations(invalidations);
+    const result = this.snapshotFlowFacts();
+    this.restoreFlowFacts(baseline);
+    return result;
+  }
+
+  private visibleBindings(): ReadonlyMap<string, Binding> {
+    const visible = new Map<string, Binding>();
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      for (const [name, binding] of this.scopes[index]!) {
+        if (!visible.has(name)) visible.set(name, binding);
+      }
+    }
+    return visible;
+  }
+
+  private narrowingsForVisibleBindings(visible: ReadonlyMap<string, Binding>): ReadonlyMap<string, ValueType> {
+    const narrowed = new Map<string, ValueType>();
+    const roots = new Set<string>();
+    for (const [name, original] of visible) {
+      roots.add(`${original.span.start}:${name}`);
+      const current = this.lookup(name);
+      if (current?.narrowingFrame === this.flowFrameDepth
+        && current.span.start === original.span.start
+        && current.span.end === original.span.end) narrowed.set(name, current.type);
+    }
+    for (let index = this.memberNarrowings.length - 1; index >= 0; index -= 1) {
+      for (const [path, fact] of this.memberNarrowings[index]!) {
+        if (fact.frame !== this.flowFrameDepth || narrowed.has(`${memberNarrowingPrefix}${path}`)) continue;
+        if ([...roots].some((root) => path === root || path.startsWith(`${root}.`))) {
+          narrowed.set(`${memberNarrowingPrefix}${path}`, fact.type);
+        }
+      }
+    }
+    return narrowed;
+  }
+
+  private narrowingsInSnapshot(
+    snapshot: FlowFactsSnapshot,
+    visible: ReadonlyMap<string, Binding>,
+    restore: FlowFactsSnapshot,
+  ): ReadonlyMap<string, ValueType> {
+    this.restoreFlowFacts(snapshot);
+    const narrowed = this.narrowingsForVisibleBindings(visible);
+    this.restoreFlowFacts(restore);
+    return narrowed;
+  }
+
+  private commonNarrowings(branches: readonly ReadonlyMap<string, ValueType>[]): ReadonlyMap<string, ValueType> {
+    const first = branches[0];
+    if (!first) return new Map();
+    const common = new Map<string, ValueType>();
+    for (const [key, type] of first) {
+      if (branches.slice(1).every((branch) => {
+        const candidate = branch.get(key);
+        return candidate !== undefined && sameType(candidate, type);
+      })) common.set(key, type);
+    }
+    return common;
   }
 
   private applyFlowInvalidations(branches: readonly FlowFactInvalidations[]): void {

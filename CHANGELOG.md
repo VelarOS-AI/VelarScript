@@ -41,6 +41,10 @@ Compiler and framework changes:
   checked value was first saved in a local `const`. Getter and safe-JavaScript
   property reads, plus resumed code after `await`, follow the same effect
   boundary.
+- Continuing branches now retain facts established on every path;
+  `try`/`catch`/`finally`, match guard fallthrough, aliased member writes,
+  JavaScript setters, object f-string coercion, and component JSX evaluation all
+  follow emitted execution order instead of sharing or guessing flow state.
 
 Tooling and documentation changes:
 

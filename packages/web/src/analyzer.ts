@@ -817,13 +817,14 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private inferJsx(expression: JSXElementExpression): ValueType {
     const attributes = new Map(expression.attributes.map((attribute) => [attribute.name, attribute]));
+    const component = /^[A-Z]/u.test(expression.tag);
     if (attributes.size !== expression.attributes.length) this.diagnostics.push(diagnostic("VEL5014", `JSX element '${expression.tag}' has duplicate attributes`, expression.span));
     for (const attribute of expression.attributes) {
       if (removedJsxControlAttributes.has(attribute.name)) {
         this.diagnostics.push(diagnostic("VEL5029", `JSX '${attribute.name}' was removed; branch with an ordinary expression such as {condition ? <A /> : <B />}`, attribute.span));
       }
     }
-    if (expression.tag && !/^[A-Z]/u.test(expression.tag)) {
+    if (expression.tag && !component) {
       for (const attribute of expression.attributes) if (!removedJsxControlAttributes.has(attribute.name)) this.analyzeNativeJsxAttribute(expression, attribute);
       if (attributes.has("unsafe:html") && expression.children.length > 0) this.diagnostics.push(diagnostic("VEL5015", "unsafe:html cannot be combined with JSX children", expression.span));
       if (expression.tag === "img" && !attributes.has("alt")) this.diagnostics.push(diagnostic("VEL5016", "An img element requires an alt attribute", expression.span));
@@ -836,6 +837,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.diagnostics.push(diagnostic("VEL5028", "An anchor with target='_blank' requires rel='noopener'", expression.span));
       }
     }
+    if (component) this.analyzeComponentElement(expression);
     for (const child of expression.children) {
       if (child.kind === "JSXExpressionChild") {
         const childType = this.inferExpression(child.expression);
@@ -846,7 +848,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.inferJsx(child);
       }
     }
-    if (/^[A-Z]/u.test(expression.tag)) this.analyzeComponentElement(expression);
+    if (component) this.invalidateEffectfulFlowFacts();
     return { kind: "node" };
   }
 
