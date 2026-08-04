@@ -105,6 +105,12 @@ interface ClassConstructorOriginSummary extends CallableOriginSummary {
 
 type CallableValueType = Extract<ValueType, { readonly kind: "function" | "action" | "intrinsic" }>;
 
+interface NamedArgumentPlan {
+  readonly ordered: readonly Expression[];
+  readonly targets: readonly (number | null)[];
+  readonly valid: boolean;
+}
+
 interface AnalyzableFunctionDeclaration {
   readonly kind: string;
   readonly name: string;
@@ -343,6 +349,7 @@ export class Analyzer implements TypeEnvironment {
     this.analysisExtensions = extensions;
     this.classes.set("Error", {
       parameters: [stringType],
+      parameterNames: ["message"],
       requiredParameters: 0,
       base: null,
       abstract: false,
@@ -4006,26 +4013,42 @@ export class Analyzer implements TypeEnvironment {
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Map") {
       const collectionContext = this.contextualCollectionType(contextualType);
-      if (hasNamed) this.typeError("Map construction does not accept named arguments", callSpan);
-      if (arguments_.length > 1) this.typeError(`Expected 0-1 arguments but received ${arguments_.length}`, callSpan);
-      if (!arguments_[0]) return collectionContext?.kind === "map" ? collectionContext : { kind: "map", key: unknownType, value: unknownType };
-      const source = this.inferExpression(arguments_[0], collectionContext?.kind === "map" ? collectionContext : unknownType);
-      for (const argument of arguments_.slice(1)) this.inferExpression(argument);
+      const named = this.planNamedArguments(arguments_, argumentNames, [unknownType], ["source"], 0, callSpan);
+      if (named && !named.valid) {
+        for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+        return collectionContext?.kind === "map" ? collectionContext : { kind: "map", key: unknownType, value: unknownType };
+      }
+      const ordered = named?.ordered ?? arguments_;
+      if (ordered.length > 1) this.typeError(`Expected 0-1 arguments but received ${ordered.length}`, callSpan);
+      const argument = ordered[0];
+      if (!argument || (argument.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument")) {
+        return collectionContext?.kind === "map" ? collectionContext : { kind: "map", key: unknownType, value: unknownType };
+      }
+      const source = this.inferExpression(argument, collectionContext?.kind === "map" ? collectionContext : unknownType);
+      for (const extra of ordered.slice(1)) this.inferExpression(extra);
       if (source.kind === "map") return { kind: "map", key: source.key, value: source.value };
       if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
-      this.typeError(`Map construction requires another Map, received ${describeType(source)}`, arguments_[0].span);
+      this.typeError(`Map construction requires another Map, received ${describeType(source)}`, argument.span);
       return { kind: "map", key: unknownType, value: unknownType };
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Set") {
       const collectionContext = this.contextualCollectionType(contextualType);
-      if (hasNamed) this.typeError("Set construction does not accept named arguments", callSpan);
-      if (arguments_.length > 1) this.typeError(`Expected 0-1 arguments but received ${arguments_.length}`, callSpan);
-      if (!arguments_[0]) return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
-      const source = this.inferExpression(arguments_[0], collectionContext?.kind === "set" ? { kind: "list", element: collectionContext.element } : unknownType);
-      for (const argument of arguments_.slice(1)) this.inferExpression(argument);
+      const named = this.planNamedArguments(arguments_, argumentNames, [unknownType], ["source"], 0, callSpan);
+      if (named && !named.valid) {
+        for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+        return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
+      }
+      const ordered = named?.ordered ?? arguments_;
+      if (ordered.length > 1) this.typeError(`Expected 0-1 arguments but received ${ordered.length}`, callSpan);
+      const argument = ordered[0];
+      if (!argument || (argument.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument")) {
+        return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
+      }
+      const source = this.inferExpression(argument, collectionContext?.kind === "set" ? { kind: "list", element: collectionContext.element } : unknownType);
+      for (const extra of ordered.slice(1)) this.inferExpression(extra);
       if (source.kind === "list" || source.kind === "set") return { kind: "set", element: source.element };
       if (source.kind === "any") return { kind: "set", element: anyType };
-      this.typeError(`Set construction requires a List or Set, received ${describeType(source)}`, arguments_[0].span);
+      this.typeError(`Set construction requires a List or Set, received ${describeType(source)}`, argument.span);
       return { kind: "set", element: unknownType };
     }
 
@@ -4063,8 +4086,7 @@ export class Analyzer implements TypeEnvironment {
       };
     }
     if (callee.kind === "intrinsic") {
-      const ordered = this.orderNamedArguments(arguments_, argumentNames, callee.parameters, callee.parameterNames, callee.requiredParameters, callSpan, callee.rest);
-      return this.inferIntrinsicCall(callee, ordered ?? arguments_, callSpan);
+      return this.inferIntrinsicCall(callee, arguments_, argumentNames, callSpan);
     }
     if (callee.kind === "componentConstructor") {
       this.typeError(`Render component '${callee.name}' with JSX`, callSpan);
@@ -4131,22 +4153,58 @@ export class Analyzer implements TypeEnvironment {
 
   private inferIntrinsicCall(
     intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
-    arguments_: readonly Expression[],
+    sourceArguments: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
   ): ValueType {
+    let arguments_ = sourceArguments;
+    let namedPreanalyzed = false;
+    const deferredNamedArrows = new Set<Expression>();
+    const named = this.planNamedArguments(
+      sourceArguments,
+      argumentNames,
+      intrinsic.parameters,
+      intrinsic.parameterNames,
+      intrinsic.requiredParameters,
+      callSpan,
+      intrinsic.rest,
+    );
+    if (named) {
+      for (const [source, target] of named.targets.entries()) {
+        const argument = sourceArguments[source]!;
+        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+        if (value.kind === "ArrowFunctionExpression") deferredNamedArrows.add(value);
+        else this.inferExpression(value, target === null ? unknownType : intrinsic.parameters[target] ?? intrinsic.rest ?? unknownType);
+      }
+      if (!named.valid) {
+        for (const argument of deferredNamedArrows) this.inferExpression(argument);
+        return intrinsic.result;
+      }
+      arguments_ = named.ordered;
+      namedPreanalyzed = true;
+    }
+    const omitted = (argument: Expression | undefined): boolean => argument?.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument";
+    const argumentAt = (index: number): Expression | null => {
+      const argument = arguments_[index];
+      return !argument || omitted(argument) ? null : argument;
+    };
+    const suppliedCount = arguments_.reduce((count, argument) => count + (omitted(argument) ? 0 : 1), 0);
     const arity = (minimum = intrinsic.requiredParameters, maximum = intrinsic.parameters.length): void => {
-      if (arguments_.length < minimum || arguments_.length > maximum) {
+      if (suppliedCount < minimum || suppliedCount > maximum) {
         const expected = maximum === Number.POSITIVE_INFINITY
           ? `at least ${minimum}`
           : minimum === maximum ? String(minimum) : `${minimum}-${maximum}`;
-        this.typeError(`Expected ${expected} arguments but received ${arguments_.length}`, callSpan);
+        this.typeError(`Expected ${expected} arguments but received ${suppliedCount}`, callSpan);
       }
     };
     const inferAt = (index: number, expected: ValueType = unknownType): ValueType => {
-      const argument = arguments_[index];
+      const argument = argumentAt(index);
       if (!argument) return unknownType;
-      if (argument.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument") return unknownType;
-      const actual = this.inferExpression(argument, expected);
+      const deferred = deferredNamedArrows.has(argument);
+      const actual = namedPreanalyzed && !deferred
+        ? this.inferredExpressionType(argument)
+        : this.inferExpression(argument, expected);
+      if (deferred) deferredNamedArrows.delete(argument);
       if (expected.kind !== "unknown") this.requireAssignable(actual, expected, argument.span);
       return actual;
     };
@@ -4154,7 +4212,8 @@ export class Analyzer implements TypeEnvironment {
       const type = inferAt(index);
       if (type.kind === "list") return { type, element: type.element };
       if (type.kind === "any") return { type, element: anyType };
-      if (arguments_[index]) this.typeError(`Expected a List, received ${describeType(type)}`, arguments_[index]!.span);
+      const argument = argumentAt(index);
+      if (argument) this.typeError(`Expected a List, received ${describeType(type)}`, argument.span);
       return { type, element: unknownType };
     };
     const callbackAt = (index: number, parameters: readonly ValueType[], result: ValueType): ValueType => {
@@ -4165,7 +4224,8 @@ export class Analyzer implements TypeEnvironment {
     const promiseValue = (type: ValueType, index: number): ValueType => {
       if (type.kind === "promise") return type.value;
       if (type.kind === "any") return anyType;
-      if (arguments_[index]) this.typeError(`Expected a Promise, received ${describeType(type)}`, arguments_[index]!.span);
+      const argument = argumentAt(index);
+      if (argument) this.typeError(`Expected a Promise, received ${describeType(type)}`, argument.span);
       return unknownType;
     };
     const runtimeTypeAt = (index: number): ValueType => {
@@ -4173,7 +4233,8 @@ export class Analyzer implements TypeEnvironment {
       if (type.kind === "typeObject") return { kind: "named", name: type.name };
       if (type.kind === "enumObject") return { kind: "enum", name: type.name, identity: type.identity };
       if (type.kind === "any") return anyType;
-      if (arguments_[index]) this.typeError("Runtime parsing requires a VelarScript runtime type", arguments_[index]!.span);
+      const argument = argumentAt(index);
+      if (argument) this.typeError("Runtime parsing requires a VelarScript runtime type", argument.span);
       return unknownType;
     };
 
@@ -4249,7 +4310,8 @@ export class Analyzer implements TypeEnvironment {
         const outer = arrayAt(0).element;
         if (outer.kind === "list") return outer;
         if (outer.kind === "any") return { kind: "list", element: anyType };
-        if (arguments_[0]) this.typeError(`flatten expects a List of Lists, received List<${describeType(outer)}>`, arguments_[0]!.span);
+        const argument = argumentAt(0);
+        if (argument) this.typeError(`flatten expects a List of Lists, received List<${describeType(outer)}>`, argument.span);
         return { kind: "list", element: unknownType };
       }
       case "collections.groupBy":
@@ -4266,8 +4328,9 @@ export class Analyzer implements TypeEnvironment {
         arity(2, 3);
         const element = arrayAt(0).element;
         const key = callbackResult(callbackAt(1, [element], unknownType));
-        if (!this.isCollectionOrderKey(key) && arguments_[1]) {
-          this.typeError(`sortBy key must return only string or only number, received ${describeType(key)}`, arguments_[1]!.span);
+        const keyArgument = argumentAt(1);
+        if (!this.isCollectionOrderKey(key) && keyArgument) {
+          this.typeError(`sortBy key must return only string or only number, received ${describeType(key)}`, keyArgument.span);
         }
         inferAt(2, boolType);
         return { kind: "list", element };
@@ -4308,8 +4371,9 @@ export class Analyzer implements TypeEnvironment {
         arity(2, 2);
         const element = arrayAt(0).element;
         const key = callbackResult(callbackAt(1, [element], unknownType));
-        if (!this.isCollectionOrderKey(key) && arguments_[1]) {
-          this.typeError(`${intrinsic.name === "collections.minBy" ? "minBy" : "maxBy"} key must return only string or only number, received ${describeType(key)}`, arguments_[1]!.span);
+        const keyArgument = argumentAt(1);
+        if (!this.isCollectionOrderKey(key) && keyArgument) {
+          this.typeError(`${intrinsic.name === "collections.minBy" ? "minBy" : "maxBy"} key must return only string or only number, received ${describeType(key)}`, keyArgument.span);
         }
         return optionalOf(element);
       }
@@ -4317,7 +4381,7 @@ export class Analyzer implements TypeEnvironment {
         arity(1, 1);
         const element = arrayAt(0).element;
         if (!isAssignable(element, numberType, this) && element.kind !== "any") {
-          this.typeError(`sum expects List<number>, received List<${describeType(element)}>`, arguments_[0]?.span ?? callSpan);
+          this.typeError(`sum expects List<number>, received List<${describeType(element)}>`, argumentAt(0)?.span ?? callSpan);
         }
         return numberType;
       }
@@ -4325,7 +4389,7 @@ export class Analyzer implements TypeEnvironment {
         arity(1, 2);
         const element = arrayAt(0).element;
         if (!isAssignable(element, stringType, this) && element.kind !== "any") {
-          this.typeError(`join expects List<string>, received List<${describeType(element)}>`, arguments_[0]?.span ?? callSpan);
+          this.typeError(`join expects List<string>, received List<${describeType(element)}>`, argumentAt(0)?.span ?? callSpan);
         }
         inferAt(1, stringType);
         return stringType;
@@ -4333,13 +4397,13 @@ export class Analyzer implements TypeEnvironment {
       case "json.parse": {
         arity(1, 2);
         inferAt(0, stringType);
-        return arguments_[1] ? runtimeTypeAt(1) : unknownType;
+        return argumentAt(1) ? runtimeTypeAt(1) : unknownType;
       }
       case "json.tryParse": {
         arity(1, 3);
         inferAt(0, stringType);
-        const parsed = arguments_[1] ? runtimeTypeAt(1) : unknownType;
-        if (arguments_[2]) {
+        const parsed = argumentAt(1) ? runtimeTypeAt(1) : unknownType;
+        if (argumentAt(2)) {
           inferAt(2, parsed);
           return parsed;
         }
@@ -4350,8 +4414,9 @@ export class Analyzer implements TypeEnvironment {
         arity(1, 2);
         const value = inferAt(0);
         const serializable = this.jsonSerializable(value);
-        if (serializable === false && arguments_[0]) {
-          this.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, arguments_[0]!.span);
+        const argument = argumentAt(0);
+        if (serializable === false && argument) {
+          this.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, argument.span);
         }
         inferAt(1, { kind: "union", members: [boolType, numberType] });
         return stringType;
@@ -4359,17 +4424,18 @@ export class Analyzer implements TypeEnvironment {
       case "json.clone": {
         arity(1, 2);
         const original = inferAt(0);
-        if (this.jsonSerializable(original) === false && arguments_[0]) {
-          this.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(original)}`, arguments_[0]!.span);
+        const argument = argumentAt(0);
+        if (this.jsonSerializable(original) === false && argument) {
+          this.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(original)}`, argument.span);
         }
-        return arguments_[1] ? runtimeTypeAt(1) : original;
+        return argumentAt(1) ? runtimeTypeAt(1) : original;
       }
       case "async.all":
       case "async.race": {
         arity(1, 1);
         const value = arrayAt(0).element;
         const resolved = value.kind === "promise" ? value.value : value.kind === "any" ? anyType : unknownType;
-        if (value.kind !== "promise" && value.kind !== "any") this.typeError(`Expected a List of Promises, received List<${describeType(value)}>`, arguments_[0]?.span ?? callSpan);
+        if (value.kind !== "promise" && value.kind !== "any") this.typeError(`Expected a List of Promises, received List<${describeType(value)}>`, argumentAt(0)?.span ?? callSpan);
         return { kind: "promise", value: intrinsic.name === "async.all" ? { kind: "list", element: resolved } : resolved };
       }
       case "async.timeout": {
@@ -4398,7 +4464,7 @@ export class Analyzer implements TypeEnvironment {
         arity(1, 1);
         const task = arrayAt(0).element;
         if (task.kind !== "function" && task.kind !== "intrinsic" && task.kind !== "any") {
-          this.typeError(`series expects a List of functions, received List<${describeType(task)}>`, arguments_[0]?.span ?? callSpan);
+          this.typeError(`series expects a List of functions, received List<${describeType(task)}>`, argumentAt(0)?.span ?? callSpan);
         }
         const result = callbackResult(task);
         return { kind: "promise", value: { kind: "list", element: result.kind === "promise" ? result.value : result } };
@@ -4420,8 +4486,8 @@ export class Analyzer implements TypeEnvironment {
         const matched = this.expandAliases(actual);
         const dynamic = matched.kind === "any" || matched.kind === "unknown";
         const fields = new Map<string, ValueType>([
-          ["toBe", { kind: "function", parameters: [actual], requiredParameters: 1, result: nullType }],
-          ["toEqual", { kind: "function", parameters: [actual], requiredParameters: 1, result: nullType }],
+          ["toBe", { kind: "function", parameterNames: ["expected"], parameters: [actual], requiredParameters: 1, result: nullType }],
+          ["toEqual", { kind: "function", parameterNames: ["expected"], parameters: [actual], requiredParameters: 1, result: nullType }],
         ]);
         if (matched.kind === "bool" || dynamic) {
           fields.set("toBeTruthy", { kind: "function", parameters: [], requiredParameters: 0, result: nullType });
@@ -4429,11 +4495,11 @@ export class Analyzer implements TypeEnvironment {
         }
         if (matched.kind === "list" || matched.kind === "string" || dynamic) {
           const contained = matched.kind === "list" ? matched.element : matched.kind === "string" ? stringType : anyType;
-          fields.set("toContain", { kind: "function", parameters: [contained], requiredParameters: 1, result: nullType });
-          fields.set("toHaveLength", { kind: "function", parameters: [numberType], requiredParameters: 1, result: nullType });
+          fields.set("toContain", { kind: "function", parameterNames: ["expected"], parameters: [contained], requiredParameters: 1, result: nullType });
+          fields.set("toHaveLength", { kind: "function", parameterNames: ["length"], parameters: [numberType], requiredParameters: 1, result: nullType });
         }
         if (matched.kind === "string" || dynamic) {
-          fields.set("toMatch", { kind: "function", parameters: [stringType], requiredParameters: 1, result: nullType });
+          fields.set("toMatch", { kind: "function", parameterNames: ["expression"], parameters: [stringType], requiredParameters: 1, result: nullType });
         }
         const callable = matched.kind === "function" || matched.kind === "intrinsic" || matched.kind === "action";
         if (callable || dynamic) fields.set("toThrow", { kind: "function", parameters: [], requiredParameters: 0, result: nullType });
@@ -4469,7 +4535,15 @@ export class Analyzer implements TypeEnvironment {
       ? memberType
       : null;
     const named = callableMember
-      ? this.orderCollectionNamedArguments(sourceArguments, argumentNames, callableMember, callSpan)
+      ? this.planNamedArguments(
+        sourceArguments,
+        argumentNames,
+        callableMember.parameters,
+        callableMember.parameterNames,
+        callableMember.requiredParameters,
+        callSpan,
+        callableMember.rest,
+      )
       : null;
     if (named) {
       const inferSource = (contextForTarget: (target: number) => ValueType): void => {
@@ -4804,20 +4878,18 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  private orderCollectionNamedArguments(
+  private planNamedArguments(
     arguments_: readonly Expression[],
     argumentNames: readonly (string | null)[] | undefined,
-    callable: CallableValueType,
+    parameters: readonly ValueType[],
+    parameterNames: readonly string[] | undefined,
+    requiredParameters: number,
     callSpan: Span,
-  ): {
-    readonly ordered: readonly Expression[];
-    readonly targets: readonly (number | null)[];
-    readonly valid: boolean;
-  } | null {
+    rest?: ValueType,
+  ): NamedArgumentPlan | null {
     if (!argumentNames?.some((name) => name !== null)) return null;
-    const parameterNames = callable.parameterNames;
-    if (!parameterNames || parameterNames.length !== callable.parameters.length || parameterNames.some((name) => !name)) {
-      this.typeError("This collection method does not expose stable parameter names", callSpan);
+    if (!parameterNames || parameterNames.length !== parameters.length || parameterNames.some((name) => !name)) {
+      this.typeError("This callable does not expose stable parameter names", callSpan);
       return {
         ordered: arguments_,
         targets: arguments_.map(() => null),
@@ -4825,10 +4897,11 @@ export class Analyzer implements TypeEnvironment {
       };
     }
 
-    const sources = Array<number>(callable.parameters.length).fill(-1);
+    const sources = Array<number>(parameters.length).fill(-1);
     const targets: (number | null)[] = [];
     let nextPositional = 0;
-    let valid = true;
+    let valid = !arguments_.some((argument) => argument.kind === "SpreadExpression");
+    if (!valid) this.typeError("Named arguments cannot be combined with a call spread", callSpan);
     for (const [source, argument] of arguments_.entries()) {
       const name = argumentNames[source] ?? null;
       let target: number;
@@ -4845,7 +4918,9 @@ export class Analyzer implements TypeEnvironment {
         }
       }
       if (target >= sources.length) {
-        this.typeError("This fixed-arity collection method has no position for another argument", argument.span);
+        this.typeError(rest
+          ? "Named calls cannot pass values to a rest parameter"
+          : "This fixed-arity call has no position for another argument", argument.span);
         targets.push(null);
         valid = false;
         continue;
@@ -4856,14 +4931,10 @@ export class Analyzer implements TypeEnvironment {
         valid = false;
         continue;
       }
-      if (argument.kind === "SpreadExpression") {
-        this.typeError("Named arguments cannot be combined with a call spread", argument.span);
-        valid = false;
-      }
       sources[target] = source;
       targets.push(target);
     }
-    const missing = parameterNames.filter((_, index) => index < callable.requiredParameters && sources[index] === -1);
+    const missing = parameterNames.filter((_, index) => index < requiredParameters && sources[index] === -1);
     if (missing.length > 0) {
       this.typeError(`Missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, callSpan);
       valid = false;
@@ -5043,9 +5114,9 @@ export class Analyzer implements TypeEnvironment {
       if (object.members.has(property)) {
         result = { kind: "enum", name: object.name, identity: object.identity };
       } else if (property === "is") {
-        result = { kind: "function", parameters: [unknownType], requiredParameters: 1, result: boolType };
+        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
       } else if (property === "parse") {
-        result = { kind: "function", parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name: object.name, identity: object.identity } };
+        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name: object.name, identity: object.identity } };
       } else {
         this.typeError(`Enum '${object.name}' has no member '${property}'`, memberSpan);
       }
@@ -5053,6 +5124,7 @@ export class Analyzer implements TypeEnvironment {
       if (property === "parse") {
         result = {
           kind: "function",
+          parameterNames: ["value"],
           parameters: [unknownType],
           requiredParameters: 1,
           result: this.invalidDeclaredTypes.has(object.name)
@@ -5405,56 +5477,24 @@ export class Analyzer implements TypeEnvironment {
     callSpan: Span,
     rest?: ValueType,
   ): readonly Expression[] | null {
-    if (!argumentNames?.some((name) => name !== null)) return null;
-    if (!parameterNames || parameterNames.length !== parameters.length || parameterNames.some((name) => !name)) {
-      for (const argument of arguments_) this.inferExpression(argument);
-      this.typeError("This callable does not expose stable parameter names", callSpan);
-      return null;
+    const plan = this.planNamedArguments(
+      arguments_,
+      argumentNames,
+      parameters,
+      parameterNames,
+      requiredParameters,
+      callSpan,
+      rest,
+    );
+    if (!plan) return null;
+    for (const [source, target] of plan.targets.entries()) {
+      const argument = arguments_[source]!;
+      const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+      const expected = target === null ? unknownType : parameters[target] ?? rest ?? unknownType;
+      const actual = this.inferExpression(value, expected);
+      if (target !== null) this.requireAssignable(actual, expected, argument.span);
     }
-    if (arguments_.some((argument) => argument.kind === "SpreadExpression")) {
-      for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      this.typeError("Named arguments cannot be combined with a call spread", callSpan);
-      return null;
-    }
-
-    const sources = Array<number>(parameters.length).fill(-1);
-    let nextPositional = 0;
-    for (let sourceIndex = 0; sourceIndex < arguments_.length; sourceIndex += 1) {
-      const name = argumentNames[sourceIndex] ?? null;
-      let targetIndex: number;
-      if (name === null) {
-        while (nextPositional < parameters.length && sources[nextPositional] !== -1) nextPositional += 1;
-        targetIndex = nextPositional;
-        nextPositional += 1;
-      } else {
-        targetIndex = parameterNames.indexOf(name);
-        if (targetIndex === -1) {
-          this.inferExpression(arguments_[sourceIndex]!);
-          this.typeError(`Unknown named argument '${name}'`, arguments_[sourceIndex]!.span);
-          continue;
-        }
-      }
-      if (targetIndex >= parameters.length) {
-        this.inferExpression(arguments_[sourceIndex]!, rest ?? unknownType);
-        this.typeError("Named calls cannot pass values to a rest parameter", arguments_[sourceIndex]!.span);
-        continue;
-      }
-      if (sources[targetIndex] !== -1) {
-        this.inferExpression(arguments_[sourceIndex]!, parameters[targetIndex]);
-        this.typeError(`Parameter '${parameterNames[targetIndex]}' is provided more than once`, arguments_[sourceIndex]!.span);
-        continue;
-      }
-      sources[targetIndex] = sourceIndex;
-      const actual = this.inferExpression(arguments_[sourceIndex]!, parameters[targetIndex]);
-      this.requireAssignable(actual, parameters[targetIndex]!, arguments_[sourceIndex]!.span);
-    }
-
-    const missing = parameterNames.filter((_, index) => index < requiredParameters && sources[index] === -1);
-    if (missing.length > 0) this.typeError(`Missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, callSpan);
-    this.namedArgumentOrders.set(spanIdentity(callSpan), sources);
-    return sources.map((source, index) => source === -1
-      ? { kind: "IdentifierExpression", name: "\u0000omitted-named-argument", span: callSpan } satisfies Expression
-      : arguments_[source]!);
+    return plan.valid ? plan.ordered : null;
   }
 
   private functionType(statement: FunctionDeclaration): ValueType {
@@ -6618,9 +6658,9 @@ export class Analyzer implements TypeEnvironment {
 
   private builtin(name: string): Binding | null {
     const functions = new Map<string, ValueType>([
-      ["number", { kind: "function", parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) }],
-      ["str", { kind: "function", parameters: [anyType], requiredParameters: 1, result: stringType }],
-      ["print", { kind: "function", parameters: [anyType], requiredParameters: 1, result: nullType }],
+      ["number", { kind: "function", parameterNames: ["text"], parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) }],
+      ["str", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: stringType }],
+      ["print", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: nullType }],
     ]);
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" ? { kind: "classConstructor", name: "Error" } satisfies ValueType : null)
@@ -6837,13 +6877,13 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "enumObject") {
       const members = new Map<string, ValueType>();
       for (const name of type.members) members.set(name, { kind: "enum", name: type.name, identity: type.identity });
-      members.set("is", { kind: "function", parameters: [unknownType], requiredParameters: 1, result: boolType });
-      members.set("parse", { kind: "function", parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name: type.name, identity: type.identity } });
+      members.set("is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType });
+      members.set("parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name: type.name, identity: type.identity } });
       return members;
     }
     if (type.kind === "typeObject") return new Map([[
       "parse",
-      { kind: "function", parameters: [unknownType], requiredParameters: 1, result: this.typeAliases.get(type.name) ?? { kind: "named", name: type.name } },
+      { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: this.typeAliases.get(type.name) ?? { kind: "named", name: type.name } },
     ]]);
     return new Map();
   }

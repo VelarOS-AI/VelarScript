@@ -23,6 +23,12 @@ standard library.
 - Runtime validation is explicit. Argument mistakes that can be proven
   statically are diagnostics; dynamic misuse throws `TypeError` or
   `RangeError`.
+- Fixed official signatures expose the same `name=value` calls as user-defined
+  functions. Their documented parameter names are part of the checked API and
+  editor signature help; source expressions still evaluate left to right.
+- A positional overload or pure rest call has no invented keyword surface.
+  `range`, `randomInt`, numeric `min`/`max`, and URL `join` therefore stay
+  positional, matching the familiar operation they represent.
 - Every API that requires `List<T>` enforces the same dense, field-free,
   mutable data-element List boundary used by the language runtime. Sparse or
   frozen JavaScript arrays, arrays carrying hidden/extra fields, and
@@ -90,6 +96,7 @@ import {enumerate, groupBy, range} from "velar/collections"
 
 const pages = enumerate(range(1, 4), 10)
 const byRole = groupBy(users, user => user.role)
+const labeled = enumerate(start=10, values=users)
 ```
 
 Ordering never uses JavaScript's mixed-type relational coercion. The compiler

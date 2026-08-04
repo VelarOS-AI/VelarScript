@@ -411,6 +411,8 @@ users expect and JavaScript users can read immediately.
 - No runtime keyword-argument record is created.
 - Core collection methods follow this same contract and expose the parameter
   names documented in their signatures.
+- Official fixed-signature APIs follow it too. Positional overloads and pure
+  rest calls do not invent names for positions that have no single meaning.
 - Once a fixed parameter has a default value, every following fixed parameter
   also has a default value. This keeps positional and named calls identical.
 

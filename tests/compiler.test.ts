@@ -3885,7 +3885,7 @@ const label = greet(ada)
   assert.ok(ordinaryCompletions.some((item) => item.label === "ada" && item.kind === "variable" && item.detail === "Person"));
   assert.ok(!ordinaryCompletions.some((item) => item.label === "label"), "the binding being declared must not complete itself");
   assert.deepEqual(projectCompletionsAt(project, mainPath, personUse + "Person.".length), [
-    { label: "parse", detail: "(unknown) -> User", kind: "method" },
+    { label: "parse", detail: "(value: unknown) -> User", kind: "method" },
   ]);
   const adaMember = mainSource.indexOf("ada.name") + "ada.".length;
   assert.deepEqual(projectCompletionsAt(project, mainPath, adaMember), [
@@ -5415,6 +5415,97 @@ print(logLevel())
     "2024-01-02T03:04:05.000Z", "2024", "true", "info:core:ready", "debug::trace", "debug",
     "",
   ].join("\n"));
+});
+
+test("Core builtins and standard modules share one named-argument ABI", async () => {
+  const intentionallyPositional = new Map<string, ReadonlySet<string>>([
+    ["velar/collections", new Set(["range"])],
+    ["velar/math", new Set(["min", "max", "randomInt"])],
+    ["velar/url", new Set(["join"])],
+  ]);
+  for (const source of [
+    "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async",
+    "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
+  ]) {
+    for (const [name, type] of standardModuleInterface(source)!.exports) {
+      if (type.kind !== "function" && type.kind !== "intrinsic" && type.kind !== "action") continue;
+      if (intentionallyPositional.get(source)?.has(name)) continue;
+      assert.equal(type.parameterNames?.length, type.parameters.length, `${source}.${name} must expose stable parameter names`);
+      assert.ok(type.parameterNames?.every(Boolean), `${source}.${name} must not expose an empty parameter name`);
+    }
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-named-standard-library-"));
+  const entry = join(directory, "main.vel");
+  const output = join(directory, "dist");
+  await writeFile(entry, `
+import {enumerate, join as joinItems} from "velar/collections"
+import {trim} from "velar/text"
+import {round} from "velar/math"
+import {parse as parseJson} from "velar/json"
+import {map as asyncMap} from "velar/async"
+import {expect} from "velar/test"
+
+type User:
+    name: string
+
+enum Status:
+    ready
+    done
+
+def markText(label: string, value: string) -> string:
+    print(value=label)
+    return value
+
+def markValues(label: string, values: List<string>) -> List<string>:
+    print(value=label)
+    return values
+
+print(value=joinItems(separator=markText("separator", ","), values=markValues("values", ["a", "b"])))
+print(value=enumerate(start=10, values=["x"])[0].index)
+print(value=round(digits=2, value=3.14159))
+print(value=trim(value=" Velar "))
+
+const parsed = parseJson(target=User, text="{\\\"name\\\":\\\"Ada\\\"}")
+const typed = User.parse(value={name: "Lin"})
+print(value=parsed.name)
+print(value=typed.name)
+print(value=Status.is(value=Status.ready))
+print(value=number(text="12"))
+print(value=str(value=12))
+print(value=Error(message="boom").message)
+
+const scores: Map<string, number> = Map()
+scores.set("Ada", 9)
+const copied = Map(source=scores)
+const tags = Set(source=["web"])
+print(value=copied.get("Ada") ?? 0)
+print(value=tags.has("web"))
+
+const doubled = await asyncMap(concurrency=2, worker=async value => value * 2, values=[1, 2])
+expect(actual=doubled).toHaveLength(length=2)
+print(value=doubled[1])
+`.trimStart(), "utf8");
+
+  const project = await compileProject(entry);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", entry, "--out-dir", output], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(build.status, 0, String(build.stderr));
+  const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "separator\nvalues\na,b\n10\n3.14\nVelar\nAda\nLin\ntrue\n12\n12\nboom\n9\ntrue\n4\n");
+
+  const invalid = compileCore(`
+print(item="wrong")
+number(value="12")
+Map(values=Map())
+Set(values=[])
+`.trimStart());
+  const messages = invalid.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /Unknown named argument 'item'/u);
+  assert.match(messages, /Unknown named argument 'value'/u);
+  assert.match(messages, /Unknown named argument 'values'/u);
 });
 
 test("every declared standard-module export exists in the shipped runtime", async () => {
@@ -9099,7 +9190,7 @@ print(next)
   assert.deepEqual(projectCompletionsAt(valid, entry, enumMember).map((item) => item.label), ["todo", "doing", "done", "is", "parse"]);
   const parseCall = validSource.indexOf("Status.parse(") + "Status.parse(".length;
   assert.deepEqual(projectSignatureAt(valid, entry, parseCall), {
-    label: "parse(unknown) -> Status",
+    label: "parse(value: unknown) -> Status",
     activeParameter: 0,
   });
   const memberReferences = projectReferencesAt(valid, entry, enumMember, true);
