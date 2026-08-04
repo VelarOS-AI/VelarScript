@@ -267,6 +267,7 @@ export class Analyzer implements TypeEnvironment {
   private functionDepth = 0;
   private parameterDefaultDepth = 0;
   private loopDepth = 0;
+  private finallyLoopDepths: number[] = [];
   private currentClass: string | null = null;
   private classFieldInitializerDepth = 0;
   protected constructorDepth = 0;
@@ -951,6 +952,9 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic("VEL3003", "'return' can only be used inside a function", statement.span));
           break;
         }
+        if (this.finallyLoopDepths.length > 0) {
+          this.diagnostics.push(diagnostic("VEL3015", "'return' cannot leave a finally block; assign a result before finally and return afterward", statement.span));
+        }
         const expected = this.returnTypes.at(-1) ?? unknownType;
         const actual = statement.value ? this.inferExpression(statement.value, expected) : nullType;
         const returned = this.asynchronousFunctions.at(-1) ? this.resolvedAsyncResult(actual) : actual;
@@ -1090,8 +1094,10 @@ export class Analyzer implements TypeEnvironment {
       }
       case "ForStatement": {
         const iterable = this.inferExpression(statement.iterable);
-        const element = iterable.kind === "list" || iterable.kind === "set" ? iterable.element : iterable.kind === "map" ? iterable.key : unknownType;
-        if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "any") {
+        const element = iterable.kind === "list" || iterable.kind === "set"
+          ? iterable.element
+          : iterable.kind === "map" ? iterable.key : iterable.kind === "string" ? stringType : unknownType;
+        if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "string" && iterable.kind !== "any") {
           this.typeError(`Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
         }
         this.enterScope();
@@ -1120,6 +1126,8 @@ export class Analyzer implements TypeEnvironment {
       case "ContinueStatement":
         if (this.loopDepth === 0) {
           this.diagnostics.push(diagnostic("VEL3005", `'${statement.kind === "BreakStatement" ? "break" : "continue"}' can only be used in a loop`, statement.span));
+        } else if (this.finallyLoopDepths.some((depth) => this.loopDepth <= depth)) {
+          this.diagnostics.push(diagnostic("VEL3015", `'${statement.kind === "BreakStatement" ? "break" : "continue"}' cannot leave a finally block`, statement.span));
         }
         break;
       case "TryStatement":
@@ -1135,7 +1143,9 @@ export class Analyzer implements TypeEnvironment {
           this.exitScope();
         }
         if (statement.finallyBody) {
+          this.finallyLoopDepths.push(this.loopDepth);
           this.analyzeBlock(statement.finallyBody);
+          this.finallyLoopDepths.pop();
         }
         break;
       case "PassStatement":
@@ -1406,6 +1416,8 @@ export class Analyzer implements TypeEnvironment {
     this.functionDepth += 1;
     const previousLoopDepth = this.loopDepth;
     this.loopDepth = 0;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
     const previousClass = this.currentClass;
     this.currentClass = statement.name;
     this.asynchronousFunctions.push(false);
@@ -1418,6 +1430,7 @@ export class Analyzer implements TypeEnvironment {
     this.asynchronousFunctions.pop();
     this.currentClass = previousClass;
     this.loopDepth = previousLoopDepth;
+    this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -1613,6 +1626,8 @@ export class Analyzer implements TypeEnvironment {
     this.functionDepth += 1;
     const previousLoopDepth = this.loopDepth;
     this.loopDepth = 0;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
     const previousClass = this.currentClass;
     this.currentClass = className ?? previousClass;
     const asynchronous = forceAsynchronous || statement.asynchronous === true;
@@ -1646,6 +1661,7 @@ export class Analyzer implements TypeEnvironment {
     this.asynchronousFunctions.pop();
     this.currentClass = previousClass;
     this.loopDepth = previousLoopDepth;
+    this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -2116,6 +2132,8 @@ export class Analyzer implements TypeEnvironment {
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
     this.asynchronousFunctions.push(expression.asynchronous);
     const parameterTypes: ValueType[] = [];
     let rest: ValueType | undefined;
@@ -2161,6 +2179,7 @@ export class Analyzer implements TypeEnvironment {
       ? { kind: "promise", value: this.resolvedAsyncResult(checkedBodyResult) } satisfies ValueType
       : checkedBodyResult;
     this.asynchronousFunctions.pop();
+    this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();

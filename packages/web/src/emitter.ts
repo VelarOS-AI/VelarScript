@@ -6,7 +6,7 @@ import type {
   LoweringHints,
 } from "@velarscript/compiler/extension";
 import { cssPropertyName } from "./look.ts";
-import { JavaScriptEmitter } from "@velarscript/compiler/extension";
+import { JavaScriptEmitter, VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
 type ComponentDeclaration = Extract<Statement, { readonly kind: "ComponentDeclaration" }>;
@@ -82,6 +82,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   protected override additionalHelpers(program: Program): readonly string[] {
     return this.webOutput ? [WEB_RUNTIME] : [];
+  }
+
+  protected override includesErrorNormalizationRuntime(): boolean {
+    return this.webOutput;
   }
 
   protected override visitExtensionRuntimeExpression(expression: Expression, visitExpression: (expression: Expression) => void): boolean {
@@ -692,6 +696,7 @@ function containsWebSyntax(value: unknown): boolean {
 }
 
 const WEB_RUNTIME = String.raw`
+${VELAR_ERROR_NORMALIZATION_RUNTIME}
 const __velarRuntimeKey = Symbol.for("velar.runtime.v1");
 const __velarRuntime = globalThis[__velarRuntimeKey] ??= {};
 __velarRuntime.domQueue ??= new Set();
@@ -705,7 +710,7 @@ __velarRuntime.classSources ??= new WeakMap();
 try { WeakSet.prototype.has.call(__velarRuntime.actionFailures, __velarRuntime.actionFailures); }
 catch { throw new TypeError("VelarScript action failure registry is invalid"); }
 __velarRuntime.report ??= (value, options = {}) => {
-  const error = value instanceof Error ? value : new Error(String(value), { cause: value });
+  const error = __velarNormalizeError(value);
   const report = Object.freeze({
     error,
     phase: String(options.phase || "runtime"),
@@ -718,8 +723,8 @@ __velarRuntime.report ??= (value, options = {}) => {
     handled = true;
     try {
       const result = handler(report);
-      if (result && typeof result.then === "function") result.catch((failure) => queueMicrotask(() => { throw failure; }));
-    } catch (failure) { queueMicrotask(() => { throw failure; }); }
+      if (result && typeof result.then === "function") result.catch((failure) => queueMicrotask(() => { throw __velarNormalizeError(failure); }));
+    } catch (failure) { queueMicrotask(() => { throw __velarNormalizeError(failure); }); }
   }
   if (options.unhandled && !handled) queueMicrotask(() => { throw error; });
   return report;
@@ -730,7 +735,7 @@ function __velarReport(value, phase, scope = null, detail = "", unhandled = true
 }
 
 function __velarReportEvent(value, scope, detail) {
-  if (value instanceof Error && WeakSet.prototype.delete.call(__velarRuntime.actionFailures, value)) return null;
+  if (Error.isError(value) && WeakSet.prototype.delete.call(__velarRuntime.actionFailures, value)) return null;
   return __velarReport(value, "event", scope, detail);
 }
 
@@ -899,7 +904,7 @@ function __velarAction(execute, scope, name) {
       },
       (failure) => {
         active -= 1;
-        let actionError = failure instanceof Error ? failure : new Error(String(failure), { cause: failure });
+        let actionError = __velarNormalizeError(failure);
         if (!disposed) {
           pending.set(active > 0);
           if (current === generation) {

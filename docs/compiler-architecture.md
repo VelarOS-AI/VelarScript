@@ -216,6 +216,18 @@ imports without a second propagation model. Unsafe JavaScript `any` remains
 outside the guarantee. Cross-module fixed-point analysis therefore converges on
 complete semantic interface identities, not hidden boundary metadata.
 
+Catch lowering uses the host's cross-realm Error brand check, then converts
+foreign non-Error throws without applying JavaScript string coercion to objects
+or functions. Primitive messages remain readable; reference values receive a
+deterministic message and are retained as `cause`.
+The analyzer also rejects `return`, or `break`/`continue` that crosses a
+`finally` boundary, while permitting control flow owned by a loop nested wholly
+inside cleanup. These rules prevent cleanup from silently replacing a pending
+return or exception. The compiler exports this generated-runtime fragment
+through its extension seam; Web events, resources, actions, routing, timers,
+application reports, and the Standard logging sink reuse that one source
+instead of maintaining local error wrappers.
+
 Release packaging is outside compiler semantics. A repository script builds
 all four npm packages, records source and tarball identities, verifies every
 SHA-256, and refuses candidate status without a clean exact tag, matching

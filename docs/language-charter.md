@@ -374,8 +374,9 @@ Map members are `size`, `get`, `set`, `update`, `remove`, `has`, `clear`,
 
 All collection growth is bounded. Every language collection operation validates
 its JavaScript boundary and calls compiler-owned helpers rather than an
-instance's overridable collection methods. A `for` loop visits List and Set
-values, or Map keys, in insertion order. Native Map and Set brands are checked
+instance's overridable collection methods. A `for` loop visits string
+characters, List and Set values, or Map keys in order. String iteration follows
+JavaScript Unicode code points, so a surrogate pair is one character. Native Map and Set brands are checked
 through their internal slots, so legitimate values from another browser realm
 work without trusting an overridable `instanceof`, `size`, iterator, or method.
 Empty mutable collections can infer
@@ -548,7 +549,15 @@ finally:
 ```
 
 JavaScript boundary failures are normalized to `Error` before entering a catch
-binding.
+binding. Primitive thrown values retain a readable message. Objects and
+functions receive a stable generic message and remain available as the
+JavaScript `cause`; normalization never calls their conversion hooks.
+
+`finally` is cleanup, not a hidden control-flow override. It cannot `return` or
+use `break`/`continue` to leave the block, because those operations can silently
+replace a pending return or exception. A loop wholly inside `finally` may still
+use its own `break` and `continue`. Finish cleanup normally or `throw` an
+explicit cleanup error, then return after the `try` statement.
 
 Assertions remain active in production:
 

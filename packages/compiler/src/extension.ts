@@ -9,6 +9,7 @@ import type { Token } from "./token.ts";
 import type { EnumInfo, ValueType } from "./types.ts";
 
 export { JavaScriptEmitter } from "./emitter.ts";
+export { VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
 export { Analyzer } from "./analyzer.ts";
 export type {
   Expression,

@@ -1,4 +1,5 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
+import { VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
 
 const anyType: ValueType = { kind: "any" };
@@ -969,8 +970,9 @@ export function uuid() {
 export function isUuid(value) {
   return typeof value === "string" && value.length === 36 && uuidPattern.test(value);
 }
-`.trimStart()],
+  `.trimStart()],
   ["velar/log", String.raw`
+${VELAR_ERROR_NORMALIZATION_RUNTIME}
 const ranks = new Map([["debug", 10], ["info", 20], ["warn", 30], ["error", 40], ["silent", 100]]);
 let threshold = "info";
 const sinks = new Set();
@@ -1002,14 +1004,14 @@ function defaultSink(record) {
 }
 
 function sinkFailure(value) {
-  const error = value instanceof Error ? value : new Error(String(value), { cause: value });
+  const error = __velarNormalizeError(value);
   defaultSink(Object.freeze({ timestamp: Date.now(), level: "error", scope: "velar/log", message: "Log sink failed", fields: new Map(), error }));
 }
 
 function emit(scope, level, message, fields, error = null) {
   message = logText(message, "Log message");
   fields = fieldsOf(fields);
-  if (error != null && !(error instanceof Error)) throw new TypeError("Logger error must be an Error");
+  if (error != null && !Error.isError(error)) throw new TypeError("Logger error must be an Error");
   if ((ranks.get(level) ?? 100) < (ranks.get(threshold) ?? 20)) return null;
   const record = Object.freeze({ timestamp: Date.now(), level, scope, message, fields, error });
   if (!sinks.size) defaultSink(record);

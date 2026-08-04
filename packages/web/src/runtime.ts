@@ -1,6 +1,9 @@
+import { VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
+
 const ownedCallbackRuntime = String.raw`
+${VELAR_ERROR_NORMALIZATION_RUNTIME}
 function __velarReportOwnedCallback(failure, phase, detail) {
-  const error = failure instanceof Error ? failure : new Error(String(failure), { cause: failure });
+  const error = __velarNormalizeError(failure);
   const runtime = globalThis[Symbol.for("velar.runtime.v1")];
   if (runtime && typeof runtime.report === "function") runtime.report(error, { phase, detail, unhandled: true });
   else queueMicrotask(() => { throw error; });
@@ -207,11 +210,12 @@ function __velarRequireRuntimeType(value, name, optional = false) {
 
 export const webModuleSources: ReadonlyMap<string, string> = new Map([
   ["velar/app", String.raw`
+${VELAR_ERROR_NORMALIZATION_RUNTIME}
 const runtimeKey = Symbol.for("velar.runtime.v1");
 const runtime = globalThis[runtimeKey] ??= {};
 runtime.errorHandlers ??= new Set();
 runtime.report ??= (value, options = {}) => {
-  const error = value instanceof Error ? value : new Error(String(value), { cause: value });
+  const error = __velarNormalizeError(value);
   const report = Object.freeze({
     error,
     phase: String(options.phase || "runtime"),
@@ -224,8 +228,8 @@ runtime.report ??= (value, options = {}) => {
     handled = true;
     try {
       const result = handler(report);
-      if (result && typeof result.then === "function") result.catch((failure) => queueMicrotask(() => { throw failure; }));
-    } catch (failure) { queueMicrotask(() => { throw failure; }); }
+      if (result && typeof result.then === "function") result.catch((failure) => queueMicrotask(() => { throw __velarNormalizeError(failure); }));
+    } catch (failure) { queueMicrotask(() => { throw __velarNormalizeError(failure); }); }
   }
   if (options.unhandled && !handled) queueMicrotask(() => { throw error; });
   return report;
@@ -239,13 +243,13 @@ export function onError(handler) {
 }
 
 export function reportError(error, phase = "manual", detail = "") {
-  if (!(error instanceof Error)) throw new TypeError("reportError requires an Error");
+  if (!Error.isError(error)) throw new TypeError("reportError requires an Error");
   if (typeof phase !== "string" || typeof detail !== "string") throw new TypeError("reportError phase and detail must be strings");
   if (phase.length > 256 || detail.length > 65536) throw new RangeError("reportError phase/detail text is too long");
   runtime.report(error, { phase, detail, unhandled: false });
   return null;
 }
-`.trimStart()],
+  `.trimStart()],
   ["velar/config", String.raw`
 ${runtimeTypeRuntime}
 const source = "__VELAR_PUBLIC_CONFIG__";
@@ -260,6 +264,7 @@ export function has(key) { if (typeof key !== "string") throw new TypeError("Con
 export function keys() { return Object.keys(value).sort(); }
 `.trimStart()],
   ["velar/web", String.raw`
+${VELAR_ERROR_NORMALIZATION_RUNTIME}
 ${listRuntime}
 ${optionsRuntime}
 ${runtimeTypeRuntime}
@@ -387,7 +392,7 @@ export function lazy(loader, exportName, loading = null, failed = null) {
     };
 
     const fail = (value) => {
-      const error = value instanceof Error ? value : new Error(String(value), { cause: value });
+      const error = __velarNormalizeError(value);
       const runtime = globalThis[Symbol.for("velar.runtime.v1")];
       runtime?.report?.(error, { phase: "resource", detail: "lazy:" + exportName, component: exportName, unhandled: false });
       try {
@@ -401,7 +406,7 @@ export function lazy(loader, exportName, loading = null, failed = null) {
           replace(component(message));
         }
       } catch (fallbackFailure) {
-        const fallbackError = fallbackFailure instanceof Error ? fallbackFailure : new Error(String(fallbackFailure), { cause: fallbackFailure });
+        const fallbackError = __velarNormalizeError(fallbackFailure);
         runtime?.report?.(fallbackError, { phase: "render", detail: "lazy-fallback:" + exportName, component: exportName, unhandled: false });
         if (active && active.__velarComponent) active.destroy(false);
         active = null;
@@ -586,7 +591,7 @@ export function Router(props) {
       node.replaceChildren(active.node);
       if (mounted) active.__mount();
     } catch (value) {
-      const error = value instanceof Error ? value : new Error(String(value), { cause: value });
+      const error = __velarNormalizeError(value);
       if (!mounted) throw error;
       const runtime = globalThis[Symbol.for("velar.runtime.v1")];
       if (runtime && typeof runtime.report === "function") {
@@ -1438,7 +1443,7 @@ function timerDuration(value, name, positive) {
 }
 
 function reportTimerFailure(failure, detail) {
-  const error = failure instanceof Error ? failure : new Error(String(failure), { cause: failure });
+  const error = __velarNormalizeError(failure);
   const runtime = globalThis[timerRuntimeKey];
   if (runtime && typeof runtime.report === "function") {
     runtime.report(error, { phase: "timer", detail, unhandled: true });

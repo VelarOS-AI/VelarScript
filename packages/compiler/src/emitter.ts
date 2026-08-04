@@ -12,6 +12,7 @@ import type {
 } from "./ast.ts";
 import { formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
 import type { LoweringHints } from "./analyzer.ts";
+import { VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
 import type { SourceText, Span } from "./source.ts";
 
 interface JavaScriptNode {
@@ -39,6 +40,7 @@ export class JavaScriptEmitter {
   private needsListBindingHelpers = false;
   private needsRuntimeTypeHelpers = false;
   private needsNumberHelper = false;
+  private needsThrownValueHelper = false;
   private suppressPromiseNormalization = 0;
   private nextJavaScriptNodeId = 0;
   private readonly javaScriptNodeSpans = new Map<number, Span>();
@@ -85,6 +87,9 @@ export class JavaScriptEmitter {
         "  return normalized;",
         "}",
       ].join("\n"));
+    }
+    if (this.needsThrownValueHelper && !this.includesErrorNormalizationRuntime()) {
+      helpers.push(VELAR_ERROR_NORMALIZATION_RUNTIME);
     }
     const needsRuntimeTypeRuntime = this.needsRuntimeTypeHelpers || this.runtimeTypes.size > 0
       || program.body.some((statement) => statement.kind === "EnumDeclaration");
@@ -207,6 +212,7 @@ export class JavaScriptEmitter {
         "}",
         "",
         "function __velarCollectionIterator(value) {",
+        "  if (typeof value === \"string\") return String.prototype[Symbol.iterator].call(value);",
         "  if (Array.isArray(value)) return Array.prototype.values.call(__velarValidateDenseList(value, \"List iteration\"));",
         "  if (__velarIsMap(value)) {",
         "    if (Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
@@ -558,6 +564,10 @@ export class JavaScriptEmitter {
     return [];
   }
 
+  protected includesErrorNormalizationRuntime(): boolean {
+    return false;
+  }
+
   protected visitExtensionRuntimeExpression(_expression: Expression, _visitExpression: (expression: Expression) => void): boolean {
     return false;
   }
@@ -896,9 +906,10 @@ export class JavaScriptEmitter {
         const tryBody = statement.tryBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
         let output = `${indentation}try {${tryBody.length > 0 ? `\n${tryBody}\n${indentation}` : ""}}`;
         if (statement.catchBody) {
+          this.needsThrownValueHelper = true;
           const catchBody = statement.catchBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
           const catchName = statement.catchName ?? "error";
-          const normalization = `${"  ".repeat(depth + 1)}${catchName} = ${catchName} instanceof Error ? ${catchName} : new Error(String(${catchName}), { cause: ${catchName} });`;
+          const normalization = `${"  ".repeat(depth + 1)}${catchName} = __velarNormalizeError(${catchName});`;
           output += ` catch (${catchName}) {\n${normalization}${catchBody.length > 0 ? `\n${catchBody}` : ""}\n${indentation}}`;
         }
         if (statement.finallyBody) {

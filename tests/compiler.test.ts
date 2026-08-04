@@ -1726,10 +1726,87 @@ catch:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /throw new ValidationError/);
   assert.match(result.code ?? "", /remainder %= 4/);
-  assert.match(result.code ?? "", /new Error\(String\(error\), \{ cause: error \}\)/);
+  assert.match(result.code ?? "", /error = __velarNormalizeError\(error\)/);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "3\ntrue\nValue must be positive\nfinalized\nAsync failure\nError\nraw failure\n");
+});
+
+test("catch normalization cannot execute a hostile thrown object's conversion hooks", () => {
+  const source = Buffer.from([
+    "export function explode(){throw {marker:'original',toString(){console.log('conversion hook ran');throw new Error('conversion failure')}}}",
+    "export function explodeProxy(){throw new Proxy({marker:'proxy'},{getPrototypeOf(){console.log('prototype trap ran');throw new Error('prototype failure')}})}",
+  ].join(";"), "utf8").toString("base64");
+  const result = compile(`
+import js unsafe {explode, explodeProxy} from "data:text/javascript;base64,${source}"
+
+try:
+    explode()
+catch error:
+    print(error.name)
+    print(error.message)
+
+try:
+    explodeProxy()
+catch error:
+    print(error.name)
+    print(error.message)
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /Error\.isError\(value\)/u);
+  assert.match(result.code ?? "", /new Error\(message, \{ cause: value \}\)/u);
+  assert.doesNotMatch(result.code ?? "", /String\(error\)/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Error\nA non-Error value was thrown by JavaScript\nError\nA non-Error value was thrown by JavaScript\n");
+});
+
+test("finally cannot silently override return or leave an outer loop", () => {
+  const invalid = compile(`
+def replacedReturn() -> number:
+    try:
+        return 1
+    finally:
+        return 2
+
+for value in [1]:
+    try:
+        pass
+    finally:
+        break
+
+for value in [1]:
+    try:
+        pass
+    finally:
+        continue
+`.trimStart());
+  assert.equal(invalid.diagnostics.filter((item) => item.code === "VEL3015").length, 3);
+  assert.ok(invalid.diagnostics.some((item) => /'return' cannot leave a finally block/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /'break' cannot leave a finally block/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /'continue' cannot leave a finally block/u.test(item.message)));
+
+  const valid = compile(`
+def cleaned() -> number:
+    let result = 0
+    try:
+        result = 2
+    finally:
+        for value in [1]:
+            if value == 1:
+                break
+        def localResult() -> number:
+            return result
+        print(localResult())
+    return result
+
+print(cleaned())
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  const execution = executeModule(valid.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "2\n2\n");
 });
 
 test("rejects missing, non-Error, and non-numeric throw/remainder operands", () => {
@@ -4699,6 +4776,14 @@ logger("foreign", foreignFields).info("cross-realm");
 logger("build", new Map([["source", "compiler"]])).info("ready");
 stopFirst(); stopFirst(); stopSecond();
 console.log(seen.join("|"));
+const failures = [];
+const originalError = console.error;
+console.error = (message, fields, error) => failures.push(message + ":" + error.message);
+const stopHostile = useSink(() => { throw { toString() { failures.push("conversion hook ran"); throw Error("conversion failure"); } }; });
+log.info("hostile");
+stopHostile();
+console.error = originalError;
+console.log(failures.join("|"));
 setLevel("DEBUG");
 console.log(level());
 for (const operation of [
@@ -4715,6 +4800,7 @@ for (const operation of [
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "first:cross-realm:runtime|second:cross-realm:runtime|first:ready:compiler|second:ready:compiler",
+    "[velar/log] Log sink failed:A non-Error value was thrown by JavaScript",
     "debug",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "",
   ].join("\n"));
@@ -7993,6 +8079,8 @@ for tag in tags:
     print(tag)
 for key in lookup:
     print(key)
+for character in "A😀":
+    print(character)
 `.trimStart(), { analysis: { imports: new Map([
     ["numbers", { kind: "list", element: { kind: "number" } }],
     ["tags", { kind: "set", element: { kind: "string" } }],
@@ -8009,7 +8097,7 @@ const lookup = runInNewContext('class HostileMap extends Map { get size() { thro
   const executable = (result.code ?? "").replace(/^import .*?;\n+/mu, boundary);
   const execution = executeModule(executable);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "1\n1\n2\ntrue\n1\n2\n1\n2\n3\n1\ntrue\n1\ntrue\n1\n2\n3\nweb\nAda\n");
+  assert.equal(execution.stdout, "1\n1\n2\ntrue\n1\n2\n1\n2\n3\n1\ntrue\n1\ntrue\n1\n2\n3\nweb\nAda\nA\n😀\n");
 
   const accessor = compileCore(`
 import js {values, reads} from "fixture"
@@ -9885,13 +9973,20 @@ component App:
         label = "ready"
         return label
 
+    async def runRefresh():
+        try:
+            await refresh()
+        catch error:
+            label = error.message
+
     computed failure = refresh.error
 
-    return <main><button type="button" disabled={refresh.pending} on:click={refresh}>Refresh</button>{failure ? <p role="alert">{failure.message}</p> : null}</main>
+    return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure ? <p role="alert">{failure.message}</p> : null}</main>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const refresh = __velarAction\(async \(\) =>/u);
+  assert.equal(result.code?.match(/function __velarNormalizeError\(value\)/gu)?.length, 1);
   const symbol = result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "refresh");
   assert.match(symbol?.type ?? "", /action \(\) -> Promise<string>/u);
 
@@ -9923,6 +10018,9 @@ __velarOn(eventTarget, "plain", () => Promise.reject(Error("Plain failure")), ev
 eventTarget.dispatchEvent(new Event("owned"));
 eventTarget.dispatchEvent(new Event("plain"));
 await new Promise((resolve) => setTimeout(resolve, 0));
+const hostile = __velarAction(() => Promise.reject({ toString() { console.log("action conversion hook ran"); throw Error("conversion failure"); } }), scope, "hostile");
+try { await hostile(); }
+catch (error) { console.log("hostile-catch:" + error.message); }
 __velarDestroyScope(eventScope);
 __velarDestroyScope(scope);
 try { await save("ignored"); }
@@ -9938,6 +10036,8 @@ catch (error) { console.log(error.message + ":" + pending.length); }
     "Save failed:false:Save failed",
     "event:plain:Plain failure",
     "action:owned:Owned failure",
+    "action:hostile:A non-Error value was thrown by JavaScript",
+    "hostile-catch:A non-Error value was thrown by JavaScript",
     "Action 'save' cannot run after its component is destroyed:3",
     "",
   ].join("\n"));
