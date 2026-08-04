@@ -378,8 +378,9 @@ component PreferencesPanel:
   observable as rejection. Failed/blocked opens reset the cached connection so
   a later operation may retry, and version changes close stale handles.
 - Storage, scope, database, and key names remain actual strings. Key listings
-  are sorted for deterministic application behavior; an externally injected
-  non-string IndexedDB key fails instead of being coerced.
+  are copied into an application-owned mutable List and sorted for deterministic
+  behavior without invoking host array methods or iterators; an externally
+  injected malformed or non-string IndexedDB key fails instead of being coerced.
 - Every write uses the strict `velar/json` data contract. Unsupported or lossy
   values that are visible to the compiler fail during checking; dynamic values
   are validated again at runtime before local/session storage or IndexedDB is
@@ -470,8 +471,9 @@ React-style effect API.
   mutable browser globals. Host strings and booleans must already have the
   declared type; malformed values are rejected rather than implicitly
   converted.
-- Snapshot language lists are limited to 1,000 entries of at most 256
-  characters and cannot contain sparse or accessor elements. Online,
+- Snapshot language lists are application-owned mutable copies limited to 1,000
+  entries of at most 256 characters and cannot contain sparse or accessor
+  elements; the containing environment record remains read-only. Online,
   visibility, media-preference, and touch fields are validated before the
   snapshot is returned. Layout rectangles and animation-frame timestamps must
   contain finite numbers, and dialog results remain bounded strings before

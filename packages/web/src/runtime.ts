@@ -1332,6 +1332,7 @@ export const http = Object.freeze({
   ["velar/storage", String.raw`
 ${ownedCallbackRuntime}
 ${strictJsonRuntime}
+${listRuntime}
 ${runtimeTypeRuntime}
 const changeEvent = "velar-storage-change";
 
@@ -1458,7 +1459,14 @@ export function database(name) {
       return null;
     },
     async has(key) { const name = keyOf(key); return (await request("readonly", (store) => store.getKey(name))) !== undefined; },
-    async keys() { const keys = await request("readonly", (store) => store.getAllKeys(undefined, 100001)); if (!Array.isArray(keys) || keys.some((key) => typeof key !== "string")) throw new TypeError("VelarScript database contains a non-string key"); if (keys.length > 100000) throw new RangeError("VelarScript databases cannot expose more than 100000 keys at once"); return keys.slice().sort(); },
+    async keys() {
+      let keys = await request("readonly", (store) => store.getAllKeys(undefined, 100001));
+      if (!Array.isArray(keys)) throw new TypeError("VelarScript database keys must be a List");
+      if (keys.length > 100000) throw new RangeError("VelarScript databases cannot expose more than 100000 keys at once");
+      keys = __velarRequireList(keys, "Database keys");
+      for (const key of keys) if (typeof key !== "string") throw new TypeError("VelarScript database contains a non-string key");
+      return keys.sort();
+    },
     async remove(key) { const name = keyOf(key); await request("readwrite", (store) => store.delete(name)); return null; },
     async clear() { await request("readwrite", (store) => store.clear()); return null; },
   });
@@ -1492,7 +1500,7 @@ function browserLanguages(value) {
     if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Browser languages cannot use accessors");
     output[index] = browserText(descriptor.value, "Browser language", 256);
   }
-  return Object.freeze(output);
+  return output;
 }
 function scrollBehavior(value) { value = __velarString(value, "Scroll behavior"); if (!["auto", "smooth", "instant"].includes(value)) throw new TypeError("Scroll behavior must be auto, smooth, or instant"); return value; }
 

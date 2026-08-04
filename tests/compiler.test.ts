@@ -5256,11 +5256,16 @@ try { environment(); failures.push("accepted"); } catch (error) { failures.push(
 navigatorValue.maxTouchPoints = 0;
 document.visibilityState = "unknown";
 try { environment(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
+document.visibilityState = "visible";
+navigatorValue.languages = ["en"];
+const snapshot = environment();
+snapshot.languages.push("fr");
 console.log(failures.join(","));
 console.log(coercions + ":" + getterReads);
+console.log(Object.isFrozen(snapshot) + ":" + Object.isFrozen(snapshot.languages) + ":" + snapshot.languages.join(","));
 `);
   assert.equal(browserExecution.status, 0, String(browserExecution.stderr));
-  assert.equal(browserExecution.stdout, "TypeError,TypeError,TypeError,TypeError,RangeError,TypeError\n0:0\n");
+  assert.equal(browserExecution.stdout, "TypeError,TypeError,TypeError,TypeError,RangeError,TypeError\n0:0\ntrue:false:en,fr\n");
 
   const webSource = standardModuleSource("velar/web") ?? "";
   const routerExecution = executeModule(`
@@ -6985,6 +6990,13 @@ test("IndexedDB waits for transaction commit and retries a failed open", () => {
 const stored = new Map();
 let openAttempts = 0;
 let transactionCount = 0;
+let hostileKeyCalls = 0;
+class HostileKeys extends Array {
+  [Symbol.iterator]() { hostileKeyCalls += 1; throw new Error("iterator override"); }
+  some() { hostileKeyCalls += 1; throw new Error("some override"); }
+  slice() { hostileKeyCalls += 1; throw new Error("slice override"); }
+  sort() { hostileKeyCalls += 1; throw new Error("sort override"); }
+}
 const outcomes = ["abort", "complete", "complete", "complete"];
 const databaseHandle = {
   objectStoreNames: { contains() { return true; } },
@@ -7009,7 +7021,7 @@ const databaseHandle = {
       put(value, key) { return request(undefined, () => stored.set(key, value)); },
       get(key) { return request(stored.get(key)); },
       getKey(key) { return request(stored.has(key) ? key : undefined); },
-      getAllKeys() { return request(["z", "a"]); },
+      getAllKeys() { return request(new HostileKeys("z", "a")); },
       delete(key) { return request(undefined, () => stored.delete(key)); },
       clear() { return request(undefined, () => stored.clear()); },
     });
@@ -7034,13 +7046,16 @@ try { await store.set("item", { value: 1 }); console.log("accepted"); } catch (e
 await store.set("item", { value: 2 });
 const Item = __velarRegisterRuntimeType(Object.freeze({ is() { return true; }, parse(value) { return value; } }));
 console.log((await store.get("item", Item)).value);
-console.log((await store.keys()).join(","));
+const keys = await store.keys();
+keys.push("m");
+console.log(keys.join(","));
+console.log(hostileKeyCalls + ":" + Object.isFrozen(keys));
 const beforeInvalid = transactionCount;
 try { await store.set(42, { value: 3 }); console.log("accepted"); } catch (error) { console.log(error.name, transactionCount === beforeInvalid); }
 console.log(openAttempts);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "open failed\ntransaction aborted\n2\na,z\nTypeError true\n2\n");
+  assert.equal(execution.stdout, "open failed\ntransaction aborted\n2\na,z,m\n0:false\nTypeError true\n2\n");
 });
 
 test("runtime List validation rejects sparse and extended JavaScript arrays", () => {
