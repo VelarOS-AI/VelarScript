@@ -2198,9 +2198,10 @@ export class Analyzer implements TypeEnvironment {
       case "DynamicImportExpression":
         return { kind: "promise", value: this.dynamicImports.get(expression.source) ?? unknownType };
       case "ListExpression": {
+        const collectionContext = this.contextualCollectionType(contextualType);
         let element = unknownType;
-        const expectedElement = contextualType.kind === "list" ? contextualType.element : unknownType;
-        let matchesContext = contextualType.kind === "list";
+        const expectedElement = collectionContext?.kind === "list" ? collectionContext.element : unknownType;
+        let matchesContext = collectionContext?.kind === "list";
         for (const item of expression.elements) {
           const itemType = this.inferExpression(item, expectedElement);
           if (item.kind === "SpreadExpression") {
@@ -2220,7 +2221,7 @@ export class Analyzer implements TypeEnvironment {
             }
           }
         }
-        if (matchesContext && contextualType.kind === "list") return contextualType;
+        if (matchesContext && collectionContext?.kind === "list") return collectionContext;
         return { kind: "list", element };
       }
       case "ObjectExpression": {
@@ -2322,17 +2323,34 @@ export class Analyzer implements TypeEnvironment {
       case "BinaryExpression":
         return this.inferBinary(expression.left, expression.operator, expression.right, expression.span);
       case "ComparisonChainExpression": {
-        const types = expression.operands.map((operand) => this.inferExpression(operand));
+        const types: ValueType[] = [this.inferExpression(expression.operands[0]!)];
+        let successful = new Map<string, ValueType>();
         for (let index = 0; index < expression.operators.length; index += 1) {
-          if (expression.operators[index] === "==" || expression.operators[index] === "!=") continue;
-          this.requireOrderedComparison(
-            types[index]!,
-            types[index + 1]!,
-            expression.operands[index]!,
-            expression.operands[index + 1]!,
-            expression.span,
-          );
+          const left = expression.operands[index]!;
+          const right = expression.operands[index + 1]!;
+          const operator = expression.operators[index]!;
+          this.enterScope();
+          try {
+            this.applyNarrowings(successful, right.span);
+            const rightType = this.inferExpression(right);
+            types.push(rightType);
+            const surviving = this.survivingNarrowings(successful);
+            if (operator !== "==" && operator !== "!=") {
+              this.requireOrderedComparison(types[index]!, rightType, left, right, expression.span);
+            }
+            const link: Expression = {
+              kind: "BinaryExpression",
+              left,
+              operator,
+              right,
+              span: { start: left.span.start, end: right.span.end },
+            };
+            successful = new Map([...surviving, ...this.narrowingFor(link, boolType)]);
+          } finally {
+            this.exitScope();
+          }
         }
+        this.logicalConditionNarrowings.set(spanIdentity(expression.span), { truthy: successful, falsy: new Map() });
         return types.some(isInvalidType) ? invalidType : boolType;
       }
       case "ConditionalExpression":
@@ -2635,10 +2653,11 @@ export class Analyzer implements TypeEnvironment {
       return unknownType;
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Map") {
+      const collectionContext = this.contextualCollectionType(contextualType);
       if (hasNamed) this.typeError("Map construction does not accept named arguments", callSpan);
       if (arguments_.length > 1) this.typeError(`Expected 0-1 arguments but received ${arguments_.length}`, callSpan);
-      if (!arguments_[0]) return contextualType.kind === "map" ? contextualType : { kind: "map", key: unknownType, value: unknownType };
-      const source = this.inferExpression(arguments_[0], contextualType.kind === "map" ? contextualType : unknownType);
+      if (!arguments_[0]) return collectionContext?.kind === "map" ? collectionContext : { kind: "map", key: unknownType, value: unknownType };
+      const source = this.inferExpression(arguments_[0], collectionContext?.kind === "map" ? collectionContext : unknownType);
       for (const argument of arguments_.slice(1)) this.inferExpression(argument);
       if (source.kind === "map") return source;
       if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
@@ -2646,10 +2665,11 @@ export class Analyzer implements TypeEnvironment {
       return { kind: "map", key: unknownType, value: unknownType };
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Set") {
+      const collectionContext = this.contextualCollectionType(contextualType);
       if (hasNamed) this.typeError("Set construction does not accept named arguments", callSpan);
       if (arguments_.length > 1) this.typeError(`Expected 0-1 arguments but received ${arguments_.length}`, callSpan);
-      if (!arguments_[0]) return contextualType.kind === "set" ? contextualType : { kind: "set", element: unknownType };
-      const source = this.inferExpression(arguments_[0], contextualType.kind === "set" ? { kind: "list", element: contextualType.element } : unknownType);
+      if (!arguments_[0]) return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
+      const source = this.inferExpression(arguments_[0], collectionContext?.kind === "set" ? { kind: "list", element: collectionContext.element } : unknownType);
       for (const argument of arguments_.slice(1)) this.inferExpression(argument);
       if (source.kind === "list" || source.kind === "set") return { kind: "set", element: source.element };
       if (source.kind === "any") return { kind: "set", element: anyType };
@@ -4045,6 +4065,13 @@ export class Analyzer implements TypeEnvironment {
         .filter((member): member is Extract<ValueType, { kind: "named" | "object" }> => member !== null);
       return candidates.length === 1 ? candidates[0]! : null;
     }
+    return null;
+  }
+
+  private contextualCollectionType(type: ValueType): Extract<ValueType, { kind: "list" | "map" | "set" }> | null {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "list" || expanded.kind === "map" || expanded.kind === "set") return expanded;
+    if (expanded.kind === "optional") return this.contextualCollectionType(expanded.inner);
     return null;
   }
 

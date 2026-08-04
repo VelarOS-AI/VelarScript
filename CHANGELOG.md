@@ -67,6 +67,10 @@ Compiler and framework changes:
 - Optional indexes and calls now expose successful-chain facts to their deferred
   expressions, optional index calls continue safely, and optional function
   annotations contextually type assigned arrows.
+- Comparison chains now carry successful-link facts into later operands and
+  into bodies controlled by the complete truthy chain.
+- Optional collection annotations now contextually type empty List, Set, and
+  Map values, including transparent collection aliases.
 
 Tooling and documentation changes:
 

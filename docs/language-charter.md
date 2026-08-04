@@ -147,6 +147,10 @@ Python-style comparison chains evaluate each operand once:
 assert 0 < percentage <= 100
 ```
 
+Each later operand is checked only under the facts established by every earlier
+successful link. When the complete chain is true, those facts are available in
+the controlled body.
+
 Power uses `**`. Membership uses `in`. Runtime type checks use `is`:
 
 ```velar fragment
@@ -438,7 +442,9 @@ through their internal slots, so legitimate values from another browser realm
 work without trusting an overridable `instanceof`, `size`, iterator, or method.
 Empty mutable collections can infer
 their element/key/value types from their first checked mutation, but exported
-APIs should annotate them.
+APIs should annotate them. An optional collection annotation still contextually
+types a present collection value, so empty `[]`, `Set()`, and `Map()` values do
+not lose their element or key/value contracts.
 
 ## 9. Control flow
 

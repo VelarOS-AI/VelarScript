@@ -118,6 +118,9 @@ an extra generated function boundary.
 before the initial expression. A literal arrow can receive the initial value's
 context afterward because creating that arrow executes no user code; its body
 still runs only after all call arguments have evaluated.
+Optional collection contexts unwrap only while checking the present value, so
+empty literals and constructors receive their collection contract without
+changing the declared optional storage type.
 Native slot checks accept cross-realm Map/Set values while instance overrides,
 custom iterators, and Array species cannot change language semantics. Mutating
 results normalize to VelarScript `null` without replacing
@@ -391,10 +394,13 @@ and browser runtimes and do not define a separate VelarScript memory model.
   exponents, and awaited bases while emitting valid JavaScript.
 - Adjacent equality and ordered comparisons become one comparison-chain AST
   node rather than nested booleans. Analysis checks every adjacent pair and
-  permits ordered links only for numbers or strings. Emission uses a hygienic
-  arrow IIFE with compiler-only `$` bindings so operands evaluate once in source
-  order and later links short-circuit; a chain containing direct `await` uses an
-  immediately awaited async IIFE, preserving a boolean source result.
+  permits ordered links only for numbers or strings. Each later operand is
+  analyzed under facts from every successful earlier link, and the complete
+  truthy chain publishes those facts to its controlled body. Emission uses a
+  hygienic arrow IIFE with compiler-only `$` bindings so operands evaluate once
+  in source order and later links short-circuit; a chain containing direct
+  `await` uses an immediately awaited async IIFE, preserving a boolean source
+  result.
 - `///` documentation is recovered from the authoritative source immediately
   before semantic declarations rather than becoming runtime AST statements.
   The semantic index stores a bounded Markdown string on each symbol; project

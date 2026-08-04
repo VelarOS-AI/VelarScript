@@ -1594,6 +1594,31 @@ const objects = Item() < Item()
   assert.equal(invalid.diagnostics.filter((item) => /Ordered comparison requires two numbers or two strings/u.test(item.message)).length, 3);
 });
 
+test("comparison chains carry successful-link facts into later operands and bodies", () => {
+  const result = compileCore(`
+type User:
+    name: string
+
+def hasName(user: User?) -> bool:
+    return user != null != user.name
+
+def label(user: User?) -> string:
+    if user != null != user.name:
+        return user.name
+    return "missing"
+
+print(hasName(null))
+print(hasName({name: "Ada"}))
+print(label(null))
+print(label({name: "Ada"}))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "false\ntrue\nmissing\nAda\n");
+});
+
 test("match selects strict literal branches without fallthrough", () => {
   const result = compile(`
 def describe(value: string) -> string:
@@ -7220,6 +7245,24 @@ extended.extend(["bad"])
   assert.equal(invalid.diagnostics.filter((item) => /Cannot assign/u.test(item.message)).length, 2);
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign string to number/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign List<string> to List<number>/u.test(item.message)));
+});
+
+test("optional collection annotations contextually type empty values", () => {
+  const result = compileCore(`
+type Names = List<string>
+
+const names: Names? = []
+const scores: Map<string, number>? = Map()
+const tags: Set<string>? = Set()
+print(names?.size)
+print(scores?.size)
+print(tags?.size)
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "0\n0\n0\n");
 });
 
 test("empty collection inference follows runtime aliases instead of individual bindings", () => {
