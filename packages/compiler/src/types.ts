@@ -374,7 +374,6 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     return fields ? objectFieldsAssignable(fields, expected.fields, environment, seen, undefined, expected.readonlyFields, undefined, expected.optionalFields) : false;
   }
   if (actual.kind === "named" && expected.kind === "named") {
-    if (actual.name === expected.name) return true;
     const actualPrimitive = environment.isPrimitiveType(actual.name);
     const expectedPrimitive = environment.isPrimitiveType(expected.name);
     if (actualPrimitive || expectedPrimitive) {

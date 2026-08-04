@@ -10602,6 +10602,48 @@ print(right.right)
   assert.deepEqual(explicit.modules.flatMap((module) => module.result.diagnostics), []);
 });
 
+test("same-named record types from different modules use their structural contracts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-record-contract-"));
+  const consumerPath = join(directory, "consumer.vel");
+  const producerPath = join(directory, "producer.vel");
+  const mainPath = join(directory, "main.vel");
+  await writeFile(consumerPath, `
+export type Item:
+    label: string
+
+export def consume(value: Item):
+    print(value.label)
+`.trimStart(), "utf8");
+  await writeFile(producerPath, `
+export type Item:
+    count: number
+
+export def make() -> Item:
+    return {count: 1}
+`.trimStart(), "utf8");
+  await writeFile(mainPath, `
+import {consume} from "./consumer.vel"
+import {make} from "./producer.vel"
+consume(make())
+`.trimStart(), "utf8");
+
+  const incompatible = await compileProject(mainPath);
+  assert.deepEqual(incompatible.failures, []);
+  assert.ok(incompatible.modules.find((module) => module.inputPath === mainPath)?.result.diagnostics
+    .some((item) => /Cannot assign Item to a different Item contract/u.test(item.message)));
+
+  await writeFile(producerPath, `
+export type Item:
+    label: string
+
+export def make() -> Item:
+    return {label: "ready"}
+`.trimStart(), "utf8");
+  const compatible = await compileProject(mainPath);
+  assert.deepEqual(compatible.failures, []);
+  assert.deepEqual(compatible.modules.flatMap((module) => module.result.diagnostics), []);
+});
+
 test("null normalization follows checked types across Velar module exports", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-host-reexport-"));
   const packageRoot = join(directory, "node_modules", "boundary-sdk");

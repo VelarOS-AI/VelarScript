@@ -6086,7 +6086,11 @@ export class Analyzer implements TypeEnvironment {
       this.freezeEscapedCollectionInference(actual, expected);
       return;
     }
-    this.typeError(`Cannot assign ${describeType(actual)} to ${describeType(expected)}`, valueSpan);
+    const actualDescription = describeType(actual);
+    const expectedDescription = describeType(expected);
+    this.typeError(actualDescription === expectedDescription
+      ? `Cannot assign ${actualDescription} to a different ${expectedDescription} contract`
+      : `Cannot assign ${actualDescription} to ${expectedDescription}`, valueSpan);
   }
 
   private freezeEscapedCollectionInference(actual: ValueType, expected: ValueType, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): void {

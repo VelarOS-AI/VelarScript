@@ -65,6 +65,13 @@ an unimported type name out of the consumer's source scope. Compiler diagnostics
 contracts, hover, completion, and emitted modules therefore share one semantic
 source.
 
+Data `type` declarations remain structurally assignable, but structure is
+resolved through those module identities before comparison. Equal display names
+never bypass field checking: two hidden `Item` results with compatible fields
+compose, while incompatible ones produce a “different Item contract” diagnostic
+instead of the nonsensical appearance that `Item` was assignable to every other
+module's `Item`.
+
 Literal dynamic `.vel` imports are part of that same graph rather than a
 bundler-only escape hatch. Inspection records them as dynamic dependencies,
 analysis exposes a typed Promise of the target module interface, reverse graph
