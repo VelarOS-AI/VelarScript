@@ -4045,9 +4045,14 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
 import { runInNewContext } from "node:vm";
 const params = runInNewContext('class HostileMap extends Map { get size() { throw new Error("size override") } entries() { throw new Error("entries override") } }; new HostileMap([["id", "7"]])');
 console.log(RouteContext.is({ path: "/items/7", params, query: new Map(), hash: "" }));
+let getterReads = 0;
+const accessor = Object.defineProperty({ params: new Map(), query: new Map(), hash: "" }, "path", { enumerable: true, get() { getterReads += 1; return "/"; } });
+console.log(RouteContext.is(accessor));
+console.log(RouteContext.is({ path: "/", params: new Map([["id", "x".repeat(2 * 1024 * 1024 + 1)]]), query: new Map(), hash: "" }));
+console.log(getterReads);
 `);
   assert.equal(routeContextExecution.status, 0, String(routeContextExecution.stderr));
-  assert.equal(routeContextExecution.stdout, "true\n");
+  assert.equal(routeContextExecution.stdout, "true\nfalse\nfalse\n0\n");
   const configRuntime = standardModuleSource("velar/config", { base: "/", publicConfig: { apiBase: "https://api.example.com" } }) ?? "";
   assert.match(configRuntime, /const source = \{"apiBase":"https:\/\/api\.example\.com"\}/u);
   assert.doesNotMatch(configRuntime, /__VELAR_PUBLIC_CONFIG__/u);
@@ -5056,6 +5061,66 @@ for (const operation of [
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "RangeError\nTypeError\nTypeError\nTypeError\n");
+});
+
+test("browser and router snapshots reject host coercion and accessor values", () => {
+  const browserSource = standardModuleSource("velar/browser") ?? "";
+  const browserExecution = executeModule(`
+let coercions = 0;
+let getterReads = 0;
+const hostile = { toString() { coercions += 1; return ""; } };
+const navigatorValue = { language: "en", languages: ["en"], onLine: true, maxTouchPoints: 0 };
+const locationValue = { href: "https://example.test/", origin: "https://example.test", pathname: "/", search: hostile, hash: "" };
+globalThis.document = { visibilityState: "visible" };
+Object.defineProperty(globalThis, "navigator", { configurable: true, value: navigatorValue });
+Object.defineProperty(globalThis, "location", { configurable: true, value: locationValue });
+globalThis.matchMedia = () => ({ matches: false });
+${browserSource}
+const failures = [];
+try { location(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
+locationValue.search = "";
+const accessorLanguages = [];
+Object.defineProperty(accessorLanguages, 0, { enumerable: true, configurable: true, get() { getterReads += 1; return "en"; } });
+accessorLanguages.length = 1;
+navigatorValue.languages = accessorLanguages;
+try { environment(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
+navigatorValue.languages = ["en"];
+navigatorValue.onLine = "yes";
+try { environment(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
+navigatorValue.onLine = true;
+globalThis.matchMedia = () => ({ matches: "yes" });
+try { environment(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
+globalThis.matchMedia = () => ({ matches: false });
+navigatorValue.maxTouchPoints = Number.NaN;
+try { environment(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
+navigatorValue.maxTouchPoints = 0;
+document.visibilityState = "unknown";
+try { environment(); failures.push("accepted"); } catch (error) { failures.push(error.name); }
+console.log(failures.join(","));
+console.log(coercions + ":" + getterReads);
+`);
+  assert.equal(browserExecution.status, 0, String(browserExecution.stderr));
+  assert.equal(browserExecution.stdout, "TypeError,TypeError,TypeError,TypeError,RangeError,TypeError\n0:0\n");
+
+  const webSource = standardModuleSource("velar/web") ?? "";
+  const routerExecution = executeModule(`
+let coercions = 0;
+const hostile = { toString() { coercions += 1; return ""; } };
+class FakeNode { replaceChildren() {} }
+globalThis.Node = FakeNode;
+globalThis.document = { createElement() { return new FakeNode(); } };
+globalThis.location = { pathname: "/", search: hostile, hash: "" };
+${webSource}
+for (const field of ["search", "hash"]) {
+  location.search = field === "search" ? hostile : "";
+  location.hash = field === "hash" ? hostile : "";
+  try { Router({ routes: [] }); console.log("accepted"); }
+  catch (error) { console.log(error.name); }
+}
+console.log(coercions);
+`);
+  assert.equal(routerExecution.status, 0, String(routerExecution.stderr));
+  assert.equal(routerExecution.stdout, "TypeError\nTypeError\n0\n");
 });
 
 test("file helpers reject forged files and hostile options before native effects", () => {

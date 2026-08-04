@@ -173,6 +173,10 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   patterns to 8,192 code units, and decoded query snapshots to 100,000 fields;
   a hostile direct URL cannot force an unbounded route table or repeated
   pattern compilation.
+- Browser path, query, and hash values must already be strings; routing never
+  calls conversion hooks on malformed host values. `RouteContext.is/parse`
+  inspect only ordinary data fields, reject accessors, and bound the combined
+  text stored in params and query Maps.
 - A percent-encoded route parameter that cannot be decoded is treated as a
   non-match and reaches the normal 404 fallback. A malformed direct URL cannot
   turn an otherwise recoverable unknown route into an application-fatal render.
@@ -449,11 +453,15 @@ sibling `cleanup` block. VelarScript does not expose `setTimeout`, `setInterval`
 React-style effect API.
 
 - `location()` and `environment()` return typed snapshots rather than exposing
-  mutable browser globals.
+  mutable browser globals. Host strings and booleans must already have the
+  declared type; malformed values are rejected rather than implicitly
+  converted.
 - Snapshot language lists are limited to 1,000 entries of at most 256
-  characters. Layout rectangles and animation-frame timestamps must contain
-  finite numbers, and dialog results remain bounded strings before they cross
-  back into VelarScript source.
+  characters and cannot contain sparse or accessor elements. Online,
+  visibility, media-preference, and touch fields are validated before the
+  snapshot is returned. Layout rectangles and animation-frame timestamps must
+  contain finite numbers, and dialog results remain bounded strings before
+  they cross back into VelarScript source.
 - `media`, `watchMedia`, `watchOnline`, and `watchVisibility` expose common
   environment state. Every watcher returns a cleanup function, and callback
   failures are owned by the application error channel.

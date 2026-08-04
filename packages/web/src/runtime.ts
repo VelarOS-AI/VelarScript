@@ -274,25 +274,34 @@ export function domId(prefix = "velar") {
   return prefix + "-" + nextDomId++;
 }
 
-function isStringMap(value) {
+function isBoundedStringMap(value) {
   let size;
   try { size = Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value); }
   catch { return false; }
   if (size > 100000) return false;
-  for (const [key, item] of Map.prototype.entries.call(value)) if (typeof key !== "string" || typeof item !== "string") return false;
+  let codeUnits = 0;
+  for (const [key, item] of Map.prototype.entries.call(value)) {
+    if (typeof key !== "string" || typeof item !== "string") return false;
+    codeUnits += key.length + item.length;
+    if (codeUnits > 2 * 1024 * 1024) return false;
+  }
   return true;
 }
 
+function checkedRouteContext(value) {
+  try {
+    const fields = __velarOptions(value, "RouteContext", new Set(["path", "params", "query", "hash"]));
+    if (Object.keys(fields).length !== 4 || typeof fields.path !== "string" || fields.path.length > 2 * 1024 * 1024
+      || !isBoundedStringMap(fields.params) || !isBoundedStringMap(fields.query)
+      || typeof fields.hash !== "string" || fields.hash.length > 2 * 1024 * 1024) return null;
+    return value;
+  } catch { return null; }
+}
+
 export const RouteContext = __velarRegisterRuntimeType(Object.freeze({
-  is(value) {
-    return Boolean(value && typeof value === "object"
-      && typeof value.path === "string"
-      && isStringMap(value.params)
-      && isStringMap(value.query)
-      && typeof value.hash === "string");
-  },
+  is(value) { return checkedRouteContext(value) !== null; },
   parse(value) {
-    if (!this.is(value)) throw new TypeError("RouteContext requires path, string params/query Maps, and hash");
+    if (checkedRouteContext(value) === null) throw new TypeError("RouteContext requires bounded path/hash text and string params/query Maps");
     return value;
   },
 }));
@@ -712,7 +721,8 @@ function isExternal(to) {
 }
 
 function queryValues() {
-  const search = String(location.search || "");
+  const search = location.search;
+  if (typeof search !== "string") throw new TypeError("Route queries require browser text");
   if (search.length > 2 * 1024 * 1024) throw new RangeError("Route queries cannot exceed 2 MiB");
   const output = new Map();
   let count = 0;
@@ -725,7 +735,8 @@ function queryValues() {
 }
 
 function routeHash() {
-  const hash = String(location.hash || "");
+  const hash = location.hash;
+  if (typeof hash !== "string") throw new TypeError("Route hashes require browser text");
   if (hash.length > 2 * 1024 * 1024) throw new RangeError("Route hashes cannot exceed 2 MiB");
   return hash;
 }
@@ -1441,7 +1452,7 @@ const timerRuntimeKey = Symbol.for("velar.runtime.v1");
 function browserNumber(value, name) { if (!Number.isFinite(value)) throw new TypeError(name + " must be a finite number"); return value; }
 function browserText(value, name, maximum) { value = __velarString(value, name); if (value.length > maximum) throw new RangeError(name + " is too long"); return value; }
 function browserQuery(search) {
-  search = browserText(String(search || ""), "Browser location query", 2 * 1024 * 1024);
+  search = browserText(search, "Browser location query", 2 * 1024 * 1024);
   const output = new Map();
   let count = 0;
   for (const [name, value] of new URLSearchParams(search)) {
@@ -1450,6 +1461,17 @@ function browserQuery(search) {
     output.set(name, value);
   }
   return output;
+}
+function browserLanguages(value) {
+  if (!Array.isArray(value) || value.length > 1000 || Object.getOwnPropertySymbols(value).length > 0
+    || Object.getOwnPropertyNames(value).length !== value.length + 1) throw new TypeError("Browser languages must be a dense List");
+  const output = new Array(value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Browser languages cannot use accessors");
+    output[index] = browserText(descriptor.value, "Browser language", 256);
+  }
+  return Object.freeze(output);
 }
 function scrollBehavior(value) { value = __velarString(value, "Scroll behavior"); if (!["auto", "smooth", "instant"].includes(value)) throw new TypeError("Scroll behavior must be auto, smooth, or instant"); return value; }
 
@@ -1516,17 +1538,21 @@ export function location() {
 }
 
 export function environment() {
-  const sourceLanguages = navigator.languages || [];
-  if (!Number.isSafeInteger(sourceLanguages.length) || sourceLanguages.length < 0 || sourceLanguages.length > 1000) throw new RangeError("Browser languages are outside VelarScript limits");
-  const languages = [];
-  for (let index = 0; index < sourceLanguages.length; index += 1) languages.push(browserText(sourceLanguages[index], "Browser language", 256));
+  const language = browserText(navigator.language, "Browser language", 256);
+  const languages = browserLanguages(navigator.languages);
+  if (typeof navigator.onLine !== "boolean") throw new TypeError("Browser online state must be bool");
+  if (document.visibilityState !== "visible" && document.visibilityState !== "hidden") throw new TypeError("Browser visibility state is invalid");
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (typeof dark !== "boolean" || typeof reduced !== "boolean") throw new TypeError("Browser media preferences must be bool");
+  if (!Number.isSafeInteger(navigator.maxTouchPoints) || navigator.maxTouchPoints < 0 || navigator.maxTouchPoints > 1000) throw new RangeError("Browser touch points are outside VelarScript limits");
   return Object.freeze({
-    language: browserText(navigator.language || "", "Browser language", 256),
+    language,
     languages,
     online: navigator.onLine,
     visible: document.visibilityState === "visible",
-    colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
-    reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    colorScheme: dark ? "dark" : "light",
+    reducedMotion: reduced,
     touch: navigator.maxTouchPoints > 0,
   });
 }
