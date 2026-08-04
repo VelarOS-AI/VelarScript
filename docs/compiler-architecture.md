@@ -217,6 +217,10 @@ objects, collections, classes, aliases, cycles, namespace imports, and dynamic
 imports without a second propagation model. Unsafe JavaScript `any` remains
 outside the guarantee. Cross-module fixed-point analysis therefore converges on
 complete semantic interface identities, not hidden boundary metadata.
+Assignment targets are a separate lowering context: they never receive the
+read-side `?? null` normalization. Flow-narrowed reads use the current fact,
+while plain assignment is checked against the declared location type and
+invalidates stale facts for that location and its descendants.
 
 Catch lowering uses the host's cross-realm Error brand check, then converts
 foreign non-Error throws without applying JavaScript string coercion to objects

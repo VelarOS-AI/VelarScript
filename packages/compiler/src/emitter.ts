@@ -943,7 +943,7 @@ export class JavaScriptEmitter {
             `${indentation}}`,
           ].join("\n");
         }
-        return `${indentation}${this.emitMappedExpression(statement.target)} ${statement.operator} ${this.emitMappedExpression(statement.value)};`;
+        return `${indentation}${this.emitMappedAssignmentTarget(statement.target)} ${statement.operator} ${this.emitMappedExpression(statement.value)};`;
       case "ExpressionStatement":
         return `${indentation}${this.emitMappedExpression(statement.expression, false)};`;
       default:
@@ -1216,6 +1216,14 @@ export class JavaScriptEmitter {
       if (this.hints.normalizedNullResults.has(key)) return `(${emitted}, null)`;
       if (this.hints.normalizedUndefinedExpressions.has(key)) return `(${emitted} ?? null)`;
       return emitted;
+    });
+  }
+
+  private emitMappedAssignmentTarget(expression: Extract<Expression, { kind: "IdentifierExpression" | "MemberExpression" }>): string {
+    return this.emitMappedJavaScript(expression.span, () => {
+      if (expression.kind === "IdentifierExpression") return this.emitExpression(expression);
+      const property = `${this.hints.privateMembers.has(expression.span.start) ? "#" : ""}${expression.property}`;
+      return `${this.emitPostfixReceiver(expression.object)}.${property}`;
     });
   }
 

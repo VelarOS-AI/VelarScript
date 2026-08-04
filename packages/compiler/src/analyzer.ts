@@ -1794,9 +1794,11 @@ export class Analyzer implements TypeEnvironment {
   private analyzeAssignment(statement: AssignmentStatement): void {
     let targetType = unknownType;
     let targetBinding: Binding | null = null;
+    let targetWritable = true;
 
     if (statement.target.kind !== "IdentifierExpression" && continuesOptionalChain(statement.target)) {
       this.diagnostics.push(diagnostic("VEL3002", "Optional chains cannot be assignment targets", statement.target.span));
+      targetWritable = false;
     }
 
     if (statement.target.kind === "IdentifierExpression") {
@@ -1807,11 +1809,18 @@ export class Analyzer implements TypeEnvironment {
       }
       if (!binding.mutable) {
         this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to const binding '${statement.target.name}'`, statement.target.span));
+        targetWritable = false;
       }
       targetBinding = binding;
-      targetType = binding.type;
+      targetType = statement.operator === "=" ? binding.declaredType : binding.type;
     } else if (statement.target.kind === "MemberExpression") {
-      targetType = this.inferMember(statement.target.object, statement.target.property, statement.target.optional, statement.target.span);
+      targetType = this.inferMember(
+        statement.target.object,
+        statement.target.property,
+        statement.target.optional,
+        statement.target.span,
+        statement.operator !== "=",
+      );
       const owner = nonOptional(this.expandAliases(this.inferExpression(statement.target.object)));
       if (owner.kind === "class") {
         const key = owner.identity ?? owner.name;
@@ -1823,18 +1832,24 @@ export class Analyzer implements TypeEnvironment {
         const method = this.findMethod(key, statement.target.property);
         if (privateField && (this.privateGetters.get(this.currentClass ?? "")?.has(statement.target.property) ?? false)) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private getter '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         } else if (privateField && !privateField.mutable && !this.constructorFieldInitializations.has(statement.target.span.start)) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private const field '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         } else if (privateMethod) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private method '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         } else if (field && !field.mutable && !this.constructorFieldInitializations.has(statement.target.span.start)) {
           const label = info?.identity ? "read-only member" : "const field";
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to ${label} '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         } else if (getter) {
           const label = info?.identity?.startsWith("js:") ? "read-only member" : "getter";
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to ${label} '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         } else if (method) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only member '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         }
       } else if (owner.kind === "classConstructor") {
         const key = owner.identity ?? owner.name;
@@ -1845,11 +1860,14 @@ export class Analyzer implements TypeEnvironment {
         const method = this.findStaticMethod(key, statement.target.property);
         if ((privateField && !privateField.mutable) || privateMethod) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private static member '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         } else if ((field && !field.mutable) || getter || method) {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only static member '${statement.target.property}'`, statement.target.span));
+          targetWritable = false;
         }
       } else if (owner.kind === "object" && owner.readonlyFields?.has(statement.target.property)) {
         this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only field '${statement.target.property}'`, statement.target.span));
+        targetWritable = false;
       } else if (owner.kind === "object" && owner.optionalFields?.has(statement.target.property)) {
         targetType = owner.fields.get(statement.target.property) ?? targetType;
       }
@@ -1861,8 +1879,10 @@ export class Analyzer implements TypeEnvironment {
         targetType = objectType.element;
       } else if (objectType.kind === "map") {
         this.typeError("Use Map.set(key, value) instead of bracket assignment", statement.target.span);
+        targetWritable = false;
       } else {
         this.typeError(`Cannot index-assign ${describeType(objectType)}`, statement.target.span);
+        targetWritable = false;
       }
     }
 
@@ -1871,9 +1891,13 @@ export class Analyzer implements TypeEnvironment {
     if (statement.operator !== "=" && targetType.kind !== "number" && !(statement.operator === "+=" && targetType.kind === "string")) {
       this.typeError(`Operator '${statement.operator}' is not valid for ${describeType(targetType)}`, statement.span);
     }
+    const assignmentValid = this.contextuallyAssignable(valueType, targetType, statement.value.span);
     this.requireAssignable(valueType, targetType, statement.value.span);
-    if (statement.operator === "=" && targetBinding?.mutable && isAssignable(valueType, targetType, this)) {
-      this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
+    if (statement.operator === "=" && targetWritable && assignmentValid) {
+      this.invalidateAssignmentNarrowings(statement.target, targetBinding);
+      if (targetBinding?.mutable) {
+        this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
+      }
     }
   }
 
@@ -3028,7 +3052,13 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  private inferMember(objectExpression: Expression, property: string, optional: boolean, memberSpan: Span): ValueType {
+  private inferMember(
+    objectExpression: Expression,
+    property: string,
+    optional: boolean,
+    memberSpan: Span,
+    useNarrowing = true,
+  ): ValueType {
     if (objectExpression.kind === "SuperExpression") {
       if (optional) this.typeError("Optional access is not valid on 'super'", memberSpan);
       const base = this.currentClass ? this.classes.get(this.currentClass)?.base ?? null : null;
@@ -3156,7 +3186,7 @@ export class Analyzer implements TypeEnvironment {
     }
 
     result = this.displayExternalClasses(result);
-    if (narrowedMember) result = narrowedMember;
+    if (useNarrowing && narrowedMember) result = narrowedMember;
 
     if (optional) {
       const finalType = resolvedOriginal.kind === "optional" || resolvedOriginal.kind === "null" ? optionalOf(result) : result;
@@ -4509,6 +4539,28 @@ export class Analyzer implements TypeEnvironment {
       if (narrowing && narrowing.frame === this.flowFrameDepth) return narrowing.type;
     }
     return null;
+  }
+
+  private invalidateAssignmentNarrowings(target: AssignmentStatement["target"], binding: Binding | null): void {
+    if (target.kind === "IdentifierExpression") {
+      if (binding && binding.narrowingFrame !== null) {
+        binding.type = binding.declaredType;
+        binding.narrowingFrame = null;
+      }
+      if (binding) this.invalidateMemberNarrowings(`${binding.span.start}:${target.name}`);
+      return;
+    }
+    if (target.kind !== "MemberExpression") return;
+    const path = this.stableMemberAccessPath(target);
+    if (path) this.invalidateMemberNarrowings(path);
+  }
+
+  private invalidateMemberNarrowings(path: string): void {
+    for (const scope of this.memberNarrowings) {
+      for (const candidate of scope.keys()) {
+        if (candidate === path || candidate.startsWith(`${path}.`)) scope.delete(candidate);
+      }
+    }
   }
 
   protected enterScope(): void {

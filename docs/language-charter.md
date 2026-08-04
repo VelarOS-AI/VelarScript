@@ -194,7 +194,12 @@ else:
 ```
 
 Presence checks distinguish `null` from valid `0`, `""`, and `false` values.
-Facts narrow local names and stable record fields within the owned branch.
+Facts narrow local names and stable record fields within the owned branch. A
+plain `=` still checks against the location's declared type, then invalidates
+the old fact for that location and its child fields. Reassigning an optional
+value to `null` is therefore valid, and later reads must prove presence again.
+Compound assignment uses the current fact because the operation itself requires
+and preserves the checked non-null value.
 
 Optional access is explicit at each optional continuation:
 

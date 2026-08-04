@@ -9818,6 +9818,77 @@ if contact.email:
   assert.equal(outside.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 2);
 });
 
+test("assignments use declared types and invalidate stale narrowing facts", () => {
+  const reassigned = compile(`
+type Contact:
+    email: string?
+
+let name: string? = "Ada"
+let contact: Contact = {email: "ada@example.com"}
+
+if name:
+    name = null
+    print(name == null)
+
+if contact.email:
+    contact.email = null
+    print(contact.email == null)
+
+contact.email = "restored@example.com"
+assert contact.email
+contact = {email: null}
+print(contact.email == null)
+
+let count: number? = 1
+if count:
+    count += 1
+    const current: number = count
+    print(current)
+`.trimStart());
+  assert.deepEqual(reassigned.diagnostics, []);
+  const execution = executeModule(reassigned.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\ntrue\ntrue\n2\n");
+
+  const stale = compile(`
+type Contact:
+    email: string?
+
+let name: string? = "Ada"
+let contact: Contact = {email: "ada@example.com"}
+
+if name:
+    name = null
+    const staleName: string = name
+
+if contact.email:
+    contact.email = null
+    const staleField: string = contact.email
+
+contact.email = "restored@example.com"
+assert contact.email
+contact = {email: null}
+const staleBase: string = contact.email
+`.trimStart());
+  assert.equal(stale.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 3);
+
+  const rejectedWrites = compile(`
+let mutableName: string? = "Ada"
+const fixedName: string? = "Lin"
+
+if mutableName:
+    mutableName = 42
+    const stillNarrowed: string = mutableName
+
+if fixedName:
+    fixedName = null
+    const stillFixed: string = fixedName
+`.trimStart());
+  assert.equal(rejectedWrites.diagnostics.length, 2);
+  assert.ok(rejectedWrites.diagnostics.some((item) => /Cannot assign number to string\?/u.test(item.message)));
+  assert.ok(rejectedWrites.diagnostics.some((item) => /Cannot assign to const binding 'fixedName'/u.test(item.message)));
+});
+
 test("validates annotations and keeps any behind unsafe boundaries", () => {
   const missing = compile("const value: Missing = null\n");
   assert.ok(missing.diagnostics.some((item) => /Unknown type 'Missing'/.test(item.message)));

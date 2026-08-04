@@ -30,6 +30,9 @@ Compiler and framework changes:
 - JavaScript generation uses structured nodes with nested source-map positions.
 - Actions retain observable pending/error state while preserving normal Promise
   rejection semantics.
+- Assignments check the declared location type, invalidate stale optional facts,
+  and lower as true JavaScript assignment targets without read-side null
+  normalization.
 
 Tooling and documentation changes:
 
