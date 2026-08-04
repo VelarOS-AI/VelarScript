@@ -77,9 +77,12 @@ composition preserves it without changing assignability or editor spelling,
 and fresh VelarScript copies intentionally remove it. Flow analysis uses this
 metadata wherever descriptor or index reflection could execute host Proxy or
 accessor behavior.
-Declared storage overlays this metadata onto its visible annotated shape rather
-than replacing the analyzed value type. Rebinding mutable storage recomputes
-the overlay, so provenance follows the current runtime reference.
+Bindings keep three concerns separate: the immutable declared contract used for
+assignment checks, the current unnarrowed storage type including provenance,
+and the current flow-narrowed read type. Rebinding mutable storage recomputes
+only the storage overlay, so provenance follows the current runtime reference
+without rewriting the source contract. Branch snapshots include that storage
+state and merge it by reachable path rather than analysis order.
 Contextual collection typing overlays the expected visible element shape onto
 the inferred elements instead of replacing them, so a fresh List is owned while
 references stored inside it keep their own origin.
@@ -297,7 +300,7 @@ checking the deferred index or arguments. A statically skipped index is checked
 for diagnostics in isolated flow, so code that cannot execute cannot erase a
 continuing fact. Optional callable contexts unwrap only for contextual function
 inference and remain optional at the declared storage boundary.
-Flow facts snapshot the complete binding state around mutually exclusive `if`,
+Flow facts snapshot the complete binding and provenance state around mutually exclusive `if`,
 `match`, `try`/`catch`, and inline conditional branches and around loop bodies.
 Only invalidations from paths that can reach the next statement are merged;
 unreachable tails cannot mutate the continuing fact set. Facts created with the

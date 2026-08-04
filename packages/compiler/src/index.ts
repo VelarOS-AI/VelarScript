@@ -389,8 +389,8 @@ function interfaceOf(
     }
     if (type.kind === "optional") return optionalOf(expandAliases(type.inner, seen));
     if (type.kind === "list") return { ...type, element: expandAliases(type.element, seen) };
-    if (type.kind === "set") return { kind: "set", element: expandAliases(type.element, seen) };
-    if (type.kind === "map") return { kind: "map", key: expandAliases(type.key, seen), value: expandAliases(type.value, seen) };
+    if (type.kind === "set") return { ...type, element: expandAliases(type.element, seen) };
+    if (type.kind === "map") return { ...type, key: expandAliases(type.key, seen), value: expandAliases(type.value, seen) };
     if (type.kind === "promise") return { kind: "promise", value: expandAliases(type.value, seen) };
     if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expandAliases(value, seen)])) };
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
@@ -580,8 +580,8 @@ function resolveNominals(
   }
   if (type.kind === "optional") return optionalOf(resolveNominals(type.inner, classIdentities, enumNames, namedTypeIdentities));
   if (type.kind === "list") return { ...type, element: resolveNominals(type.element, classIdentities, enumNames, namedTypeIdentities) };
-  if (type.kind === "set") return { kind: "set", element: resolveNominals(type.element, classIdentities, enumNames, namedTypeIdentities) };
-  if (type.kind === "map") return { kind: "map", key: resolveNominals(type.key, classIdentities, enumNames, namedTypeIdentities), value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "set") return { ...type, element: resolveNominals(type.element, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "map") return { ...type, key: resolveNominals(type.key, classIdentities, enumNames, namedTypeIdentities), value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
   if (type.kind === "promise") return { kind: "promise", value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
   if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, resolveNominals(value, classIdentities, enumNames, namedTypeIdentities)])) };
   if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {

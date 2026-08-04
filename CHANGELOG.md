@@ -85,6 +85,9 @@ Compiler and framework changes:
 - Safe JavaScript records and Lists now retain host-origin metadata through
   declared results and type composition, so reads, reflection, destructuring,
   iteration, spread, and structural matching invalidate stale flow facts.
+- Set and Map now carry the same container-level host provenance as List;
+  Proxy-sensitive size reads and iteration are effect boundaries, while copy
+  construction creates an owned container and retains element provenance.
 - Runtime `Type.parse`, `is`, and type-pattern checks now preserve host origin
   when they validate an unchecked value; safe-JavaScript class instances carry
   the same non-display provenance through constructors and method results.
@@ -92,6 +95,10 @@ Compiler and framework changes:
   their analysis identity without changing visible type equality.
 - Explicit variable annotations and mutable rebinding now preserve the current
   value's host origin instead of silently turning an external reference local.
+- Declared assignment contracts, current storage provenance, and flow-narrowed
+  read types are now separate binding states. Reachable branches merge storage
+  provenance symmetrically, including assignments through a narrowed binding,
+  so analysis no longer depends on branch order.
 - VelarScript functions, async functions, expression arrows, getters, and class
   methods now preserve host origin through returns. Callable contracts retain
   non-display parameter-to-result relationships, including named and rest

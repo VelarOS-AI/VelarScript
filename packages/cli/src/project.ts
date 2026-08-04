@@ -884,9 +884,9 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
     case "list":
       return { ...type, element: renameType(type.element, aliases) };
     case "set":
-      return { kind: "set", element: renameType(type.element, aliases) };
+      return { ...type, element: renameType(type.element, aliases) };
     case "map":
-      return { kind: "map", key: renameType(type.key, aliases), value: renameType(type.value, aliases) };
+      return { ...type, key: renameType(type.key, aliases), value: renameType(type.value, aliases) };
     case "promise":
       return { kind: "promise", value: renameType(type.value, aliases) };
     case "object":
@@ -944,9 +944,9 @@ function resolveKnownNominals(
     case "list":
       return { ...type, element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
     case "set":
-      return { kind: "set", element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
+      return { ...type, element: resolveKnownNominals(type.element, classes, enums, namedTypeIdentities) };
     case "map":
-      return { kind: "map", key: resolveKnownNominals(type.key, classes, enums, namedTypeIdentities), value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
+      return { ...type, key: resolveKnownNominals(type.key, classes, enums, namedTypeIdentities), value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
     case "promise":
       return { kind: "promise", value: resolveKnownNominals(type.value, classes, enums, namedTypeIdentities) };
     case "object":
@@ -983,9 +983,9 @@ function expandKnownAliases(type: ValueType, aliases: ReadonlyMap<string, ValueT
     case "list":
       return { ...type, element: expandKnownAliases(type.element, aliases, seen) };
     case "set":
-      return { kind: "set", element: expandKnownAliases(type.element, aliases, seen) };
+      return { ...type, element: expandKnownAliases(type.element, aliases, seen) };
     case "map":
-      return { kind: "map", key: expandKnownAliases(type.key, aliases, seen), value: expandKnownAliases(type.value, aliases, seen) };
+      return { ...type, key: expandKnownAliases(type.key, aliases, seen), value: expandKnownAliases(type.value, aliases, seen) };
     case "promise":
       return { kind: "promise", value: expandKnownAliases(type.value, aliases, seen) };
     case "object":

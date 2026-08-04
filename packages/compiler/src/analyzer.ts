@@ -51,6 +51,8 @@ interface Binding {
   readonly effectMutable: boolean;
   type: ValueType;
   declaredType: ValueType;
+  storageType: ValueType;
+  readonly storageBinding?: Binding;
   readonly span: Span;
   narrowingFrame: number | null;
 }
@@ -69,6 +71,7 @@ interface MemberNarrowing {
 interface FlowFactsSnapshot {
   readonly bindings: ReadonlyMap<Binding, {
     readonly type: ValueType;
+    readonly storageType: ValueType;
     readonly frame: number | null;
   }>;
   readonly members: readonly ReadonlyMap<string, MemberNarrowing>[];
@@ -77,6 +80,7 @@ interface FlowFactsSnapshot {
 interface FlowFactInvalidations {
   readonly bindings: ReadonlySet<Binding>;
   readonly members: ReadonlyMap<number, ReadonlySet<string>>;
+  readonly storageTypes: ReadonlyMap<Binding, ValueType>;
 }
 
 interface ReturnContext {
@@ -766,8 +770,8 @@ export class Analyzer implements TypeEnvironment {
       }
       if (type.kind === "optional") return optionalOf(expand(type.inner));
       if (type.kind === "list") return { ...type, element: expand(type.element) };
-      if (type.kind === "set") return { kind: "set", element: expand(type.element) };
-      if (type.kind === "map") return { kind: "map", key: expand(type.key), value: expand(type.value) };
+      if (type.kind === "set") return { ...type, element: expand(type.element) };
+      if (type.kind === "map") return { ...type, key: expand(type.key), value: expand(type.value) };
       if (type.kind === "promise") return { kind: "promise", value: expand(type.value) };
       if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expand(value)])) };
       if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
@@ -798,7 +802,7 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "map") {
       const key = this.expandAliases(type.key, seen);
       const value = this.expandAliases(type.value, seen);
-      return key === type.key && value === type.value ? type : { kind: "map", key, value };
+      return key === type.key && value === type.value ? type : { ...type, key, value };
     }
     if (type.kind === "promise") {
       const value = this.expandAliases(type.value, seen);
@@ -1099,9 +1103,14 @@ export class Analyzer implements TypeEnvironment {
         const declared = annotationValid
           ? annotated ? this.preserveDeclaredOrigin(annotated, actual) : actual
           : invalidType;
+        const contract = annotationValid
+          ? annotated ?? (this.isFreshUnresolvedCollection(statement.initializer, actual)
+            ? actual
+            : this.clearExternalOrigin(actual))
+          : invalidType;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
         if (this.bindingPatternReflectionMayExecute(statement.pattern, actual)) this.invalidateEffectfulFlowFacts();
-        this.declarePattern(statement.pattern, statement.binding === "let", declared);
+        this.declarePattern(statement.pattern, statement.binding === "let", declared, contract);
         this.validateKnownBindingShape(statement.pattern, statement.initializer);
         if (!annotated && statement.pattern.kind === "NameBindingPattern") {
           const binding = this.scopes.at(-1)?.get(statement.pattern.name);
@@ -1190,7 +1199,7 @@ export class Analyzer implements TypeEnvironment {
           elseReturns = this.blockAlwaysReturns(statement.elseBody);
           if (!elseReturns) continuingInvalidations.push(elseInvalidations);
         }
-        this.applyFlowInvalidations(continuingInvalidations);
+        this.applyFlowInvalidations(continuingInvalidations, !statement.elseBody);
         if (!statement.elseBody && thenReturns) this.persistNarrowings(falsy);
         else if (statement.elseBody && thenReturns && !elseReturns) this.persistNarrowings(elseFacts);
         else if (statement.elseBody && elseReturns && !thenReturns) this.persistNarrowings(thenFacts);
@@ -1386,7 +1395,7 @@ export class Analyzer implements TypeEnvironment {
       }
       case "ForStatement": {
         const iterable = this.inferExpression(statement.iterable);
-        if (this.listReflectionMayExecute(iterable)) this.invalidateEffectfulFlowFacts();
+        if (this.collectionReflectionMayExecute(iterable)) this.invalidateEffectfulFlowFacts();
         const element = iterable.kind === "list" || iterable.kind === "set"
           ? iterable.element
           : iterable.kind === "map" ? iterable.key : iterable.kind === "string" ? stringType : unknownType;
@@ -2050,6 +2059,7 @@ export class Analyzer implements TypeEnvironment {
       if (analysisTypeIdentity(binding.type) === analysisTypeIdentity(next)) return false;
       binding.type = next;
       binding.declaredType = next;
+      binding.storageType = next;
       this.recordSemanticBinding(`${binding.span.start}:${statement.name}`, next);
       this.callableOriginChanged = true;
       return true;
@@ -2815,7 +2825,7 @@ export class Analyzer implements TypeEnvironment {
         targetWritable = false;
       }
       targetBinding = binding;
-      targetType = statement.operator === "=" ? binding.declaredType : binding.type;
+      targetType = statement.operator === "=" ? (binding.storageBinding ?? binding).declaredType : binding.type;
     } else if (statement.target.kind === "MemberExpression") {
       targetType = this.inferMember(
         statement.target.object,
@@ -2912,9 +2922,11 @@ export class Analyzer implements TypeEnvironment {
       } else if (statement.operator === "=") {
         this.invalidateAssignmentNarrowings(statement.target, targetBinding);
         if (targetBinding?.mutable) {
-          const visibleStorage = this.clearExternalOrigin(targetBinding.declaredType);
-          const rebound = this.preserveDeclaredOrigin(visibleStorage, valueType);
-          targetBinding.declaredType = rebound;
+          const storageBinding = targetBinding.storageBinding ?? targetBinding;
+          const rebound = this.preserveDeclaredOrigin(storageBinding.declaredType, valueType);
+          storageBinding.storageType = rebound;
+          if (storageBinding.narrowingFrame === null) storageBinding.type = rebound;
+          targetBinding.storageType = rebound;
           targetBinding.type = rebound;
           this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
         }
@@ -3015,7 +3027,7 @@ export class Analyzer implements TypeEnvironment {
         for (const item of expression.elements) {
           const itemType = this.inferExpression(item, expectedElement);
           if (item.kind === "SpreadExpression") {
-            if (this.listReflectionMayExecute(itemType)) this.invalidateEffectfulFlowFacts();
+            if (this.collectionReflectionMayExecute(itemType)) this.invalidateEffectfulFlowFacts();
             if (itemType.kind === "list") {
               element = mergeTypes(element, itemType.element);
               if (expectedElement.kind !== "unknown") {
@@ -3189,7 +3201,7 @@ export class Analyzer implements TypeEnvironment {
               contextualType,
             );
           });
-          this.applyFlowInvalidations([thenInvalidations, elseInvalidations]);
+          this.applyFlowInvalidations([thenInvalidations, elseInvalidations], false);
           if (this.contextualObjectType(contextualType)
             && this.contextuallyAssignable(thenType, contextualType, expression.thenValue.span)
             && this.contextuallyAssignable(elseType, contextualType, expression.elseValue.span)) {
@@ -3242,7 +3254,7 @@ export class Analyzer implements TypeEnvironment {
         if (isInvalidType(object)) return invalidType;
         if (object.kind === "list") {
           this.requireAssignable(index, numberType, expression.index.span);
-          if (this.listReflectionMayExecute(object)) this.invalidateEffectfulFlowFacts();
+          if (this.collectionReflectionMayExecute(object)) this.invalidateEffectfulFlowFacts();
           if (guarded) {
             this.optionalIndexes.add(spanIdentity(expression.span));
             return optionalOf(object.element);
@@ -3513,7 +3525,7 @@ export class Analyzer implements TypeEnvironment {
       if (!arguments_[0]) return collectionContext?.kind === "map" ? collectionContext : { kind: "map", key: unknownType, value: unknownType };
       const source = this.inferExpression(arguments_[0], collectionContext?.kind === "map" ? collectionContext : unknownType);
       for (const argument of arguments_.slice(1)) this.inferExpression(argument);
-      if (source.kind === "map") return source;
+      if (source.kind === "map") return { kind: "map", key: source.key, value: source.value };
       if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
       this.typeError(`Map construction requires another Map, received ${describeType(source)}`, arguments_[0].span);
       return { kind: "map", key: unknownType, value: unknownType };
@@ -4164,7 +4176,7 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "copy") {
         this.collectionCalls.set(member.span.end, "mapCopy");
         this.checkArguments(arguments_, [], callSpan);
-        return object;
+        return { kind: "map", key: object.key, value: object.value };
       }
     }
     if (object.kind === "set") {
@@ -4214,7 +4226,7 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "copy") {
         this.collectionCalls.set(member.span.end, "setCopy");
         this.checkArguments(arguments_, [], callSpan);
-        return object;
+        return { kind: "set", element: object.element };
       }
     }
     return null;
@@ -4263,7 +4275,8 @@ export class Analyzer implements TypeEnvironment {
     const narrowedMember = basePath ? this.lookupMemberNarrowing(`${basePath}.${property}`) : null;
     let result = unknownType;
     let effectfulRead = object.kind === "any"
-      || (object.kind === "object" || object.kind === "named" || object.kind === "list") && object.external === true;
+      || (object.kind === "object" || object.kind === "named" || object.kind === "list"
+        || object.kind === "set" || object.kind === "map") && object.external === true;
 
     if (object.kind === "any") {
       result = anyType;
@@ -4600,7 +4613,7 @@ export class Analyzer implements TypeEnvironment {
         if (argument.kind === "SpreadExpression") {
           sawSpread = true;
           const type = this.inferExpression(argument.value);
-          if (this.listReflectionMayExecute(type)) this.invalidateEffectfulFlowFacts();
+          if (this.collectionReflectionMayExecute(type)) this.invalidateEffectfulFlowFacts();
           if (!rest) this.typeError("Call spread requires a callable with a rest parameter", argument.span);
           else if (fixedIndex < parameters.length) {
             this.typeError(`Provide all ${parameters.length} fixed argument${parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
@@ -4737,9 +4750,10 @@ export class Analyzer implements TypeEnvironment {
       fields: new Map([...type.fields].map(([name, field]) => [name, this.markExternalAggregate(field)])),
     };
     if (type.kind === "list") return { ...type, external: true, element: this.markExternalAggregate(type.element) };
-    if (type.kind === "set") return { ...type, element: this.markExternalAggregate(type.element) };
+    if (type.kind === "set") return { ...type, external: true, element: this.markExternalAggregate(type.element) };
     if (type.kind === "map") return {
       ...type,
+      external: true,
       key: this.markExternalAggregate(type.key),
       value: this.markExternalAggregate(type.value),
     };
@@ -4754,7 +4768,8 @@ export class Analyzer implements TypeEnvironment {
 
   private hasExternalOrigin(input: ValueType): boolean {
     const type = this.expandAliases(input);
-    if ((type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list") && type.external) {
+    if ((type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list"
+      || type.kind === "set" || type.kind === "map") && type.external) {
       return true;
     }
     if (type.kind === "class" && type.containsExternal) return true;
@@ -4788,13 +4803,18 @@ export class Analyzer implements TypeEnvironment {
       };
     }
     if (declared.kind === "set" && source.kind === "set") {
-      return { ...declared, element: this.preserveDeclaredOrigin(declared.element, source.element) };
+      return {
+        ...declared,
+        element: this.preserveDeclaredOrigin(declared.element, source.element),
+        ...(source.external ? { external: true } : {}),
+      };
     }
     if (declared.kind === "map" && source.kind === "map") {
       return {
         ...declared,
         key: this.preserveDeclaredOrigin(declared.key, source.key),
         value: this.preserveDeclaredOrigin(declared.value, source.value),
+        ...(source.external ? { external: true } : {}),
       };
     }
     if (declared.kind === "promise" && source.kind === "promise") {
@@ -4860,8 +4880,8 @@ export class Analyzer implements TypeEnvironment {
       }
       if (type.kind === "optional") return optionalOf(resolve(type.inner));
       if (type.kind === "list") return { ...type, element: resolve(type.element) };
-      if (type.kind === "set") return { kind: "set", element: resolve(type.element) };
-      if (type.kind === "map") return { kind: "map", key: resolve(type.key), value: resolve(type.value) };
+      if (type.kind === "set") return { ...type, element: resolve(type.element) };
+      if (type.kind === "map") return { ...type, key: resolve(type.key), value: resolve(type.value) };
       if (type.kind === "promise") return { kind: "promise", value: resolve(type.value) };
       if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, resolve(value)])) };
       if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
@@ -5268,10 +5288,10 @@ export class Analyzer implements TypeEnvironment {
       return { ...type, element: this.resolveNamedClasses(type.element) };
     }
     if (type.kind === "set") {
-      return { kind: "set", element: this.resolveNamedClasses(type.element) };
+      return { ...type, element: this.resolveNamedClasses(type.element) };
     }
     if (type.kind === "map") {
-      return { kind: "map", key: this.resolveNamedClasses(type.key), value: this.resolveNamedClasses(type.value) };
+      return { ...type, key: this.resolveNamedClasses(type.key), value: this.resolveNamedClasses(type.value) };
     }
     if (type.kind === "promise") {
       return { kind: "promise", value: this.resolveNamedClasses(type.value) };
@@ -5712,7 +5732,7 @@ export class Analyzer implements TypeEnvironment {
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" ? { kind: "classConstructor", name: "Error" } satisfies ValueType : null)
       ?? (name === "Map" || name === "Set" ? anyType : null);
-    return type ? { mutable: false, effectMutable: false, type, declaredType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
+    return type ? { mutable: false, effectMutable: false, type, declaredType: type, storageType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
   }
 
   private isFreshUnresolvedCollection(expression: Expression, type: ValueType): boolean {
@@ -5766,15 +5786,18 @@ export class Analyzer implements TypeEnvironment {
     if (aliasedGroup) {
       binding.type = aliasedGroup.type;
       binding.declaredType = aliasedGroup.type;
+      binding.storageType = aliasedGroup.type;
       this.joinCollectionInference(name, binding, aliasedGroup);
     }
     else if (this.isFreshUnresolvedCollection(value, valueType)) {
       binding.type = valueType;
       binding.declaredType = valueType;
+      binding.storageType = valueType;
       this.joinCollectionInference(name, binding, this.createCollectionInference(valueType));
     } else {
       binding.type = valueType;
       binding.declaredType = valueType;
+      binding.storageType = valueType;
     }
     this.recordSemanticBinding(`${binding.span.start}:${name}`, binding.type);
   }
@@ -5786,6 +5809,7 @@ export class Analyzer implements TypeEnvironment {
     declarationSpan: Span,
     internal = false,
     effectMutable = mutable,
+    declaredType = type,
   ): void {
     if (!internal && name.toLowerCase().startsWith("__velar")) {
       this.diagnostics.push(diagnostic("VEL3007", `'${name}' uses the reserved compiler prefix '__velar'`, declarationSpan));
@@ -5808,7 +5832,7 @@ export class Analyzer implements TypeEnvironment {
       this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
       return;
     }
-    scope.set(name, { mutable, effectMutable, type, declaredType: type, span: declarationSpan, narrowingFrame: null });
+    scope.set(name, { mutable, effectMutable, type, declaredType, storageType: type, span: declarationSpan, narrowingFrame: null });
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
   }
 
@@ -5915,8 +5939,8 @@ export class Analyzer implements TypeEnvironment {
     }
     if (type.kind === "optional") return optionalOf(this.displayExternalClasses(type.inner));
     if (type.kind === "list") return { ...type, element: this.displayExternalClasses(type.element) };
-    if (type.kind === "set") return { kind: "set", element: this.displayExternalClasses(type.element) };
-    if (type.kind === "map") return { kind: "map", key: this.displayExternalClasses(type.key), value: this.displayExternalClasses(type.value) };
+    if (type.kind === "set") return { ...type, element: this.displayExternalClasses(type.element) };
+    if (type.kind === "map") return { ...type, key: this.displayExternalClasses(type.key), value: this.displayExternalClasses(type.value) };
     if (type.kind === "promise") return { kind: "promise", value: this.displayExternalClasses(type.value) };
     if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, this.displayExternalClasses(value)])) };
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
@@ -5929,22 +5953,34 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
-  private declarePattern(pattern: BindingPattern, mutable: boolean, type: ValueType): void {
+  private declarePattern(pattern: BindingPattern, mutable: boolean, type: ValueType, declaredType = type): void {
     if (pattern.kind === "NameBindingPattern") {
-      this.declareBinding(pattern.name, mutable, type, pattern.span);
+      this.declareBinding(pattern.name, mutable, type, pattern.span, false, mutable, declaredType);
       return;
     }
     if (pattern.kind === "ListBindingPattern") {
       const element = type.kind === "list" ? type.element : type.kind === "any" ? anyType : unknownType;
+      const declaredElement = declaredType.kind === "list" ? declaredType.element
+        : declaredType.kind === "any" ? anyType : unknownType;
       if (type.kind !== "list" && type.kind !== "any") {
         this.typeError(`Cannot list-destructure ${describeType(type)}`, pattern.span);
       }
-      for (const child of pattern.elements) if (child) this.declarePattern(child, mutable, element);
-      if (pattern.rest) this.declareBinding(pattern.rest.name, mutable, { kind: "list", element }, pattern.rest.span);
+      for (const child of pattern.elements) if (child) this.declarePattern(child, mutable, element, declaredElement);
+      if (pattern.rest) this.declareBinding(
+        pattern.rest.name,
+        mutable,
+        { kind: "list", element },
+        pattern.rest.span,
+        false,
+        mutable,
+        { kind: "list", element: declaredElement },
+      );
       return;
     }
 
     const fields = type.kind === "object" ? type.fields : type.kind === "named" ? this.fieldsOf(type.identity ?? type.name) : null;
+    const declaredFields = declaredType.kind === "object" ? declaredType.fields
+      : declaredType.kind === "named" ? this.fieldsOf(declaredType.identity ?? declaredType.name) : null;
     if (!fields && type.kind !== "any") {
       this.typeError(`Cannot object-destructure ${describeType(type)}`, pattern.span);
     }
@@ -5967,7 +6003,14 @@ export class Analyzer implements TypeEnvironment {
         this.optionalBindingEntries.add(entry.span.start);
       }
       if (fields && !fields.has(entry.property)) this.typeError(`Object has no field '${entry.property}'`, entry.span);
-      this.declarePattern(entry.pattern, mutable, field);
+      const declaredFieldValue = declaredFields?.get(entry.property) ?? (declaredType.kind === "any" ? anyType : unknownType);
+      const declaredStructurallyOptional = declaredType.kind === "object" && declaredType.optionalFields?.has(entry.property);
+      this.declarePattern(
+        entry.pattern,
+        mutable,
+        field,
+        declaredStructurallyOptional ? optionalOf(declaredFieldValue) : declaredFieldValue,
+      );
     }
     if (pattern.rest) {
       const remaining = new Map<string, ValueType>();
@@ -5975,11 +6018,20 @@ export class Analyzer implements TypeEnvironment {
       const remainingOptional = type.kind === "object"
         ? new Set([...type.optionalFields ?? []].filter((name) => !selected.has(name)))
         : new Set<string>();
+      const declaredRemaining = new Map<string, ValueType>();
+      for (const [name, field] of declaredFields ?? []) if (!selected.has(name)) declaredRemaining.set(name, field);
+      const declaredRemainingOptional = declaredType.kind === "object"
+        ? new Set([...declaredType.optionalFields ?? []].filter((name) => !selected.has(name)))
+        : new Set<string>();
       this.declareBinding(pattern.rest.name, mutable, type.kind === "any" ? anyType : {
         kind: "object",
         fields: remaining,
         ...(remainingOptional.size > 0 ? { optionalFields: remainingOptional } : {}),
-      }, pattern.rest.span);
+      }, pattern.rest.span, false, mutable, declaredType.kind === "any" ? anyType : {
+        kind: "object",
+        fields: declaredRemaining,
+        ...(declaredRemainingOptional.size > 0 ? { optionalFields: declaredRemainingOptional } : {}),
+      });
     }
   }
 
@@ -6014,7 +6066,7 @@ export class Analyzer implements TypeEnvironment {
       const binding = this.scopes[index]?.get(name);
       if (binding) {
         return binding.narrowingFrame !== null && binding.narrowingFrame < this.flowFrameDepth
-          ? { ...binding, type: binding.declaredType, narrowingFrame: null }
+          ? { ...binding, type: binding.storageType, narrowingFrame: null }
           : binding;
       }
     }
@@ -6033,6 +6085,8 @@ export class Analyzer implements TypeEnvironment {
           effectMutable: binding?.effectMutable ?? false,
           type,
           declaredType: binding?.declaredType ?? type,
+          storageType: binding?.storageType ?? type,
+          ...(binding ? { storageBinding: binding.storageBinding ?? binding } : {}),
           span: binding?.span ?? narrowingSpan,
           narrowingFrame: this.flowFrameDepth,
         });
@@ -6060,6 +6114,8 @@ export class Analyzer implements TypeEnvironment {
           effectMutable: binding.effectMutable,
           type,
           declaredType: binding.declaredType,
+          storageType: binding.storageType,
+          storageBinding: binding.storageBinding ?? binding,
           span: binding.span,
           narrowingFrame: this.flowFrameDepth,
         });
@@ -6124,7 +6180,7 @@ export class Analyzer implements TypeEnvironment {
   private invalidateAssignmentNarrowings(target: AssignmentStatement["target"], binding: Binding | null): void {
     if (target.kind === "IdentifierExpression") {
       if (binding && binding.narrowingFrame !== null) {
-        binding.type = binding.declaredType;
+        binding.type = binding.storageType;
         binding.narrowingFrame = null;
       }
       if (binding) this.invalidateMemberNarrowings(`${binding.span.start}:${target.name}`);
@@ -6148,7 +6204,7 @@ export class Analyzer implements TypeEnvironment {
     for (const scope of this.scopes) {
       for (const binding of scope.values()) {
         if (binding.effectMutable && binding.narrowingFrame === this.flowFrameDepth) {
-          binding.type = binding.declaredType;
+          binding.type = binding.storageType;
           binding.narrowingFrame = null;
         }
       }
@@ -6176,7 +6232,8 @@ export class Analyzer implements TypeEnvironment {
   private runtimeValidationMayRetainHostOrigin(input: ValueType): boolean {
     const type = this.expandAliases(input);
     if (type.kind === "unknown" || type.kind === "any") return true;
-    if (type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list") {
+    if (type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list"
+      || type.kind === "set" || type.kind === "map") {
       return type.external === true || type.kind === "class" && type.containsExternal === true;
     }
     if (type.kind === "optional") return this.runtimeValidationMayRetainHostOrigin(type.inner);
@@ -6199,12 +6256,12 @@ export class Analyzer implements TypeEnvironment {
     return false;
   }
 
-  private listReflectionMayExecute(input: ValueType): boolean {
+  private collectionReflectionMayExecute(input: ValueType): boolean {
     const type = this.expandAliases(input);
     if (type.kind === "any") return true;
-    if (type.kind === "list") return type.external === true;
-    if (type.kind === "optional") return this.listReflectionMayExecute(type.inner);
-    if (type.kind === "union") return type.members.some((member) => this.listReflectionMayExecute(member));
+    if (type.kind === "list" || type.kind === "set" || type.kind === "map") return type.external === true;
+    if (type.kind === "optional") return this.collectionReflectionMayExecute(type.inner);
+    if (type.kind === "union") return type.members.some((member) => this.collectionReflectionMayExecute(member));
     return false;
   }
 
@@ -6216,7 +6273,7 @@ export class Analyzer implements TypeEnvironment {
     }
     if (type.kind === "optional") return this.bindingPatternReflectionMayExecute(pattern, type.inner);
     if (pattern.kind === "ListBindingPattern") {
-      if (this.listReflectionMayExecute(type)) return true;
+      if (this.collectionReflectionMayExecute(type)) return true;
       const element = type.kind === "list" ? type.element : type.kind === "any" ? anyType : unknownType;
       return pattern.elements.some((child) => child !== null && this.bindingPatternReflectionMayExecute(child, element));
     }
@@ -6238,7 +6295,7 @@ export class Analyzer implements TypeEnvironment {
     }
     if (type.kind === "optional") return this.matchPatternReflectionMayExecute(pattern, type.inner);
     if (pattern.kind === "MatchListPattern") {
-      if (this.listReflectionMayExecute(type)) return true;
+      if (this.collectionReflectionMayExecute(type)) return true;
       const element = type.kind === "list" ? type.element : type.kind === "any" ? anyType : unknownType;
       return pattern.elements.some((child) => this.matchPatternReflectionMayExecute(child, element));
     }
@@ -6254,10 +6311,10 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private snapshotFlowFacts(): FlowFactsSnapshot {
-    const bindings = new Map<Binding, { readonly type: ValueType; readonly frame: number | null }>();
+    const bindings = new Map<Binding, { readonly type: ValueType; readonly storageType: ValueType; readonly frame: number | null }>();
     for (const scope of this.scopes) {
       for (const binding of scope.values()) {
-        bindings.set(binding, { type: binding.type, frame: binding.narrowingFrame });
+        bindings.set(binding, { type: binding.type, storageType: binding.storageType, frame: binding.narrowingFrame });
       }
     }
     return {
@@ -6269,6 +6326,7 @@ export class Analyzer implements TypeEnvironment {
   private restoreFlowFacts(snapshot: FlowFactsSnapshot): void {
     for (const [binding, state] of snapshot.bindings) {
       binding.type = state.type;
+      binding.storageType = state.storageType;
       binding.narrowingFrame = state.frame;
     }
     snapshot.members.forEach((source, index) => {
@@ -6283,9 +6341,11 @@ export class Analyzer implements TypeEnvironment {
     this.restoreFlowFacts(snapshot);
     analyze();
     const bindings = new Set<Binding>();
+    const storageTypes = new Map<Binding, ValueType>();
     for (const [binding, state] of snapshot.bindings) {
       if (state.frame !== null
         && (binding.narrowingFrame !== state.frame || !sameType(binding.type, state.type))) bindings.add(binding);
+      storageTypes.set(binding, binding.storageType);
     }
     const members = new Map<number, ReadonlySet<string>>();
     snapshot.members.forEach((source, index) => {
@@ -6298,7 +6358,7 @@ export class Analyzer implements TypeEnvironment {
       if (invalidated.size > 0) members.set(index, invalidated);
     });
     this.restoreFlowFacts(snapshot);
-    return { bindings, members };
+    return { bindings, members, storageTypes };
   }
 
   private flowSnapshotAfterInvalidations(
@@ -6367,10 +6427,19 @@ export class Analyzer implements TypeEnvironment {
     return common;
   }
 
-  private applyFlowInvalidations(branches: readonly FlowFactInvalidations[]): void {
+  private applyFlowInvalidations(branches: readonly FlowFactInvalidations[], includeBaseline = true): void {
+    if (branches.length > 0) {
+      const bindings = new Set(branches.flatMap((branch) => [...branch.storageTypes.keys()]));
+      for (const binding of bindings) {
+        const candidates = branches.map((branch) => branch.storageTypes.get(binding) ?? binding.storageType);
+        if (includeBaseline) candidates.unshift(binding.storageType);
+        binding.storageType = candidates.reduce((merged, candidate) => mergeTypes(merged, candidate));
+        if (binding.narrowingFrame === null) binding.type = binding.storageType;
+      }
+    }
     for (const branch of branches) {
       for (const binding of branch.bindings) {
-        binding.type = binding.declaredType;
+        binding.type = binding.storageType;
         binding.narrowingFrame = null;
       }
       for (const [index, paths] of branch.members) {

@@ -862,6 +862,13 @@ const unsafeSpread: Outer = {...aliasedOuter}
     analysisTypeIdentity({ kind: "list", element: leftObject }),
     analysisTypeIdentity({ kind: "list", element: { ...leftObject, external: true } }),
   );
+  for (const collection of [
+    { kind: "set" as const, element: leftObject },
+    { kind: "map" as const, key: { kind: "string" as const }, value: leftObject },
+  ]) {
+    assert.equal(sameType(collection, { ...collection, external: true }), true);
+    assert.notEqual(analysisTypeIdentity(collection), analysisTypeIdentity({ ...collection, external: true }));
+  }
   const ownedClass = { kind: "class" as const, name: "Box" };
   const containingClass = { ...ownedClass, containsExternal: true as const };
   assert.equal(sameType(ownedClass, containingClass), true);
@@ -11469,6 +11476,51 @@ if rebound.label:
   const annotatedExport = annotatedExternalValues.moduleInterface.exports.get("annotated");
   assert.equal(annotatedExport?.kind === "named" ? annotatedExport.external : false, true);
 
+  const branchAssignedExternalValues = compileCore(`
+type Profile:
+    label: string?
+
+import js {profile} from "host-sdk"
+
+let selected: Profile = {label: "owned"}
+if true:
+    selected = profile
+else:
+    selected = {label: "fallback"}
+if selected.label:
+    const repeated: string = selected.label
+
+let reversed: Profile = {label: "owned"}
+if true:
+    reversed = {label: "fallback"}
+else:
+    reversed = profile
+if reversed.label:
+    const repeated: string = reversed.label
+
+let maybe: Profile = {label: "owned"}
+if true:
+    maybe = profile
+if maybe.label:
+    const repeated: string = maybe.label
+
+let reset: Profile = profile
+if true:
+    reset = {label: "left"}
+else:
+    reset = {label: "right"}
+if reset.label:
+    const repeated: string = reset.label
+
+let narrowed: Profile? = {label: "owned"}
+if narrowed:
+    narrowed = profile
+if narrowed:
+    if narrowed.label:
+        const repeated: string = narrowed.label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(branchAssignedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
+
   const externalListType: ValueType = { kind: "list", element: { kind: "number" }, external: true };
   const externalList = compileCore(`
 import js {values} from "host-sdk"
@@ -11518,6 +11570,63 @@ if current:
     const afterWrite: string = current
 `.trimStart(), { analysis: { imports: new Map([["values", externalListType]]) } });
   assert.equal(externalList.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 7);
+
+  const externalSetType: ValueType = { kind: "set", element: externalRecordType, external: true };
+  const externalMapType: ValueType = {
+    kind: "map",
+    key: { kind: "string" },
+    value: externalRecordType,
+    external: true,
+  };
+  const externalSetAndMap = compileCore(`
+import js {profiles, profilesById} from "host-sdk"
+
+let current: string? = "ready"
+if current:
+    const size = profiles.size
+    const stale: string = current
+
+current = "ready"
+if current:
+    for profile in profiles:
+        const seen = profile
+    const stale: string = current
+
+current = "ready"
+if current:
+    const size = profilesById.size
+    const stale: string = current
+
+current = "ready"
+if current:
+    for id in profilesById:
+        const seen = id
+    const stale: string = current
+
+const setValues = profiles.values()
+if setValues[0].label:
+    const repeated: string = setValues[0].label
+
+const mapValues = profilesById.values()
+if mapValues[0].label:
+    const repeated: string = mapValues[0].label
+
+const ownedSet = profiles.copy()
+current = "ready"
+if current:
+    const size = ownedSet.size
+    const stable: string = current
+
+const ownedMap = Map(profilesById)
+current = "ready"
+if current:
+    const size = ownedMap.size
+    const stable: string = current
+`.trimStart(), { analysis: { imports: new Map<string, ValueType>([
+    ["profiles", externalSetType],
+    ["profilesById", externalMapType],
+  ]) } });
+  assert.equal(externalSetAndMap.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 6);
 
   const internalList = compile(`
 const values = [1]

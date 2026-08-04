@@ -14,8 +14,8 @@ export type ValueType =
   | { readonly kind: "bool" }
   | { readonly kind: "optional"; readonly inner: ValueType }
   | { readonly kind: "list"; readonly element: ValueType; readonly external?: true }
-  | { readonly kind: "set"; readonly element: ValueType }
-  | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType }
+  | { readonly kind: "set"; readonly element: ValueType; readonly external?: true }
+  | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType; readonly external?: true }
   | { readonly kind: "promise"; readonly value: ValueType }
   | {
       readonly kind: "object";
@@ -199,13 +199,18 @@ function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
     };
   }
   if (left.kind === "set" && right.kind === "set") {
-    return { kind: "set", element: mergeEquivalentMetadata(left.element, right.element) };
+    return {
+      kind: "set",
+      element: mergeEquivalentMetadata(left.element, right.element),
+      ...(left.external || right.external ? { external: true } : {}),
+    };
   }
   if (left.kind === "map" && right.kind === "map") {
     return {
       kind: "map",
       key: mergeEquivalentMetadata(left.key, right.key),
       value: mergeEquivalentMetadata(left.value, right.value),
+      ...(left.external || right.external ? { external: true } : {}),
     };
   }
   if (left.kind === "promise" && right.kind === "promise") {
@@ -367,9 +372,9 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
     case "list":
       return `list${external}:${nested(type.element)}`;
     case "set":
-      return `set:${nested(type.element)}`;
+      return `set${external}:${nested(type.element)}`;
     case "map":
-      return `map:${nested(type.key)}:${nested(type.value)}`;
+      return `map${external}:${nested(type.key)}:${nested(type.value)}`;
     case "promise":
       return `promise:${nested(type.value)}`;
     case "object":

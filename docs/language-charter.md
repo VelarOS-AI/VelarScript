@@ -260,18 +260,22 @@ An `is` check against a safe-JavaScript class also accounts for its possible
 the suspension. Declaring a nested function does not itself invalidate facts;
 invoking it does.
 
-Structural records and Lists produced by safe JavaScript declarations retain
+Structural records, Lists, Sets, and Maps produced by safe JavaScript declarations retain
 that host origin through functions, Promises, conditionals, and VelarScript
 module exports. Record reads and reflective operations on those values are
-effect boundaries because a getter or Proxy hook may execute. List indexing,
-spreading, binding, iteration, and structural matching likewise account for
-host reflection. Saving one field in a local `const`, object-spreading into a
-new record, or copying a List creates an owned value with ordinary local rules.
+effect boundaries because a getter or Proxy hook may execute. Collection size,
+indexing, spreading, binding, iteration, and structural matching likewise
+account for host reflection. Saving one field in a local `const`,
+object-spreading into a new record, or copying a collection creates an owned
+container with ordinary local rules; referenced elements retain their own
+origin.
 Writing a field or List index on a host-origin value is also an effect boundary.
 An explicit type annotation constrains the visible shape but never claims
 ownership: assigning a host-origin value to `const value: T` or `let value: T`
 preserves that origin, and assigning a fresh owned value back to a `let` restores
-ordinary local behavior.
+ordinary local behavior. This current storage state is merged across reachable
+branches, so reversing `if` branches cannot change the analysis result and two
+explicitly owned branches can jointly restore local behavior.
 
 Functions do not erase this distinction. A return annotation describes the
 visible result shape; it does not claim that a returned reference was newly
