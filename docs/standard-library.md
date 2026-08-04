@@ -170,7 +170,9 @@ through 308 without the former multiply-and-divide overflow for large finite
 values. `randomInt` uses an inclusive lower and exclusive upper safe-integer
 bound; with one argument its lower bound is zero. `gcd` and `lcm` likewise own
 safe integers, and `lcm` rejects an inexact result. Randomness is the host
-JavaScript runtime's `Math.random` and is not cryptographically secure.
+JavaScript runtime's `Math.random` and is not cryptographically secure. Its
+result is checked as a finite number in the native `[0, 1)` range before either
+random API returns a value.
 
 ## `velar/json`
 
@@ -215,7 +217,11 @@ integer from 0 through 10.
 Parsing and encoded output are limited to 16 MiB. Validation stops beyond
 1,000,000 values or 128 nested collections, checks array data descriptors
 without invoking getters, and estimates pretty-print expansion before calling
-the host serializer.
+the host serializer. Serialization and cloning operate on the data-descriptor
+snapshot created during that same validation pass, so a Proxy or List subclass
+cannot present one value for validation and a different value to the serializer.
+Parsed host results are copied through the same boundary, and the serializer's
+return value must be actual text.
 
 ## `velar/async`
 
@@ -320,8 +326,10 @@ keeps astronomical year numbering (`1 BC` is year `0`), matching JavaScript
 `uuid()` returns a cryptographically secure host UUID. It delegates to the
 existing JavaScript host's `crypto.randomUUID()` and fails explicitly when that
 capability is unavailable or returns a non-canonical result; it never falls
-back to timestamps or `Math.random`. `isUuid(value)` checks canonical UUID text
-without changing it and rejects non-36-character input before pattern matching.
+back to timestamps or `Math.random`. The capability must be a data method rather
+than an accessor, and non-`Error` host failures are wrapped without invoking
+conversion hooks. `isUuid(value)` checks canonical UUID text without changing
+it and rejects non-36-character input before pattern matching.
 
 ```velar
 import {isUuid, uuid} from "velar/id"

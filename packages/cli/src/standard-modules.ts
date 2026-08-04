@@ -276,7 +276,7 @@ function __velarJsonFailure(path, message) {
   throw new TypeError("Invalid JSON value at " + path + ": " + message);
 }
 function __velarJsonPath(parent, key) {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) ? parent + "." + key : parent + "[" + JSON.stringify(key) + "]";
+  return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) ? parent + "." + key : parent + "[field]";
 }
 function __velarJsonStringUnits(value) {
   let units = 2;
@@ -293,17 +293,17 @@ function __velarJsonBudget(state, path) {
   if (state.nodes > __velarMaxJsonNodes) __velarJsonFailure(path, "data cannot exceed " + __velarMaxJsonNodes + " values");
   if (state.compactUnits > __velarMaxJsonCodeUnits) __velarJsonFailure(path, "encoded JSON cannot exceed 16 MiB");
 }
-function __velarAssertJson(value, path = "$", state = null) {
-  state ??= { active: new Set(), nodes: 0, depth: 0, compactUnits: 0, prettyLines: 0, prettyIndentWeight: 0, prettyColonSpaces: 0 };
+function __velarJsonState() { return { active: new Set(), nodes: 0, depth: 0, compactUnits: 0, prettyLines: 0, prettyIndentWeight: 0, prettyColonSpaces: 0 }; }
+function __velarInspectJson(value, path, state, copy) {
   state.nodes += 1;
-  if (value === null) { state.compactUnits += 4; __velarJsonBudget(state, path); return state; }
-  if (typeof value === "string") { state.compactUnits += __velarJsonStringUnits(value); __velarJsonBudget(state, path); return state; }
-  if (typeof value === "boolean") { state.compactUnits += value ? 4 : 5; __velarJsonBudget(state, path); return state; }
+  if (value === null) { state.compactUnits += 4; __velarJsonBudget(state, path); return value; }
+  if (typeof value === "string") { state.compactUnits += __velarJsonStringUnits(value); __velarJsonBudget(state, path); return value; }
+  if (typeof value === "boolean") { state.compactUnits += value ? 4 : 5; __velarJsonBudget(state, path); return value; }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) __velarJsonFailure(path, "numbers must be finite");
     state.compactUnits += String(value).length;
     __velarJsonBudget(state, path);
-    return state;
+    return value;
   }
   if (typeof value !== "object") __velarJsonFailure(path, typeof value + " is not supported");
   if (state.depth >= __velarMaxJsonDepth) __velarJsonFailure(path, "data cannot exceed " + __velarMaxJsonDepth + " nested collections");
@@ -323,14 +323,16 @@ function __velarAssertJson(value, path = "$", state = null) {
         state.prettyIndentWeight += value.length * (state.depth + 1) + state.depth;
       }
       __velarJsonBudget(state, path);
+      const output = copy ? new Array(value.length) : value;
       state.depth += 1;
       for (let index = 0; index < value.length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, index);
         if (!descriptor?.enumerable || !("value" in descriptor)) __velarJsonFailure(path + "[" + index + "]", "List entries must be enumerable data values");
-        __velarAssertJson(descriptor.value, path + "[" + index + "]", state);
+        const child = __velarInspectJson(descriptor.value, path + "[" + index + "]", state, copy);
+        if (copy) output[index] = child;
       }
       state.depth -= 1;
-      return state;
+      return output;
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
@@ -345,6 +347,7 @@ function __velarAssertJson(value, path = "$", state = null) {
       state.prettyColonSpaces += keys.length;
     }
     __velarJsonBudget(state, path);
+    const output = copy ? Object.create(null) : value;
     state.depth += 1;
     for (const key of keys) {
       if (typeof key !== "string") __velarJsonFailure(path, "record symbol fields are not supported");
@@ -355,13 +358,23 @@ function __velarAssertJson(value, path = "$", state = null) {
       if (!descriptor?.enumerable || !("value" in descriptor)) {
         __velarJsonFailure(childPath, "record fields must be enumerable data values");
       }
-      __velarAssertJson(descriptor.value, childPath, state);
+      const child = __velarInspectJson(descriptor.value, childPath, state, copy);
+      if (copy) Object.defineProperty(output, key, { value: child, enumerable: true, configurable: true, writable: true });
     }
     state.depth -= 1;
-    return state;
+    return output;
   } finally {
     state.active.delete(value);
   }
+}
+function __velarAssertJson(value, path = "$", state = null) {
+  state ??= __velarJsonState();
+  __velarInspectJson(value, path, state, false);
+  return state;
+}
+function __velarJsonSnapshot(value) {
+  const state = __velarJsonState();
+  return { value: __velarInspectJson(value, "$", state, true), state };
 }
 function __velarJsonIndent(pretty) {
   if (pretty === false) return 0;
@@ -372,11 +385,13 @@ function __velarJsonIndent(pretty) {
   return pretty;
 }
 function __velarJsonStringify(value, pretty = false) {
-  const state = __velarAssertJson(value);
+  const snapshot = __velarJsonSnapshot(value);
+  const state = snapshot.state;
   const indentation = __velarJsonIndent(pretty);
   const estimated = state.compactUnits + (indentation ? state.prettyLines + state.prettyColonSpaces + state.prettyIndentWeight * indentation : 0);
   if (estimated > __velarMaxJsonCodeUnits) throw new RangeError("Encoded JSON cannot exceed 16 MiB");
-  const output = JSON.stringify(value, null, indentation);
+  const output = JSON.stringify(snapshot.value, null, indentation);
+  if (typeof output !== "string") throw new TypeError("The host JSON serializer must return a string");
   if (output.length > __velarMaxJsonCodeUnits) throw new RangeError("Encoded JSON cannot exceed 16 MiB");
   return output;
 }
@@ -789,8 +804,8 @@ export function atan2(left, right) { return binary(left, right, Math.atan2, "ata
 export function degrees(value) { return requireNumber(value, "degrees") * 180 / Math.PI; }
 export function radians(value) { return requireNumber(value, "radians") * Math.PI / 180; }
 export function hypot(left, right) { return binary(left, right, Math.hypot, "hypot"); }
-export const random = Math.random;
-export function randomInt(minimum, maximum = null) { if (maximum === null) { maximum = minimum; minimum = 0; } const width = maximum - minimum; if (!Number.isSafeInteger(minimum) || !Number.isSafeInteger(maximum) || !Number.isSafeInteger(width) || width <= 0) throw new RangeError("randomInt requires an increasing safe-integer range"); return Math.floor(Math.random() * width) + minimum; }
+export function random() { const value = Math.random(); if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("The host random source must return a finite number"); if (value < 0 || value >= 1) throw new RangeError("The host random source must return a number from 0 up to but excluding 1"); return value; }
+export function randomInt(minimum, maximum = null) { if (maximum === null) { maximum = minimum; minimum = 0; } const width = maximum - minimum; if (!Number.isSafeInteger(minimum) || !Number.isSafeInteger(maximum) || !Number.isSafeInteger(width) || width <= 0) throw new RangeError("randomInt requires an increasing safe-integer range"); return Math.floor(random() * width) + minimum; }
 export const isFinite = Number.isFinite;
 export const isInteger = Number.isInteger;
 export function gcd(left, right) { if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right)) throw new TypeError("gcd requires safe integers"); left = Math.abs(left); right = Math.abs(right); while (right) [left, right] = [right, left % right]; return left; }
@@ -801,13 +816,22 @@ ${strictJsonRuntime}
 ${deepEqualRuntime}
 ${runtimeTypeRuntime}
 function runtimeType(Type) { return __velarRequireRuntimeType(Type, "JSON validation", true); }
-function validate(value, Type) { Type = runtimeType(Type); return Type ? Type.parse(value) : value; }
-export function parse(text, Type = null) { if (typeof text !== "string") throw new TypeError("json.parse requires a string"); Type = runtimeType(Type); if (text.length > __velarMaxJsonCodeUnits) throw new RangeError("JSON text cannot exceed 16 MiB"); const value = JSON.parse(text); __velarAssertJson(value); return Type ? Type.parse(value) : value; }
+export function parse(text, Type = null) { if (typeof text !== "string") throw new TypeError("json.parse requires a string"); Type = runtimeType(Type); if (text.length > __velarMaxJsonCodeUnits) throw new RangeError("JSON text cannot exceed 16 MiB"); const value = __velarJsonSnapshot(JSON.parse(text)).value; return Type ? Type.parse(value) : value; }
 export function tryParse(text, Type = null, fallback = null) { Type = runtimeType(Type); try { return parse(text, Type); } catch { return fallback; } }
 export function stringify(value, pretty = false) { return __velarJsonStringify(value, pretty); }
-function sorted(value) { if (value === null || typeof value !== "object") return value; if (Array.isArray(value)) return value.map(sorted); const result = Object.create(null); for (const key of Object.keys(value).sort()) result[key] = sorted(value[key]); return result; }
-export function stableStringify(value, pretty = false) { __velarAssertJson(value); return __velarJsonStringify(sorted(value), pretty); }
-export function clone(value, Type = null) { Type = runtimeType(Type); const cloned = JSON.parse(__velarJsonStringify(value)); return Type ? Type.parse(cloned) : cloned; }
+function sorted(value) {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    const output = new Array(value.length);
+    for (let index = 0; index < value.length; index += 1) output[index] = sorted(Object.getOwnPropertyDescriptor(value, index).value);
+    return output;
+  }
+  const result = Object.create(null);
+  for (const key of Object.getOwnPropertyNames(value).sort()) Object.defineProperty(result, key, { value: sorted(Object.getOwnPropertyDescriptor(value, key).value), enumerable: true, configurable: true, writable: true });
+  return result;
+}
+export function stableStringify(value, pretty = false) { return __velarJsonStringify(sorted(__velarJsonSnapshot(value).value), pretty); }
+export function clone(value, Type = null) { Type = runtimeType(Type); const cloned = __velarJsonSnapshot(JSON.parse(__velarJsonStringify(value))).value; return Type ? Type.parse(cloned) : cloned; }
 export function isSerializable(value) { try { __velarAssertJson(value); return true; } catch { return false; } }
 export function deepEqual(left, right) { return __velarDeepEqual(left, right); }
 `.trimStart()],
@@ -1062,8 +1086,22 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 export function uuid() {
   const source = globalThis.crypto;
-  if (!source || typeof source.randomUUID !== "function") throw new Error("Secure UUID generation is unavailable in this JavaScript host");
-  const value = source.randomUUID();
+  if (!source || typeof source !== "object") throw new Error("Secure UUID generation is unavailable in this JavaScript host");
+  let owner = source;
+  let method = null;
+  for (let depth = 0; owner !== null && depth < 32; depth += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, "randomUUID");
+    if (descriptor) {
+      if (!("value" in descriptor) || typeof descriptor.value !== "function") throw new TypeError("crypto.randomUUID must be a data function");
+      method = descriptor.value;
+      break;
+    }
+    owner = Object.getPrototypeOf(owner);
+  }
+  if (!method) throw new Error("Secure UUID generation is unavailable in this JavaScript host");
+  let value;
+  try { value = method.call(source); }
+  catch (failure) { if (Error.isError(failure)) throw failure; throw new Error("Secure UUID generation failed", { cause: failure }); }
   if (!isUuid(value)) throw new Error("Secure UUID generation returned an invalid UUID");
   return value;
 }

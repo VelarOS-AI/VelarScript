@@ -6308,12 +6308,20 @@ for (const operation of [
 ]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
+const originalMathRandom = Math.random;
+Math.random = () => 1;
+try { random(); console.log("accepted"); } catch (error) { console.log(error.name); }
+try { randomInt(10); console.log("accepted"); } catch (error) { console.log(error.name); }
+Math.random = () => "0.5";
+try { random(); console.log("accepted"); } catch (error) { console.log(error.name); }
+Math.random = originalMathRandom;
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "1.01", "1200", "true", "6 24",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
-    "RangeError", "RangeError", "TypeError", "RangeError", "",
+    "RangeError", "RangeError", "TypeError", "RangeError",
+    "RangeError", "RangeError", "TypeError", "",
   ].join("\n"));
 });
 
@@ -6651,12 +6659,33 @@ for (const operation of [() => parse("{}", {}), () => tryParse("{}", {}), () => 
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 console.log(runtimeTypeReads);
+let jsonValueReads = 0;
+const changingRecord = new Proxy({ value: 1 }, {
+  get(target, key) { jsonValueReads += 1; return key === "value" ? 2 : Reflect.get(target, key); },
+});
+console.log(stringify(changingRecord));
+console.log(clone(changingRecord).value);
+class HostileJsonList extends Array { map() { throw new Error("List map override"); } }
+console.log(stableStringify(new HostileJsonList({ z: 1, a: 2 })));
+console.log(jsonValueReads);
+const originalJsonStringify = JSON.stringify;
+let jsonCoercions = 0;
+JSON.stringify = () => ({ toString() { jsonCoercions += 1; return "{}"; } });
+try { stringify({ value: 1 }); console.log("accepted"); } catch (error) { console.log(error.name); }
+JSON.stringify = originalJsonStringify;
+const originalJsonParse = JSON.parse;
+let jsonGetterReads = 0;
+JSON.parse = () => Object.defineProperty({}, "value", { enumerable: true, get() { jsonGetterReads += 1; return 1; } });
+try { parse("{}"); console.log("accepted"); } catch (error) { console.log(error.name); }
+JSON.parse = originalJsonParse;
+console.log(jsonCoercions + ":" + jsonGetterReads);
 `);
   assert.equal(jsonExecution.status, 0, String(jsonExecution.stderr));
   assert.equal(jsonExecution.stdout, [
     "true", "false", "false", "false", "false", "false", "false", "false", "TypeError", "true",
     '{"__proto__":{"safe":true},"a":1}', '{"value":[1,2]}', "TypeError", "TypeError", "TypeError", "RangeError",
-    "TypeError", "TypeError", "TypeError", "TypeError", "0", "",
+    "TypeError", "TypeError", "TypeError", "TypeError", "0",
+    '{"value":1}', "1", '[{"a":2,"z":1}]', "0", "TypeError", "TypeError", "0:0", "",
   ].join("\n"));
 
   const storage = standardModuleSource("velar/storage") ?? "";
@@ -7106,9 +7135,18 @@ Object.defineProperty(globalThis, "crypto", { configurable: true, value: { rando
 ${source}
 try { uuid(); console.log("accepted"); } catch (error) { console.log(error.name); }
 console.log(isUuid("x".repeat(100000)));
+let uuidGetterReads = 0;
+Object.defineProperty(globalThis, "crypto", { configurable: true, value: Object.defineProperty({}, "randomUUID", { get() { uuidGetterReads += 1; return () => "00000000-0000-4000-8000-000000000000"; } }) });
+try { uuid(); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(uuidGetterReads);
+let uuidCoercions = 0;
+const hostileUuidFailure = { toString() { uuidCoercions += 1; return "unsafe"; } };
+Object.defineProperty(globalThis, "crypto", { configurable: true, value: { randomUUID() { throw hostileUuidFailure; } } });
+try { uuid(); console.log("accepted"); } catch (error) { console.log(error.name + ":" + (error.cause === hostileUuidFailure)); }
+console.log(uuidCoercions);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "Error\nfalse\n");
+  assert.equal(execution.stdout, "Error\nfalse\nTypeError\n0\nError:true\n0\n");
 });
 
 test("0.4 Core standard library rejects invalid typed calls before runtime", async () => {
