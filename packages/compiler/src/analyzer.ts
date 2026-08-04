@@ -200,6 +200,8 @@ export interface LoweringHints {
   readonly normalizedNullResults: ReadonlySet<string>;
   readonly normalizedPromiseValues: ReadonlySet<string>;
   readonly normalizedUndefinedExpressions: ReadonlySet<string>;
+  readonly instanceFieldReads: ReadonlySet<string>;
+  readonly privateInstanceFieldReads: ReadonlySet<string>;
   readonly staticFieldReads: ReadonlyMap<string, number>;
   readonly optionalBindingEntries: ReadonlySet<number>;
   readonly reactiveBindings: ReadonlyMap<string, "state" | "computed">;
@@ -274,6 +276,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly normalizedNullResults = new Set<string>();
   private readonly normalizedPromiseValues = new Set<string>();
   private readonly normalizedUndefinedExpressions = new Set<string>();
+  private readonly instanceFieldReads = new Set<string>();
+  private readonly privateInstanceFieldReads = new Set<string>();
   private readonly staticFieldReads = new Map<string, number>();
   private readonly optionalBindingEntries = new Set<number>();
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
@@ -662,6 +666,8 @@ export class Analyzer implements TypeEnvironment {
       normalizedNullResults: this.normalizedNullResults,
       normalizedPromiseValues: this.normalizedPromiseValues,
       normalizedUndefinedExpressions: this.normalizedUndefinedExpressions,
+      instanceFieldReads: this.instanceFieldReads,
+      privateInstanceFieldReads: this.privateInstanceFieldReads,
       staticFieldReads: this.staticFieldReads,
       optionalBindingEntries: this.optionalBindingEntries,
       reactiveBindings: this.reactiveBindings,
@@ -4795,6 +4801,13 @@ export class Analyzer implements TypeEnvironment {
       }
       if (object.external || object.containsExternal && !method && !privateMethod) {
         result = this.markExternalAggregate(result);
+      }
+      if (readValue && field && !object.external && !classKey.startsWith("js:")) {
+        this.instanceFieldReads.add(spanIdentity(memberSpan));
+      }
+      if (readValue && privateField
+        && !(this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false)) {
+        this.privateInstanceFieldReads.add(spanIdentity(memberSpan));
       }
     } else if (object.kind === "classConstructor") {
       const key = object.identity ?? object.name;

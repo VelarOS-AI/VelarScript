@@ -9707,6 +9707,20 @@ class Counter:
   assert.notEqual(failed.status, 0);
   assert.match(String(failed.stderr), /Static field 'second' was read before initialization/u);
 
+  const compound = compile(`
+class Label:
+    static const first: string = Label.extend()
+    static let second: string = "ready"
+
+    static def extend() -> string:
+        Label.second += "!"
+        return Label.second
+`.trimStart());
+  assert.deepEqual(compound.diagnostics, []);
+  const compoundFailure = executeModule(compound.code ?? "");
+  assert.notEqual(compoundFailure.status, 0);
+  assert.match(String(compoundFailure.stderr), /Static field 'second' was read before initialization/u);
+
   const valid = compile(`
 async def next() -> number:
     return 3
@@ -9725,6 +9739,81 @@ print(Derived.copy)
   const execution = executeModule(valid.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "2\n");
+});
+
+test("instance fields cannot expose partially initialized JavaScript values", () => {
+  const direct = compile(`
+class User:
+    const name: string
+
+    constructor():
+        print(self.name)
+        self.name = "Ada"
+
+User()
+`.trimStart());
+  assert.deepEqual(direct.diagnostics, []);
+  assert.match(direct.code ?? "", /__velarReadInstanceField\(self, "name"\)/u);
+  const directFailure = executeModule(direct.code ?? "");
+  assert.notEqual(directFailure.status, 0);
+  assert.match(String(directFailure.stderr), /Field 'name' was read before initialization/u);
+
+  const privateDirect = compile(`
+class Vault:
+    private const secret: string
+
+    constructor():
+        print(self.secret)
+        self.secret = "token"
+
+Vault()
+`.trimStart());
+  assert.deepEqual(privateDirect.diagnostics, []);
+  assert.match(privateDirect.code ?? "", /__velarReadPrivateField\(self\.#secret, "secret"\)/u);
+  const privateFailure = executeModule(privateDirect.code ?? "");
+  assert.notEqual(privateFailure.status, 0);
+  assert.match(String(privateFailure.stderr), /Private field 'secret' was read before initialization/u);
+
+  const dynamicDispatch = compile(`
+class Base:
+    constructor():
+        self.validate()
+
+    def validate():
+        pass
+
+class Child extends Base:
+    const name: string
+
+    constructor():
+        super()
+        self.name = "Ada"
+
+    override def validate():
+        print(self.name)
+
+Child()
+`.trimStart());
+  assert.deepEqual(dynamicDispatch.diagnostics, []);
+  const dispatchFailure = executeModule(dynamicDispatch.code ?? "");
+  assert.notEqual(dispatchFailure.status, 0);
+  assert.match(String(dispatchFailure.stderr), /Field 'name' was read before initialization/u);
+
+  const valid = compile(`
+class Score:
+    let value: number = 2
+
+    def add(amount: number):
+        self.value += amount
+
+const score = Score()
+score.add(3)
+print(score.value)
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  const execution = executeModule(valid.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "5\n");
 });
 
 test("class getters expose native read-only derived properties with explicit inheritance", () => {
@@ -12780,7 +12869,7 @@ print(Vault().label())
 print(Runner().run(value=3))
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /self\.#profile \?\? null\)\?\.name/u);
+  assert.match(result.code ?? "", /__velarReadPrivateField\(self\.#profile, "profile"\)\?\.name/u);
   assert.doesNotMatch(result.code ?? "", /\?\.#name/u);
   assert.doesNotMatch(result.code ?? "", /new Vault\(\) \?\? null/u);
   const execution = executeModule(result.code ?? "");

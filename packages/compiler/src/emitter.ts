@@ -63,6 +63,23 @@ export class JavaScriptEmitter {
       .filter((item) => item.code.length > 0);
 
     const helpers: string[] = [...this.additionalHelpers(program)];
+    if (this.hints.instanceFieldReads.size > 0) {
+      helpers.push([
+        "function __velarReadInstanceField(receiver, name) {",
+        "  const value = Reflect.get(receiver, name);",
+        "  if (value === undefined) throw new TypeError(`Field '${name}' was read before initialization or contains undefined`);",
+        "  return value;",
+        "}",
+      ].join("\n"));
+    }
+    if (this.hints.privateInstanceFieldReads.size > 0) {
+      helpers.push([
+        "function __velarReadPrivateField(value, name) {",
+        "  if (value === undefined) throw new TypeError(`Private field '${name}' was read before initialization or contains undefined`);",
+        "  return value;",
+        "}",
+      ].join("\n"));
+    }
     if (this.hints.staticFieldReads.size > 0) {
       helpers.push([
         "function __velarReadStaticField(receiver, name, ownerDepth) {",
@@ -1023,7 +1040,35 @@ export class JavaScriptEmitter {
             `${indentation}}`,
           ].join("\n");
         }
-        return `${indentation}${this.emitMappedAssignmentTarget(statement.target)} ${statement.operator} ${this.emitMappedExpression(statement.value)};`;
+        if (statement.operator !== "=" && statement.target.kind === "MemberExpression") {
+          const key = spanIdentity(statement.target.span);
+          const staticFieldOwnerDepth = this.hints.staticFieldReads.get(key);
+          const guardedInstanceField = this.hints.instanceFieldReads.has(key);
+          const guardedPrivateField = this.hints.privateInstanceFieldReads.has(key);
+          if (staticFieldOwnerDepth !== undefined || guardedInstanceField || guardedPrivateField) {
+            const suffix = statement.span.start;
+            const objectName = `$velarMemberObject${suffix}`;
+            const privateProperty = this.hints.privateMembers.has(key);
+            const property = `${privateProperty ? "#" : ""}${statement.target.property}`;
+            const read = staticFieldOwnerDepth !== undefined
+              ? `__velarReadStaticField(${objectName}, ${JSON.stringify(statement.target.property)}, ${staticFieldOwnerDepth})`
+              : guardedPrivateField
+                ? `__velarReadPrivateField(${objectName}.${property}, ${JSON.stringify(statement.target.property)})`
+                : `__velarReadInstanceField(${objectName}, ${JSON.stringify(statement.target.property)})`;
+            const operation = `${read} ${statement.operator.slice(0, -1)} ${this.emitMappedExpression(statement.value)}`;
+            return [
+              `${indentation}{`,
+              `${indentation}  const ${objectName} = ${this.emitMappedExpression(statement.target.object)};`,
+              `${indentation}  ${objectName}.${property} = ${operation};`,
+              `${indentation}}`,
+            ].join("\n");
+          }
+        }
+        {
+          const target = this.emitMappedAssignmentTarget(statement.target);
+          const value = this.emitMappedExpression(statement.value);
+          return `${indentation}${target} ${statement.operator} ${value};`;
+        }
       case "ExpressionStatement":
         return `${indentation}${this.emitMappedExpression(statement.expression, false)};`;
       default:
@@ -1467,6 +1512,21 @@ export class JavaScriptEmitter {
           return expression.optional
             ? `(__value => __value == null ? null : ${read})(${object})`
             : `__velarReadStaticField(${object}, ${JSON.stringify(expression.property)}, ${staticFieldOwnerDepth})`;
+        }
+        if (this.hints.instanceFieldReads.has(spanIdentity(expression.span))) {
+          const object = this.emitMappedExpression(expression.object);
+          const read = `__velarReadInstanceField(__value, ${JSON.stringify(expression.property)})`;
+          return expression.optional
+            ? `(__value => __value == null ? null : ${read})(${object})`
+            : `__velarReadInstanceField(${object}, ${JSON.stringify(expression.property)})`;
+        }
+        if (this.hints.privateInstanceFieldReads.has(spanIdentity(expression.span))) {
+          if (expression.optional) {
+            const object = this.emitMappedExpression(expression.object);
+            const read = `__velarReadPrivateField(__value.#${expression.property}, ${JSON.stringify(expression.property)})`;
+            return `(__value => __value == null ? null : ${read})(${object})`;
+          }
+          return `__velarReadPrivateField(${this.emitPostfixReceiver(expression.object)}.#${expression.property}, ${JSON.stringify(expression.property)})`;
         }
         const publicProperty = expression.property;
         const property = `${this.hints.privateMembers.has(spanIdentity(expression.span)) ? "#" : ""}${publicProperty}`;
