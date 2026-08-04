@@ -51,6 +51,9 @@ Compiler and framework changes:
   assignment permission. Named live imports lose stale facts at effect
   boundaries, while namespace imports with live exports fail explicitly and
   all namespace fields remain read-only.
+- Named calls now retain native callee-first evaluation, member receivers, and
+  optional-call short-circuiting while still evaluating argument expressions
+  once in source order before arranging them in declaration order.
 
 Tooling and documentation changes:
 

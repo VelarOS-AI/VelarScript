@@ -55,7 +55,11 @@ element type as separate compiler data. A source rest binding is analyzed as a
 `List<T>`, while calls, exported module interfaces, class-method overrides,
 semantic hover/signature text, manual extern declarations, and the limited
 `.d.ts` bridge all consume the same element contract. Emission is the final
-native JavaScript `...name` lowering; there is no runtime argument wrapper.
+native JavaScript `...name` lowering. Named calls keep the original call
+expression in place and spread a source-ordered, declaration-arranged argument
+list into it. The callee and member receiver therefore evaluate first, `this`
+is preserved, optional calls skip argument evaluation, and no keyword-argument
+record crosses the call boundary.
 
 Type syntax is parsed once into named, generic, optional, union, and function
 nodes. Analysis, public interfaces, semantic tooling, and emission resolve that

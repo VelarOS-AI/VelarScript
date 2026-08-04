@@ -324,6 +324,8 @@ users expect and JavaScript users can read immediately.
 - Names are checked against the declaration.
 - A name cannot appear twice.
 - Arguments evaluate from left to right.
+- The callee, including its receiver and any getter, evaluates before arguments.
+- An optional call that short-circuits does not evaluate its arguments.
 - Lowered JavaScript receives arguments in declaration order.
 - No runtime keyword-argument record is created.
 

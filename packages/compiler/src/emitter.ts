@@ -1327,18 +1327,18 @@ export class JavaScriptEmitter {
         const arguments_ = namedOrder
           ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
           : sourceArguments;
-        const wrapNamed = (value: string): string => namedOrder
-          ? `((__namedArguments) => ${value})([${sourceArguments.join(", ")}])`
-          : value;
+        const emitArguments = (): string => namedOrder
+          ? `...((__namedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+          : arguments_.join(", ");
         if (this.hints.optionalCallees.has(spanIdentity(expression.span))) {
           const call = expression.callee.kind === "MemberExpression"
-            ? `${this.emitPostfixReceiver(expression.callee.object)}${expression.callee.optional ? "?." : "."}${expression.callee.property}?.(${arguments_.join(", ")})`
-            : `${this.emitPostfixReceiver(expression.callee)}?.(${arguments_.join(", ")})`;
-          return wrapNamed(`(${call} ?? null)`);
+            ? `${this.emitPostfixReceiver(expression.callee.object)}${expression.callee.optional ? "?." : "."}${expression.callee.property}?.(${emitArguments()})`
+            : `${this.emitPostfixReceiver(expression.callee)}?.(${emitArguments()})`;
+          return `(${call} ?? null)`;
         }
         if (expression.callee.kind === "MemberExpression" && expression.callee.optional) {
-          const call = `${this.emitPostfixReceiver(expression.callee.object)}?.${expression.callee.property}(${arguments_.join(", ")})`;
-          return wrapNamed(`(${call} ?? null)`);
+          const call = `${this.emitPostfixReceiver(expression.callee.object)}?.${expression.callee.property}(${emitArguments()})`;
+          return `(${call} ?? null)`;
         }
         let callee: string;
         if (expression.callee.kind === "IdentifierExpression" && (expression.callee.name === "Map" || expression.callee.name === "Set")) {
@@ -1351,8 +1351,8 @@ export class JavaScriptEmitter {
         }
         const formRead = this.hints.formReads.get(spanIdentity(expression.span));
         if (formRead) arguments_.push(JSON.stringify(formRead));
-        const call = `${callee}(${arguments_.join(", ")})`;
-        return wrapNamed(this.hints.optionalCalls.has(spanIdentity(expression.span)) ? `(${call} ?? null)` : call);
+        const call = `${callee}(${emitArguments()})`;
+        return this.hints.optionalCalls.has(spanIdentity(expression.span)) ? `(${call} ?? null)` : call;
       }
       case "MemberExpression": {
         if (this.hints.collectionSizes.has(expression.span.end)) {

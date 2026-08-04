@@ -139,7 +139,7 @@ const label = describe(excited=true, name=mark("name"), count=2)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /\(\(__namedArguments\) => describe\(__namedArguments\[1\], __namedArguments\[2\], __namedArguments\[0\]\)\)\(\[true, mark\("name"\), 2\]\)/u);
+  assert.match(result.code ?? "", /describe\(\.\.\.\(\(__namedArguments\) => \[__namedArguments\[1\], __namedArguments\[2\], __namedArguments\[0\]\]\)\(\[true, mark\("name"\), 2\]\)\)/u);
   const signature = result.moduleInterface.exports.get("describe");
   assert.equal(signature, undefined);
 
@@ -156,6 +156,79 @@ greet(missing="Velar")
   assert.match(positional.diagnostics.map((item) => item.message).join("\n"), /Positional arguments must appear before named arguments/u);
   const colon = compileCore(`def greet(name: string):\n    print(name)\n\ngreet(name: "Velar")\n`);
   assert.match(colon.diagnostics.map((item) => item.message).join("\n"), /uses ':' rather than '='/u);
+});
+
+test("named calls evaluate the callee first and preserve optional short-circuiting", () => {
+  const result = compileCore(`
+let events: List<string> = []
+
+def mark(value: string) -> string:
+    events.append(value)
+    return value
+
+class Service:
+    def describe(first: string, second: string) -> string:
+        return f"{first}:{second}"
+
+class Host:
+    get service() -> Service:
+        events.append("callee")
+        return Service()
+
+const host = Host()
+print(host.service.describe(second=mark("second"), first=mark("first")))
+const absent: Service? = null
+print(absent?.describe(first=mark("skipped"), second="unused") == null)
+print(events.join(","))
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "first:second\ntrue\ncallee,second,first\n");
+});
+
+test("call analysis follows callee-first and source-argument effect order", () => {
+  const named = compileCore(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def clear(box: Box) -> string:
+    box.user = null
+    return "cleared"
+
+def consume(first: string, second: string) -> string:
+    return first
+
+def invalid(box: Box) -> string:
+    assert box.user
+    return consume(second=clear(box), first=box.user.name)
+`.trimStart());
+  assert.equal(named.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+
+  const getter = compileCore(`
+type User:
+    name: string
+
+class Service:
+    def describe(name: string) -> string:
+        return name
+
+class Host:
+    let user: User? = {name: "Ada"}
+
+    get service() -> Service:
+        self.user = null
+        return Service()
+
+def invalid(host: Host) -> string:
+    assert host.user
+    return host.service.describe(name=host.user.name)
+`.trimStart());
+  assert.equal(getter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 });
 
 test("keeps Web syntax outside the Core language unless the project loads the Web extension", () => {
@@ -11260,7 +11333,7 @@ component ActionButton:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /surface\(__namedArguments\[1\], __namedArguments\[0\]\)/u);
+  assert.match(result.code ?? "", /surface\(\.\.\.\(\(__namedArguments\) => \[__namedArguments\[1\], __namedArguments\[0\]\]/u);
   assert.match(result.code ?? "", /__velarLook\(\[/u);
   assert.match(result.css ?? "", /focus-visible:outline"\]\[data-velar-look\]:where\(:focus-visible\)/u);
 });

@@ -213,8 +213,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const arguments_ = namedOrder
         ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
         : sourceArguments;
-      const call = `__velarLookCall(${JSON.stringify(controlledCall)}, [${arguments_.join(", ")}])`;
-      return namedOrder ? `((__namedArguments) => ${call})([${sourceArguments.join(", ")}])` : call;
+      const orderedArguments = namedOrder
+        ? `((__namedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+        : `[${arguments_.join(", ")}]`;
+      return `__velarLookCall(${JSON.stringify(controlledCall)}, ${orderedArguments})`;
     }
     return super.emitExpression(expression);
   }
