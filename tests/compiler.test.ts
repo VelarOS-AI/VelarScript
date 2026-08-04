@@ -6032,11 +6032,14 @@ console.log(await passesAsync(() => expect(() => Promise.reject(new Error("expec
 console.log(await passesAsync(() => expect(() => { throw new Error("sync"); }).toReject()));
 console.log(await passesAsync(() => expect(Promise.resolve(1)).toReject()));
 console.log(await passesAsync(() => expect(42).toReject()));
+let thenGetterReads = 0;
+const hostileThenable = Object.defineProperty({}, "then", { get() { thenGetterReads += 1; return () => null; } });
+console.log(await passesAsync(() => expect(hostileThenable).toReject()), thenGetterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "true false", "true false", "true false", "true false", "true", "false",
-    "true false", "true false", "true", "true", "false", "false", "false", "",
+    "true false", "true false", "true", "true", "false", "false", "false", "false 0", "",
   ].join("\n"));
 
   const directory = await mkdtemp(join(tmpdir(), "velar-test-matchers-"));
@@ -6184,6 +6187,12 @@ for (const [name, callback] of [["all", () => all(sparse)], ["race", () => race(
 }
 try { await timeout(Promise.resolve(1), 1, 42); console.log("accepted"); } catch (error) { console.log("timeout", error.name); }
 try { await retry(() => 1, Number.MAX_SAFE_INTEGER + 1); console.log("accepted"); } catch (error) { console.log("retry", error.name); }
+let asyncThenReads = 0;
+const fakePromise = Object.defineProperty({}, "then", { get() { asyncThenReads += 1; return resolve => resolve(1); } });
+for (const [name, callback] of [["all-value", () => all([1])], ["race-thenable", () => race([fakePromise])], ["timeout-value", () => timeout(1, 1)]]) {
+  try { await callback(); console.log("accepted"); } catch (error) { console.log(name, error.name); }
+}
+console.log(asyncThenReads);
 console.log(
   (await all([Promise.resolve(undefined)]))[0] === null,
   await race([Promise.resolve(undefined)]) === null,
@@ -6194,7 +6203,7 @@ console.log(
 );
 `);
   assert.equal(asyncExecution.status, 0, String(asyncExecution.stderr));
-  assert.equal(asyncExecution.stdout, "all TypeError\nrace TypeError\nmap TypeError\nseries TypeError\ntimeout TypeError\nretry RangeError\ntrue true true true true true\n");
+  assert.equal(asyncExecution.stdout, "all TypeError\nrace TypeError\nmap TypeError\nseries TypeError\ntimeout TypeError\nretry RangeError\nall-value TypeError\nrace-thenable TypeError\ntimeout-value TypeError\n0\ntrue true true true true true\n");
 
   const urlSource = standardModuleSource("velar/url") ?? "";
   const urlExecution = executeModule(`${urlSource}
@@ -6280,12 +6289,11 @@ console.log(coercions + ":" + getterReads);
 let coercions = 0;
 const hostile = { toString() { coercions += 1; return "converted"; } };
 globalThis.RegExp = class { constructor() { throw hostile; } };
-try { matches("Velar", "Velar"); console.log("accepted"); }
-catch (error) { console.log(error.message); }
+console.log(matches("Velar", "Velar"));
 console.log(coercions);
 `);
   assert.equal(textExecution.status, 0, String(textExecution.stderr));
-  assert.equal(textExecution.stdout, "Invalid text pattern\n0\n");
+  assert.equal(textExecution.stdout, "true\n0\n");
 });
 
 test("velar/math never reintroduces JavaScript numeric coercion", () => {
@@ -6361,6 +6369,11 @@ for (const operation of [
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 const originalLogDateNow = Date.now;
+let sinkThenReads = 0;
+const stopThenable = useSink(() => Object.defineProperty({}, "then", { get() { sinkThenReads += 1; return () => null; } }));
+log.info("non-promise sink result");
+stopThenable();
+console.log(sinkThenReads);
 Date.now = () => NaN;
 try { log.info("invalid clock"); console.log("accepted"); } catch (error) { console.log(error.name); }
 Date.now = originalLogDateNow;
@@ -6379,7 +6392,7 @@ console.log(consoleBoundaryFailure + ":" + consoleGetterReads);
     "first:cross-realm:runtime|second:cross-realm:runtime|first:ready:compiler|second:ready:compiler",
     "[velar/log] Log sink failed:A non-Error value was thrown by JavaScript",
     "debug",
-    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
+    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "0",
     "TypeError", "TypeError:0", "",
   ].join("\n"));
 });
@@ -6403,11 +6416,16 @@ for (const operation of [
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 console.log(getterReads);
+let optionReads = 0;
+const proxyOptions = new Proxy({ ignoreCase: true }, { get(target, key) { optionReads += 1; return Reflect.get(target, key); } });
+console.log(matches("VELAR", "velar", proxyOptions), optionReads);
+console.log(findMatches("💙", "").map(match => match.index).join(","));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "007", "Velar…",
-    "RangeError", "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "0", "",
+    "RangeError", "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "0",
+    "true 0", "0,2", "",
   ].join("\n"));
 });
 
@@ -6424,12 +6442,12 @@ for (const operation of [() => repeat("item", 1000001), () => sum(oversized)]) {
 
   const text = standardModuleSource("velar/text") ?? "";
   const textExecution = executeModule(`${text}
-for (const operation of [() => repeat("ab", 9000000), () => padStart("x", 20000000), () => split("x".repeat(1000001), "")]) {
+for (const operation of [() => repeat("ab", 9000000), () => padStart("x", 20000000), () => split("x".repeat(1000001), ""), () => indent("a\\nb", "x".repeat(9 * 1024 * 1024))]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 `);
   assert.equal(textExecution.status, 0, String(textExecution.stderr));
-  assert.equal(textExecution.stdout, "RangeError\nRangeError\nRangeError\n");
+  assert.equal(textExecution.stdout, "RangeError\nRangeError\nRangeError\nRangeError\n");
 
   const json = standardModuleSource("velar/json") ?? "";
   const jsonExecution = executeModule(`${json}

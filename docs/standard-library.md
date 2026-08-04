@@ -121,17 +121,21 @@ runs with `-`; it does not transliterate non-Latin text. `escapeHtml` escapes
 text for HTML content and attribute contexts but does not mark it as trusted
 HTML.
 
-Pattern expressions use the host JavaScript pattern syntax in Unicode mode.
+Pattern expressions use JavaScript pattern syntax in Unicode mode through a
+captured intrinsic implementation, not a replaceable ambient `RegExp` global.
 Each operation creates a fresh pattern; source code never receives `RegExp` or
-its mutable `lastIndex`. Options are one typed record containing only optional
+its mutable `lastIndex`. Options are copied from one typed data record containing only optional
 `ignoreCase`, `multiline`, and `dotAll` booleans. `findMatch` returns
 `{value, index, groups}` or `null`; `findMatches` returns all such records and
 normalizes an unmatched capture to `null`. `replaceMatches` replaces every
 match with one literal string, and `splitPattern` omits capture groups from the
 result. Invalid patterns throw `TypeError` at the VelarScript boundary.
 
-Pattern source is limited to 4,096 code units, pattern input/output text to
-16 MiB, and list-producing pattern operations to 1,000,000 results. Patterns
+Pattern source is limited to 4,096 code units, pattern input/output and returned
+match text to 16 MiB, and list-producing pattern operations to 1,000,000 results.
+Matches are copied from checked data fields, empty Unicode matches always make
+code-point progress, and replacement size is checked before the final string is
+allocated. Patterns
 are application code, not a sandbox for executing arbitrary user-supplied
 regular expressions; applications that accept search text should use the
 literal `includes`/`startsWith`/`endsWith` operations unless they deliberately
@@ -140,7 +144,9 @@ own a pattern grammar.
 Text counts used by `repeat`, `padStart`, `padEnd`, and `truncate` are
 non-negative safe integers; native string-to-number coercion is not exposed.
 Dynamic pattern options must be plain enumerable data fields, so getters,
-symbols, and class instances are rejected without hidden evaluation.
+symbols, and class instances are rejected without hidden evaluation. Text
+composition such as `indent` checks its complete output budget before joining
+the final string.
 
 ```velar
 import {findMatch, matches, splitPattern} from "velar/text"
@@ -237,7 +243,9 @@ return value must be actual text.
 These helpers use the host Promise queue. They do not create threads, cancel a
 Promise, or replace the JavaScript event loop. Their List arguments use the
 same dense List validation as collection helpers; concurrency counts are
-positive safe integers. Retry attempts are positive safe integers and timeout
+positive safe integers. `all`, `race`, and `timeout` require actual Promises at
+runtime, including across JavaScript realms; arbitrary thenables are rejected
+without probing a `then` accessor. Retry attempts are positive safe integers and timeout
 messages remain real strings at dynamic boundaries. `all` and `race` may start
 at most 10,000 operations at once, `map` concurrency is at most 1,024, retry is
 at most 10,000 attempts, and timer durations stay within the signed 32-bit host
@@ -374,7 +382,9 @@ component BuildStatus:
   scope, message, fields, and optional error.
 - Each sink receives its own fields snapshot, so mutation inside one callback
   cannot rewrite what another sink observes. The optional error is either an
-  actual `Error` or `null`.
+  actual `Error` or `null`. Rejections from an actual Promise returned by a sink
+  are reported internally; arbitrary objects are not treated as thenables and
+  their `then` accessors are never probed.
 - One logger accepts at most 1,000 merged fields, field names are limited to
   1,024 characters, messages to 64 KiB, scopes to 1,024 characters, and an
   application may install at most 1,000 sinks. These limits are checked before

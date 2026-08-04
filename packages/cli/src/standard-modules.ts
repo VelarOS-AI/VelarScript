@@ -692,6 +692,9 @@ export function repeat(value, count) { count = requireCount(count, "repeat count
   ["velar/text", String.raw`
 const maxTextCodeUnits = 16 * 1024 * 1024;
 const maxTextItems = 1000000;
+const nativeRegExpPrototype = Object.getPrototypeOf(/(?:)/u);
+const NativeRegExp = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "constructor").value;
+const nativeRegExpExec = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "exec").value;
 function valueOf(value) { if (typeof value !== "string") throw new TypeError("velar/text requires strings"); if (value.length > maxTextCodeUnits) throw new RangeError("velar/text strings cannot exceed 16 MiB"); return value; }
 function textOutput(value, name) { if (value.length > maxTextCodeUnits) throw new RangeError(name + " output cannot exceed 16 MiB"); return value; }
 function textCount(value, name) { if (!Number.isSafeInteger(value) || value < 0 || value > maxTextCodeUnits) throw new RangeError(name + " must be an integer from 0 through " + maxTextCodeUnits); return value; }
@@ -703,14 +706,16 @@ function patternOptions(value) {
   if (typeof value !== "object" || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) throw new TypeError("text pattern options must be a record");
   if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError("text pattern options cannot contain symbol fields");
   const allowed = new Set(["ignoreCase", "multiline", "dotAll"]);
+  const output = Object.create(null);
   for (const name of Object.getOwnPropertyNames(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, name);
     if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Text pattern option '" + name + "' must be an enumerable data field");
     if (!allowed.has(name)) throw new TypeError("Unknown text pattern option '" + name + "'");
     const option = descriptor.value;
     if (option != null && typeof option !== "boolean") throw new TypeError("Text pattern option '" + name + "' must be bool");
+    output[name] = option;
   }
-  return value;
+  return output;
 }
 function patternOf(expression, options, global = false) {
   expression = valueOf(expression); options = patternOptions(options);
@@ -720,11 +725,46 @@ function patternOf(expression, options, global = false) {
   if (options.ignoreCase === true) flags += "i";
   if (options.multiline === true) flags += "m";
   if (options.dotAll === true) flags += "s";
-  try { return new RegExp(expression, flags); }
+  try { return new NativeRegExp(expression, flags); }
   catch { throw new TypeError("Invalid text pattern"); }
 }
-function matchValue(match) {
-  return Object.freeze({ value: match[0], index: match.index, groups: match.slice(1).map((value) => value === undefined ? null : value) });
+function matchValue(match, input) {
+  if (!Array.isArray(match) || match.length < 1 || match.length > 4097) throw new TypeError("The regular expression engine returned an invalid match");
+  const groups = new Array(match.length - 1);
+  for (let index = 0; index < match.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(match, index);
+    if (!descriptor || !("value" in descriptor)) throw new TypeError("Regular expression matches must contain data values");
+    const value = descriptor.value;
+    if (value !== undefined && typeof value !== "string") throw new TypeError("Regular expression match values must be strings");
+    if (index === 0) {
+      if (typeof value !== "string") throw new TypeError("A regular expression match requires full text");
+    } else groups[index - 1] = value === undefined ? null : value;
+  }
+  const indexDescriptor = Object.getOwnPropertyDescriptor(match, "index");
+  if (!indexDescriptor || !("value" in indexDescriptor) || !Number.isSafeInteger(indexDescriptor.value) || indexDescriptor.value < 0 || indexDescriptor.value > input.length) throw new TypeError("A regular expression match requires a valid index");
+  return Object.freeze({ value: Object.getOwnPropertyDescriptor(match, 0).value, index: indexDescriptor.value, groups });
+}
+function nextTextIndex(value, index) {
+  if (index >= value.length) return index + 1;
+  const first = value.charCodeAt(index);
+  if (first < 0xD800 || first > 0xDBFF || index + 1 >= value.length) return index + 1;
+  const second = value.charCodeAt(index + 1);
+  return second >= 0xDC00 && second <= 0xDFFF ? index + 2 : index + 1;
+}
+function eachMatch(value, pattern, visit) {
+  let count = 0, units = 0;
+  while (true) {
+    const raw = nativeRegExpExec.call(pattern, value);
+    if (raw === null) return;
+    if (count >= maxTextItems) throw new RangeError("Text patterns cannot produce more than " + maxTextItems + " matches");
+    count += 1;
+    const match = matchValue(raw, value);
+    units += match.value.length;
+    for (const group of match.groups) if (group !== null) units += group.length;
+    if (units > maxTextCodeUnits) throw new RangeError("Text pattern results cannot exceed 16 MiB");
+    visit(match);
+    if (match.value === "") pattern.lastIndex = nextTextIndex(value, pattern.lastIndex);
+  }
 }
 export function trim(value) { return valueOf(value).trim(); }
 export function trimStart(value) { return valueOf(value).trimStart(); }
@@ -746,18 +786,42 @@ export function lines(value) { return textList(valueOf(value).split(/\r?\n/u, ma
 export function words(value) { const cleaned = valueOf(value).trim(); return cleaned ? textList(cleaned.split(/\s+/u, maxTextItems + 1), "words") : []; }
 export function slug(value) { return textOutput(valueOf(value).normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/gu, ""), "slug"); }
 export function truncate(value, length, suffix = "…") { value = valueOf(value); suffix = valueOf(suffix); length = textCount(length, "truncate length"); const valueLength = codePointLength(value); if (valueLength <= length) return value; const suffixLength = codePointLength(suffix); if (suffixLength >= length) return codePointPrefix(suffix, length); return codePointPrefix(value, length - suffixLength) + suffix; }
-export function indent(value, prefix = "    ") { return textOutput(lines(valueOf(value)).map((line) => valueOf(prefix) + line).join("\n"), "indent"); }
+export function indent(value, prefix = "    ") {
+  const rows = lines(valueOf(value)); prefix = valueOf(prefix);
+  let units = Math.max(0, rows.length - 1);
+  const output = new Array(rows.length);
+  for (let index = 0; index < rows.length; index += 1) {
+    units += prefix.length + rows[index].length;
+    if (units > maxTextCodeUnits) throw new RangeError("indent output cannot exceed 16 MiB");
+    output[index] = prefix + rows[index];
+  }
+  return output.join("\n");
+}
 export function dedent(value) { const rows = lines(valueOf(value)); let width = null; for (const line of rows) if (line.trim()) { const current = line.match(/^[ \t]*/u)[0].length; width = width === null ? current : Math.min(width, current); } return rows.map((line) => line.slice(width ?? 0)).join("\n"); }
 export function normalizeWhitespace(value) { return valueOf(value).trim().replace(/\s+/gu, " "); }
 export function isBlank(value) { return valueOf(value).trim().length === 0; }
 export function escapeHtml(value) { return textOutput(valueOf(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"), "escapeHtml"); }
-export function matches(value, expression, options = {}) { return patternOf(expression, options).test(valueOf(value)); }
-export function findMatch(value, expression, options = {}) { const match = patternOf(expression, options).exec(valueOf(value)); return match ? matchValue(match) : null; }
-export function findMatches(value, expression, options = {}) { const output = []; for (const match of valueOf(value).matchAll(patternOf(expression, options, true))) { if (output.length >= maxTextItems) throw new RangeError("findMatches cannot produce more than " + maxTextItems + " items"); output.push(matchValue(match)); } return output; }
-export function replaceMatches(value, expression, replacement, options = {}) { return textOutput(valueOf(value).replace(patternOf(expression, options, true), () => valueOf(replacement)), "replaceMatches"); }
+export function matches(value, expression, options = {}) { value = valueOf(value); return nativeRegExpExec.call(patternOf(expression, options), value) !== null; }
+export function findMatch(value, expression, options = {}) { value = valueOf(value); const match = nativeRegExpExec.call(patternOf(expression, options), value); return match === null ? null : matchValue(match, value); }
+export function findMatches(value, expression, options = {}) { value = valueOf(value); const output = []; eachMatch(value, patternOf(expression, options, true), match => output.push(match)); return output; }
+export function replaceMatches(value, expression, replacement, options = {}) {
+  value = valueOf(value); replacement = valueOf(replacement);
+  const output = []; let end = 0, units = 0;
+  eachMatch(value, patternOf(expression, options, true), match => {
+    const before = value.slice(end, match.index);
+    units += before.length + replacement.length;
+    if (units > maxTextCodeUnits) throw new RangeError("replaceMatches output cannot exceed 16 MiB");
+    output.push(before, replacement);
+    end = match.index + match.value.length;
+  });
+  const tail = value.slice(end);
+  if (units + tail.length > maxTextCodeUnits) throw new RangeError("replaceMatches output cannot exceed 16 MiB");
+  output.push(tail);
+  return output.join("");
+}
 export function splitPattern(value, expression, options = {}) {
   value = valueOf(value); const output = []; let end = 0;
-  for (const match of value.matchAll(patternOf(expression, options, true))) { if (output.length >= maxTextItems) throw new RangeError("splitPattern cannot produce more than " + maxTextItems + " items"); output.push(value.slice(end, match.index)); end = match.index + match[0].length; }
+  eachMatch(value, patternOf(expression, options, true), match => { if (output.length >= maxTextItems) throw new RangeError("splitPattern cannot produce more than " + maxTextItems + " items"); output.push(value.slice(end, match.index)); end = match.index + match.value.length; });
   output.push(value.slice(end)); return output;
 }
 `.trimStart()],
@@ -842,9 +906,10 @@ const __velarMaxAsyncFanout = 10000;
 function asyncFanout(values, name) { values = __velarRequireList(values, name); if (values.length > __velarMaxAsyncFanout) throw new RangeError(name + " cannot start more than 10000 operations at once"); return values; }
 export function sleep(milliseconds) { if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("sleep requires milliseconds from 0 through 2147483647"); return new Promise((resolve) => setTimeout(() => resolve(null), milliseconds)); }
 function normalize(value) { return value === undefined ? null : value; }
-export async function all(values) { return (await Promise.all(asyncFanout(values, "async.all"))).map(normalize); }
-export async function race(values) { return normalize(await Promise.race(asyncFanout(values, "async.race"))); }
-export async function timeout(value, milliseconds, message = "Operation timed out") { if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("timeout requires milliseconds from 0 through 2147483647"); if (typeof message !== "string") throw new TypeError("timeout message must be a string"); if (message.length > 65536) throw new RangeError("timeout messages cannot exceed 64 KiB"); let timer; try { return normalize(await Promise.race([value, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); })])); } finally { clearTimeout(timer); } }
+function actualPromise(value, name) { try { return Promise.prototype.then.call(value, normalize); } catch { throw new TypeError(name + " requires actual Promises"); } }
+export async function all(values) { values = asyncFanout(values, "async.all"); return Promise.all(values.map((value) => actualPromise(value, "async.all"))); }
+export async function race(values) { values = asyncFanout(values, "async.race"); return Promise.race(values.map((value) => actualPromise(value, "async.race"))); }
+export async function timeout(value, milliseconds, message = "Operation timed out") { value = actualPromise(value, "async.timeout"); if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("timeout requires milliseconds from 0 through 2147483647"); if (typeof message !== "string") throw new TypeError("timeout message must be a string"); if (message.length > 65536) throw new RangeError("timeout messages cannot exceed 64 KiB"); let timer; try { return normalize(await Promise.race([value, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); })])); } finally { clearTimeout(timer); } }
 export async function retry(task, attempts = 3) { if (typeof task !== "function") throw new TypeError("retry requires a function"); if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10000) throw new RangeError("retry attempts must be an integer from 1 through 10000"); let last; for (let attempt = 0; attempt < attempts; attempt += 1) { try { return normalize(await task()); } catch (error) { last = error; } } throw last; }
 export async function map(values, worker, concurrency = 4) { values = __velarRequireList(values, "async.map"); if (typeof worker !== "function") throw new TypeError("async.map requires a worker"); if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 1024) throw new RangeError("async.map concurrency must be an integer from 1 through 1024"); const output = new Array(values.length); let cursor = 0; async function run() { while (true) { const index = cursor++; if (index >= values.length) return; output[index] = normalize(await worker(values[index])); } } await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, run)); return output; }
 export async function series(tasks) { tasks = __velarRequireList(tasks, "async.series"); if (tasks.some((task) => typeof task !== "function")) throw new TypeError("series requires a List of functions"); const output = []; for (const task of tasks) output.push(normalize(await task())); return output; }
@@ -1168,6 +1233,10 @@ function sinkFailure(value) {
   const error = __velarNormalizeError(value);
   defaultSink(Object.freeze({ timestamp: logTimestamp(), level: "error", scope: "velar/log", message: "Log sink failed", fields: new Map(), error }));
 }
+function observeSinkResult(value) {
+  try { Promise.prototype.then.call(value, undefined, sinkFailure); }
+  catch { /* Non-Promise sink results are intentionally ignored. */ }
+}
 
 function emit(scope, level, message, fields, error = null) {
   message = logText(message, "Log message");
@@ -1180,7 +1249,7 @@ function emit(scope, level, message, fields, error = null) {
     try {
       const delivered = Object.freeze({ ...record, fields: new Map(record.fields) });
       const result = sink(delivered);
-      if (result && typeof result.then === "function") result.catch(sinkFailure);
+      observeSinkResult(result);
     } catch (failure) { sinkFailure(failure); }
   }
   return null;
@@ -1313,8 +1382,10 @@ export function expect(actual) {
         try { result = actual(); }
         catch (error) { throw new Error("Expected function to return a rejecting Promise, but it threw synchronously: " + display(error)); }
       } else result = actual;
-      if (!result || typeof result.then !== "function") throw new TypeError("toReject requires a Promise or a function returning one");
-      try { await result; } catch { return null; }
+      let promise;
+      try { promise = Promise.prototype.then.call(result, value => value); }
+      catch { throw new TypeError("toReject requires a Promise or a function returning one"); }
+      try { await promise; } catch { return null; }
       throw new Error("Expected Promise to reject");
     },
   });
