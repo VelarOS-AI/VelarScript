@@ -3595,7 +3595,74 @@ watch ready:
     await later()
 `.trimStart());
   assert.equal(asynchronousWatch.code, null);
-  assert.ok(asynchronousWatch.diagnostics.some((item) => item.code === "VEL4007" && /mounted block/u.test(item.message)));
+  assert.ok(asynchronousWatch.diagnostics.some((item) => item.code === "VEL4007" && /watch blocks are synchronous/u.test(item.message)));
+
+  const asynchronousComputed = compile(`
+async def later() -> number:
+    return 1
+
+computed value = await later()
+`.trimStart());
+  assert.equal(asynchronousComputed.code, null);
+  assert.ok(asynchronousComputed.diagnostics.some((item) => item.code === "VEL4007" && /Computed expressions.*synchronous/u.test(item.message)));
+
+  const asynchronousJsx = compile(`
+async def label() -> string:
+    return "ready"
+
+mount(<main>{await label()}</main>, "#app")
+`.trimStart());
+  assert.equal(asynchronousJsx.code, null);
+  assert.ok(asynchronousJsx.diagnostics.some((item) => item.code === "VEL4007" && /JSX rendering is synchronous/u.test(item.message)));
+
+  const asynchronousMount = compile(`
+async def createRoot() -> WebNode:
+    return <main>Ready</main>
+
+mount(await createRoot(), "#app")
+`.trimStart());
+  assert.equal(asynchronousMount.code, null);
+  assert.ok(asynchronousMount.diagnostics.some((item) => item.code === "VEL4007" && /mount constructs its root synchronously/u.test(item.message)));
+
+  const namedMount = compile(`
+def root() -> WebNode:
+    print("node")
+    return <main>Ready</main>
+
+def target() -> string:
+    print("target")
+    return "#app"
+
+mount(node=root(), target=target())
+`.trimStart());
+  assert.deepEqual(namedMount.diagnostics, []);
+  assert.match(namedMount.code ?? "", /__velarMount\(\(\) => \(\(__namedArguments\) => \[__namedArguments\[0\], __namedArguments\[1\]\]\)\(\[root\(\), target\(\)\]\), null\)/u);
+  const mountExecution = executeModule(`
+class FakeNode {
+  append(node) { this.child = node; }
+  setAttribute() {}
+}
+const targetNode = new FakeNode();
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement() { return new FakeNode(); },
+  createTextNode() { return new FakeNode(); },
+  createComment() { return new FakeNode(); },
+  querySelector() { return targetNode; },
+};
+${namedMount.code ?? ""}
+`);
+  assert.equal(mountExecution.status, 0, String(mountExecution.stderr));
+  assert.equal(mountExecution.stdout, "node\ntarget\n");
+
+  const reorderedMount = compile(`
+component App:
+    return <main>Ready</main>
+
+mount(target="#app", node=<App />)
+`.trimStart());
+  assert.deepEqual(reorderedMount.diagnostics, []);
+  assert.match(reorderedMount.code ?? "", /__namedArguments\[1\], __namedArguments\[0\]/u);
 });
 
 test("reactive reference state cannot escape through aliases, calls, returns, or nested mutation", () => {

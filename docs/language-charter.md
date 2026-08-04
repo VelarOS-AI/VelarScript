@@ -918,7 +918,9 @@ const visible = filterTasks(tasks.copy(), query)
 return tasks.copy()
 ```
 
-`computed` is read-only and tracks its reactive dependencies.
+`computed` is read-only and tracks its reactive dependencies. Computed
+expressions are synchronous; asynchronous component data belongs in a
+`resource`.
 
 A resource exposes `value`, `loading`, `ready`, `error`, and `reload`. It owns
 stale-result and component-destruction handling.

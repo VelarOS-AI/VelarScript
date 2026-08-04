@@ -238,7 +238,20 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && expression.callee.name === "mount" && expression.arguments.length === 2) {
-      return `__velarMount(() => ${this.emitMappedExpression(expression.arguments[0]!)}, ${this.emitMappedExpression(expression.arguments[1]!)})`;
+      const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+      const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
+      const arguments_ = namedOrder
+        ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
+        : sourceArguments;
+      const evaluated = namedOrder
+        ? `((__namedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+        : `[${arguments_.join(", ")}]`;
+      const targetSource = namedOrder?.[1] ?? 1;
+      const target = targetSource >= 0 ? expression.arguments[targetSource] : null;
+      const fallbackTarget = target?.kind === "LiteralExpression" && typeof target.value === "string"
+        ? JSON.stringify(target.value)
+        : "null";
+      return `__velarMount(() => ${evaluated}, ${fallbackTarget})`;
     }
     const controlledCall = expression.kind === "CallExpression"
       ? this.hints.extensionCalls.get(spanIdentity(expression.span))
@@ -1053,12 +1066,25 @@ function __velarFatal(parent, error) {
   parent.replaceChildren(fallback);
 }
 
-function __velarMount(create, target) {
+function __velarMount(evaluate, fallbackTarget = null) {
+  let values;
+  try {
+    values = evaluate();
+  } catch (failure) {
+    const report = __velarReport(failure, "mount", null);
+    if (fallbackTarget !== null) {
+      try {
+        const fallback = document.querySelector(fallbackTarget);
+        if (fallback) __velarFatal(fallback, report.error);
+      } catch {}
+    }
+    return null;
+  }
+  const value = values[0];
+  const target = values[1];
   const parent = typeof target === "string" ? document.querySelector(target) : target;
   if (!parent) throw new Error("VelarScript mount target was not found");
-  let value;
   try {
-    value = typeof create === "function" ? create() : create;
     if (value && value.__velarComponent) {
       const result = value.mount(parent);
       if (Array.isArray(globalThis.__velarHotDisposers)) globalThis.__velarHotDisposers.push(() => value.destroy());

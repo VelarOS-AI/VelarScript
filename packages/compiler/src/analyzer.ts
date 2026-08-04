@@ -773,6 +773,10 @@ export class Analyzer implements TypeEnvironment {
     return false;
   }
 
+  protected invalidExtensionAwaitMessage(): string | null {
+    return null;
+  }
+
   protected isTopLevelScope(): boolean {
     return this.scopes.length === 1;
   }
@@ -3667,7 +3671,13 @@ export class Analyzer implements TypeEnvironment {
           const invalidFunctionAwait = this.functionDepth > 0 && !this.asynchronousFunctions.at(-1);
           const invalidExtensionAwait = this.functionDepth === 0 && this.invalidExtensionAwaitContext();
           if (this.parameterDefaultDepth === 0 && this.constructorDepth === 0 && (invalidFunctionAwait || invalidExtensionAwait)) {
-            this.diagnostics.push(diagnostic("VEL4007", "'await' can only be used in an async function, mounted block, or at module scope", expression.span));
+            this.diagnostics.push(diagnostic(
+              "VEL4007",
+              invalidExtensionAwait
+                ? this.invalidExtensionAwaitMessage() ?? "'await' is not valid in this synchronous extension context"
+                : "'await' can only be used in an async function, mounted block, or at module scope",
+              expression.span,
+            ));
           }
           const awaited = this.expandAliases(operand);
           this.invalidateEffectfulFlowFacts();

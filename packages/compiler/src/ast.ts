@@ -777,3 +777,49 @@ export interface JSXExpressionChild {
   readonly expression: Expression;
   readonly span: Span;
 }
+
+export function expressionContainsDirectAwait(
+  expression: Expression,
+  extension: (value: Expression) => boolean | undefined = () => undefined,
+): boolean {
+  const extensionResult = extension(expression);
+  if (extensionResult !== undefined) return extensionResult;
+  switch (expression.kind) {
+    case "UnaryExpression":
+      return expression.operator === "await" || expressionContainsDirectAwait(expression.operand, extension);
+    case "FStringExpression":
+      return expression.parts.some((part) => part.kind === "expression" && expressionContainsDirectAwait(part.value, extension));
+    case "ListExpression":
+      return expression.elements.some((element) => expressionContainsDirectAwait(element, extension));
+    case "ObjectExpression":
+      return expression.properties.some((property) => expressionContainsDirectAwait(property.value, extension));
+    case "SpreadExpression":
+      return expressionContainsDirectAwait(expression.value, extension);
+    case "BinaryExpression":
+      return expressionContainsDirectAwait(expression.left, extension) || expressionContainsDirectAwait(expression.right, extension);
+    case "ComparisonChainExpression":
+      return expression.operands.some((operand) => expressionContainsDirectAwait(operand, extension));
+    case "ConditionalExpression":
+      return expressionContainsDirectAwait(expression.condition, extension)
+        || expressionContainsDirectAwait(expression.thenValue, extension)
+        || expressionContainsDirectAwait(expression.elseValue, extension);
+    case "IsExpression":
+      return expressionContainsDirectAwait(expression.value, extension);
+    case "CallExpression":
+      return expressionContainsDirectAwait(expression.callee, extension)
+        || expression.arguments.some((argument) => expressionContainsDirectAwait(argument, extension));
+    case "MemberExpression":
+      return expressionContainsDirectAwait(expression.object, extension);
+    case "IndexExpression":
+      return expressionContainsDirectAwait(expression.object, extension)
+        || expressionContainsDirectAwait(expression.index, extension);
+    case "ArrowFunctionExpression":
+    case "DynamicImportExpression":
+    case "LiteralExpression":
+    case "IdentifierExpression":
+    case "SuperExpression":
+      return false;
+    default:
+      return false;
+  }
+}

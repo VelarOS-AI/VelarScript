@@ -4,6 +4,7 @@ import {
   anyType,
   boolType,
   describeType,
+  expressionContainsDirectAwait,
   isInvalidType,
   isAssignable,
   nullType,
@@ -361,7 +362,8 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
   private mountedDepth = 0;
-  private watchDepth = 0;
+  private synchronousReactiveDepth = 0;
+  private jsxDepth = 0;
   private readonly resources: ReadonlyMap<string, string>;
   private readonly unsafeCssImports = new Set<string>();
 
@@ -390,9 +392,15 @@ export class VelarWebAnalyzer extends Analyzer {
         }
         const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
         const annotationContext = statement.type ? this.resolveValidatedAnnotation(statement.type) : null;
-        if (statement.kind === "ComputedDeclaration") this.flowFrameDepth += 1;
+        if (statement.kind === "ComputedDeclaration") {
+          this.flowFrameDepth += 1;
+          this.synchronousReactiveDepth += 1;
+        }
         const actual = this.inferExpression(statement.initializer, annotationContext ?? unknownType);
-        if (statement.kind === "ComputedDeclaration") this.flowFrameDepth -= 1;
+        if (statement.kind === "ComputedDeclaration") {
+          this.synchronousReactiveDepth -= 1;
+          this.flowFrameDepth -= 1;
+        }
         const declared = annotationContext ?? actual;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
         const kind = statement.kind === "StateDeclaration" ? "state" : "computed";
@@ -419,9 +427,9 @@ export class VelarWebAnalyzer extends Analyzer {
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
-          this.watchDepth += 1;
+          this.synchronousReactiveDepth += 1;
           this.analyzeStatements(statement.body);
-          this.watchDepth -= 1;
+          this.synchronousReactiveDepth -= 1;
           this.exitScope();
         }
         this.flowFrameDepth -= 1;
@@ -492,6 +500,18 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
+    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
+      && expression.callee.name === "mount") {
+      const namedNode = expression.argumentNames?.findIndex((name) => name === "node") ?? -1;
+      const node = expression.arguments[namedNode >= 0 ? namedNode : 0];
+      if (node && expressionContainsDirectAwait(node, (value) => value.kind === "JSXElementExpression" ? false : undefined)) {
+        this.diagnostics.push(diagnostic(
+          "VEL4007",
+          "mount constructs its root synchronously; await the root in a separate module binding before calling mount",
+          node.span,
+        ));
+      }
+    }
     if (expression.kind === "CallExpression" && expression.callee.kind === "MemberExpression"
       && this.reactiveReference(expression.callee.object)
       && ["append", "extend", "insert", "pop", "add", "set", "update", "remove", "clear"].includes(expression.callee.property)) {
@@ -617,7 +637,14 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override invalidExtensionAwaitContext(): boolean {
-    return this.watchDepth > 0 || (this.componentStates !== null && this.mountedDepth === 0);
+    return this.synchronousReactiveDepth > 0 || this.jsxDepth > 0
+      || (this.componentStates !== null && this.mountedDepth === 0);
+  }
+
+  protected override invalidExtensionAwaitMessage(): string | null {
+    if (this.jsxDepth > 0) return "JSX rendering is synchronous; load async component data with a resource or await before constructing JSX";
+    if (this.synchronousReactiveDepth > 0) return "Computed expressions and watch blocks are synchronous; use resource, action, or mounted for async work";
+    return "Component setup and cleanup are synchronous; use resource, action, or mounted for async work";
   }
 
   private componentType(statement: ComponentDeclaration): ValueType {
@@ -697,9 +724,15 @@ export class VelarWebAnalyzer extends Analyzer {
       if (item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration") {
         const annotationValid = item.type ? this.validateTypeReference(item.type) : true;
         const annotationContext = item.type ? this.resolveValidatedAnnotation(item.type) : null;
-        if (item.kind === "ComputedDeclaration") this.flowFrameDepth += 1;
+        if (item.kind === "ComputedDeclaration") {
+          this.flowFrameDepth += 1;
+          this.synchronousReactiveDepth += 1;
+        }
         const actual = this.inferExpression(item.initializer, annotationContext ?? unknownType);
-        if (item.kind === "ComputedDeclaration") this.flowFrameDepth -= 1;
+        if (item.kind === "ComputedDeclaration") {
+          this.synchronousReactiveDepth -= 1;
+          this.flowFrameDepth -= 1;
+        }
         const declared = annotationContext ?? actual;
         if (annotationValid) this.requireAssignable(actual, declared, item.initializer.span);
         this.declareBinding(item.name, item.kind === "StateDeclaration", declared, item.span);
@@ -715,9 +748,9 @@ export class VelarWebAnalyzer extends Analyzer {
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
-        this.watchDepth += 1;
+        this.synchronousReactiveDepth += 1;
         this.analyzeStatements(item.body);
-        this.watchDepth -= 1;
+        this.synchronousReactiveDepth -= 1;
         this.exitScope();
         this.flowFrameDepth -= 1;
       } else if (item.kind === "MountedBlock") {
@@ -838,6 +871,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private inferJsx(expression: JSXElementExpression): ValueType {
+    this.jsxDepth += 1;
     const attributes = new Map(expression.attributes.map((attribute) => [attribute.name, attribute]));
     const component = /^[A-Z]/u.test(expression.tag);
     if (attributes.size !== expression.attributes.length) this.diagnostics.push(diagnostic("VEL5014", `JSX element '${expression.tag}' has duplicate attributes`, expression.span));
@@ -875,6 +909,7 @@ export class VelarWebAnalyzer extends Analyzer {
       }
     }
     if (component) this.invalidateEffectfulFlowFacts();
+    this.jsxDepth -= 1;
     return { kind: "node" };
   }
 

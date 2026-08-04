@@ -67,6 +67,9 @@ component RuntimeStatus:
 - The compiler reports failures from initial `mount`, reactive `render` and
   synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
   and `cleanup`.
+- JSX rendering and `computed` expressions are synchronous. Async component data
+  belongs in `resource`; explicit UI operations belong in `action`; setup that
+  must finish after insertion belongs in `mounted`.
 - Managed callbacks from browser/media/online/visibility watchers, storage
   watches, WebSocket handlers, and server-sent-event handlers report both
   synchronous failures and rejected promises through the same `velar/app`
@@ -80,6 +83,9 @@ component RuntimeStatus:
   the original error. Dynamic and keyed updates build the replacement first,
   so a failed update retains the last valid DOM and discards its incomplete
   scope.
+- Root construction passed to `mount` is synchronous so the runtime can own its
+  failure transaction. Await module-level preload work into a binding before
+  calling `mount`; component data continues to use `resource`.
 - Cleanup remains the sibling `cleanup` block, not a React-style effect. Its
   independent cleanup steps continue after one fails, and every failure is
   reported. `mounted` may await asynchronous work; `cleanup` remains

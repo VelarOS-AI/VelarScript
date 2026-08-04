@@ -10,6 +10,7 @@ import type {
   TypeDeclaration,
   TypeReference,
 } from "./ast.ts";
+import { expressionContainsDirectAwait as containsDirectAwait } from "./ast.ts";
 import { formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
 import type { LoweringHints } from "./analyzer.ts";
 import { VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
@@ -1582,46 +1583,7 @@ export class JavaScriptEmitter {
   }
 
   protected expressionContainsDirectAwait(expression: Expression): boolean {
-    const extensionResult = this.extensionExpressionContainsDirectAwait(expression);
-    if (extensionResult !== undefined) return extensionResult;
-    switch (expression.kind) {
-      case "UnaryExpression":
-        return expression.operator === "await" || this.expressionContainsDirectAwait(expression.operand);
-      case "FStringExpression":
-        return expression.parts.some((part) => part.kind === "expression" && this.expressionContainsDirectAwait(part.value));
-      case "ListExpression":
-        return expression.elements.some((element) => this.expressionContainsDirectAwait(element));
-      case "ObjectExpression":
-        return expression.properties.some((property) => this.expressionContainsDirectAwait(property.value));
-      case "SpreadExpression":
-        return this.expressionContainsDirectAwait(expression.value);
-      case "BinaryExpression":
-        return this.expressionContainsDirectAwait(expression.left) || this.expressionContainsDirectAwait(expression.right);
-      case "ComparisonChainExpression":
-        return expression.operands.some((operand) => this.expressionContainsDirectAwait(operand));
-      case "ConditionalExpression":
-        return this.expressionContainsDirectAwait(expression.condition)
-          || this.expressionContainsDirectAwait(expression.thenValue)
-          || this.expressionContainsDirectAwait(expression.elseValue);
-      case "IsExpression":
-        return this.expressionContainsDirectAwait(expression.value);
-      case "CallExpression":
-        return this.expressionContainsDirectAwait(expression.callee)
-          || expression.arguments.some((argument) => this.expressionContainsDirectAwait(argument));
-      case "MemberExpression":
-        return this.expressionContainsDirectAwait(expression.object);
-      case "IndexExpression":
-        return this.expressionContainsDirectAwait(expression.object)
-          || this.expressionContainsDirectAwait(expression.index);
-      case "ArrowFunctionExpression":
-      case "DynamicImportExpression":
-      case "LiteralExpression":
-      case "IdentifierExpression":
-      case "SuperExpression":
-        return false;
-      default:
-        return false;
-    }
+    return containsDirectAwait(expression, (value) => this.extensionExpressionContainsDirectAwait(value));
   }
 
   private typeRuntimeName(reference: TypeReference): string {
