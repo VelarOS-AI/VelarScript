@@ -113,6 +113,11 @@ Compiler and framework changes:
   forwarding, hoisted calls, methods returning `self`, runtime checks, and
   module interfaces preserve that distinction without making unrelated
   primitive fields effectful.
+- Post-construction field, index, and collection-mutator writes now retain
+  contained host origin for local records, classes, Lists, Sets, and Maps.
+  Flow-scoped reference identities propagate that state through direct and
+  conditional aliases, narrowed bindings, identity functions, and methods
+  returning `self`, while a fresh rebind separates the previous object.
 - Callable and constructor default provenance is applied only when that
   parameter is omitted; an explicit owned argument is not contaminated by an
   external default it replaces.

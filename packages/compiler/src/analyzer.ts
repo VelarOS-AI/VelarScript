@@ -52,6 +52,7 @@ interface Binding {
   type: ValueType;
   declaredType: ValueType;
   storageType: ValueType;
+  referenceIdentities: ReadonlySet<number>;
   readonly storageBinding?: Binding;
   readonly span: Span;
   narrowingFrame: number | null;
@@ -72,6 +73,7 @@ interface FlowFactsSnapshot {
   readonly bindings: ReadonlyMap<Binding, {
     readonly type: ValueType;
     readonly storageType: ValueType;
+    readonly referenceIdentities: ReadonlySet<number>;
     readonly frame: number | null;
   }>;
   readonly members: readonly ReadonlyMap<string, MemberNarrowing>[];
@@ -81,6 +83,7 @@ interface FlowFactInvalidations {
   readonly bindings: ReadonlySet<Binding>;
   readonly members: ReadonlyMap<number, ReadonlySet<string>>;
   readonly storageTypes: ReadonlyMap<Binding, ValueType>;
+  readonly referenceIdentities: ReadonlyMap<Binding, ReadonlySet<number>>;
 }
 
 interface ReturnContext {
@@ -307,6 +310,7 @@ export class Analyzer implements TypeEnvironment {
   private finallyLoopDepths: number[] = [];
   private currentClass: string | null = null;
   private classFieldInitializerDepth = 0;
+  private nextReferenceIdentity = 1;
   protected constructorDepth = 0;
   protected flowFrameDepth = 0;
   private callableOriginChanged = false;
@@ -1112,13 +1116,16 @@ export class Analyzer implements TypeEnvironment {
         if (this.bindingPatternReflectionMayExecute(statement.pattern, actual)) this.invalidateEffectfulFlowFacts();
         this.declarePattern(statement.pattern, statement.binding === "let", declared, contract);
         this.validateKnownBindingShape(statement.pattern, statement.initializer);
-        if (!annotated && statement.pattern.kind === "NameBindingPattern") {
+        if (statement.pattern.kind === "NameBindingPattern") {
           const binding = this.scopes.at(-1)?.get(statement.pattern.name);
           if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
-            const aliasedGroup = aliasedBinding ? this.collectionInferenceGroups.get(aliasedBinding) : null;
-            if (aliasedGroup) this.joinCollectionInference(statement.pattern.name, binding, aliasedGroup);
-            else if (this.isFreshUnresolvedCollection(statement.initializer, declared)) {
-              this.joinCollectionInference(statement.pattern.name, binding, this.createCollectionInference(declared));
+            binding.referenceIdentities = this.referenceIdentitiesForExpression(statement.initializer, declared);
+            if (!annotated) {
+              const aliasedGroup = aliasedBinding ? this.collectionInferenceGroups.get(aliasedBinding) : null;
+              if (aliasedGroup) this.joinCollectionInference(statement.pattern.name, binding, aliasedGroup);
+              else if (this.isFreshUnresolvedCollection(statement.initializer, declared)) {
+                this.joinCollectionInference(statement.pattern.name, binding, this.createCollectionInference(declared));
+              }
             }
           }
         }
@@ -2915,18 +2922,27 @@ export class Analyzer implements TypeEnvironment {
     this.requireAssignable(valueType, targetType, statement.value.span);
     if (targetWritable && assignmentValid) {
       if (statement.target.kind === "MemberExpression") {
+        if (statement.operator === "=" && this.hasExternalOrigin(valueType)) {
+          this.retainContainedOrigin(statement.target.object);
+        }
         if (effectfulMemberWrite) this.invalidateEffectfulFlowFacts();
         else this.invalidateCurrentMemberNarrowings();
       } else if (statement.target.kind === "IndexExpression" && effectfulIndexWrite) {
         this.invalidateEffectfulFlowFacts();
+      } else if (statement.target.kind === "IndexExpression" && statement.operator === "="
+        && this.hasExternalOrigin(valueType)) {
+        this.retainContainedOrigin(statement.target.object);
       } else if (statement.operator === "=") {
         this.invalidateAssignmentNarrowings(statement.target, targetBinding);
         if (targetBinding?.mutable) {
           const storageBinding = targetBinding.storageBinding ?? targetBinding;
           const rebound = this.preserveDeclaredOrigin(storageBinding.declaredType, valueType);
+          const referenceIdentities = this.referenceIdentitiesForExpression(statement.value, rebound);
           storageBinding.storageType = rebound;
+          storageBinding.referenceIdentities = referenceIdentities;
           if (storageBinding.narrowingFrame === null) storageBinding.type = rebound;
           targetBinding.storageType = rebound;
+          targetBinding.referenceIdentities = referenceIdentities;
           targetBinding.type = rebound;
           this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
         }
@@ -4019,6 +4035,7 @@ export class Analyzer implements TypeEnvironment {
         if (argument && object.element.kind === "unknown") {
           if (!this.refineCollectionInference(object, { kind: "list", element: value })) this.requireAssignable(value, object.element, argument.span);
         } else if (argument) this.requireAssignable(value, object.element, argument.span);
+        if (argument && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "element");
         if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
         return nullType;
       }
@@ -4031,6 +4048,7 @@ export class Analyzer implements TypeEnvironment {
           inferred = this.refineCollectionInference(object, source);
         }
         if (argument && !inferred) this.requireAssignable(source, object, argument.span);
+        if (argument && this.hasExternalOrigin(source)) this.retainContainedOrigin(member.object, "element");
         if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
         return nullType;
       }
@@ -4042,6 +4060,7 @@ export class Analyzer implements TypeEnvironment {
         if (argument && object.element.kind === "unknown") {
           if (!this.refineCollectionInference(object, { kind: "list", element: value })) this.requireAssignable(value, object.element, argument.span);
         } else if (argument) this.requireAssignable(value, object.element, argument.span);
+        if (argument && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "element");
         if (arguments_.length !== 2) this.typeError(`Expected 2 arguments but received ${arguments_.length}`, callSpan);
         return nullType;
       }
@@ -4123,6 +4142,8 @@ export class Analyzer implements TypeEnvironment {
         }
         if (arguments_[0]) this.requireAssignable(key, object.key, arguments_[0].span);
         if (arguments_[1]) this.requireAssignable(value, object.value, arguments_[1].span);
+        if (arguments_[0] && this.hasExternalOrigin(key)) this.retainContainedOrigin(member.object, "key");
+        if (arguments_[1] && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "value");
         if (arguments_.length !== 2) this.typeError(`Expected 2 arguments but received ${arguments_.length}`, callSpan);
         return nullType;
       }
@@ -4135,6 +4156,7 @@ export class Analyzer implements TypeEnvironment {
           inferred = this.refineCollectionInference(object, source);
         }
         if (argument && !inferred) this.requireAssignable(source, object, argument.span);
+        if (argument && this.hasExternalOrigin(source)) this.retainContainedOrigin(member.object);
         if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
         return nullType;
       }
@@ -4187,6 +4209,7 @@ export class Analyzer implements TypeEnvironment {
         if (arguments_[0] && object.element.kind === "unknown") {
           if (!this.refineCollectionInference(object, { kind: "set", element: value })) this.requireAssignable(value, object.element, arguments_[0].span);
         } else if (arguments_[0]) this.requireAssignable(value, object.element, arguments_[0].span);
+        if (arguments_[0] && this.hasExternalOrigin(value)) this.retainContainedOrigin(member.object, "element");
         return nullType;
       }
       if (member.property === "update") {
@@ -4200,6 +4223,7 @@ export class Analyzer implements TypeEnvironment {
         if (argument && !inferred) {
           this.requireAssignable(source, { kind: "union", members: [object, { kind: "list", element: object.element }] }, argument.span);
         }
+        if (argument && this.hasExternalOrigin(source)) this.retainContainedOrigin(member.object, "element");
         if (arguments_.length !== 1) this.typeError(`Expected 1 argument but received ${arguments_.length}`, callSpan);
         return nullType;
       }
@@ -4308,6 +4332,7 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Object has no field '${property}'`, memberSpan);
       }
       if (object.external) result = this.markExternalAggregate(result);
+      else if (object.containsExternal) result = this.markExternalAggregate(result);
     } else if (object.kind === "named") {
       const fields = this.fieldsOf(object.identity ?? object.name);
       result = fields?.get(property) ?? unknownType;
@@ -4315,6 +4340,7 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Type '${object.name}' has no field '${property}'`, memberSpan);
       }
       if (object.external) result = this.markExternalAggregate(result);
+      else if (object.containsExternal) result = this.markExternalAggregate(result);
     } else if (object.kind === "class") {
       const classKey = object.identity ?? object.name;
       const privateField = this.privateFieldForAccess(classKey, property, false);
@@ -4766,13 +4792,129 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
+  private markContainedExternal(type: ValueType, collectionPart?: "element" | "key" | "value"): ValueType {
+    if (type.kind === "object" || type.kind === "named" || type.kind === "class") {
+      return { ...type, containsExternal: true };
+    }
+    if (type.kind === "list" || type.kind === "set") {
+      return { ...type, element: this.markExternalAggregate(type.element) };
+    }
+    if (type.kind === "map") {
+      return {
+        ...type,
+        key: !collectionPart || collectionPart === "key" ? this.markExternalAggregate(type.key) : type.key,
+        value: !collectionPart || collectionPart === "value" ? this.markExternalAggregate(type.value) : type.value,
+      };
+    }
+    if (type.kind === "optional") return optionalOf(this.markContainedExternal(type.inner, collectionPart));
+    if (type.kind === "union") return unionOf(type.members.map((member) => this.markContainedExternal(member, collectionPart)));
+    return type;
+  }
+
+  private referenceLike(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "object" || expanded.kind === "named" || expanded.kind === "class"
+      || expanded.kind === "list" || expanded.kind === "set" || expanded.kind === "map") return true;
+    if (expanded.kind === "optional") return this.referenceLike(expanded.inner);
+    if (expanded.kind === "union") return expanded.members.some((member) => this.referenceLike(member));
+    return false;
+  }
+
+  private freshReferenceIdentities(type: ValueType): ReadonlySet<number> {
+    return this.referenceLike(type) ? new Set([this.nextReferenceIdentity++]) : new Set();
+  }
+
+  private referenceIdentitiesForExpression(expression: Expression, type: ValueType): ReadonlySet<number> {
+    if (!this.referenceLike(type)) return new Set();
+    if (expression.kind === "IdentifierExpression") {
+      return this.lookup(expression.name)?.referenceIdentities ?? this.freshReferenceIdentities(type);
+    }
+    if (expression.kind === "MemberExpression" || expression.kind === "IndexExpression") {
+      let root = expression.object;
+      while (root.kind === "MemberExpression" || root.kind === "IndexExpression") root = root.object;
+      if (root.kind === "IdentifierExpression") {
+        const identities = this.lookup(root.name)?.referenceIdentities;
+        if (identities && identities.size > 0) return identities;
+      }
+    }
+    if (expression.kind === "ConditionalExpression") {
+      return new Set([
+        ...this.referenceIdentitiesForExpression(expression.thenValue, type),
+        ...this.referenceIdentitiesForExpression(expression.elseValue, type),
+      ]);
+    }
+    if (expression.kind === "BinaryExpression" && (expression.operator === "??"
+      || expression.operator === "and" || expression.operator === "or")) {
+      return new Set([
+        ...this.referenceIdentitiesForExpression(expression.left, type),
+        ...this.referenceIdentitiesForExpression(expression.right, type),
+      ]);
+    }
+    if (expression.kind === "CallExpression") {
+      const callee = this.inferredExpressionTypes.get(spanIdentity(expression.callee.span));
+      if (callee?.kind === "function" || callee?.kind === "action" || callee?.kind === "intrinsic") {
+        const identities = new Set<number>();
+        for (const index of callee.resultOriginParameters ?? []) {
+          const argument = this.argumentForCallableParameter(expression.arguments, expression.argumentNames, callee, index);
+          if (argument) {
+            for (const identity of this.referenceIdentitiesForExpression(argument, this.inferredExpressionType(argument))) {
+              identities.add(identity);
+            }
+          }
+        }
+        if (callee.resultOriginRest) {
+          for (const argument of this.restArgumentsForCallable(expression.arguments, expression.argumentNames, callee)) {
+            for (const identity of this.referenceIdentitiesForExpression(argument, this.inferredExpressionType(argument))) {
+              identities.add(identity);
+            }
+          }
+        }
+        if (callee.resultOriginReceiver && expression.callee.kind === "MemberExpression") {
+          for (const identity of this.referenceIdentitiesForExpression(
+            expression.callee.object,
+            this.inferredExpressionType(expression.callee.object),
+          )) identities.add(identity);
+        }
+        if (identities.size > 0) return identities;
+      }
+    }
+    return this.freshReferenceIdentities(type);
+  }
+
+  private retainContainedOrigin(expression: Expression, collectionPart?: "element" | "key" | "value"): void {
+    let root = expression;
+    while (root.kind === "MemberExpression" || root.kind === "IndexExpression") root = root.object;
+    if (root.kind !== "IdentifierExpression") return;
+    const binding = this.lookup(root.name);
+    if (!binding) return;
+    const identities = binding.referenceIdentities;
+    const updatedStorage = new Set<Binding>();
+    for (const scope of this.scopes) {
+      for (const [name, candidate] of scope) {
+        if (identities.size > 0
+          && ![...candidate.referenceIdentities].some((identity) => identities.has(identity))) continue;
+        if (identities.size === 0 && candidate !== binding) continue;
+        const storageBinding = candidate.storageBinding ?? candidate;
+        if (!updatedStorage.has(storageBinding)) {
+          const retained = this.markContainedExternal(storageBinding.storageType, collectionPart);
+          storageBinding.storageType = retained;
+          if (storageBinding.narrowingFrame === null) storageBinding.type = retained;
+          updatedStorage.add(storageBinding);
+        }
+        candidate.storageType = storageBinding.storageType;
+        candidate.type = storageBinding.storageType;
+        this.recordSemanticBinding(`${candidate.span.start}:${name}`, candidate.type);
+      }
+    }
+  }
+
   private hasExternalOrigin(input: ValueType): boolean {
     const type = this.expandAliases(input);
     if ((type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list"
       || type.kind === "set" || type.kind === "map") && type.external) {
       return true;
     }
-    if (type.kind === "class" && type.containsExternal) return true;
+    if ((type.kind === "object" || type.kind === "named" || type.kind === "class") && type.containsExternal) return true;
     if (type.kind === "optional") return this.hasExternalOrigin(type.inner);
     if (type.kind === "list" || type.kind === "set") return this.hasExternalOrigin(type.element);
     if (type.kind === "map") return this.hasExternalOrigin(type.key) || this.hasExternalOrigin(type.value);
@@ -4828,6 +4970,15 @@ export class Analyzer implements TypeEnvironment {
           source.fields.has(name) ? this.preserveDeclaredOrigin(field, source.fields.get(name)!) : field,
         ])),
         ...(source.external ? { external: true } : {}),
+        ...(source.containsExternal ? { containsExternal: true } : {}),
+      };
+    }
+    if (declared.kind === "named" && source.kind === "named"
+      && (declared.identity ?? declared.name) === (source.identity ?? source.name)) {
+      return {
+        ...declared,
+        ...(source.external ? { external: true as const } : {}),
+        ...(source.containsExternal ? { containsExternal: true as const } : {}),
       };
     }
     if (declared.kind === "class" && source.kind === "class"
@@ -4843,7 +4994,7 @@ export class Analyzer implements TypeEnvironment {
 
   private clearExternalOrigin(type: ValueType): ValueType {
     if (type.kind === "named") {
-      const { external: _external, ...owned } = type;
+      const { external: _external, containsExternal: _containsExternal, ...owned } = type;
       return owned;
     }
     if (type.kind === "class") {
@@ -4851,7 +5002,7 @@ export class Analyzer implements TypeEnvironment {
       return owned;
     }
     if (type.kind === "object") {
-      const { external: _external, ...owned } = type;
+      const { external: _external, containsExternal: _containsExternal, ...owned } = type;
       return { ...owned, fields: new Map([...type.fields].map(([name, field]) => [name, this.clearExternalOrigin(field)])) };
     }
     if (type.kind === "list") return { kind: "list", element: this.clearExternalOrigin(type.element) };
@@ -5732,7 +5883,16 @@ export class Analyzer implements TypeEnvironment {
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" ? { kind: "classConstructor", name: "Error" } satisfies ValueType : null)
       ?? (name === "Map" || name === "Set" ? anyType : null);
-    return type ? { mutable: false, effectMutable: false, type, declaredType: type, storageType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
+    return type ? {
+      mutable: false,
+      effectMutable: false,
+      type,
+      declaredType: type,
+      storageType: type,
+      referenceIdentities: new Set(),
+      span: { start: 0, end: 0 },
+      narrowingFrame: null,
+    } : null;
   }
 
   private isFreshUnresolvedCollection(expression: Expression, type: ValueType): boolean {
@@ -5832,7 +5992,16 @@ export class Analyzer implements TypeEnvironment {
       this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
       return;
     }
-    scope.set(name, { mutable, effectMutable, type, declaredType, storageType: type, span: declarationSpan, narrowingFrame: null });
+    scope.set(name, {
+      mutable,
+      effectMutable,
+      type,
+      declaredType,
+      storageType: type,
+      referenceIdentities: this.freshReferenceIdentities(type),
+      span: declarationSpan,
+      narrowingFrame: null,
+    });
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
   }
 
@@ -6086,6 +6255,7 @@ export class Analyzer implements TypeEnvironment {
           type,
           declaredType: binding?.declaredType ?? type,
           storageType: binding?.storageType ?? type,
+          referenceIdentities: binding?.referenceIdentities ?? this.freshReferenceIdentities(type),
           ...(binding ? { storageBinding: binding.storageBinding ?? binding } : {}),
           span: binding?.span ?? narrowingSpan,
           narrowingFrame: this.flowFrameDepth,
@@ -6115,6 +6285,7 @@ export class Analyzer implements TypeEnvironment {
           type,
           declaredType: binding.declaredType,
           storageType: binding.storageType,
+          referenceIdentities: binding.referenceIdentities,
           storageBinding: binding.storageBinding ?? binding,
           span: binding.span,
           narrowingFrame: this.flowFrameDepth,
@@ -6234,7 +6405,8 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "unknown" || type.kind === "any") return true;
     if (type.kind === "object" || type.kind === "named" || type.kind === "class" || type.kind === "list"
       || type.kind === "set" || type.kind === "map") {
-      return type.external === true || type.kind === "class" && type.containsExternal === true;
+      return type.external === true
+        || (type.kind === "object" || type.kind === "named" || type.kind === "class") && type.containsExternal === true;
     }
     if (type.kind === "optional") return this.runtimeValidationMayRetainHostOrigin(type.inner);
     if (type.kind === "union") return type.members.some((member) => this.runtimeValidationMayRetainHostOrigin(member));
@@ -6311,10 +6483,20 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private snapshotFlowFacts(): FlowFactsSnapshot {
-    const bindings = new Map<Binding, { readonly type: ValueType; readonly storageType: ValueType; readonly frame: number | null }>();
+    const bindings = new Map<Binding, {
+      readonly type: ValueType;
+      readonly storageType: ValueType;
+      readonly referenceIdentities: ReadonlySet<number>;
+      readonly frame: number | null;
+    }>();
     for (const scope of this.scopes) {
       for (const binding of scope.values()) {
-        bindings.set(binding, { type: binding.type, storageType: binding.storageType, frame: binding.narrowingFrame });
+        bindings.set(binding, {
+          type: binding.type,
+          storageType: binding.storageType,
+          referenceIdentities: binding.referenceIdentities,
+          frame: binding.narrowingFrame,
+        });
       }
     }
     return {
@@ -6327,6 +6509,7 @@ export class Analyzer implements TypeEnvironment {
     for (const [binding, state] of snapshot.bindings) {
       binding.type = state.type;
       binding.storageType = state.storageType;
+      binding.referenceIdentities = state.referenceIdentities;
       binding.narrowingFrame = state.frame;
     }
     snapshot.members.forEach((source, index) => {
@@ -6342,10 +6525,12 @@ export class Analyzer implements TypeEnvironment {
     analyze();
     const bindings = new Set<Binding>();
     const storageTypes = new Map<Binding, ValueType>();
+    const referenceIdentities = new Map<Binding, ReadonlySet<number>>();
     for (const [binding, state] of snapshot.bindings) {
       if (state.frame !== null
         && (binding.narrowingFrame !== state.frame || !sameType(binding.type, state.type))) bindings.add(binding);
       storageTypes.set(binding, binding.storageType);
+      referenceIdentities.set(binding, binding.referenceIdentities);
     }
     const members = new Map<number, ReadonlySet<string>>();
     snapshot.members.forEach((source, index) => {
@@ -6358,7 +6543,7 @@ export class Analyzer implements TypeEnvironment {
       if (invalidated.size > 0) members.set(index, invalidated);
     });
     this.restoreFlowFacts(snapshot);
-    return { bindings, members, storageTypes };
+    return { bindings, members, storageTypes, referenceIdentities };
   }
 
   private flowSnapshotAfterInvalidations(
@@ -6435,6 +6620,11 @@ export class Analyzer implements TypeEnvironment {
         if (includeBaseline) candidates.unshift(binding.storageType);
         binding.storageType = candidates.reduce((merged, candidate) => mergeTypes(merged, candidate));
         if (binding.narrowingFrame === null) binding.type = binding.storageType;
+      }
+      for (const binding of new Set(branches.flatMap((branch) => [...branch.referenceIdentities.keys()]))) {
+        const candidates = branches.map((branch) => branch.referenceIdentities.get(binding) ?? binding.referenceIdentities);
+        if (includeBaseline) candidates.unshift(binding.referenceIdentities);
+        binding.referenceIdentities = new Set(candidates.flatMap((candidate) => [...candidate]));
       }
     }
     for (const branch of branches) {

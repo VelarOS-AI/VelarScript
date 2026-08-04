@@ -23,8 +23,9 @@ export type ValueType =
       readonly readonlyFields?: ReadonlySet<string>;
       readonly optionalFields?: ReadonlySet<string>;
       readonly external?: true;
+      readonly containsExternal?: true;
     }
-  | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly external?: true }
+  | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly external?: true; readonly containsExternal?: true }
   | { readonly kind: "class"; readonly name: string; readonly identity?: string; readonly external?: true; readonly containsExternal?: true }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
   | { readonly kind: "enumObject"; readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> }
@@ -176,10 +177,15 @@ function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
         right.fields.has(name) ? mergeEquivalentMetadata(value, right.fields.get(name)!) : value,
       ])),
       ...(left.external || right.external ? { external: true as const } : {}),
+      ...(left.containsExternal || right.containsExternal ? { containsExternal: true as const } : {}),
     };
   }
   if (left.kind === "named" && right.kind === "named") {
-    return left.external || right.external ? { ...left, external: true } : left;
+    return {
+      ...left,
+      ...(left.external || right.external ? { external: true as const } : {}),
+      ...(left.containsExternal || right.containsExternal ? { containsExternal: true as const } : {}),
+    };
   }
   if (left.kind === "class" && right.kind === "class") {
     return {
@@ -363,7 +369,7 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
     case "classConstructor":
       return `${type.kind}:${type.identity ?? type.name}`;
     case "named":
-      return `named${external}:${type.identity ?? type.name}`;
+      return `named${external}${includeExternal && type.containsExternal ? ":contains-external" : ""}:${type.identity ?? type.name}`;
     case "enum":
     case "enumObject":
       return `${type.kind}:${type.identity}`;
@@ -378,7 +384,7 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
     case "promise":
       return `promise:${nested(type.value)}`;
     case "object":
-      return `object${external}:${[...type.fields]
+      return `object${external}${includeExternal && type.containsExternal ? ":contains-external" : ""}:${[...type.fields]
         .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly:" : ""}${type.optionalFields?.has(name) ? "optional:" : ""}${name}:${value}`)

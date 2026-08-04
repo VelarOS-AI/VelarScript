@@ -103,6 +103,16 @@ refined together so hoisted factories cannot observe a declaration-order gap.
 External default metadata is keyed by formal parameter and applied only when a
 positional or named call omits that parameter.
 
+The same contained-origin state applies after construction. Writing a
+host-origin aggregate into a local record, class field, List slot, Set, or Map
+widens the owning storage while leaving the locally allocated container inert.
+Bindings also carry flow-scoped reference identities. Direct aliases,
+conditional aliases, narrowed bindings, identity-style callable results, and
+methods returning `self` therefore observe the same widening; rebinding a
+variable to a fresh allocation gives it a distinct identity. Collection
+mutators route through this storage operation instead of maintaining a second
+origin model.
+
 Runtime validation proves a value's current shape; it does not prove that a
 Proxy will preserve that shape on its next operation. `Type.parse`, `is`, and
 type-pattern narrowing therefore keep host origin when their input is unchecked

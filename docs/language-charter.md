@@ -297,6 +297,14 @@ class should contain only stable local data.
 An external default contributes origin only when the caller omits that
 parameter; passing an explicit owned value keeps the result owned.
 
+Mutation does not erase the distinction. Storing a host-origin aggregate in a
+local field or collection makes later aggregate reads from that container
+host-origin, while primitive fields and the local container itself remain
+ordinary values. This follows direct and conditional aliases, including a
+helper that returns its input or a method that returns `self`. Rebinding a
+variable to a freshly allocated value separates it from aliases of the previous
+object.
+
 An f-string converts each embedded value at its source position. Primitive and
 enum conversion is inert. Converting an object may invoke its `toString`, so
 object interpolation is an ordinary effect boundary; save any checked value

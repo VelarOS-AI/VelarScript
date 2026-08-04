@@ -858,6 +858,11 @@ const unsafeSpread: Outer = {...aliasedOuter}
   ]) };
   assert.equal(sameType(leftObject, rightObject), true);
   assert.notEqual(analysisTypeIdentity(leftObject), analysisTypeIdentity({ ...leftObject, external: true }));
+  assert.equal(sameType(leftObject, { ...leftObject, containsExternal: true }), true);
+  assert.notEqual(analysisTypeIdentity(leftObject), analysisTypeIdentity({ ...leftObject, containsExternal: true }));
+  const ownedNamed = { kind: "named" as const, name: "Box" };
+  assert.equal(sameType(ownedNamed, { ...ownedNamed, containsExternal: true }), true);
+  assert.notEqual(analysisTypeIdentity(ownedNamed), analysisTypeIdentity({ ...ownedNamed, containsExternal: true }));
   assert.notEqual(
     analysisTypeIdentity({ kind: "list", element: leftObject }),
     analysisTypeIdentity({ kind: "list", element: { ...leftObject, external: true } }),
@@ -11520,6 +11525,152 @@ if narrowed:
         const repeated: string = narrowed.label
 `.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
   assert.equal(branchAssignedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
+
+  const storedExternalMembers = compileCore(`
+type Profile:
+    label: string?
+
+type Wrapper:
+    profile: Profile
+
+class Box:
+    let profile: Profile
+
+    constructor(profile: Profile):
+        self.profile = profile
+
+    def same() -> Box:
+        return self
+
+import js {profile} from "host-sdk"
+
+const owned: Profile = {label: "owned"}
+
+export const box = Box(owned)
+box.profile = profile
+const classStored = box.profile
+if classStored.label:
+    const repeated: string = classStored.label
+
+const values = [owned]
+values[0] = profile
+const listStored = values[0]
+if listStored.label:
+    const repeated: string = listStored.label
+
+const record: Wrapper = {profile: owned}
+record.profile = profile
+const recordStored = record.profile
+if recordStored.label:
+    const repeated: string = recordStored.label
+
+const aliased = Box(owned)
+const alias = aliased
+alias.profile = profile
+const aliasStored = aliased.profile
+if aliasStored.label:
+    const repeated: string = aliasStored.label
+
+let rebound = Box(owned)
+const previous = rebound
+rebound = Box(owned)
+previous.profile = profile
+const previousStored = previous.profile
+if previousStored.label:
+    const repeated: string = previousStored.label
+const reboundStored = rebound.profile
+if reboundStored.label:
+    const stable: string = reboundStored.label
+
+const left = Box(owned)
+const right = Box(owned)
+const selected = true ? left : right
+selected.profile = profile
+const leftStored = left.profile
+if leftStored.label:
+    const repeated: string = leftStored.label
+const rightStored = right.profile
+if rightStored.label:
+    const repeated: string = rightStored.label
+
+def identity(value: Box) -> Box:
+    return value
+
+const functionSource = Box(owned)
+const functionAlias = identity(functionSource)
+functionAlias.profile = profile
+const functionStored = functionSource.profile
+if functionStored.label:
+    const repeated: string = functionStored.label
+
+const methodSource = Box(owned)
+const methodAlias = methodSource.same()
+methodAlias.profile = profile
+const methodStored = methodSource.profile
+if methodStored.label:
+    const repeated: string = methodStored.label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(storedExternalMembers.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 9);
+  const storedBox = storedExternalMembers.moduleInterface.exports.get("box");
+  assert.equal(storedBox?.kind === "class" ? storedBox.containsExternal : false, true);
+
+  const storedExternalCollectionValues = compileCore(`
+type Profile:
+    label: string?
+
+import js {profile} from "host-sdk"
+
+const owned: Profile = {label: "owned"}
+
+const appended = [owned]
+appended.append(profile)
+const appendedValue = appended[1]
+if appendedValue.label:
+    const repeated: string = appendedValue.label
+
+const inserted = [owned]
+inserted.insert(0, profile)
+const insertedValue = inserted[0]
+if insertedValue.label:
+    const repeated: string = insertedValue.label
+
+const extended = [owned]
+extended.extend([profile])
+const extendedValue = extended[1]
+if extendedValue.label:
+    const repeated: string = extendedValue.label
+
+const mapped: Map<string, Profile> = Map()
+mapped.set("host", profile)
+const mappedValue = mapped.get("host")
+if mappedValue:
+    if mappedValue.label:
+        const repeated: string = mappedValue.label
+
+const sourceMap: Map<string, Profile> = Map()
+sourceMap.set("host", profile)
+const updatedMap: Map<string, Profile> = Map()
+updatedMap.update(sourceMap)
+const updatedMapValue = updatedMap.get("host")
+if updatedMapValue:
+    if updatedMapValue.label:
+        const repeated: string = updatedMapValue.label
+
+const added: Set<Profile> = Set()
+added.add(profile)
+const addedValues = added.values()
+if addedValues[0].label:
+    const repeated: string = addedValues[0].label
+
+const sourceSet: Set<Profile> = Set()
+sourceSet.add(profile)
+const updatedSet: Set<Profile> = Set()
+updatedSet.update(sourceSet)
+const updatedSetValues = updatedSet.values()
+if updatedSetValues[0].label:
+    const repeated: string = updatedSetValues[0].label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(storedExternalCollectionValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 7);
 
   const externalListType: ValueType = { kind: "list", element: { kind: "number" }, external: true };
   const externalList = compileCore(`
