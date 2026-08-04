@@ -197,14 +197,14 @@ generated statement. This keeps content hashes and source maps reproducible
 across output locations. Linked
 production maps are disabled by default and remain an explicit manifest input.
 
-Safe JavaScript imports carry an analysis-only boundary-provenance bit. The bit
-flows through bindings, destructuring, type-preserving calls, function returns,
-and public class members, and is included in the converged cross-module
-interface fingerprint. Null normalization is emitted only for a checked
-nullable value with that provenance. Namespace or dynamic imports of a
-VelarScript module containing boundary exports fail closed because the current
-interface deliberately tracks export provenance, not arbitrary nested field
-provenance.
+Null normalization is type-directed rather than provenance-directed. Every
+checked expression whose expanded type is optional, `null`, or `unknown`
+observes JavaScript `undefined` as VelarScript `null`; `Promise<T>` receives the
+same treatment when `T` has that nullish contract. This rule survives values,
+objects, collections, classes, aliases, cycles, namespace imports, and dynamic
+imports without a second propagation model. Unsafe JavaScript `any` remains
+outside the guarantee. Cross-module fixed-point analysis therefore converges on
+complete semantic interface identities, not hidden boundary metadata.
 
 Release packaging is outside compiler semantics. A repository script builds
 all four npm packages, records source and tarball identities, verifies every

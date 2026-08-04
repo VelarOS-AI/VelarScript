@@ -463,11 +463,10 @@ function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]
       ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
       ...[...info.staticFields].map(([field, value]) => [`static-field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
       ...[...info.staticMethods].map(([method, type]) => [`static-method:${method}`, type] as const),
-    ]))}:host:${[...info.hostBoundaryMembers ?? []].sort().join(",")}:static-host:${[...info.hostBoundaryStaticMembers ?? []].sort().join(",")}`)
+    ]))}`)
     .join("|");
   return [
     `exports:${typeMap(interface_.exports)}`,
-    `host:${[...interface_.hostBoundaryExports].sort().join(",")}`,
     `named:${namedTypes}`,
     `aliases:${typeMap(interface_.typeAliases)}`,
     `enums:${enums}`,
@@ -488,7 +487,6 @@ async function createAnalysisContext(
   compilerExtensions: readonly CompilerExtension[],
 ): Promise<AnalysisContext> {
   const imports = new Map<string, ValueType>();
-  const hostImports = new Set<string>();
   const dynamicImports = new Map<string, ValueType>();
   const reactiveImports = new Map<string, "state" | "computed">();
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -518,12 +516,6 @@ async function createAnalysisContext(
         failures.push({
           path: module.inputPath,
           message: `Dynamically imported module '${dependency.source}' exports reactive values; expose behavior through functions or components instead`,
-        });
-      }
-      if (interface_.hostBoundaryExports.size > 0) {
-        failures.push({
-          path: module.inputPath,
-          message: `Dynamically imported module '${dependency.source}' exports JavaScript-boundary values; import those values by name so boundary normalization remains explicit`,
         });
       }
       dynamicImports.set(dependency.source, { kind: "object", fields: new Map(interface_.exports) });
@@ -566,7 +558,7 @@ async function createAnalysisContext(
     }
     const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
-      importInterface(module, dependency, standard, imports, hostImports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
+      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
       continue;
     }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
@@ -575,11 +567,10 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, hostImports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
+    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
   }
   return {
     imports,
-    hostImports,
     dynamicImports,
     reactiveImports,
     namedTypes,
@@ -756,7 +747,6 @@ function importInterface(
   dependency: ModuleInspection["dependencies"][number],
   interface_: ModuleInspection["moduleInterface"],
   imports: Map<string, ValueType>,
-  hostImports: Set<string>,
   reactiveImports: Map<string, "state" | "computed">,
   namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
   namedTypeIdentities: Map<string, string>,
@@ -825,12 +815,6 @@ function importInterface(
             message: `Module '${dependency.source}' exports reactive values; import them by name instead of using a namespace import`,
           });
         }
-        if (interface_.hostBoundaryExports.size > 0) {
-          failures.push({
-            path: module.inputPath,
-            message: `Module '${dependency.source}' exports JavaScript-boundary values; import them by name instead of using a namespace import`,
-          });
-        }
         imports.set(specifier.local, {
           kind: "object",
           fields: new Map([...interface_.exports].map(([name, type]) => [name, resolveImportedType(type)])),
@@ -844,7 +828,6 @@ function importInterface(
         continue;
       }
       imports.set(specifier.local, resolveImportedType(exported));
-      if (interface_.hostBoundaryExports.has(specifier.imported)) hostImports.add(specifier.local);
       const reactive = interface_.reactiveExports.get(specifier.imported);
       if (reactive) reactiveImports.set(specifier.local, reactive);
     }
@@ -867,8 +850,6 @@ function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): Cla
     staticFields: new Map([...info.staticFields].map(([name, field]) => [name, { mutable: field.mutable, type: renameType(field.type, aliases) }])),
     staticGetters: info.staticGetters,
     staticMethods: new Map([...info.staticMethods].map(([name, type]) => [name, renameType(type, aliases)])),
-    ...(info.hostBoundaryMembers ? { hostBoundaryMembers: info.hostBoundaryMembers } : {}),
-    ...(info.hostBoundaryStaticMembers ? { hostBoundaryStaticMembers: info.hostBoundaryStaticMembers } : {}),
   };
 }
 

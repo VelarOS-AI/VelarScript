@@ -149,8 +149,6 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
       parsed.source.path,
       extensions,
       analyzer.semanticTypes(),
-      analyzer.moduleHostBoundaryBindings(),
-      analyzer.moduleClassHostBoundaries(),
     ),
     semanticIndex,
   };
@@ -343,11 +341,6 @@ function interfaceOf(
   path: string,
   extensions: readonly CompilerExtension[],
   analyzedBindings: ReadonlyMap<string, ValueType> = new Map(),
-  analyzedHostBoundaries: ReadonlySet<string> = new Set(),
-  analyzedClassHostBoundaries: ReadonlyMap<string, {
-    readonly members: ReadonlySet<string>;
-    readonly staticMembers: ReadonlySet<string>;
-  }> = new Map(),
 ): ModuleInterface {
   const classIdentities = new Map<string, string>([["Error", "Error"]]);
   for (const statement of program.body) {
@@ -397,7 +390,6 @@ function interfaceOf(
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
   const exports = new Map<string, ValueType>();
-  const hostBoundaryExports = new Set<string>();
   const reactiveExports = new Map<string, "state" | "computed">();
   const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
   const testFunctions: string[] = [];
@@ -436,7 +428,6 @@ function interfaceOf(
       const methods = new Map(statement.methods.filter((method) => !method.static && !method.private).map((method) => [method.name, functionSignature(method, resolve)]));
       const staticMethods = new Map(statement.methods.filter((method) => method.static && !method.private).map((method) => [method.name, functionSignature(method, resolve)]));
       const identity = classIdentities.get(statement.name)!;
-      const hostBoundaries = analyzedClassHostBoundaries.get(statement.name);
       classes.set(statement.name, {
         identity,
         parameters: statement.parameters.map((parameter) => resolve(parameter.type)),
@@ -452,8 +443,6 @@ function interfaceOf(
         staticFields,
         staticGetters: new Set(statement.getters.filter((getter) => getter.static && !getter.private).map((getter) => getter.name)),
         staticMethods,
-        ...(hostBoundaries?.members.size ? { hostBoundaryMembers: hostBoundaries.members } : {}),
-        ...(hostBoundaries?.staticMembers.size ? { hostBoundaryStaticMembers: hostBoundaries.staticMembers } : {}),
       });
     } else if (statement.kind === "FunctionDeclaration" && statement.name.startsWith("test_")) {
       testFunctions.push(statement.name);
@@ -496,12 +485,8 @@ function interfaceOf(
       }
     }
   }
-  for (const name of exports.keys()) {
-    if (analyzedHostBoundaries.has(name)) hostBoundaryExports.add(name);
-  }
   return {
     exports,
-    hostBoundaryExports,
     reactiveExports,
     namedTypes,
     namedTypeIdentities,

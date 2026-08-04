@@ -184,7 +184,6 @@ export interface CompilerAnalyzerFactory {
 
 export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
-  readonly hostBoundaryExports: ReadonlySet<string>;
   readonly reactiveExports: ReadonlyMap<string, "state" | "computed">;
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeIdentities: ReadonlyMap<string, string>;

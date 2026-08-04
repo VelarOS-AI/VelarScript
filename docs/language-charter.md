@@ -810,16 +810,14 @@ validators, optional-chain normalization, readable DOM output, and source maps.
 It does not pretend those additions create a different memory model.
 Calls and awaited operations whose checked result is `null` normalize their
 observable result to `null` after evaluation. Every expression typed as
-optional, `null`, or `unknown` translates JavaScript `undefined` to `null` only
-when the analyzer can trace the value to a checked JavaScript boundary. The
-trace survives assignment, destructuring, members, calls that preserve their
-input type, function returns, and class methods. Ordinary VelarScript values do
-not receive redundant wrappers. Errors and Promise behavior are unchanged;
-Promise normalization uses one cross-module identity cache. Unsafe JavaScript
-`any` imports deliberately remain outside this guarantee. A discarded
-expression result is not wrapped. VelarScript modules that export such boundary
-values require named imports; namespace and dynamic imports are rejected rather
-than losing field-level provenance.
+optional, `null`, or `unknown` translates JavaScript `undefined` to `null` by
+its checked type alone. The same rule applies through assignment,
+destructuring, objects, collections, members, functions, classes, aliases,
+cycles, namespace imports, and dynamic imports. Repeated normalization is
+idempotent. Errors and Promise behavior are unchanged; Promise normalization
+uses one cross-module identity cache. Unsafe JavaScript `any` imports
+deliberately remain outside this guarantee. A discarded expression result is
+not wrapped.
 
 ## 19. Deliberately absent source features
 

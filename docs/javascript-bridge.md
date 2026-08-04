@@ -98,28 +98,20 @@ Calls lower to native JavaScript `new`, including namespace imports, while
 VelarScript keeps the declared class nominal and enforces read-only members.
 After a statically `null` call or `await` is evaluated, its observable result is
 normalized to `null`. Every checked expression typed as optional, `null`, or
-`unknown` translates a JavaScript `undefined` to `null` only while the analyzer
-can prove that the value originated at a safe JavaScript boundary. Provenance is
-preserved through assignment, destructuring, indexing, member access,
-type-preserving function forwarding, returned functions, and class instance or
-static members. Ordinary VelarScript optional values already contain only
-VelarScript `null`, so they are not wrapped again. This keeps the generated code
-minimal without allowing JavaScript `undefined` to leak into checked values.
-Side effects and errors are preserved. Explicit `import js unsafe` values remain
-the caller's responsibility because `any` has no checked result contract.
-
-When a VelarScript module re-exports JavaScript-boundary values, consumers must
-import those values by name. A namespace import or dynamic import of that module
-is rejected because it would erase which fields carry boundary provenance. This
-is a deliberate precision rule, not a restriction on ordinary VelarScript
-modules or on a direct safe `import js` namespace.
+`unknown` translates JavaScript `undefined` to `null`. The decision follows the
+checked type, not where a value originated, so it remains valid through
+assignment, destructuring, objects, collections, member access, functions,
+classes, aliases, cycles, namespace imports, and dynamic imports. Normalization
+is idempotent, evaluates an expression once, and preserves side effects and
+errors. Explicit `import js unsafe` values remain the caller's responsibility
+because `any` has no checked result contract.
 
 Promise values whose checked result can contain `null`, an optional, or
 `unknown` are adapted when they enter a VelarScript expression, not only when
 they are awaited. The adapter is rejection-preserving and its cache is shared
 by generated VelarScript modules, so the same Promise remains the same
-VelarScript Promise even when it is exported, stored, compared, or passed
-through `velar/async` before awaiting.
+VelarScript Promise even when it is exported, stored, compared, imported through
+any supported module form, or passed through `velar/async` before awaiting.
 
 An exported constant whose interface contains ordinary methods remains a plain
 checked object boundary. For example, `request(path: string): Promise<string>`

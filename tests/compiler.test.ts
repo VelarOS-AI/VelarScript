@@ -81,6 +81,21 @@ function assertDevServerExit(exitCode: number | null, stderr: string): void {
   assert.ok(exitCode === 0 || (process.platform === "win32" && exitCode === null), stderr || `Unexpected dev-server exit code ${String(exitCode)}`);
 }
 
+async function stopDevServer(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("Dev server did not stop"));
+    }, 2_000);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.kill("SIGTERM");
+  });
+}
+
 async function linkWorkspaceWebExtension(projectRoot: string): Promise<void> {
   const scope = join(projectRoot, "node_modules", "@velarscript");
   await mkdir(scope, { recursive: true });
@@ -171,7 +186,7 @@ print(describe(2, null))
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /\} else if \(\(value > 10\)\) \{/u);
-  assert.match(result.code ?? "", /\} else if \(\(fallback !== null\)\) \{/u);
+  assert.match(result.code ?? "", /\} else if \(\(\(fallback \?\? null\) !== null\)\) \{/u);
   assert.doesNotMatch(result.code ?? "", /else \{\s+if/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
@@ -1813,7 +1828,7 @@ test("CLI builds a real .vel file", async () => {
   assert.deepEqual(map.sourcesContent, ["const answer = 40 + 2\n"]);
 });
 
-test("dev server exits cleanly after browser requests", async () => {
+test("dev server exits cleanly after browser requests", async (context) => {
   const child = spawn(process.execPath, [
     "packages/cli/src/cli.ts",
     "dev",
@@ -1821,6 +1836,7 @@ test("dev server exits cleanly after browser requests", async () => {
     "--port",
     "42879",
   ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  context.after(() => stopDevServer(child));
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   const deadline = Date.now() + 5_000;
@@ -1856,7 +1872,7 @@ test("dev server exits cleanly after browser requests", async () => {
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
-test("dev server keeps the last good app behind compile-error overlays", async () => {
+test("dev server keeps the last good app behind compile-error overlays", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dev-overlay-"));
   const mainPath = join(directory, "main.vel");
   await linkWorkspaceWebExtension(directory);
@@ -1866,6 +1882,7 @@ test("dev server keeps the last good app behind compile-error overlays", async (
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
+  context.after(() => stopDevServer(child));
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   const waitForOutput = async (pattern: RegExp): Promise<void> => {
@@ -1956,7 +1973,7 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
   assertDevServerExit(exitCode, errors);
 });
 
-test("dev server polling watcher reports project changes without native file events", async () => {
+test("dev server polling watcher reports project changes without native file events", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dev-polling-"));
   const mainPath = join(directory, "main.vel");
   const preloadPath = join(directory, "force-windows-platform.mjs");
@@ -1973,6 +1990,7 @@ test("dev server polling watcher reports project changes without native file eve
     "--port",
     "42882",
   ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  context.after(() => stopDevServer(child));
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   const waitForOutput = async (pattern: RegExp): Promise<void> => {
@@ -2046,7 +2064,7 @@ mount(<App />, "#app")
   }
 });
 
-test("dev server watches installed VelarScript source package roots", async () => {
+test("dev server watches installed VelarScript source package roots", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dev-package-"));
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "library");
@@ -2072,6 +2090,7 @@ mount(<App />, "#app")
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
+  context.after(() => stopDevServer(child));
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   const waitForOutput = async (pattern: RegExp): Promise<void> => {
@@ -2087,7 +2106,7 @@ mount(<App />, "#app")
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
-test("dev server watches JavaScript package subpath declarations and reanalyzes safe imports", async () => {
+test("dev server watches JavaScript package subpath declarations and reanalyzes safe imports", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "velar-dev-js-types-"));
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "typed-library");
@@ -2117,10 +2136,11 @@ mount(<App />, "#app")
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
+  context.after(() => stopDevServer(child));
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   const waitForOutput = async (pattern: RegExp): Promise<void> => {
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 10_000;
     while (!pattern.test(output) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.match(output, pattern);
   };
@@ -7485,7 +7505,7 @@ print(right.right)
   assert.deepEqual(explicit.modules.flatMap((module) => module.result.diagnostics), []);
 });
 
-test("JavaScript boundary provenance crosses Velar module exports", async () => {
+test("null normalization follows checked types across Velar module exports", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-host-reexport-"));
   const packageRoot = join(directory, "node_modules", "boundary-sdk");
   await mkdir(packageRoot, { recursive: true });
@@ -7521,12 +7541,19 @@ test("JavaScript boundary provenance crosses Velar module exports", async () => 
   const namespaceEntry = join(directory, "namespace.vel");
   await writeFile(namespaceEntry, 'import * as bridge from "./bridge.vel"\nprint(bridge.forwardedEmpty == null)\nprint(await bridge.forwardedPromise == null)\n', "utf8");
   const namespaceProject = await compileProject(namespaceEntry);
-  assert.ok(namespaceProject.failures.some((failure) => /JavaScript-boundary values.*import them by name/u.test(failure.message)));
+  assert.deepEqual(namespaceProject.failures, []);
+  assert.deepEqual(namespaceProject.modules.flatMap((module) => module.result.diagnostics), []);
+  const namespaceCode = namespaceProject.modules.find((module) => module.inputPath === namespaceEntry)!.result.code ?? "";
+  assert.match(namespaceCode, /bridge\.forwardedEmpty \?\? null/u);
+  assert.match(namespaceCode, /__velarNormalizePromiseValue\(bridge\.forwardedPromise\)/u);
 
   const dynamicEntry = join(directory, "dynamic.vel");
   await writeFile(dynamicEntry, 'const bridge = await import("./bridge.vel")\nprint(bridge.forwardedEmpty == null)\n', "utf8");
   const dynamicProject = await compileProject(dynamicEntry);
-  assert.ok(dynamicProject.failures.some((failure) => /Dynamically imported module.*JavaScript-boundary values/u.test(failure.message)));
+  assert.deepEqual(dynamicProject.failures, []);
+  assert.deepEqual(dynamicProject.modules.flatMap((module) => module.result.diagnostics), []);
+  const dynamicCode = dynamicProject.modules.find((module) => module.inputPath === dynamicEntry)!.result.code ?? "";
+  assert.match(dynamicCode, /bridge\.forwardedEmpty \?\? null/u);
 
   const internal = join(directory, "internal.vel");
   const internalEntry = join(directory, "internal-main.vel");
@@ -7535,7 +7562,7 @@ test("JavaScript boundary provenance crosses Velar module exports", async () => 
   const internalProject = await compileProject(internalEntry);
   assert.deepEqual(internalProject.failures, []);
   const internalCode = internalProject.modules.find((module) => module.inputPath === internalEntry)!.result.code ?? "";
-  assert.doesNotMatch(internalCode, /maybe \?\? null/u);
+  assert.match(internalCode, /maybe \?\? null/u);
 });
 
 test("rest signatures retain class element types across module and editor boundaries", async () => {
@@ -8903,7 +8930,7 @@ print(box?.label() == null)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /user\.avatar \?\? null/);
-  assert.match(result.code ?? "", /box\?\.label\?\.\(\) \?\? null/);
+  assert.match(result.code ?? "", /\(box \?\? null\)\?\.label\?\.\(\) \?\? null/);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "true\ntrue\n");
@@ -9672,7 +9699,7 @@ component App:
     return <main>ready</main>
 `.trimStart());
   assert.deepEqual(asynchronousMount.diagnostics, []);
-  assert.match(asynchronousMount.code ?? "", /async \(\) => \{[\s\S]*await prepare\(\)/u);
+  assert.match(asynchronousMount.code ?? "", /async \(\) => \{[\s\S]*await __velarNormalizePromiseValue\(prepare\(\)\)/u);
 
   const asynchronousCleanup = compile(`
 async def dispose():
@@ -9866,8 +9893,8 @@ component Profile(user: User?, failed: Error?, loading: bool):
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /if \(loading\)/u);
-  assert.match(result.code ?? "", /failed != null/u);
-  assert.match(result.code ?? "", /user != null/u);
+  assert.match(result.code ?? "", /\(failed \?\? null\) != null/u);
+  assert.match(result.code ?? "", /\(user \?\? null\) != null/u);
   assert.doesNotMatch(result.code ?? "", /__velarStaticAttr\([^\n]+"(?:if|else-if|else)"/u);
 
   const invalid = compile(`

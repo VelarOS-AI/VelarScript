@@ -42,7 +42,6 @@ import {
 
 interface Binding {
   readonly mutable: boolean;
-  hostBoundary: boolean;
   type: ValueType;
   declaredType: ValueType;
   readonly span: Span;
@@ -104,8 +103,6 @@ export interface ClassInfo {
   readonly staticFields: ReadonlyMap<string, ClassField>;
   readonly staticGetters: ReadonlySet<string>;
   readonly staticMethods: ReadonlyMap<string, ValueType>;
-  readonly hostBoundaryMembers?: ReadonlySet<string>;
-  readonly hostBoundaryStaticMembers?: ReadonlySet<string>;
 }
 
 export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
@@ -179,7 +176,6 @@ export interface LoweringHints {
 
 export interface AnalysisContext {
   readonly imports?: ReadonlyMap<string, ValueType>;
-  readonly hostImports?: ReadonlySet<string>;
   readonly dynamicImports?: ReadonlyMap<string, ValueType>;
   readonly reactiveImports?: ReadonlyMap<string, "state" | "computed">;
   readonly namedTypes?: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
@@ -236,8 +232,6 @@ export class Analyzer implements TypeEnvironment {
   private readonly normalizedNullResults = new Set<string>();
   private readonly normalizedPromiseValues = new Set<string>();
   private readonly normalizedUndefinedExpressions = new Set<string>();
-  private readonly hostBoundaryFunctionExpressions = new Set<string>();
-  private readonly hostBoundaryReturnFrames: boolean[] = [];
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
   protected readonly enumValueBindings = new Map<number, string>();
   private readonly exhaustiveMatches = new Set<number>();
@@ -301,7 +295,6 @@ export class Analyzer implements TypeEnvironment {
       staticMethods: new Map(),
     });
     this.importBindings = new Map(context.imports);
-    this.hostImports = new Set(context.hostImports);
     this.dynamicImports = new Map(context.dynamicImports);
     for (const [name, kind] of context.reactiveImports ?? []) this.reactiveBindings.set(name, kind);
     for (const [name, fields] of context.namedTypes ?? []) this.namedTypes.set(name, fields);
@@ -318,7 +311,6 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private readonly importBindings: ReadonlyMap<string, ValueType>;
-  private readonly hostImports: ReadonlySet<string>;
   private readonly dynamicImports: ReadonlyMap<string, ValueType>;
 
   analyze(program: Program): readonly Diagnostic[] {
@@ -376,8 +368,6 @@ export class Analyzer implements TypeEnvironment {
             false,
             this.importType(statement, specifier.local, specifier.imported, specifier.namespace),
             specifier.span,
-            false,
-            (statement.javascript && !statement.unsafe) || this.hostImports.has(specifier.local),
           );
         }
         this.predeclared.add(statement);
@@ -796,8 +786,6 @@ export class Analyzer implements TypeEnvironment {
               false,
               this.importType(statement, specifier.local, specifier.imported, specifier.namespace),
               specifier.span,
-              false,
-              (statement.javascript && !statement.unsafe) || this.hostImports.has(specifier.local),
             );
           }
         }
@@ -933,7 +921,7 @@ export class Analyzer implements TypeEnvironment {
         const declared = annotated ?? actual;
         if (statement.type) this.validateType(declared, statement.type.span);
         this.requireAssignable(actual, declared, statement.initializer.span);
-        this.declarePattern(statement.pattern, statement.binding === "let", declared, this.expressionFromHostBoundary(statement.initializer));
+        this.declarePattern(statement.pattern, statement.binding === "let", declared);
         if (!annotated && statement.pattern.kind === "NameBindingPattern") {
           const binding = this.scopes.at(-1)?.get(statement.pattern.name);
           if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
@@ -960,10 +948,6 @@ export class Analyzer implements TypeEnvironment {
         }
         const expected = this.returnTypes.at(-1) ?? unknownType;
         const actual = statement.value ? this.inferExpression(statement.value, expected) : nullType;
-        if (statement.value && this.expressionFromHostBoundary(statement.value)) {
-          const frame = this.hostBoundaryReturnFrames.length - 1;
-          if (frame >= 0) this.hostBoundaryReturnFrames[frame] = true;
-        }
         const returned = this.asynchronousFunctions.at(-1) ? this.resolvedAsyncResult(actual) : actual;
         this.requireAssignable(returned, expected, statement.span);
         break;
@@ -1066,7 +1050,7 @@ export class Analyzer implements TypeEnvironment {
           this.typeError(`Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
         }
         this.enterScope();
-        this.declarePattern(statement.pattern, false, element, this.expressionFromHostBoundary(statement.iterable));
+        this.declarePattern(statement.pattern, false, element);
         this.loopDepth += 1;
         for (const child of statement.body) {
           this.analyzeStatement(child);
@@ -1299,9 +1283,7 @@ export class Analyzer implements TypeEnvironment {
         }
       }
       if (getter.abstract) this.validateMethodSignature(getter);
-      else if (this.analyzeFunctionDeclaration(getter, statement.name, true, !getter.static)) {
-        this.markClassHostBoundaryMember(statement.name, getter.name, getter.static);
-      }
+      else this.analyzeFunctionDeclaration(getter, statement.name, true, !getter.static);
     }
 
     const ownMethods = new Set<string>();
@@ -1352,9 +1334,7 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Override '${method.name}' must keep the base method signature ${describeType(inherited.type)}`, method.span);
       }
       if (method.abstract) this.validateMethodSignature(method);
-      else if (this.analyzeFunctionDeclaration(method, statement.name, true, !method.static)) {
-        this.markClassHostBoundaryMember(statement.name, method.name, method.static);
-      }
+      else this.analyzeFunctionDeclaration(method, statement.name, true, !method.static);
     }
 
     if (!statement.abstract) {
@@ -1572,7 +1552,7 @@ export class Analyzer implements TypeEnvironment {
     declareSelf = Boolean(className),
     forceAsynchronous = false,
     declarationKind = "accessor" in statement ? "Getter" : "Function",
-  ): boolean {
+  ): void {
     const outerConstructorDepth = this.constructorDepth;
     if (!method && !className && !this.predeclared.has(statement)) {
       this.declareBinding(statement.name, false, this.functionType(statement as FunctionDeclaration), statement.span);
@@ -1586,7 +1566,6 @@ export class Analyzer implements TypeEnvironment {
     this.currentClass = className ?? previousClass;
     const asynchronous = forceAsynchronous || statement.asynchronous === true;
     this.asynchronousFunctions.push(asynchronous);
-    this.hostBoundaryReturnFrames.push(false);
     const declaredReturn = this.resolveResult(statement.returnType);
     if (statement.returnType) this.validateType(declaredReturn, statement.returnType.span);
     if (asynchronous && statement.returnType && this.asyncResultContainsPromise(declaredReturn)) {
@@ -1612,7 +1591,6 @@ export class Analyzer implements TypeEnvironment {
     if (statement.returnType && expectedReturn.kind !== "null" && !this.blockAlwaysReturns(statement.body)) {
       this.diagnostics.push(diagnostic("VEL4006", `${declarationKind} '${statement.name}' can finish without returning ${describeType(expectedReturn)}`, statement.span));
     }
-    const returnsHostBoundary = this.hostBoundaryReturnFrames.pop() ?? false;
     this.returnTypes.pop();
     this.asynchronousFunctions.pop();
     this.currentClass = previousClass;
@@ -1620,23 +1598,7 @@ export class Analyzer implements TypeEnvironment {
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
-    if (!className && returnsHostBoundary) {
-      const binding = this.lookup(statement.name);
-      if (binding) binding.hostBoundary = true;
-    }
     this.constructorDepth = outerConstructorDepth;
-    return returnsHostBoundary;
-  }
-
-  private markClassHostBoundaryMember(className: string, name: string, staticMember: boolean): void {
-    const info = this.classes.get(className);
-    if (!info) return;
-    const members = new Set(staticMember ? info.hostBoundaryStaticMembers : info.hostBoundaryMembers);
-    members.add(name);
-    this.classes.set(className, {
-      ...info,
-      ...(staticMember ? { hostBoundaryStaticMembers: members } : { hostBoundaryMembers: members }),
-    });
   }
 
   protected analyzeBlock(statements: readonly Statement[], narrowed: ReadonlyMap<string, ValueType> = new Map()): void {
@@ -1730,7 +1692,6 @@ export class Analyzer implements TypeEnvironment {
     }
     this.requireAssignable(valueType, targetType, statement.value.span);
     if (statement.operator === "=" && targetBinding?.mutable && isAssignable(valueType, targetType, this)) {
-      targetBinding.hostBoundary ||= this.expressionFromHostBoundary(statement.value);
       this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
     }
   }
@@ -1738,20 +1699,18 @@ export class Analyzer implements TypeEnvironment {
   protected inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     const type = this.inferExpressionType(expression, contextualType);
     const expanded = this.expandAliases(type);
-    if (this.expressionFromHostBoundary(expression, type)
-      && expanded.kind === "promise"
-      && (this.expandAliases(expanded.value).kind === "null" || this.mayContainHostUndefined(this.expandAliases(expanded.value)))) {
+    if (expanded.kind === "promise" && this.hasNullishContract(this.expandAliases(expanded.value))) {
       this.normalizedPromiseValues.add(`${expression.span.start}:${expression.span.end}`);
-    } else if (this.shouldNormalizeHostUndefined(expression, expanded)) {
+    } else if (this.shouldNormalizeNullish(expression, expanded)) {
       this.normalizedUndefinedExpressions.add(`${expression.span.start}:${expression.span.end}`);
     }
     this.recordSemanticExpression(expression, type);
     return type;
   }
 
-  private mayContainHostUndefined(type: ValueType): boolean {
+  private hasNullishContract(type: ValueType): boolean {
     return type.kind === "null" || type.kind === "optional" || type.kind === "unknown"
-      || type.kind === "union" && type.members.some((member) => this.mayContainHostUndefined(this.expandAliases(member)));
+      || type.kind === "union" && type.members.some((member) => this.hasNullishContract(this.expandAliases(member)));
   }
 
   private expressionAlreadyNormalizesUndefined(expression: Expression): boolean {
@@ -1766,79 +1725,9 @@ export class Analyzer implements TypeEnvironment {
     return expression.kind === "MemberExpression" && this.optionalMembers.has(expression.span.start);
   }
 
-  private shouldNormalizeHostUndefined(expression: Expression, type: ValueType): boolean {
-    if (!this.mayContainHostUndefined(type) || this.expressionAlreadyNormalizesUndefined(expression)) return false;
-    return this.expressionFromHostBoundary(expression, type);
-  }
-
-  private expressionFromHostBoundary(expression: Expression, knownType?: ValueType): boolean {
-    if (expression.kind === "IdentifierExpression") return this.lookup(expression.name)?.hostBoundary === true;
-    if (expression.kind === "ArrowFunctionExpression") {
-      return this.hostBoundaryFunctionExpressions.has(`${expression.span.start}:${expression.span.end}`);
-    }
-    if (expression.kind === "CallExpression") {
-      if (this.expressionFromHostBoundary(expression.callee)) return true;
-      const callable = expression.callee.kind === "IdentifierExpression"
-        ? this.lookup(expression.callee.name)?.type
-        : this.semanticExpressionTypes.get(`${expression.callee.span.start}:${expression.callee.span.end}`);
-      const resultType = knownType
-        ?? this.semanticExpressionTypes.get(`${expression.span.start}:${expression.span.end}`);
-      if (!callable || !resultType || (callable.kind !== "function" && callable.kind !== "action" && callable.kind !== "intrinsic")) return false;
-      const result = this.expandAliases(resultType);
-      const order = this.namedArgumentOrders.get(expression.span.start);
-      for (const [sourceIndex, argument] of expression.arguments.entries()) {
-        if (!this.expressionFromHostBoundary(argument)) continue;
-        const parameterIndex = order ? order.indexOf(sourceIndex) : sourceIndex;
-        const parameter = parameterIndex >= 0
-          ? callable.parameters[parameterIndex] ?? callable.rest
-          : undefined;
-        if (parameter && sameType(this.expandAliases(parameter), result)) return true;
-      }
-      return false;
-    }
-    if (expression.kind === "MemberExpression") {
-      if (this.expressionFromHostBoundary(expression.object)) return true;
-      const owner = expression.object.kind === "IdentifierExpression"
-        ? this.lookup(expression.object.name)?.type
-        : this.semanticExpressionTypes.get(`${expression.object.span.start}:${expression.object.span.end}`);
-      return owner ? this.classMemberFromHostBoundary(owner, expression.property) : false;
-    }
-    if (expression.kind === "IndexExpression") return this.expressionFromHostBoundary(expression.object);
-    if (expression.kind === "UnaryExpression" && expression.operator === "await") return this.expressionFromHostBoundary(expression.operand);
-    return false;
-  }
-
-  moduleHostBoundaryBindings(): ReadonlySet<string> {
-    return new Set([...this.scopes[0] ?? []]
-      .filter(([, binding]) => binding.hostBoundary)
-      .map(([name]) => name));
-  }
-
-  moduleClassHostBoundaries(): ReadonlyMap<string, {
-    readonly members: ReadonlySet<string>;
-    readonly staticMembers: ReadonlySet<string>;
-  }> {
-    return new Map([...this.classes]
-      .filter(([, info]) => !info.identity && ((info.hostBoundaryMembers?.size ?? 0) > 0 || (info.hostBoundaryStaticMembers?.size ?? 0) > 0))
-      .map(([name, info]) => [name, {
-        members: new Set(info.hostBoundaryMembers),
-        staticMembers: new Set(info.hostBoundaryStaticMembers),
-      }]));
-  }
-
-  private classMemberFromHostBoundary(type: ValueType, property: string): boolean {
-    const resolved = nonOptional(this.expandAliases(type));
-    if (resolved.kind !== "class" && resolved.kind !== "classConstructor") return false;
-    const staticMember = resolved.kind === "classConstructor";
-    let current: string | null = resolved.identity ?? resolved.name;
-    const visited = new Set<string>();
-    while (current && !visited.has(current)) {
-      visited.add(current);
-      const info: ClassInfo | undefined = this.classes.get(current) ?? this.classes.get(resolved.name);
-      if ((staticMember ? info?.hostBoundaryStaticMembers : info?.hostBoundaryMembers)?.has(property)) return true;
-      current = info?.base ?? null;
-    }
-    return false;
+  private shouldNormalizeNullish(expression: Expression, type: ValueType): boolean {
+    if (!this.hasNullishContract(type) || this.expressionAlreadyNormalizesUndefined(expression)) return false;
+    return expression.kind !== "LiteralExpression";
   }
 
   private recordSemanticExpression(expression: Expression, type: ValueType): void {
@@ -2209,7 +2098,6 @@ export class Analyzer implements TypeEnvironment {
     this.parameterDefaultDepth = 0;
     this.constructorDepth = 0;
     const bodyResult = this.inferExpression(expression.body, contextualResult);
-    const returnsHostBoundary = this.expressionFromHostBoundary(expression.body);
     this.parameterDefaultDepth = outerParameterDefaultDepth;
     this.constructorDepth = outerConstructorDepth;
     const checkedBodyResult = expected
@@ -2225,7 +2113,6 @@ export class Analyzer implements TypeEnvironment {
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
-    if (returnsHostBoundary) this.hostBoundaryFunctionExpressions.add(`${expression.span.start}:${expression.span.end}`);
     return {
       kind: "function",
       parameters: parameterTypes,
@@ -3800,7 +3687,7 @@ export class Analyzer implements TypeEnvironment {
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" ? { kind: "classConstructor", name: "Error" } satisfies ValueType : null)
       ?? (name === "Map" || name === "Set" ? anyType : null);
-    return type ? { mutable: false, hostBoundary: false, type, declaredType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
+    return type ? { mutable: false, type, declaredType: type, span: { start: 0, end: 0 }, narrowingFrame: null } : null;
   }
 
   private isFreshUnresolvedCollection(expression: Expression, type: ValueType): boolean {
@@ -3873,7 +3760,6 @@ export class Analyzer implements TypeEnvironment {
     type: ValueType,
     declarationSpan: Span,
     internal = false,
-    hostBoundary = false,
   ): void {
     if (!internal && name.toLowerCase().startsWith("__velar")) {
       this.diagnostics.push(diagnostic("VEL3007", `'${name}' uses the reserved compiler prefix '__velar'`, declarationSpan));
@@ -3896,7 +3782,7 @@ export class Analyzer implements TypeEnvironment {
       this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
       return;
     }
-    scope.set(name, { mutable, hostBoundary, type, declaredType: type, span: declarationSpan, narrowingFrame: null });
+    scope.set(name, { mutable, type, declaredType: type, span: declarationSpan, narrowingFrame: null });
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
   }
 
@@ -4017,9 +3903,9 @@ export class Analyzer implements TypeEnvironment {
     return type;
   }
 
-  private declarePattern(pattern: BindingPattern, mutable: boolean, type: ValueType, hostBoundary = false): void {
+  private declarePattern(pattern: BindingPattern, mutable: boolean, type: ValueType): void {
     if (pattern.kind === "NameBindingPattern") {
-      this.declareBinding(pattern.name, mutable, type, pattern.span, false, hostBoundary);
+      this.declareBinding(pattern.name, mutable, type, pattern.span);
       return;
     }
     if (pattern.kind === "ListBindingPattern") {
@@ -4027,8 +3913,8 @@ export class Analyzer implements TypeEnvironment {
       if (type.kind !== "list" && type.kind !== "any") {
         this.typeError(`Cannot list-destructure ${describeType(type)}`, pattern.span);
       }
-      for (const child of pattern.elements) if (child) this.declarePattern(child, mutable, element, hostBoundary);
-      if (pattern.rest) this.declareBinding(pattern.rest.name, mutable, { kind: "list", element }, pattern.rest.span, false, hostBoundary);
+      for (const child of pattern.elements) if (child) this.declarePattern(child, mutable, element);
+      if (pattern.rest) this.declareBinding(pattern.rest.name, mutable, { kind: "list", element }, pattern.rest.span);
       return;
     }
 
@@ -4045,7 +3931,7 @@ export class Analyzer implements TypeEnvironment {
       const fieldValue = fields?.get(entry.property) ?? (type.kind === "any" ? anyType : unknownType);
       const field = type.kind === "object" && type.optionalFields?.has(entry.property) ? optionalOf(fieldValue) : fieldValue;
       if (fields && !fields.has(entry.property)) this.typeError(`Object has no field '${entry.property}'`, entry.span);
-      this.declarePattern(entry.pattern, mutable, field, hostBoundary);
+      this.declarePattern(entry.pattern, mutable, field);
     }
     if (pattern.rest) {
       const remaining = new Map<string, ValueType>();
@@ -4057,7 +3943,7 @@ export class Analyzer implements TypeEnvironment {
         kind: "object",
         fields: remaining,
         ...(remainingOptional.size > 0 ? { optionalFields: remainingOptional } : {}),
-      }, pattern.rest.span, false, hostBoundary);
+      }, pattern.rest.span);
     }
   }
 
@@ -4082,7 +3968,6 @@ export class Analyzer implements TypeEnvironment {
         const binding = this.lookup(key);
         this.scopes.at(-1)!.set(key, {
           mutable: binding?.mutable ?? false,
-          hostBoundary: binding?.hostBoundary ?? false,
           type,
           declaredType: binding?.declaredType ?? type,
           span: binding?.span ?? narrowingSpan,
@@ -4109,7 +3994,6 @@ export class Analyzer implements TypeEnvironment {
       } else {
         scope.set(key, {
           mutable: binding.mutable,
-          hostBoundary: binding.hostBoundary,
           type,
           declaredType: binding.declaredType,
           span: binding.span,
