@@ -37,6 +37,10 @@ manifest and bounded `.d.ts` graph used by each safe JavaScript import. Editor
 sessions track those files with the same content snapshots as VelarScript
 sources and resources, so a declaration change invalidates its importer and the
 importer's reverse dependency closure without requiring an unrelated source edit.
+Opening an explicit `.vel` file still discovers its nearest manifest. Missing
+manifests intentionally select standalone Core mode; an existing malformed,
+legacy, or unloadable manifest is a project error and is never hidden by
+silently retrying the file as standalone source.
 
 Project modules compile dependency-first. The public interface returned by a
 successful compilation is built from that same analyzer's binding types rather

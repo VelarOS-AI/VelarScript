@@ -70,6 +70,12 @@ export async function resolveVelarProject(input: string | null, cwd = process.cw
   return loadManifest(manifestPath);
 }
 
+export async function resolveVelarProjectForDocument(path: string): Promise<VelarProjectConfig> {
+  const documentPath = resolve(path);
+  const manifestPath = await findManifest(dirname(documentPath));
+  return manifestPath ? loadManifest(manifestPath, documentPath) : standaloneProject(documentPath);
+}
+
 async function loadManifest(manifestPath: string, entryOverride: string | null = null): Promise<VelarProjectConfig> {
   let manifest: ManifestShape;
   try {

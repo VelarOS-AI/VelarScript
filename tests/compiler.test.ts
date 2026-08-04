@@ -4184,6 +4184,14 @@ test("project sessions invalidate safe JavaScript imports when declaration graph
   assert.equal(changed.project.stats.reusedModules, 1);
 });
 
+test("project sessions surface invalid manifests instead of silently compiling standalone", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-session-config-"));
+  const mainPath = join(directory, "main.vel");
+  await writeFile(mainPath, "const value = 1\n", "utf8");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 1, entry: "main.vel", extensions: [] }), "utf8");
+  await assert.rejects(new VelarProjectSessions().snapshot(mainPath), /unsupported formatVersion 1/u);
+});
+
 test("0.10 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
   assert.equal(api.standardVersion, "0.4");
@@ -15999,6 +16007,22 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.doesNotMatch(coreCompletionText, /bind:value|DialogElement|velar\/web|velar\/app|"label":"component"|"label":"resource"|"label":"mounted"/u);
   assert.match(coreCompletionText, /velar\/test/);
   assert.match(coreCompletionText, /"label":"const"/);
+
+  const invalidDirectory = join(directory, "invalid-config");
+  const invalidPath = join(invalidDirectory, "main.vel");
+  const invalidUri = pathToFileURL(invalidPath).href;
+  await mkdir(invalidDirectory, { recursive: true });
+  await writeFile(invalidPath, "const value = 1\n", "utf8");
+  await writeFile(join(invalidDirectory, "velar.json"), JSON.stringify({ formatVersion: 1, entry: "main.vel", extensions: [] }), "utf8");
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: invalidUri, languageId: "velar", version: 1, text: "const value = 1\n" } },
+  });
+  const invalidPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === invalidUri);
+  const invalidDiagnostics = (invalidPublished.params as { diagnostics: Array<{ code: string; message: string }> }).diagnostics;
+  assert.ok(invalidDiagnostics.some((item) => item.code === "VEL9001" && /unsupported formatVersion 1/u.test(item.message)));
 
   const carriageReturnText = "const first = 1\rconst second = first\r";
   send({

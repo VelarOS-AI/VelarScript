@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
+import { resolveVelarProjectForDocument, type VelarProjectConfig } from "./config.ts";
 import { compileProjectEntries, type ProjectResult } from "./project.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
@@ -156,11 +156,7 @@ function configKey(config: VelarProjectConfig): string {
 }
 
 async function projectForDocument(path: string): Promise<VelarProjectConfig> {
-  try {
-    return await resolveVelarProject(null, dirname(path));
-  } catch {
-    return resolveVelarProject(path);
-  }
+  return resolveVelarProjectForDocument(path);
 }
 
 async function discoverVelarFiles(config: VelarProjectConfig): Promise<string[]> {

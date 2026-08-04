@@ -1,7 +1,6 @@
-import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { collectionMemberGuidance, compile, formatSource, sourceTypeNameGuidance, type CollectionKind, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
-import { compileProjectEntries, type ProjectResult } from "./project.ts";
+import type { ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
@@ -161,14 +160,7 @@ export async function runLanguageServer(): Promise<void> {
   const projectFor = async (document: TextDocument): Promise<ProjectResult | null> => {
     const path = pathOf(document.uri);
     if (!path) return null;
-    try {
-      return (await sessions.snapshot(path, overrides())).project;
-    } catch {
-      return compileProjectEntries([path], path, overrides(), {
-        sourceRoot: dirname(path),
-        projectRoot: dirname(path),
-      });
-    }
+    return (await sessions.snapshot(path, overrides())).project;
   };
 
   const publish = async (document: TextDocument): Promise<void> => {
