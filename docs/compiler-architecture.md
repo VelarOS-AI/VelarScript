@@ -59,7 +59,9 @@ native JavaScript `...name` lowering. Named calls keep the original call
 expression in place and spread a source-ordered, declaration-arranged argument
 list into it. The callee and member receiver therefore evaluate first, `this`
 is preserved, optional calls skip argument evaluation, and no keyword-argument
-record crosses the call boundary.
+record crosses the call boundary. Call spreads are restricted to a declared
+rest slot after all fixed arguments and copy the dense source List before native
+spread emission, so an instance iterator cannot alter call semantics.
 
 Type syntax is parsed once into named, generic, optional, union, and function
 nodes. Analysis, public interfaces, semantic tooling, and emission resolve that
@@ -124,6 +126,9 @@ changing the declared optional storage type.
 Null coalescing applies the same rule to its deferred fallback: the fallback
 receives the outer result context when one exists, otherwise the present side
 of the optional left type. It is analyzed under the left side's null-path facts.
+Spread-bearing List literals use sequential thunks so validation failure stops
+later evaluation. When a part contains direct `await`, an async helper awaits
+only that marked thunk; ordinary Promise-valued items retain their value identity.
 Native slot checks accept cross-realm Map/Set values while instance overrides,
 custom iterators, and Array species cannot change language semantics. Mutating
 results normalize to VelarScript `null` without replacing

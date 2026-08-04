@@ -358,6 +358,7 @@ print(count("a", "b"))
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /function total\(first, \.\.\.values\)/u);
   assert.match(result.code ?? "", /total\(first, \.\.\.values\)/u);
+  assert.match(result.code ?? "", /\.\.\.__velarCopyList\(tail, "Call spread"\)/u);
   assert.match(result.code ?? "", /const count = \(\.\.\.values\) => __velarCollectionSize\(values\);/u);
   const restSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "values" && symbol.kind === "parameter");
   assert.equal(restSymbol?.type, "List<number>");
@@ -366,6 +367,44 @@ print(count("a", "b"))
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "6\n6\n6\n2\n");
+
+  const hostile = compileCore(`
+import js {tail} from "fixture"
+
+def total(first: number, ...values: number) -> number:
+    return first + values[0] + values[1]
+
+print(total(1, ...tail))
+`.trimStart(), { analysis: { imports: new Map([
+    ["tail", { kind: "list", element: { kind: "number" } }],
+  ]) } });
+  assert.deepEqual(hostile.diagnostics, []);
+  const hostileExecution = executeModule((hostile.code ?? "").replace(/^import .*?;\n+/mu, `
+class HostileList extends Array {
+  [Symbol.iterator]() { throw new Error("iterator override"); }
+}
+const tail = new HostileList(2, 3);
+`));
+  assert.equal(hostileExecution.status, 0, String(hostileExecution.stderr));
+  assert.equal(hostileExecution.stdout, "6\n");
+
+  const asynchronousSpread = compileCore(`
+async def read(value: number) -> number:
+    print(f"read:{value}")
+    return value
+
+async def readTail() -> List<number>:
+    print("tail")
+    return [2, 3]
+
+const values = [await read(1), ...await readTail(), await read(4)]
+print(f"{values[0]}:{values[3]}")
+`.trimStart());
+  assert.deepEqual(asynchronousSpread.diagnostics, []);
+  assert.match(asynchronousSpread.code ?? "", /await __velarCreateListAsync/u);
+  const asynchronousExecution = executeModule(asynchronousSpread.code ?? "");
+  assert.equal(asynchronousExecution.status, 0, String(asynchronousExecution.stderr));
+  assert.equal(asynchronousExecution.stdout, "read:1\ntail\nread:4\n1:4\n");
 });
 
 test("async arrows preserve concise callbacks without leaking await across function boundaries", () => {
@@ -634,7 +673,16 @@ def total(first: number, ...values: number) -> number:
 const values = [1, 2]
 total(...values)
 `.trimStart());
-  assert.ok(missingFixed.diagnostics.some((item) => /required fixed argument before a call spread/u.test(item.message)));
+  assert.ok(missingFixed.diagnostics.some((item) => /all 1 fixed argument before a call spread/u.test(item.message)));
+
+  const fixedArity = compile(`
+def format(value: number = 0) -> number:
+    return value
+
+const values = [1]
+format(...values)
+`.trimStart());
+  assert.ok(fixedArity.diagnostics.some((item) => /requires a callable with a rest parameter/u.test(item.message)));
 
   const incompatibleOverride = compile(`
 abstract class Reporter:

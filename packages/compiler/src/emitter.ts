@@ -248,6 +248,20 @@ export class JavaScriptEmitter {
         "  }",
         "  return output;",
         "}",
+        "async function __velarCreateListAsync(parts) {",
+        "  const output = [];",
+        "  for (const [spread, asynchronous, read] of parts) {",
+        "    if (!spread) {",
+        "      if (output.length >= __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
+        "      output.push(asynchronous ? await read() : read());",
+        "      continue;",
+        "    }",
+        "    const values = __velarValidateDenseList(asynchronous ? await read() : read(), \"List spread\");",
+        "    if (output.length + values.length > __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
+        "    for (let index = 0; index < values.length; index += 1) output.push(Object.getOwnPropertyDescriptor(values, index).value);",
+        "  }",
+        "  return output;",
+        "}",
         "",
         "function __velarCreateSet(value) {",
         "  if (value === undefined) return new Set();",
@@ -1248,16 +1262,21 @@ export class JavaScriptEmitter {
       case "ListExpression":
         if (expression.elements.some((element) => element.kind === "SpreadExpression")) {
           this.needsCollectionHelpers = true;
-          const parts = expression.elements.map((element) => element.kind === "SpreadExpression"
-            ? `[true, () => ${this.emitMappedExpression(element.value)}]`
-            : `[false, () => ${this.emitMappedExpression(element)}]`);
-          return `__velarCreateList([${parts.join(", ")}])`;
+          const asynchronous = expression.elements.some((element) => this.expressionContainsDirectAwait(element));
+          const parts = expression.elements.map((element) => {
+            const directAwait = this.expressionContainsDirectAwait(element);
+            const value = element.kind === "SpreadExpression" ? element.value : element;
+            const read = `${directAwait ? "async " : ""}() => ${this.emitMappedExpression(value)}`;
+            return asynchronous ? `[${element.kind === "SpreadExpression"}, ${directAwait}, ${read}]` : `[${element.kind === "SpreadExpression"}, ${read}]`;
+          });
+          return `${asynchronous ? "await __velarCreateListAsync" : "__velarCreateList"}([${parts.join(", ")}])`;
         }
         return `[${expression.elements.map((element) => this.emitMappedExpression(element)).join(", ")}]`;
       case "ObjectExpression":
         return `{ ${expression.properties.map((property) => property.kind === "ObjectProperty" ? `${this.emitObjectKey(property.name)}: ${this.emitMappedExpression(property.value)}` : `...${this.emitMappedExpression(property.value)}`).join(", ")} }`;
       case "SpreadExpression":
-        return `...${this.emitMappedExpression(expression.value)}`;
+        this.needsCollectionHelpers = true;
+        return `...__velarCopyList(${this.emitMappedExpression(expression.value)}, "Call spread")`;
       case "UnaryExpression":
         if (expression.operator === "await") {
           return `await ${this.emitMappedExpression(expression.operand)}`;

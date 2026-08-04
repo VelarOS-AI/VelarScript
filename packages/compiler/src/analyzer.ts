@@ -3681,17 +3681,11 @@ export class Analyzer implements TypeEnvironment {
         if (argument.kind === "SpreadExpression") {
           sawSpread = true;
           const type = this.inferExpression(argument.value);
-          if (fixedIndex < requiredParameters) {
-            this.typeError(`Provide the ${requiredParameters} required fixed argument${requiredParameters === 1 ? "" : "s"} before a call spread`, argument.span);
-          }
-          if (type.kind === "list") {
-            const accepted = [...parameters.slice(fixedIndex), ...(rest ? [rest] : [])];
-            if (accepted.length === 0) {
-              this.typeError("This fixed-arity call has no position for spread values", argument.span);
-            } else {
-              for (const expected of accepted) this.requireAssignable(type.element, expected, argument.span);
-            }
-          } else if (type.kind !== "any") {
+          if (!rest) this.typeError("Call spread requires a callable with a rest parameter", argument.span);
+          else if (fixedIndex < parameters.length) {
+            this.typeError(`Provide all ${parameters.length} fixed argument${parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
+          } else if (type.kind === "list") this.requireAssignable(type.element, rest, argument.span);
+          if (type.kind !== "list" && type.kind !== "any") {
             this.typeError(`Call spread requires a List, received ${describeType(type)}`, argument.span);
           }
           fixedIndex = parameters.length;

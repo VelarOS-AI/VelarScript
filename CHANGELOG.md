@@ -76,6 +76,9 @@ Compiler and framework changes:
 - Match success and fallthrough now narrow the original stable identifier or
   data field through guards, later cases, and else; effects invalidate stale
   facts.
+- List and call spreads now validate dense Lists without invoking instance
+  iterators, async List spreads preserve order, and call spread targets only a
+  declared rest parameter.
 
 Tooling and documentation changes:
 

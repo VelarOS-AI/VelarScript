@@ -352,6 +352,9 @@ const load = async id => await fetchUser(id)
 ```
 
 Rest parameters use `...values`. A rest parameter is always final.
+Call spread uses the same boundary in reverse: it targets a declared rest
+parameter after every fixed argument has been written explicitly. The spread
+value must be a checked dense List; instance iterator overrides are ignored.
 
 ### Async functions
 
@@ -449,6 +452,12 @@ their element/key/value types from their first checked mutation, but exported
 APIs should annotate them. An optional collection annotation still contextually
 types a present collection value, so empty `[]`, `Set()`, and `Map()` values do
 not lose their element or key/value contracts.
+
+List spread evaluates each ordinary item and spread source once in source order.
+Every spread source is validated and copied by index rather than through a
+replaceable iterator. Direct `await` remains valid in any part of an async List
+expression and does not cause non-awaited Promise values in other items to be
+adopted accidentally.
 
 ## 9. Control flow
 
