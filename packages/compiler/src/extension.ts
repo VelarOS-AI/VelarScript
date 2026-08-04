@@ -171,6 +171,7 @@ export interface CompilerInspectionExtension {
   readonly visitDependencyExpression?: (expression: Expression, context: CompilerDependencyContext) => boolean;
   readonly visitDependencyStatement?: (statement: Statement, context: CompilerDependencyContext) => boolean;
   readonly contributeInterface?: (statement: Statement, context: CompilerInterfaceContext) => boolean;
+  readonly interfaceExportIdentity?: (name: string, value: unknown) => string;
   readonly inferPublicExpression?: (expression: Expression) => ValueType | undefined;
   readonly resources?: (program: Program) => readonly CompilerResourceDependency[];
   readonly moduleData?: (program: Program, path: string) => unknown;

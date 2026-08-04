@@ -7,11 +7,11 @@ import { SourceMap } from "node:module";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
-import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText } from "@velarscript/compiler";
+import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
 import { analysisTypeIdentity, isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
-import { compileProject as compileProjectCore, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
+import { compileProject as compileProjectCore, moduleInterfaceIdentity, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
 import {
@@ -10379,6 +10379,61 @@ test("project interfaces use analyzed export types through dependency chains and
   assert.deepEqual(cyclic.failures, []);
   assert.deepEqual(cyclic.modules.flatMap((module) => module.result.diagnostics), []);
   assert.equal(describeType(cyclic.modules.find((module) => module.inputPath === first)!.result.moduleInterface.exports.get("forwarded")!), "number");
+});
+
+test("cyclic module convergence observes the complete public class contract", () => {
+  const interface_ = inspectCoreModule(`
+export class Widget:
+    constructor(value: string):
+        pass
+
+    get label() -> string:
+        return "widget"
+
+    def render() -> string:
+        return self.label
+`.trimStart(), { path: "/contracts.vel" }).moduleInterface;
+  const info = interface_.classes.get("Widget")!;
+  const identity = moduleInterfaceIdentity(interface_);
+  const changed = (next: typeof info): string => moduleInterfaceIdentity({
+    ...interface_,
+    classes: new Map([["Widget", next]]),
+  });
+
+  const variants = [
+    { ...info, parameters: [{ kind: "number" } as ValueType] },
+    { ...info, parameterNames: ["item"] },
+    { ...info, requiredParameters: 0 },
+    { ...info, constructorRest: { kind: "string" } as ValueType },
+    { ...info, abstract: true },
+    { ...info, getters: new Set<string>() },
+    { ...info, abstractGetters: new Set(["label"]) },
+    { ...info, abstractMethods: new Set(["render"]) },
+    { ...info, staticGetters: new Set(["label"]) },
+  ];
+  for (const variant of variants) assert.notEqual(changed(variant), identity);
+
+  assert.notEqual(moduleInterfaceIdentity({
+    ...interface_,
+    namedTypeIdentities: new Map([["WidgetData", "velar:/other.vel#type:WidgetData"]]),
+  }), identity);
+
+  const extensionInterface = (version: number) => ({
+    ...interface_,
+    extensionExports: new Map([["contract-test", new Map<string, unknown>([["metadata", { version }]])]]),
+  });
+  assert.throws(
+    () => moduleInterfaceIdentity(extensionInterface(1)),
+    /without an interfaceExportIdentity contract/u,
+  );
+  const contractExtension: CompilerExtension = {
+    id: "contract-test",
+    inspection: { interfaceExportIdentity: (_name, value) => JSON.stringify(value) },
+  };
+  assert.notEqual(
+    moduleInterfaceIdentity(extensionInterface(1), [contractExtension]),
+    moduleInterfaceIdentity(extensionInterface(2), [contractExtension]),
+  );
 });
 
 test("record metadata keeps module identity without creating implicit type imports", async () => {

@@ -296,9 +296,17 @@ export async function compileProjectEntries(
         });
         nextResults.set(module.inputPath, { inputPath: module.inputPath, relativePath: module.relativePath, result });
       }
-      const identity = group.map((module) => moduleInterfaceIdentity(nextResults.get(module.inputPath)!.result.moduleInterface)).join("\0");
       passResults = nextResults;
       for (const [path, compiled] of nextResults) compiledInterfaces.set(path, compiled.result.moduleInterface);
+      let identity: string;
+      try {
+        identity = group
+          .map((module) => moduleInterfaceIdentity(nextResults.get(module.inputPath)!.result.moduleInterface, compilerExtensions))
+          .join("\0");
+      } catch (error) {
+        failures.push({ path: group[0]!.inputPath, message: hostErrorMessage(error) });
+        break;
+      }
       if (!cyclic || identity === previousIdentity) break;
       previousIdentity = identity;
       if (pass === maximumPasses - 1) {
@@ -445,14 +453,23 @@ function moduleDependencies(
   return [...output].sort();
 }
 
-function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]): string {
+export function moduleInterfaceIdentity(
+  interface_: ModuleInspection["moduleInterface"],
+  extensions: readonly CompilerExtension[] = [],
+): string {
   const typeMap = (values: ReadonlyMap<string, ValueType>): string => [...values]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, type]) => `${name}:${analysisTypeIdentity(type)}`)
     .join("|");
+  const names = (values: ReadonlySet<string>): string => [...values].sort().join(",");
+  const types = (values: readonly ValueType[]): string => values.map(analysisTypeIdentity).join(",");
   const namedTypes = [...interface_.namedTypes]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, fields]) => `${name}{${typeMap(fields)}}`)
+    .join("|");
+  const namedTypeIdentities = [...interface_.namedTypeIdentities]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, identity]) => `${name}:${identity}`)
     .join("|");
   const enums = [...interface_.enums]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -466,21 +483,52 @@ function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]
   );
   const classes = [...interface_.classes]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:origin:${info.constructorOriginParameters?.join(",") ?? ""}:${info.constructorOriginRest ? "rest" : ""}:${info.constructorContainsExternal ? "contains-external" : ""}:defaults:${info.constructorExternalDefaults?.join(",") ?? ""}:getters:${getterEffects(info.getterStorageOriginEffects)}:static-getters:${getterEffects(info.staticGetterStorageOriginEffects)}:${typeMap(new Map([
+    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:abstract:${info.abstract ? "yes" : "no"}:parameters:${info.parameterNames?.join(",") ?? ""}:${info.requiredParameters}:${types(info.parameters)}:rest:${info.constructorRest ? analysisTypeIdentity(info.constructorRest) : ""}:origin:${info.constructorOriginParameters?.join(",") ?? ""}:${info.constructorOriginRest ? "rest" : ""}:${info.constructorContainsExternal ? "contains-external" : ""}:defaults:${info.constructorExternalDefaults?.join(",") ?? ""}:getters:${names(info.getters)}:abstract-getters:${names(info.abstractGetters)}:getter-effects:${getterEffects(info.getterStorageOriginEffects)}:abstract-methods:${names(info.abstractMethods)}:static-getters:${names(info.staticGetters)}:static-getter-effects:${getterEffects(info.staticGetterStorageOriginEffects)}:${typeMap(new Map([
       ...[...info.fields].map(([field, value]) => [`field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
       ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
       ...[...info.staticFields].map(([field, value]) => [`static-field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
       ...[...info.staticMethods].map(([method, type]) => [`static-method:${method}`, type] as const),
     ]))}`)
     .join("|");
+  const extensionOwners = new Map(extensions.map((extension) => [extension.id, extension]));
+  let extensionIdentitySize = 0;
+  const extensionSegment = (value: string): string => {
+    extensionIdentitySize += value.length;
+    if (extensionIdentitySize > 1024 * 1024) {
+      throw new Error("Compiler extension interface identities cannot exceed 1 MiB per module");
+    }
+    return `${value.length}:${value}`;
+  };
+  const extensionExports = [...interface_.extensionExports]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([extensionId, values]) => {
+      const identify = extensionOwners.get(extensionId)?.inspection?.interfaceExportIdentity;
+      if (!identify) {
+        throw new Error(`Compiler extension '${extensionId}' exports cross-module interface data without an interfaceExportIdentity contract`);
+      }
+      const entries = [...values]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, value]) => {
+          const identity = identify(name, value);
+          if (typeof identity !== "string" || identity.length > 1024 * 1024) {
+            throw new Error(`Compiler extension '${extensionId}' returned an invalid interface identity for '${name}'`);
+          }
+          return `${extensionSegment(name)}${extensionSegment(identity)}`;
+        });
+      return `${extensionSegment(extensionId)}${entries.join("")}`;
+    })
+    .join("");
   return [
     `exports:${typeMap(interface_.exports)}`,
     `mutable:${[...interface_.mutableExports].sort().join(",")}`,
     `named:${namedTypes}`,
+    `named-identities:${namedTypeIdentities}`,
     `aliases:${typeMap(interface_.typeAliases)}`,
     `enums:${enums}`,
     `classes:${classes}`,
     `reactive:${[...interface_.reactiveExports].sort(([left], [right]) => left.localeCompare(right)).map(([name, kind]) => `${name}:${kind}`).join(",")}`,
+    `tests:${[...interface_.testFunctions].sort().join(",")}`,
+    `extension-exports:${extensionExports}`,
   ].join("#");
 }
 

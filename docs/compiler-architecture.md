@@ -38,8 +38,16 @@ Project modules compile dependency-first. The public interface returned by a
 successful compilation is built from that same analyzer's binding types rather
 than a second expression guesser. Strongly connected module groups run bounded
 interface passes until their complete exported contracts stabilize; a cycle that
-cannot converge is a project failure. Record display names are kept for editor
-output, while module-qualified identities own their field metadata. This lets
+cannot converge is a project failure. The convergence identity includes live
+and reactive exports, named-type identities and fields, aliases, enums, and the
+complete public class contract: constructor names, arity, fixed/rest types,
+inheritance, abstract members, getters, fields, methods, and host-origin effects.
+Extension-owned cross-module interface values must provide their own bounded,
+deterministic `interfaceExportIdentity`; missing contracts fail the project
+instead of being treated as stable. Changing one of those contracts cannot be
+mistaken for a stable pass. Record
+display names are kept for editor output, while module-qualified identities own
+their field metadata. This lets
 two dependencies both declare `Item` without overwriting one another and keeps
 an unimported type name out of the consumer's source scope. Compiler diagnostics, imported
 contracts, hover, completion, and emitted modules therefore share one semantic
