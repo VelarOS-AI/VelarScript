@@ -6432,10 +6432,12 @@ const hostileThrown = { toString() { coercions += 1; return "converted"; } };
 globalThis.RegExp = class { constructor() { throw hostileThrown; } };
 try { expect("Velar").toMatch("Velar"); console.log("accepted"); }
 catch (error) { console.log(error.message); }
+try { expect("Velar").toMatch("x".repeat(4097)); console.log("accepted"); }
+catch (error) { console.log(error.name); }
 console.log(coercions + ":" + getterReads);
 `);
   assert.equal(testExecution.status, 0, String(testExecution.stderr));
-  assert.equal(testExecution.stdout, "true\ntrue\ntrue\nInvalid toMatch pattern\n0:0\n");
+  assert.equal(testExecution.stdout, "true\ntrue\ntrue\naccepted\nRangeError\n0:0\n");
 
   const textSource = standardModuleSource("velar/text") ?? "";
   const textExecution = executeModule(`${textSource}

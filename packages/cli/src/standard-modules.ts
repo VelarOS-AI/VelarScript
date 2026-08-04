@@ -1295,6 +1295,9 @@ export function useSink(sink) {
 `.trimStart()],
   ["velar/test", String.raw`
 ${deepEqualRuntime}
+const nativeTestRegExpPrototype = Object.getPrototypeOf(/(?:)/u);
+const NativeTestRegExp = Object.getOwnPropertyDescriptor(nativeTestRegExpPrototype, "constructor").value;
+const nativeTestRegExpExec = Object.getOwnPropertyDescriptor(nativeTestRegExpPrototype, "exec").value;
 function display(value, state = null) {
   state ??= { active: new WeakSet(), nodes: 0, depth: 0 };
   state.nodes += 1;
@@ -1361,9 +1364,10 @@ export function expect(actual) {
     },
     toMatch(expected) {
       if (typeof actual !== "string" || typeof expected !== "string") throw new TypeError("toMatch requires text and a string pattern");
+      if (expected.length > 4096) throw new RangeError("toMatch patterns cannot exceed 4096 code units");
       let pattern;
-      try { pattern = new RegExp(expected, "u"); } catch { throw new TypeError("Invalid toMatch pattern"); }
-      if (!pattern.test(actual)) throw new Error("Expected " + display(actual) + " to match " + display(expected));
+      try { pattern = new NativeTestRegExp(expected, "u"); } catch { throw new TypeError("Invalid toMatch pattern"); }
+      if (nativeTestRegExpExec.call(pattern, actual) === null) throw new Error("Expected " + display(actual) + " to match " + display(expected));
     },
     toHaveLength(expected) {
       if (!Number.isSafeInteger(expected) || expected < 0) throw new RangeError("Expected length must be a non-negative safe integer");

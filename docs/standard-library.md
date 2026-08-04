@@ -397,6 +397,33 @@ component BuildStatus:
   the internal host logger and cannot recursively invoke the failing sink.
 - VelarScript never uploads logs or telemetry automatically.
 
+## `velar/test`
+
+`velar/test` provides the small assertion surface used by `velar test` without
+introducing a second testing language.
+
+```velar fragment
+import {expect} from "velar/test"
+
+def test_profile_name():
+    const profile = {name: "Ada", tags: ["compiler", "web"]}
+    expect(profile.name).toBe("Ada")
+    expect(profile.tags).toContain("web")
+    expect(profile).toEqual({name: "Ada", tags: ["compiler", "web"]})
+```
+
+- `toBe` uses exact identity/value equality; `toEqual` uses the same bounded
+  VelarScript data comparison as `velar/json.deepEqual`.
+- `toBeTruthy` and `toBeFalsy` require actual `true` and `false`, rather than
+  JavaScript truthiness. `toContain` accepts text or a dense List, and
+  `toHaveLength` accepts text or a dense List.
+- `toMatch` accepts a Unicode string pattern of at most 4,096 code units. It
+  uses the native regular-expression intrinsic captured by the module and does
+  not trust a replaced global `RegExp` constructor.
+- `toThrow` requires a synchronous function. `toReject` requires an actual
+  Promise or a function returning one; arbitrary thenables are rejected without
+  reading a `then` accessor.
+
 ## Deliberate omissions
 
 Standard API 0.4 does not copy Node-only filesystem/process APIs, Python's OS,
