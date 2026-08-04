@@ -3484,7 +3484,7 @@ export class Analyzer implements TypeEnvironment {
     const type = this.inferExpressionType(expression, contextualType);
     this.inferredExpressionTypes.set(spanIdentity(expression.span), type);
     const expanded = this.expandAliases(type);
-    if (expanded.kind === "promise" && this.hasNullishContract(this.expandAliases(expanded.value))) {
+    if (expanded.kind === "promise") {
       this.normalizedPromiseValues.add(spanIdentity(expression.span));
     } else if (this.shouldNormalizeNullish(expression, expanded)) {
       this.normalizedUndefinedExpressions.add(spanIdentity(expression.span));

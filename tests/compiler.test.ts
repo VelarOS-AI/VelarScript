@@ -461,10 +461,10 @@ print(immediate)
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "load")?.type, "(number) -> Promise<number>");
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "combine")?.type, "(left: number, right: number) -> Promise<number>");
-  assert.match(result.code ?? "", /const load = async value => await next\(value\);/u);
-  assert.match(result.code ?? "", /const combine = async \(left, right\) => next\(\(left \+ right\)\);/u);
-  assert.match(result.code ?? "", /const member = \(await result\(\)\)\.value;/u);
-  assert.match(result.code ?? "", /const immediate = await \(async \(\) => next\(8\)\)\(\);/u);
+  assert.match(result.code ?? "", /const load = async value => await __velarNormalizePromiseValue\(next\(value\)\);/u);
+  assert.match(result.code ?? "", /const combine = async \(left, right\) => __velarNormalizePromiseValue\(next\(\(left \+ right\)\)\);/u);
+  assert.match(result.code ?? "", /const member = \(await __velarNormalizePromiseValue\(result\(\)\)\)\.value;/u);
+  assert.match(result.code ?? "", /const immediate = await __velarNormalizePromiseValue\(\(async \(\) => next\(8\)\)\(\)\);/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "3\n8\n10\n9\n");
@@ -582,8 +582,8 @@ print(await forwardAlias(delayed))
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "forward")?.type, "(value: number) -> Promise<number>");
   assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "save")?.type, "action () -> Promise<number>");
-  assert.match(result.code ?? "", /async function forward\(value\) \{\s*return inner\(value\);/u);
-  assert.match(result.code ?? "", /async load\(value\) \{\s*const self = this;\s*return inner\(value\);/u);
+  assert.match(result.code ?? "", /async function forward\(value\) \{\s*return __velarNormalizePromiseValue\(inner\(value\)\);/u);
+  assert.match(result.code ?? "", /async load\(value\) \{\s*const self = this;\s*return __velarNormalizePromiseValue\(inner\(value\)\);/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "2\n3\n4\n");
@@ -1187,6 +1187,7 @@ const maybeValue = undefined;
 
 test("host Promises normalize undefined before composition without losing identity or rejection", () => {
   const promiseNull = { kind: "promise", value: { kind: "null" } } as const;
+  const promiseNumber = { kind: "promise", value: { kind: "number" } } as const;
   const promiseOptional = { kind: "promise", value: { kind: "optional", inner: { kind: "string" } } } as const;
   const result = compileCore(`
 import js {client, collect, collectMaybe, externalAsync, maybeAsync, ready, rejected} from "fixture"
@@ -1243,7 +1244,7 @@ catch error:
     print(error.name)
 print(reads())
 `.trimStart(), { analysis: { imports: new Map<string, ValueType>([
-    ["hostile", promiseNull],
+    ["hostile", promiseNumber],
     ["reads", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "number" } }],
   ]) } });
   assert.deepEqual(forged.diagnostics, []);
@@ -1255,6 +1256,18 @@ const reads = () => thenReads;
   const forgedExecution = executeModule(forgedExecutable);
   assert.equal(forgedExecution.status, 0, String(forgedExecution.stderr));
   assert.equal(forgedExecution.stdout, "TypeError\n0\n");
+
+  const poisonedRegistry = executeModule(`
+Object.defineProperty(globalThis, Symbol.for("velar.promise.normalization.v1"), {
+  value: new WeakMap(),
+  enumerable: true,
+  configurable: false,
+  writable: false,
+});
+${forgedExecutable}
+`);
+  assert.notEqual(poisonedRegistry.status, 0);
+  assert.match(String(poisonedRegistry.stderr), /Promise normalization registry ownership is invalid/u);
 });
 
 test("collection callbacks cannot return JavaScript undefined into VelarScript values", () => {
@@ -1703,7 +1716,7 @@ print(groupedAwait)
   assert.match(result.code ?? "", /const leading = -\(\(2 \*\* 2\)\)/u);
   assert.match(result.code ?? "", /const grouped = \(\(-\(2\)\) \*\* 2\)/u);
   assert.match(result.code ?? "", /const reciprocal = \(2 \*\* -\(2\)\)/u);
-  assert.match(result.code ?? "", /const awaited = \(\(await two\(\)\) \*\* 2\)/u);
+  assert.match(result.code ?? "", /const awaited = \(\(await __velarNormalizePromiseValue\(two\(\)\)\) \*\* 2\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "9\n512\n-4\n4\n0.25\n4\n4\n");
@@ -14609,7 +14622,7 @@ component App:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /const label = __velarResource\(\(\) => loadLabel\(\), __scope, "label"\)/u);
+  assert.match(result.code ?? "", /const label = __velarResource\(\(\) => __velarNormalizePromiseValue\(loadLabel\(\)\), __scope, "label"\)/u);
   const symbol = result.semanticIndex.symbols.find((item) => item.kind === "resource" && item.name === "label");
   assert.match(symbol?.type ?? "", /value: string\?/u);
   assert.match(symbol?.type ?? "", /reload: \(\) -> Promise<null>/u);

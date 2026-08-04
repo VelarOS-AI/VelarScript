@@ -106,12 +106,13 @@ is idempotent, evaluates an expression once, and preserves side effects and
 errors. Explicit `import js unsafe` values remain the caller's responsibility
 because `any` has no checked result contract.
 
-Promise values whose checked result can contain `null`, an optional, or
-`unknown` are adapted when they enter a VelarScript expression, not only when
-they are awaited. The adapter is rejection-preserving and its cache is shared
-by generated VelarScript modules, so the same Promise remains the same
-VelarScript Promise even when it is exported, stored, compared, imported through
-any supported module form, or passed through `velar/async` before awaiting. A
+Every checked `Promise<T>` is adapted when it enters a VelarScript expression,
+not only when it is awaited. As everywhere else in the language, a JavaScript
+`undefined` resolution becomes `null`. The adapter preserves rejection and its
+cache is shared by generated VelarScript modules, so the same Promise remains
+the same VelarScript Promise even when it is exported, stored, compared,
+imported through any supported module form, or passed through `velar/async`
+before awaiting. A
 JavaScript export declared as `Promise<T>` must return an actual native Promise
 (including one from another realm); arbitrary thenables are rejected without
 reading a `then` accessor.
