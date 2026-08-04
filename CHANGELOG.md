@@ -92,6 +92,14 @@ Compiler and framework changes:
   their analysis identity without changing visible type equality.
 - Explicit variable annotations and mutable rebinding now preserve the current
   value's host origin instead of silently turning an external reference local.
+- VelarScript functions, async functions, expression arrows, getters, and class
+  methods now preserve host origin through returns. Callable contracts retain
+  non-display parameter-to-result relationships, including named and rest
+  arguments, so one identity helper remains local for local inputs and external
+  only for external inputs. Analyzed class member contracts now cross module
+  boundaries instead of being rebuilt from source annotations.
+- Contextually typed List literals now retain host origin in their element
+  types while the newly allocated List itself remains owned.
 
 Tooling and documentation changes:
 

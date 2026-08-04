@@ -273,6 +273,15 @@ ownership: assigning a host-origin value to `const value: T` or `let value: T`
 preserves that origin, and assigning a fresh owned value back to a `let` restores
 ordinary local behavior.
 
+Functions do not erase this distinction. A return annotation describes the
+visible result shape; it does not claim that a returned reference was newly
+allocated. VelarScript tracks direct returns, local forwarding, async adoption,
+named arguments, rest arguments, expression arrows, getters, and methods. A
+helper such as `def identity(value: Profile) -> Profile: return value` therefore
+returns an owned `Profile` for an owned argument and a host-origin `Profile` for
+a host-origin argument. This relationship is part of the analyzed module
+contract but is not another source-level type feature or editor-visible syntax.
+
 An f-string converts each embedded value at its source position. Primitive and
 enum conversion is inert. Converting an object may invoke its `toString`, so
 object interpolation is an ordinary effect boundary; save any checked value

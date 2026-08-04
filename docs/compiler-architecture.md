@@ -80,6 +80,16 @@ accessor behavior.
 Declared storage overlays this metadata onto its visible annotated shape rather
 than replacing the analyzed value type. Rebinding mutable storage recomputes
 the overlay, so provenance follows the current runtime reference.
+Contextual collection typing overlays the expected visible element shape onto
+the inferred elements instead of replacing them, so a fresh List is owned while
+references stored inside it keep their own origin.
+Callable analysis also records non-display parameter, rest-parameter, and
+receiver dependencies on the result. These summaries are computed to a fixed
+point across hoisted declarations, calls, local forwarding, async results,
+arrows, getters, and methods. Call sites apply the summary to arguments in
+formal-parameter order while preserving source evaluation order. Public class
+interfaces consume the analyzed member tables, so the same contract survives
+module boundaries instead of being reconstructed from annotations.
 
 Runtime validation proves a value's current shape; it does not prove that a
 Proxy will preserve that shape on its next operation. `Type.parse`, `is`, and

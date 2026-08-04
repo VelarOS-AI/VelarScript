@@ -32,9 +32,9 @@ export type ValueType =
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | { readonly kind: "node" }
   | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly intrinsic?: string }
-  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true }
+  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true }
+  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true }
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
 export const unknownType: ValueType = { kind: "unknown" };
@@ -218,11 +218,18 @@ function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
   }
   if ((left.kind === "function" || left.kind === "action" || left.kind === "intrinsic")
     && right.kind === left.kind) {
+    const resultOriginParameters = [...new Set([
+      ...(left.resultOriginParameters ?? []),
+      ...(right.resultOriginParameters ?? []),
+    ])].sort((a, b) => a - b);
     return {
       ...left,
       parameters: left.parameters.map((parameter, index) => mergeEquivalentMetadata(parameter, right.parameters[index]!)),
       ...(left.rest && right.rest ? { rest: mergeEquivalentMetadata(left.rest, right.rest) } : {}),
       result: mergeEquivalentMetadata(left.result, right.result),
+      ...(resultOriginParameters.length > 0 ? { resultOriginParameters } : {}),
+      ...(left.resultOriginRest || right.resultOriginRest ? { resultOriginRest: true as const } : {}),
+      ...(left.resultOriginReceiver || right.resultOriginReceiver ? { resultOriginReceiver: true as const } : {}),
     };
   }
   return left;
@@ -365,7 +372,7 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(nested).join(",")}:${type.rest ? nested(type.rest) : ""}:${nested(type.result)}`;
+      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(nested).join(",")}:${type.rest ? nested(type.rest) : ""}:${nested(type.result)}${includeExternal ? `:origin:${type.resultOriginParameters?.join(",") ?? ""}:${type.resultOriginRest ? "rest" : ""}:${type.resultOriginReceiver ? "receiver" : ""}` : ""}`;
     case "componentConstructor":
       return `component:${type.intrinsic ?? ""}:${type.name}:${[...type.props]
         .map(([name, value]) => [name, nested(value)] as const)

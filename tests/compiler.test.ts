@@ -11582,6 +11582,214 @@ if local.label:
     const repeated: string = local.label
 `.trimStart());
   assert.deepEqual(runtimeValidatedOwnedValues.diagnostics, []);
+
+  const forwardedExternalValues = compileCore(`
+type Profile:
+    label: string?
+
+import js {profile} from "host-sdk"
+
+const hoistedValue = hoisted()
+if hoistedValue.label:
+    const repeated: string = hoistedValue.label
+
+const forwarded: Profile = profile
+const forwardedValue = fromForwarded()
+if forwardedValue.label:
+    const repeated: string = forwardedValue.label
+
+export def hoisted() -> Profile:
+    return profile
+
+export def fromForwarded() -> Profile:
+    return forwarded
+
+export def direct() -> Profile:
+    return profile
+
+export def earlier() -> Profile:
+    return later()
+
+export def throughLocal() -> Profile:
+    const value: Profile = later()
+    return value
+
+export def identity(value: Profile) -> Profile:
+    return value
+
+export def namedIdentity(prefix: string, value: Profile) -> Profile:
+    return value
+
+export def wrapped(value: Profile) -> Profile:
+    return identity(value)
+
+export def nestedIdentity(value: Profile) -> Profile:
+    def local(input: Profile) -> Profile:
+        return input
+    return local(value)
+
+export def makeGetter(value: Profile) -> () -> Profile:
+    return () => value
+
+export def matched(value: Profile) -> Profile:
+    match value:
+        case Profile as current:
+            return current
+
+export def firstFrom(values: List<Profile>, fallback: Profile) -> Profile:
+    for value in values:
+        return value
+    return fallback
+
+export async def asyncIdentity(value: Profile) -> Profile:
+    return value
+
+export def first(...values: Profile) -> Profile:
+    return values[0]
+
+export const arrowIdentity = (value: Profile) => value
+
+def later() -> Profile:
+    return profile
+
+export async def asynchronous() -> Profile:
+    return profile
+
+class Store:
+    get current() -> Profile:
+        return profile
+
+    def load() -> Profile:
+        return profile
+
+    def echo(value: Profile) -> Profile:
+        return value
+
+    static def loadStatic() -> Profile:
+        return profile
+
+    static def echoStatic(value: Profile) -> Profile:
+        return value
+
+const directValue = direct()
+if directValue.label:
+    const repeated: string = directValue.label
+
+const earlierValue = earlier()
+if earlierValue.label:
+    const repeated: string = earlierValue.label
+
+const localValue = throughLocal()
+if localValue.label:
+    const repeated: string = localValue.label
+
+const identityValue = identity(profile)
+if identityValue.label:
+    const repeated: string = identityValue.label
+
+const ownedIdentity = identity({label: "owned"})
+if ownedIdentity.label:
+    const repeated: string = ownedIdentity.label
+
+const namedValue = namedIdentity(value=profile, prefix="host")
+if namedValue.label:
+    const repeated: string = namedValue.label
+
+const wrappedValue = wrapped(profile)
+if wrappedValue.label:
+    const repeated: string = wrappedValue.label
+
+const nestedValue = nestedIdentity(profile)
+if nestedValue.label:
+    const repeated: string = nestedValue.label
+
+const getter = makeGetter(profile)
+const closureValue = getter()
+if closureValue.label:
+    const repeated: string = closureValue.label
+
+const matchedValue = matched(profile)
+if matchedValue.label:
+    const repeated: string = matchedValue.label
+
+export const iteratedValue = firstFrom([profile], {label: "fallback"})
+if iteratedValue.label:
+    const repeated: string = iteratedValue.label
+
+const asyncIdentityValue = await asyncIdentity(profile)
+if asyncIdentityValue.label:
+    const repeated: string = asyncIdentityValue.label
+
+const firstValue = first(profile)
+if firstValue.label:
+    const repeated: string = firstValue.label
+
+const ownedFirst = first({label: "owned"})
+if ownedFirst.label:
+    const repeated: string = ownedFirst.label
+
+const arrowValue = arrowIdentity(profile)
+if arrowValue.label:
+    const repeated: string = arrowValue.label
+
+const mappedValues = [profile].map(identity)
+if mappedValues[0].label:
+    const repeated: string = mappedValues[0].label
+
+const asynchronousValue = await asynchronous()
+if asynchronousValue.label:
+    const repeated: string = asynchronousValue.label
+
+const store = Store()
+if store.current.label:
+    const repeated: string = store.current.label
+
+const methodValue = store.load()
+if methodValue.label:
+    const repeated: string = methodValue.label
+
+const echoValue = store.echo(profile)
+if echoValue.label:
+    const repeated: string = echoValue.label
+
+const staticValue = Store.loadStatic()
+if staticValue.label:
+    const repeated: string = staticValue.label
+
+const staticEchoValue = Store.echoStatic(profile)
+if staticEchoValue.label:
+    const repeated: string = staticEchoValue.label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(forwardedExternalValues.diagnostics.length, 22);
+  assert.equal(forwardedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 22);
+  for (const name of ["hoisted", "fromForwarded", "direct", "earlier", "throughLocal", "asynchronous"]) {
+    const exported = forwardedExternalValues.moduleInterface.exports.get(name);
+    const result = exported?.kind === "function" ? exported.result : null;
+    const resolved = result?.kind === "promise" ? result.value : result;
+    assert.equal(resolved?.kind === "named" ? resolved.external : false, true);
+  }
+  const identityExport = forwardedExternalValues.moduleInterface.exports.get("identity");
+  assert.deepEqual(identityExport?.kind === "function" ? identityExport.resultOriginParameters : null, [0]);
+  assert.equal(identityExport?.kind === "function" && identityExport.result.kind === "named" ? identityExport.result.external ?? false : false, false);
+  for (const name of ["namedIdentity", "wrapped", "nestedIdentity", "makeGetter", "matched", "asyncIdentity"]) {
+    const exported = forwardedExternalValues.moduleInterface.exports.get(name);
+    assert.deepEqual(exported?.kind === "function" ? exported.resultOriginParameters : null, [name === "namedIdentity" ? 1 : 0]);
+  }
+  const firstFromExport = forwardedExternalValues.moduleInterface.exports.get("firstFrom");
+  assert.deepEqual(firstFromExport?.kind === "function" ? firstFromExport.resultOriginParameters : null, [0, 1]);
+  const iteratedExport = forwardedExternalValues.moduleInterface.exports.get("iteratedValue");
+  assert.equal(iteratedExport?.kind === "named" ? iteratedExport.external : false, true);
+  const firstExport = forwardedExternalValues.moduleInterface.exports.get("first");
+  assert.equal(firstExport?.kind === "function" ? firstExport.resultOriginRest : false, true);
+  const arrowExport = forwardedExternalValues.moduleInterface.exports.get("arrowIdentity");
+  assert.deepEqual(arrowExport?.kind === "function" ? arrowExport.resultOriginParameters : null, [0]);
+  const storeInterface = forwardedExternalValues.moduleInterface.classes.get("Store");
+  const echoInterface = storeInterface?.methods.get("echo");
+  assert.deepEqual(echoInterface?.kind === "function" ? echoInterface.resultOriginParameters : null, [0]);
+  const loadInterface = storeInterface?.methods.get("load");
+  assert.equal(loadInterface?.kind === "function" && loadInterface.result.kind === "named" ? loadInterface.result.external : false, true);
+  const currentInterface = storeInterface?.fields.get("current")?.type;
+  assert.equal(currentInterface?.kind === "named" ? currentInterface.external : false, true);
 });
 
 test("f-strings invalidate facts only when object coercion can execute user code", () => {

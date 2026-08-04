@@ -150,6 +150,7 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
       parsed.source.path,
       extensions,
       analyzer.semanticTypes(),
+      analyzer.analyzedClasses(),
     ),
     semanticIndex,
   };
@@ -359,6 +360,7 @@ function interfaceOf(
   path: string,
   extensions: readonly CompilerExtension[],
   analyzedBindings: ReadonlyMap<string, ValueType> = new Map(),
+  analyzedClasses: ReadonlyMap<string, ClassInfo> = new Map(),
 ): ModuleInterface {
   const classIdentities = new Map<string, string>([["Error", "Error"]]);
   for (const statement of program.body) {
@@ -401,6 +403,7 @@ function interfaceOf(
     return type;
   };
   const resolve = (reference: TypeReference | null): ValueType => resolveNominals(expandAliases(reference ? resolveTypeReference(reference) : unknownType), classIdentities, enumNames, namedTypeIdentities);
+  const resolveAnalyzed = (type: ValueType): ValueType => resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities);
   const resolvedAnalyzedBindings = new Map([...analyzedBindings]
     .map(([name, type]) => [name, resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities)]));
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -463,6 +466,20 @@ function interfaceOf(
         staticGetters: new Set(statement.getters.filter((getter) => getter.static && !getter.private).map((getter) => getter.name)),
         staticMethods,
       });
+      const analyzed = analyzedClasses.get(statement.name);
+      if (analyzed) {
+        classes.set(statement.name, {
+          ...analyzed,
+          identity,
+          parameters: analyzed.parameters.map(resolveAnalyzed),
+          ...(analyzed.constructorRest ? { constructorRest: resolveAnalyzed(analyzed.constructorRest) } : {}),
+          base: analyzed.base ? classIdentities.get(analyzed.base) ?? analyzed.base : null,
+          fields: new Map([...analyzed.fields].map(([name, field]) => [name, { ...field, type: resolveAnalyzed(field.type) }])),
+          methods: new Map([...analyzed.methods].map(([name, type]) => [name, resolveAnalyzed(type)])),
+          staticFields: new Map([...analyzed.staticFields].map(([name, field]) => [name, { ...field, type: resolveAnalyzed(field.type) }])),
+          staticMethods: new Map([...analyzed.staticMethods].map(([name, type]) => [name, resolveAnalyzed(type)])),
+        });
+      }
     } else if (statement.kind === "FunctionDeclaration" && statement.name.startsWith("test_")) {
       testFunctions.push(statement.name);
     }
