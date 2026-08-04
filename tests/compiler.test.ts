@@ -8290,6 +8290,42 @@ const result = echo(value=value)
   assert.equal(argument.originalColumn, original.lastIndexOf("value"));
 });
 
+test("Web source maps retain nested JSX elements, attributes, text, and expressions", () => {
+  const source = `
+component Child(label: string):
+    return <span>{label}</span>
+
+component App:
+    const title = "ready"
+    return <main><section aria-label="panel"><Child label={title} /><p>{title}</p><strong>Static</strong></section></main>
+`.trimStart();
+  const result = compile(source, { path: "jsx-map.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  const generatedLines = (result.code ?? "").split("\n");
+  const generatedLine = generatedLines.findIndex((line) => line.includes('__velarCreateElement("section"'));
+  const generated = generatedLines[generatedLine] ?? "";
+  const sourceMap = new SourceMap(JSON.parse(result.sourceMap ?? "{}"));
+  const sourceText = new SourceText("jsx-map.vel", source);
+  const assertMapped = (generatedNeedle: string, sourceOffset: number): void => {
+    const generatedColumn = generated.indexOf(generatedNeedle);
+    assert.ok(generatedColumn >= 0, generatedNeedle);
+    const entry = sourceMap.findEntry(generatedLine, generatedColumn) as { originalLine: number; originalColumn: number };
+    const expected = sourceText.location(sourceOffset);
+    assert.equal(entry.originalLine, expected.line - 1, generatedNeedle);
+    assert.equal(entry.originalColumn, expected.column - 1, generatedNeedle);
+  };
+
+  assertMapped('__velarCreateElement("main"', source.indexOf("<main"));
+  assertMapped('__velarCreateElement("section"', source.indexOf("<section"));
+  assertMapped("__velarStaticAttr(__el", source.indexOf("aria-label"));
+  assertMapped("Child({", source.indexOf("<Child"));
+  assertMapped("label:", source.indexOf("label={"));
+  assertMapped('__velarCreateElement("p"', source.indexOf("<p>"));
+  assertMapped("=> title", source.lastIndexOf("title"));
+  assertMapped('__velarCreateElement("strong"', source.indexOf("<strong>"));
+  assertMapped('document.createTextNode("Static")', source.indexOf("Static"));
+});
+
 test("imported classes preserve construction, aliases, and nominal checks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-module-class-"));
   const output = join(directory, "dist");

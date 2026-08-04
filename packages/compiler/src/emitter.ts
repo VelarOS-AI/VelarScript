@@ -544,6 +544,10 @@ export class JavaScriptEmitter {
     return node.code.length === 0 ? "" : `\u0000VELAR_MAP_${node.id}\u0000${node.code}`;
   }
 
+  protected emitMappedJavaScript(sourceSpan: Span, render: () => string): string {
+    return this.markJavaScriptNode(this.emitJavaScriptNode(sourceSpan, render));
+  }
+
   private renderJavaScriptNode(node: JavaScriptNode): { readonly code: string; readonly mappings: readonly GeneratedMapping[] } {
     let code = "";
     let cursor = 0;
@@ -765,7 +769,7 @@ export class JavaScriptEmitter {
   }
 
   protected emitMappedStatement(statement: Statement, depth: number): string {
-    return this.markJavaScriptNode(this.emitJavaScriptNode(statement.span, () => this.emitStatement(statement, depth)));
+    return this.emitMappedJavaScript(statement.span, () => this.emitStatement(statement, depth));
   }
 
   protected emitStatement(statement: Statement, depth: number): string {
@@ -1195,7 +1199,7 @@ export class JavaScriptEmitter {
   }
 
   protected emitMappedExpression(expression: Expression, normalizeNull = true): string {
-    return this.markJavaScriptNode(this.emitJavaScriptNode(expression.span, () => {
+    return this.emitMappedJavaScript(expression.span, () => {
       const key = `${expression.span.start}:${expression.span.end}`;
       const normalizePromise = normalizeNull
         && this.suppressPromiseNormalization === 0
@@ -1212,7 +1216,7 @@ export class JavaScriptEmitter {
       if (this.hints.normalizedNullResults.has(key)) return `(${emitted}, null)`;
       if (this.hints.normalizedUndefinedExpressions.has(key)) return `(${emitted} ?? null)`;
       return emitted;
-    }));
+    });
   }
 
   protected emitExpression(expression: Expression): string {

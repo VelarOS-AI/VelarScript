@@ -198,7 +198,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
     if (expression.kind === "JSXElementExpression") {
-      return this.emitJsx(expression, this.currentScope ?? "__velarGlobalScope", this.currentScope !== null, this.currentJsxNamespace);
+      return this.emitJsx(expression, this.currentScope ?? "__velarGlobalScope", this.currentScope !== null, this.currentJsxNamespace, false);
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && expression.callee.name === "mount" && expression.arguments.length === 2) {
@@ -375,11 +375,19 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     return null;
   }
 
-  private emitJsx(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string): string {
+  private emitJsx(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string, mapped = true): string {
+    const render = (): string => this.emitJsxCode(expression, scope, asChild, namespace);
+    return mapped ? this.emitMappedJavaScript(expression.span, render) : render();
+  }
+
+  private emitJsxCode(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string): string {
     if (/^[A-Z]/u.test(expression.tag)) {
       const properties = expression.attributes
         .filter((attribute) => attribute.name !== "key")
-        .map((attribute) => `${this.emitObjectKey(attribute.name)}: ${this.emitJsxAttributeValue(attribute)}`);
+        .map((attribute) => this.emitMappedJavaScript(
+          attribute.span,
+          () => `${this.emitObjectKey(attribute.name)}: ${this.emitJsxAttributeValue(attribute)}`,
+        ));
       if (hasMeaningfulChildren(expression.children)) properties.push(`children: ${this.emitJsxChildren(expression.children, scope, namespace)}`);
       const props = properties.join(", ");
       const component = `${expression.tag}({ ${props} }, ${namespace})`;
@@ -394,47 +402,53 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       ? `const ${element} = __velarCreateElement(${JSON.stringify(expression.tag)}, ${elementNamespace});`
       : `const ${element} = document.createDocumentFragment();`];
     for (const attribute of expression.attributes) {
-      const value = attribute.value;
       if (attribute.name === "key") continue;
-      if (attribute.name === "ref" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
-        lines.push(`${value.name} = ${element}; ${scope}.cleanups.push(() => { if (${value.name} === ${element}) ${value.name} = null; });`);
-      } else if (attribute.name.startsWith("on:") && value && typeof value !== "string") {
-        const [event, ...modifiers] = attribute.name.slice(3).split(".");
-        lines.push(`__velarOn(${element}, ${JSON.stringify(event)}, ${this.emitMappedExpression(value)}, ${scope}, ${JSON.stringify(modifiers)});`);
-      } else if (attribute.name === "bind:value" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
-        const numeric = expression.tag === "input" && expression.attributes.some((item) => item.name === "type" && item.value === "number");
-        const enumName = this.hints.enumValueBindings.get(attribute.span.start);
-        lines.push(`__velarBindValue(${element}, ${value.name}, ${scope}, ${numeric}${enumName ? `, ${enumName}.parse` : ""});`);
-      } else if (attribute.name === "bind:checked" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
-        lines.push(`__velarBindChecked(${element}, ${value.name}, ${scope});`);
-      } else if (attribute.name.startsWith("class:") && value && typeof value !== "string") {
-        lines.push(`__velarClass(${element}, ${JSON.stringify(attribute.name.slice(6))}, () => ${this.emitMappedExpression(value)}, ${scope});`);
-      } else if (attribute.name === "host") {
-        lines.push(`${element}.__velarHost = true;`);
-      } else if (attribute.name === "look" && value && typeof value !== "string") {
-        lines.push(`__velarLookBind(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`);
-      } else if (attribute.name === "class" && value && typeof value !== "string") {
-        lines.push(`__velarClassBind(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`);
-      } else if (attribute.name === "unsafe:html" && value && typeof value !== "string") {
-        lines.push(`__velarHtml(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`);
-      } else if (typeof value === "string" || value === null) {
-        lines.push(`__velarStaticAttr(${element}, ${JSON.stringify(attribute.name)}, ${value === null ? "true" : JSON.stringify(value)});`);
-      } else {
-        lines.push(`__velarAttr(${element}, ${JSON.stringify(attribute.name)}, () => ${this.emitMappedExpression(value)}, ${scope});`);
-      }
+      lines.push(this.emitMappedJavaScript(attribute.span, () => {
+        const value = attribute.value;
+        if (attribute.name === "ref" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
+          return `${value.name} = ${element}; ${scope}.cleanups.push(() => { if (${value.name} === ${element}) ${value.name} = null; });`;
+        }
+        if (attribute.name.startsWith("on:") && value && typeof value !== "string") {
+          const [event, ...modifiers] = attribute.name.slice(3).split(".");
+          return `__velarOn(${element}, ${JSON.stringify(event)}, ${this.emitMappedExpression(value)}, ${scope}, ${JSON.stringify(modifiers)});`;
+        }
+        if (attribute.name === "bind:value" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
+          const numeric = expression.tag === "input" && expression.attributes.some((item) => item.name === "type" && item.value === "number");
+          const enumName = this.hints.enumValueBindings.get(attribute.span.start);
+          return `__velarBindValue(${element}, ${value.name}, ${scope}, ${numeric}${enumName ? `, ${enumName}.parse` : ""});`;
+        }
+        if (attribute.name === "bind:checked" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
+          return `__velarBindChecked(${element}, ${value.name}, ${scope});`;
+        }
+        if (attribute.name.startsWith("class:") && value && typeof value !== "string") {
+          return `__velarClass(${element}, ${JSON.stringify(attribute.name.slice(6))}, () => ${this.emitMappedExpression(value)}, ${scope});`;
+        }
+        if (attribute.name === "host") return `${element}.__velarHost = true;`;
+        if (attribute.name === "look" && value && typeof value !== "string") {
+          return `__velarLookBind(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`;
+        }
+        if (attribute.name === "class" && value && typeof value !== "string") {
+          return `__velarClassBind(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`;
+        }
+        if (attribute.name === "unsafe:html" && value && typeof value !== "string") {
+          return `__velarHtml(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`;
+        }
+        if (typeof value === "string" || value === null) {
+          return `__velarStaticAttr(${element}, ${JSON.stringify(attribute.name)}, ${value === null ? "true" : JSON.stringify(value)});`;
+        }
+        return `__velarAttr(${element}, ${JSON.stringify(attribute.name)}, () => ${this.emitMappedExpression(value)}, ${scope});`;
+      }));
     }
     for (const child of expression.children) {
       if (child.kind === "JSXText") {
         const text = normalizeJsxText(child.value);
-        if (text) lines.push(`${element}.append(document.createTextNode(${JSON.stringify(text)}));`);
+        if (text) lines.push(this.emitMappedJavaScript(child.span, () => `${element}.append(document.createTextNode(${JSON.stringify(text)}));`));
       } else if (child.kind === "JSXElementExpression") {
-        if (/^[A-Z]/u.test(child.tag)) {
-          lines.push(`__velarDynamic(${element}, (__childScope) => ${this.emitJsx(child, "__childScope", true, childNamespace)}, ${scope});`);
-        } else {
-          lines.push(`__velarAppend(${element}, ${this.emitJsx(child, scope, true, childNamespace)});`);
-        }
+        lines.push(this.emitMappedJavaScript(child.span, () => /^[A-Z]/u.test(child.tag)
+          ? `__velarDynamic(${element}, (__childScope) => ${this.emitJsx(child, "__childScope", true, childNamespace)}, ${scope});`
+          : `__velarAppend(${element}, ${this.emitJsx(child, scope, true, childNamespace)});`));
       } else {
-        lines.push(this.emitDynamicChild(element, child.expression, scope, childNamespace));
+        lines.push(this.emitMappedJavaScript(child.expression.span, () => this.emitDynamicChild(element, child.expression, scope, childNamespace)));
       }
     }
     lines.push(`return ${element};`);

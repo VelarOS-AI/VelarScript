@@ -203,8 +203,10 @@ inline compiler maps rather than random temporary `.js` paths. JavaScript
 generation is retained as a parent/child node IR for statements and expressions;
 the renderer records exact generated offsets for those nodes and emits line-and-
 column source-map segments instead of assigning one source span to a whole
-generated statement. This keeps content hashes and source maps reproducible
-across output locations. Linked
+generated statement. Web JSX participates in the same tree: nested elements,
+attributes, static text, and dynamic child expressions each own a mapped node
+instead of inheriting the previous generated fragment's position. This keeps
+content hashes and source maps reproducible across output locations. Linked
 production maps are disabled by default and remain an explicit manifest input.
 
 Null normalization is type-directed rather than provenance-directed. Every
