@@ -56,6 +56,7 @@ export interface ProjectResult {
   readonly notices: readonly ProjectNotice[];
   readonly velarPackages: readonly VelarSourcePackage[];
   readonly velarImports: ReadonlyMap<string, string>;
+  readonly externalTypeDependencies: ReadonlyMap<string, ReadonlySet<string>>;
   readonly stats: ProjectCompilationStats;
 }
 
@@ -131,6 +132,7 @@ export async function compileProjectEntries(
   const failures: ProjectFailure[] = [];
   const notices: ProjectNotice[] = [];
   const declarationCache = new Map<string, Promise<TypeScriptDeclarationBridge | null>>();
+  const externalTypeDependencies = new Map<string, Set<string>>();
   const interfaceCache = new Map<string, ModuleInspection["moduleInterface"]>();
   const velarPackages = new Map<string, VelarSourcePackage>();
   const velarImports = new Map<string, string>();
@@ -250,6 +252,14 @@ export async function compileProjectEntries(
   const modules: ProjectModule[] = [];
   const affected = previous ? affectedModules(loaded, velarImports, previous, changedPaths) : new Set(loaded.keys());
   const previousModules = new Map(previous?.modules.map((module) => [module.inputPath, module]));
+  for (const [dependency, importers] of previous?.externalTypeDependencies ?? []) {
+    for (const importer of importers) {
+      if (!loaded.has(importer) || affected.has(importer)) continue;
+      const preserved = externalTypeDependencies.get(dependency) ?? new Set<string>();
+      preserved.add(importer);
+      externalTypeDependencies.set(dependency, preserved);
+    }
+  }
   const compiledInterfaces = new Map<string, ModuleInspection["moduleInterface"]>();
   for (const [path, module] of previousModules) {
     if (loaded.has(path) && !affected.has(path)) compiledInterfaces.set(path, module.result.moduleInterface);
@@ -283,6 +293,7 @@ export async function compileProjectEntries(
           failures,
           notices,
           declarationCache,
+          externalTypeDependencies,
           interfaceCache,
           compiledInterfaces,
           compilerExtensions,
@@ -331,6 +342,7 @@ export async function compileProjectEntries(
     notices: uniqueNotices(notices),
     velarPackages: [...velarPackages.values()],
     velarImports,
+    externalTypeDependencies,
     stats: {
       moduleCount: modules.length,
       compiledModules,
@@ -378,6 +390,11 @@ function affectedModules(
   };
   for (const module of loaded.values()) resources(module.inputPath, module.inspection.resources);
   for (const module of previous.modules) resources(module.inputPath, module.result.resources);
+  for (const [dependency, importers] of previous.externalTypeDependencies) {
+    const dependents = reverse.get(dependency) ?? new Set<string>();
+    for (const importer of importers) dependents.add(importer);
+    reverse.set(dependency, dependents);
+  }
   const pending = [...affected];
   while (pending.length > 0) {
     const path = pending.shift()!;
@@ -539,6 +556,7 @@ async function createAnalysisContext(
   failures: ProjectFailure[],
   notices: ProjectNotice[],
   declarationCache: Map<string, Promise<TypeScriptDeclarationBridge | null>>,
+  externalTypeDependencies: Map<string, Set<string>>,
   interfaceCache: Map<string, ModuleInspection["moduleInterface"]>,
   compiledInterfaces: ReadonlyMap<string, ModuleInspection["moduleInterface"]>,
   compilerExtensions: readonly CompilerExtension[],
@@ -594,6 +612,11 @@ async function createAnalysisContext(
       }
       const declarations = await pending;
       if (!declarations) continue;
+      for (const path of declarations.dependencies) {
+        const importers = externalTypeDependencies.get(path) ?? new Set<string>();
+        importers.add(module.inputPath);
+        externalTypeDependencies.set(path, importers);
+      }
       for (const warning of declarations.warnings) {
         notices.push({ path: module.inputPath, message: `${dependency.source}: ${warning}` });
       }

@@ -72,6 +72,19 @@ export class VelarProjectSessions {
         }
       }
     }
+    for (const dependencyPath of state.project?.externalTypeDependencies.keys() ?? []) {
+      if (contents.has(dependencyPath)) continue;
+      try {
+        const overridden = overrides.get(dependencyPath);
+        const text = overridden === undefined
+          ? await readBoundedText(dependencyPath, 2 * 1024 * 1024, "external type dependency")
+          : overridden;
+        contents.set(dependencyPath, text);
+        if (state.contents.get(dependencyPath) !== text) changed.add(dependencyPath);
+      } catch {
+        changed.add(dependencyPath);
+      }
+    }
     for (const previous of state.contents.keys()) if (!contents.has(previous)) changed.add(previous);
     if (state.project && changed.size === 0) return { config, project: state.project, changedPaths: changed };
 
@@ -103,6 +116,14 @@ export class VelarProjectSessions {
         } catch {
           // Failed resources remain represented by project failures and are retried on the next snapshot.
         }
+      }
+    }
+    for (const dependencyPath of project.externalTypeDependencies.keys()) {
+      try {
+        state.contents.set(dependencyPath, overrides.get(dependencyPath)
+          ?? await readBoundedText(dependencyPath, 2 * 1024 * 1024, "external type dependency"));
+      } catch {
+        // Missing declarations remain represented by the rebuilt bridge and are retried on the next snapshot.
       }
     }
     return { config, project, changedPaths: changed };

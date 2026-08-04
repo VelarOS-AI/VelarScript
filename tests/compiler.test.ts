@@ -4147,6 +4147,43 @@ test("project sessions reuse unaffected modules and invalidate reverse dependenc
   assert.match(restored.project.modules.find((module) => module.inputPath === storePath)?.result.code ?? "", /const value = 4/u);
 });
 
+test("project sessions invalidate safe JavaScript imports when declaration graphs change", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-session-dts-"));
+  const packageRoot = join(directory, "node_modules", "session-sdk");
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] }), "utf8");
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({
+    name: "session-sdk",
+    type: "module",
+    exports: "./index.js",
+    types: "./index.d.ts",
+  }), "utf8");
+  await writeFile(join(packageRoot, "index.js"), "export const value = 'ready'\n", "utf8");
+  const declarationPath = join(packageRoot, "index.d.ts");
+  await writeFile(declarationPath, "export declare const value: string;\n", "utf8");
+  const resolvedDeclarationPath = await realpath(declarationPath);
+  const mainPath = join(directory, "main.vel");
+  const otherPath = join(directory, "other.vel");
+  await writeFile(mainPath, "import js {value} from \"session-sdk\"\nconst label: string = value\n", "utf8");
+  await writeFile(otherPath, "export const untouched = 1\n", "utf8");
+
+  const sessions = new VelarProjectSessions();
+  const first = await sessions.snapshot(mainPath);
+  assert.deepEqual(first.project.failures, []);
+  assert.deepEqual(first.project.modules.flatMap((module) => module.result.diagnostics), []);
+  assert.equal(first.project.externalTypeDependencies.get(resolvedDeclarationPath)?.has(mainPath), true);
+  const firstOther = first.project.modules.find((module) => module.inputPath === otherPath)?.result;
+
+  await writeFile(declarationPath, "export declare const value: number;\n", "utf8");
+  const changed = await sessions.snapshot(mainPath);
+  assert.deepEqual([...changed.changedPaths], [resolvedDeclarationPath]);
+  assert.ok(changed.project.modules.find((module) => module.inputPath === mainPath)?.result.diagnostics
+    .some((item) => /Cannot assign number to string/u.test(item.message)));
+  assert.equal(changed.project.modules.find((module) => module.inputPath === otherPath)?.result, firstOther);
+  assert.equal(changed.project.stats.compiledModules, 1);
+  assert.equal(changed.project.stats.reusedModules, 1);
+});
+
 test("0.10 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
   assert.equal(api.standardVersion, "0.4");
@@ -9504,6 +9541,10 @@ export {leaked} from "./leak";
 
   const bridge = await loadTypeScriptDeclarations("graph-sdk", join(sourceRoot, "main.vel"));
   assert.ok(bridge);
+  assert.ok(bridge.dependencies.includes(await realpath(join(packageRoot, "package.json"))));
+  assert.ok(bridge.dependencies.includes(await realpath(join(packageRoot, "index.d.ts"))));
+  assert.ok(bridge.dependencies.includes(await realpath(join(packageRoot, "client.d.ts"))));
+  assert.ok(bridge.dependencies.includes(await realpath(join(packageRoot, "model.d.ts"))));
   const client = bridge.exports.get("Client");
   const sameClient = bridge.exports.get("SameClient");
   assert.equal(client?.kind, "classConstructor");

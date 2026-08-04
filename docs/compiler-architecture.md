@@ -32,7 +32,11 @@ reused, and affected modules plus elapsed time. The language server owns a
 multi-entry incremental session; the development server owns an entry-graph
 incremental session and dynamically watches resolved npm VelarScript package roots.
 Both reuse the compiler's reverse-dependency invalidation rather than creating
-their own semantic cache.
+their own semantic cache. The project result also records the exact package
+manifest and bounded `.d.ts` graph used by each safe JavaScript import. Editor
+sessions track those files with the same content snapshots as VelarScript
+sources and resources, so a declaration change invalidates its importer and the
+importer's reverse dependency closure without requiring an unrelated source edit.
 
 Project modules compile dependency-first. The public interface returned by a
 successful compilation is built from that same analyzer's binding types rather

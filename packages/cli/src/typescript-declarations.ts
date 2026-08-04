@@ -6,6 +6,7 @@ import { describeType, optionalOf, semanticTypeIdentity, type ClassInfo, type Va
 
 export interface TypeScriptDeclarationBridge {
   readonly path: string;
+  readonly dependencies: readonly string[];
   readonly exports: ReadonlyMap<string, ValueType>;
   readonly typeExports: ReadonlyMap<string, ValueType>;
   readonly classes: ReadonlyMap<string, ClassInfo>;
@@ -43,6 +44,7 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
   }
   const root = await findPackageRoot(entry, packageName);
   if (!root) return null;
+  const manifestPath = join(root, "package.json");
   let manifest: {
     readonly name?: unknown;
     readonly types?: unknown;
@@ -50,7 +52,6 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
     readonly exports?: unknown;
   };
   try {
-    const manifestPath = join(root, "package.json");
     manifest = JSON.parse(await readLimitedText(manifestPath, MAX_PACKAGE_MANIFEST_BYTES, "package manifest")) as typeof manifest;
   } catch {
     return null;
@@ -61,7 +62,8 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
   const path = await firstDeclarationEntry(root, declared, entry, subpath === ".");
   if (!path) return null;
   try {
-    return await loadTypeScriptDeclarationGraph(root, path, packageName);
+    const bridge = await loadTypeScriptDeclarationGraph(root, path, packageName);
+    return { ...bridge, dependencies: [...unique([manifestPath, ...bridge.dependencies])].sort() };
   } catch {
     return null;
   }
@@ -267,7 +269,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
           }
         }
       }
-      const bridge = { path, exports, typeExports, classes, classRegistry, warnings: unique(warnings) } satisfies TypeScriptDeclarationBridge;
+      const bridge = { path, dependencies: [path], exports, typeExports, classes, classRegistry, warnings: unique(warnings) } satisfies TypeScriptDeclarationBridge;
       cache.set(path, bridge);
       return bridge;
     } finally {
@@ -275,11 +277,12 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
     }
   };
 
-  return load(entryPath, 0);
+  const bridge = await load(entryPath, 0);
+  return { ...bridge, dependencies: [...counted].sort() };
 }
 
 function emptyDeclarationBridge(path: string, warning: string): TypeScriptDeclarationBridge {
-  return { path, exports: new Map(), typeExports: new Map(), classes: new Map(), classRegistry: new Map(), warnings: [warning] };
+  return { path, dependencies: [path], exports: new Map(), typeExports: new Map(), classes: new Map(), classRegistry: new Map(), warnings: [warning] };
 }
 
 function declarationReexports(source: string): readonly DeclarationReexport[] {
@@ -692,7 +695,7 @@ export function parseTypeScriptDeclarations(
   if (!reexportsHandled && (/export\s+\*/u.test(text) || /export\s+(?:type\s+)?\{[^}]+\}\s+from\s*["']/u.test(text))) {
     warnings.push("TypeScript re-export requires the package declaration graph loader");
   }
-  return { path, exports, typeExports, classes, classRegistry, warnings: unique(warnings) };
+  return { path, dependencies: [path], exports, typeExports, classes, classRegistry, warnings: unique(warnings) };
 }
 
 interface TypeScriptClassDeclaration {
