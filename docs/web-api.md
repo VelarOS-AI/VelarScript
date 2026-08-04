@@ -569,7 +569,8 @@ component LiveStatus:
 - `eventStream` wraps server-sent events and exposes `state` and `close`, with
   optional credentials. Event streams report `connecting`, `open`, or `closed`;
   WebSockets additionally expose `closing`. Unknown native state numbers fail
-  rather than being mislabeled.
+  rather than being mislabeled. Each state observation reads the native value
+  once, so validation and the returned label cannot describe different states.
 - URLs are strings, EventSource credentials are bool, and handler records
   accept only documented enumerable callable data fields. Accessors and unknown
   fields fail before constructing the native connection. Handler throws and
@@ -581,11 +582,12 @@ component LiveStatus:
   stream after reporting the boundary error. Server-sent event IDs are limited
   to 64 KiB on the same checked return path.
 - Resolved native connection URLs are validated again before becoming public
-  fields. Inbound WebSocket close codes/reasons are also checked before the
-  typed callback runs; malformed host metadata is reported through
-  `velar/app` without implicit conversion.
+  fields. Inbound message text, event IDs, and WebSocket close codes/reasons are
+  each snapshotted once before the typed callback runs; malformed host metadata
+  is reported through `velar/app` without implicit conversion.
 - WebSocket close codes are `1000` or application codes `3000`–`4999`; reasons
-  are strings no longer than 123 UTF-8 bytes. Invalid messages, JSON payloads,
+  are strings no longer than 123 UTF-8 bytes. A reason above 123 code units is
+  rejected before allocating an encoded copy. Invalid messages, JSON payloads,
   codes, and reasons fail before native `send` or `close` effects.
 - Connections are ordinary owned resources. Applications close them explicitly
   from sibling component `cleanup`; the API does not introduce React-style

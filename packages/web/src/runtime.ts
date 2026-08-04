@@ -1778,16 +1778,18 @@ function handler(value, allowed) {
   return value;
 }
 function webSocketState(value) {
-  if (value.readyState === 0) return "connecting";
-  if (value.readyState === 1) return "open";
-  if (value.readyState === 2) return "closing";
-  if (value.readyState === 3) return "closed";
+  const readyState = value.readyState;
+  if (readyState === 0) return "connecting";
+  if (readyState === 1) return "open";
+  if (readyState === 2) return "closing";
+  if (readyState === 3) return "closed";
   throw new TypeError("WebSocket returned an invalid state");
 }
 function eventStreamState(value) {
-  if (value.readyState === 0) return "connecting";
-  if (value.readyState === 1) return "open";
-  if (value.readyState === 2) return "closed";
+  const readyState = value.readyState;
+  if (readyState === 0) return "connecting";
+  if (readyState === 1) return "open";
+  if (readyState === 2) return "closed";
   throw new TypeError("Event stream returned an invalid state");
 }
 export function socket(url, handlers = {}) {
@@ -1798,27 +1800,29 @@ export function socket(url, handlers = {}) {
   catch (failure) { try { value.close(); } catch {} throw failure; }
   value.addEventListener("open", () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "socket:open"));
   value.addEventListener("message", (event) => {
-    if (typeof event.data !== "string") {
+    const data = event.data;
+    if (typeof data !== "string") {
       __velarInvokeOwnedCallback(handlers.error, ["Binary WebSocket messages are not supported by VelarScript Web API 0.10"], "realtime", "socket:error");
       const state = webSocketState(value);
       if (state === "connecting" || state === "open") value.close(1003, "Text messages only");
       return;
     }
-    if (event.data.length > maxRealtimeTextCodeUnits) {
+    if (data.length > maxRealtimeTextCodeUnits) {
       __velarInvokeOwnedCallback(handlers.error, ["WebSocket message exceeded 16 MiB"], "realtime", "socket:error");
       const state = webSocketState(value);
       if (state === "connecting" || state === "open") value.close(1009, "Message too large");
       return;
     }
-    __velarInvokeOwnedCallback(handlers.message, [event.data], "realtime", "socket:message");
+    __velarInvokeOwnedCallback(handlers.message, [data], "realtime", "socket:message");
   });
   value.addEventListener("error", () => __velarInvokeOwnedCallback(handlers.error, ["WebSocket connection error"], "realtime", "socket:error"));
   value.addEventListener("close", (event) => {
     try {
-      if (!Number.isSafeInteger(event.code) || event.code < 0 || event.code > 65535) throw new TypeError("WebSocket close event returned an invalid code");
+      const code = event.code;
       const reason = realtimeMessage(event.reason, "WebSocket close event reason");
-      if (new TextEncoder().encode(reason).length > 123) throw new RangeError("WebSocket close event reason cannot exceed 123 UTF-8 bytes");
-      __velarInvokeOwnedCallback(handlers.close, [event.code, reason], "realtime", "socket:close");
+      if (!Number.isSafeInteger(code) || code < 0 || code > 65535) throw new TypeError("WebSocket close event returned an invalid code");
+      if (reason.length > 123 || new TextEncoder().encode(reason).length > 123) throw new RangeError("WebSocket close event reason cannot exceed 123 UTF-8 bytes");
+      __velarInvokeOwnedCallback(handlers.close, [code, reason], "realtime", "socket:close");
     } catch (failure) { __velarReportOwnedCallback(failure, "realtime", "socket:close"); }
   });
   return Object.freeze({
@@ -1829,7 +1833,7 @@ export function socket(url, handlers = {}) {
     close(code = 1000, reason = "") {
       if (!Number.isSafeInteger(code) || (code !== 1000 && (code < 3000 || code > 4999))) throw new RangeError("WebSocket close code must be 1000 or from 3000 through 4999");
       reason = __velarString(reason, "WebSocket close reason");
-      if (new TextEncoder().encode(reason).length > 123) throw new RangeError("WebSocket close reason cannot exceed 123 UTF-8 bytes");
+      if (reason.length > 123 || new TextEncoder().encode(reason).length > 123) throw new RangeError("WebSocket close reason cannot exceed 123 UTF-8 bytes");
       const state = webSocketState(value);
       if (state === "connecting" || state === "open") value.close(code, reason);
       return null;
@@ -1845,12 +1849,14 @@ export function eventStream(url, handlers = {}, credentials = false) {
   catch (failure) { try { value.close(); } catch {} throw failure; }
   value.addEventListener("open", () => __velarInvokeOwnedCallback(handlers.open, [], "realtime", "event-stream:open"));
   value.addEventListener("message", (event) => {
-    if (typeof event.data !== "string" || event.data.length > maxRealtimeTextCodeUnits || typeof event.lastEventId !== "string" || event.lastEventId.length > 65536) {
+    const data = event.data;
+    const lastEventId = event.lastEventId;
+    if (typeof data !== "string" || data.length > maxRealtimeTextCodeUnits || typeof lastEventId !== "string" || lastEventId.length > 65536) {
       __velarInvokeOwnedCallback(handlers.error, ["Event stream message or ID exceeded VelarScript limits"], "realtime", "event-stream:error");
       value.close();
       return;
     }
-    __velarInvokeOwnedCallback(handlers.message, [event.data, event.lastEventId], "realtime", "event-stream:message");
+    __velarInvokeOwnedCallback(handlers.message, [data, lastEventId], "realtime", "event-stream:message");
   });
   value.addEventListener("error", () => __velarInvokeOwnedCallback(handlers.error, ["Event stream connection error"], "realtime", "event-stream:error"));
   return Object.freeze({

@@ -5467,6 +5467,7 @@ let getterReads = 0;
 let constructed = 0;
 let sent = 0;
 let closed = 0;
+let encodedCloseReasons = 0;
 class FakeSocket {
   static OPEN = 1;
   static CLOSING = 2;
@@ -5483,6 +5484,7 @@ class FakeEventSource {
 globalThis.WebSocket = FakeSocket;
 globalThis.EventSource = FakeEventSource;
 ${source}
+globalThis.TextEncoder = class { encode() { encodedCloseReasons += 1; return new Uint8Array(); } };
 const handlerAccessor = Object.defineProperty({}, "message", { enumerable: true, get() { getterReads += 1; return () => null; } });
 const invalidOperations = [
   () => socket(42),
@@ -5507,10 +5509,10 @@ for (const operation of [
   catch (error) { failures.push(error.name); }
 }
 console.log(failures.join(","));
-console.log([getterReads, constructed, sent, closed].join(":"));
+console.log([getterReads, constructed, sent, closed, encodedCloseReasons].join(":"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,RangeError,RangeError\n0:1:0:0\n");
+  assert.equal(execution.stdout, "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,RangeError,RangeError\n0:1:0:0:0\n");
 });
 
 test("realtime validates resolved URLs, states, and inbound close metadata", () => {
@@ -5521,6 +5523,7 @@ let resolvedUrl = { toString() { coercions += 1; return "wss://coerced.test"; } 
 let socketValue;
 let streamValue;
 let invalidCloses = 0;
+let receivedClose = "";
 const reports = [];
 globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.push(options.detail + ":" + error.name); } };
 class FakeSocket {
@@ -5541,11 +5544,22 @@ for (const operation of [() => socket("wss://example.test"), () => eventStream("
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 resolvedUrl = "wss://example.test";
-const channel = socket("wss://example.test", { close() {} });
+const channel = socket("wss://example.test", { close(code, reason) { receivedClose = code + ":" + reason; } });
+let readyStateReads = 0;
+Object.defineProperty(socketValue, "readyState", { configurable: true, get() { readyStateReads += 1; return readyStateReads === 1 ? 1 : 4; } });
+console.log(channel.state(), readyStateReads);
+Object.defineProperty(socketValue, "readyState", { configurable: true, writable: true, value: 4 });
 socketValue.readyState = 4;
 try { channel.state(); console.log("accepted"); } catch (error) { console.log(error.name); }
 socketValue.readyState = 3;
 socketValue.listeners.get("close")({ code: 1000, reason: 0 });
+let closeCodeReads = 0;
+let closeReasonReads = 0;
+socketValue.listeners.get("close")({
+  get code() { closeCodeReads += 1; return closeCodeReads === 1 ? 1000 : 70000; },
+  get reason() { closeReasonReads += 1; return closeReasonReads === 1 ? "done" : 0; },
+});
+console.log(receivedClose, closeCodeReads, closeReasonReads);
 resolvedUrl = "https://example.test";
 const stream = eventStream("https://example.test");
 streamValue.readyState = 2;
@@ -5556,7 +5570,7 @@ console.log(reports.join("|"));
 console.log(coercions + ":" + invalidCloses);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "TypeError\nTypeError\nTypeError\nclosed\nTypeError\nsocket:close:TypeError\n0:2\n");
+  assert.equal(execution.stdout, "TypeError\nTypeError\nopen 1\nTypeError\n1000:done 1 1\nclosed\nTypeError\nsocket:close:TypeError\n0:2\n");
 });
 
 test("realtime closes oversized inbound messages and rejects oversized sends", () => {
@@ -5567,6 +5581,9 @@ let streamValue;
 let sent = 0;
 let socketClosed = "";
 let streamClosed = 0;
+let socketDataReads = 0;
+let streamDataReads = 0;
+let streamIdReads = 0;
 class FakeSocket {
   static OPEN = 1;
   static CLOSING = 2;
@@ -5588,16 +5605,23 @@ let socketMessages = 0;
 const channel = socket("wss://example.test", { message() { socketMessages += 1; }, error() { socketErrors += 1; } });
 const tooLarge = "x".repeat(16 * 1024 * 1024 + 1);
 try { channel.send(tooLarge); console.log("accepted"); } catch (error) { console.log(error.name); }
-socketValue.listeners.get("message")({ data: tooLarge });
+socketValue.listeners.get("message")({ get data() { socketDataReads += 1; return socketDataReads === 1 ? tooLarge : "small"; } });
 let streamErrors = 0;
 const stream = eventStream("https://example.test", { error() { streamErrors += 1; } });
-streamValue.listeners.get("message")({ data: tooLarge, lastEventId: "" });
+streamValue.listeners.get("message")({
+  get data() { streamDataReads += 1; return streamDataReads === 1 ? tooLarge : "small"; },
+  get lastEventId() { streamIdReads += 1; return ""; },
+});
 const metadataStream = eventStream("https://example.test", { error() { streamErrors += 1; } });
-streamValue.listeners.get("message")({ data: "small", lastEventId: "x".repeat(65537) });
+streamValue.listeners.get("message")({
+  get data() { streamDataReads += 1; return "small"; },
+  get lastEventId() { streamIdReads += 1; return streamIdReads === 2 ? "x".repeat(65537) : ""; },
+});
 console.log([sent, socketErrors, socketMessages, socketClosed, streamErrors, streamClosed].join("|"));
+console.log([socketDataReads, streamDataReads, streamIdReads].join(":"));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "RangeError\n0|1|0|1009:Message too large|2|2\n");
+  assert.equal(execution.stdout, "RangeError\n0|1|0|1009:Message too large|2|2\n1:2:2\n");
 });
 
 test("browser npm assets cannot escape a package through symbolic links", async () => {
