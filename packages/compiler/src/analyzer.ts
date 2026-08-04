@@ -18,6 +18,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
+import { collectionMemberGuidance, type CollectionKind } from "./language-guidance.ts";
 import type { Span } from "./source.ts";
 import {
   anyType,
@@ -125,22 +126,6 @@ const setCollectionOperations = new Map<string, CollectionOperation>([
   ["add", "setAdd"], ["update", "setUpdate"], ["has", "has"], ["remove", "remove"],
   ["clear", "clear"], ["copy", "setCopy"], ["values", "values"],
 ]);
-const listMemberGuidance = new Map<string, string>([
-  ["length", "Use 'size'"], ["at", "Use 'get(index)'"], ["includes", "Use 'has(value)'"],
-  ["add", "Use 'append(value)'"], ["addAll", "Use 'extend(values)'"], ["push", "Use 'append(value)'"],
-  ["unshift", "Use 'insert(0, value)'"], ["shift", "Use 'pop(0)'"], ["delete", "Use 'remove(value)'"],
-  ["deleteAt", "Use 'pop(index)'"], ["first", "Use 'get(0)'"], ["last", "Use 'get(-1)'"],
-  ["findIndex", "Use 'index(value)'"], ["indexOf", "Use 'index(value)'"],
-  ["any", "Use 'some(test)'"], ["all", "Use 'every(test)'"], ["sort", "Use 'sorted(compare)'"],
-  ["reverse", "Use 'reversed()'"], ["splice", "Use 'insert', 'remove', 'pop', or 'slice' for one explicit operation"],
-]);
-const setMemberGuidance = new Map<string, string>([
-  ["length", "Use 'size'"], ["addAll", "Use 'update(values)'"], ["delete", "Use 'remove(value)'"],
-]);
-const mapMemberGuidance = new Map<string, string>([
-  ["length", "Use 'size'"], ["setAll", "Use 'update(other)'"], ["delete", "Use 'remove(key)'"],
-]);
-
 export interface FormReadField {
   readonly name: string;
   readonly kind: "string" | "number" | "bool" | "enum" | "strings";
@@ -2262,7 +2247,9 @@ export class Analyzer implements TypeEnvironment {
       }
     }
 
+    const diagnosticsBeforeCallee = this.diagnostics.length;
     const callee = this.inferExpression(calleeExpression);
+    const calleeAlreadyDiagnosed = this.diagnostics.length > diagnosticsBeforeCallee;
     if (callee.kind === "classConstructor") {
       this.constructorCalls.add(`${callSpan.start}:${callSpan.end}`);
       const info = this.classes.get(callee.identity ?? callee.name) ?? this.classes.get(callee.name);
@@ -2306,11 +2293,13 @@ export class Analyzer implements TypeEnvironment {
       return anyType;
     }
     if (callee.kind === "unknown") {
-      if (hasNamed) this.typeError("Named arguments require a statically known callable signature", callSpan);
-      for (const argument of arguments_) {
-        this.inferExpression(argument);
+      if (!calleeAlreadyDiagnosed) {
+        if (hasNamed) this.typeError("Named arguments require a statically known callable signature", callSpan);
+        for (const argument of arguments_) {
+          this.inferExpression(argument);
+        }
+        this.typeError("Cannot call an unknown JavaScript value without a declaration or validation", callSpan);
       }
-      this.typeError("Cannot call an unknown JavaScript value without a declaration or validation", callSpan);
       return unknownType;
     }
     for (const argument of arguments_) {
@@ -2948,15 +2937,15 @@ export class Analyzer implements TypeEnvironment {
     } else if (object.kind === "list") {
       result = this.listMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("List", property, listMemberGuidance), memberSpan);
+      if (result.kind === "unknown") this.typeError(this.collectionMemberError("List", property), memberSpan);
     } else if (object.kind === "set") {
       result = this.setMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Set", property, setMemberGuidance), memberSpan);
+      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Set", property), memberSpan);
     } else if (object.kind === "map") {
       result = this.mapMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Map", property, mapMemberGuidance), memberSpan);
+      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Map", property), memberSpan);
     } else if (object.kind === "action") {
       if (property === "pending") result = boolType;
       else if (property === "error") result = optionalOf({ kind: "class", name: "Error" });
@@ -3107,9 +3096,9 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
-  private collectionMemberError(kind: "List" | "Set" | "Map", property: string, guidance: ReadonlyMap<string, string>): string {
-    const suggestion = guidance.get(property);
-    return `${kind} has no member '${property}'${suggestion ? `; ${suggestion}` : ""}`;
+  private collectionMemberError(kind: CollectionKind, property: string): string {
+    const guidance = collectionMemberGuidance(kind, property);
+    return `${kind} has no member '${property}'${guidance ? `; ${guidance.message}` : ""}`;
   }
 
   private mapMember(map: Extract<ValueType, { kind: "map" }>, property: string): ValueType | null {

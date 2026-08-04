@@ -1145,6 +1145,38 @@ parsed("checked")
   assert.ok(unknown.diagnostics.some((item) => /Unknown type 'Missing'/u.test(item.message)));
 });
 
+test("type annotations guide familiar JavaScript and Python spellings without parser cascades", () => {
+  const spellings = [
+    ["const values: Array<number> = []\n", /Use 'List<T>'/u],
+    ["const value: str = \"text\"\n", /Use 'string'/u],
+    ["const value: String = \"text\"\n", /wrapper-object types are not exposed/u],
+    ["const value: boolean = true\n", /Use 'bool'/u],
+    ["const value: void = null\n", /Use 'null'/u],
+    ["const value: object = {}\n", /Declare a named 'type'/u],
+    ["const callback: Function = value => value\n", /explicit function type/u],
+  ] as const;
+  for (const [source, expected] of spellings) {
+    const result = compile(source);
+    assert.equal(result.diagnostics.length, 1, result.diagnostics.map((item) => item.message).join("\n"));
+    assert.equal(result.diagnostics[0]?.code, "VEL2012");
+    assert.match(result.diagnostics[0]?.message ?? "", expected);
+  }
+
+  const square = compile("const values: List[number] = []\n");
+  assert.equal(square.diagnostics.length, 1);
+  assert.equal(square.diagnostics[0]?.message, "Generic type arguments use '<...>', not '[...]'");
+
+  const python = compile("const values: list[number] = []\n");
+  assert.deepEqual(python.diagnostics.map((item) => item.message), [
+    "Use 'List<T>' for ordered collections",
+    "Generic type arguments use '<...>', not '[...]'",
+  ]);
+
+  const map = compile("const values: Map[string, number] = Map()\n");
+  assert.equal(map.diagnostics.length, 1);
+  assert.equal(map.diagnostics[0]?.message, "Generic type arguments use '<...>', not '[...]'");
+});
+
 test("lowers null and readable logical operators", () => {
   const result = compile(`
 const missing = null
@@ -6682,10 +6714,12 @@ values.findIndex(value => value > 0)
 
 const tags = Set()
 tags.addAll(["web"])
+tags.append("game")
 tags.delete("web")
 
 const scores = Map()
 scores.setAll(Map())
+scores.put("Ada", 9)
 scores.delete("Ada")
 `.trimStart());
   const messages = legacy.diagnostics.map((item) => item.message).join("\n");
@@ -6694,10 +6728,14 @@ scores.delete("Ada")
   assert.match(messages, /pop\(index\)/u);
   assert.match(messages, /insert.*remove.*pop.*slice/u);
   assert.match(messages, /some\(test\)/u);
-  assert.match(messages, /index\(value\)/u);
+  assert.match(messages, /find\(test\).*index\(value\)/u);
   assert.match(messages, /Set has no member 'addAll'.*update/u);
+  assert.match(messages, /Set has no member 'append'.*add/u);
   assert.match(messages, /Map has no member 'setAll'.*update/u);
+  assert.match(messages, /Map has no member 'put'.*set/u);
   assert.match(messages, /remove/u);
+  assert.doesNotMatch(messages, /Cannot call an unknown JavaScript value/u);
+  assert.doesNotMatch(messages, /Ordered comparison requires/u);
 });
 
 test("empty Lists infer one element type from append or extend", () => {
@@ -10792,6 +10830,46 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   });
   const memberFixed = await waitFor((message) => message.id === 131);
   assert.deepEqual((memberFixed.result as Array<{ edit: { changes: Record<string, Array<{ newText: string }>> } }>).map((item) => item.edit.changes[memberFixUri]![0]!.newText), ["append"]);
+
+  const typeFixUri = pathToFileURL(join(directory, "type-fix.vel")).href;
+  const typeFixText = "const values: Array<number> = []\nconst tags: Set[string] = Set()\n";
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: typeFixUri, languageId: "velar", version: 1, text: typeFixText } },
+  });
+  const typePublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === typeFixUri);
+  const typeDiagnostics = (typePublished.params as { diagnostics: Array<{ code: string; range: Range }> }).diagnostics;
+  assert.equal(typeDiagnostics.filter((item) => item.code === "VEL2012").length, 2);
+  send({
+    jsonrpc: "2.0",
+    id: 132,
+    method: "textDocument/codeAction",
+    params: { textDocument: { uri: typeFixUri }, context: { diagnostics: typeDiagnostics, only: ["quickfix"] } },
+  });
+  const typeFixed = await waitFor((message) => message.id === 132);
+  assert.deepEqual((typeFixed.result as Array<{ edit: { changes: Record<string, Array<{ newText: string }>> } }>).map((item) => item.edit.changes[typeFixUri]![0]!.newText), ["List", "<string>"]);
+
+  const unsafeFixUri = pathToFileURL(join(directory, "unsafe-fix.vel")).href;
+  const unsafeFixText = "const values: List<number> = [1]\nvalues.findIndex(value => value > 0)\nvalues.sort()\n";
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: unsafeFixUri, languageId: "velar", version: 1, text: unsafeFixText } },
+  });
+  const unsafePublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === unsafeFixUri);
+  const unsafeDiagnostics = (unsafePublished.params as { diagnostics: Array<{ code: string; range: Range }> }).diagnostics;
+  assert.equal(unsafeDiagnostics.length, 2);
+  send({
+    jsonrpc: "2.0",
+    id: 133,
+    method: "textDocument/codeAction",
+    params: { textDocument: { uri: unsafeFixUri }, context: { diagnostics: unsafeDiagnostics, only: ["quickfix"] } },
+  });
+  const unsafeFixed = await waitFor((message) => message.id === 133);
+  assert.deepEqual(unsafeFixed.result, []);
 
   send({ jsonrpc: "2.0", id: 2, method: "textDocument/hover", params: { textDocument: { uri: scratchUri }, position: { line: 0, character: 2 } } });
   const hovered = await waitFor((message) => message.id === 2);

@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { compile, formatSource, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
+import { collectionMemberGuidance, compile, formatSource, sourceTypeNameGuidance, type CollectionKind, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
 import { compileProjectEntries, type ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
@@ -707,6 +707,15 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
         ["!", ["not", "Use readable 'not'"]],
       ]).get(original);
       if (direct) [replacement, title] = direct;
+    } else if (diagnostic.code === "VEL2012" && typeof diagnostic.message === "string") {
+      const typeGuidance = sourceTypeNameGuidance(original);
+      if (typeGuidance?.replacement && typeGuidance.title) {
+        replacement = typeGuidance.replacement;
+        title = typeGuidance.title;
+      } else if (diagnostic.message.includes("Generic type arguments use") && original.startsWith("[") && original.endsWith("]")) {
+        replacement = `<${original.slice(1, -1)}>`;
+        title = "Use angle brackets for generic type arguments";
+      }
     } else if (diagnostic.code === "VEL2024") {
       let colon = end;
       while (colon < document.text.length && (document.text[colon] === " " || document.text[colon] === "\t")) colon += 1;
@@ -717,21 +726,12 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
       }
     } else if (diagnostic.code === "VEL4001" && typeof diagnostic.message === "string") {
       const member = /\.([A-Za-z][A-Za-z0-9_]*)$/u.exec(original);
-      const guidance = member ? new Map<string, readonly [string, string]>([
-        ["length", ["size", "Use collection size"]],
-        ["push", ["append", "Use List.append"]],
-        ["includes", ["has", "Use collection has"]],
-        ["delete", ["remove", "Use collection remove"]],
-        ["findIndex", ["index", "Use List.index"]],
-        ["indexOf", ["index", "Use List.index"]],
-        ["any", ["some", "Use List.some"]],
-        ["all", ["every", "Use List.every"]],
-        ["sort", ["sorted", "Use non-mutating List.sorted"]],
-        ["reverse", ["reversed", "Use non-mutating List.reversed"]],
-      ]).get(member[1]!) : null;
-      if (member && guidance && diagnostic.message.includes("Use")) {
+      const owner = /^(List|Set|Map) has no member/u.exec(diagnostic.message)?.[1] as CollectionKind | undefined;
+      const guidance = member && owner ? collectionMemberGuidance(owner, member[1]!) : null;
+      if (member && guidance?.replacement && guidance.title) {
         editRange = { start: positionAt(document.text, end - member[1]!.length), end: positionAt(document.text, end) };
-        [replacement, title] = guidance;
+        replacement = guidance.replacement;
+        title = guidance.title;
       }
     }
     if (!replacement || !title) continue;

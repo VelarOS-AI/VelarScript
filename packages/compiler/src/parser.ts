@@ -39,6 +39,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
+import { sourceTypeNameGuidance } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
@@ -1236,13 +1237,24 @@ export class Parser {
       return { kind: "FunctionTypeSyntax", parameters, result: result.syntax, span: span(open.span.start, result.span.end) };
     }
     const name = this.check("null") ? this.advance() : this.expect("identifier", "Expected a type name");
+    const nameGuidance = sourceTypeNameGuidance(name.value);
+    if (nameGuidance) this.diagnostics.push(diagnostic("VEL2012", nameGuidance.message, name.span));
     let syntax: TypeSyntax = { kind: "NamedTypeSyntax", name: name.value, span: name.span };
-    if (this.match("less")) {
+    const angleArguments = this.match("less");
+    const squareArguments = !angleArguments && this.match("leftBracket");
+    if (angleArguments || squareArguments) {
+      const open = this.previous();
+      const closeKind = squareArguments ? "rightBracket" : "greater";
       const arguments_: TypeSyntax[] = [];
-      do {
-        arguments_.push(this.parseTypeReference().syntax);
-      } while (this.match("comma") && !this.check("greater"));
-      const close = this.expect("greater", "Expected '>' after type arguments");
+      if (!this.check(closeKind)) {
+        do {
+          arguments_.push(this.parseTypeReference().syntax);
+        } while (this.match("comma") && !this.check(closeKind));
+      }
+      const close = this.expect(closeKind, squareArguments ? "Expected ']' after type arguments" : "Expected '>' after type arguments");
+      if (squareArguments) {
+        this.diagnostics.push(diagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
+      }
       const expectedArguments = name.value === "Map" ? 2 : name.value === "List" || name.value === "Set" || name.value === "Promise" ? 1 : null;
       if (expectedArguments !== null && arguments_.length !== expectedArguments) {
         this.diagnostics.push(diagnostic("VEL2012", `Type '${name.value}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
