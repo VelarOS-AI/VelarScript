@@ -39,8 +39,8 @@ function namedFunction(parameterNames: readonly string[], parameters: readonly V
 }
 
 const webGlobals = new Map<string, ValueType>([
-  ["mount", { kind: "function", parameters: [nodeType, anyType], requiredParameters: 2, result: nullType }],
-  ["tick", { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "promise", value: nullType } }],
+  ["mount", namedFunction(["node", "target"], [nodeType, anyType], nullType)],
+  ["tick", namedFunction([], [], { kind: "promise", value: nullType })],
   ["color", namedFunction(["value"], [stringType], colorType)],
   ["rgb", namedFunction(["red", "green", "blue"], [numberType, numberType, numberType], colorType)],
   ["rgba", namedFunction(["red", "green", "blue", "alpha"], [numberType, numberType, numberType, numberType], colorType)],
@@ -50,7 +50,7 @@ const webGlobals = new Map<string, ValueType>([
   ["darken", namedFunction(["color", "amount"], [colorInputType, numberType], colorType)],
   ["border", namedFunction(["width", "color", "style"], [lengthType, colorInputType, stringType], borderType, 2)],
   ["shadow", namedFunction(["x", "y", "blur", "color", "spread", "inset"], [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType, 4)],
-  ["linearGradient", namedFunction(["angle", "from", "to"], [angleType, colorInputType, colorInputType], imageType)],
+  ["linearGradient", namedFunction(["angle", "start", "end"], [angleType, colorInputType, colorInputType], imageType)],
   ["asset", namedFunction(["path"], [stringType], imageType)],
   ["minmax", namedFunction(["minimum", "maximum"], [anyType, anyType], trackType)],
   ["repeat", namedFunction(["count", "size"], [numberType, anyType], trackListType)],
@@ -66,8 +66,8 @@ function functionType(parameters: readonly ValueType[], result: ValueType, requi
   return { kind: "function", parameters, requiredParameters, result };
 }
 
-function intrinsic(name: string, parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
-  return { kind: "intrinsic", name, parameters, requiredParameters, result };
+function namedIntrinsic(name: string, parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
+  return { kind: "intrinsic", name, parameterNames, parameters, requiredParameters, result };
 }
 
 function promise(value: ValueType): ValueType {
@@ -80,19 +80,19 @@ function object(fields: Readonly<Record<string, ValueType>>): ValueType {
 
 const unknownType: ValueType = { kind: "unknown" };
 const errorType: ValueType = { kind: "class", name: "Error" };
-const cleanupType = functionType([], nullType);
+const cleanupType = namedFunction([], [], nullType);
 const arrayString: ValueType = { kind: "list", element: stringType };
 const mapString = (value: ValueType): ValueType => ({ kind: "map", key: stringType, value });
 const webElementType: ValueType = { kind: "union", members: [elementType, inputElementType, canvasElementType, dialogElementType] };
 const fileType = object({ name: stringType, size: numberType, type: stringType, modified: numberType });
 const fileArrayType: ValueType = { kind: "list", element: fileType };
 const formBodyType = object({
-  field: functionType([stringType, stringType], nullType),
-  file: functionType([stringType, fileType, stringType], nullType, 2),
-  files: functionType([stringType, fileArrayType], nullType),
-  remove: functionType([stringType], nullType),
-  has: functionType([stringType], boolType),
-  names: functionType([], arrayString),
+  field: namedFunction(["name", "value"], [stringType, stringType], nullType),
+  file: namedFunction(["name", "value", "fileName"], [stringType, fileType, stringType], nullType, 2),
+  files: namedFunction(["name", "values"], [stringType, fileArrayType], nullType),
+  remove: namedFunction(["name"], [stringType], nullType),
+  has: namedFunction(["name"], [stringType], boolType),
+  names: namedFunction([], [], arrayString),
 });
 
 const httpResponseType = object({
@@ -101,19 +101,19 @@ const httpResponseType = object({
   statusText: stringType,
   url: stringType,
   headers: mapString(stringType),
-  json: functionType([], promise(unknownType)),
-  text: functionType([], promise(stringType)),
-  blob: functionType([], promise(anyType)),
-  parse: intrinsic("http.parse", [anyType], promise(anyType)),
+  json: namedFunction([], [], promise(unknownType)),
+  text: namedFunction([], [], promise(stringType)),
+  blob: namedFunction([], [], promise(anyType)),
+  parse: namedIntrinsic("http.parse", ["target"], [anyType], promise(anyType)),
 });
 
 const requestType = object({
-  response: functionType([], promise(httpResponseType)),
-  json: functionType([], promise(unknownType)),
-  text: functionType([], promise(stringType)),
-  blob: functionType([], promise(anyType)),
-  parse: intrinsic("http.parse", [anyType], promise(anyType)),
-  cancel: functionType([], nullType),
+  response: namedFunction([], [], promise(httpResponseType)),
+  json: namedFunction([], [], promise(unknownType)),
+  text: namedFunction([], [], promise(stringType)),
+  blob: namedFunction([], [], promise(anyType)),
+  parse: namedIntrinsic("http.parse", ["target"], [anyType], promise(anyType)),
+  cancel: namedFunction([], [], nullType),
 });
 
 const httpOptionsType = object({
@@ -125,39 +125,39 @@ const httpOptionsType = object({
   cache: optional(stringType),
 });
 const httpType = object({
-  request: intrinsic("http.request", [stringType, stringType, httpOptionsType], requestType, 2),
-  get: intrinsic("http.request", [stringType, httpOptionsType], requestType, 1),
-  post: intrinsic("http.request", [stringType, httpOptionsType], requestType, 1),
-  put: intrinsic("http.request", [stringType, httpOptionsType], requestType, 1),
-  patch: intrinsic("http.request", [stringType, httpOptionsType], requestType, 1),
-  delete: intrinsic("http.request", [stringType, httpOptionsType], requestType, 1),
-  head: intrinsic("http.request", [stringType, httpOptionsType], requestType, 1),
+  request: namedIntrinsic("http.request", ["method", "url", "options"], [stringType, stringType, httpOptionsType], requestType, 2),
+  get: namedIntrinsic("http.request", ["url", "options"], [stringType, httpOptionsType], requestType, 1),
+  post: namedIntrinsic("http.request", ["url", "options"], [stringType, httpOptionsType], requestType, 1),
+  put: namedIntrinsic("http.request", ["url", "options"], [stringType, httpOptionsType], requestType, 1),
+  patch: namedIntrinsic("http.request", ["url", "options"], [stringType, httpOptionsType], requestType, 1),
+  delete: namedIntrinsic("http.request", ["url", "options"], [stringType, httpOptionsType], requestType, 1),
+  head: namedIntrinsic("http.request", ["url", "options"], [stringType, httpOptionsType], requestType, 1),
 });
 
 function createStorageType(): ValueType {
   const common = (): Map<string, ValueType> => new Map([
-    ["get", intrinsic("storage.get", [stringType, anyType, anyType], anyType, 2)],
-    ["set", functionType([stringType, anyType], nullType)],
-    ["has", functionType([stringType], boolType)],
-    ["keys", functionType([], arrayString)],
-    ["remove", functionType([stringType], nullType)],
-    ["clear", functionType([], nullType)],
-    ["watch", intrinsic("storage.watch", [stringType, anyType, anyType], cleanupType)],
+    ["get", namedIntrinsic("storage.get", ["key", "target", "fallback"], [stringType, anyType, anyType], anyType, 2)],
+    ["set", namedFunction(["key", "value"], [stringType, anyType], nullType)],
+    ["has", namedFunction(["key"], [stringType], boolType)],
+    ["keys", namedFunction([], [], arrayString)],
+    ["remove", namedFunction(["key"], [stringType], nullType)],
+    ["clear", namedFunction([], [], nullType)],
+    ["watch", namedIntrinsic("storage.watch", ["key", "target", "callback"], [stringType, anyType, anyType], cleanupType)],
   ]);
   const scoped: ValueType = { kind: "object", fields: common() };
   const fields = common();
-  fields.set("scope", functionType([stringType], scoped));
+  fields.set("scope", namedFunction(["name"], [stringType], scoped));
   return { kind: "object", fields };
 }
 
 const storageType = createStorageType();
 const databaseType = object({
-  get: intrinsic("storage.databaseGet", [stringType, anyType, anyType], promise(anyType), 2),
-  set: functionType([stringType, anyType], promise(nullType)),
-  has: functionType([stringType], promise(boolType)),
-  keys: functionType([], promise(arrayString)),
-  remove: functionType([stringType], promise(nullType)),
-  clear: functionType([], promise(nullType)),
+  get: namedIntrinsic("storage.databaseGet", ["key", "target", "fallback"], [stringType, anyType, anyType], promise(anyType), 2),
+  set: namedFunction(["key", "value"], [stringType, anyType], promise(nullType)),
+  has: namedFunction(["key"], [stringType], promise(boolType)),
+  keys: namedFunction([], [], promise(arrayString)),
+  remove: namedFunction(["key"], [stringType], promise(nullType)),
+  clear: namedFunction([], [], promise(nullType)),
 });
 
 const routeType = object({
@@ -203,17 +203,17 @@ const socketHandlersType = object({
 });
 const socketType = object({
   url: stringType,
-  state: functionType([], stringType),
-  send: functionType([stringType], nullType),
-  sendJson: intrinsic("realtime.sendJson", [anyType], nullType),
-  close: functionType([numberType, stringType], nullType, 0),
+  state: namedFunction([], [], stringType),
+  send: namedFunction(["data"], [stringType], nullType),
+  sendJson: namedIntrinsic("realtime.sendJson", ["data"], [anyType], nullType),
+  close: namedFunction(["code", "reason"], [numberType, stringType], nullType, 0),
 });
 const eventStreamHandlersType = object({
   open: optional(functionType([], unknownType)),
   message: optional(functionType([stringType, stringType], unknownType)),
   error: optional(functionType([stringType], unknownType)),
 });
-const eventStreamType = object({ url: stringType, state: functionType([], stringType), close: functionType([], nullType) });
+const eventStreamType = object({ url: stringType, state: namedFunction([], [], stringType), close: namedFunction([], [], nullType) });
 const appErrorType = object({
   error: errorType,
   phase: stringType,
@@ -222,46 +222,46 @@ const appErrorType = object({
   timestamp: numberType,
 });
 const browserTestControllerType = object({
-  open: functionType([stringType], promise(nullType), 0),
-  reload: functionType([], promise(nullType)),
-  click: functionType([stringType], promise(nullType)),
-  fill: functionType([stringType, stringType], promise(nullType)),
-  select: functionType([stringType, stringType], promise(nullType)),
-  press: functionType([stringType, stringType], promise(nullType)),
-  text: functionType([stringType], promise(stringType)),
-  attribute: functionType([stringType, stringType], promise(optional(stringType))),
-  namespace: functionType([stringType], promise(stringType)),
-  count: functionType([stringType], promise(numberType)),
-  visible: functionType([stringType], promise(boolType)),
-  waitFor: functionType([stringType, stringType], promise(nullType), 1),
-  waitForText: functionType([stringType, stringType], promise(nullType)),
-  currentPath: functionType([], promise(stringType)),
-  viewport: functionType([numberType, numberType], promise(nullType)),
+  open: namedFunction(["path"], [stringType], promise(nullType), 0),
+  reload: namedFunction([], [], promise(nullType)),
+  click: namedFunction(["selector"], [stringType], promise(nullType)),
+  fill: namedFunction(["selector", "value"], [stringType, stringType], promise(nullType)),
+  select: namedFunction(["selector", "value"], [stringType, stringType], promise(nullType)),
+  press: namedFunction(["selector", "key"], [stringType, stringType], promise(nullType)),
+  text: namedFunction(["selector"], [stringType], promise(stringType)),
+  attribute: namedFunction(["selector", "name"], [stringType, stringType], promise(optional(stringType))),
+  namespace: namedFunction(["selector"], [stringType], promise(stringType)),
+  count: namedFunction(["selector"], [stringType], promise(numberType)),
+  visible: namedFunction(["selector"], [stringType], promise(boolType)),
+  waitFor: namedFunction(["selector", "until"], [stringType, stringType], promise(nullType), 1),
+  waitForText: namedFunction(["selector", "text"], [stringType, stringType], promise(nullType)),
+  currentPath: namedFunction([], [], promise(stringType)),
+  viewport: namedFunction(["width", "height"], [numberType, numberType], promise(nullType)),
 });
 
 
 export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
   ["velar/app", moduleInterface(new Map([
-    ["onError", functionType([functionType([appErrorType], unknownType)], cleanupType)],
-    ["reportError", functionType([errorType, stringType, stringType], nullType, 1)],
+    ["onError", namedFunction(["handler"], [functionType([appErrorType], unknownType)], cleanupType)],
+    ["reportError", namedFunction(["error", "phase", "detail"], [errorType, stringType, stringType], nullType, 1)],
   ]))],
   ["velar/config", moduleInterface(new Map([
-    ["publicConfig", intrinsic("config.public", [anyType], anyType)],
-    ["has", functionType([stringType], boolType)],
-    ["keys", functionType([], arrayString)],
+    ["publicConfig", namedIntrinsic("config.public", ["target"], [anyType], anyType)],
+    ["has", namedFunction(["key"], [stringType], boolType)],
+    ["keys", namedFunction([], [], arrayString)],
   ]))],
   ["velar/web", moduleInterface(new Map([
     ["RouteContext", { kind: "typeObject", name: "RouteContext" }],
-    ["route", intrinsic("web.route", [stringType, anyType], routeType)],
-    ["lazy", intrinsic("web.lazy", [functionType([], promise(anyType)), stringType, anyType, anyType], anyType, 2)],
-    ["navigate", functionType([stringType, navigationOptionsType], nullType, 1)],
-    ["redirect", functionType([stringType], nullType)],
-    ["back", functionType([], nullType)],
-    ["forward", functionType([], nullType)],
-    ["reload", functionType([], nullType)],
-    ["currentRoute", functionType([], routeContextType)],
-    ["announce", functionType([stringType, stringType], nullType, 1)],
-    ["domId", functionType([stringType], stringType, 0)],
+    ["route", namedIntrinsic("web.route", ["path", "view"], [stringType, anyType], routeType)],
+    ["lazy", namedIntrinsic("web.lazy", ["loader", "exportName", "loading", "failed"], [functionType([], promise(anyType)), stringType, anyType, anyType], anyType, 2)],
+    ["navigate", namedFunction(["to", "options"], [stringType, navigationOptionsType], nullType, 1)],
+    ["redirect", namedFunction(["to"], [stringType], nullType)],
+    ["back", namedFunction([], [], nullType)],
+    ["forward", namedFunction([], [], nullType)],
+    ["reload", namedFunction([], [], nullType)],
+    ["currentRoute", namedFunction([], [], routeContextType)],
+    ["announce", namedFunction(["message", "priority"], [stringType, stringType], nullType, 1)],
+    ["domId", namedFunction(["prefix"], [stringType], stringType, 0)],
     ["Head", { kind: "componentConstructor", name: "Head", props: new Map<string, ValueType>([
       ["title", stringType], ["description", stringType], ["canonical", stringType], ["robots", stringType],
       ["image", stringType], ["themeColor", stringType], ["language", stringType],
@@ -274,12 +274,13 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
   ]))],
   ["velar/http", moduleInterface(new Map([
     ["http", httpType],
-    ["formBody", functionType([], formBodyType)],
+    ["formBody", namedFunction([], [], formBodyType)],
     ["HttpAbortError", { kind: "classConstructor", name: "HttpAbortError" }],
     ["HttpError", { kind: "classConstructor", name: "HttpError" }],
   ]), new Map([
     ["HttpAbortError", {
       parameters: [stringType],
+      parameterNames: ["reason"],
       requiredParameters: 1,
       base: "Error",
       abstract: false,
@@ -294,6 +295,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     }],
     ["HttpError", {
       parameters: [stringType, numberType, stringType, unknownType],
+      parameterNames: ["message", "status", "url", "body"],
       requiredParameters: 3,
       base: "Error",
       abstract: false,
@@ -314,55 +316,55 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
   ["velar/storage", moduleInterface(new Map([
     ["storage", storageType],
     ["session", storageType],
-    ["database", functionType([stringType], databaseType)],
+    ["database", namedFunction(["name"], [stringType], databaseType)],
   ]))],
   ["velar/forms", moduleInterface(new Map([
-    ["values", functionType([elementType], formValuesType)],
-    ["read", intrinsic("forms.read", [elementType, anyType], anyType)],
-    ["fieldValue", functionType([elementType, stringType], optional(unknownType))],
-    ["textValue", functionType([elementType, stringType, stringType], stringType, 2)],
-    ["numberValue", functionType([elementType, stringType], optional(numberType))],
-    ["checkedValue", functionType([elementType, stringType], boolType)],
-    ["fieldValues", functionType([elementType, stringType], arrayString)],
-    ["setError", functionType([elementType, stringType, stringType], nullType)],
-    ["clearError", functionType([elementType, stringType], nullType)],
-    ["clearErrors", functionType([elementType], nullType)],
-    ["errors", functionType([elementType], mapString(stringType))],
-    ["focusFirstError", functionType([elementType], boolType)],
-    ["setPending", functionType([elementType, boolType], nullType)],
-    ["reset", functionType([elementType], nullType)],
+    ["values", namedFunction(["form"], [elementType], formValuesType)],
+    ["read", namedIntrinsic("forms.read", ["form", "target"], [elementType, anyType], anyType)],
+    ["fieldValue", namedFunction(["form", "name"], [elementType, stringType], optional(unknownType))],
+    ["textValue", namedFunction(["form", "name", "fallback"], [elementType, stringType, stringType], stringType, 2)],
+    ["numberValue", namedFunction(["form", "name"], [elementType, stringType], optional(numberType))],
+    ["checkedValue", namedFunction(["form", "name"], [elementType, stringType], boolType)],
+    ["fieldValues", namedFunction(["form", "name"], [elementType, stringType], arrayString)],
+    ["setError", namedFunction(["form", "name", "message"], [elementType, stringType, stringType], nullType)],
+    ["clearError", namedFunction(["form", "name"], [elementType, stringType], nullType)],
+    ["clearErrors", namedFunction(["form"], [elementType], nullType)],
+    ["errors", namedFunction(["form"], [elementType], mapString(stringType))],
+    ["focusFirstError", namedFunction(["form"], [elementType], boolType)],
+    ["setPending", namedFunction(["form", "pending"], [elementType, boolType], nullType)],
+    ["reset", namedFunction(["form"], [elementType], nullType)],
   ]))],
   ["velar/browser", moduleInterface(new Map([
-    ["after", functionType([numberType, functionType([], unknownType)], cleanupType)],
-    ["location", functionType([], browserLocationType)],
-    ["environment", functionType([], browserEnvironmentType)],
-    ["copyText", functionType([stringType], promise(nullType))],
-    ["readClipboardText", functionType([], promise(stringType))],
-    ["open", functionType([stringType, stringType], nullType, 1)],
-    ["scrollTo", functionType([numberType, numberType, stringType], nullType, 2)],
-    ["scrollIntoView", functionType([webElementType, stringType], nullType, 1)],
-    ["focus", functionType([webElementType, boolType], nullType, 1)],
-    ["blur", functionType([webElementType], nullType)],
-    ["measure", functionType([webElementType], rectType)],
-    ["media", functionType([stringType], boolType)],
-    ["watchMedia", functionType([stringType, functionType([boolType], unknownType)], cleanupType)],
-    ["watchOnline", functionType([functionType([boolType], unknownType)], cleanupType)],
-    ["watchVisibility", functionType([functionType([boolType], unknownType)], cleanupType)],
-    ["showDialog", functionType([dialogElementType], nullType)],
-    ["closeDialog", functionType([dialogElementType, stringType], nullType, 1)],
-    ["dialogResult", functionType([dialogElementType], stringType)],
-    ["every", functionType([numberType, functionType([], unknownType)], cleanupType)],
-    ["frame", functionType([], promise(numberType))],
+    ["after", namedFunction(["milliseconds", "callback"], [numberType, functionType([], unknownType)], cleanupType)],
+    ["location", namedFunction([], [], browserLocationType)],
+    ["environment", namedFunction([], [], browserEnvironmentType)],
+    ["copyText", namedFunction(["value"], [stringType], promise(nullType))],
+    ["readClipboardText", namedFunction([], [], promise(stringType))],
+    ["open", namedFunction(["url", "target"], [stringType, stringType], nullType, 1)],
+    ["scrollTo", namedFunction(["x", "y", "behavior"], [numberType, numberType, stringType], nullType, 2)],
+    ["scrollIntoView", namedFunction(["element", "behavior"], [webElementType, stringType], nullType, 1)],
+    ["focus", namedFunction(["element", "preventScroll"], [webElementType, boolType], nullType, 1)],
+    ["blur", namedFunction(["element"], [webElementType], nullType)],
+    ["measure", namedFunction(["element"], [webElementType], rectType)],
+    ["media", namedFunction(["query"], [stringType], boolType)],
+    ["watchMedia", namedFunction(["query", "callback"], [stringType, functionType([boolType], unknownType)], cleanupType)],
+    ["watchOnline", namedFunction(["callback"], [functionType([boolType], unknownType)], cleanupType)],
+    ["watchVisibility", namedFunction(["callback"], [functionType([boolType], unknownType)], cleanupType)],
+    ["showDialog", namedFunction(["dialog"], [dialogElementType], nullType)],
+    ["closeDialog", namedFunction(["dialog", "result"], [dialogElementType, stringType], nullType, 1)],
+    ["dialogResult", namedFunction(["dialog"], [dialogElementType], stringType)],
+    ["every", namedFunction(["milliseconds", "callback"], [numberType, functionType([], unknownType)], cleanupType)],
+    ["frame", namedFunction([], [], promise(numberType))],
   ]))],
   ["velar/files", moduleInterface(new Map([
-    ["pick", functionType([fileOptionsType], promise(fileArrayType), 0)],
-    ["readText", functionType([fileType, numberType], promise(stringType), 1)],
-    ["readDataUrl", functionType([fileType, numberType], promise(stringType), 1)],
-    ["download", functionType([stringType, stringType, stringType], nullType, 2)],
+    ["pick", namedFunction(["options"], [fileOptionsType], promise(fileArrayType), 0)],
+    ["readText", namedFunction(["file", "maxBytes"], [fileType, numberType], promise(stringType), 1)],
+    ["readDataUrl", namedFunction(["file", "maxBytes"], [fileType, numberType], promise(stringType), 1)],
+    ["download", namedFunction(["name", "data", "mime"], [stringType, stringType, stringType], nullType, 2)],
   ]))],
   ["velar/realtime", moduleInterface(new Map([
-    ["socket", functionType([stringType, socketHandlersType], socketType, 1)],
-    ["eventStream", functionType([stringType, eventStreamHandlersType, boolType], eventStreamType, 1)],
+    ["socket", namedFunction(["url", "handlers"], [stringType, socketHandlersType], socketType, 1)],
+    ["eventStream", namedFunction(["url", "handlers", "credentials"], [stringType, eventStreamHandlersType, boolType], eventStreamType, 1)],
   ]))],
   ["velar/web-test", moduleInterface(new Map([
     ["browser", browserTestControllerType],

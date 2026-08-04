@@ -82,6 +82,7 @@ export interface CompilerAnalysisExtension {
 export interface CompilerIntrinsicAnalysisContext {
   readonly intrinsic: Extract<ValueType, { kind: "intrinsic" }>;
   readonly arguments: readonly Expression[];
+  readonly argumentAt: (index: number) => Expression | null;
   readonly callSpan: Span;
   readonly arity: (minimum?: number, maximum?: number) => void;
   readonly inferAt: (index: number, expected?: ValueType) => ValueType;

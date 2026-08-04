@@ -58,15 +58,15 @@ const LOOK_PROPERTY_TYPES = new Map<string, ValueType>([
 ]);
 
 export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
-  const { intrinsic, arguments: arguments_, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
+  const { intrinsic, argumentAt, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
   switch (intrinsic.name) {
     case "web.route": {
       arity(2, 2);
       inferAt(0, stringType);
       const component = inferAt(1);
-      const path = arguments_[0];
+      const path = argumentAt(0);
       if (path?.kind === "LiteralExpression" && typeof path.value === "string") checkRoutePath(path.value, path.span, context);
-      checkRouteComponent(component, arguments_[1]?.span ?? callSpan, "A route", context);
+      checkRouteComponent(component, argumentAt(1)?.span ?? callSpan, "A route", context);
       return { kind: "object", fields: new Map([["path", stringType], ["component", anyType]]) };
     }
     case "web.lazy": {
@@ -75,52 +75,55 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       inferAt(1, stringType);
       const loadingFallback = inferAt(2);
       const failedFallback = inferAt(3);
-      const loaderExpression = arguments_[0];
+      const loaderExpression = argumentAt(0);
       if (loaderExpression?.kind !== "ArrowFunctionExpression" || loaderExpression.parameters.length !== 0 || loaderExpression.body.kind !== "DynamicImportExpression") {
         context.typeError("A lazy loader must be written as () => import(\"./module.vel\")", loaderExpression?.span ?? callSpan);
         return anyType;
       }
       if (isInvalidType(loader)) return loader;
       if (loader.kind !== "function" && loader.kind !== "any") {
-        if (arguments_[0]) context.typeError(`Expected a module loader, received ${describeType(loader)}`, arguments_[0]!.span);
+        if (loaderExpression) context.typeError(`Expected a module loader, received ${describeType(loader)}`, loaderExpression.span);
         return anyType;
       }
       if (loader.kind === "any") return anyType;
       if (isInvalidType(loader.result)) return loader.result;
-      if (loader.parameters.length !== 0) context.typeError("A lazy module loader cannot receive parameters", arguments_[0]?.span ?? callSpan);
+      if (loader.parameters.length !== 0) context.typeError("A lazy module loader cannot receive parameters", loaderExpression?.span ?? callSpan);
       const moduleType = loader.result.kind === "promise" ? loader.result.value : null;
       if (!moduleType) {
-        context.typeError("A lazy module loader must return import(\"./module.vel\")", arguments_[0]?.span ?? callSpan);
+        context.typeError("A lazy module loader must return import(\"./module.vel\")", loaderExpression?.span ?? callSpan);
         return anyType;
       }
-      const name = arguments_[1]?.kind === "LiteralExpression" && typeof arguments_[1].value === "string" ? arguments_[1].value : null;
+      const nameExpression = argumentAt(1);
+      const name = nameExpression?.kind === "LiteralExpression" && typeof nameExpression.value === "string" ? nameExpression.value : null;
       if (!name) {
-        context.typeError("A lazy component export name must be a string literal", arguments_[1]?.span ?? callSpan);
+        context.typeError("A lazy component export name must be a string literal", nameExpression?.span ?? callSpan);
         return anyType;
       }
       if (moduleType.kind !== "object") {
-        context.typeError("A lazy loader must load a checked VelarScript module", arguments_[0]?.span ?? callSpan);
+        context.typeError("A lazy loader must load a checked VelarScript module", loaderExpression?.span ?? callSpan);
         return anyType;
       }
       const exported = moduleType.fields.get(name);
       if (!exported) {
-        context.typeError(`Dynamically imported module has no export named '${name}'`, arguments_[1]?.span ?? callSpan);
+        context.typeError(`Dynamically imported module has no export named '${name}'`, nameExpression?.span ?? callSpan);
         return anyType;
       }
       if (exported.kind !== "componentConstructor") {
-        context.typeError(`Dynamic export '${name}' is ${describeType(exported)}, not a component`, arguments_[1]?.span ?? callSpan);
+        context.typeError(`Dynamic export '${name}' is ${describeType(exported)}, not a component`, nameExpression?.span ?? callSpan);
         return anyType;
       }
-      if (arguments_[2] && !isInvalidType(loadingFallback) && loadingFallback.kind !== "null" && loadingFallback.kind !== "any") {
-        if (loadingFallback.kind !== "componentConstructor") context.typeError("A lazy loading fallback must be a component", arguments_[2]!.span);
-        else if (loadingFallback.requiredProps.size > 0) context.typeError("A lazy loading fallback cannot require props", arguments_[2]!.span);
+      const loadingExpression = argumentAt(2);
+      if (loadingExpression && !isInvalidType(loadingFallback) && loadingFallback.kind !== "null" && loadingFallback.kind !== "any") {
+        if (loadingFallback.kind !== "componentConstructor") context.typeError("A lazy loading fallback must be a component", loadingExpression.span);
+        else if (loadingFallback.requiredProps.size > 0) context.typeError("A lazy loading fallback cannot require props", loadingExpression.span);
       }
-      if (arguments_[3] && !isInvalidType(failedFallback) && failedFallback.kind !== "null" && failedFallback.kind !== "any") {
-        if (failedFallback.kind !== "componentConstructor") context.typeError("A lazy failure fallback must be a component accepting error: Error", arguments_[3]!.span);
+      const failedExpression = argumentAt(3);
+      if (failedExpression && !isInvalidType(failedFallback) && failedFallback.kind !== "null" && failedFallback.kind !== "any") {
+        if (failedFallback.kind !== "componentConstructor") context.typeError("A lazy failure fallback must be a component accepting error: Error", failedExpression.span);
         else {
           const error = failedFallback.props.get("error");
           if (!error || !context.isAssignable({ kind: "class", name: "Error" }, error) || [...failedFallback.requiredProps].some((prop) => prop !== "error")) {
-            context.typeError("A lazy failure fallback must accept error: Error and require no other props", arguments_[3]!.span);
+            context.typeError("A lazy failure fallback must accept error: Error and require no other props", failedExpression.span);
           }
         }
       }
@@ -134,12 +137,12 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       let options: ValueType | null = null;
       for (const [index, expected] of intrinsic.parameters.entries()) {
         const actual = inferAt(index, expected);
-        if (index === intrinsic.parameters.length - 1 && arguments_[index]) options = actual;
+        if (index === intrinsic.parameters.length - 1 && argumentAt(index)) options = actual;
       }
       const fields = options?.kind === "object" ? options.fields : null;
       const body = fields?.get("body");
       if (body && !context.isHttpFormBody(body) && context.jsonSerializable(body) === false) {
-        const optionsExpression = arguments_[intrinsic.parameters.length - 1];
+        const optionsExpression = argumentAt(intrinsic.parameters.length - 1);
         const bodyExpression = optionsExpression?.kind === "ObjectExpression"
           ? optionsExpression.properties.find((property) => property.kind === "ObjectProperty" && property.name === "body")?.value
           : null;
@@ -150,7 +153,8 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
     case "realtime.sendJson": {
       arity(1, 1);
       const value = inferAt(0);
-      if (context.jsonSerializable(value) === false && arguments_[0]) context.typeError(`Realtime JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, arguments_[0]!.span);
+      const valueExpression = argumentAt(0);
+      if (context.jsonSerializable(value) === false && valueExpression) context.typeError(`Realtime JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, valueExpression.span);
       return nullType;
     }
     case "config.public":
@@ -160,14 +164,14 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       arity(2, 3);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
-      if (arguments_[2]) { inferAt(2, parsed); return parsed; }
+      if (argumentAt(2)) { inferAt(2, parsed); return parsed; }
       return optionalOf(parsed);
     }
     case "storage.databaseGet": {
       arity(2, 3);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
-      if (arguments_[2]) { inferAt(2, parsed); return { kind: "promise", value: parsed }; }
+      if (argumentAt(2)) { inferAt(2, parsed); return { kind: "promise", value: parsed }; }
       return { kind: "promise", value: optionalOf(parsed) };
     }
     case "storage.watch": {
@@ -185,12 +189,12 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       const expanded = context.expandAliases(parsed);
       const fields = expanded.kind === "named" ? context.declaredFieldsOf(expanded.identity ?? expanded.name) : null;
       if (!fields) {
-        context.typeError("Form reading requires a record declared with 'type Name:'", arguments_[1]?.span ?? callSpan);
+        context.typeError("Form reading requires a record declared with 'type Name:'", argumentAt(1)?.span ?? callSpan);
         return parsed;
       }
       const descriptors: FormReadField[] = [];
       for (const [name, field] of fields) {
-        const descriptor = context.formReadField(name, field, arguments_[1]?.span ?? callSpan);
+        const descriptor = context.formReadField(name, field, argumentAt(1)?.span ?? callSpan);
         if (descriptor) descriptors.push(descriptor);
       }
       if (descriptors.length === fields.size) context.recordFormRead(callSpan, descriptors);

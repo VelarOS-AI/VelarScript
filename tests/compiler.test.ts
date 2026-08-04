@@ -10,6 +10,7 @@ import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
 import { analysisTypeIdentity, isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
+import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { compileProject as compileProjectCore, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
@@ -4171,7 +4172,7 @@ reload()
   const webApiSource = await readFile(entry, "utf8");
   const domIdCall = webApiSource.indexOf('domId("heading")') + "domId(".length;
   assert.deepEqual(projectSignatureAt(project, entry, domIdCall), {
-    label: "domId(string = default) -> string",
+    label: "domId(prefix: string = default) -> string",
     activeParameter: 0,
   });
   const compiled = project.modules[0]?.result;
@@ -4193,6 +4194,45 @@ test("the official Web package owns the framework contract and CLI only composes
   }
   assert.match(webModuleSource("velar/web", { base: "/framework/" }) ?? "", /const appBase = "\/framework\/"/u);
   assert.equal(webModuleSource("velar/collections"), null);
+
+  const unavailableParameterNames = new Set([
+    ...Object.keys(keywordKinds),
+    ...Object.keys(velarCompilerExtension.lexical?.keywords ?? {}),
+    ...Object.keys(velarCompilerExtension.lexical?.forbiddenIdentifiers ?? {}),
+  ]);
+  const assertParameterNames = (type: Extract<ValueType, { kind: "function" | "action" | "intrinsic" }>, path: string): void => {
+    assert.equal(type.parameterNames?.length, type.parameters.length, `${path} must expose stable parameter names`);
+    assert.ok(type.parameterNames?.every(Boolean), `${path} must not expose an empty parameter name`);
+    for (const name of type.parameterNames ?? []) assert.ok(!unavailableParameterNames.has(name), `${path} parameter '${name}' must be writable at a call site`);
+  };
+  const assertNamedSurface = (type: ValueType, path: string): void => {
+    if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") {
+      assertParameterNames(type, path);
+      assertNamedSurface(type.result, `${path} return`);
+      return;
+    }
+    if (type.kind === "object") {
+      for (const [name, field] of type.fields) assertNamedSurface(field, `${path}.${name}`);
+      return;
+    }
+    if (type.kind === "promise") assertNamedSurface(type.value, `${path} value`);
+    if (type.kind === "optional") assertNamedSurface(type.inner, `${path} value`);
+    if (type.kind === "union") for (const member of type.members) assertNamedSurface(member, `${path} member`);
+  };
+  for (const [source, interface_] of webModuleInterfaces) {
+    for (const [name, type] of interface_.exports) assertNamedSurface(type, `${source}.${name}`);
+    for (const [name, info] of interface_.classes) {
+      assert.equal(info.parameterNames?.length, info.parameters.length, `${source}.${name} constructor must expose stable parameter names`);
+      assert.ok(info.parameterNames?.every(Boolean), `${source}.${name} constructor must not expose an empty parameter name`);
+      for (const parameter of info.parameterNames ?? []) assert.ok(!unavailableParameterNames.has(parameter), `${source}.${name} constructor parameter '${parameter}' must be writable at a call site`);
+    }
+  }
+  for (const [name, type] of velarCompilerExtension.analysis?.globals ?? []) {
+    if ((type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") && !(type.parameters.length === 0 && type.rest)) {
+      assertParameterNames(type, `Web global ${name}`);
+    }
+  }
+
   assert.equal(VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION, 1);
   assert.equal(velarFrameworkHost.id, "@velarscript/web");
   assert.equal(velarFrameworkHost.capability, "web");
@@ -4279,6 +4319,74 @@ test("the official Web package owns the framework contract and CLI only composes
       { id: "example-two", capabilities: ["surface"] },
     ],
   }), /capability 'surface'.*more than one owner/u);
+});
+
+test("fixed Web APIs share the language named-argument ABI", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-named-web-api-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+import {publicConfig} from "velar/config"
+import {route, navigate} from "velar/web"
+import {http, HttpAbortError, HttpError} from "velar/http"
+import {storage, database} from "velar/storage"
+import {textValue} from "velar/forms"
+import {scrollTo} from "velar/browser"
+import {socket} from "velar/realtime"
+
+type User:
+    name: string
+
+component Page:
+    return <main>Page</main>
+
+def markText(label: string, value: string) -> string:
+    return value
+
+def markNumber(label: string, value: number) -> number:
+    return value
+
+def readName(form: Element) -> string:
+    return textValue(fallback="", name="name", form=form)
+
+def prepare():
+    const config = publicConfig(target=User)
+    const itemRoute = route(view=Page, path="/items")
+    navigate(options={scroll: false}, to=itemRoute.path)
+    const request = http.get(options={timeout: markNumber("options", 10)}, url=markText("url", "/api/items"))
+    const loaded: User? = storage.get(target=User, key="current")
+    const fallback: User = storage.get(fallback={name: "Ada"}, target=User, key="fallback")
+    storage.set(value=fallback, key="current")
+    const records = database(name="users")
+    const pending: Promise<User?> = records.get(target=User, key="current")
+    scrollTo(behavior="smooth", y=20, x=10)
+    const channel = socket(handlers={}, url="wss://example.com/events")
+    channel.send(data="ping")
+    channel.sendJson(data={name: loaded?.name ?? config.name})
+    channel.close(reason="done", code=1000)
+    const aborted = HttpAbortError(reason="cancelled")
+    const failed = HttpError(body=null, url="/api/items", status=500, message=aborted.message)
+`.trimStart(), "utf8");
+
+  const project = await compileProject(entry);
+  assert.deepEqual(project.failures, []);
+  const diagnostics = project.modules.flatMap((module) => module.result.diagnostics);
+  assert.deepEqual(diagnostics, []);
+  const code = project.modules[0]?.result.code ?? "";
+  assert.ok(code.indexOf('markNumber("options", 10)') < code.indexOf('markText("url", "/api/items")'), code);
+
+  const invalidPath = join(directory, "invalid.vel");
+  await writeFile(invalidPath, `
+import {http} from "velar/http"
+import {scrollTo} from "velar/browser"
+
+http.get(path="/items")
+scrollTo(left=10, top=20)
+`.trimStart(), "utf8");
+  const invalid = await compileProject(invalidPath);
+  const messages = invalid.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message).join("\n");
+  assert.match(messages, /Unknown named argument 'path'/u);
+  assert.match(messages, /Unknown named argument 'left'/u);
+  assert.match(messages, /Unknown named argument 'top'/u);
 });
 
 test("velar/web creates bounded application-local DOM IDs without requiring cryptographic UUIDs", async () => {

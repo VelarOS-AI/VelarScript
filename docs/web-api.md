@@ -12,6 +12,27 @@ browser globals. The compiler reports `VEL3008` for direct source-level use of
 JavaScript boundary. This document defines the current API; removed experiments
 do not remain as compatibility aliases.
 
+## One call convention
+
+Every fixed Web API uses the same call rule as an ordinary VelarScript function:
+arguments may be positional or explicitly named with `name=value`. Names are part
+of the checked API contract, optional values may be omitted, and supplied
+expressions still run from left to right as written even when their names are out
+of declaration order.
+
+```velar fragment
+const request = http.get(options={timeout: 5000}, url="/api/users")
+const current = storage.get(target=User, key="current")
+storage.set(value=current, key="current")
+scrollTo(behavior="smooth", y=400, x=0)
+```
+
+Use positional arguments when their meaning is already obvious and named
+arguments when they remove ambiguity. The compiler rejects unknown, repeated,
+or missing names instead of guessing. Callback parameter names remain local to
+the callback; only the function that receives the callback defines the public
+call contract.
+
 ## `velar/app`
 
 ```velar

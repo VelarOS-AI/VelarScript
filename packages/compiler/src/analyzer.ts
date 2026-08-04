@@ -4242,6 +4242,7 @@ export class Analyzer implements TypeEnvironment {
       const result = extension.inferIntrinsic?.({
         intrinsic,
         arguments: arguments_,
+        argumentAt,
         callSpan,
         arity,
         inferAt,
