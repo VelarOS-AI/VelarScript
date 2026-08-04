@@ -10,6 +10,7 @@ import {
   nonOptional,
   numberType,
   optionalOf,
+  spanIdentity,
   stringType,
   unknownType,
   type AnalysisContext,
@@ -192,7 +193,7 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         const descriptor = context.formReadField(name, field, arguments_[1]?.span ?? callSpan);
         if (descriptor) descriptors.push(descriptor);
       }
-      if (descriptors.length === fields.size) context.recordFormRead(callSpan.start, descriptors);
+      if (descriptors.length === fields.size) context.recordFormRead(callSpan, descriptors);
       return parsed;
     }
     default:
@@ -495,7 +496,7 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && LOOK_BUILDERS.has(expression.callee.name) && !this.lookup(expression.callee.name)) {
-      this.extensionCalls.set(expression.span.start, expression.callee.name);
+      this.extensionCalls.set(spanIdentity(expression.span), expression.callee.name);
     }
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {
       const operand = this.inferExpression(expression.operand);

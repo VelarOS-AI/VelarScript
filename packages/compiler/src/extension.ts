@@ -18,6 +18,7 @@ export type {
 } from "./ast.ts";
 export type { AnalysisContext, ClassField, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
 export { Parser } from "./parser.ts";
+export { spanIdentity } from "./source.ts";
 export type { ParseResult } from "./parser.ts";
 export type { CompilerSemanticExtension, SemanticDeclareOptions, SemanticExtensionContext, SemanticFunctionLike } from "./semantic.ts";
 export type { Token, TokenKind } from "./token.ts";
@@ -93,7 +94,7 @@ export interface CompilerIntrinsicAnalysisContext {
   readonly isHttpFormBody: (type: ValueType) => boolean;
   readonly declaredFieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null;
   readonly formReadField: (name: string, type: ValueType, span: Span) => FormReadField | null;
-  readonly recordFormRead: (spanStart: number, fields: readonly FormReadField[]) => void;
+  readonly recordFormRead: (sourceSpan: Span, fields: readonly FormReadField[]) => void;
 }
 
 export interface CompilerModuleExtension {

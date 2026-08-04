@@ -2123,7 +2123,7 @@ test("enforces parameter, condition, coercion, and object-shape contracts", () =
   assert.ok(truthiness.diagnostics.some((item) => /Condition must be bool or optional/.test(item.message)));
 
   const logical = compile("const visible = 1 and true\n");
-  assert.ok(logical.diagnostics.some((item) => /number to bool/.test(item.message)));
+  assert.ok(logical.diagnostics.some((item) => /Condition must be bool or optional, received number/.test(item.message)));
 
   const coercion = compile("const label = \"Score: \" + 10\n");
   assert.ok(coercion.diagnostics.some((item) => /f-string or str\(value\)/.test(item.message)));
@@ -9692,6 +9692,102 @@ print(inverseNumberLabel(0))
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "present\npresent\n");
+});
+
+test("short-circuit conditions and while bodies preserve optional narrowing", () => {
+  const result = compile(`
+type User:
+    name: string
+    active: bool
+    manager: User?
+
+let probes = 0
+
+def probe() -> bool:
+    probes += 1
+    return true
+
+def managerName(user: User?) -> string:
+    if user and user.manager and user.manager.active:
+        return user.manager.name
+    return "missing"
+
+def status(user: User?) -> string:
+    if user == null or not user.active:
+        return "inactive"
+    else:
+        return user.name
+
+const absent: User? = null
+const present: User? = {
+    name: "Ada",
+    active: true,
+    manager: {name: "Lin", active: true, manager: null},
+}
+
+print(absent and probe())
+print(probes)
+print(present and probe())
+print(probes)
+print(present or probe())
+print(probes)
+print(absent or probe())
+print(probes)
+print(managerName(present))
+print(managerName(absent))
+print(status(present))
+
+let current: User? = present
+while current:
+    print(current.name)
+    current = null
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /\(absent \?\? null\) != null\) && probe/u);
+  assert.match(result.code ?? "", /\(present \?\? null\) != null\) \|\| probe/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "false\n0\ntrue\n1\ntrue\n1\ntrue\n2\nLin\nmissing\nAda\nAda\n");
+
+  const stale = compile(`
+type User:
+    active: bool
+
+let current: User? = {active: true}
+if current and current.active:
+    current = null
+    const invalid: User = current
+`.trimStart());
+  assert.equal(stale.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
+});
+
+test("lowering hints use exact spans across nested expressions", () => {
+  const result = compile(`
+type Profile:
+    name: string
+
+class Vault:
+    private const profile: Profile? = {name: "Ada"}
+
+    def label() -> string?:
+        return self.profile?.name
+
+class Runner:
+    def run(value: number) -> number:
+        return value
+
+let available: bool? = false
+print(not not available)
+print(Vault().label())
+print(Runner().run(value=3))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /self\.#profile \?\? null\)\?\.name/u);
+  assert.doesNotMatch(result.code ?? "", /\?\.#name/u);
+  assert.doesNotMatch(result.code ?? "", /new Vault\(\) \?\? null/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\nAda\n3\n");
 });
 
 test("explicit null comparisons narrow blocks, inline expressions, assertions, and JSX sequences", () => {

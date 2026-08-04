@@ -3,6 +3,10 @@ export interface Span {
   readonly end: number;
 }
 
+export function spanIdentity(sourceSpan: Span): string {
+  return `${sourceSpan.start}:${sourceSpan.end}`;
+}
+
 export interface SourceLocation {
   readonly line: number;
   readonly column: number;

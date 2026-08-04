@@ -132,7 +132,10 @@ const fallback = optionalValue ?? defaultValue
 ```
 
 Logical operators are `and`, `or`, and `not`. They require checked boolean or
-optional conditions; they are not general value-selection operators.
+optional conditions; they are not general value-selection operators. `and` and
+`or` short-circuit in source order. The right side receives facts established
+by the path that reaches it, so `user and user.active` and
+`user == null or not user.active` need no optional-access workaround.
 
 Equality uses `==` and `!=` in source and compiles to strict JavaScript
 identity/value equality. There is no coercive equality spelling.
@@ -479,7 +482,9 @@ while attempts < 3:
 ```
 
 `break` and `continue` are available only inside loops. Iterating a Map yields
-its keys.
+its keys. A `while` body receives the successful condition's facts on every
+iteration; assigning a narrowed optional back to `null` invalidates that fact
+for the remainder of the current iteration.
 
 ## 10. Classes
 

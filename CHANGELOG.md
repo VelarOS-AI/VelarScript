@@ -33,6 +33,8 @@ Compiler and framework changes:
 - Assignments check the declared location type, invalidate stale optional facts,
   and lower as true JavaScript assignment targets without read-side null
   normalization.
+- Short-circuit conditions and `while` bodies share optional narrowing, while
+  complete source spans keep nested lowering hints from colliding.
 
 Tooling and documentation changes:
 

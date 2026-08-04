@@ -13,7 +13,7 @@ import type {
 import { formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
 import type { LoweringHints } from "./analyzer.ts";
 import { VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
-import type { SourceText, Span } from "./source.ts";
+import { spanIdentity, type SourceText, type Span } from "./source.ts";
 
 interface JavaScriptNode {
   readonly id: number;
@@ -1200,7 +1200,7 @@ export class JavaScriptEmitter {
 
   protected emitMappedExpression(expression: Expression, normalizeNull = true): string {
     return this.emitMappedJavaScript(expression.span, () => {
-      const key = `${expression.span.start}:${expression.span.end}`;
+      const key = spanIdentity(expression.span);
       const normalizePromise = normalizeNull
         && this.suppressPromiseNormalization === 0
         && this.hints.normalizedPromiseValues.has(key);
@@ -1222,7 +1222,7 @@ export class JavaScriptEmitter {
   private emitMappedAssignmentTarget(expression: Extract<Expression, { kind: "IdentifierExpression" | "MemberExpression" }>): string {
     return this.emitMappedJavaScript(expression.span, () => {
       if (expression.kind === "IdentifierExpression") return this.emitExpression(expression);
-      const property = `${this.hints.privateMembers.has(expression.span.start) ? "#" : ""}${expression.property}`;
+      const property = `${this.hints.privateMembers.has(spanIdentity(expression.span)) ? "#" : ""}${expression.property}`;
       return `${this.emitPostfixReceiver(expression.object)}.${property}`;
     });
   }
@@ -1263,13 +1263,17 @@ export class JavaScriptEmitter {
           return `await ${this.emitMappedExpression(expression.operand)}`;
         }
         return expression.operator === "not"
-          ? this.hints.optionalNegations.has(expression.span.start)
+          ? this.hints.optionalNegations.has(spanIdentity(expression.span))
             ? `(${this.emitMappedExpression(expression.operand)} == null)`
             : `!(${this.emitMappedExpression(expression.operand)})`
           : `${expression.operator}(${this.emitMappedExpression(expression.operand)})`;
       case "BinaryExpression": {
+        if (expression.operator === "and" || expression.operator === "or") {
+          const operator = expression.operator === "and" ? "&&" : "||";
+          return `(${this.emitCondition(expression.left)} ${operator} ${this.emitCondition(expression.right)})`;
+        }
         if (expression.operator === "in") {
-          const membership = this.hints.membershipChecks.get(expression.span.start);
+          const membership = this.hints.membershipChecks.get(spanIdentity(expression.span));
           if (membership === "string") {
             return `${this.emitPostfixReceiver(expression.right)}.includes(${this.emitMappedExpression(expression.left)})`;
           }
@@ -1277,7 +1281,7 @@ export class JavaScriptEmitter {
           const helper = membership === "collection" ? "__velarCollectionHas" : "__velarMembership";
           return `${helper}(${this.emitMappedExpression(expression.right)}, ${this.emitMappedExpression(expression.left)})`;
         }
-        const operator = expression.operator === "and" ? "&&" : expression.operator === "or" ? "||" : expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
+        const operator = expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
           ? `(${this.emitMappedExpression(expression.left)})`
           : this.emitMappedExpression(expression.left);
@@ -1288,7 +1292,7 @@ export class JavaScriptEmitter {
       case "ConditionalExpression":
         return `(${this.emitCondition(expression.condition)} ? ${this.emitMappedExpression(expression.thenValue)} : ${this.emitMappedExpression(expression.elseValue)})`;
       case "IsExpression":
-        if (this.hints.classChecks.has(expression.span.start)) {
+        if (this.hints.classChecks.has(spanIdentity(expression.span))) {
           return `${this.emitMappedExpression(expression.value)} instanceof ${this.typeRuntimeName(expression.type)}`;
         }
         {
@@ -1311,7 +1315,7 @@ export class JavaScriptEmitter {
             this.needsCollectionHelpers = true;
             const object = this.emitMappedExpression(expression.callee.object);
             const arguments_ = expression.arguments.map((argument) => this.emitMappedExpression(argument));
-            if (this.hints.optionalCallees.has(expression.span.start)) {
+            if (this.hints.optionalCallees.has(spanIdentity(expression.span))) {
               const invocation = `${helper}(__value${arguments_.length > 0 ? `, ${arguments_.join(", ")}` : ""})`;
               return `(__velarOptionalCollection(${object}, __value => ${invocation}) ?? null)`;
             }
@@ -1319,14 +1323,14 @@ export class JavaScriptEmitter {
           }
         }
         const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
-        const namedOrder = this.hints.namedArgumentOrders.get(expression.span.start);
+        const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
         const arguments_ = namedOrder
           ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
           : sourceArguments;
         const wrapNamed = (value: string): string => namedOrder
           ? `((__namedArguments) => ${value})([${sourceArguments.join(", ")}])`
           : value;
-        if (this.hints.optionalCallees.has(expression.span.start)) {
+        if (this.hints.optionalCallees.has(spanIdentity(expression.span))) {
           const call = expression.callee.kind === "MemberExpression"
             ? `${this.emitPostfixReceiver(expression.callee.object)}${expression.callee.optional ? "?." : "."}${expression.callee.property}?.(${arguments_.join(", ")})`
             : `${this.emitPostfixReceiver(expression.callee)}?.(${arguments_.join(", ")})`;
@@ -1341,14 +1345,14 @@ export class JavaScriptEmitter {
           this.needsCollectionHelpers = true;
           callee = expression.callee.name === "Map" ? "__velarCreateMap" : "__velarCreateSet";
         } else {
-          callee = this.hints.constructorCalls.has(`${expression.span.start}:${expression.span.end}`)
+          callee = this.hints.constructorCalls.has(spanIdentity(expression.span))
             ? `new ${this.emitMappedExpression(expression.callee)}`
             : this.emitPostfixReceiver(expression.callee);
         }
-        const formRead = this.hints.formReads.get(expression.span.start);
+        const formRead = this.hints.formReads.get(spanIdentity(expression.span));
         if (formRead) arguments_.push(JSON.stringify(formRead));
         const call = `${callee}(${arguments_.join(", ")})`;
-        return wrapNamed(this.hints.optionalCalls.has(expression.span.start) ? `(${call} ?? null)` : call);
+        return wrapNamed(this.hints.optionalCalls.has(spanIdentity(expression.span)) ? `(${call} ?? null)` : call);
       }
       case "MemberExpression": {
         if (this.hints.collectionSizes.has(expression.span.end)) {
@@ -1359,14 +1363,14 @@ export class JavaScriptEmitter {
             : `__velarCollectionSize(${object})`;
         }
         const publicProperty = expression.property;
-        const property = `${this.hints.privateMembers.has(expression.span.start) ? "#" : ""}${publicProperty}`;
+        const property = `${this.hints.privateMembers.has(spanIdentity(expression.span)) ? "#" : ""}${publicProperty}`;
         const access = `${this.emitPostfixReceiver(expression.object)}${expression.optional ? "?." : "."}${property}`;
-        return this.hints.optionalMembers.has(expression.span.start) ? `(${access} ?? null)` : access;
+        return this.hints.optionalMembers.has(spanIdentity(expression.span)) ? `(${access} ?? null)` : access;
       }
       case "IndexExpression":
         this.needsIndexHelpers = true;
         this.needsCollectionHelpers = true;
-        return this.hints.optionalIndexes.has(expression.span.start)
+        return this.hints.optionalIndexes.has(spanIdentity(expression.span))
           ? `__velarOptionalIndex(${this.emitMappedExpression(expression.object)}, () => ${this.emitMappedExpression(expression.index)})`
           : `__velarIndex(${this.emitMappedExpression(expression.object)}, ${this.emitMappedExpression(expression.index)})`;
       default:
@@ -1376,7 +1380,7 @@ export class JavaScriptEmitter {
 
   protected emitCondition(expression: Expression): string {
     const value = this.emitMappedExpression(expression);
-    return this.hints.presenceConditions.has(expression.span.start) ? `(${value} != null)` : value;
+    return this.hints.presenceConditions.has(spanIdentity(expression.span)) ? `(${value} != null)` : value;
   }
 
   private emitPostfixReceiver(expression: Expression): string {

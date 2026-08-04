@@ -20,7 +20,7 @@ import type {
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
 import { collectionMemberGuidance, type CollectionKind } from "./language-guidance.ts";
-import type { Span } from "./source.ts";
+import { spanIdentity, type Span } from "./source.ts";
 import {
   anyType,
   boolType,
@@ -140,16 +140,16 @@ export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlySet<number>;
   readonly constructorCalls: ReadonlySet<string>;
-  readonly classChecks: ReadonlySet<number>;
-  readonly privateMembers: ReadonlySet<number>;
+  readonly classChecks: ReadonlySet<string>;
+  readonly privateMembers: ReadonlySet<string>;
   readonly classNames: ReadonlySet<string>;
   readonly enumNames: ReadonlySet<string>;
-  readonly optionalMembers: ReadonlySet<number>;
-  readonly optionalCalls: ReadonlySet<number>;
-  readonly optionalIndexes: ReadonlySet<number>;
-  readonly optionalCallees: ReadonlySet<number>;
-  readonly presenceConditions: ReadonlySet<number>;
-  readonly optionalNegations: ReadonlySet<number>;
+  readonly optionalMembers: ReadonlySet<string>;
+  readonly optionalCalls: ReadonlySet<string>;
+  readonly optionalIndexes: ReadonlySet<string>;
+  readonly optionalCallees: ReadonlySet<string>;
+  readonly presenceConditions: ReadonlySet<string>;
+  readonly optionalNegations: ReadonlySet<string>;
   readonly normalizedNullResults: ReadonlySet<string>;
   readonly normalizedPromiseValues: ReadonlySet<string>;
   readonly normalizedUndefinedExpressions: ReadonlySet<string>;
@@ -157,11 +157,11 @@ export interface LoweringHints {
   readonly reactiveBindings: ReadonlyMap<string, "state" | "computed">;
   readonly enumValueBindings: ReadonlyMap<number, string>;
   readonly exhaustiveMatches: ReadonlySet<number>;
-  readonly membershipChecks: ReadonlyMap<number, "collection" | "string">;
-  readonly formReads: ReadonlyMap<number, readonly FormReadField[]>;
-  readonly namedArgumentOrders: ReadonlyMap<number, readonly number[]>;
-  readonly extensionLiterals: ReadonlyMap<number, string>;
-  readonly extensionCalls: ReadonlyMap<number, string>;
+  readonly membershipChecks: ReadonlyMap<string, "collection" | "string">;
+  readonly formReads: ReadonlyMap<string, readonly FormReadField[]>;
+  readonly namedArgumentOrders: ReadonlyMap<string, readonly number[]>;
+  readonly extensionLiterals: ReadonlyMap<string, string>;
+  readonly extensionCalls: ReadonlyMap<string, string>;
 }
 
 export interface AnalysisContext {
@@ -214,15 +214,15 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionCalls = new Map<number, CollectionOperation>();
   private readonly collectionSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
-  private readonly classChecks = new Set<number>();
-  private readonly privateMembers = new Set<number>();
-  private readonly optionalMembers = new Set<number>();
-  private readonly optionalCalls = new Set<number>();
-  private readonly optionalIndexes = new Set<number>();
-  private readonly optionalCallees = new Set<number>();
+  private readonly classChecks = new Set<string>();
+  private readonly privateMembers = new Set<string>();
+  private readonly optionalMembers = new Set<string>();
+  private readonly optionalCalls = new Set<string>();
+  private readonly optionalIndexes = new Set<string>();
+  private readonly optionalCallees = new Set<string>();
   private readonly constructorFieldInitializations = new Set<number>();
-  private readonly presenceConditions = new Set<number>();
-  private readonly optionalNegations = new Set<number>();
+  private readonly presenceConditions = new Set<string>();
+  private readonly optionalNegations = new Set<string>();
   private readonly normalizedNullResults = new Set<string>();
   private readonly normalizedPromiseValues = new Set<string>();
   private readonly normalizedUndefinedExpressions = new Set<string>();
@@ -230,11 +230,11 @@ export class Analyzer implements TypeEnvironment {
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
   protected readonly enumValueBindings = new Map<number, string>();
   private readonly exhaustiveMatches = new Set<number>();
-  private readonly membershipChecks = new Map<number, "collection" | "string">();
-  private readonly formReads = new Map<number, readonly FormReadField[]>();
-  private readonly namedArgumentOrders = new Map<number, readonly number[]>();
-  protected readonly extensionLiterals = new Map<number, string>();
-  protected readonly extensionCalls = new Map<number, string>();
+  private readonly membershipChecks = new Map<string, "collection" | "string">();
+  private readonly formReads = new Map<string, readonly FormReadField[]>();
+  private readonly namedArgumentOrders = new Map<string, readonly number[]>();
+  protected readonly extensionLiterals = new Map<string, string>();
+  protected readonly extensionCalls = new Map<string, string>();
   private readonly semanticBindingTypes = new Map<string, ValueType>();
   private readonly semanticBindingMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly semanticMemberCache = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -247,6 +247,10 @@ export class Analyzer implements TypeEnvironment {
   private readonly semanticExpressionContexts = new Map<string, ValueType>();
   private readonly semanticExpressionContextMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly contextualAssignments = new Map<string, ValueType>();
+  private readonly logicalConditionNarrowings = new Map<string, {
+    readonly truthy: ReadonlyMap<string, ValueType>;
+    readonly falsy: ReadonlyMap<string, ValueType>;
+  }>();
   private readonly collectionInferenceGroups = new WeakMap<Binding, CollectionInferenceGroup>();
   private readonly collectionInferenceTypes = new WeakMap<object, CollectionInferenceGroup>();
   private readonly privateFields = new Map<string, Map<string, ClassField>>();
@@ -1228,12 +1232,14 @@ export class Analyzer implements TypeEnvironment {
         this.exitScope();
         break;
       }
-      case "WhileStatement":
-        this.requireCondition(this.inferExpression(statement.condition), statement.condition);
+      case "WhileStatement": {
+        const condition = this.inferExpression(statement.condition);
+        this.requireCondition(condition, statement.condition);
         this.loopDepth += 1;
-        this.analyzeBlock(statement.body);
+        this.analyzeBlock(statement.body, this.narrowingFor(statement.condition, condition));
         this.loopDepth -= 1;
         break;
+      }
       case "BreakStatement":
       case "ContinueStatement":
         if (this.loopDepth === 0) {
@@ -1905,9 +1911,9 @@ export class Analyzer implements TypeEnvironment {
     const type = this.inferExpressionType(expression, contextualType);
     const expanded = this.expandAliases(type);
     if (expanded.kind === "promise" && this.hasNullishContract(this.expandAliases(expanded.value))) {
-      this.normalizedPromiseValues.add(`${expression.span.start}:${expression.span.end}`);
+      this.normalizedPromiseValues.add(spanIdentity(expression.span));
     } else if (this.shouldNormalizeNullish(expression, expanded)) {
-      this.normalizedUndefinedExpressions.add(`${expression.span.start}:${expression.span.end}`);
+      this.normalizedUndefinedExpressions.add(spanIdentity(expression.span));
     }
     this.recordSemanticExpression(expression, type);
     return type;
@@ -1920,14 +1926,14 @@ export class Analyzer implements TypeEnvironment {
 
   private expressionAlreadyNormalizesUndefined(expression: Expression): boolean {
     if (expression.kind === "UnaryExpression" && expression.operator === "await") {
-      return this.normalizedPromiseValues.has(`${expression.operand.span.start}:${expression.operand.span.end}`);
+      return this.normalizedPromiseValues.has(spanIdentity(expression.operand.span));
     }
     if (expression.kind === "CallExpression") {
-      return this.optionalCalls.has(expression.span.start)
-        || this.optionalCallees.has(expression.span.start);
+      return this.optionalCalls.has(spanIdentity(expression.span))
+        || this.optionalCallees.has(spanIdentity(expression.span));
     }
-    if (expression.kind === "IndexExpression") return this.optionalIndexes.has(expression.span.start);
-    return expression.kind === "MemberExpression" && this.optionalMembers.has(expression.span.start);
+    if (expression.kind === "IndexExpression") return this.optionalIndexes.has(spanIdentity(expression.span));
+    return expression.kind === "MemberExpression" && this.optionalMembers.has(spanIdentity(expression.span));
   }
 
   private shouldNormalizeNullish(expression: Expression, type: ValueType): boolean {
@@ -1945,8 +1951,8 @@ export class Analyzer implements TypeEnvironment {
       const members = this.semanticMembersOf(type);
       const callable = type.kind === "function" || type.kind === "intrinsic" || type.kind === "action";
       if (members.size > 0 || callable || expression.kind === "MemberExpression"
-        || this.semanticExpressionContexts.has(`${expression.span.start}:${expression.span.end}`)) {
-        const key = `${expression.span.start}:${expression.span.end}`;
+        || this.semanticExpressionContexts.has(spanIdentity(expression.span))) {
+        const key = spanIdentity(expression.span);
         this.semanticExpressionTypes.set(key, type);
         this.semanticExpressionMembers.set(key, members);
       }
@@ -2009,7 +2015,7 @@ export class Analyzer implements TypeEnvironment {
       case "ObjectExpression": {
         const objectContext = this.contextualObjectType(contextualType);
         if (objectContext?.kind === "named") {
-          const contextKey = `${expression.span.start}:${expression.span.end}`;
+          const contextKey = spanIdentity(expression.span);
           this.semanticExpressionContexts.set(contextKey, objectContext);
           this.semanticExpressionContextMembers.set(contextKey, this.semanticMembersOf(objectContext));
         }
@@ -2057,7 +2063,7 @@ export class Analyzer implements TypeEnvironment {
               this.typeError(`Object is missing required field '${name}'`, expression.span);
             }
           }
-          this.contextualAssignments.set(`${expression.span.start}:${expression.span.end}`, contextualType);
+          this.contextualAssignments.set(spanIdentity(expression.span), contextualType);
         }
         return { kind: "object", fields, ...(optionalFields.size > 0 ? { optionalFields } : {}) };
       }
@@ -2082,8 +2088,8 @@ export class Analyzer implements TypeEnvironment {
           if (isInvalidType(awaited)) return invalidType;
           if (awaited.kind === "promise") {
             const result = resolvedAsyncType(awaited.value);
-            if (result.kind === "null" && !this.normalizedPromiseValues.has(`${expression.operand.span.start}:${expression.operand.span.end}`)) {
-              this.normalizedNullResults.add(`${expression.span.start}:${expression.span.end}`);
+            if (result.kind === "null" && !this.normalizedPromiseValues.has(spanIdentity(expression.operand.span))) {
+              this.normalizedNullResults.add(spanIdentity(expression.span));
             }
             return result;
           }
@@ -2094,7 +2100,7 @@ export class Analyzer implements TypeEnvironment {
         }
         if (isInvalidType(operand)) return invalidType;
         if (expression.operator === "not") {
-          if (operand.kind === "optional") this.optionalNegations.add(expression.span.start);
+          if (operand.kind === "optional") this.optionalNegations.add(spanIdentity(expression.span));
           else this.requireAssignable(operand, boolType, expression.operand.span);
           return boolType;
         }
@@ -2126,7 +2132,7 @@ export class Analyzer implements TypeEnvironment {
           if (this.contextualObjectType(contextualType)
             && this.contextuallyAssignable(thenType, contextualType, expression.thenValue.span)
             && this.contextuallyAssignable(elseType, contextualType, expression.elseValue.span)) {
-            this.contextualAssignments.set(`${expression.span.start}:${expression.span.end}`, contextualType);
+            this.contextualAssignments.set(spanIdentity(expression.span), contextualType);
           }
           return mergeTypes(thenType, elseType);
         }
@@ -2134,14 +2140,14 @@ export class Analyzer implements TypeEnvironment {
         this.inferExpression(expression.value);
         const checked = this.resolveAnnotation(expression.type);
         const valid = this.validateTypeReference(expression.type);
-        if (valid && checked.kind === "class") this.classChecks.add(expression.span.start);
+        if (valid && checked.kind === "class") this.classChecks.add(spanIdentity(expression.span));
         return valid ? boolType : invalidType;
       }
       case "ArrowFunctionExpression":
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
         const result = this.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
-        if (this.expandAliases(result).kind === "null") this.normalizedNullResults.add(`${expression.span.start}:${expression.span.end}`);
+        if (this.expandAliases(result).kind === "null") this.normalizedNullResults.add(spanIdentity(expression.span));
         return result;
       }
       case "MemberExpression":
@@ -2154,7 +2160,7 @@ export class Analyzer implements TypeEnvironment {
         }
         if (original.kind === "null" && expression.optional) {
           this.inferExpression(expression.index);
-          this.optionalIndexes.add(expression.span.start);
+          this.optionalIndexes.add(spanIdentity(expression.span));
           return optionalOf(unknownType);
         }
         const object = guarded && original.kind === "optional" ? original.inner : original;
@@ -2163,7 +2169,7 @@ export class Analyzer implements TypeEnvironment {
         if (object.kind === "list") {
           this.requireAssignable(index, numberType, expression.index.span);
           if (guarded) {
-            this.optionalIndexes.add(expression.span.start);
+            this.optionalIndexes.add(spanIdentity(expression.span));
             return optionalOf(object.element);
           }
           return object.element;
@@ -2184,6 +2190,18 @@ export class Analyzer implements TypeEnvironment {
 
   private inferBinary(leftExpression: Expression, operator: string, rightExpression: Expression, operationSpan: Span): ValueType {
     const left = this.inferExpression(leftExpression);
+    if (operator === "and" || operator === "or") {
+      this.requireCondition(left, leftExpression);
+      const leftTruthy = this.narrowingFor(leftExpression, left);
+      const leftFalsy = this.negativeNarrowingFor(leftExpression, left);
+      const rightContext = operator === "and" ? leftTruthy : leftFalsy;
+      const rightCondition = this.inferConditionWithNarrowings(rightExpression, rightContext);
+      this.logicalConditionNarrowings.set(spanIdentity(operationSpan), {
+        truthy: operator === "and" ? this.combineNarrowings(leftTruthy, rightCondition.truthy) : new Map(),
+        falsy: operator === "or" ? this.combineNarrowings(leftFalsy, rightCondition.falsy) : new Map(),
+      });
+      return isInvalidType(left) || isInvalidType(rightCondition.type) ? invalidType : boolType;
+    }
     const right = this.inferExpression(rightExpression);
     if (isInvalidType(left) || isInvalidType(right)) return invalidType;
     if (operator === "??") {
@@ -2192,21 +2210,16 @@ export class Analyzer implements TypeEnvironment {
       }
       return mergeTypes(nonOptional(left), right);
     }
-    if (operator === "and" || operator === "or") {
-      this.requireAssignable(left, boolType, leftExpression.span);
-      this.requireAssignable(right, boolType, rightExpression.span);
-      return boolType;
-    }
     if (operator === "in") {
       if (right.kind === "list" || right.kind === "set") {
         this.requireAssignable(left, right.element, leftExpression.span);
-        this.membershipChecks.set(operationSpan.start, "collection");
+        this.membershipChecks.set(spanIdentity(operationSpan), "collection");
       } else if (right.kind === "map") {
         this.requireAssignable(left, right.key, leftExpression.span);
-        this.membershipChecks.set(operationSpan.start, "collection");
+        this.membershipChecks.set(spanIdentity(operationSpan), "collection");
       } else if (right.kind === "string") {
         this.requireAssignable(left, stringType, leftExpression.span);
-        this.membershipChecks.set(operationSpan.start, "string");
+        this.membershipChecks.set(spanIdentity(operationSpan), "string");
       } else if (right.kind !== "any") {
         this.typeError(`Membership requires a List, Set, Map, or string, received ${describeType(right)}`, rightExpression.span);
       }
@@ -2362,12 +2375,12 @@ export class Analyzer implements TypeEnvironment {
       if (isInvalidType(callee)) return invalidType;
       if (callee.kind === "function" || callee.kind === "action") {
         this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
-        this.optionalCallees.add(callSpan.start);
+        this.optionalCallees.add(spanIdentity(callSpan));
         return optionalOf(callee.result);
       }
       if (callee.kind === "any") {
         for (const argument of arguments_) this.inferExpression(argument);
-        this.optionalCallees.add(callSpan.start);
+        this.optionalCallees.add(spanIdentity(callSpan));
         return anyType;
       }
       this.typeError(`Optional call requires a function, received ${describeType(original)}`, callSpan);
@@ -2409,7 +2422,7 @@ export class Analyzer implements TypeEnvironment {
     const callee = this.inferExpression(calleeExpression);
     const calleeAlreadyDiagnosed = this.diagnostics.length > diagnosticsBeforeCallee;
     if (callee.kind === "classConstructor") {
-      this.constructorCalls.add(`${callSpan.start}:${callSpan.end}`);
+      this.constructorCalls.add(spanIdentity(callSpan));
       const info = this.classes.get(callee.identity ?? callee.name) ?? this.classes.get(callee.name);
       if (info?.abstract) this.typeError(`Cannot instantiate abstract class '${callee.name}'`, callSpan);
       this.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
@@ -2431,7 +2444,7 @@ export class Analyzer implements TypeEnvironment {
         this.recordRuntimeObjectShape(arguments_[0], callee.result);
       }
       this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
-      if (callee.result.kind === "optional") this.optionalCalls.add(callSpan.start);
+      if (callee.result.kind === "optional") this.optionalCalls.add(spanIdentity(callSpan));
       return callee.result;
     }
     if (callee.kind === "optional" && (callee.inner.kind === "function" || callee.inner.kind === "action")) {
@@ -2439,8 +2452,8 @@ export class Analyzer implements TypeEnvironment {
       if (!continuesOptionalChain(calleeExpression)) {
         this.typeError("Use a presence check or an optional access chain before calling an optional function", calleeExpression.span);
       }
-      this.optionalCalls.add(callSpan.start);
-      this.optionalCallees.add(callSpan.start);
+      this.optionalCalls.add(spanIdentity(callSpan));
+      this.optionalCallees.add(spanIdentity(callSpan));
       return optionalOf(callee.inner.result);
     }
     if (callee.kind === "any") {
@@ -2532,7 +2545,7 @@ export class Analyzer implements TypeEnvironment {
         isHttpFormBody: (type) => this.isHttpFormBody(type),
         declaredFieldsOf: (name) => this.namedTypes.get(name) ?? null,
         formReadField: (name, type, fieldSpan) => this.formReadField(name, type, fieldSpan),
-        recordFormRead: (spanStart, fields) => this.formReads.set(spanStart, fields),
+        recordFormRead: (sourceSpan, fields) => this.formReads.set(spanIdentity(sourceSpan), fields),
       });
       if (result) return result;
     }
@@ -3137,7 +3150,7 @@ export class Analyzer implements TypeEnvironment {
       const method = this.findMethod(classKey, property);
       result = privateField?.type ?? privateMethod ?? field?.type ?? getter?.type ?? method?.type ?? unknownType;
       if (privateField || privateMethod) {
-        this.privateMembers.add(memberSpan.start);
+        this.privateMembers.add(spanIdentity(memberSpan));
       } else if (!field && !getter && !method && this.declaresPrivateMember(classKey, property, false)) {
         this.typeError(`Member '${property}' is private to class '${object.name}'`, memberSpan);
       } else if (!field && !getter && !method) {
@@ -3152,7 +3165,7 @@ export class Analyzer implements TypeEnvironment {
       const method = this.findStaticMethod(key, property);
       result = privateField?.type ?? privateMethod ?? field?.type ?? getter ?? method ?? unknownType;
       if (privateField || privateMethod) {
-        this.privateMembers.add(memberSpan.start);
+        this.privateMembers.add(spanIdentity(memberSpan));
       } else if (!field && !getter && !method && this.declaresPrivateMember(key, property, true)) {
         this.typeError(`Static member '${property}' is private to class '${object.name}'`, memberSpan);
       } else if (!field && !getter && !method) {
@@ -3190,13 +3203,13 @@ export class Analyzer implements TypeEnvironment {
 
     if (optional) {
       const finalType = resolvedOriginal.kind === "optional" || resolvedOriginal.kind === "null" ? optionalOf(result) : result;
-      if (finalType.kind === "optional") this.optionalMembers.add(memberSpan.start);
+      if (finalType.kind === "optional") this.optionalMembers.add(spanIdentity(memberSpan));
       return finalType;
     }
     if (resolvedOriginal.kind === "optional") {
       this.typeError(`Use optional access '?.' for ${describeType(original)}`, memberSpan);
     }
-    if (result.kind === "optional") this.optionalMembers.add(memberSpan.start);
+    if (result.kind === "optional") this.optionalMembers.add(spanIdentity(memberSpan));
     return result;
   }
 
@@ -3434,7 +3447,7 @@ export class Analyzer implements TypeEnvironment {
 
     const missing = parameterNames.filter((_, index) => index < requiredParameters && sources[index] === -1);
     if (missing.length > 0) this.typeError(`Missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, callSpan);
-    this.namedArgumentOrders.set(callSpan.start, sources);
+    this.namedArgumentOrders.set(spanIdentity(callSpan), sources);
     return sources.map((source, index) => source === -1
       ? { kind: "IdentifierExpression", name: "\u0000omitted-named-argument", span: callSpan } satisfies Expression
       : arguments_[source]!);
@@ -3528,11 +3541,13 @@ export class Analyzer implements TypeEnvironment {
     return this.conditionNarrowing(expression, true, knownType);
   }
 
-  protected negativeNarrowingFor(expression: Expression): ReadonlyMap<string, ValueType> {
-    return this.conditionNarrowing(expression, false);
+  protected negativeNarrowingFor(expression: Expression, knownType?: ValueType): ReadonlyMap<string, ValueType> {
+    return this.conditionNarrowing(expression, false, knownType);
   }
 
   private conditionNarrowing(expression: Expression, truthy: boolean, knownType?: ValueType): ReadonlyMap<string, ValueType> {
+    const logical = this.logicalConditionNarrowings.get(spanIdentity(expression.span));
+    if (logical) return truthy ? logical.truthy : logical.falsy;
     const narrowed = new Map<string, ValueType>();
     if (expression.kind === "UnaryExpression" && expression.operator === "not") {
       return this.conditionNarrowing(expression.operand, !truthy);
@@ -3609,9 +3624,48 @@ export class Analyzer implements TypeEnvironment {
     return result;
   }
 
+  private inferConditionWithNarrowings(
+    expression: Expression,
+    narrowed: ReadonlyMap<string, ValueType>,
+  ): {
+    readonly type: ValueType;
+    readonly truthy: ReadonlyMap<string, ValueType>;
+    readonly falsy: ReadonlyMap<string, ValueType>;
+  } {
+    if (narrowed.size === 0) {
+      const type = this.inferExpression(expression);
+      this.requireCondition(type, expression);
+      return {
+        type,
+        truthy: this.narrowingFor(expression, type),
+        falsy: this.negativeNarrowingFor(expression, type),
+      };
+    }
+    this.enterScope();
+    try {
+      this.applyNarrowings(narrowed, expression.span);
+      const type = this.inferExpression(expression);
+      this.requireCondition(type, expression);
+      return {
+        type,
+        truthy: this.narrowingFor(expression, type),
+        falsy: this.negativeNarrowingFor(expression, type),
+      };
+    } finally {
+      this.exitScope();
+    }
+  }
+
+  private combineNarrowings(
+    first: ReadonlyMap<string, ValueType>,
+    second: ReadonlyMap<string, ValueType>,
+  ): ReadonlyMap<string, ValueType> {
+    return new Map([...first, ...second]);
+  }
+
   protected requireCondition(type: ValueType, condition: Expression): void {
     if (isInvalidType(type)) return;
-    if (type.kind === "optional") this.presenceConditions.add(condition.span.start);
+    if (type.kind === "optional") this.presenceConditions.add(spanIdentity(condition.span));
     if (type.kind !== "bool" && type.kind !== "optional" && type.kind !== "any") {
       this.typeError(`Condition must be bool or optional, received ${describeType(type)}`, condition.span);
     }
@@ -3677,7 +3731,7 @@ export class Analyzer implements TypeEnvironment {
 
   private contextuallyAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): boolean {
     if (isAssignable(actual, expected, this)) return true;
-    const contextual = this.contextualAssignments.get(`${valueSpan.start}:${valueSpan.end}`);
+    const contextual = this.contextualAssignments.get(spanIdentity(valueSpan));
     return Boolean(contextual && isAssignable(this.expandAliases(contextual), this.expandAliases(expected), this));
   }
 

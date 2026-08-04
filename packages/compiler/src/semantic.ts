@@ -8,7 +8,7 @@ import type {
   Statement,
   TypeReference,
 } from "./ast.ts";
-import type { SourceText, Span } from "./source.ts";
+import { spanIdentity, type SourceText, type Span } from "./source.ts";
 import { describeType, formatTypeReference, type ValueType } from "./types.ts";
 
 export type SemanticSymbolKind =
@@ -430,7 +430,7 @@ export function buildSemanticIndex(
   };
 
   const visitExpression = (expression: Expression, write = false): void => {
-    const expressionKey = `${expression.span.start}:${expression.span.end}`;
+    const expressionKey = spanIdentity(expression.span);
     const expressionType = expressionTypes.get(expressionKey);
     const expressionOwner = expressionOwners.get(expressionKey);
     const expressionContext = expressionContexts.get(expressionKey);

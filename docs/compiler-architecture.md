@@ -208,6 +208,10 @@ attributes, static text, and dynamic child expressions each own a mapped node
 instead of inheriting the previous generated fragment's position. This keeps
 content hashes and source maps reproducible across output locations. Linked
 production maps are disabled by default and remain an explicit manifest input.
+Analyzer-to-emitter lowering hints use the complete source span as node identity.
+Parent expressions and their first child often share a start offset, so
+start-only keys are forbidden for expression hints such as optional reads,
+private members, named calls, conditions, and Web-controlled calls.
 
 Null normalization is type-directed rather than provenance-directed. Every
 checked expression whose expanded type is optional, `null`, or `unknown`
@@ -221,6 +225,10 @@ Assignment targets are a separate lowering context: they never receive the
 read-side `?? null` normalization. Flow-narrowed reads use the current fact,
 while plain assignment is checked against the declared location type and
 invalidates stale facts for that location and its descendants.
+Short-circuit `and`/`or` analysis evaluates the right operand under the facts
+that make it reachable, records only facts valid for the complete result path,
+and lowers optional conditions to explicit presence checks. `while` bodies use
+the same successful-condition facts rather than a separate loop rule.
 
 Catch lowering uses the host's cross-realm Error brand check, then converts
 foreign non-Error throws without applying JavaScript string coercion to objects

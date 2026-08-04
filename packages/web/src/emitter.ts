@@ -6,7 +6,7 @@ import type {
   LoweringHints,
 } from "@velarscript/compiler/extension";
 import { cssPropertyName } from "./look.ts";
-import { JavaScriptEmitter, VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
+import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_RUNTIME } from "@velarscript/compiler/extension";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
 type ComponentDeclaration = Extract<Statement, { readonly kind: "ComponentDeclaration" }>;
@@ -194,7 +194,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (this.reactive.has(expression.name)) return `${expression.name}.get()`;
       if (expression.name === "mount") return "__velarMount";
       if (expression.name === "tick") return "__velarTick";
-      const controlled = this.hints.extensionLiterals.get(expression.span.start);
+      const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
     if (expression.kind === "JSXElementExpression") {
@@ -204,10 +204,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       && expression.callee.name === "mount" && expression.arguments.length === 2) {
       return `__velarMount(() => ${this.emitMappedExpression(expression.arguments[0]!)}, ${this.emitMappedExpression(expression.arguments[1]!)})`;
     }
-    const controlledCall = expression.kind === "CallExpression" ? this.hints.extensionCalls.get(expression.span.start) : undefined;
+    const controlledCall = expression.kind === "CallExpression"
+      ? this.hints.extensionCalls.get(spanIdentity(expression.span))
+      : undefined;
     if (controlledCall !== undefined && expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
       const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
-      const namedOrder = this.hints.namedArgumentOrders.get(expression.span.start);
+      const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
       const arguments_ = namedOrder
         ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
         : sourceArguments;
