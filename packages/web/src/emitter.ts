@@ -469,8 +469,9 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         if (attribute.name === "class" && value && typeof value !== "string") {
           return `__velarClassBind(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`;
         }
-        if (attribute.name === "unsafe:html" && value && typeof value !== "string") {
-          return `__velarHtml(${element}, () => ${this.emitMappedExpression(value)}, ${scope});`;
+        if (attribute.name === "unsafe:html") {
+          const html = typeof value === "string" ? JSON.stringify(value) : value === null ? '""' : this.emitMappedExpression(value);
+          return `__velarHtml(${element}, () => ${html}, ${scope});`;
         }
         if (typeof value === "string" || value === null) {
           return `__velarStaticAttr(${element}, ${JSON.stringify(attribute.name)}, ${value === null ? "true" : JSON.stringify(value)});`;
@@ -1114,10 +1115,44 @@ function __velarCreateElement(tag, namespace) {
     : document.createElement(tag);
 }
 
-function __velarAppend(parent, value) {
+function __velarAppend(parent, value, state = null) {
+  state ??= { active: new Set(), depth: 0, values: 0, text: 0 };
   if (value == null || value === false || value === true) return;
-  if (Array.isArray(value)) { for (const item of value) __velarAppend(parent, item); return; }
-  parent.append(value instanceof globalThis.Node ? value : document.createTextNode(String(value)));
+  state.values += 1;
+  if (state.values > 1000000) throw new RangeError("JSX cannot render more than 1000000 values");
+  if (typeof value === "string") {
+    state.text += value.length;
+    if (state.text > 16 * 1024 * 1024) throw new RangeError("JSX text cannot exceed 16 MiB");
+    parent.append(document.createTextNode(value));
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("JSX numbers must be finite");
+    parent.append(document.createTextNode(String(value)));
+    return;
+  }
+  if (typeof globalThis.Node !== "undefined" && value instanceof globalThis.Node) { parent.append(value); return; }
+  if (Array.isArray(value)) {
+    if (state.depth >= 128) throw new RangeError("JSX Lists cannot exceed 128 nested levels");
+    if (state.active.has(value)) throw new TypeError("JSX cannot render a cyclic List");
+    if (value.length > 1000000 || Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+      throw new TypeError("JSX requires dense Lists without extra fields");
+    }
+    state.active.add(value);
+    state.depth += 1;
+    try {
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index);
+        if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) throw new TypeError("JSX requires ordinary mutable List elements");
+        __velarAppend(parent, descriptor.value, state);
+      }
+    } finally {
+      state.depth -= 1;
+      state.active.delete(value);
+    }
+    return;
+  }
+  throw new TypeError("JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values");
 }
 
 function __velarDynamic(parent, read, scope) {
@@ -1155,8 +1190,8 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
     const created = [];
     try {
       for (const value of values) {
-        const key = keyOf(value);
-        if (next.has(key)) throw new Error("Duplicate JSX key '" + String(key) + "'");
+        const key = __velarKey(keyOf(value));
+        if (next.has(key)) throw new Error("Duplicate JSX key '" + (typeof key === "string" ? key : String(key)) + "'");
         let entry = entries.get(key);
         if (entry && !Object.is(entry.value, value)) entry = null;
         if (!entry) {
@@ -1197,15 +1232,36 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
 
 function __velarStaticAttr(element, name, value) {
   if (value === false || value == null) return;
-  __velarSetAttribute(element, name, value === true ? "" : String(value));
+  __velarSetAttribute(element, name, __velarAttributeValue(value, name));
 }
 
 function __velarAttr(element, name, read, scope) {
   __velarObserver(() => {
     const value = read();
     if (value == null || value === false) __velarRemoveAttribute(element, name);
-    else __velarSetAttribute(element, name, value === true ? "" : String(value));
+    else __velarSetAttribute(element, name, __velarAttributeValue(value, name));
   }, "dom", scope);
+}
+
+function __velarAttributeValue(value, name) {
+  if (value === true) return "";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("JSX attribute '" + name + "' requires a finite number");
+    return String(value);
+  }
+  if (typeof value !== "string") throw new TypeError("JSX attribute '" + name + "' requires text, a finite number, bool, an enum, or null");
+  if (value.length > 1024 * 1024) throw new RangeError("JSX attribute '" + name + "' cannot exceed 1 MiB");
+  return value;
+}
+
+function __velarKey(value) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("A JSX key number must be finite");
+    return value;
+  }
+  if (typeof value !== "string") throw new TypeError("A JSX key must be a string, string-backed enum, or finite number");
+  if (value.length > 65536) throw new RangeError("A JSX key cannot exceed 65536 characters");
+  return value;
 }
 
 function __velarSetAttribute(element, name, value) {
@@ -1500,10 +1556,16 @@ function __velarLookCall(name, args) {
 }
 
 function __velarHtml(element, read, scope) {
-  __velarObserver(() => { element.innerHTML = String(read() ?? ""); }, "dom", scope);
+  __velarObserver(() => {
+    const value = read();
+    if (value != null && typeof value !== "string") throw new TypeError("unsafe:html requires string or null");
+    if (value?.length > 16 * 1024 * 1024) throw new RangeError("unsafe:html cannot exceed 16 MiB");
+    element.innerHTML = value ?? "";
+  }, "dom", scope);
 }
 
 function __velarOn(element, event, handler, scope, modifiers = []) {
+  if (typeof handler !== "function") throw new TypeError("Event '" + event + "' requires a function");
   const capture = modifiers.includes("capture");
   const options = { capture, once: modifiers.includes("once") };
   const listener = (value) => {
@@ -1520,14 +1582,28 @@ function __velarOn(element, event, handler, scope, modifiers = []) {
 }
 
 function __velarBindValue(element, state, scope, numeric = false, parse = null) {
-  __velarObserver(() => { const value = state.get(); element.value = value == null ? "" : String(value); }, "dom", scope);
+  __velarObserver(() => {
+    const value = state.get();
+    if (value == null) element.value = "";
+    else if (numeric) {
+      if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("Numeric bind:value requires a finite number");
+      element.value = String(value);
+    } else {
+      if (typeof value !== "string") throw new TypeError("bind:value requires text");
+      element.value = value;
+    }
+  }, "dom", scope);
   const update = () => state.set(numeric ? element.valueAsNumber : parse ? parse(element.value) : element.value);
   element.addEventListener("input", update);
   scope.cleanups.push(() => element.removeEventListener("input", update));
 }
 
 function __velarBindChecked(element, state, scope) {
-  __velarObserver(() => { element.checked = Boolean(state.get()); }, "dom", scope);
+  __velarObserver(() => {
+    const value = state.get();
+    if (typeof value !== "boolean") throw new TypeError("bind:checked requires bool");
+    element.checked = value;
+  }, "dom", scope);
   const update = () => state.set(element.checked);
   element.addEventListener("change", update);
   scope.cleanups.push(() => element.removeEventListener("change", update));

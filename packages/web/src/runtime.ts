@@ -770,10 +770,34 @@ function component(node, mounted, cleanup) {
   };
 }
 
-function append(parent, value) {
+function append(parent, value, state = null) {
+  state ??= { active: new Set(), depth: 0, values: 0, text: 0 };
   if (value == null || value === false || value === true) return;
-  if (Array.isArray(value)) { for (const item of __velarRequireList(value, "JSX children")) append(parent, item); return; }
-  parent.append(value instanceof Node ? value : document.createTextNode(String(value)));
+  state.values += 1;
+  if (state.values > 1000000) throw new RangeError("JSX cannot render more than 1000000 values");
+  if (typeof value === "string") {
+    state.text += value.length;
+    if (state.text > 16 * 1024 * 1024) throw new RangeError("JSX text cannot exceed 16 MiB");
+    parent.append(document.createTextNode(value));
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("JSX numbers must be finite");
+    parent.append(document.createTextNode(String(value)));
+    return;
+  }
+  if (typeof globalThis.Node !== "undefined" && value instanceof globalThis.Node) { parent.append(value); return; }
+  if (Array.isArray(value)) {
+    if (state.depth >= 128) throw new RangeError("JSX Lists cannot exceed 128 nested levels");
+    if (state.active.has(value)) throw new TypeError("JSX cannot render a cyclic List");
+    const values = __velarRequireList(value, "JSX children");
+    state.active.add(value);
+    state.depth += 1;
+    try { for (const item of values) append(parent, item, state); }
+    finally { state.depth -= 1; state.active.delete(value); }
+    return;
+  }
+  throw new TypeError("JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values");
 }
 `.trimStart()],
   ["velar/forms", String.raw`

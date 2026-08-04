@@ -29,6 +29,7 @@ type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }
 type JSXAttribute = JSXElementExpression["attributes"][number];
 
 const removedJsxControlAttributes = new Set(["if", "else-if", "else"]);
+const textualWebPrimitiveNames = new Set(["Length", "Percentage", "Color", "Duration", "Angle", "Opacity"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
 const LOOK_CONDITION_TERM_LIMIT = 32;
 
@@ -858,6 +859,10 @@ export class VelarWebAnalyzer extends Analyzer {
       if (child.kind === "JSXExpressionChild") {
         const childType = this.inferExpression(child.expression);
         if (containsPromise(this.expandAliases(childType))) this.diagnostics.push(diagnostic("VEL5031", "JSX cannot render a Promise; await it before rendering", child.expression.span));
+        else if (!isInvalidType(childType) && !(child.expression.kind === "ListExpression" && child.expression.elements.length === 0)
+          && !this.isJsxRenderable(childType)) {
+          this.diagnostics.push(diagnostic("VEL5047", `JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values; received ${describeType(childType)}`, child.expression.span));
+        }
         const list = jsxMapExpression(child.expression);
         if (list && !list.body.attributes.some((attribute) => attribute.name === "key")) this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", list.body.span));
       } else if (child.kind === "JSXElementExpression") {
@@ -934,6 +939,12 @@ export class VelarWebAnalyzer extends Analyzer {
     } else if (attribute.name === "look") {
       if (!value || typeof value === "string") this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
       else if (!this.isLookInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(inferred)}`, attribute.span));
+    } else if (attribute.name === "class") {
+      if (!this.isClassInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX class requires string, string?, or a list of strings; received ${describeType(inferred)}`, attribute.span));
+    } else if (attribute.name === "unsafe:html") {
+      if (!isInvalidType(inferred) && inferred.kind !== "any" && !this.isOptionalString(inferred)) {
+        this.diagnostics.push(diagnostic("VEL5047", `unsafe:html requires string or string?, received ${describeType(inferred)}`, attribute.span));
+      }
     } else if (attribute.name === "bind:value") {
       if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || (!this.componentStates?.has(value.name) && this.reactiveBindings.get(value.name) !== "state")) {
         this.diagnostics.push(diagnostic("VEL5019", "bind:value requires a writable state name", attribute.span));
@@ -966,7 +977,7 @@ export class VelarWebAnalyzer extends Analyzer {
       if (!event) this.diagnostics.push(diagnostic("VEL5025", "An event directive requires an event name", attribute.span));
       for (const modifier of modifiers) if (!supported.has(modifier)) this.diagnostics.push(diagnostic("VEL5025", `Unknown event modifier '${modifier}'`, attribute.span));
       if (new Set(modifiers).size !== modifiers.length) this.diagnostics.push(diagnostic("VEL5025", "Event modifiers cannot be repeated", attribute.span));
-      if (inferred.kind !== "function" && inferred.kind !== "action" && inferred.kind !== "intrinsic" && inferred.kind !== "any" && inferred.kind !== "unknown") {
+      if (!isInvalidType(inferred) && inferred.kind !== "function" && inferred.kind !== "action" && inferred.kind !== "intrinsic" && inferred.kind !== "any") {
         this.diagnostics.push(diagnostic("VEL5021", `Event '${event}' requires a function`, attribute.span));
       } else if (inferred.kind === "function" || inferred.kind === "action" || inferred.kind === "intrinsic") {
         if (inferred.rest || inferred.parameters.length > 1) this.diagnostics.push(diagnostic("VEL5021", `Event '${event}' handlers accept zero parameters or one ${describeType(expectedEvent ?? { kind: "named", name: "Event" })} parameter`, attribute.span));
@@ -976,13 +987,15 @@ export class VelarWebAnalyzer extends Analyzer {
       this.requireAssignable(inferred, boolType, attribute.span);
     } else if (attribute.name === "key" && !isInvalidType(inferred) && inferred.kind !== "string" && inferred.kind !== "number" && inferred.kind !== "enum" && inferred.kind !== "any") {
       this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
+    } else if (!isInvalidType(inferred) && !this.isJsxAttributeValue(inferred)) {
+      this.diagnostics.push(diagnostic("VEL5047", `Native JSX attributes require text, finite numbers, bool, enums, or null; received ${describeType(inferred)}`, attribute.span));
     }
     if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
       && !expression.attributes.some((item) => item.name === "role")) this.diagnostics.push(diagnostic("VEL5023", `Clickable <${expression.tag}> requires an explicit role`, expression.span));
   }
 
   private isLookInput(type: ValueType): boolean {
-    if (type.kind === "any" || type.kind === "unknown" || type.kind === "null") return true;
+    if (type.kind === "any" || type.kind === "null") return true;
     if (type.kind === "named") return type.name === "Look";
     if (type.kind === "optional") return this.isLookInput(type.inner);
     if (type.kind === "list") return this.isLookInput(type.element);
@@ -991,10 +1004,39 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private isClassInput(type: ValueType): boolean {
-    if (type.kind === "any" || type.kind === "unknown" || type.kind === "null" || type.kind === "string") return true;
+    if (type.kind === "any" || type.kind === "null" || type.kind === "string") return true;
     if (type.kind === "optional") return this.isClassInput(type.inner);
     if (type.kind === "list") return this.isClassInput(type.element);
     if (type.kind === "union") return type.members.every((member) => this.isClassInput(member));
+    return false;
+  }
+
+  private isJsxRenderable(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "any" || expanded.kind === "null" || expanded.kind === "string" || expanded.kind === "number"
+      || expanded.kind === "bool" || expanded.kind === "enum" || expanded.kind === "node") return true;
+    if (expanded.kind === "named") return textualWebPrimitiveNames.has(expanded.name);
+    if (expanded.kind === "optional") return this.isJsxRenderable(expanded.inner);
+    if (expanded.kind === "list") return this.isJsxRenderable(expanded.element);
+    if (expanded.kind === "union") return expanded.members.every((member) => this.isJsxRenderable(member));
+    return false;
+  }
+
+  private isJsxAttributeValue(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "any" || expanded.kind === "null" || expanded.kind === "string" || expanded.kind === "number"
+      || expanded.kind === "bool" || expanded.kind === "enum") return true;
+    if (expanded.kind === "named") return textualWebPrimitiveNames.has(expanded.name);
+    if (expanded.kind === "optional") return this.isJsxAttributeValue(expanded.inner);
+    if (expanded.kind === "union") return expanded.members.every((member) => this.isJsxAttributeValue(member));
+    return false;
+  }
+
+  private isOptionalString(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "string" || expanded.kind === "null") return true;
+    if (expanded.kind === "optional") return this.isOptionalString(expanded.inner);
+    if (expanded.kind === "union") return expanded.members.every((member) => this.isOptionalString(member));
     return false;
   }
 

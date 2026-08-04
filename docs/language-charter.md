@@ -853,6 +853,14 @@ Component names are PascalCase. Native elements use lowercase HTML/SVG names.
 Props are checked from the component declaration. Boolean attributes may be
 valueless. JSX expressions use ordinary VelarScript expressions.
 
+JSX children render strings, finite numbers, booleans, enums, `WebNode` values,
+or Lists containing those values. `null` and booleans render no text. Native
+attributes accept strings, finite numbers, booleans, enums, or `null`.
+VelarScript never calls an object's conversion hooks to invent text or an
+attribute value: format an object explicitly before rendering it. Raw HTML is
+an explicit string-only boundary, written as `unsafe:html={trustedMarkup}`; it
+cannot be combined with children.
+
 Use ordinary conditional expressions or functions for conditional children:
 
 ```velar fragment

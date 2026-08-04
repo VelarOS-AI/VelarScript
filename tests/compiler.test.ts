@@ -7768,6 +7768,110 @@ component App:
   assert.ok(invalid.diagnostics.some((diagnostic) => diagnostic.code === "VEL4001"));
 });
 
+test("JSX has one explicit renderable-value boundary without object coercion", () => {
+  const valid = compile(`
+enum Status:
+    ready
+
+component App:
+    const labels: List<string> = ["Velar", "Script"]
+    const accent = color("#7c5cff")
+    return <main data-accent={accent}>
+        {"Ready"}{42}{true}{Status.ready}{labels}{accent}{null}
+        <section unsafe:html="<strong>trusted</strong>"></section>
+    </main>
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  assert.match(valid.code ?? "", /__velarHtml\([^;]+\(\) => "<strong>trusted<\/strong>"/u);
+  assert.doesNotMatch(valid.code ?? "", /__velarStaticAttr\([^;]+"unsafe:html"/u);
+
+  const invalid = compile(`
+type User:
+    name: string
+
+const user: User = {name: "Ada"}
+
+def callback() -> null:
+    return null
+
+component Broken:
+    return <main data-user={user} class={user}>
+        {user}
+        {callback}
+        <section unsafe:html={42}></section>
+    </main>
+`.trimStart());
+  assert.ok(invalid.diagnostics.some((item) => item.code === "VEL5047" && /Native JSX attributes/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => item.code === "VEL5040" && /JSX class/u.test(item.message)));
+  assert.ok(invalid.diagnostics.filter((item) => item.code === "VEL5047" && /JSX can render/u.test(item.message)).length >= 2);
+  assert.ok(invalid.diagnostics.some((item) => item.code === "VEL5047" && /unsafe:html requires string/u.test(item.message)));
+
+  const runtime = compile(`
+component Shell:
+    return <main>Ready</main>
+`.trimStart());
+  assert.deepEqual(runtime.diagnostics, []);
+  const execution = executeModule(`${runtime.code ?? ""}
+class FakeNode {}
+globalThis.Node = FakeNode;
+globalThis.document = { createTextNode(value) { return { value }; } };
+const parent = { append() {}, setAttribute() {}, setAttributeNS() {} };
+let coercions = 0;
+let getterReads = 0;
+const hostile = { toString() { coercions += 1; return "coerced"; }, valueOf() { coercions += 1; return 1; } };
+const accessor = [];
+Object.defineProperty(accessor, 0, { enumerable: true, configurable: true, get() { getterReads += 1; return "read"; } });
+accessor.length = 1;
+const cyclic = [];
+cyclic.push(cyclic);
+for (const operation of [
+  () => __velarAppend(parent, hostile),
+  () => __velarStaticAttr(parent, "data-value", hostile),
+  () => __velarKey(hostile),
+  () => __velarAppend(parent, accessor),
+  () => __velarAppend(parent, cyclic),
+  () => __velarAppend(parent, Infinity),
+]) {
+  try { operation(); console.log("accepted"); }
+  catch (error) { console.log(error.name); }
+}
+console.log(coercions + ":" + getterReads);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "TypeError\nTypeError\nTypeError\nTypeError\nTypeError\nTypeError\n0:0\n");
+
+  const webRuntime = standardModuleSource("velar/web") ?? "";
+  const webExecution = executeModule(`
+class FakeNode {
+  constructor() {
+    this.classList = { add() {}, remove() {} };
+  }
+  append() {}
+  addEventListener() {}
+  removeEventListener() {}
+  insertBefore() {}
+  remove() {}
+}
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement() { return new FakeNode(); },
+  createTextNode(value) { return { value }; },
+};
+${webRuntime}
+let coercions = 0;
+const hostile = { toString() { coercions += 1; return "coerced"; } };
+const cyclic = [];
+cyclic.push(cyclic);
+for (const children of [hostile, cyclic]) {
+  try { Link({ to: "/", children }); console.log("accepted"); }
+  catch (error) { console.log(error.name); }
+}
+console.log(coercions);
+`);
+  assert.equal(webExecution.status, 0, String(webExecution.stderr));
+  assert.equal(webExecution.stdout, "TypeError\nTypeError\n0\n");
+});
+
 test("native SVG JSX preserves namespaces across components, dynamics, and foreignObject", () => {
   const result = compile(`
 component Point(x: number, y: number):
