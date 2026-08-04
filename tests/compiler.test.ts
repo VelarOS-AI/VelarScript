@@ -14445,6 +14445,70 @@ if child.profile.label:
   assert.deepEqual(inheritedConstructorOrigin.moduleInterface.classes.get("ChildBox")?.constructorOriginParameters, [0]);
 });
 
+test("callable annotations preserve inferred origin and storage effects", () => {
+  const externalProfile: ValueType = {
+    kind: "object",
+    fields: new Map([["label", { kind: "optional", inner: { kind: "string" } }]]),
+    external: true,
+  };
+  const result = compileCore(`
+type Profile:
+    label: string?
+
+type Box:
+    profile: Profile
+
+import js {profile} from "host-sdk"
+
+def identity(value: Profile) -> Profile:
+    return value
+
+def first(...values: Profile) -> Profile:
+    return values[0]
+
+def defaultIdentity(value: Profile = profile) -> Profile:
+    return value
+
+def store(box: Box, value: Profile):
+    box.profile = value
+
+export const identityAlias: (Profile) -> Profile = identity
+export const restAlias: (Profile, Profile) -> Profile = first
+export const defaultAlias: () -> Profile = defaultIdentity
+export const storeAlias: (Box, Profile) -> null = store
+
+const identityValue = identityAlias(profile)
+if identityValue.label:
+    const repeated: string = identityValue.label
+
+const restValue = restAlias({label: "owned"}, profile)
+if restValue.label:
+    const repeated: string = restValue.label
+
+const defaultValue = defaultAlias()
+if defaultValue.label:
+    const repeated: string = defaultValue.label
+
+const box: Box = {profile: {label: "owned"}}
+storeAlias(box, profile)
+if box.profile.label:
+    const repeated: string = box.profile.label
+`.trimStart(), { analysis: { imports: new Map([["profile", externalProfile]]) } });
+  assert.equal(result.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
+  const exported = result.moduleInterface.exports;
+  const identityAlias = exported.get("identityAlias");
+  const restAlias = exported.get("restAlias");
+  const defaultAlias = exported.get("defaultAlias");
+  const storeAlias = exported.get("storeAlias");
+  assert.deepEqual(identityAlias?.kind === "function" ? identityAlias.resultOriginParameters : null, [0]);
+  assert.deepEqual(restAlias?.kind === "function" ? restAlias.resultOriginParameters : null, [0, 1]);
+  assert.deepEqual(defaultAlias?.kind === "function" ? defaultAlias.resultOriginExternalDefaults : null, [0]);
+  assert.deepEqual(storeAlias?.kind === "function" ? storeAlias.storageOriginEffects : null, [{
+    targetParameter: 0,
+    sourceParameters: [1],
+  }]);
+});
+
 test("f-strings invalidate facts only when object coercion can execute user code", () => {
   const unsafeCoercion = compile(`
 type User:

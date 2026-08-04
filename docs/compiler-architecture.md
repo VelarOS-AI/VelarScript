@@ -128,6 +128,9 @@ arrows, getters, and methods. Call sites apply the summary to arguments in
 formal-parameter order while preserving source evaluation order. Public class
 interfaces consume the analyzed member tables, so the same contract survives
 module boundaries instead of being reconstructed from annotations.
+Assigning a callable to an explicit function type changes its visible signature,
+not its inferred behavior: parameter/default/rest result origins and storage
+effects are translated to the visible positional contract and retained.
 Constructor analysis maintains a separate fixed-point summary for arguments or
 captured values stored by the instance, including `super(...)` forwarding. A
 local instance that stores one of those values receives `containsExternal`

@@ -2343,7 +2343,23 @@ export class Analyzer implements TypeEnvironment {
       effect.sourceReceiver ?? false,
       effect.external ?? false,
     ]);
-    for (const effect of groups.flat()) byIdentity.set(identity(effect), effect);
+    for (const effect of groups.flat()) {
+      const normalized: StorageOriginEffect = {
+        ...(effect.targetParameter !== undefined ? { targetParameter: effect.targetParameter } : {}),
+        ...(effect.targetRest ? { targetRest: true } : {}),
+        ...(effect.targetReceiver ? { targetReceiver: true } : {}),
+        ...(effect.sourceParameters?.length
+          ? { sourceParameters: [...new Set(effect.sourceParameters)].sort((left, right) => left - right) }
+          : {}),
+        ...(effect.sourceExternalDefaults?.length
+          ? { sourceExternalDefaults: [...new Set(effect.sourceExternalDefaults)].sort((left, right) => left - right) }
+          : {}),
+        ...(effect.sourceRest ? { sourceRest: true } : {}),
+        ...(effect.sourceReceiver ? { sourceReceiver: true } : {}),
+        ...(effect.external ? { external: true } : {}),
+      };
+      byIdentity.set(identity(normalized), normalized);
+    }
     return [...byIdentity.values()].sort((left, right) => identity(left).localeCompare(identity(right)));
   }
 
@@ -5801,6 +5817,10 @@ export class Analyzer implements TypeEnvironment {
     if (declared.kind === "promise" && source.kind === "promise") {
       return { ...declared, value: this.preserveDeclaredOrigin(declared.value, source.value) };
     }
+    if ((declared.kind === "function" || declared.kind === "action" || declared.kind === "intrinsic")
+      && (source.kind === "function" || source.kind === "action" || source.kind === "intrinsic")) {
+      return this.preserveCallableOrigin(declared, source);
+    }
     if (declared.kind === "object" && source.kind === "object") {
       return {
         ...declared,
@@ -5829,6 +5849,63 @@ export class Analyzer implements TypeEnvironment {
       };
     }
     return this.hasExternalOrigin(source) ? this.markExternalAggregate(declared) : declared;
+  }
+
+  private preserveCallableOrigin(declared: CallableValueType, source: CallableValueType): CallableValueType {
+    const resultOriginParameters = new Set([
+      ...(declared.resultOriginParameters ?? []),
+      ...(source.resultOriginParameters ?? []),
+    ]);
+    if (source.resultOriginRest) {
+      for (let index = source.parameters.length; index < declared.parameters.length; index += 1) {
+        resultOriginParameters.add(index);
+      }
+    }
+    const resultOriginExternalDefaults = [...new Set([
+      ...(declared.resultOriginExternalDefaults ?? []),
+      ...(source.resultOriginExternalDefaults ?? []),
+    ])].sort((left, right) => left - right);
+
+    const translateEffect = (effect: StorageOriginEffect): readonly StorageOriginEffect[] => {
+      const sourceParameters = new Set(effect.sourceParameters ?? []);
+      if (effect.sourceRest) {
+        for (let index = source.parameters.length; index < declared.parameters.length; index += 1) {
+          sourceParameters.add(index);
+        }
+      }
+      const sourceFields = {
+        ...(sourceParameters.size > 0 ? { sourceParameters: [...sourceParameters].sort((left, right) => left - right) } : {}),
+        ...(effect.sourceExternalDefaults?.length ? { sourceExternalDefaults: [...effect.sourceExternalDefaults] } : {}),
+        ...(effect.sourceRest && declared.rest ? { sourceRest: true as const } : {}),
+        ...(effect.sourceReceiver ? { sourceReceiver: true as const } : {}),
+        ...(effect.external ? { external: true as const } : {}),
+      };
+      if (!effect.targetRest) return [{
+        ...(effect.targetParameter !== undefined ? { targetParameter: effect.targetParameter } : {}),
+        ...(effect.targetReceiver ? { targetReceiver: true as const } : {}),
+        ...sourceFields,
+      }];
+
+      const translated: StorageOriginEffect[] = [];
+      for (let index = source.parameters.length; index < declared.parameters.length; index += 1) {
+        translated.push({ targetParameter: index, ...sourceFields });
+      }
+      if (declared.rest) translated.push({ targetRest: true, ...sourceFields });
+      return translated;
+    };
+    const storageOriginEffects = this.mergeStorageOriginEffects(
+      declared.storageOriginEffects ?? [],
+      (source.storageOriginEffects ?? []).flatMap(translateEffect),
+    );
+    return {
+      ...declared,
+      result: this.preserveDeclaredOrigin(declared.result, source.result),
+      ...(resultOriginParameters.size > 0 ? { resultOriginParameters: [...resultOriginParameters].sort((left, right) => left - right) } : {}),
+      ...(declared.resultOriginRest || source.resultOriginRest && declared.rest ? { resultOriginRest: true } : {}),
+      ...(declared.resultOriginReceiver || source.resultOriginReceiver ? { resultOriginReceiver: true } : {}),
+      ...(resultOriginExternalDefaults.length > 0 ? { resultOriginExternalDefaults } : {}),
+      ...(storageOriginEffects.length > 0 ? { storageOriginEffects } : {}),
+    };
   }
 
   private clearExternalOrigin(type: ValueType): ValueType {
