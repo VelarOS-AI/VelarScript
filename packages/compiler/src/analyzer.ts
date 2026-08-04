@@ -233,6 +233,9 @@ const reservedBindings = new Set([
   "Array", "Boolean", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
   "Symbol", "TypeError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
 ]);
+const javaScriptReservedBindings = new Set([
+  "debugger", "default", "delete", "do", "function", "implements", "instanceof", "interface", "package", "protected", "public", "typeof", "void", "yield",
+]);
 const memberNarrowingPrefix = "\u0000member:";
 const coreGlobalGuidance = new Map([
   ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
@@ -320,6 +323,7 @@ export class Analyzer implements TypeEnvironment {
   private loopDepth = 0;
   private finallyLoopDepths: number[] = [];
   private currentClass: string | null = null;
+  private superMemberContext: "instance" | "static" | null = null;
   private classFieldInitializerDepth = 0;
   private staticFieldInitialization: {
     readonly className: string;
@@ -1577,8 +1581,10 @@ export class Analyzer implements TypeEnvironment {
   private analyzeClassDeclaration(statement: ClassDeclaration): void {
     const outerConstructorDepth = this.constructorDepth;
     const outerClass = this.currentClass;
+    const outerSuperMemberContext = this.superMemberContext;
     this.constructorDepth = 0;
     this.currentClass = statement.name;
+    this.superMemberContext = null;
     for (const member of [...statement.fields, ...statement.getters, ...statement.methods]) {
       this.validateClassMemberName(member.name, member.span);
     }
@@ -1595,6 +1601,7 @@ export class Analyzer implements TypeEnvironment {
 
     this.enterScope();
     this.flowFrameDepth += 1;
+    this.superMemberContext = "instance";
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
@@ -1620,6 +1627,7 @@ export class Analyzer implements TypeEnvironment {
     }
     this.validateConstructorShape(statement);
     if (statement.initialization) this.analyzeClassInitialization(statement);
+    this.superMemberContext = null;
     this.flowFrameDepth -= 1;
     this.exitScope();
 
@@ -1634,9 +1642,11 @@ export class Analyzer implements TypeEnvironment {
       }
       const outerStaticFieldInitialization = this.staticFieldInitialization;
       this.staticFieldInitialization = { className: statement.name, initialized: initializedStaticFields };
+      this.superMemberContext = "static";
       this.classFieldInitializerDepth += 1;
       const actual = this.inferExpression(field.initializer, valid ? declared : invalidType);
       this.classFieldInitializerDepth -= 1;
+      this.superMemberContext = null;
       this.staticFieldInitialization = outerStaticFieldInitialization;
       if (valid) this.requireAssignable(actual, declared, field.initializer.span);
       initializedStaticFields.add(field.name);
@@ -1691,6 +1701,7 @@ export class Analyzer implements TypeEnvironment {
         continue;
       }
       if (inheritedGetter || inheritedMethod) this.typeError(`Static field '${field.name}' conflicts with an inherited static ${inheritedGetter ? "getter" : "method"}`, field.span);
+      if (!field.private && inheritedField) this.typeError(`Static field '${field.name}' conflicts with an inherited static field; static fields cannot be overridden`, field.span);
     }
 
     const privateNames = new Set<string>();
@@ -1722,6 +1733,9 @@ export class Analyzer implements TypeEnvironment {
       const inheritedGetter = baseName ? (getter.static
         ? this.findStaticGetter(baseName, getter.name)
         : this.findGetter(baseName, getter.name)) : null;
+      const inheritedGetterType = getter.static
+        ? inheritedGetter as ValueType | null
+        : (inheritedGetter as { readonly type: ValueType } | null)?.type ?? null;
       if (getter.private && (inheritedField || inheritedMethod || inheritedGetter)) {
         this.typeError(`Private${getter.static ? " static" : ""} getter '${getter.name}' conflicts with an inherited public member`, getter.span);
       }
@@ -1735,19 +1749,14 @@ export class Analyzer implements TypeEnvironment {
       if (getter.abstract && getter.override) this.typeError(`Abstract getter '${getter.name}' cannot also be an override`, getter.span);
       if (getter.private && getter.abstract) this.typeError(`Private getter '${getter.name}' cannot be abstract`, getter.span);
       if (getter.private && getter.override) this.typeError(`Private getter '${getter.name}' cannot use 'override'`, getter.span);
-      if (getter.static && getter.override) this.typeError(`Static getter '${getter.name}' cannot use 'override'`, getter.span);
-      if (getter.static && !getter.private && inheritedGetter) {
-        this.typeError(`Static getter '${getter.name}' conflicts with an inherited static getter`, getter.span);
-      }
-      if (!getter.static && !getter.private) {
-        const inheritedInstanceGetter = baseName ? this.findGetter(baseName, getter.name) : null;
-        if (getter.override && !inheritedInstanceGetter) {
-          this.typeError(`Getter '${getter.name}' uses 'override' but no base getter exists`, getter.span);
-        } else if (!getter.override && inheritedInstanceGetter && !getter.abstract) {
-          this.typeError(`Getter '${getter.name}' overrides a base getter and must use 'override'`, getter.span);
+      if (!getter.private) {
+        if (getter.override && !inheritedGetter) {
+          this.typeError(`${getter.static ? "Static g" : "G"}etter '${getter.name}' uses 'override' but no base getter exists`, getter.span);
+        } else if (!getter.override && inheritedGetter && !getter.abstract) {
+          this.typeError(`${getter.static ? "Static g" : "G"}etter '${getter.name}' overrides a base getter and must use 'override'`, getter.span);
         }
-        if (getter.override && inheritedInstanceGetter && !sameType(this.resolveResult(getter.returnType), inheritedInstanceGetter.type)) {
-          this.typeError(`Getter override '${getter.name}' must keep the base result ${describeType(inheritedInstanceGetter.type)}`, getter.span);
+        if (getter.override && inheritedGetterType && !sameType(this.resolveResult(getter.returnType), inheritedGetterType)) {
+          this.typeError(`Getter override '${getter.name}' must keep the base result ${describeType(inheritedGetterType)}`, getter.span);
         }
       }
       if (getter.abstract) this.validateMethodSignature(getter);
@@ -1762,11 +1771,13 @@ export class Analyzer implements TypeEnvironment {
       if (method.static && ownStaticFields.has(method.name)) {
         this.typeError(`Static method '${method.name}' conflicts with a static field declared by class '${statement.name}'`, method.span);
       }
-      if (!method.static && baseName && (this.findField(baseName, method.name) || this.findGetter(baseName, method.name))) {
-        this.typeError(`Method '${method.name}' conflicts with an inherited field or getter`, method.span);
+      if (!method.private && baseName && (method.static
+        ? this.findStaticField(baseName, method.name) || this.findStaticGetter(baseName, method.name)
+        : this.findField(baseName, method.name) || this.findGetter(baseName, method.name))) {
+        this.typeError(`${method.static ? "Static m" : "M"}ethod '${method.name}' conflicts with an inherited ${method.static ? "static " : ""}field or getter`, method.span);
       }
       if (method.private && baseName && (method.static
-        ? this.findStaticField(baseName, method.name) || this.findStaticMethod(baseName, method.name)
+        ? this.findStaticField(baseName, method.name) || this.findStaticGetter(baseName, method.name) || this.findStaticMethod(baseName, method.name)
         : this.findField(baseName, method.name) || this.findGetter(baseName, method.name) || this.findMethod(baseName, method.name))) {
         this.typeError(`Private${method.static ? " static" : ""} method '${method.name}' conflicts with an inherited public member`, method.span);
       }
@@ -1789,17 +1800,19 @@ export class Analyzer implements TypeEnvironment {
       if (method.private && method.override) {
         this.typeError(`Private method '${method.name}' cannot use 'override'`, method.span);
       }
-      if (method.static && method.override) {
-        this.typeError(`Static method '${method.name}' cannot use 'override'`, method.span);
-      }
-      const inherited = baseName && !method.static && !method.private ? this.findMethod(baseName, method.name) : null;
+      const inherited = baseName && !method.private
+        ? method.static ? this.findStaticMethod(baseName, method.name) : this.findMethod(baseName, method.name)
+        : null;
+      const inheritedType = method.static
+        ? inherited as ValueType | null
+        : (inherited as { readonly type: ValueType } | null)?.type ?? null;
       if (method.override && !inherited) {
-        this.typeError(`Method '${method.name}' uses 'override' but no base method exists`, method.span);
+        this.typeError(`${method.static ? "Static m" : "M"}ethod '${method.name}' uses 'override' but no base method exists`, method.span);
       } else if (!method.override && inherited && !method.abstract) {
-        this.typeError(`Method '${method.name}' overrides a base method and must use 'override'`, method.span);
+        this.typeError(`${method.static ? "Static m" : "M"}ethod '${method.name}' overrides a base method and must use 'override'`, method.span);
       }
-      if (method.override && inherited && !sameType(this.functionType(method), inherited.type)) {
-        this.typeError(`Override '${method.name}' must keep the base method signature ${describeType(inherited.type)}`, method.span);
+      if (method.override && inheritedType && !sameType(this.functionType(method), inheritedType)) {
+        this.typeError(`Override '${method.name}' must keep the base method signature ${describeType(inheritedType)}`, method.span);
       }
       if (method.abstract) this.validateMethodSignature(method);
       else this.analyzeFunctionDeclaration(method, statement.name, true, !method.static);
@@ -1813,6 +1826,7 @@ export class Analyzer implements TypeEnvironment {
     }
     this.constructorDepth = outerConstructorDepth;
     this.currentClass = outerClass;
+    this.superMemberContext = outerSuperMemberContext;
   }
 
   private validateClassMemberName(name: string, memberSpan: Span, external = false): void {
@@ -1835,7 +1849,9 @@ export class Analyzer implements TypeEnvironment {
     const previousFinallyLoopDepths = this.finallyLoopDepths;
     this.finallyLoopDepths = [];
     const previousClass = this.currentClass;
+    const previousSuperMemberContext = this.superMemberContext;
     this.currentClass = statement.name;
+    this.superMemberContext = "instance";
     this.asynchronousFunctions.push(false);
     this.returnContexts.push({ expected: nullType, observed: null });
     this.constructorDepth += 1;
@@ -1845,6 +1861,7 @@ export class Analyzer implements TypeEnvironment {
     this.returnContexts.pop();
     this.asynchronousFunctions.pop();
     this.currentClass = previousClass;
+    this.superMemberContext = previousSuperMemberContext;
     this.loopDepth = previousLoopDepth;
     this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
@@ -2118,7 +2135,11 @@ export class Analyzer implements TypeEnvironment {
     const previousFinallyLoopDepths = this.finallyLoopDepths;
     this.finallyLoopDepths = [];
     const previousClass = this.currentClass;
+    const previousSuperMemberContext = this.superMemberContext;
     this.currentClass = className ?? previousClass;
+    this.superMemberContext = method && className
+      ? "static" in statement && statement.static === true ? "static" : "instance"
+      : null;
     const asynchronous = forceAsynchronous || statement.asynchronous === true;
     this.asynchronousFunctions.push(asynchronous);
     const declaredReturn = this.resolveResult(statement.returnType);
@@ -2151,6 +2172,7 @@ export class Analyzer implements TypeEnvironment {
     this.returnContexts.pop();
     this.asynchronousFunctions.pop();
     this.currentClass = previousClass;
+    this.superMemberContext = previousSuperMemberContext;
     this.loopDepth = previousLoopDepth;
     this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
@@ -4717,19 +4739,26 @@ export class Analyzer implements TypeEnvironment {
     if (objectExpression.kind === "SuperExpression") {
       if (optional) this.typeError("Optional access is not valid on 'super'", memberSpan);
       const base = this.currentClass ? this.classes.get(this.currentClass)?.base ?? null : null;
-      if (!base) {
-        this.typeError("'super' is only available inside a derived instance method", objectExpression.span);
+      if (!base || !this.superMemberContext) {
+        this.typeError("'super' member access is only available directly inside a derived constructor, method, getter, field initializer, or nested arrow", objectExpression.span);
         return unknownType;
       }
-      const method = this.findMethod(base, property);
-      const getter = this.findGetter(base, property);
-      if (!method && !getter) {
-        this.typeError(`Base class '${base}' has no method or getter '${property}'`, memberSpan);
+      const staticMember = this.superMemberContext === "static";
+      const method = staticMember ? this.findStaticMethod(base, property) : this.findMethod(base, property);
+      const methodType = staticMember ? method as ValueType | null : (method as { readonly type: ValueType } | null)?.type ?? null;
+      const getter = staticMember ? this.findStaticGetter(base, property) : this.findGetter(base, property);
+      const getterType = staticMember ? getter as ValueType | null : (getter as { readonly type: ValueType } | null)?.type ?? null;
+      const field = staticMember ? this.findStaticField(base, property) : null;
+      if (!method && !getter && !field) {
+        this.typeError(`Base class '${base}' has no ${staticMember ? "static " : ""}method${staticMember ? ", getter, or field" : " or getter"} '${property}'`, memberSpan);
         return unknownType;
       }
-      this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, { kind: "class", name: base });
+      this.semanticExpressionOwners.set(
+        `${memberSpan.start}:${memberSpan.end}`,
+        staticMember ? { kind: "classConstructor", name: base } : { kind: "class", name: base },
+      );
       if (getter) this.invalidateEffectfulFlowFacts();
-      return method?.type ?? getter!.type;
+      return methodType ?? getterType ?? field!.type;
     }
     const original = this.inferredOrAnalyze(objectExpression);
     this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, nonOptional(original));
@@ -6519,6 +6548,10 @@ export class Analyzer implements TypeEnvironment {
     effectMutable = mutable,
     declaredType = type,
   ): void {
+    if (!internal && javaScriptReservedBindings.has(name)) {
+      this.diagnostics.push(diagnostic("VEL3007", `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`, declarationSpan));
+      return;
+    }
     if (!internal && name.toLowerCase().startsWith("__velar")) {
       this.diagnostics.push(diagnostic("VEL3007", `'${name}' uses the reserved compiler prefix '__velar'`, declarationSpan));
       return;

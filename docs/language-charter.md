@@ -88,6 +88,10 @@ const user = {id: "user-1", title}
 `null` is the only ordinary empty value. `undefined`, `none`, and `None` are
 not VelarScript values.
 
+A bare `return` returns `null`, including at JavaScript and asynchronous
+boundaries. Falling through a function without another result has the same
+meaning.
+
 Object fields support JavaScript-style shorthand. Spreads are supported in
 records and lists:
 
@@ -685,9 +689,17 @@ class Player extends Entity:
 ```
 
 A derived constructor calls `super(...)` before using `self`. `abstract` and
-`override` are checked. `static` declares class-owned fields and methods.
+`override` are checked for instance and static methods and getters. `static`
+declares class-owned fields and methods; inherited static fields cannot be
+redeclared because that would create two independent storage locations.
 `private` lowers to native JavaScript private storage and is accessible only
 inside the declaring class.
+
+`super.member` follows JavaScript's lexical rule. It is available directly in a
+derived constructor, method, getter, or field initializer and remains available
+inside a nested arrow. A nested `def` creates a new function boundary and does
+not inherit `super`; name the base class explicitly when that is the intended
+call.
 
 VelarScript preserves JavaScript prototype and reference semantics. It does not
 copy Python's multiple inheritance, metaclasses, descriptors, or operator
@@ -1091,6 +1103,11 @@ The following are not part of VelarScript:
 - implicit global CSS
 - random class or variable names
 - automatic compatibility aliases for removed spellings
+
+JavaScript reserved words that are not already VelarScript keywords cannot be
+used as binding names because generated modules must remain valid JavaScript.
+They remain valid as ordinary record keys and class member names, so external
+data and Web APIs do not need renamed fields.
 
 When a removed spelling is common enough to be a likely mistake, the compiler
 reports the direct current spelling. It does not keep the old behavior alive.

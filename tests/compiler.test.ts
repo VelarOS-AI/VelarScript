@@ -126,6 +126,30 @@ else:
   assert.match(result.code ?? "", /if \(\(result === 5\)\)/);
 });
 
+test("bare returns preserve null at direct JavaScript and asynchronous boundaries", () => {
+  const result = compileCore(`
+def stop():
+    return
+
+async def stopLater():
+    return
+
+class Controller:
+    def stop():
+        return
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.doesNotMatch(result.code ?? "", /return;/u);
+  assert.match(result.code ?? "", /return null;/u);
+  const execution = executeModule(`${result.code ?? ""}
+console.log(stop() === null);
+console.log((await stopLater()) === null);
+console.log(new Controller().stop() === null);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\ntrue\ntrue\n");
+});
+
 test("named arguments are checked, reordered, and evaluated in source order", () => {
   const result = compileCore(`
 def describe(name: string, count: number = 1, excited: bool = false) -> string:
@@ -2702,6 +2726,44 @@ test("compiler host capabilities stay protected while extension conveniences fol
   assert.deepEqual(hygienicIndex.diagnostics, []);
   assert.match(hygienicIndex.code ?? "", /class __VelarIndexError extends RangeError/u);
   assert.match(hygienicIndex.code ?? "", /class IndexError \{/u);
+});
+
+test("JavaScript reserved words stay data names but cannot become emitted bindings", () => {
+  const reserved = [
+    "debugger", "default", "delete", "do", "function", "implements", "instanceof", "interface", "package", "protected", "public", "typeof", "void", "yield",
+  ];
+  for (const name of reserved) {
+    const result = compileCore(`const ${name} = 1\n`);
+    assert.equal(result.code, null);
+    assert.ok(
+      result.diagnostics.some((item) => item.code === "VEL3007" && item.message === `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`),
+      `${name}: ${JSON.stringify(result.diagnostics)}`,
+    );
+  }
+
+  for (const source of [
+    `def run(yield: number) -> number:\n    return yield\n`,
+    `const {default} = {default: 1}\n`,
+    `for public in [1]:\n    print(public)\n`,
+  ]) {
+    const result = compileCore(source);
+    assert.equal(result.code, null);
+    assert.ok(result.diagnostics.some((item) => item.code === "VEL3007" && /reserved by JavaScript/u.test(item.message)), JSON.stringify(result.diagnostics));
+  }
+
+  const dataNames = compileCore(`
+class Operations:
+    def delete() -> string:
+        return "member"
+
+const value = {default: "record"}
+print(value.default)
+print(Operations().delete())
+`.trimStart());
+  assert.deepEqual(dataNames.diagnostics, []);
+  const execution = executeModule(dataNames.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "record\nmember\n");
 });
 
 test("rejects legacy and discarded design surface with intentional diagnostics", () => {
@@ -9519,6 +9581,89 @@ print(error.message)
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "9\nguest:1\ntrue\nRequired\n");
+});
+
+test("super follows class-member lexical boundaries and supports checked static overrides", () => {
+  const result = compile(`
+class Base:
+    static const prefix: string = "base"
+
+    static get category() -> string:
+        return "entity"
+
+    static def label() -> string:
+        return Base.prefix
+
+    def instanceLabel() -> string:
+        return "instance"
+
+class Child extends Base:
+    override static get category() -> string:
+        return super.category + ":child"
+
+    override static def label() -> string:
+        const read = () => super.label()
+        return f"{read()}:{super.prefix}"
+
+    override def instanceLabel() -> string:
+        const read = () => super.instanceLabel()
+        return read() + ":child"
+
+print(Child.category)
+print(Child.label())
+print(Child().instanceLabel())
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "entity:child\nbase:base\ninstance:child\n");
+
+  const nestedFunction = compile(`
+class Base:
+    def label() -> string:
+        return "base"
+
+class Child extends Base:
+    override def label() -> string:
+        def nested() -> string:
+            return super.label()
+        return nested()
+`.trimStart());
+  assert.ok(nestedFunction.diagnostics.some((item) => /nested arrow/u.test(item.message)), JSON.stringify(nestedFunction.diagnostics));
+  assert.equal(nestedFunction.code, null);
+
+  const missingOverride = compile(`
+class Base:
+    static get category() -> string:
+        return "base"
+
+    static def label() -> string:
+        return "base"
+
+class Child extends Base:
+    static get category() -> string:
+        return "child"
+
+    static def label() -> string:
+        return "child"
+`.trimStart());
+  assert.equal(missingOverride.diagnostics.filter((item) => /must use 'override'/u.test(item.message)).length, 2);
+
+  const invalid = compile(`
+class Base:
+    static const version: string = "1"
+
+    static def label(value: string) -> string:
+        return value
+
+class Child extends Base:
+    static const version: string = "2"
+
+    override static def label(value: number) -> string:
+        return str(value)
+`.trimStart());
+  assert.ok(invalid.diagnostics.some((item) => /static fields cannot be overridden/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /must keep the base method signature/u.test(item.message)));
 });
 
 test("constructors initialize fields once after the base constructor and preserve bound methods", () => {

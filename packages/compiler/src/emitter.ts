@@ -911,7 +911,7 @@ export class JavaScriptEmitter {
         return `${indentation}${prefix} ${statement.name}(${parameters}) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
       }
       case "ReturnStatement":
-        return `${indentation}return${statement.value ? ` ${this.emitMappedExpression(statement.value)}` : ""};`;
+        return `${indentation}return ${statement.value ? this.emitMappedExpression(statement.value) : "null"};`;
       case "ThrowStatement":
         return `${indentation}throw ${this.emitMappedExpression(statement.value)};`;
       case "AssertStatement": {
