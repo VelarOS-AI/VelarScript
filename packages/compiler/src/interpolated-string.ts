@@ -5,6 +5,30 @@ export interface InterpolatedStringScan {
   readonly closed: boolean;
 }
 
+export function findInterpolatedExpressionEnd(source: string, start: number, end = source.length): number {
+  let depth = 1;
+  let quote: "\"" | "'" | null = null;
+  for (let index = start; index < end; index += 1) {
+    const character = source[index]!;
+    if (quote) {
+      if (character === "\\") {
+        index += 1;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      quote = character;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}" && --depth === 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 export function scanInterpolatedString(source: string, start: number): InterpolatedStringScan {
   const quote = source[start + 1];
   const contentStart = start + 2;

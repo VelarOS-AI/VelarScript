@@ -1,5 +1,5 @@
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-import { scanInterpolatedString } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, scanInterpolatedString } from "./interpolated-string.ts";
 
 export interface FormatOptions {
   readonly indentWidth?: number;
@@ -159,8 +159,9 @@ function tokenizeInline(source: string): InlineToken[] {
     }
     if (character === "f" && (source[index + 1] === '"' || source[index + 1] === "'")) {
       const start = index;
-      index = scanInterpolatedString(source, start).end;
-      tokens.push({ kind: "string", text: source.slice(start, index) });
+      const scanned = scanInterpolatedString(source, start);
+      index = scanned.end;
+      tokens.push({ kind: "string", text: formatInterpolatedString(source, start, scanned) });
       continue;
     }
     if (character === '"' || character === "'") {
@@ -246,7 +247,7 @@ function tokenizeInline(source: string): InlineToken[] {
     }
     if (character === "<") {
       const previous = tokens.at(-1);
-      const generic = previous?.kind === "word" && (genericNames.has(previous.text) || /^[A-Z]/u.test(previous.text));
+      const generic = previous?.kind === "word" && genericNames.has(previous.text);
       if (generic) genericStack.push(true);
       tokens.push({ kind: generic ? "open" : "operator", text: character, generic });
       index += 1;
@@ -266,6 +267,36 @@ function tokenizeInline(source: string): InlineToken[] {
     index += 1;
   }
   return tokens;
+}
+
+function formatInterpolatedString(source: string, start: number, scanned: ReturnType<typeof scanInterpolatedString>): string {
+  if (!scanned.closed) return source.slice(start, scanned.end);
+  let output = source.slice(start, scanned.contentStart);
+  let index = scanned.contentStart;
+  while (index < scanned.contentEnd) {
+    const character = source[index]!;
+    const next = source[index + 1];
+    if (character === "\\" && next !== undefined) {
+      output += `${character}${next}`;
+      index += 2;
+      continue;
+    }
+    if ((character === "{" || character === "}") && next === character) {
+      output += `${character}${next}`;
+      index += 2;
+      continue;
+    }
+    if (character !== "{") {
+      output += character;
+      index += 1;
+      continue;
+    }
+    const close = findInterpolatedExpressionEnd(source, index + 1, scanned.contentEnd);
+    if (close < 0) return source.slice(start, scanned.end);
+    output += `{${formatInline(source.slice(index + 1, close).trim())}}`;
+    index = close + 1;
+  }
+  return `${output}${source.slice(scanned.contentEnd, scanned.end)}`;
 }
 
 function beginsJsx(tokens: readonly InlineToken[], source: string, index: number): boolean {

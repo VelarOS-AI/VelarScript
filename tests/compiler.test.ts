@@ -1021,6 +1021,14 @@ print(f"same quote: {"ready"}")
   const formattedExecution = executeModule(compile(formatSource(formattedSource)).code ?? "");
   assert.equal(formattedExecution.status, 0, String(formattedExecution.stderr));
   assert.equal(formattedExecution.stdout, "xtail\n");
+
+  const spacedSource = 'const left = "Velar"\nconst right = "Script"\nprint(f"{left+right}: {({name:right}).name} {{ready}}")\n';
+  const spacedFormatted = formatSource(spacedSource);
+  assert.equal(spacedFormatted, 'const left = "Velar"\nconst right = "Script"\nprint(f"{left + right}: {({name: right}).name} {{ready}}")\n');
+  assert.equal(formatSource(spacedFormatted), spacedFormatted);
+  const spacedExecution = executeModule(compile(spacedFormatted).code ?? "");
+  assert.equal(spacedExecution.status, 0, String(spacedExecution.stderr));
+  assert.equal(spacedExecution.stdout, "VelarScript: Script {ready}\n");
 });
 
 test("unterminated strings stop at the line boundary and preserve following declarations", () => {
@@ -8491,6 +8499,18 @@ const same = TaskPriority.is(TaskPriority.high)
 def find(value: Ticket?, previous: Ticket?) -> Ticket?:
     return [ready ? value : previous]
 `);
+  assert.equal(formatSource(formatted), formatted);
+});
+
+test("formatter does not confuse capitalized values with generic types", () => {
+  const source = `const lower = Player < score
+const bounded = Player < score and score > Limit
+const chained = value < Other > limit
+const values: List<Player> = []
+`;
+  const formatted = formatSource(source);
+  assert.equal(formatted, source);
+  assert.deepEqual(inspectModule(formatted).diagnostics, []);
   assert.equal(formatSource(formatted), formatted);
 });
 

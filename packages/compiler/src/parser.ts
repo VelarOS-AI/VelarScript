@@ -39,6 +39,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
+import { findInterpolatedExpressionEnd } from "./interpolated-string.ts";
 import { sourceTypeNameGuidance } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
@@ -1678,7 +1679,7 @@ export class Parser {
         parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(textStart, index)) });
       }
 
-      const close = this.findFStringExpressionEnd(token.value, index + 1);
+      const close = findInterpolatedExpressionEnd(token.value, index + 1);
       if (close < 0) {
         const offset = token.span.start + 2 + index;
         this.diagnostics.push(diagnostic("VEL2009", "Unclosed expression in interpolated string", span(offset, token.span.end)));
@@ -1712,30 +1713,6 @@ export class Parser {
       raw: `${negative ? "-" : ""}${token.value}`,
       span: literalSpan,
     };
-  }
-
-  private findFStringExpressionEnd(value: string, start: number): number {
-    let depth = 1;
-    let quote: "\"" | "'" | null = null;
-    for (let index = start; index < value.length; index += 1) {
-      const character = value[index]!;
-      if (quote) {
-        if (character === "\\") {
-          index += 1;
-        } else if (character === quote) {
-          quote = null;
-        }
-        continue;
-      }
-      if (character === "\"" || character === "'") {
-        quote = character;
-      } else if (character === "{") {
-        depth += 1;
-      } else if (character === "}" && --depth === 0) {
-        return index;
-      }
-    }
-    return -1;
   }
 
   private decodeFStringText(value: string): string {
