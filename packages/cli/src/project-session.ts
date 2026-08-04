@@ -142,11 +142,11 @@ function configKey(config: VelarProjectConfig): string {
   return JSON.stringify({
     formatVersion: config.formatVersion,
     manifestPath: config.manifestPath,
+    manifestIdentity: config.manifestIdentity,
     entryPath: config.entryPath,
     outDir: config.outDir,
     publicDir: config.publicDir,
     extensions: config.extensions,
-    extensionConfig: [...config.extensionConfig],
     framework: config.framework ? {
       id: config.framework.host.id,
       protocolVersion: config.framework.host.protocolVersion,

@@ -41,6 +41,10 @@ Opening an explicit `.vel` file still discovers its nearest manifest. Missing
 manifests intentionally select standalone Core mode; an existing malformed,
 legacy, or unloadable manifest is a project error and is never hidden by
 silently retrying the file as standalone source.
+Manifest-backed editor sessions key reuse by the SHA-256 identity of the exact
+bounded `velar.json` source. They do not serialize extension-owned runtime
+configuration to guess whether it changed, so `Map`, `Set`, and other validated
+extension config representations cannot collapse to an accidental shared key.
 
 Project modules compile dependency-first. The public interface returned by a
 successful compilation is built from that same analyzer's binding types rather

@@ -4192,6 +4192,25 @@ test("project sessions surface invalid manifests instead of silently compiling s
   await assert.rejects(new VelarProjectSessions().snapshot(mainPath), /unsupported formatVersion 1/u);
 });
 
+test("project sessions key reuse by the exact manifest identity", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-session-manifest-"));
+  const mainPath = join(directory, "main.vel");
+  const manifestPath = join(directory, "velar.json");
+  const manifest = { formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] };
+  await writeFile(mainPath, "const value = 1\n", "utf8");
+  await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+  const sessions = new VelarProjectSessions();
+  const first = await sessions.snapshot(mainPath);
+  const reused = await sessions.snapshot(mainPath);
+  assert.equal(reused.project, first.project);
+
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  const refreshed = await sessions.snapshot(mainPath);
+  assert.notEqual(refreshed.project, first.project);
+  assert.notEqual(refreshed.config.manifestIdentity, first.config.manifestIdentity);
+  assert.equal(refreshed.project.stats.compiledModules, 1);
+});
+
 test("0.10 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
   assert.equal(api.standardVersion, "0.4");
@@ -7808,6 +7827,7 @@ mount(<App />, "#app")
   const config = await resolveVelarProject(null, directory);
   const web = config.extensionConfig.get("@velarscript/web") as VelarWebConfig;
   assert.equal(config.entryPath, join(directory, "src", "main.vel"));
+  assert.match(config.manifestIdentity ?? "", /^[a-f0-9]{64}$/u);
   assert.equal(web.base, "/demo/");
   assert.deepEqual(web.publicConfig, { apiBase: "https://api.example.com", features: { releases: true } });
   assert.equal(web.build.sourceMaps, true);

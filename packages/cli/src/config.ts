@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -18,6 +19,7 @@ export interface VelarProjectConfig {
   readonly formatVersion: number;
   readonly root: string;
   readonly manifestPath: string | null;
+  readonly manifestIdentity: string | null;
   readonly entryPath: string;
   readonly outDir: string;
   readonly publicDir: string;
@@ -78,11 +80,13 @@ export async function resolveVelarProjectForDocument(path: string): Promise<Vela
 
 async function loadManifest(manifestPath: string, entryOverride: string | null = null): Promise<VelarProjectConfig> {
   let manifest: ManifestShape;
+  let manifestIdentity: string;
   try {
     const metadata = await stat(manifestPath);
     if (metadata.size > 1024 * 1024) throw new RangeError("project manifest exceeds 1 MiB");
     const source = await readFile(manifestPath, "utf8");
     if (Buffer.byteLength(source, "utf8") > 1024 * 1024) throw new RangeError("project manifest exceeds 1 MiB");
+    manifestIdentity = createHash("sha256").update(source).digest("hex");
     manifest = JSON.parse(source) as ManifestShape;
   } catch (error) {
     throw new Error(`Cannot read ${manifestPath}: ${hostErrorMessage(error)}`);
@@ -116,6 +120,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     formatVersion,
     root,
     manifestPath,
+    manifestIdentity,
     entryPath: entry,
     outDir,
     publicDir,
@@ -132,6 +137,7 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
     formatVersion: CURRENT_PROJECT_FORMAT_VERSION,
     root,
     manifestPath: null,
+    manifestIdentity: null,
     entryPath,
     outDir: join(root, "dist"),
     publicDir: join(root, "public"),
