@@ -23,6 +23,7 @@ const canvasElementType: ValueType = { kind: "named", name: "CanvasElement" };
 const dialogElementType: ValueType = { kind: "named", name: "DialogElement" };
 const blobType: ValueType = { kind: "named", name: "Blob" };
 const lengthType: ValueType = { kind: "named", name: "Length" };
+const percentageType: ValueType = { kind: "named", name: "Percentage" };
 const colorType: ValueType = { kind: "named", name: "Color" };
 const colorInputType: ValueType = colorType;
 const borderType: ValueType = { kind: "named", name: "Border" };
@@ -35,6 +36,9 @@ const durationType: ValueType = { kind: "named", name: "Duration" };
 const angleType: ValueType = { kind: "named", name: "Angle" };
 const spacingType: ValueType = { kind: "named", name: "Spacing" };
 const mountTargetType: ValueType = { kind: "union", members: [stringType, elementType] };
+const lookScalarType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType] };
+const trackInputType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType, trackType, trackListType] };
+const repeatCountType: ValueType = { kind: "union", members: [numberType, stringType] };
 
 function namedFunction(parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
   return { kind: "function", parameterNames, parameters, requiredParameters, result };
@@ -54,11 +58,11 @@ const webGlobals = new Map<string, ValueType>([
   ["shadow", namedFunction(["x", "y", "blur", "color", "spread", "inset"], [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType, 4)],
   ["linearGradient", namedFunction(["angle", "start", "end"], [angleType, colorInputType, colorInputType], imageType)],
   ["asset", namedFunction(["path"], [stringType], imageType)],
-  ["minmax", namedFunction(["minimum", "maximum"], [anyType, anyType], trackType)],
-  ["repeat", namedFunction(["count", "size"], [numberType, anyType], trackListType)],
-  ["tracks", { kind: "function", parameters: [], requiredParameters: 0, rest: anyType, result: trackListType }],
+  ["minmax", namedFunction(["minimum", "maximum"], [lookScalarType, lookScalarType], trackType)],
+  ["repeat", namedFunction(["count", "size"], [repeatCountType, trackInputType], trackListType)],
+  ["tracks", { kind: "function", parameterNames: ["first"], parameters: [trackInputType], requiredParameters: 1, rest: trackInputType, result: trackListType }],
   ["transition", namedFunction(["property", "duration", "easing", "delay"], [stringType, durationType, stringType, durationType], transitionType, 2)],
-  ["spacing", namedFunction(["first", "second", "third", "fourth"], [anyType, anyType, anyType, anyType], spacingType, 1)],
+  ["spacing", namedFunction(["first", "second", "third", "fourth"], [lookScalarType, lookScalarType, lookScalarType, lookScalarType], spacingType, 1)],
   ["min", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
   ["max", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
   ["clamp", namedFunction(["minimum", "preferred", "maximum"], [lengthType, lengthType, lengthType], lengthType)],

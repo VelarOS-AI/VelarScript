@@ -1254,8 +1254,14 @@ function __velarLookVariable(token) {
 }
 
 function __velarLookValue(token, value) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("Look properties require finite numbers");
+    return String(value);
+  }
+  if (typeof value !== "string") throw new TypeError("Look properties require text, finite numbers, typed visual values, or null");
+  if (value.length > 1024 * 1024) throw new RangeError("A Look property value cannot exceed 1 MiB");
   if (token.endsWith(":content") && typeof value === "string" && value !== "none" && value !== "normal") return JSON.stringify(value);
-  return String(value);
+  return value;
 }
 
 function __velarLookDimension(value) {
@@ -1323,7 +1329,10 @@ function __velarApplyLooks(element) {
   const previous = element.__velarLookTokens || new Set();
   const next = new Set(Object.keys(merged));
   for (const token of previous) if (!next.has(token)) element.style.removeProperty(__velarLookVariable(token));
-  for (const [token, value] of Object.entries(merged)) element.style.setProperty(__velarLookVariable(token), __velarLookValue(token, value));
+  for (const [token, value] of Object.entries(merged)) {
+    if (value == null) element.style.removeProperty(__velarLookVariable(token));
+    else element.style.setProperty(__velarLookVariable(token), __velarLookValue(token, value));
+  }
   if (next.size > 0) element.setAttribute("data-velar-look", [...next].join(" "));
   else element.removeAttribute("data-velar-look");
   element.__velarLookTokens = next;
@@ -1412,27 +1421,81 @@ function __velarClassBind(element, read, scope) {
   });
 }
 
+function __velarLookText(value, label) {
+  if (typeof value !== "string") throw new TypeError(label + " must be text");
+  if (value.length > 65536) throw new RangeError(label + " cannot exceed 65536 characters");
+  return value;
+}
+
+function __velarLookFinite(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError(label + " must be a finite number");
+  return value;
+}
+
+function __velarLookRange(value, label, minimum, maximum) {
+  value = __velarLookFinite(value, label);
+  if (value < minimum || value > maximum) throw new RangeError(label + " must be from " + minimum + " through " + maximum);
+  return value;
+}
+
+function __velarLookVisual(value, label) {
+  if (typeof value === "number") return String(__velarLookFinite(value, label));
+  return __velarLookText(value, label);
+}
+
+function __velarLookResult(value) {
+  if (value.length > 1024 * 1024) throw new RangeError("A constructed Look value cannot exceed 1 MiB");
+  return value;
+}
+
 function __velarLookCall(name, args) {
-  if (name === "color") return String(args[0]);
-  if (name === "rgb") return "rgb(" + args.slice(0, 3).join(" ") + ")";
-  if (name === "rgba") return "rgb(" + args.slice(0, 3).join(" ") + " / " + args[3] + ")";
-  if (name === "hsl") return "hsl(" + args[0] + " " + args[1] + "% " + args[2] + "%)";
-  if (name === "alpha") return "color-mix(in srgb, " + args[0] + " " + Number(args[1]) * 100 + "%, transparent)";
-  if (name === "lighten") return "color-mix(in srgb, " + args[0] + ", white " + Number(args[1]) * 100 + "%)";
-  if (name === "darken") return "color-mix(in srgb, " + args[0] + ", black " + Number(args[1]) * 100 + "%)";
-  if (name === "border") return args[0] + " " + (args[2] ?? "solid") + " " + args[1];
-  if (name === "shadow") {
-    const spread = args[4] ?? "0px";
-    return (args[5] ? "inset " : "") + args[0] + " " + args[1] + " " + args[2] + " " + spread + " " + args[3];
+  if (name === "color") return __velarLookText(args[0], "Color");
+  if (name === "rgb" || name === "rgba") {
+    const channels = args.slice(0, 3).map((value, index) => __velarLookRange(value, "RGB channel " + (index + 1), 0, 255));
+    const alpha = name === "rgba" ? " / " + __velarLookRange(args[3], "RGB alpha", 0, 1) : "";
+    return __velarLookResult("rgb(" + channels.join(" ") + alpha + ")");
   }
-  if (name === "linearGradient") return "linear-gradient(" + args[0] + ", " + args[1] + ", " + args[2] + ")";
-  if (name === "asset") return "url(" + JSON.stringify(args[0]) + ")";
-  if (name === "minmax") return "minmax(" + args[0] + ", " + args[1] + ")";
-  if (name === "repeat") return "repeat(" + args[0] + ", " + args[1] + ")";
-  if (name === "tracks") return args.join(" ");
-  if (name === "transition") return args[0] + " " + args[1] + " " + (args[2] ?? "ease") + (args[3] ? " " + args[3] : "");
-  if (name === "spacing") return args.filter((value) => value !== undefined).join(" ");
-  if (name === "min" || name === "max" || name === "clamp") return name + "(" + args.join(", ") + ")";
+  if (name === "hsl") {
+    const hue = __velarLookFinite(args[0], "HSL hue");
+    const saturation = __velarLookRange(args[1], "HSL saturation", 0, 100);
+    const lightness = __velarLookRange(args[2], "HSL lightness", 0, 100);
+    return __velarLookResult("hsl(" + hue + " " + saturation + "% " + lightness + "%)");
+  }
+  if (name === "alpha" || name === "lighten" || name === "darken") {
+    const color = __velarLookText(args[0], "Color");
+    const amount = __velarLookRange(args[1], "Color amount", 0, 1) * 100;
+    if (name === "alpha") return __velarLookResult("color-mix(in srgb, " + color + " " + amount + "%, transparent)");
+    return __velarLookResult("color-mix(in srgb, " + color + ", " + (name === "lighten" ? "white " : "black ") + amount + "%)");
+  }
+  if (name === "border") {
+    const style = args[2] ?? "solid";
+    if (typeof style !== "string" || !["none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset"].includes(style)) throw new TypeError("Border style is invalid");
+    return __velarLookResult(__velarLookVisual(args[0], "Border width") + " " + style + " " + __velarLookText(args[1], "Border color"));
+  }
+  if (name === "shadow") {
+    const spread = args[4] === undefined ? "0px" : __velarLookVisual(args[4], "Shadow spread");
+    const inset = args[5] === undefined ? false : args[5];
+    if (typeof inset !== "boolean") throw new TypeError("Shadow inset must be bool");
+    return __velarLookResult((inset ? "inset " : "") + __velarLookVisual(args[0], "Shadow x") + " " + __velarLookVisual(args[1], "Shadow y") + " " + __velarLookVisual(args[2], "Shadow blur") + " " + spread + " " + __velarLookText(args[3], "Shadow color"));
+  }
+  if (name === "linearGradient") return __velarLookResult("linear-gradient(" + __velarLookVisual(args[0], "Gradient angle") + ", " + __velarLookText(args[1], "Gradient start") + ", " + __velarLookText(args[2], "Gradient end") + ")");
+  if (name === "asset") return __velarLookResult("url(" + JSON.stringify(__velarLookText(args[0], "Asset path")) + ")");
+  if (name === "minmax") return __velarLookResult("minmax(" + __velarLookVisual(args[0], "Minimum track") + ", " + __velarLookVisual(args[1], "Maximum track") + ")");
+  if (name === "repeat") return __velarLookResult("repeat(" + __velarLookVisual(args[0], "Repeat count") + ", " + __velarLookVisual(args[1], "Repeat size") + ")");
+  if (name === "tracks") {
+    if (args.length === 0) throw new TypeError("tracks requires at least one value");
+    if (args.length > 1024) throw new RangeError("tracks cannot contain more than 1024 values");
+    return __velarLookResult(args.map((value, index) => __velarLookVisual(value, "Track " + (index + 1))).join(" "));
+  }
+  if (name === "transition") {
+    const property = __velarLookText(args[0], "Transition property");
+    const duration = __velarLookVisual(args[1], "Transition duration");
+    const easing = args[2] === undefined ? "ease" : __velarLookText(args[2], "Transition easing");
+    const delay = args[3] === undefined ? "" : " " + __velarLookVisual(args[3], "Transition delay");
+    return __velarLookResult(property + " " + duration + " " + easing + delay);
+  }
+  if (name === "spacing") return __velarLookResult(args.filter((value) => value !== undefined).map((value, index) => __velarLookVisual(value, "Spacing value " + (index + 1))).join(" "));
+  if (name === "min" || name === "max" || name === "clamp") return __velarLookResult(name + "(" + args.map((value) => __velarLookVisual(value, name + " value")).join(", ") + ")");
   throw new TypeError("Unknown Look builder " + name);
 }
 

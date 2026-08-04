@@ -8395,7 +8395,7 @@ SecondClient()
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign to read-only member 'baseUrl'/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign to read-only static member 'version'/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
-  assert.ok(invalid.diagnostics.some((item) => /Expected 1 arguments but received 0/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /Expected 1 argument but received 0/u.test(item.message)));
 
   const invalidInheritance = compile(`
 extern module "bad-sdk":
@@ -13945,6 +13945,45 @@ const broken = look:
   const state = Array.from({ length: 33 }, (_, index) => `const ready${index} = true`).join("\n");
   const expanded = compile(`${state}\n\nconst broken = look:\n    if ${condition}:\n        color = rgb(17, 18, 22)\n`);
   assert.match(expanded.diagnostics.map((item) => item.message).join("\n"), /at most 32 selector\/runtime terms/u);
+});
+
+test("Look builders reject JavaScript coercion and invalid visual ranges", () => {
+  const invalidTypes = compile(`
+const callback = () => null
+const empty = tracks()
+
+const broken = look:
+    gridTemplateColumns = tracks(callback)
+    padding = spacing(callback)
+    gridTemplateRows = repeat(Error("count"), 1px)
+`.trimStart());
+  const messages = invalidTypes.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /Cannot assign \(\) -> null to .*Track/u);
+  assert.match(messages, /Cannot assign \(\) -> null to .*Length/u);
+  assert.match(messages, /Cannot assign Error to number \| string/u);
+  assert.match(messages, /Expected at least 1 argument but received 0/u);
+
+  const invalidRange = compile(`
+const broken = look:
+    color = rgba(0, 0, 0, 2)
+`.trimStart());
+  assert.deepEqual(invalidRange.diagnostics, []);
+  const rangeExecution = executeModule(invalidRange.code ?? "");
+  assert.notEqual(rangeExecution.status, 0);
+  assert.match(String(rangeExecution.stderr), /RGB alpha must be from 0 through 1/u);
+
+  const dynamic = compile(`
+import js unsafe {unsafeValue} from "data:text/javascript,export const unsafeValue={toString(){console.log('coerced');return '0.5'}}"
+
+const broken = look:
+    color = color(unsafeValue)
+`.trimStart());
+  assert.deepEqual(dynamic.diagnostics, []);
+  const coercionExecution = executeModule(dynamic.code ?? "");
+  assert.notEqual(coercionExecution.status, 0);
+  assert.equal(coercionExecution.stdout, "");
+  assert.match(String(coercionExecution.stderr), /Color must be text/u);
+  assert.match(dynamic.code ?? "", /if \(value == null\) element\.style\.removeProperty/u);
 });
 
 test("Look diagnostics retain exact right-hand expression spans", () => {

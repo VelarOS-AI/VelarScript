@@ -253,6 +253,10 @@ const coreGlobalGuidance = new Map([
   ["String", "Use str(value) instead of the JavaScript String global"],
 ]);
 
+function argumentNoun(expected: string): "argument" | "arguments" {
+  return expected === "1" || expected === "at least 1" ? "argument" : "arguments";
+}
+
 export function isCorePrimitiveName(name: string): boolean {
   return corePrimitiveNames.has(name);
 }
@@ -4250,7 +4254,7 @@ export class Analyzer implements TypeEnvironment {
         const expected = maximum === Number.POSITIVE_INFINITY
           ? `at least ${minimum}`
           : minimum === maximum ? String(minimum) : `${minimum}-${maximum}`;
-        this.typeError(`Expected ${expected} arguments but received ${suppliedCount}`, callSpan);
+        this.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${suppliedCount}`, callSpan);
       }
     };
     const inferAt = (index: number, expected: ValueType = unknownType): ValueType => {
@@ -5515,7 +5519,7 @@ export class Analyzer implements TypeEnvironment {
       const expected = rest
         ? `at least ${requiredParameters}`
         : requiredParameters === parameters.length ? String(parameters.length) : `${requiredParameters}-${parameters.length}`;
-      this.typeError(`Expected ${expected} arguments but received ${arguments_.length}`, callSpan);
+      this.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${arguments_.length}`, callSpan);
     }
     for (let index = 0; index < arguments_.length; index += 1) {
       const expected = parameters[index] ?? rest ?? unknownType;

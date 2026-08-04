@@ -1015,6 +1015,13 @@ Named arguments work normally:
 const raised = shadow(0px, 12px, 32px, rgba(0, 0, 0, 0.16), spread=0px, inset=false)
 ```
 
+Builder inputs are checked visual values, not JavaScript coercion points.
+Colors use finite numeric ranges; layout builders accept finite numbers,
+bounded strings, typed lengths/percentages, and their declared track values.
+Functions, records, classes, non-finite numbers, and objects with conversion
+hooks never become CSS text. A dynamic property value of `null` removes that
+controlled value instead of emitting the text `"null"`.
+
 ### Composition
 
 Look values are ordinary exportable values and may be composed once at their
