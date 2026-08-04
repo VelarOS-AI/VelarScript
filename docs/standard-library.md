@@ -88,7 +88,7 @@ VelarScript `null` before becoming observable.
 | `sortBy` | Returns a stable key-sorted copy in either direction; keys are all strings or all non-NaN numbers. |
 | `minBy`, `maxBy` | Return the value with the smallest/largest uniform string/number callback key, or `null`. |
 | `sum` | Adds a `List<number>` from zero. |
-| `join` | Joins a `List<string>` with an optional separator. |
+| `join` | Joins one checked `List<string>` snapshot with an optional separator; the result cannot exceed 16 MiB. |
 | `repeat` | Returns a list containing a value a non-negative number of times. |
 
 ```velar fragment

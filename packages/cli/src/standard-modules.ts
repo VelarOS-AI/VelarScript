@@ -527,6 +527,8 @@ function __velarRequireRuntimeType(value, name, optional = false) {
 const coreModuleSources: ReadonlyMap<string, string> = new Map([
   ["velar/collections", String.raw`
 ${listRuntime}
+const maxCollectionTextCodeUnits = 16 * 1024 * 1024;
+const nativeListJoin = Object.getOwnPropertyDescriptor(Array.prototype, "join").value;
 function requireList(value, name) {
   return __velarRequireList(value, name);
 }
@@ -686,7 +688,24 @@ function extremeBy(values, key, direction, name) {
 export function minBy(values, key) { return extremeBy(values, key, -1, "minBy"); }
 export function maxBy(values, key) { return extremeBy(values, key, 1, "maxBy"); }
 export function sum(values) { return requireList(values, "sum").reduce((total, value) => { if (typeof value !== "number") throw new TypeError("sum requires numbers"); return total + value; }, 0); }
-export function join(values, separator = "") { if (typeof separator !== "string") throw new TypeError("join separator must be a string"); return requireList(values, "join").map((value) => { if (typeof value !== "string") throw new TypeError("join requires strings"); return value; }).join(separator); }
+export function join(values, separator = "") {
+  if (typeof separator !== "string") throw new TypeError("join separator must be a string");
+  values = requireList(values, "join");
+  let outputCodeUnits = 0;
+  for (const value of values) {
+    if (typeof value !== "string") throw new TypeError("join requires strings");
+    if (value.length > maxCollectionTextCodeUnits - outputCodeUnits) {
+      throw new RangeError("join output cannot exceed 16 MiB");
+    }
+    outputCodeUnits += value.length;
+  }
+  const separatorCount = Math.max(0, values.length - 1);
+  if (separatorCount > 0
+    && separator.length > Math.floor((maxCollectionTextCodeUnits - outputCodeUnits) / separatorCount)) {
+    throw new RangeError("join output cannot exceed 16 MiB");
+  }
+  return nativeListJoin.call(values, separator);
+}
 export function repeat(value, count) { count = requireCount(count, "repeat count"); if (count > __velarMaxListItems) throw new RangeError("repeat cannot produce more than " + __velarMaxListItems + " items"); return Array.from({ length: count }, () => value); }
 `.trimStart()],
   ["velar/text", String.raw`

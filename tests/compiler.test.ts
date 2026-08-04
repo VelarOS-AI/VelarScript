@@ -6588,12 +6588,24 @@ test("standard modules bound pathological allocation and timer inputs before eff
   const collections = standardModuleSource("velar/collections") ?? "";
   const collectionExecution = executeModule(`${collections}
 const oversized = []; oversized.length = 1000001;
-for (const operation of [() => repeat("item", 1000001), () => sum(oversized)]) {
+const originalJoin = Array.prototype.join;
+let nativeJoinCalls = 0;
+Array.prototype.join = () => { nativeJoinCalls += 1; throw new Error("late join allocation"); };
+for (const operation of [
+  () => repeat("item", 1000001),
+  () => sum(oversized),
+  () => join(["x".repeat(8 * 1024 * 1024), "x".repeat(8 * 1024 * 1024 + 1)]),
+  () => join(["left", "right"], "x".repeat(16 * 1024 * 1024)),
+]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
+console.log(join(["x".repeat(8 * 1024 * 1024), "x".repeat(8 * 1024 * 1024)]).length);
+console.log(join(["only"], "x".repeat(16 * 1024 * 1024 + 1)));
+console.log(nativeJoinCalls);
+Array.prototype.join = originalJoin;
 `);
   assert.equal(collectionExecution.status, 0, String(collectionExecution.stderr));
-  assert.equal(collectionExecution.stdout, "RangeError\nRangeError\n");
+  assert.equal(collectionExecution.stdout, "RangeError\nRangeError\nRangeError\nRangeError\n16777216\nonly\n0\n");
 
   const text = standardModuleSource("velar/text") ?? "";
   const textExecution = executeModule(`${text}
