@@ -253,6 +253,14 @@ const coreGlobalGuidance = new Map([
   ["String", "Use str(value) instead of the JavaScript String global"],
 ]);
 
+export function isCorePrimitiveName(name: string): boolean {
+  return corePrimitiveNames.has(name);
+}
+
+export function isCoreReservedBinding(name: string): boolean {
+  return reservedBindings.has(name);
+}
+
 export class Analyzer implements TypeEnvironment {
   protected readonly diagnostics: Diagnostic[] = [];
   private readonly scopes: Map<string, Binding>[] = [new Map()];
@@ -341,6 +349,7 @@ export class Analyzer implements TypeEnvironment {
   private callableOriginChanged = false;
   private readonly primitiveNames = new Set(corePrimitiveNames);
   private readonly primitiveParents = new Map<string, Set<string>>();
+  private readonly primitiveMutableFields = new Map<string, Set<string>>();
   private readonly extensionGlobals = new Map<string, ValueType>();
   private readonly extensionReservedBindings = new Set<string>();
   private readonly globalGuidance = new Map(coreGlobalGuidance);
@@ -382,6 +391,11 @@ export class Analyzer implements TypeEnvironment {
         const collected = this.primitiveParents.get(name) ?? new Set<string>();
         for (const parent of parents) collected.add(parent);
         this.primitiveParents.set(name, collected);
+      }
+      for (const [name, fields] of extension.primitiveMutableFields ?? []) {
+        const collected = this.primitiveMutableFields.get(name) ?? new Set<string>();
+        for (const field of fields) collected.add(field);
+        this.primitiveMutableFields.set(name, collected);
       }
       for (const [name, type] of extension.globals ?? []) this.extensionGlobals.set(name, type);
       for (const name of extension.reservedBindings ?? []) this.extensionReservedBindings.add(name);
@@ -3387,6 +3401,11 @@ export class Analyzer implements TypeEnvironment {
       } else if (owner.kind === "object" && owner.readonlyFields?.has(statement.target.property)) {
         this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only field '${statement.target.property}'`, statement.target.span));
         targetWritable = false;
+      } else if (owner.kind === "named" && this.primitiveNames.has(owner.name)
+        && this.fieldsOf(owner.identity ?? owner.name)?.has(statement.target.property)
+        && !this.primitiveFieldWritable(owner.name, statement.target.property)) {
+        this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only member '${statement.target.property}'`, statement.target.span));
+        targetWritable = false;
       } else if (owner.kind === "object" && owner.optionalFields?.has(statement.target.property)) {
         targetType = owner.fields.get(statement.target.property) ?? targetType;
       }
@@ -3442,6 +3461,19 @@ export class Analyzer implements TypeEnvironment {
         }
       }
     }
+  }
+
+  private primitiveFieldWritable(name: string, field: string): boolean {
+    const pending = [name];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (this.primitiveMutableFields.get(current)?.has(field)) return true;
+      for (const parent of this.primitiveParents.get(current) ?? []) pending.push(parent);
+    }
+    return false;
   }
 
   protected inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {

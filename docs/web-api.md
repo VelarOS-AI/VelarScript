@@ -483,8 +483,9 @@ if selected.size > 0:
 ```
 
 `pick` uses the native file-input path supported by Chromium, Firefox, and
-WebKit. It returns stable VelarScript file records with `name`, `size`, `type`, and
-`modified`; only records returned by `pick` may be read with `readText` or
+WebKit. It returns `List<File>`, where opaque `File` values expose read-only
+`name`, `size`, `type`, and `modified` metadata; only values returned by `pick`
+may be read with `readText` or
 `readDataUrl` or attached to `velar/http.formBody`. Picker options are a
 data-only `accept` string/`multiple` bool record. `download` accepts actual text
 for its name, data, and MIME type. Invalid options, forged file records, and
@@ -497,7 +498,7 @@ persistent file handles, and the File System Access API are deliberately not
 part of Web API 0.10.
 
 Returned file names/MIME types, sizes, and modification times are validated
-before an opaque record is registered. Invalid native picker results reject
+before an opaque `File` is registered. Invalid native picker results reject
 the Promise instead of escaping an event callback or leaving it pending.
 `readText` and `readDataUrl` also verify the asynchronous reader result and its
 maximum encoded expansion before returning a string.

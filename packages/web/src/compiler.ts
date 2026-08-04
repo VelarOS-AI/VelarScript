@@ -86,7 +86,7 @@ const cleanupType = namedFunction([], [], nullType);
 const arrayString: ValueType = { kind: "list", element: stringType };
 const mapString = (value: ValueType): ValueType => ({ kind: "map", key: stringType, value });
 const webElementType: ValueType = { kind: "union", members: [elementType, inputElementType, canvasElementType, dialogElementType] };
-const fileType = object({ name: stringType, size: numberType, type: stringType, modified: numberType });
+const fileType: ValueType = { kind: "named", name: "File" };
 const fileArrayType: ValueType = { kind: "list", element: fileType };
 const formBodyType = object({
   field: namedFunction(["name", "value"], [stringType, stringType], nullType),
@@ -420,7 +420,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "Look", "Length", "Percentage", "Color", "Duration", "Angle", "Opacity", "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing"]),
+    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "Look", "Length", "Percentage", "Color", "Duration", "Angle", "Opacity", "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing"]),
     primitiveParents: new Map([
       ["InputElement", new Set(["Element"])],
       ["CanvasElement", new Set(["Element"])],
@@ -428,6 +428,10 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["KeyboardEvent", new Set(["Event"])],
       ["PointerEvent", new Set(["Event"])],
       ["InputEvent", new Set(["Event"])],
+    ]),
+    primitiveMutableFields: new Map([
+      ["InputElement", new Set(["value", "checked"])],
+      ["CanvasElement", new Set(["width", "height"])],
     ]),
     globals: webGlobals,
     reservedBindings: new Set(["mount", "tick"]),
@@ -461,6 +465,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       CanvasElement: "A native canvas reference obtained through JSX `ref`.",
       DialogElement: "A native dialog reference obtained from `<dialog ref={value}>` and operated through `velar/browser`.",
       Blob: "An opaque binary HTTP body returned by `blob()` and accepted by HTTP request bodies.",
+      File: "An opaque selected file returned by `velar/files.pick()` with checked read-only metadata.",
       Event: "A restricted Web event value exposed to VelarScript event handlers.",
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),

@@ -217,7 +217,8 @@ for `match`; an asserted binding shape fails immediately.
   contextual project-editor seams;
   extensions declare opaque primitive types and their parent relations through
   the generic analysis contract, so Core assignability contains no Web type
-  names;
+  names; primitive members are read-only unless their owning extension
+  explicitly marks a field writable;
   loading lexical keywords alone can never silently activate Web semantics.
   Its `framework-host` subpath is a platform-neutral tooling ABI containing
   only protocol types and a version constant; it does not implement HTML,

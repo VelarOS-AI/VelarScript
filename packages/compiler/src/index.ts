@@ -1,4 +1,4 @@
-import { Analyzer, type AnalysisContext, type ClassInfo } from "./analyzer.ts";
+import { Analyzer, isCorePrimitiveName, isCoreReservedBinding, type AnalysisContext, type ClassInfo } from "./analyzer.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
@@ -213,6 +213,8 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
 function normalizedExtensions(extensions: readonly CompilerExtension[]): readonly CompilerExtension[] {
   const seen = new Set<string>();
   const capabilities = new Set<string>();
+  const primitiveOwners = new Map<string, string>();
+  const globalOwners = new Map<string, string>();
   for (const extension of extensions) {
     if (!extension.id || seen.has(extension.id)) throw new Error(`Compiler extension '${extension.id}' is invalid or duplicated`);
     seen.add(extension.id);
@@ -222,7 +224,56 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
       }
       capabilities.add(capability);
     }
+    for (const name of extension.analysis?.primitiveTypes ?? []) {
+      const owner = primitiveOwners.get(name);
+      if (isCorePrimitiveName(name)) throw new Error(`Compiler extension '${extension.id}' cannot replace Core primitive '${name}'`);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || owner) {
+        throw new Error(`Compiler primitive '${name}' is invalid or has more than one owner${owner ? ` (${owner}, ${extension.id})` : ""}`);
+      }
+      primitiveOwners.set(name, extension.id);
+    }
+    for (const name of extension.analysis?.globals?.keys() ?? []) {
+      if (isCoreReservedBinding(name)) throw new Error(`Compiler extension '${extension.id}' cannot replace reserved Core binding '${name}'`);
+      const owner = globalOwners.get(name);
+      if (owner) throw new Error(`Compiler global '${name}' has more than one owner (${owner}, ${extension.id})`);
+      globalOwners.set(name, extension.id);
+    }
   }
+
+  const parents = new Map<string, Set<string>>();
+  for (const extension of extensions) {
+    for (const [name, values] of extension.analysis?.primitiveParents ?? []) {
+      if (primitiveOwners.get(name) !== extension.id) {
+        throw new Error(`Compiler extension '${extension.id}' cannot define parents for primitive '${name}' that it does not own`);
+      }
+      const collected = parents.get(name) ?? new Set<string>();
+      for (const parent of values) {
+        if (!primitiveOwners.has(parent)) throw new Error(`Compiler primitive '${name}' has unknown parent '${parent}'`);
+        collected.add(parent);
+      }
+      parents.set(name, collected);
+    }
+    for (const [name, fields] of extension.analysis?.primitiveMutableFields ?? []) {
+      if (primitiveOwners.get(name) !== extension.id) {
+        throw new Error(`Compiler extension '${extension.id}' cannot make fields writable on primitive '${name}' that it does not own`);
+      }
+      for (const field of fields) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(field)) throw new Error(`Compiler primitive '${name}' has invalid writable field '${field}'`);
+      }
+    }
+  }
+
+  const completed = new Set<string>();
+  const active = new Set<string>();
+  const visit = (name: string): void => {
+    if (completed.has(name)) return;
+    if (active.has(name)) throw new Error(`Compiler primitive inheritance contains a cycle at '${name}'`);
+    active.add(name);
+    for (const parent of parents.get(name) ?? []) visit(parent);
+    active.delete(name);
+    completed.add(name);
+  };
+  for (const name of primitiveOwners.keys()) visit(name);
   return extensions;
 }
 

@@ -19,6 +19,23 @@ function __velarInvokeOwnedCallback(callback, arguments_, phase, detail) {
 }
 `.trimStart();
 
+const fileRegistryRuntime = String.raw`
+const nativeFilesKey = Symbol.for("velar.file.registry.v1");
+const nativeFiles = (() => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, nativeFilesKey);
+  if (descriptor) {
+    if (!("value" in descriptor)) throw new TypeError("VelarScript file registry cannot be an accessor");
+    if (descriptor.configurable || descriptor.enumerable || descriptor.writable) throw new TypeError("VelarScript file registry ownership is invalid");
+    try { WeakMap.prototype.has.call(descriptor.value, descriptor.value); }
+    catch { throw new TypeError("VelarScript file registry is invalid"); }
+    return descriptor.value;
+  }
+  const registry = new WeakMap();
+  Object.defineProperty(globalThis, nativeFilesKey, { value: registry, enumerable: false, configurable: false, writable: false });
+  return registry;
+})();
+`.trimStart();
+
 const strictJsonRuntime = String.raw`
 const __velarMaxJsonCodeUnits = 16 * 1024 * 1024;
 const __velarMaxJsonNodes = 1000000;
@@ -1017,8 +1034,7 @@ ${listRuntime}
 ${optionsRuntime}
 ${strictJsonRuntime}
 ${runtimeTypeRuntime}
-const nativeFilesKey = Symbol.for("velar.file.registry.v1");
-const nativeFiles = globalThis[nativeFilesKey] ??= new WeakMap();
+${fileRegistryRuntime}
 const formBodies = new WeakMap();
 
 function runtimeHttpType(Type) { return __velarRequireRuntimeType(Type, "HTTP parsing"); }
@@ -1088,7 +1104,7 @@ function fieldName(value) {
 }
 
 function nativeFile(value) {
-  const file = value && nativeFiles.get(value);
+  const file = value && WeakMap.prototype.get.call(nativeFiles, value);
   if (!(file instanceof File)) throw new TypeError("Form body files must come from velar/files pick()");
   return file;
 }
@@ -1588,8 +1604,7 @@ function requireDialog(value) { if (typeof HTMLDialogElement === "undefined" || 
 `.trimStart()],
   ["velar/files", String.raw`
 ${optionsRuntime}
-const nativeFilesKey = Symbol.for("velar.file.registry.v1");
-const nativeFiles = globalThis[nativeFilesKey] ??= new WeakMap();
+${fileRegistryRuntime}
 const defaultFileReadBytes = 16 * 1024 * 1024;
 const maxFileReadBytes = 64 * 1024 * 1024;
 function readLimit(value) {
@@ -1606,10 +1621,10 @@ function wrap(file) {
   if (!Number.isFinite(modified) || modified < 0) throw new TypeError("Selected file modified time must be a non-negative finite number");
   const value = { name, size, type, modified };
   Object.freeze(value);
-  nativeFiles.set(value, file);
+  WeakMap.prototype.set.call(nativeFiles, value, file);
   return value;
 }
-function native(file) { const value = nativeFiles.get(file); if (!value) throw new TypeError("Expected a file returned by velar/files"); return value; }
+function native(file) { const value = WeakMap.prototype.get.call(nativeFiles, file); if (!value) throw new TypeError("Expected a file returned by velar/files"); return value; }
 export function pick(options = {}) {
   options = __velarOptions(options, "File picker options", new Set(["accept", "multiple"]));
   const accept = options.accept == null ? "" : __velarString(options.accept, "File accept filter");

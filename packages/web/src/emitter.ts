@@ -41,6 +41,15 @@ interface LookRule {
   readonly staticAtoms: readonly LookStaticAtom[];
 }
 
+const FILE_TYPE_RUNTIME = String.raw`
+function __velarFileTypeIs(value) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.file.registry.v1"));
+  if (!descriptor || !("value" in descriptor) || descriptor.configurable || descriptor.enumerable || descriptor.writable) return false;
+  try { return WeakMap.prototype.has.call(descriptor.value, value); }
+  catch { return false; }
+}
+`.trimStart();
+
 export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private readonly reactive = new Map<string, "state" | "computed">();
   private currentScope: string | null = null;
@@ -49,6 +58,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private cssOutput = "";
   private cssSegments: CompilerStyleSegments = { before: "", controlled: "", after: "" };
   private webOutput = false;
+  private needsFileTypeHelper = false;
   private jsxId = 0;
 
   constructor(
@@ -66,6 +76,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     for (const [name, kind] of this.hints.reactiveBindings) this.reactive.set(name, kind);
     this.prepareLooks(program);
     this.webOutput = containsWebSyntax(program);
+    this.needsFileTypeHelper = false;
     return super.emit(program);
   }
 
@@ -93,12 +104,19 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         return `((typeof HTMLInputElement !== "undefined" && ${value} instanceof HTMLInputElement) || (typeof HTMLSelectElement !== "undefined" && ${value} instanceof HTMLSelectElement) || (typeof HTMLTextAreaElement !== "undefined" && ${value} instanceof HTMLTextAreaElement))`;
       }
       if (type.name === "Blob") return `(typeof Blob !== "undefined" && ${value} instanceof Blob)`;
+      if (type.name === "File") {
+        this.needsFileTypeHelper = true;
+        return `__velarFileTypeIs(${value})`;
+      }
     }
     return super.emitTypeCheck(type, value, state);
   }
 
   protected override additionalHelpers(program: Program): readonly string[] {
-    return this.webOutput ? [WEB_RUNTIME] : [];
+    return [
+      ...(this.webOutput ? [WEB_RUNTIME] : []),
+      ...(this.needsFileTypeHelper ? [FILE_TYPE_RUNTIME] : []),
+    ];
   }
 
   protected override includesErrorNormalizationRuntime(): boolean {

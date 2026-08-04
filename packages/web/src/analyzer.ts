@@ -1021,6 +1021,7 @@ function webTypeFields(name: string): ReadonlyMap<string, ValueType> | null {
   if (name === "PointerEvent") return new Map([...eventFields(), ["pointerId", numberType], ["pointerType", stringType], ["pressure", numberType], ["button", numberType], ["buttons", numberType], ["clientX", numberType], ["clientY", numberType], ["movementX", numberType], ["movementY", numberType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "InputEvent") return new Map([...eventFields(), ["data", optionalOf(stringType)], ["inputType", stringType], ["isComposing", boolType]]);
   if (name === "Blob") return new Map();
+  if (name === "File") return new Map([["name", stringType], ["size", numberType], ["type", stringType], ["modified", numberType]]);
   if (name === "Element" || name === "InputElement" || name === "CanvasElement" || name === "DialogElement") {
     const fields = new Map<string, ValueType>([["focus", functionType([], [], nullType)], ["remove", functionType([], [], nullType)]]);
     if (name === "InputElement") { fields.set("value", stringType); fields.set("checked", boolType); }

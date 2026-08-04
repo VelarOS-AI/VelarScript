@@ -4322,6 +4322,39 @@ test("the official Web package owns the framework contract and CLI only composes
       { id: "example-two", capabilities: ["surface"] },
     ],
   }), /capability 'surface'.*more than one owner/u);
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [
+      { id: "example-one", analysis: { primitiveTypes: new Set(["Surface"]) } },
+      { id: "example-two", analysis: { primitiveTypes: new Set(["Surface"]) } },
+    ],
+  }), /primitive 'Surface'.*more than one owner/u);
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [{
+      id: "example-one",
+      analysis: {
+        primitiveTypes: new Set(["First", "Second"]),
+        primitiveParents: new Map([["First", new Set(["Second"])], ["Second", new Set(["First"])]]),
+      },
+    }],
+  }), /primitive inheritance contains a cycle/u);
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [
+      { id: "example-one", analysis: { primitiveTypes: new Set(["Surface"]) } },
+      { id: "example-two", analysis: { primitiveMutableFields: new Map([["Surface", new Set(["value"])]]), primitiveTypes: new Set(["Control"]) } },
+    ],
+  }), /cannot make fields writable on primitive 'Surface' that it does not own/u);
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [
+      { id: "example-one", analysis: { globals: new Map([["surface", { kind: "number" }]]) } },
+      { id: "example-two", analysis: { globals: new Map([["surface", { kind: "string" }]]) } },
+    ],
+  }), /global 'surface' has more than one owner/u);
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [{ id: "example-one", analysis: { globals: new Map([["print", { kind: "number" }]]) } }],
+  }), /cannot replace reserved Core binding 'print'/u);
+  assert.throws(() => compileCore("const value = 1\n", {
+    extensions: [{ id: "example-one", analysis: { primitiveTypes: new Set(["string"]) } }],
+  }), /cannot replace Core primitive 'string'/u);
 });
 
 test("fixed Web APIs share the language named-argument ABI", async () => {
@@ -4428,6 +4461,66 @@ def inspectCanvas(canvas: CanvasElement):
   assert.match(messages, /Cannot assign \{\s*\} to Blob/u);
   assert.match(messages, /Cannot assign .* to Element/u);
   assert.match(messages, /Cannot access 'fillRect' on unknown without validation/u);
+});
+
+test("Web host values are opaque and expose only intentional writable fields", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-opaque-web-values-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+import {pick, readText} from "velar/files"
+
+type Attachment:
+    file: File
+
+async def inspect():
+    const selected = await pick()
+    if selected.size > 0:
+        const file = selected[0]
+        print(file.name)
+        print(file.size)
+        await readText(file)
+        const checked = Attachment.parse({file: file})
+
+def edit(input: InputElement, canvas: CanvasElement):
+    input.value = "ready"
+    input.checked = true
+    canvas.width = 640
+    canvas.height = 480
+`.trimStart(), "utf8");
+  const project = await compileProject(entry);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const valid = project.modules[0]!.result;
+  assert.match(valid.semanticIndex.symbols.find((symbol) => symbol.name === "selected")?.type ?? "", /List<File>/u);
+  assert.match(valid.code ?? "", /function __velarFileTypeIs/u);
+  assert.match(valid.code ?? "", /WeakMap\.prototype\.has\.call/u);
+
+  const forgedRuntime = compile(`
+type Attachment:
+    file: File
+
+const forged = Attachment.parse({file: {name: "fake.txt", size: 1, type: "text/plain", modified: 0}})
+`.trimStart());
+  assert.deepEqual(forgedRuntime.diagnostics, []);
+  const execution = executeModule(forgedRuntime.code ?? "");
+  assert.notEqual(execution.status, 0);
+  assert.match(String(execution.stderr), /Value does not match Attachment/u);
+
+  const invalid = compile(`
+const forged: File = {name: "fake.txt", size: 1, type: "text/plain", modified: 0}
+
+def overwrite(file: File, event: KeyboardEvent, element: Element, input: InputElement):
+    file.name = "changed.txt"
+    event.key = "Enter"
+    element.focus = () => null
+    input.remove = () => null
+`.trimStart());
+  const messages = invalid.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /Cannot assign .* to File/u);
+  assert.match(messages, /Cannot assign to read-only member 'name'/u);
+  assert.match(messages, /Cannot assign to read-only member 'key'/u);
+  assert.match(messages, /Cannot assign to read-only member 'focus'/u);
+  assert.match(messages, /Cannot assign to read-only member 'remove'/u);
 });
 
 test("velar/web creates bounded application-local DOM IDs without requiring cryptographic UUIDs", async () => {
@@ -5001,6 +5094,16 @@ console.log(getterReads + ":" + nativeCalls);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, `${new Array(9).fill("TypeError").join(",")}\n0:0\n`);
+
+  const accessorRegistry = executeModule(`
+Object.defineProperty(globalThis, Symbol.for("velar.file.registry.v1"), {
+  get() { console.log("accessor invoked"); return new WeakMap(); },
+});
+${source}
+`);
+  assert.notEqual(accessorRegistry.status, 0);
+  assert.equal(accessorRegistry.stdout, "");
+  assert.match(String(accessorRegistry.stderr), /VelarScript file registry cannot be an accessor/u);
 });
 
 test("file reads enforce explicit byte budgets before allocating browser readers", () => {
@@ -5023,6 +5126,10 @@ globalThis.removeEventListener = () => {};
 globalThis.FileReader = class { constructor() { readerCalls += 1; } };
 globalThis.Blob = class { constructor() { blobCalls += 1; } };
 globalThis.URL = { createObjectURL() { return "blob:test"; } };
+const hostileFileRegistry = new WeakMap();
+hostileFileRegistry.get = () => { throw new Error("instance get must not run"); };
+hostileFileRegistry.set = () => { throw new Error("instance set must not run"); };
+Object.defineProperty(globalThis, Symbol.for("velar.file.registry.v1"), { value: hostileFileRegistry });
 ${source}
 const [file] = await pick();
 const failures = [];
@@ -5291,9 +5398,7 @@ blur("missing")
   const messages = project.modules.flatMap((module) => module.result.diagnostics).map((item) => item.message).join("\n");
   assert.match(messages, /Runtime parsing requires a VelarScript runtime type/u);
   assert.match(messages, /Cannot assign string to number/u);
-  assert.match(messages, /Object is missing required field 'size'/u);
-  assert.match(messages, /Object is missing required field 'type'/u);
-  assert.match(messages, /Object is missing required field 'modified'/u);
+  assert.equal(messages.match(/Cannot assign \{ name: string \} to File/gu)?.length, 2);
   assert.match(messages, /Cannot assign Element to DialogElement/u);
   assert.match(messages, /A <div> ref requires Element/u);
   assert.match(messages, /A route path must start with/u);
@@ -5314,7 +5419,6 @@ blur("missing")
   assert.match(messages, /Cannot assign.*number.*error.*Error/u);
   assert.match(messages, /Cannot assign string to Error/u);
   assert.match(messages, /Cannot assign number to string/u);
-  assert.match(messages, /Object is missing required field 'modified'/u);
   assert.match(messages, /Form field 'nested' cannot decode NestedValue/u);
   assert.match(messages, /Cannot assign number to \(\) -> unknown/u);
 });
