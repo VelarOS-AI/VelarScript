@@ -42,6 +42,7 @@ import {
   unionOf,
   unknownType,
   type EnumInfo,
+  type StorageOriginEffect,
   type TypeEnvironment,
   type ValueType,
 } from "./types.ts";
@@ -146,11 +147,13 @@ export interface ClassInfo {
   readonly abstract: boolean;
   readonly fields: ReadonlyMap<string, ClassField>;
   readonly getters: ReadonlySet<string>;
+  readonly getterStorageOriginEffects?: ReadonlyMap<string, readonly StorageOriginEffect[]>;
   readonly abstractGetters: ReadonlySet<string>;
   readonly methods: ReadonlyMap<string, ValueType>;
   readonly abstractMethods: ReadonlySet<string>;
   readonly staticFields: ReadonlyMap<string, ClassField>;
   readonly staticGetters: ReadonlySet<string>;
+  readonly staticGetterStorageOriginEffects?: ReadonlyMap<string, readonly StorageOriginEffect[]>;
   readonly staticMethods: ReadonlyMap<string, ValueType>;
 }
 
@@ -299,9 +302,11 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionInferenceTypes = new WeakMap<object, CollectionInferenceGroup>();
   private readonly privateFields = new Map<string, Map<string, ClassField>>();
   private readonly privateGetters = new Map<string, Set<string>>();
+  private readonly privateGetterStorageOriginEffects = new Map<string, Map<string, readonly StorageOriginEffect[]>>();
   private readonly privateMethods = new Map<string, Map<string, ValueType>>();
   private readonly privateStaticFields = new Map<string, Map<string, ClassField>>();
   private readonly privateStaticGetters = new Map<string, Set<string>>();
+  private readonly privateStaticGetterStorageOriginEffects = new Map<string, Map<string, readonly StorageOriginEffect[]>>();
   private readonly privateStaticMethods = new Map<string, Map<string, ValueType>>();
   private readonly predeclared = new WeakSet<object>();
   private functionDepth = 0;
@@ -1883,6 +1888,21 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
+  private findGetterStorageOriginEffects(className: string, name: string): readonly StorageOriginEffect[] {
+    const privateEffects = this.privateGetterStorageOriginEffects.get(this.currentClass ?? "")?.get(name);
+    if (privateEffects) return privateEffects;
+    let current: string | null = className;
+    const visited = new Set<string>();
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      const info = this.classes.get(current);
+      const effects = info?.getterStorageOriginEffects?.get(name);
+      if (effects) return effects;
+      current = info?.base ?? null;
+    }
+    return [];
+  }
+
   private findMethod(className: string, name: string): { readonly owner: string; readonly type: ValueType; readonly abstract: boolean } | null {
     let current: string | null = className;
     const visited = new Set<string>();
@@ -1920,6 +1940,47 @@ export class Analyzer implements TypeEnvironment {
       current = info?.base ?? null;
     }
     return null;
+  }
+
+  private findStaticGetterStorageOriginEffects(className: string, name: string): readonly StorageOriginEffect[] {
+    const privateEffects = this.privateStaticGetterStorageOriginEffects.get(this.currentClass ?? "")?.get(name);
+    if (privateEffects) return privateEffects;
+    let current: string | null = className;
+    const visited = new Set<string>();
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      const info = this.classes.get(current);
+      const effects = info?.staticGetterStorageOriginEffects?.get(name);
+      if (effects) return effects;
+      current = info?.base ?? null;
+    }
+    return [];
+  }
+
+  private setGetterStorageOriginEffects(
+    className: string,
+    name: string,
+    staticMember: boolean,
+    privateMember: boolean,
+    effects: readonly StorageOriginEffect[],
+  ): void {
+    if (privateMember) {
+      const registry = staticMember ? this.privateStaticGetterStorageOriginEffects : this.privateGetterStorageOriginEffects;
+      const members = registry.get(className) ?? new Map<string, readonly StorageOriginEffect[]>();
+      members.set(name, effects);
+      registry.set(className, members);
+      return;
+    }
+    const info = this.classes.get(className);
+    if (!info) return;
+    const members = new Map(staticMember ? info.staticGetterStorageOriginEffects : info.getterStorageOriginEffects);
+    members.set(name, effects);
+    this.classes.set(className, {
+      ...info,
+      ...(staticMember
+        ? { staticGetterStorageOriginEffects: members }
+        : { getterStorageOriginEffects: members }),
+    });
   }
 
   private findStaticMethod(className: string, name: string): ValueType | null {
@@ -2044,6 +2105,7 @@ export class Analyzer implements TypeEnvironment {
       returnContext.observed ?? expectedReturn,
       asynchronous,
       this.callableReturnOrigin(statement, className),
+      this.callableStorageOriginEffects(statement, className),
     );
     this.constructorDepth = outerConstructorDepth;
   }
@@ -2054,6 +2116,7 @@ export class Analyzer implements TypeEnvironment {
     resolvedResult: ValueType,
     asynchronous: boolean,
     origin?: CallableOriginSummary,
+    storageOriginEffects: readonly StorageOriginEffect[] = [],
   ): boolean {
     const result = asynchronous ? { kind: "promise", value: resolvedResult } satisfies ValueType : resolvedResult;
     const staticMember = "static" in statement && statement.static === true;
@@ -2062,7 +2125,10 @@ export class Analyzer implements TypeEnvironment {
     if (!className) {
       const binding = this.lookup(statement.name);
       if (!binding || (binding.type.kind !== "function" && binding.type.kind !== "action")) return false;
-      const next = this.withCallableResultOrigin({ ...binding.type, result }, origin);
+      const next = this.withCallableStorageOriginEffects(
+        this.withCallableResultOrigin({ ...binding.type, result }, origin),
+        storageOriginEffects,
+      );
       if (analysisTypeIdentity(binding.type) === analysisTypeIdentity(next)) return false;
       binding.type = next;
       binding.declaredType = next;
@@ -2076,8 +2142,19 @@ export class Analyzer implements TypeEnvironment {
         ? staticMember ? this.privateStaticFields.get(className) : this.privateFields.get(className)
         : staticMember ? this.classes.get(className)?.staticFields : this.classes.get(className)?.fields;
       const field = fields?.get(statement.name);
-      if (!field || analysisTypeIdentity(field.type) === analysisTypeIdentity(resolvedResult)) return false;
-      (fields as Map<string, ClassField>).set(statement.name, { ...field, type: resolvedResult });
+      if (!field) return false;
+      const existingEffects = privateMember
+        ? (staticMember ? this.privateStaticGetterStorageOriginEffects : this.privateGetterStorageOriginEffects)
+          .get(className)?.get(statement.name)
+        : (staticMember
+          ? this.classes.get(className)?.staticGetterStorageOriginEffects
+          : this.classes.get(className)?.getterStorageOriginEffects)?.get(statement.name);
+      const mergedEffects = this.mergeStorageOriginEffects(existingEffects ?? [], storageOriginEffects);
+      const typeChanged = analysisTypeIdentity(field.type) !== analysisTypeIdentity(resolvedResult);
+      const effectsChanged = JSON.stringify(existingEffects ?? []) !== JSON.stringify(mergedEffects);
+      if (!typeChanged && !effectsChanged) return false;
+      if (typeChanged) (fields as Map<string, ClassField>).set(statement.name, { ...field, type: resolvedResult });
+      if (effectsChanged) this.setGetterStorageOriginEffects(className, statement.name, staticMember, privateMember, mergedEffects);
       this.callableOriginChanged = true;
       return true;
     }
@@ -2086,7 +2163,10 @@ export class Analyzer implements TypeEnvironment {
       : staticMember ? this.classes.get(className)?.staticMethods : this.classes.get(className)?.methods;
     const method = methods?.get(statement.name);
     if (!method || (method.kind !== "function" && method.kind !== "action")) return false;
-    const next = this.withCallableResultOrigin({ ...method, result }, origin);
+    const next = this.withCallableStorageOriginEffects(
+      this.withCallableResultOrigin({ ...method, result }, origin),
+      storageOriginEffects,
+    );
     if (analysisTypeIdentity(method) === analysisTypeIdentity(next)) return false;
     (methods as Map<string, ValueType>).set(statement.name, next);
     this.callableOriginChanged = true;
@@ -2107,6 +2187,32 @@ export class Analyzer implements TypeEnvironment {
       ...(callable.resultOriginReceiver || origin.receiver ? { resultOriginReceiver: true as const } : {}),
       ...(externalDefaults.length > 0 ? { resultOriginExternalDefaults: externalDefaults } : {}),
     };
+  }
+
+  private withCallableStorageOriginEffects<T extends CallableValueType>(
+    callable: T,
+    effects: readonly StorageOriginEffect[],
+  ): T {
+    const merged = this.mergeStorageOriginEffects(callable.storageOriginEffects ?? [], effects);
+    return { ...callable, ...(merged.length > 0 ? { storageOriginEffects: merged } : {}) };
+  }
+
+  private mergeStorageOriginEffects(
+    ...groups: readonly (readonly StorageOriginEffect[])[]
+  ): readonly StorageOriginEffect[] {
+    const byIdentity = new Map<string, StorageOriginEffect>();
+    const identity = (effect: StorageOriginEffect): string => JSON.stringify([
+      effect.targetParameter ?? null,
+      effect.targetRest ?? false,
+      effect.targetReceiver ?? false,
+      effect.sourceParameters ?? [],
+      effect.sourceExternalDefaults ?? [],
+      effect.sourceRest ?? false,
+      effect.sourceReceiver ?? false,
+      effect.external ?? false,
+    ]);
+    for (const effect of groups.flat()) byIdentity.set(identity(effect), effect);
+    return [...byIdentity.values()].sort((left, right) => identity(left).localeCompare(identity(right)));
   }
 
   private bindingPatternHasExternalOrigin(pattern: BindingPattern): boolean {
@@ -2162,13 +2268,29 @@ export class Analyzer implements TypeEnvironment {
           if (this.hasExternalOrigin(defaultType)) externalDefaults.add(index);
         }
         if (externalDefaults.size > 0) origin = { ...origin, externalDefaults };
+        const storageOriginEffects = this.callableStorageOriginEffects(callable.statement, callable.className);
         if (observed) {
           const next = mergeTypes(resolvedCurrent, observed);
-          const callableChanged = this.updateCallableReturnOrigin(callable.statement, callable.className, next, asynchronous, origin);
+          const callableChanged = this.updateCallableReturnOrigin(
+            callable.statement,
+            callable.className,
+            next,
+            asynchronous,
+            origin,
+            storageOriginEffects,
+          );
           changed = callableChanged || changed;
           anyChanged = callableChanged || anyChanged;
-        } else if (origin.parameters.size > 0 || origin.rest || origin.receiver || externalDefaults.size > 0) {
-          const callableChanged = this.updateCallableReturnOrigin(callable.statement, callable.className, resolvedCurrent, asynchronous, origin);
+        } else if (origin.parameters.size > 0 || origin.rest || origin.receiver || externalDefaults.size > 0
+          || storageOriginEffects.length > 0) {
+          const callableChanged = this.updateCallableReturnOrigin(
+            callable.statement,
+            callable.className,
+            resolvedCurrent,
+            asynchronous,
+            origin,
+            storageOriginEffects,
+          );
           changed = callableChanged || changed;
           anyChanged = callableChanged || anyChanged;
         }
@@ -2535,6 +2657,268 @@ export class Analyzer implements TypeEnvironment {
     };
     visit(statement.body, environment);
     return returned;
+  }
+
+  private callableStorageOriginEffects(
+    statement: AnalyzableFunctionDeclaration,
+    className: string | null,
+  ): readonly StorageOriginEffect[] {
+    const environment = new Map<string, CallableOriginSummary>();
+    let fixedIndex = 0;
+    for (const parameter of statement.parameters) {
+      environment.set(parameter.name, parameter.rest
+        ? { parameters: new Set(), rest: true, receiver: false }
+        : { parameters: new Set([fixedIndex++]), rest: false, receiver: false });
+    }
+    const staticMember = "static" in statement && statement.static === true;
+    if (className && !staticMember) environment.set("self", { parameters: new Set(), rest: false, receiver: true });
+
+    const effects: StorageOriginEffect[] = [];
+    const fixedParameters = statement.parameters.filter((parameter) => !parameter.rest);
+    const sourceExternalDefaults = (origin: CallableOriginSummary): readonly number[] => [...origin.parameters]
+      .filter((index) => {
+        const defaultValue = fixedParameters[index]?.defaultValue;
+        return Boolean(defaultValue && this.hasExternalOrigin(this.refinedReturnExpressionType(defaultValue, className)));
+      })
+      .sort((left, right) => left - right);
+    const recordEffect = (
+      target: CallableOriginSummary,
+      source: CallableOriginSummary,
+      external: boolean,
+      externalDefaults: readonly number[] = sourceExternalDefaults(source),
+    ): void => {
+      if (source.parameters.size === 0 && !source.rest && !source.receiver && !external) return;
+      const sourceFields = {
+        ...(source.parameters.size > 0 ? { sourceParameters: [...source.parameters].sort((a, b) => a - b) } : {}),
+        ...(externalDefaults.length > 0 ? { sourceExternalDefaults: externalDefaults } : {}),
+        ...(source.rest ? { sourceRest: true as const } : {}),
+        ...(source.receiver ? { sourceReceiver: true as const } : {}),
+        ...(external ? { external: true as const } : {}),
+      };
+      for (const targetParameter of [...target.parameters].sort((a, b) => a - b)) {
+        effects.push({ targetParameter, ...sourceFields });
+      }
+      if (target.rest) effects.push({ targetRest: true, ...sourceFields });
+      if (target.receiver) effects.push({ targetReceiver: true, ...sourceFields });
+    };
+    const expressionOrigin = (expression: Expression, bindings: ReadonlyMap<string, CallableOriginSummary>): CallableOriginSummary => (
+      this.callableExpressionOrigin(expression, bindings, className)
+    );
+    const expressionIsExternal = (expression: Expression): boolean => (
+      this.hasExternalOrigin(this.refinedReturnExpressionType(expression, className))
+    );
+    const callTargetOrigin = (
+      call: Extract<Expression, { kind: "CallExpression" }>,
+      callable: CallableValueType,
+      effect: StorageOriginEffect,
+      bindings: ReadonlyMap<string, CallableOriginSummary>,
+    ): CallableOriginSummary => {
+      if (effect.targetParameter !== undefined) {
+        const argument = this.callArgumentForParameter(call, callable, effect.targetParameter);
+        return argument ? expressionOrigin(argument, bindings) : this.emptyCallableOrigin();
+      }
+      if (effect.targetRest) {
+        return this.mergeCallableOrigins(...this.callRestArguments(call, callable).map((argument) => expressionOrigin(argument, bindings)));
+      }
+      if (effect.targetReceiver && call.callee.kind === "MemberExpression") {
+        return expressionOrigin(call.callee.object, bindings);
+      }
+      return this.emptyCallableOrigin();
+    };
+    const callSourceOrigin = (
+      call: Extract<Expression, { kind: "CallExpression" }>,
+      callable: CallableValueType,
+      effect: StorageOriginEffect,
+      bindings: ReadonlyMap<string, CallableOriginSummary>,
+    ): { readonly origin: CallableOriginSummary; readonly external: boolean } => {
+      const origins: CallableOriginSummary[] = [];
+      let external = effect.external === true;
+      for (const index of effect.sourceParameters ?? []) {
+        const argument = this.callArgumentForParameter(call, callable, index);
+        if (argument) origins.push(expressionOrigin(argument, bindings));
+        else if (effect.sourceExternalDefaults?.includes(index)) external = true;
+      }
+      if (effect.sourceRest) {
+        for (const argument of this.callRestArguments(call, callable)) origins.push(expressionOrigin(argument, bindings));
+      }
+      if (effect.sourceReceiver && call.callee.kind === "MemberExpression") {
+        origins.push(expressionOrigin(call.callee.object, bindings));
+      }
+      return { origin: this.mergeCallableOrigins(...origins), external };
+    };
+    const recordCall = (
+      call: Extract<Expression, { kind: "CallExpression" }>,
+      bindings: ReadonlyMap<string, CallableOriginSummary>,
+    ): void => {
+      if (call.callee.kind === "MemberExpression") {
+        const collectionSources = call.callee.property === "append" || call.callee.property === "extend"
+          || call.callee.property === "add" || call.callee.property === "update" ? [call.arguments[0]]
+          : call.callee.property === "insert" ? [call.arguments[1]]
+            : call.callee.property === "set" ? [call.arguments[0], call.arguments[1]]
+              : [];
+        const presentSources = collectionSources.filter((source): source is Expression => source !== undefined);
+        if (presentSources.length > 0) {
+          const source = this.mergeCallableOrigins(...presentSources.map((item) => expressionOrigin(item, bindings)));
+          recordEffect(
+            expressionOrigin(call.callee.object, bindings),
+            source,
+            presentSources.some(expressionIsExternal),
+          );
+        }
+      }
+      const callable = this.callableTypeForOrigin(call.callee, className);
+      if (!callable) return;
+      for (const effect of callable.storageOriginEffects ?? []) {
+        const source = callSourceOrigin(call, callable, effect, bindings);
+        recordEffect(callTargetOrigin(call, callable, effect, bindings), source.origin, source.external);
+      }
+    };
+    const visitExpression = (expression: Expression, bindings: ReadonlyMap<string, CallableOriginSummary>): void => {
+      switch (expression.kind) {
+        case "FStringExpression":
+          for (const part of expression.parts) if (part.kind === "expression") visitExpression(part.value, bindings);
+          return;
+        case "ListExpression":
+          for (const element of expression.elements) visitExpression(element, bindings);
+          return;
+        case "ObjectExpression":
+          for (const property of expression.properties) visitExpression(property.value, bindings);
+          return;
+        case "SpreadExpression":
+          visitExpression(expression.value, bindings);
+          return;
+        case "UnaryExpression":
+          visitExpression(expression.operand, bindings);
+          return;
+        case "BinaryExpression":
+          visitExpression(expression.left, bindings);
+          visitExpression(expression.right, bindings);
+          return;
+        case "ComparisonChainExpression":
+          for (const operand of expression.operands) visitExpression(operand, bindings);
+          return;
+        case "ConditionalExpression":
+          visitExpression(expression.condition, bindings);
+          visitExpression(expression.thenValue, bindings);
+          visitExpression(expression.elseValue, bindings);
+          return;
+        case "IsExpression":
+          visitExpression(expression.value, bindings);
+          return;
+        case "CallExpression":
+          visitExpression(expression.callee, bindings);
+          for (const argument of expression.arguments) visitExpression(argument, bindings);
+          recordCall(expression, bindings);
+          return;
+        case "MemberExpression":
+          visitExpression(expression.object, bindings);
+          return;
+        case "IndexExpression":
+          visitExpression(expression.object, bindings);
+          visitExpression(expression.index, bindings);
+          return;
+        default:
+          return;
+      }
+    };
+    const mergeBranchBindings = (
+      target: Map<string, CallableOriginSummary>,
+      branches: readonly ReadonlyMap<string, CallableOriginSummary>[],
+    ): void => {
+      for (const name of target.keys()) {
+        target.set(name, this.mergeCallableOrigins(
+          target.get(name)!,
+          ...branches.flatMap((branch) => branch.has(name) ? [branch.get(name)!] : []),
+        ));
+      }
+    };
+    const visit = (statements: readonly Statement[], bindings: Map<string, CallableOriginSummary>): void => {
+      for (const child of statements) {
+        if (child.kind === "VariableDeclaration") {
+          visitExpression(child.initializer, bindings);
+          this.bindCallableOriginPattern(child.pattern, expressionOrigin(child.initializer, bindings), bindings);
+        } else if (child.kind === "AssignmentStatement") {
+          if (child.target.kind === "MemberExpression" || child.target.kind === "IndexExpression") {
+            visitExpression(child.target.object, bindings);
+            if (child.target.kind === "IndexExpression") visitExpression(child.target.index, bindings);
+            visitExpression(child.value, bindings);
+            if (child.operator === "=") {
+              recordEffect(
+                expressionOrigin(child.target.object, bindings),
+                expressionOrigin(child.value, bindings),
+                expressionIsExternal(child.value),
+              );
+            }
+          } else {
+            visitExpression(child.value, bindings);
+            if (child.operator === "=" && bindings.has(child.target.name)) {
+              bindings.set(child.target.name, expressionOrigin(child.value, bindings));
+            }
+          }
+        } else if (child.kind === "ExpressionStatement") visitExpression(child.expression, bindings);
+        else if (child.kind === "ReturnStatement") {
+          if (child.value) visitExpression(child.value, bindings);
+        } else if (child.kind === "ThrowStatement") visitExpression(child.value, bindings);
+        else if (child.kind === "AssertStatement") {
+          visitExpression(child.condition, bindings);
+          if (child.message) visitExpression(child.message, bindings);
+        } else if (child.kind === "IfStatement") {
+          visitExpression(child.condition, bindings);
+          const thenBindings = new Map(bindings);
+          visit(child.thenBody, thenBindings);
+          const elseBindings = new Map(bindings);
+          if (child.elseBody) visit(child.elseBody, elseBindings);
+          mergeBranchBindings(bindings, [thenBindings, elseBindings]);
+        } else if (child.kind === "MatchStatement") {
+          visitExpression(child.value, bindings);
+          const matched = expressionOrigin(child.value, bindings);
+          const branches = child.cases.map((branch) => {
+            const branchBindings = new Map(bindings);
+            this.bindCallableMatchOriginPattern(branch.pattern, matched, branchBindings);
+            if (branch.guard) visitExpression(branch.guard, branchBindings);
+            visit(branch.body, branchBindings);
+            return branchBindings;
+          });
+          if (child.elseBody) {
+            const elseBindings = new Map(bindings);
+            visit(child.elseBody, elseBindings);
+            branches.push(elseBindings);
+          } else branches.push(new Map(bindings));
+          mergeBranchBindings(bindings, branches);
+        } else if (child.kind === "ForStatement") {
+          visitExpression(child.iterable, bindings);
+          const bodyBindings = new Map(bindings);
+          this.bindCallableOriginPattern(child.pattern, expressionOrigin(child.iterable, bindings), bodyBindings);
+          visit(child.body, bodyBindings);
+          mergeBranchBindings(bindings, [bodyBindings]);
+        } else if (child.kind === "WhileStatement") {
+          visitExpression(child.condition, bindings);
+          const bodyBindings = new Map(bindings);
+          visit(child.body, bodyBindings);
+          mergeBranchBindings(bindings, [bodyBindings]);
+        } else if (child.kind === "TryStatement") {
+          const branches: Map<string, CallableOriginSummary>[] = [];
+          const tryBindings = new Map(bindings);
+          visit(child.tryBody, tryBindings);
+          branches.push(tryBindings);
+          if (child.catchBody) {
+            const catchBindings = new Map(bindings);
+            visit(child.catchBody, catchBindings);
+            branches.push(catchBindings);
+          }
+          mergeBranchBindings(bindings, branches);
+          if (child.finallyBody) visit(child.finallyBody, bindings);
+        }
+      }
+    };
+    visit(statement.body, environment);
+    const summarized: CallableValueType = this.withCallableStorageOriginEffects({
+      kind: "function",
+      parameters: [],
+      requiredParameters: 0,
+      result: nullType,
+    }, effects);
+    return summarized.storageOriginEffects ?? [];
   }
 
   private callableTypeForOrigin(expression: Expression, className: string | null): CallableValueType | null {
@@ -3520,6 +3904,7 @@ export class Analyzer implements TypeEnvironment {
         this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
           this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
         });
+        this.applyCallableStorageOriginEffects(callee, calleeExpression, arguments_, argumentNames);
         this.optionalCallees.add(spanIdentity(callSpan));
         return optionalOf(this.callableResultWithArgumentOrigins(callee, callee.result, calleeExpression, arguments_, argumentNames));
       }
@@ -3611,6 +3996,7 @@ export class Analyzer implements TypeEnvironment {
         this.recordRuntimeObjectShape(arguments_[0], callee.result);
       }
       this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
+      this.applyCallableStorageOriginEffects(callee, calleeExpression, arguments_, argumentNames);
       if (callee.result.kind === "optional") this.optionalCalls.add(spanIdentity(callSpan));
       if (calleeExpression.kind === "MemberExpression" && calleeExpression.property === "parse"
         && this.expandAliases(
@@ -3628,6 +4014,7 @@ export class Analyzer implements TypeEnvironment {
       this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
         this.checkArguments(arguments_, inner.parameters, callSpan, inner.requiredParameters, inner.rest, argumentNames, inner.parameterNames);
       });
+      this.applyCallableStorageOriginEffects(inner, calleeExpression, arguments_, argumentNames);
       if (!continuesOptionalChain(calleeExpression)) {
         this.typeError("Use a presence check or an optional access chain before calling an optional function", calleeExpression.span);
       }
@@ -4352,6 +4739,13 @@ export class Analyzer implements TypeEnvironment {
       effectfulRead = object.external === true || Boolean(getter
         || privateField && (this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false)
         || classKey.startsWith("js:") && !privateMethod && !method && (privateField || field));
+      if (readValue && (getter || privateField && (this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false))) {
+        this.applyGetterStorageOriginEffects(
+          this.findGetterStorageOriginEffects(classKey, property),
+          objectExpression,
+          object,
+        );
+      }
       if (privateField || privateMethod) {
         this.privateMembers.add(spanIdentity(memberSpan));
       } else if (!field && !getter && !method && this.declaresPrivateMember(classKey, property, false)) {
@@ -4540,6 +4934,55 @@ export class Analyzer implements TypeEnvironment {
         return { kind: "function", parameters: [], requiredParameters: 0, result: { kind: "list", element: set.element } };
       default:
         return null;
+    }
+  }
+
+  private applyCallableStorageOriginEffects(
+    callable: CallableValueType,
+    calleeExpression: Expression,
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+  ): void {
+    for (const effect of callable.storageOriginEffects ?? []) {
+      let sourceIsExternal = effect.external === true;
+      for (const index of effect.sourceParameters ?? []) {
+        const argument = this.argumentForCallableParameter(arguments_, argumentNames, callable, index);
+        if (argument) sourceIsExternal ||= this.hasExternalOrigin(this.inferredExpressionType(argument));
+        else if (effect.sourceExternalDefaults?.includes(index)) sourceIsExternal = true;
+      }
+      if (effect.sourceRest) {
+        sourceIsExternal ||= this.restArgumentsForCallable(arguments_, argumentNames, callable)
+          .some((argument) => this.hasExternalOrigin(this.inferredExpressionType(argument)));
+      }
+      if (effect.sourceReceiver && calleeExpression.kind === "MemberExpression") {
+        sourceIsExternal ||= this.hasExternalOrigin(this.inferredExpressionType(calleeExpression.object));
+      }
+      if (!sourceIsExternal) continue;
+      if (effect.targetParameter !== undefined) {
+        const target = this.argumentForCallableParameter(arguments_, argumentNames, callable, effect.targetParameter);
+        if (target) this.retainContainedOrigin(target);
+      }
+      if (effect.targetRest) {
+        for (const target of this.restArgumentsForCallable(arguments_, argumentNames, callable)) {
+          this.retainContainedOrigin(target);
+        }
+      }
+      if (effect.targetReceiver && calleeExpression.kind === "MemberExpression") {
+        this.retainContainedOrigin(calleeExpression.object);
+      }
+    }
+  }
+
+  private applyGetterStorageOriginEffects(
+    effects: readonly StorageOriginEffect[],
+    receiverExpression: Expression,
+    receiverType: ValueType,
+  ): void {
+    for (const effect of effects) {
+      if (!effect.targetReceiver) continue;
+      const sourceIsExternal = effect.external === true
+        || effect.sourceReceiver === true && this.hasExternalOrigin(receiverType);
+      if (sourceIsExternal) this.retainContainedOrigin(receiverExpression);
     }
   }
 
@@ -4753,13 +5196,19 @@ export class Analyzer implements TypeEnvironment {
   ): ValueType {
     const result = this.markExternalAggregate(statement.returnType ? resolve(statement.returnType) : nullType);
     const rest = statement.parameters.find((parameter) => parameter.rest);
+    const parameters = statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolve(parameter.type));
+    const storageOriginEffects: StorageOriginEffect[] = parameters.flatMap((parameter, targetParameter) => (
+      this.referenceLike(parameter) ? [{ targetParameter, external: true as const }] : []
+    ));
+    if (rest && this.referenceLike(resolve(rest.type))) storageOriginEffects.push({ targetRest: true, external: true });
     return {
       kind: "function",
-      parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolve(parameter.type)),
+      parameters,
       parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
       requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
       ...(rest ? { rest: resolve(rest.type) } : {}),
       result: statement.asynchronous ? { kind: "promise", value: this.resolvedAsyncResult(result) } : result,
+      ...(storageOriginEffects.length > 0 ? { storageOriginEffects } : {}),
     };
   }
 

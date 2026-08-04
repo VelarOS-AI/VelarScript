@@ -305,6 +305,14 @@ helper that returns its input or a method that returns `self`. Rebinding a
 variable to a freshly allocated value separates it from aliases of the previous
 object.
 
+This rule crosses function boundaries. A helper that stores one parameter in
+another parameter or in `self` carries that relationship in its analyzed module
+contract, including named arguments, rest parameters, forwarding helpers,
+external defaults, captured host values, and mutating getters. Passing a local
+aggregate to safe JavaScript also permits the host to retain or populate it, so
+later aggregate reads use host-origin rules unless the caller passes an owned
+snapshot that is discarded afterward.
+
 An f-string converts each embedded value at its source position. Primitive and
 enum conversion is inert. Converting an object may invoke its `toString`, so
 object interpolation is an ordinary effect boundary; save any checked value

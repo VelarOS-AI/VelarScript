@@ -118,6 +118,11 @@ Compiler and framework changes:
   Flow-scoped reference identities propagate that state through direct and
   conditional aliases, narrowed bindings, identity functions, and methods
   returning `self`, while a fresh rebind separates the previous object.
+- Functions and methods now publish composable storage-origin effects for
+  parameter, rest, receiver, default, and captured-value writes. Forwarding,
+  named calls, declaration-before-use, inherited mutating getters, module
+  boundaries, and conservative safe-JavaScript argument mutation preserve the
+  same provenance contract.
 - Callable and constructor default provenance is applied only when that
   parameter is omitted; an explicit owned argument is not contaminated by an
   external default it replaces.

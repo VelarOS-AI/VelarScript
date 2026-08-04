@@ -113,6 +113,15 @@ variable to a fresh allocation gives it a distinct identity. Collection
 mutators route through this storage operation instead of maintaining a second
 origin model.
 
+Callable contracts additionally carry storage-origin effects. Each effect maps
+a mutated parameter, rest item, or method receiver to the parameters, rest
+values, receiver, external default, or captured host value that may be stored
+inside it. The same declaration-order-independent fixed point used for return
+provenance composes these effects through forwarding helpers, named calls,
+methods, getters, and module interfaces. Safe-JavaScript functions conservatively
+expose reference arguments to host mutation. Call sites apply the effect to the
+same flow-scoped reference identities used by direct writes.
+
 Runtime validation proves a value's current shape; it does not prove that a
 Proxy will preserve that shape on its next operation. `Type.parse`, `is`, and
 type-pattern narrowing therefore keep host origin when their input is unchecked

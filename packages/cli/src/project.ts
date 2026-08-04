@@ -10,6 +10,7 @@ import {
   type CompileResult,
   type EnumInfo,
   type ModuleInspection,
+  type StorageOriginEffect,
   type ValueType,
 } from "@velarscript/compiler";
 import type { ResolvedFrameworkHost } from "./config.ts";
@@ -457,9 +458,15 @@ function moduleInterfaceIdentity(interface_: ModuleInspection["moduleInterface"]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, info]) => `${name}:${info.identity}:${[...info.members].sort().join(",")}`)
     .join("|");
+  const getterEffects = (values: ReadonlyMap<string, readonly StorageOriginEffect[]> | undefined): string => (
+    [...values ?? []]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, effects]) => `${name}:${JSON.stringify(effects)}`)
+      .join("|")
+  );
   const classes = [...interface_.classes]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:origin:${info.constructorOriginParameters?.join(",") ?? ""}:${info.constructorOriginRest ? "rest" : ""}:${info.constructorContainsExternal ? "contains-external" : ""}:defaults:${info.constructorExternalDefaults?.join(",") ?? ""}:${typeMap(new Map([
+    .map(([name, info]) => `${name}:${info.identity ?? ""}:${info.base ?? ""}:origin:${info.constructorOriginParameters?.join(",") ?? ""}:${info.constructorOriginRest ? "rest" : ""}:${info.constructorContainsExternal ? "contains-external" : ""}:defaults:${info.constructorExternalDefaults?.join(",") ?? ""}:getters:${getterEffects(info.getterStorageOriginEffects)}:static-getters:${getterEffects(info.staticGetterStorageOriginEffects)}:${typeMap(new Map([
       ...[...info.fields].map(([field, value]) => [`field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
       ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
       ...[...info.staticFields].map(([field, value]) => [`static-field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
@@ -860,11 +867,13 @@ function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): Cla
     abstract: info.abstract,
     fields: new Map([...info.fields].map(([name, field]) => [name, { mutable: field.mutable, type: renameType(field.type, aliases) }])),
     getters: info.getters,
+    ...(info.getterStorageOriginEffects ? { getterStorageOriginEffects: info.getterStorageOriginEffects } : {}),
     abstractGetters: info.abstractGetters,
     methods: new Map([...info.methods].map(([name, type]) => [name, renameType(type, aliases)])),
     abstractMethods: info.abstractMethods,
     staticFields: new Map([...info.staticFields].map(([name, field]) => [name, { mutable: field.mutable, type: renameType(field.type, aliases) }])),
     staticGetters: info.staticGetters,
+    ...(info.staticGetterStorageOriginEffects ? { staticGetterStorageOriginEffects: info.staticGetterStorageOriginEffects } : {}),
     staticMethods: new Map([...info.staticMethods].map(([name, type]) => [name, renameType(type, aliases)])),
   };
 }

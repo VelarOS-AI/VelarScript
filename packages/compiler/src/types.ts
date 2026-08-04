@@ -5,6 +5,17 @@ export interface EnumInfo {
   readonly members: ReadonlySet<string>;
 }
 
+export interface StorageOriginEffect {
+  readonly targetParameter?: number;
+  readonly targetRest?: true;
+  readonly targetReceiver?: true;
+  readonly sourceParameters?: readonly number[];
+  readonly sourceExternalDefaults?: readonly number[];
+  readonly sourceRest?: true;
+  readonly sourceReceiver?: true;
+  readonly external?: true;
+}
+
 export type ValueType =
   | { readonly kind: "unknown"; readonly restricted?: boolean }
   | { readonly kind: "any" }
@@ -33,9 +44,9 @@ export type ValueType =
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | { readonly kind: "node" }
   | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly intrinsic?: string }
-  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[] }
-  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[] }
-  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[] }
+  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[]; readonly storageOriginEffects?: readonly StorageOriginEffect[] }
+  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[]; readonly storageOriginEffects?: readonly StorageOriginEffect[] }
+  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[]; readonly storageOriginEffects?: readonly StorageOriginEffect[] }
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
 export const unknownType: ValueType = { kind: "unknown" };
@@ -168,6 +179,40 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
   return unionOf([left, right]);
 }
 
+function storageOriginEffectIdentity(effect: StorageOriginEffect): string {
+  return `${effect.targetReceiver ? "receiver" : effect.targetRest ? "rest" : `parameter:${effect.targetParameter ?? ""}`}`
+    + `<-${effect.sourceReceiver ? "receiver:" : ""}`
+    + `${effect.sourceRest ? "rest:" : ""}`
+    + `${effect.external ? "external:" : ""}`
+    + `${effect.sourceExternalDefaults?.length ? `defaults:${[...effect.sourceExternalDefaults].sort((a, b) => a - b).join(",")}:` : ""}`
+    + `${[...(effect.sourceParameters ?? [])].sort((a, b) => a - b).join(",")}`;
+}
+
+function mergeStorageOriginEffects(
+  left: readonly StorageOriginEffect[] | undefined,
+  right: readonly StorageOriginEffect[] | undefined,
+): readonly StorageOriginEffect[] {
+  const effects = new Map<string, StorageOriginEffect>();
+  for (const effect of [...(left ?? []), ...(right ?? [])]) {
+    const normalized: StorageOriginEffect = {
+      ...(effect.targetParameter !== undefined ? { targetParameter: effect.targetParameter } : {}),
+      ...(effect.targetRest ? { targetRest: true } : {}),
+      ...(effect.targetReceiver ? { targetReceiver: true } : {}),
+      ...(effect.sourceParameters?.length
+        ? { sourceParameters: [...new Set(effect.sourceParameters)].sort((a, b) => a - b) }
+        : {}),
+      ...(effect.sourceExternalDefaults?.length
+        ? { sourceExternalDefaults: [...new Set(effect.sourceExternalDefaults)].sort((a, b) => a - b) }
+        : {}),
+      ...(effect.sourceRest ? { sourceRest: true } : {}),
+      ...(effect.sourceReceiver ? { sourceReceiver: true } : {}),
+      ...(effect.external ? { external: true } : {}),
+    };
+    effects.set(storageOriginEffectIdentity(normalized), normalized);
+  }
+  return [...effects.values()].sort((a, b) => storageOriginEffectIdentity(a).localeCompare(storageOriginEffectIdentity(b)));
+}
+
 function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
   if (left.kind === "object" && right.kind === "object") {
     return {
@@ -241,6 +286,7 @@ function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
       ...(left.resultOriginExternalDefaults ?? []),
       ...(right.resultOriginExternalDefaults ?? []),
     ])].sort((a, b) => a - b);
+    const storageOriginEffects = mergeStorageOriginEffects(left.storageOriginEffects, right.storageOriginEffects);
     return {
       ...left,
       parameters: left.parameters.map((parameter, index) => mergeEquivalentMetadata(parameter, right.parameters[index]!)),
@@ -250,6 +296,7 @@ function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
       ...(left.resultOriginRest || right.resultOriginRest ? { resultOriginRest: true as const } : {}),
       ...(left.resultOriginReceiver || right.resultOriginReceiver ? { resultOriginReceiver: true as const } : {}),
       ...(resultOriginExternalDefaults.length > 0 ? { resultOriginExternalDefaults } : {}),
+      ...(storageOriginEffects.length > 0 ? { storageOriginEffects } : {}),
     };
   }
   return left;
@@ -392,7 +439,7 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(nested).join(",")}:${type.rest ? nested(type.rest) : ""}:${nested(type.result)}${includeExternal ? `:origin:${type.resultOriginParameters?.join(",") ?? ""}:${type.resultOriginRest ? "rest" : ""}:${type.resultOriginReceiver ? "receiver" : ""}:defaults:${type.resultOriginExternalDefaults?.join(",") ?? ""}` : ""}`;
+      return `${type.kind}:${type.kind === "intrinsic" ? `${type.name}:` : ""}${type.parameterNames?.join(",") ?? ""}:${type.requiredParameters}:${type.parameters.map(nested).join(",")}:${type.rest ? nested(type.rest) : ""}:${nested(type.result)}${includeExternal ? `:origin:${type.resultOriginParameters?.join(",") ?? ""}:${type.resultOriginRest ? "rest" : ""}:${type.resultOriginReceiver ? "receiver" : ""}:defaults:${type.resultOriginExternalDefaults?.join(",") ?? ""}:storage:${(type.storageOriginEffects ?? []).map(storageOriginEffectIdentity).sort().join(";")}` : ""}`;
     case "componentConstructor":
       return `component:${type.intrinsic ?? ""}:${type.name}:${[...type.props]
         .map(([name, value]) => [name, nested(value)] as const)

@@ -895,6 +895,18 @@ const unsafeSpread: Outer = {...aliasedOuter}
     { kind: "intrinsic", name: "json.stringify", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
     { kind: "intrinsic", name: "json.clone", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
   ), false);
+  const inertCallable = {
+    kind: "function" as const,
+    parameters: [ownedClass, ownedNamed],
+    requiredParameters: 2,
+    result: { kind: "null" as const },
+  };
+  const storageEffectCallable = {
+    ...inertCallable,
+    storageOriginEffects: [{ targetParameter: 0, sourceParameters: [1] }],
+  };
+  assert.equal(sameType(inertCallable, storageEffectCallable), true);
+  assert.notEqual(analysisTypeIdentity(inertCallable), analysisTypeIdentity(storageEffectCallable));
 
   const redundantNull = compile("const value: null? = null\n");
   assert.ok(redundantNull.diagnostics.some((item) => item.message === "'null?' is redundant; use 'null'"));
@@ -11671,6 +11683,140 @@ if updatedSetValues[0].label:
     const repeated: string = updatedSetValues[0].label
 `.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
   assert.equal(storedExternalCollectionValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 7);
+
+  const callableStoredExternalValues = compileCore(`
+type Profile:
+    label: string?
+
+class Box:
+    let profile: Profile
+
+    constructor(profile: Profile):
+        self.profile = profile
+
+    def store(value: Profile):
+        self.profile = value
+
+    def capture():
+        self.profile = profile
+
+    get touch() -> Profile:
+        self.profile = profile
+        return self.profile
+
+class ChildBox extends Box:
+    constructor(profile: Profile):
+        super(profile)
+
+extern module "host-sdk":
+    export def hydrate(box: Box)
+
+import js {profile} from "host-sdk"
+import js {hydrate} from "host-sdk"
+
+const owned: Profile = {label: "owned"}
+
+const early = Box(owned)
+store(value=profile, box=early)
+const earlyValue = early.profile
+if earlyValue.label:
+    const repeated: string = earlyValue.label
+
+const capturedBox = Box(owned)
+captured(capturedBox)
+const capturedValue = capturedBox.profile
+if capturedValue.label:
+    const repeated: string = capturedValue.label
+
+const forwardedBox = Box(owned)
+forward(forwardedBox, profile)
+const forwardedValue = forwardedBox.profile
+if forwardedValue.label:
+    const repeated: string = forwardedValue.label
+
+const defaultedBox = Box(owned)
+storeDefault(defaultedBox)
+const defaultedValue = defaultedBox.profile
+if defaultedValue.label:
+    const repeated: string = defaultedValue.label
+
+const explicitBox = Box(owned)
+storeDefault(explicitBox, owned)
+const explicitValue = explicitBox.profile
+if explicitValue.label:
+    const stable: string = explicitValue.label
+
+const restLeft = Box(owned)
+const restRight = Box(owned)
+storeRest(profile, restLeft, restRight)
+const restLeftValue = restLeft.profile
+if restLeftValue.label:
+    const repeated: string = restLeftValue.label
+const restRightValue = restRight.profile
+if restRightValue.label:
+    const repeated: string = restRightValue.label
+
+const methodBox = Box(owned)
+methodBox.store(profile)
+const methodValue = methodBox.profile
+if methodValue.label:
+    const repeated: string = methodValue.label
+
+const capturedMethodBox = Box(owned)
+capturedMethodBox.capture()
+const capturedMethodValue = capturedMethodBox.profile
+if capturedMethodValue.label:
+    const repeated: string = capturedMethodValue.label
+
+const hydratedBox = Box(owned)
+hydrate(hydratedBox)
+const hydratedValue = hydratedBox.profile
+if hydratedValue.label:
+    const repeated: string = hydratedValue.label
+
+const getterBox = Box(owned)
+const touched = getterBox.touch
+const getterValue = getterBox.profile
+if getterValue.label:
+    const repeated: string = getterValue.label
+
+const inheritedGetterBox = ChildBox(owned)
+const inheritedTouched = inheritedGetterBox.touch
+const inheritedGetterValue = inheritedGetterBox.profile
+if inheritedGetterValue.label:
+    const repeated: string = inheritedGetterValue.label
+
+export def store(box: Box, value: Profile):
+    box.profile = value
+
+def captured(box: Box):
+    box.profile = profile
+
+def forward(box: Box, value: Profile):
+    store(box, value)
+
+def storeDefault(box: Box, value: Profile = profile):
+    box.profile = value
+
+def storeRest(value: Profile, ...boxes: Box):
+    for box in boxes:
+        box.profile = value
+`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
+  assert.equal(callableStoredExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 11);
+  const callableStoreInterface = callableStoredExternalValues.moduleInterface.exports.get("store");
+  assert.deepEqual(callableStoreInterface?.kind === "function" ? callableStoreInterface.storageOriginEffects : null, [{
+    targetParameter: 0,
+    sourceParameters: [1],
+  }]);
+  const callableBox = callableStoredExternalValues.moduleInterface.classes.get("Box");
+  const callableStoreMethod = callableBox?.methods.get("store");
+  assert.deepEqual(callableStoreMethod?.kind === "function"
+    ? callableStoreMethod.storageOriginEffects
+    : null, [{ targetReceiver: true, sourceParameters: [0] }]);
+  assert.deepEqual(callableBox?.getterStorageOriginEffects?.get("touch"), [{
+    targetReceiver: true,
+    external: true,
+  }]);
 
   const externalListType: ValueType = { kind: "list", element: { kind: "number" }, external: true };
   const externalList = compileCore(`
