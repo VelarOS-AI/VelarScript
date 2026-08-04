@@ -584,6 +584,32 @@ print(await task())
     assert.equal(invalid.diagnostics.filter((item) => item.code === "VEL4007" && /parameter default value/u.test(item.message)).length, 1, JSON.stringify(invalid.diagnostics));
     assert.equal(invalid.code, null);
   }
+
+  for (const source of [
+    `def choose(first: number = 1, second: number) -> number:\n    return second\n`,
+    `class Pair:\n    const second: number\n\n    constructor(first: number = 1, second: number):\n        self.second = second\n`,
+    `class Picker:\n    def choose(first: number = 1, second: number) -> number:\n        return second\n`,
+    `const choose = (first: number = 1, second: number) => second\n`,
+    `extern module "library":\n    export def choose(first: number = 1, second: number) -> number\n`,
+  ]) {
+    const invalidOrder = compile(source);
+    assert.equal(
+      invalidOrder.diagnostics.filter((item) => item.code === "VEL2016" && /required parameter cannot follow/u.test(item.message)).length,
+      1,
+      JSON.stringify(invalidOrder.diagnostics),
+    );
+  }
+
+  const namedDefault = compile(`
+def choose(first: number, second: number = 2) -> number:
+    return first + second
+
+print(choose(first=3))
+`.trimStart());
+  assert.deepEqual(namedDefault.diagnostics, []);
+  const namedExecution = executeModule(namedDefault.code ?? "");
+  assert.equal(namedExecution.status, 0, String(namedExecution.stderr));
+  assert.equal(namedExecution.stdout, "5\n");
 });
 
 test("async declarations annotate the resolved value instead of a nested Promise", () => {
@@ -2415,9 +2441,12 @@ enum Status:
     ready
     ready
     parse
+    prototype
+    __proto__
 `.trimStart());
   assert.ok(malformed.diagnostics.some((item) => /declared more than once/u.test(item.message)));
   assert.ok(malformed.diagnostics.some((item) => /reserved for runtime validation/u.test(item.message)));
+  assert.equal(malformed.diagnostics.filter((item) => /does not expose prototype manipulation/u.test(item.message)).length, 2);
 
   const incomplete = compile(`
 enum Status:
@@ -7944,6 +7973,10 @@ export declare class BrokenFormatter extends BaseFormatter {
 export declare function overloaded(value: string): string;
 export declare function overloaded(value: number): number;
 export declare function identity<T>(value: T): T;
+export declare function invalidOrder(first?: string, second: number): number;
+export declare class InvalidOrder {
+  constructor(first?: string, second: number);
+}
 `, "fixture/index.d.ts");
   assert.equal(describeType(declarations.exports.get("format")!), "(number, { prefix?: string, precision: number } = default) -> Promise<string>");
   assert.equal(describeType(declarations.exports.get("join")!), "(string, ...string) -> string");
@@ -7991,6 +8024,8 @@ export declare function identity<T>(value: T): T;
   assert.equal(describeType(declarations.classes.get("Formatter")!.staticFields.get("version")!.type), "string");
   assert.equal(describeType(declarations.exports.get("overloaded")!), "unknown");
   assert.equal(describeType(declarations.exports.get("identity")!), "unknown");
+  assert.equal(describeType(declarations.exports.get("invalidOrder")!), "unknown");
+  assert.equal(describeType(declarations.exports.get("InvalidOrder")!), "unknown");
   assert.ok(declarations.warnings.some((warning) => /Overloaded export 'overloaded'/u.test(warning)));
   assert.ok(declarations.warnings.some((warning) => /Recursive interface 'RecursiveClient'/u.test(warning)));
   assert.ok(declarations.warnings.some((warning) => /Generic or complex interface base 'GenericBase<string>'/u.test(warning)));
@@ -8001,6 +8036,8 @@ export declare function identity<T>(value: T): T;
   assert.ok(declarations.warnings.some((warning) => /Record is a plain JavaScript object/u.test(warning)));
   assert.ok(declarations.warnings.some((warning) => /literal type/u.test(warning)));
   assert.ok(declarations.warnings.some((warning) => /void cannot be supplied/u.test(warning)));
+  assert.ok(declarations.warnings.some((warning) => /Required parameter 'second: number' follows an optional parameter/u.test(warning)));
+  assert.ok(declarations.warnings.some((warning) => /Required constructor parameter 'second: number' follows an optional parameter/u.test(warning)));
 
   const restrictedLiteral = compileCore('import js {setMode} from "fixture"\nsetMode("fast")\n', {
     analysis: { imports: new Map([["setMode", declarations.exports.get("setMode")!]]) },
@@ -9814,6 +9851,36 @@ print(score.value)
   const execution = executeModule(valid.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "5\n");
+});
+
+test("class member names cannot reopen JavaScript constructor or prototype behavior", () => {
+  for (const source of [
+    `class Invalid:\n    const __proto__: string = "value"\n`,
+    `class Invalid:\n    static const prototype: string = "value"\n`,
+    `class Invalid:\n    def constructor() -> string:\n        return "value"\n`,
+    `class Invalid:\n    get constructor() -> string:\n        return "value"\n`,
+    `class Invalid:\n    private def constructor() -> string:\n        return "value"\n`,
+    `extern module "library":\n    export class Invalid:\n        static const prototype: string\n`,
+  ]) {
+    const result = compile(source);
+    assert.ok(result.diagnostics.some((item) => item.code === "VEL4014"), JSON.stringify(result.diagnostics));
+    assert.equal(result.code, null);
+  }
+
+  const record = compile(`
+type Metadata:
+    constructor: string
+    prototype: string
+    __proto__: string
+
+const value: Metadata = {constructor: "data", prototype: "data", "__proto__": "data"}
+const {constructor, prototype, __proto__} = value
+print(constructor + prototype + __proto__)
+`.trimStart());
+  assert.deepEqual(record.diagnostics, []);
+  const execution = executeModule(record.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "datadatadata\n");
 });
 
 test("class getters expose native read-only derived properties with explicit inheritance", () => {

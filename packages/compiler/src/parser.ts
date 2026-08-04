@@ -582,6 +582,7 @@ export class Parser {
     this.expect("leftParen", "Expected '('");
     const parameters: Parameter[] = [];
     let sawRest = false;
+    let sawDefault = false;
     if (!this.check("rightParen")) {
       do {
         const rest = this.match("ellipsis");
@@ -598,7 +599,11 @@ export class Parser {
         if (rest && defaultValue) {
           this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot have a default value", parameterSpan));
         }
+        if (!rest && !defaultValue && sawDefault && !sawRest) {
+          this.diagnostics.push(diagnostic("VEL2016", "A required parameter cannot follow a parameter with a default value", parameterSpan));
+        }
         parameters.push({ name: name.value, type, defaultValue, rest, span: parameterSpan });
+        if (!rest && defaultValue) sawDefault = true;
         sawRest ||= rest;
       } while (this.match("comma") && !this.check("rightParen"));
     }
@@ -610,6 +615,7 @@ export class Parser {
     this.expect("leftParen", "Expected '('");
     const parameters: ClassParameter[] = [];
     let sawRest = false;
+    let sawDefault = false;
     if (!this.check("rightParen")) {
       do {
         const rest = this.match("ellipsis");
@@ -622,7 +628,11 @@ export class Parser {
         if (rest && !type) this.diagnostics.push(diagnostic("VEL2016", "A rest parameter requires an element type", parameterSpan));
         if (rest && defaultValue) this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot have a default value", parameterSpan));
         if (rest && binding) this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot declare a class field", parameterSpan));
+        if (!rest && !defaultValue && sawDefault && !sawRest) {
+          this.diagnostics.push(diagnostic("VEL2016", "A required parameter cannot follow a parameter with a default value", parameterSpan));
+        }
         parameters.push({ name: name.value, binding, private: false, type, defaultValue, rest, span: parameterSpan });
+        if (!rest && defaultValue) sawDefault = true;
         sawRest ||= rest;
       } while (this.match("comma") && !this.check("rightParen"));
     }

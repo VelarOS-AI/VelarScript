@@ -405,6 +405,8 @@ users expect and JavaScript users can read immediately.
 - An optional call that short-circuits does not evaluate its arguments.
 - Lowered JavaScript receives arguments in declaration order.
 - No runtime keyword-argument record is created.
+- Once a fixed parameter has a default value, every following fixed parameter
+  also has a default value. This keeps positional and named calls identical.
 
 Arrows are concise expression functions:
 
@@ -413,7 +415,8 @@ const doubled = values.map(value => value * 2)
 const load = async id => await fetchUser(id)
 ```
 
-Rest parameters use `...values`. A rest parameter is always final.
+Rest parameters use `...values`. A rest parameter is always final and may
+follow defaulted fixed parameters.
 Call spread uses the same boundary in reverse: it targets a declared rest
 parameter after every fixed argument has been written explicitly. The spread
 value must be a checked dense List; instance iterator overrides are ignored.

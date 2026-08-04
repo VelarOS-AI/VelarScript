@@ -1019,11 +1019,13 @@ export class Analyzer implements TypeEnvironment {
               if (parameter.binding) members.add(`instance:${parameter.name}`);
             }
             for (const field of declaration.fields) {
+              this.validateClassMemberName(field.name, field.span, true);
               const key = `${field.static ? "static" : "instance"}:${field.name}`;
               if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${field.name}' more than once`, field.span);
               members.add(key);
             }
             for (const method of declaration.methods) {
+              this.validateClassMemberName(method.name, method.span, true);
               const key = `${method.static ? "static" : "instance"}:${method.name}`;
               if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${method.name}' more than once`, method.span);
               members.add(key);
@@ -1104,6 +1106,9 @@ export class Analyzer implements TypeEnvironment {
         for (const member of statement.members) {
           if (member.name === "is" || member.name === "parse") {
             this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is reserved for runtime validation`, member.span));
+          }
+          if (member.name === "prototype" || member.name === "__proto__") {
+            this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is unavailable because VelarScript does not expose prototype manipulation`, member.span));
           }
           if (seen.has(member.name)) {
             this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is declared more than once`, member.span));
@@ -1574,6 +1579,9 @@ export class Analyzer implements TypeEnvironment {
     const outerClass = this.currentClass;
     this.constructorDepth = 0;
     this.currentClass = statement.name;
+    for (const member of [...statement.fields, ...statement.getters, ...statement.methods]) {
+      this.validateClassMemberName(member.name, member.span);
+    }
     if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "classConstructor", name: statement.name }, statement.span);
     const baseName = statement.base?.name ?? null;
     if (baseName) {
@@ -1805,6 +1813,15 @@ export class Analyzer implements TypeEnvironment {
     }
     this.constructorDepth = outerConstructorDepth;
     this.currentClass = outerClass;
+  }
+
+  private validateClassMemberName(name: string, memberSpan: Span, external = false): void {
+    const label = external ? "Extern class member" : "Class member";
+    if (name === "constructor") {
+      this.diagnostics.push(diagnostic("VEL4014", `${label} 'constructor' is reserved for the constructor(...) declaration`, memberSpan));
+    } else if (name === "prototype" || name === "__proto__") {
+      this.diagnostics.push(diagnostic("VEL4014", `${label} '${name}' is unavailable because VelarScript does not expose prototype manipulation`, memberSpan));
+    }
   }
 
   private analyzeClassInitialization(statement: ClassDeclaration): void {

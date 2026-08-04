@@ -626,7 +626,7 @@ export function parseTypeScriptDeclarations(
     else if (signature.generic) warnings.push(`Generic function '${local}' is outside the VelarScript declaration bridge and was kept as unknown`);
     else {
       const parameters = parseParameters(signature.parameters, (value) => parse(value, "to-js"), warnings);
-      type = {
+      type = parameters.invalid ? unsupportedType : {
         kind: "function",
         parameters: parameters.types,
         requiredParameters: parameters.required,
@@ -761,6 +761,11 @@ function parseClassDeclaration(
     warnings.push(`Overloaded or duplicate class member '${name}' in '${declaration.name}' caused the class to be kept as unknown`);
     invalid = true;
   };
+  const reserved = (name: string, member: string): boolean => {
+    if (name !== "constructor" && name !== "prototype" && name !== "__proto__") return false;
+    reject(member);
+    return true;
+  };
 
   for (const raw of splitFields(declaration.body)) {
     const member = raw.trim();
@@ -795,6 +800,7 @@ function parseClassDeclaration(
 
     const accessor = readAccessorSignature(member);
     if (accessor) {
+      if (reserved(accessor.name, member)) continue;
       const modifiers = new Set(accessor.modifiers);
       const target = modifiers.has("static") ? staticAccessors : accessors;
       const fieldsTarget = modifiers.has("static") ? staticFields : fields;
@@ -820,6 +826,7 @@ function parseClassDeclaration(
       const target = modifiers.has("static") ? staticFields : fields;
       const accessorsTarget = modifiers.has("static") ? staticAccessors : accessors;
       const name = property[2]!;
+      if (reserved(name, member)) continue;
       if (target.has(name) || accessorsTarget.has(name) || (modifiers.has("static") ? staticMethods : methods).has(name)) {
         duplicate(name);
         continue;
@@ -838,6 +845,7 @@ function parseClassDeclaration(
     const modifiersText = methodPrefix?.[1] ?? "";
     const method = readMethodSignature(member.slice(methodPrefix?.[0].length ?? 0));
     if (method) {
+      if (reserved(method.name, member)) continue;
       const modifiers = new Set(modifiersText.trim().split(/\s+/u).filter(Boolean));
       const target = modifiers.has("static") ? staticMethods : methods;
       const fieldsTarget = modifiers.has("static") ? staticFields : fields;
@@ -847,7 +855,7 @@ function parseClassDeclaration(
         continue;
       }
       const parameters = parseParameters(method.parameters, (value) => parse(value, "to-js"), warnings);
-      const type: ValueType = {
+      const type: ValueType = parameters.invalid ? unsupportedType : {
         kind: "function",
         parameters: parameters.types,
         requiredParameters: parameters.required,
@@ -930,11 +938,12 @@ function parseParameters(
   source: string,
   parse: (value: string) => ValueType,
   warnings: string[],
-): { readonly types: readonly ValueType[]; readonly required: number; readonly rest?: ValueType } {
+): { readonly types: readonly ValueType[]; readonly required: number; readonly rest?: ValueType; readonly invalid?: true } {
   if (!source.trim()) return { types: [], required: 0 };
   const types: ValueType[] = [];
   let required = 0;
   let optionalSeen = false;
+  let invalid = false;
   let rest: ValueType | undefined;
   const parts = splitTopLevel(source, ",");
   for (const [index, part] of parts.entries()) {
@@ -959,10 +968,14 @@ function parseParameters(
     }
     const type = parse(match[3] ?? "unknown");
     types.push(type);
+    if (!optional && optionalSeen) {
+      warnings.push(`Required parameter '${part.trim()}' follows an optional parameter and the callable was kept as unknown`);
+      invalid = true;
+    }
     if (!optional && !optionalSeen) required += 1;
     if (optional) optionalSeen = true;
   }
-  return { types, required, ...(rest ? { rest } : {}) };
+  return { types, required, ...(rest ? { rest } : {}), ...(invalid ? { invalid: true } : {}) };
 }
 
 function parseClassConstructorParameters(
@@ -1003,6 +1016,9 @@ function parseClassConstructorParameters(
     const sourceType = match[5] ?? "unknown";
     const parameterType = parse(sourceType, "to-js");
     types.push(parameterType);
+    if (!optional && optionalSeen) {
+      warnings.push(`Required constructor parameter '${part.trim()}' follows an optional parameter`);
+    }
     if (!optional && !optionalSeen) required += 1;
     if (optional) optionalSeen = true;
     if (modifiers.has("readonly") || modifiers.has("public")) {
@@ -1083,6 +1099,7 @@ function parseTsType(
   const arrow = /^\(([^()]*)\)\s*=>\s*(.+)$/u.exec(value);
   if (arrow) {
     const parameters = parseParameters(arrow[1] ?? "", (part) => parseTsType(part, aliases, warnings, stack, classTypes, oppositeDirection(direction)), warnings);
+    if (parameters.invalid) return unsupportedType;
     const resultSource = arrow[2] ?? "unknown";
     return {
       kind: "function",
@@ -1161,7 +1178,7 @@ function objectType(source: string, aliases: ReadonlyMap<string, string>, warnin
     const method = readMethodSignature(part.trim());
     if (method) {
       const parameters = parseParameters(method.parameters, (value) => parseTsType(value, aliases, warnings, stack, classTypes, oppositeDirection(direction)), warnings);
-      const type: ValueType = {
+      const type: ValueType = parameters.invalid ? unsupportedType : {
         kind: "function",
         parameters: parameters.types,
         requiredParameters: parameters.required,
