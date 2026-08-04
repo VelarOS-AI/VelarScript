@@ -129,6 +129,12 @@ of the optional left type. It is analyzed under the left side's null-path facts.
 Spread-bearing List literals use sequential thunks so validation failure stops
 later evaluation. When a part contains direct `await`, an async helper awaits
 only that marked thunk; ordinary Promise-valued items retain their value identity.
+Record literals preserve the same source-ordered construction model. The common
+explicit-field case remains a direct JavaScript object literal; spread-bearing
+records and the special JavaScript name `__proto__` use a dedicated writer.
+Spread sources are copied through descriptors, rejecting symbols and accessors
+without invoking them. This removes native object-literal `__proto__` behavior
+while retaining an ordinary object prototype and deterministic replacement.
 Native slot checks accept cross-realm Map/Set values while instance overrides,
 custom iterators, and Array species cannot change language semantics. Mutating
 results normalize to VelarScript `null` without replacing

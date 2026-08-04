@@ -8131,6 +8131,71 @@ print(f"{name}:{details.score}:{first}:{rest.size}")
   assert.ok(quoted.diagnostics.some((item) => item.code === "VEL2020" && /requires ':' and a value/u.test(item.message)));
 });
 
+test("record construction preserves source order without native object magic or accessor reads", () => {
+  const ordinary = compile(`
+const value = {"__proto__": "owned", constructor: "field"}
+print(value.constructor)
+`.trimStart());
+  assert.deepEqual(ordinary.diagnostics, []);
+  assert.match(ordinary.code ?? "", /__velarCreateRecord/u);
+  const ordinaryExecution = executeModule(`${ordinary.code ?? ""}\nconsole.log(Object.getPrototypeOf(value) === Object.prototype, Object.prototype.hasOwnProperty.call(value, "__proto__"), Object.getOwnPropertyDescriptor(value, "__proto__").value);\n`);
+  assert.equal(ordinaryExecution.status, 0, String(ordinaryExecution.stderr));
+  assert.equal(ordinaryExecution.stdout, "field\ntrue true owned\n");
+
+  const unsafeSource = Buffer.from([
+    "export const accessor=Object.defineProperty({},'name',{enumerable:true,get(){console.log('getter called');return 'Ada'}})",
+    "export const symbol=Object.assign({name:'Ada'},{[Symbol('private')]:'hidden'})",
+    "export const nullish={name:undefined}",
+  ].join(";"), "utf8").toString("base64");
+  for (const [name, message] of [
+    ["accessor", /cannot copy accessor field 'name'/u],
+    ["symbol", /cannot copy symbol fields/u],
+  ] as const) {
+    const rejected = compile(`
+import js unsafe {${name} as payload} from "data:text/javascript;base64,${unsafeSource}"
+const copied = {...payload}
+print(copied)
+`.trimStart());
+    assert.deepEqual(rejected.diagnostics, []);
+    const execution = executeModule(rejected.code ?? "");
+    assert.notEqual(execution.status, 0);
+    assert.equal(execution.stdout, "");
+    assert.match(String(execution.stderr), message);
+  }
+
+  const nullish = compile(`
+import js unsafe {nullish as payload} from "data:text/javascript;base64,${unsafeSource}"
+const copied = {...payload}
+`.trimStart());
+  assert.deepEqual(nullish.diagnostics, []);
+  const nullishExecution = executeModule(`${nullish.code ?? ""}\nconsole.log(copied.name === null);\n`);
+  assert.equal(nullishExecution.status, 0, String(nullishExecution.stderr));
+  assert.equal(nullishExecution.stdout, "true\n");
+
+  const asynchronous = compile(`
+import js unsafe {promise} from "data:text/javascript,export const promise=Promise.resolve(5)"
+
+type Payload:
+    name: string
+
+async def read(value: number) -> number:
+    print(f"read:{value}")
+    return value
+
+async def load() -> Payload:
+    print("load")
+    return {name: "Ada"}
+
+const record = {first: await read(1), ...await load(), promise, last: await read(2)}
+print(record.promise == promise)
+`.trimStart());
+  assert.deepEqual(asynchronous.diagnostics, []);
+  assert.match(asynchronous.code ?? "", /await __velarCreateRecordAsync/u);
+  const asynchronousExecution = executeModule(asynchronous.code ?? "");
+  assert.equal(asynchronousExecution.status, 0, String(asynchronousExecution.stderr));
+  assert.equal(asynchronousExecution.stdout, "read:1\nload\nread:2\ntrue\n");
+});
+
 test("binding patterns reject ambiguous shapes without leaking JavaScript undefined or accessors", () => {
   const optional = compile(`
 type Profile:

@@ -36,6 +36,7 @@ export class JavaScriptEmitter {
   private readonly forcedFunctionExports: ReadonlySet<string>;
   private needsIndexHelpers = false;
   private needsCollectionHelpers = false;
+  private needsRecordHelpers = false;
   private needsObjectBindingHelpers = false;
   private needsListBindingHelpers = false;
   private needsRuntimeTypeHelpers = false;
@@ -421,6 +422,56 @@ export class JavaScriptEmitter {
         "function __velarCollectionValues(value) { const prototype = __velarIsMap(value) ? Map.prototype : Set.prototype; const size = Reflect.getOwnPropertyDescriptor(prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A collection cannot exceed 1000000 items\"); return [...prototype.values.call(value)]; }",
         "function __velarCollectionEntries(value) { const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value); if (size > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\"); return [...Map.prototype.entries.call(value)].map(([key, item]) => Object.freeze({ key, value: item })); }",
         "function __velarOptionalCollection(value, operation) { return value == null ? null : operation(value); }",
+      ].join("\n"));
+    }
+    if (this.needsRecordHelpers) {
+      helpers.push([
+        "const __velarMaxRecordFields = 1000000;",
+        "",
+        "function __velarSetRecordField(output, field, value, count) {",
+        "  const present = Object.prototype.hasOwnProperty.call(output, field);",
+        "  if (!present && count >= __velarMaxRecordFields) throw new RangeError(\"A record cannot exceed 1000000 fields\");",
+        "  Object.defineProperty(output, field, { value: value ?? null, writable: true, enumerable: true, configurable: true });",
+        "  return present ? count : count + 1;",
+        "}",
+        "function __velarSpreadRecord(output, value, count) {",
+        "  if (value === null || typeof value !== \"object\" || Array.isArray(value)) throw new TypeError(\"Object spread requires a record object\");",
+        "  if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError(\"Object spread cannot copy symbol fields\");",
+        "  const fields = Object.getOwnPropertyNames(value);",
+        "  if (fields.length > __velarMaxRecordFields) throw new RangeError(\"Object spread cannot inspect more than 1000000 fields\");",
+        "  for (const field of fields) {",
+        "    const descriptor = Object.getOwnPropertyDescriptor(value, field);",
+        "    if (!descriptor) throw new TypeError(\"Object spread source changed while it was being copied\");",
+        "    if (!descriptor.enumerable) continue;",
+        "    if (!(\"value\" in descriptor)) throw new TypeError(\"Object spread cannot copy accessor field '\" + field + \"'\");",
+        "    count = __velarSetRecordField(output, field, descriptor.value, count);",
+        "  }",
+        "  return count;",
+        "}",
+        "function __velarCreateRecord(parts) {",
+        "  const output = {};",
+        "  let count = 0;",
+        "  for (const [spread, field, read] of parts) {",
+        "    if (spread) count = __velarSpreadRecord(output, read(), count);",
+        "    else {",
+        "      if (!Object.prototype.hasOwnProperty.call(output, field) && count >= __velarMaxRecordFields) throw new RangeError(\"A record cannot exceed 1000000 fields\");",
+        "      count = __velarSetRecordField(output, field, read(), count);",
+        "    }",
+        "  }",
+        "  return output;",
+        "}",
+        "async function __velarCreateRecordAsync(parts) {",
+        "  const output = {};",
+        "  let count = 0;",
+        "  for (const [spread, field, asynchronous, read] of parts) {",
+        "    if (spread) count = __velarSpreadRecord(output, asynchronous ? await read() : read(), count);",
+        "    else {",
+        "      if (!Object.prototype.hasOwnProperty.call(output, field) && count >= __velarMaxRecordFields) throw new RangeError(\"A record cannot exceed 1000000 fields\");",
+        "      count = __velarSetRecordField(output, field, asynchronous ? await read() : read(), count);",
+        "    }",
+        "  }",
+        "  return output;",
+        "}",
       ].join("\n"));
     }
     if (this.needsObjectBindingHelpers) {
@@ -1272,8 +1323,26 @@ export class JavaScriptEmitter {
           return `${asynchronous ? "await __velarCreateListAsync" : "__velarCreateList"}([${parts.join(", ")}])`;
         }
         return `[${expression.elements.map((element) => this.emitMappedExpression(element)).join(", ")}]`;
-      case "ObjectExpression":
-        return `{ ${expression.properties.map((property) => property.kind === "ObjectProperty" ? `${this.emitObjectKey(property.name)}: ${this.emitMappedExpression(property.value)}` : `...${this.emitMappedExpression(property.value)}`).join(", ")} }`;
+      case "ObjectExpression": {
+        const needsControlledConstruction = expression.properties.some((property) => property.kind === "ObjectSpread"
+          || property.name === "__proto__");
+        if (!needsControlledConstruction) {
+          return `{ ${expression.properties.map((property) => property.kind === "ObjectProperty"
+            ? `${this.emitObjectKey(property.name)}: ${this.emitMappedExpression(property.value)}`
+            : "").join(", ")} }`;
+        }
+        this.needsRecordHelpers = true;
+        const asynchronous = expression.properties.some((property) => this.expressionContainsDirectAwait(property.value));
+        const parts = expression.properties.map((property) => {
+          const directAwait = this.expressionContainsDirectAwait(property.value);
+          const read = `${directAwait ? "async " : ""}() => ${this.emitMappedExpression(property.value)}`;
+          const name = property.kind === "ObjectProperty" ? JSON.stringify(property.name) : "null";
+          return asynchronous
+            ? `[${property.kind === "ObjectSpread"}, ${name}, ${directAwait}, ${read}]`
+            : `[${property.kind === "ObjectSpread"}, ${name}, ${read}]`;
+        });
+        return `${asynchronous ? "await __velarCreateRecordAsync" : "__velarCreateRecord"}([${parts.join(", ")}])`;
+      }
       case "SpreadExpression":
         this.needsCollectionHelpers = true;
         return `...__velarCopyList(${this.emitMappedExpression(expression.value)}, "Call spread")`;

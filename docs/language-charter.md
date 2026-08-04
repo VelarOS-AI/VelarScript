@@ -96,6 +96,15 @@ const nextUser = {...user, title: "Owner"}
 const nextValues = [...values, 4]
 ```
 
+Record construction is controlled even though its surface stays familiar.
+Fields evaluate once from left to right, later fields replace earlier fields,
+and names such as `__proto__` are ordinary own data fields rather than object
+literal magic. Object spread copies only own enumerable string data fields. It
+never invokes an accessor, ignores the source prototype, rejects symbol fields,
+and converts an unsafe JavaScript `undefined` field to `null`. Direct `await` is
+valid anywhere in an async record expression without adopting Promise-valued
+fields that were not explicitly awaited.
+
 Declarations and `for` loops share one controlled binding-pattern contract:
 
 ```velar fragment

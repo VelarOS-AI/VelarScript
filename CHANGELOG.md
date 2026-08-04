@@ -79,6 +79,9 @@ Compiler and framework changes:
 - List and call spreads now validate dense Lists without invoking instance
   iterators, async List spreads preserve order, and call spread targets only a
   declared rest parameter.
+- Record construction now defines controlled own data fields, makes
+  `__proto__` an ordinary name, rejects accessor and symbol spreads, normalizes
+  unsafe `undefined`, and preserves explicit async evaluation.
 
 Tooling and documentation changes:
 
