@@ -706,7 +706,7 @@ function patternOf(expression, options, global = false) {
   if (options.multiline === true) flags += "m";
   if (options.dotAll === true) flags += "s";
   try { return new RegExp(expression, flags); }
-  catch (error) { throw new TypeError("Invalid text pattern: " + (error instanceof Error ? error.message : String(error))); }
+  catch { throw new TypeError("Invalid text pattern"); }
 }
 function matchValue(match) {
   return Object.freeze({ value: match[0], index: match.index, groups: match.slice(1).map((value) => value === undefined ? null : value) });
@@ -829,15 +829,33 @@ export async function series(tasks) { tasks = __velarRequireList(tasks, "async.s
 ${listRuntime}
 const fallbackBase = "https://velar.invalid/";
 function urlText(value, name = "velar/url") { if (typeof value !== "string") throw new TypeError(name + " requires a string"); if (value.length > 2 * 1024 * 1024) throw new RangeError(name + " cannot exceed 2 MiB"); return value; }
-function baseOf(base) { return base ? urlText(base, "URL base") : (typeof location !== "undefined" ? location.href : fallbackBase); }
+function baseOf(base) { return base !== "" ? urlText(base, "URL base") : (typeof location !== "undefined" ? urlText(location.href, "Browser URL base") : fallbackBase); }
 function urlOf(value, base = "") { return new URL(urlText(value), baseOf(base)); }
-function restore(original, url) { const output = /^[a-z][a-z\d+.-]*:/iu.test(original) ? url.href : original.startsWith("//") ? "//" + url.host + url.pathname + url.search + url.hash : url.pathname + url.search + url.hash; return urlText(output, "URL output"); }
+function urlSnapshot(url) {
+  const search = urlText(url.search, "URL query");
+  return Object.freeze({
+    href: urlText(url.href, "URL href"), protocol: urlText(url.protocol, "URL protocol"), host: urlText(url.host, "URL host"),
+    hostname: urlText(url.hostname, "URL hostname"), port: urlText(url.port, "URL port"), path: urlText(url.pathname, "URL path"),
+    query: queryMap(search, "URL query"), hash: urlText(url.hash, "URL hash"), origin: urlText(url.origin, "URL origin"),
+  });
+}
+function restore(original, url) {
+  const href = urlText(url.href, "URL href"), host = urlText(url.host, "URL host"), path = urlText(url.pathname, "URL path");
+  const search = urlText(url.search, "URL query"), hash = urlText(url.hash, "URL hash");
+  const output = /^[a-z][a-z\d+.-]*:/iu.test(original) ? href : original.startsWith("//") ? "//" + host + path + search + hash : path + search + hash;
+  return urlText(output, "URL output");
+}
 function queryMap(search, name) {
+  search = urlText(search, name);
   const output = new Map();
   let count = 0;
+  let codeUnits = 0;
   for (const [key, value] of new URLSearchParams(search)) {
     count += 1;
     if (count > 100000) throw new RangeError(name + " cannot exceed 100000 fields");
+    if (typeof key !== "string" || typeof value !== "string") throw new TypeError(name + " must contain string fields");
+    codeUnits += key.length + value.length;
+    if (codeUnits > 2 * 1024 * 1024) throw new RangeError(name + " cannot exceed 2 MiB");
     output.set(key, value);
   }
   return output;
@@ -845,6 +863,7 @@ function queryMap(search, name) {
 function appendQueryValue(output, name, value, budget) {
   if (value == null) return;
   if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") throw new TypeError("URL query value '" + name + "' must be a string, number, bool, null, or List of those values");
+  if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError("URL query numbers must be finite");
   const text = String(value);
   budget.units += (name.length + text.length) * 9 + 2;
   if (budget.units > 2 * 1024 * 1024) throw new RangeError("URL query output cannot exceed 2 MiB");
@@ -879,7 +898,7 @@ function appendParams(params, output) {
     else appendQueryValue(output, name, value, budget);
   }
 }
-export function parse(value, base = "") { const url = urlOf(value, base); return Object.freeze({ href: url.href, protocol: url.protocol, host: url.host, hostname: url.hostname, port: url.port, path: url.pathname, query: queryMap(url.search, "URL query"), hash: url.hash, origin: url.origin }); }
+export function parse(value, base = "") { return urlSnapshot(urlOf(value, base)); }
 export function join(...parts) {
   if (!parts.length) throw new RangeError("url.join requires at least one part");
   let output = urlText(parts[0], "url.join");
@@ -895,7 +914,7 @@ export function query(params) { const output = new URLSearchParams(); appendPara
 export function parseQuery(value) { return queryMap(urlText(value, "parseQuery").replace(/^\?/u, ""), "URL query"); }
 export function withQuery(value, params) { const url = urlOf(value); url.search = ""; appendParams(params, url.searchParams); return restore(value, url); }
 export function withHash(value, hash) { const url = urlOf(value); hash = urlText(hash, "withHash"); url.hash = hash ? "#" + hash.replace(/^#/u, "") : ""; return restore(value, url); }
-export function isExternal(value, base = "") { value = urlText(value, "isExternal"); if (base) urlText(base, "URL base"); try { const url = urlOf(value, base); const origin = new URL(baseOf(base)).origin; return url.origin !== origin || !/^https?:$/u.test(url.protocol); } catch { return true; } }
+export function isExternal(value, base = "") { value = urlText(value, "isExternal"); if (base) urlText(base, "URL base"); try { const url = urlOf(value, base); const origin = urlText(new URL(baseOf(base)).origin, "URL origin"); return urlText(url.origin, "URL origin") !== origin || !/^https?:$/u.test(urlText(url.protocol, "URL protocol")); } catch { return true; } }
 export function encode(value) { return encodeURIComponent(urlText(value, "encode")); }
 export function decode(value) { return decodeURIComponent(urlText(value, "decode")); }
 export function normalize(value, base = "") { const url = urlOf(value, base); return restore(value, url); }
@@ -1078,36 +1097,52 @@ export function useSink(sink) {
 `.trimStart()],
   ["velar/test", String.raw`
 ${deepEqualRuntime}
-function display(value, active = new WeakSet()) {
+function display(value, state = null) {
+  state ??= { active: new WeakSet(), nodes: 0, depth: 0 };
+  state.nodes += 1;
+  if (state.nodes > 1000) return "…";
   if (value === null) return "null";
-  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "string") return JSON.stringify(value.length > 256 ? value.slice(0, 256) + "…" : value);
+  if (typeof value === "function") return "[function]";
+  if (typeof value === "undefined") return "undefined";
+  if (typeof value === "symbol") return "[symbol]";
   if (typeof value !== "object") return String(value);
-  if (active.has(value)) return "[cycle]";
-  active.add(value);
+  if (state.active.has(value)) return "[cycle]";
+  if (state.depth >= 16) return "[depth]";
+  state.active.add(value);
+  state.depth += 1;
   try {
     if (Array.isArray(value)) {
       if (!__velarDenseList(value)) return "[invalid List]";
       const items = [];
-      for (let index = 0; index < value.length; index += 1) items.push(display(Object.getOwnPropertyDescriptor(value, index).value, active));
+      const limit = Math.min(value.length, 50);
+      for (let index = 0; index < limit; index += 1) items.push(display(Object.getOwnPropertyDescriptor(value, index).value, state));
+      if (value.length > limit) items.push("…");
       return "[" + items.join(", ") + "]";
     }
     if (__velarMapSize(value) !== null) {
       const items = [];
-      for (const [key, item] of Map.prototype.entries.call(value)) items.push(display(key, active) + " => " + display(item, active));
+      for (const [key, item] of Map.prototype.entries.call(value)) { if (items.length >= 50) { items.push("…"); break; } items.push(display(key, state) + " => " + display(item, state)); }
       return "Map(" + items.join(", ") + ")";
     }
     if (__velarSetSize(value) !== null) {
       const items = [];
-      for (const item of Set.prototype.values.call(value)) items.push(display(item, active));
+      for (const item of Set.prototype.values.call(value)) { if (items.length >= 50) { items.push("…"); break; } items.push(display(item, state)); }
       return "Set(" + items.join(", ") + ")";
     }
     const keys = __velarDataRecordKeys(value);
-    if (keys) return "{" + keys.map((key) => JSON.stringify(key) + ": " + display(Object.getOwnPropertyDescriptor(value, key).value, active)).join(", ") + "}";
+    if (keys) {
+      const displayed = keys.slice(0, 50).map((key) => JSON.stringify(key) + ": " + display(Object.getOwnPropertyDescriptor(value, key).value, state));
+      if (keys.length > 50) displayed.push("…");
+      return "{" + displayed.join(", ") + "}";
+    }
     const prototype = Object.getPrototypeOf(value);
     const constructor = prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
-    return "[" + (typeof constructor === "function" && constructor.name ? constructor.name : "object") + "]";
+    const name = typeof constructor === "function" ? Object.getOwnPropertyDescriptor(constructor, "name")?.value : null;
+    return "[" + (typeof name === "string" && name ? name : "object") + "]";
   } finally {
-    active.delete(value);
+    state.depth -= 1;
+    state.active.delete(value);
   }
 }
 export function expect(actual) {
@@ -1129,7 +1164,7 @@ export function expect(actual) {
     toMatch(expected) {
       if (typeof actual !== "string" || typeof expected !== "string") throw new TypeError("toMatch requires text and a string pattern");
       let pattern;
-      try { pattern = new RegExp(expected, "u"); } catch (error) { throw new TypeError("Invalid toMatch pattern: " + (error instanceof Error ? error.message : String(error))); }
+      try { pattern = new RegExp(expected, "u"); } catch { throw new TypeError("Invalid toMatch pattern"); }
       if (!pattern.test(actual)) throw new Error("Expected " + display(actual) + " to match " + display(expected));
     },
     toHaveLength(expected) {

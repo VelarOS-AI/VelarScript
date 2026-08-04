@@ -6182,6 +6182,8 @@ for (const operation of [
   () => query({ tag: sparse }),
   () => query({ filter: { active: true } }),
   () => query(new Map([[1, "value"]])),
+  () => query({ page: Number.POSITIVE_INFINITY }),
+  () => query({ page: Number.NaN }),
   () => parseQuery(42),
   () => encode(42),
   () => withHash("/items", 42),
@@ -6196,8 +6198,68 @@ for (const operation of [
     "https://example.test/api/items",
     "flag=true&page=2&tag=a&tag=b",
     "page=3",
-    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "",
+    "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "TypeError", "",
   ].join("\n"));
+});
+
+test("URL snapshots and test diagnostics never invoke conversion hooks", () => {
+  const urlSource = standardModuleSource("velar/url") ?? "";
+  const urlExecution = executeModule(`
+let coercions = 0;
+const hostile = { toString() { coercions += 1; return "https://coerced.test"; } };
+globalThis.location = { href: hostile };
+${urlSource}
+try { parse("/items"); console.log("accepted"); } catch (error) { console.log(error.name); }
+const NativeUrl = globalThis.URL;
+globalThis.URL = class {
+  constructor() {
+    this.href = hostile; this.protocol = "https:"; this.host = "example.test"; this.hostname = "example.test";
+    this.port = ""; this.pathname = "/"; this.search = ""; this.hash = ""; this.origin = "https://example.test";
+  }
+};
+try { parse("/items", "https://example.test"); console.log("accepted"); } catch (error) { console.log(error.name); }
+globalThis.URL = NativeUrl;
+console.log(coercions);
+`);
+  assert.equal(urlExecution.status, 0, String(urlExecution.stderr));
+  assert.equal(urlExecution.stdout, "TypeError\nTypeError\n0\n");
+
+  const testSource = standardModuleSource("velar/test") ?? "";
+  const testExecution = executeModule(`${testSource}
+let coercions = 0;
+let getterReads = 0;
+const hostileFunction = function () {};
+hostileFunction[Symbol.toPrimitive] = () => { coercions += 1; return "coerced"; };
+const Constructor = function () {};
+Object.defineProperty(Constructor, "name", { configurable: true, get() { getterReads += 1; return "Hostile"; } });
+const prototype = Object.create(null);
+Object.defineProperty(prototype, "constructor", { value: Constructor });
+const hostileObject = Object.create(prototype);
+const large = new Array(100000).fill("x".repeat(1000));
+for (const value of [hostileFunction, hostileObject, large]) {
+  try { expect(value).toBe(null); console.log("accepted"); }
+  catch (error) { console.log(error.message.length < 20000); }
+}
+const hostileThrown = { toString() { coercions += 1; return "converted"; } };
+globalThis.RegExp = class { constructor() { throw hostileThrown; } };
+try { expect("Velar").toMatch("Velar"); console.log("accepted"); }
+catch (error) { console.log(error.message); }
+console.log(coercions + ":" + getterReads);
+`);
+  assert.equal(testExecution.status, 0, String(testExecution.stderr));
+  assert.equal(testExecution.stdout, "true\ntrue\ntrue\nInvalid toMatch pattern\n0:0\n");
+
+  const textSource = standardModuleSource("velar/text") ?? "";
+  const textExecution = executeModule(`${textSource}
+let coercions = 0;
+const hostile = { toString() { coercions += 1; return "converted"; } };
+globalThis.RegExp = class { constructor() { throw hostile; } };
+try { matches("Velar", "Velar"); console.log("accepted"); }
+catch (error) { console.log(error.message); }
+console.log(coercions);
+`);
+  assert.equal(textExecution.status, 0, String(textExecution.stderr));
+  assert.equal(textExecution.stdout, "Invalid text pattern\n0\n");
 });
 
 test("velar/math never reintroduces JavaScript numeric coercion", () => {

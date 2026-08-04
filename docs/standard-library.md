@@ -261,10 +261,12 @@ Query names are strings. Values are explicit string/number/bool scalars,
 `null`, or dense Lists of those scalars; records/classes/functions are rejected
 instead of becoming `"[object Object]"`. `null` values are omitted, List values
 produce repeated keys, and duplicate parsed keys keep their last value in the
-returned `Map`. URL text operations validate actual strings at dynamic
-boundaries rather than inheriting JavaScript `String(...)` coercion. URL text
-and encoded query output are limited to 2 MiB; query maps contain at most
-100,000 fields.
+returned `Map`. Query numbers must be finite. URL text operations validate
+actual strings at dynamic boundaries rather than inheriting JavaScript
+`String(...)` coercion; this includes the browser's current base URL and every
+field copied from a native `URL` result. URL text and encoded query output are
+limited to 2 MiB; parsed names/values share the same text budget, and query maps
+contain at most 100,000 fields.
 
 ## `velar/time`
 

@@ -584,6 +584,10 @@ matchers are exposed only for compatible checked subjects, then validate the
 same rule at dynamic boundaries. In particular, `toThrow` requires a function,
 and `toReject` requires a Promise (or a function returning one); a synchronous
 throw cannot masquerade as a rejected Promise.
+Failure rendering is bounded for large/deep Lists, Maps, Sets, records, and
+strings. It never calls conversion hooks on functions or unknown objects, and
+invalid regular-expression construction uses a stable owned message rather
+than formatting a hostile thrown value.
 `.test.vel` files and `test_*` discovery remain owned by `velar test`.
 
 Browser application tests use a separate `.browser.test.vel` suffix and run
