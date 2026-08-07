@@ -4,6 +4,36 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — VelarOS-Lite S2 batch: re-exports, bridged-dependency sandboxes, extern default contract
+
+Language and compiler changes:
+
+- Named re-exports: `export {name, other as alias} from "./module.vel"` (also
+  from package sources and standard modules) re-exports without creating local
+  bindings. Re-exported names join the module interface under their aliases
+  with the origin contract; live-export (`export let`) mutability and reactive
+  kinds propagate, and the statement lowers to a native ES-module
+  `export ... from`. Go-to-definition follows re-export chains to the origin
+  declaration. Namespace re-export (`export * from`) is rejected with VEL2029
+  guidance toward the named form, and a re-exported name that collides with
+  another export of the same module is rejected with VEL3016.
+- The extern default-export contract is documented and pinned by tests:
+  `export class default:` and `export const default: T` declare a
+  default-export-only package, and the bare `import js Name from "pkg"` form is
+  the canonical default import (see javascript-bridge.md).
+
+Tooling changes:
+
+- `velar test` and `velar run` now compile into `<project>/.velar/test-*` and
+  `<project>/.velar/run-*` sandboxes instead of the system temporary
+  directory, so Node's upward `node_modules` walk keeps resolving the
+  project's real npm dependencies for bridged `import js` packages. The
+  sandbox is removed after each run and `.velar/` is gitignored by the
+  project templates; TMPDIR workarounds are no longer needed.
+- When a module declares a manual `extern module "pkg"`, the automatic
+  TypeScript-declaration probe no longer runs for that module's imports of
+  that source, so it emits no notices that second-guess the manual contract.
+
 ## 0.10.0-dev — Blind-usability batch 3: chains, string functions, Look tightening
 
 Language and compiler changes:

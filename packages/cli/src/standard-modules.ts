@@ -249,7 +249,7 @@ function moduleInterface(
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
 ): ModuleInterface {
-  return { exports, mutableExports: new Set(), reactiveExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {

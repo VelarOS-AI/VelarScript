@@ -811,11 +811,28 @@ function classDescendsFrom(project: ProjectResult, candidate: MemberTarget, expe
   return false;
 }
 
-function exportedTarget(project: ProjectResult, importer: ProjectModule, imported: SemanticImport): ExportTarget | null {
+function exportedTarget(
+  project: ProjectResult,
+  importer: ProjectModule,
+  imported: SemanticImport,
+  visited: Set<string> = new Set(),
+): ExportTarget | null {
   const targetModule = importedModule(project, importer, imported);
   if (!targetModule) return null;
   const symbol = targetModule.result.semanticIndex.symbols.find((item) => item.exported && item.name === imported.imported);
-  return symbol ? { kind: "export", module: targetModule, symbol } : null;
+  if (!symbol) return null;
+  if (symbol.kind === "import") {
+    // An exported import symbol is a named re-export; follow the chain to the
+    // module that actually declares the value.
+    const forwarded = targetModule.result.semanticIndex.imports.find((item) => item.localSymbolId === symbol.id);
+    const key = `${targetModule.inputPath}\0${symbol.id}`;
+    if (forwarded && !visited.has(key)) {
+      visited.add(key);
+      const origin = exportedTarget(project, targetModule, forwarded, visited);
+      if (origin) return origin;
+    }
+  }
+  return { kind: "export", module: targetModule, symbol };
 }
 
 function importedModule(project: ProjectResult, importer: ProjectModule, imported: SemanticImport): ProjectModule | null {

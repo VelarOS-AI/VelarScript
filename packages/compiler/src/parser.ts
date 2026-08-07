@@ -29,6 +29,8 @@ import type {
   ObjectProperty,
   Parameter,
   Program,
+  ReExportDeclaration,
+  ReExportSpecifier,
   Statement,
   TypeDeclaration,
   TypeAliasDeclaration,
@@ -195,6 +197,9 @@ export class Parser {
     }
 
     const exported = this.match("export");
+    if (exported && (this.check("leftBrace") || this.check("star"))) {
+      return this.parseReExport(start);
+    }
     const abstract = this.match("abstract");
     const asynchronous = this.match("async");
 
@@ -395,6 +400,36 @@ export class Parser {
     this.expect("from", "Expected 'from' after imports");
     const source = this.expect("string", "Expected a module path string");
     return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
+  }
+
+  private parseReExport(start: number): ReExportDeclaration | null {
+    if (this.match("star")) {
+      const star = this.previous();
+      if (this.match("as")) this.match("identifier");
+      if (this.match("from")) this.match("string");
+      this.diagnostics.push(diagnostic(
+        "VEL2029",
+        "Namespace re-export 'export * from' is not supported; re-export each name explicitly with export {name, other as alias} from \"./module.vel\"",
+        star.span,
+      ));
+      return null;
+    }
+    this.expect("leftBrace", "Expected '{' after 'export'");
+    const specifiers: ReExportSpecifier[] = [];
+    if (!this.check("rightBrace")) {
+      do {
+        const imported = this.expect("identifier", "Expected a re-exported name");
+        const alias = this.match("as") ? this.expect("identifier", "Expected a re-export alias") : imported;
+        specifiers.push({ imported: imported.value, exported: alias.value, span: span(imported.span.start, alias.span.end) });
+      } while (this.match("comma") && !this.check("rightBrace"));
+    }
+    this.expect("rightBrace", "Expected '}' after re-exported names");
+    this.expect("from", "Expected 'from' after re-exported names; VelarScript modules export declarations directly and re-export other modules' names with export {name} from \"./module.vel\"");
+    const source = this.expect("string", "Expected a module path string");
+    if (specifiers.length === 0) {
+      this.diagnostics.push(diagnostic("VEL2029", "A re-export must name at least one export", span(start, source.span.end)));
+    }
+    return { kind: "ReExportDeclaration", source: source.value, sourceSpan: source.span, specifiers, span: span(start, source.span.end) };
   }
 
   private parseExternModule(start: number): ExternModuleDeclaration {

@@ -784,6 +784,18 @@ reads. The module contract records that distinction, and modules with live
 exports must be imported by name rather than through `* as`; namespace fields
 are always read-only.
 
+A module can re-export another module's named exports without creating local
+bindings, which is how a package entry exposes symbols from its internal
+modules (a barrel). Re-exported names join the module's interface under their
+aliases with the full origin contract, including live-export mutability, and
+lower to native ES-module re-exports. Namespace re-export (`export * from`)
+is deliberately absent; name every symbol so the module interface stays
+explicit:
+
+```velar fragment
+export {renderMarkdown, highlightFence as highlight} from "./markdown.vel"
+```
+
 Different modules may use the same record display name; their field metadata is
 kept separate until ordinary structural assignability is checked.
 

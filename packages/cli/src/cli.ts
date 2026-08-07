@@ -664,7 +664,7 @@ async function discoverVelarSources(config: VelarProjectConfig): Promise<string[
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === ".git" || entry.name === "node_modules" || excluded.has(path)) continue;
+        if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".velar" || excluded.has(path)) continue;
         await visit(path);
       } else if (entry.isFile() && entry.name.endsWith(".vel")) {
         output.push(path);

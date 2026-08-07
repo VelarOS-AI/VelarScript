@@ -1,6 +1,36 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
+
+/**
+ * Creates the sandbox directory that receives a compiled test or run tree.
+ *
+ * The sandbox lives inside the project (`<project>/.velar/<prefix>-*`), not in
+ * os.tmpdir(): Node resolves bare JavaScript imports by walking node_modules
+ * directories upward from the importing file, so a compiled tree inside the
+ * project still reaches the project's real npm dependencies (bridged
+ * `import js` packages), while an os.tmpdir() sandbox severs that resolution.
+ * The directory is removed after the run; `.velar/` should be gitignored.
+ */
+export async function createCompiledSandbox(projectRoot: string, prefix: "test" | "run"): Promise<string> {
+  const velarRoot = join(projectRoot, ".velar");
+  await mkdir(velarRoot, { recursive: true });
+  const sandbox = await mkdtemp(join(velarRoot, `${prefix}-`));
+  // The compiled tree is always ES modules, regardless of the project's own
+  // package.json "type" field.
+  await writeFile(join(sandbox, "package.json"), JSON.stringify({ name: `velar-${prefix}`, private: true, type: "module" }), "utf8");
+  return sandbox;
+}
+
+/** Removes a compiled sandbox and prunes `.velar/` when it becomes empty. */
+export async function removeCompiledSandbox(sandbox: string): Promise<void> {
+  await rm(sandbox, { recursive: true, force: true });
+  try {
+    await rmdir(dirname(sandbox));
+  } catch {
+    // Another run is active or `.velar` holds other entries; leave it in place.
+  }
+}
 
 export async function writeCompiledTestProject(project: ProjectResult, outputRoot: string): Promise<void> {
   for (const package_ of project.velarPackages) await writePackageManifest(package_, outputRoot);

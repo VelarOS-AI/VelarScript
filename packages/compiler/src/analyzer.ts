@@ -411,6 +411,7 @@ export class Analyzer implements TypeEnvironment {
     this.rejectUnproductiveRecursiveTypes(program);
     this.validateExternDeclarations(program);
     this.registerExternModules(program);
+    this.validateReExports(program);
     this.predeclareTopLevel(program);
     for (const statement of program.body) {
       this.analyzeStatement(statement);
@@ -594,6 +595,42 @@ export class Analyzer implements TypeEnvironment {
         });
       }
       for (const declaration of statement.constants) validate(declaration.type);
+    }
+  }
+
+  private validateReExports(program: Program): void {
+    const exported = new Set<string>();
+    const addPatternNames = (pattern: BindingPattern): void => {
+      if (pattern.kind === "NameBindingPattern") {
+        exported.add(pattern.name);
+        return;
+      }
+      if (pattern.kind === "ListBindingPattern") {
+        for (const element of pattern.elements) if (element) addPatternNames(element);
+        if (pattern.rest) exported.add(pattern.rest.name);
+        return;
+      }
+      for (const entry of pattern.entries) addPatternNames(entry.pattern);
+      if (pattern.rest) exported.add(pattern.rest.name);
+    };
+    for (const statement of program.body) {
+      if (statement.kind === "ReExportDeclaration" || !("exported" in statement) || !statement.exported) continue;
+      if (statement.kind === "VariableDeclaration") addPatternNames(statement.pattern);
+      else if ("name" in statement && typeof statement.name === "string") exported.add(statement.name);
+    }
+    for (const statement of program.body) {
+      if (statement.kind !== "ReExportDeclaration") continue;
+      for (const specifier of statement.specifiers) {
+        if (exported.has(specifier.exported)) {
+          this.diagnostics.push(diagnostic(
+            "VEL3016",
+            `Export '${specifier.exported}' is declared more than once in this module; rename the re-export with 'as'`,
+            specifier.span,
+          ));
+          continue;
+        }
+        exported.add(specifier.exported);
+      }
     }
   }
 
@@ -1030,6 +1067,8 @@ export class Analyzer implements TypeEnvironment {
             );
           }
         }
+        break;
+      case "ReExportDeclaration":
         break;
       case "ExternModuleDeclaration":
         {

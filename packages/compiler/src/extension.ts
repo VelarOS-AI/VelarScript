@@ -194,6 +194,8 @@ export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
   readonly mutableExports: ReadonlySet<string>;
   readonly reactiveExports: ReadonlyMap<string, "state" | "computed">;
+  /** Named re-exports (`export {name} from "source"`), keyed by the exported alias. */
+  readonly reExports: ReadonlyMap<string, { readonly source: string; readonly imported: string }>;
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeIdentities: ReadonlyMap<string, string>;
   readonly typeAliases: ReadonlyMap<string, ValueType>;

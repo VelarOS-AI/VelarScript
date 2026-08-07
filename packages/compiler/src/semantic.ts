@@ -5,6 +5,7 @@ import type {
   ImportDeclaration,
   MatchPattern,
   Program,
+  ReExportDeclaration,
   Statement,
   TypeReference,
   TypeSyntax,
@@ -347,10 +348,32 @@ export function buildSemanticIndex(
     }
   };
 
+  const declareReExport = (statement: ReExportDeclaration): void => {
+    moduleReferences.push({ source: statement.source, span: moduleSourceSpan(statement.sourceSpan), dynamic: false });
+    for (const specifier of statement.specifiers) {
+      const words = wordSpans(source.text, specifier.span);
+      const importedSpan = words.find((word) => source.text.slice(word.start, word.end) === specifier.imported) ?? words[0] ?? specifier.span;
+      const exportedSpan = [...words].reverse().find((word) => source.text.slice(word.start, word.end) === specifier.exported) ?? importedSpan;
+      // A re-export is not a lexical binding: the exported alias is visible to
+      // importers only, so the symbol stays out of the module scope chain.
+      const symbol = declare(specifier, specifier.exported, "import", specifier.span, exportedSpan, true, false, false);
+      imports.push({
+        source: statement.source,
+        imported: specifier.imported,
+        importedSpan,
+        local: specifier.exported,
+        localSpan: exportedSpan,
+        localSymbolId: symbol.id,
+        namespace: false,
+      });
+    }
+  };
+
   const predeclareTopLevel = (): void => {
     for (const statement of program.body) {
       switch (statement.kind) {
         case "ImportDeclaration": declareImport(statement); break;
+        case "ReExportDeclaration": declareReExport(statement); break;
         case "TypeDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
         case "TypeAliasDeclaration": declare(
           statement,
@@ -610,6 +633,7 @@ export function buildSemanticIndex(
     for (const extension of semanticExtensions) if (extension.visitStatement?.(statement, extensionContext)) return;
     switch (statement.kind) {
       case "ImportDeclaration": break;
+      case "ReExportDeclaration": break;
       case "ExternModuleDeclaration":
         for (const declaration of statement.functions) {
           const selection = nameSpan(declaration.span, declaration.name);

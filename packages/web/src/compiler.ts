@@ -383,7 +383,7 @@ function moduleInterface(
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
   namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
 ): ModuleInterface {
-  return { exports, mutableExports: new Set(), reactiveExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({

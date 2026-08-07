@@ -550,6 +550,9 @@ export function moduleInterfaceIdentity(
     node("reactive", [...interface_.reactiveExports]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, kind]) => node("reactive-entry", [name, kind]))),
+    node("re-exports", [...interface_.reExports]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, target]) => node("re-export", [name, target.source, target.imported]))),
     node("tests", [...interface_.testFunctions].sort()),
     extensionExports,
   ]);
@@ -607,8 +610,27 @@ async function createAnalysisContext(
       importHiddenTypeMetadata(interface_, namedTypes, enums, classes);
       continue;
     }
+    if (dependency.reExport) {
+      const interface_ = standardModuleInterface(dependency.source, compilerExtensions) ?? (() => {
+        const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
+          ? resolve(dirname(module.inputPath), dependency.source)
+          : velarImports.get(projectImportKey(module.inputPath, dependency.source));
+        const target = targetPath ? loaded.get(targetPath) : null;
+        return target ? resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions) : null;
+      })();
+      if (interface_) {
+        for (const specifier of dependency.specifiers) {
+          if (!interface_.exports.has(specifier.imported)) {
+            failures.push({ path: module.inputPath, message: `Module '${dependency.source}' has no export named '${specifier.imported}'` });
+          }
+        }
+      }
+      continue;
+    }
     if (dependency.javascript) {
-      if (dependency.unsafe) continue;
+      // A manual extern module owns the source contract completely, so the
+      // automatic TypeScript-declaration probe stays silent for that source.
+      if (dependency.unsafe || dependency.externOwned) continue;
       const key = projectImportKey(module.inputPath, dependency.source);
       let pending = declarationCache.get(key);
       if (!pending) {
@@ -687,6 +709,8 @@ function resolvedModuleInterface(
   if (cached) return cached;
   const own = compiledInterfaces.get(module.inputPath) ?? module.inspection.moduleInterface;
   const exports = new Map(own.exports);
+  const mutableExports = new Set(own.mutableExports);
+  const reactiveExports = new Map(own.reactiveExports);
   const namedTypes = new Map(own.namedTypes);
   const namedTypeIdentities = new Map(own.namedTypeIdentities);
   const typeAliases = new Map(own.typeAliases);
@@ -699,7 +723,7 @@ function resolvedModuleInterface(
   for (const info of own.enums.values()) enums.set(info.identity, info);
   for (const info of own.classes.values()) if (info.identity) classes.set(info.identity, info);
   const extensionExports = new Map([...own.extensionExports].map(([id, values]) => [id, new Map(values)] as const));
-  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionExports };
+  const resolved: ModuleInspection["moduleInterface"] = { ...own, exports, mutableExports, reactiveExports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionExports };
   cache.set(module.inputPath, resolved);
 
   for (const dependency of module.inspection.dependencies) {
@@ -744,6 +768,25 @@ function resolvedModuleInterface(
       if (renamed.identity && !classes.has(renamed.identity)) classes.set(renamed.identity, renamed);
       const localName = aliases.get(name);
       if (localName && dependencyInterface.exports.has(name)) classes.set(localName, renamed);
+    }
+    if (dependency.reExport) {
+      // Re-exported names become part of this module's own interface under
+      // their aliases; live-export mutability and reactivity flags propagate.
+      for (const specifier of dependency.specifiers) {
+        const type = dependencyInterface.exports.get(specifier.imported);
+        if (type) exports.set(specifier.local, renameType(type, aliases));
+        if (dependencyInterface.mutableExports.has(specifier.imported)) mutableExports.add(specifier.local);
+        const reactive = dependencyInterface.reactiveExports.get(specifier.imported);
+        if (reactive) reactiveExports.set(specifier.local, reactive);
+      }
+      for (const [extensionId, values] of dependencyInterface.extensionExports) {
+        const target = extensionExports.get(extensionId) ?? new Map<string, unknown>();
+        for (const specifier of dependency.specifiers) {
+          const value = values.get(specifier.imported);
+          if (value !== undefined) target.set(specifier.local, value);
+        }
+        if (target.size > 0) extensionExports.set(extensionId, target);
+      }
     }
   }
 

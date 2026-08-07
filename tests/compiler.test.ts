@@ -16475,3 +16475,256 @@ test("multi-token Look shorthand strings are rejected with builder guidance", ()
   assert.ok(kebab.diagnostics.some((item) => item.code === "VEL5038" && item.message.includes("Use 'borderRadius'")));
   assert.ok(kebab.diagnostics.some((item) => item.code === "VEL5038" && item.message.includes("Use 'spacing(8px, 12px)'")));
 });
+
+test("named re-exports join the module interface with aliases and live-export flags", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-re-export-"));
+  const libraryPath = join(directory, "library.vel");
+  const barrelPath = join(directory, "barrel.vel");
+  const consumerPath = join(directory, "consumer.vel");
+  await writeFile(libraryPath, `
+export type Report:
+    total: number
+
+export let counter = 0
+
+export def bump():
+    counter += 1
+
+export def greet(name: string) -> string:
+    return "Hello, " + name
+`.trimStart(), "utf8");
+  await writeFile(barrelPath, `export {Report, counter, bump, greet as hello} from "./library.vel"\n`, "utf8");
+  const consumerSource = `
+import {Report, counter, bump, hello} from "./barrel.vel"
+
+const report: Report = {total: 1}
+print(hello("Velar"))
+print(counter)
+bump()
+print(counter)
+print(report.total)
+`.trimStart();
+  await writeFile(consumerPath, consumerSource, "utf8");
+
+  const project = await compileProject(consumerPath);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const barrel = project.modules.find((module) => module.inputPath === barrelPath);
+  assert.equal(barrel?.result.code, "export { Report, counter, bump, greet as hello } from \"./library.js\";\n");
+  const symbols = project.modules.find((module) => module.inputPath === consumerPath)?.result.semanticIndex.symbols;
+  assert.equal(symbols?.find((item) => item.name === "hello")?.type, "(name: string) -> string");
+
+  // Go-to-definition follows the re-export chain to the origin declaration.
+  const definition = projectDefinitionAt(project, consumerPath, consumerSource.indexOf("hello(\"Velar\")") + 1);
+  assert.equal(definition?.path, libraryPath);
+
+  // The live export propagates: a namespace import of the barrel is rejected
+  // exactly like a namespace import of the origin module.
+  const namespacePath = join(directory, "namespace.vel");
+  await writeFile(namespacePath, `import * as barrel from "./barrel.vel"\n\nprint(barrel.hello("Velar"))\n`, "utf8");
+  const namespaceProject = await compileProject(namespacePath);
+  assert.ok(namespaceProject.failures.some((failure) => /exports live values; import them by name/u.test(failure.message)),
+    JSON.stringify(namespaceProject.failures));
+
+  // End-to-end: the compiled re-export stays a live ES-module binding.
+  const cli = resolve("packages/cli/src/cli.ts");
+  const execution = spawnSync(process.execPath, [cli, "run", consumerPath], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(execution.status, 0, execution.stderr);
+  assert.equal(execution.stdout, "Hello, Velar\n0\n1\n1\n");
+});
+
+test("named re-exports work from package sources and package barrels", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-re-export-package-"));
+  const packageRoot = join(directory, "node_modules", "velar-lib");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await mkdir(join(packageRoot, "src"), { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel", extensions: [] }), "utf8");
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "velar-lib", velar: { entry: "src/index.vel" } }), "utf8");
+  await writeFile(join(packageRoot, "src", "impl.vel"), `
+export def greet(name: string) -> string:
+    return "Hello, " + name
+`.trimStart(), "utf8");
+  // The package entry is itself a barrel of internal modules.
+  await writeFile(join(packageRoot, "src", "index.vel"), `export {greet} from "./impl.vel"\n`, "utf8");
+  await writeFile(join(directory, "src", "main.vel"), `
+import {packaged} from "./barrel.vel"
+
+print(packaged("Velar"))
+`.trimStart(), "utf8");
+  // The application barrel re-exports directly from the package source.
+  await writeFile(join(directory, "src", "barrel.vel"), `export {greet as packaged} from "velar-lib"\n`, "utf8");
+
+  const project = await compileProject(join(directory, "src", "main.vel"), new Map(), {
+    sourceRoot: join(directory, "src"),
+    projectRoot: directory,
+  });
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+
+  const cli = resolve("packages/cli/src/cli.ts");
+  const execution = spawnSync(process.execPath, [cli, "run"], { cwd: directory, encoding: "utf8" });
+  assert.equal(execution.status, 0, execution.stderr);
+  assert.equal(execution.stdout, "Hello, Velar\n");
+});
+
+test("re-exports reject namespace form, duplicates, and missing origin names", async () => {
+  const star = compile(`export * from "./library.vel"\n`);
+  assert.ok(star.diagnostics.some((item) => item.code === "VEL2029"
+    && item.message.includes("export {name, other as alias} from")), JSON.stringify(star.diagnostics));
+
+  const empty = compile(`export {} from "./library.vel"\n`);
+  assert.ok(empty.diagnostics.some((item) => item.code === "VEL2029" && /at least one export/u.test(item.message)),
+    JSON.stringify(empty.diagnostics));
+
+  const duplicate = compile(`export const value = 1\nexport {value} from "./library.vel"\n`);
+  assert.ok(duplicate.diagnostics.some((item) => item.code === "VEL3016"
+    && item.message.includes("Export 'value' is declared more than once")), JSON.stringify(duplicate.diagnostics));
+  const repeated = compile(`export {value} from "./a.vel"\nexport {value} from "./b.vel"\n`);
+  assert.ok(repeated.diagnostics.some((item) => item.code === "VEL3016"), JSON.stringify(repeated.diagnostics));
+  const aliased = compile(`export const value = 1\nexport {value as shared} from "./library.vel"\n`);
+  assert.deepEqual(aliased.diagnostics, []);
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-re-export-missing-"));
+  const libraryPath = join(directory, "library.vel");
+  const barrelPath = join(directory, "barrel.vel");
+  await writeFile(libraryPath, "export const present = 1\n", "utf8");
+  await writeFile(barrelPath, `export {missing} from "./library.vel"\n`, "utf8");
+  const project = await compileProject(barrelPath);
+  assert.ok(project.failures.some((failure) => failure.message === "Module './library.vel' has no export named 'missing'"),
+    JSON.stringify(project.failures));
+});
+
+test("extern default exports pin the class and constant contracts", () => {
+  const source = `
+type MarkdownItOptions:
+    html: bool
+
+type Highlighter:
+    highlight: (code: string, language: string) -> string
+
+extern module "markdown-it":
+    export class default:
+        constructor(options: MarkdownItOptions)
+        def render(source: string) -> string
+
+extern module "highlight.js/lib/common":
+    export const default: Highlighter
+
+import js MarkdownIt from "markdown-it"
+import js hljs from "highlight.js/lib/common"
+
+const renderer = MarkdownIt({html: false})
+
+export def render(text: string) -> string:
+    return renderer.render(text) + hljs.highlight(text, "vel")
+`.trimStart();
+  const result = compileCore(source);
+  assert.deepEqual(result.diagnostics, []);
+  // The bare import js form is the canonical default import and lowers to a
+  // native JavaScript default import for both shapes.
+  assert.match(result.code ?? "", /import MarkdownIt from "markdown-it";/u);
+  assert.match(result.code ?? "", /import hljs from "highlight\.js\/lib\/common";/u);
+  // The declared contracts stay checked.
+  const misuse = compileCore(source.replace("renderer.render(text)", "renderer.render(1)"));
+  assert.ok(misuse.diagnostics.some((item) => item.code === "VEL4001"), JSON.stringify(misuse.diagnostics));
+  // The explicit spelling is equivalent and also lowers to a default import.
+  const explicit = compileCore(`
+extern module "markdown-it":
+    export const default: string
+
+import js {default as banner} from "markdown-it"
+
+print(banner)
+`.trimStart());
+  assert.deepEqual(explicit.diagnostics, []);
+  assert.match(explicit.code ?? "", /import banner from "markdown-it";/u);
+  // The formatter accepts both declaration shapes unchanged.
+  assert.equal(formatSource(source), source);
+});
+
+test("a manual extern module silences the declaration probe for its source", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-extern-probe-"));
+  const packageRoot = join(directory, "node_modules", "manual-owned");
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({
+    name: "manual-owned",
+    type: "module",
+    main: "index.js",
+    types: "index.d.ts",
+  }), "utf8");
+  await writeFile(join(packageRoot, "index.js"), "export const helper = () => \"ok\";\n", "utf8");
+  // This declaration file produces a probe notice: the export table names a
+  // local binding that is never declared.
+  await writeFile(join(packageRoot, "index.d.ts"), "export { helper };\n", "utf8");
+
+  const declaredPath = join(directory, "declared.vel");
+  await writeFile(declaredPath, `
+extern module "manual-owned":
+    export def helper() -> string
+
+import js {helper} from "manual-owned"
+
+print(helper())
+`.trimStart(), "utf8");
+  const declared = await compileProject(declaredPath);
+  assert.deepEqual(declared.failures, []);
+  assert.deepEqual(declared.modules.flatMap((module) => module.result.diagnostics), []);
+  assert.deepEqual(declared.notices, []);
+
+  // Without the manual declaration the same probe notice still surfaces.
+  const undeclaredPath = join(directory, "undeclared.vel");
+  await writeFile(undeclaredPath, `import js {helper} from "manual-owned"\n\nprint(helper)\n`, "utf8");
+  const undeclared = await compileProject(undeclaredPath);
+  assert.ok(undeclared.notices.some((notice) => notice.message.includes("manual-owned")
+    && notice.message.includes("was not found and was kept as unknown")), JSON.stringify(undeclared.notices));
+});
+
+test("velar test and velar run resolve bridged npm dependencies from the project", async () => {
+  const cli = resolve("packages/cli/src/cli.ts");
+  const directory = await mkdtemp(join(tmpdir(), "velar-bridged-sandbox-"));
+  const packageRoot = join(directory, "node_modules", "word-count");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel", extensions: [] }), "utf8");
+  // The project's own package manifest deliberately omits "type": the compiled
+  // sandbox carries its own ES-module manifest.
+  await writeFile(join(directory, "package.json"), JSON.stringify({ name: "bridged-fixture", private: true }), "utf8");
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "word-count", type: "module", main: "index.js" }), "utf8");
+  await writeFile(join(packageRoot, "index.js"), "export function countWords(text) { return text.split(/\\s+/u).filter(Boolean).length; }\n", "utf8");
+  await writeFile(join(directory, "src", "words.vel"), `
+extern module "word-count":
+    export def countWords(text: string) -> number
+
+import js {countWords} from "word-count"
+
+export def measure(text: string) -> number:
+    return countWords(text)
+`.trimStart(), "utf8");
+  await writeFile(join(directory, "src", "main.vel"), `
+import {measure} from "./words.vel"
+
+print(measure("velar test resolves bridged packages"))
+`.trimStart(), "utf8");
+  await writeFile(join(directory, "src", "words.test.vel"), `
+import {expect} from "velar/test"
+import {measure} from "./words.vel"
+
+def test_bridged_dependency():
+    expect(measure("one two three")).toBe(3)
+`.trimStart(), "utf8");
+
+  // No TMPDIR override: the compiled tree must resolve the bridged package
+  // through the project's own node_modules.
+  const tested = spawnSync(process.execPath, [cli, "test"], { cwd: directory, encoding: "utf8" });
+  assert.equal(tested.status, 0, String(tested.stderr));
+  assert.match(tested.stdout, /words\.test\.vel :: test_bridged_dependency/u);
+  assert.match(tested.stdout, /1 passed, 0 failed/u);
+
+  const ran = spawnSync(process.execPath, [cli, "run"], { cwd: directory, encoding: "utf8" });
+  assert.equal(ran.status, 0, String(ran.stderr));
+  assert.equal(ran.stdout, "5\n");
+
+  // The in-project sandbox cleans up after itself.
+  const entries = await readdir(directory);
+  assert.ok(!entries.includes(".velar"), JSON.stringify(entries));
+});

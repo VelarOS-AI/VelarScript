@@ -811,6 +811,7 @@ export class JavaScriptEmitter {
         case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
         case "ExpressionStatement": visitExpression(statement.expression); break;
         case "ImportDeclaration":
+        case "ReExportDeclaration":
         case "ExternModuleDeclaration":
         case "TypeDeclaration":
         case "TypeAliasDeclaration":
@@ -879,6 +880,13 @@ export class JavaScriptEmitter {
     switch (statement.kind) {
       case "ImportDeclaration":
         return this.emitImport(statement.source, statement.specifiers, indentation);
+      case "ReExportDeclaration": {
+        const emittedSource = statement.source.endsWith(".vel") ? `${statement.source.slice(0, -4)}.js` : statement.source;
+        const names = statement.specifiers
+          .map((specifier) => specifier.imported === specifier.exported ? specifier.imported : `${specifier.imported} as ${specifier.exported}`)
+          .join(", ");
+        return `${indentation}export {${names.length > 0 ? ` ${names} ` : ""}} from ${JSON.stringify(emittedSource)};`;
+      }
       case "ExternModuleDeclaration":
         return "";
       case "TypeDeclaration":

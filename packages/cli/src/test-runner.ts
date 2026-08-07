@@ -1,12 +1,11 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
-import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.ts";
+import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { hostErrorStack } from "./host-error.ts";
 
 export async function runTests(config: VelarProjectConfig, explicitInput: string | null): Promise<number> {
@@ -18,7 +17,7 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
     return 1;
   }
 
-  const temporary = await mkdtemp(join(tmpdir(), "velar-tests-"));
+  const temporary = await createCompiledSandbox(config.root, "test");
   let passed = 0;
   let failed = 0;
   try {
@@ -76,7 +75,7 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
       }
     }
   } finally {
-    await rm(temporary, { recursive: true, force: true });
+    await removeCompiledSandbox(temporary);
   }
   process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
   return failed === 0 ? 0 : 1;
@@ -88,7 +87,7 @@ async function discoverTestFiles(root: string, excluded: ReadonlySet<string>): P
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === ".git" || excluded.has(path)) continue;
+        if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".velar" || excluded.has(path)) continue;
         await visit(path);
       } else if (entry.isFile() && entry.name.endsWith(".test.vel") && !entry.name.endsWith(".browser.test.vel")) {
         output.push(path);

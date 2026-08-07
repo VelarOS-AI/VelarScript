@@ -8,6 +8,7 @@ export interface Program {
 
 export type Statement =
   | ImportDeclaration
+  | ReExportDeclaration
   | UnsafeCssImportDeclaration
   | ExternModuleDeclaration
   | ComponentDeclaration
@@ -50,6 +51,20 @@ export interface ImportSpecifier {
   readonly imported: string;
   readonly local: string;
   readonly namespace: boolean;
+  readonly span: Span;
+}
+
+export interface ReExportDeclaration {
+  readonly kind: "ReExportDeclaration";
+  readonly source: string;
+  readonly sourceSpan: Span;
+  readonly specifiers: readonly ReExportSpecifier[];
+  readonly span: Span;
+}
+
+export interface ReExportSpecifier {
+  readonly imported: string;
+  readonly exported: string;
   readonly span: Span;
 }
 

@@ -62,7 +62,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
     },
   };
   return new Map([
-    [".gitignore", "node_modules/\ndist/\n"],
+    [".gitignore", "node_modules/\ndist/\n.velar/\n"],
     ["package.json", json(packageManifest)],
     ["velar.json", json({
       formatVersion,
@@ -104,7 +104,7 @@ function componentTemplate(name: string, displayName: string, version: string, f
     },
   };
   return new Map([
-    [".gitignore", "node_modules/\ndist/\n"],
+    [".gitignore", "node_modules/\ndist/\n.velar/\n"],
     ["package.json", json(packageManifest)],
     ["velar.json", json({
       formatVersion,
@@ -136,7 +136,7 @@ function commonWebFiles(
   formatVersion: number,
 ): readonly (readonly [string, string])[] {
   return [
-    [".gitignore", "node_modules/\ndist/\n"],
+    [".gitignore", "node_modules/\ndist/\n.velar/\n"],
     ["package.json", json({
       name,
       version: "0.1.0",

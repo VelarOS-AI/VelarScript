@@ -2,7 +2,10 @@
 
 Status: deliberately limited in VelarScript 0.10
 
-Safe `import js` first uses an explicit local `extern module` when present. If
+Safe `import js` first uses an explicit local `extern module` when present; the
+manual declaration owns the whole source contract, so the automatic
+TypeScript-declaration probe below neither runs nor prints notices for that
+module's imports of the declared source. If
 there is no manual declaration, the project compiler may read the npm package's
 `types`, `typings`, export-map `types`, or adjacent declaration entry. Exact and
 single-wildcard package subpaths such as `sdk/client` and `sdk/features/*` use
@@ -102,6 +105,42 @@ extern module "text-tools":
 VelarScript initializer. Functions use the same checked parameter/result syntax as
 ordinary VelarScript functions. `export class` provides a complete
 constructor/instance/static contract directly.
+
+Default-export-only packages are declared with the export name `default`. This
+is a supported contract, not a parser accident: `default` is not a VelarScript
+keyword, so it names the extern export directly, and the bare `import js Name
+from "pkg"` form imports exactly that name. Both the class shape and the
+constant shape work:
+
+```velar
+type MarkdownItOptions:
+    html: bool
+
+type Highlighter:
+    highlight: (code: string, language: string) -> string
+
+extern module "markdown-it":
+    export class default:
+        constructor(options: MarkdownItOptions)
+        def render(source: string) -> string
+
+extern module "highlight.js/lib/common":
+    export const default: Highlighter
+
+import js MarkdownIt from "markdown-it"
+import js hljs from "highlight.js/lib/common"
+
+const renderer = MarkdownIt({html: false})
+```
+
+The bare form `import js MarkdownIt from "markdown-it"` is the canonical
+default import and lowers to a native JavaScript default import; the explicit
+spelling `import js {default as MarkdownIt} from "markdown-it"` is equivalent.
+Because `default` is a reserved word in JavaScript, the imported binding must
+always carry another local name — which both forms provide. Use the constant
+shape for default-exported singletons (it tells no lies about
+constructability) and the class shape when the default export is genuinely
+constructed with `new`.
 Calls lower to native JavaScript `new`, including namespace imports, while
 VelarScript keeps the declared class nominal and enforces read-only members.
 After a statically `null` call or `await` is evaluated, its observable result is

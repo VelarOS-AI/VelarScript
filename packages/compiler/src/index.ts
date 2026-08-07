@@ -66,6 +66,10 @@ export interface ModuleDependency {
   readonly javascript: boolean;
   readonly unsafe: boolean;
   readonly dynamic: boolean;
+  /** True for `export {name} from "source"` re-export dependencies. */
+  readonly reExport?: boolean;
+  /** True when the importing module declares `extern module "source"` itself. */
+  readonly externOwned?: boolean;
   readonly specifiers: readonly ModuleDependencySpecifier[];
 }
 
@@ -285,6 +289,9 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
 }
 
 function dependenciesOf(program: Program, extensions: readonly CompilerExtension[]): readonly ModuleDependency[] {
+  const externSources = new Set(program.body
+    .filter((statement) => statement.kind === "ExternModuleDeclaration")
+    .map((statement) => statement.source));
   const dependencies: ModuleDependency[] = program.body
     .filter((statement) => statement.kind === "ImportDeclaration")
     .map((statement) => ({
@@ -292,12 +299,28 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       javascript: statement.javascript,
       unsafe: statement.unsafe,
       dynamic: false,
+      ...(statement.javascript && !statement.unsafe && externSources.has(statement.source) ? { externOwned: true } : {}),
       specifiers: statement.specifiers.map((specifier) => ({
         imported: specifier.imported,
         local: specifier.local,
         namespace: specifier.namespace,
       })),
     }));
+  for (const statement of program.body) {
+    if (statement.kind !== "ReExportDeclaration") continue;
+    dependencies.push({
+      source: statement.source,
+      javascript: false,
+      unsafe: false,
+      dynamic: false,
+      reExport: true,
+      specifiers: statement.specifiers.map((specifier) => ({
+        imported: specifier.imported,
+        local: specifier.exported,
+        namespace: false,
+      })),
+    });
+  }
 
   const dynamicSources = new Set<string>();
   const dependencyExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
@@ -400,6 +423,7 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
       case "ExpressionStatement": visitExpression(statement.expression); break;
       case "ImportDeclaration":
+      case "ReExportDeclaration":
       case "ExternModuleDeclaration":
       case "TypeDeclaration":
       case "TypeAliasDeclaration":
@@ -582,10 +606,19 @@ function interfaceOf(
       }
     }
   }
+  const reExports = new Map<string, { readonly source: string; readonly imported: string }>();
+  for (const statement of program.body) {
+    if (statement.kind !== "ReExportDeclaration") continue;
+    for (const specifier of statement.specifiers) {
+      reExports.set(specifier.exported, { source: statement.source, imported: specifier.imported });
+    }
+  }
+
   return {
     exports,
     mutableExports,
     reactiveExports,
+    reExports,
     namedTypes,
     namedTypeIdentities,
     typeAliases,

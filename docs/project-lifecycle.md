@@ -92,8 +92,17 @@ stack traces map back to `.vel` sources. Entry resolution mirrors
 `velar check`. Projects that enable a web application framework are rejected
 and belong to `velar dev` and `velar build`.
 
+`velar test` and `velar run` compile into a short-lived sandbox inside the
+project — `.velar/test-*` and `.velar/run-*` — rather than the system
+temporary directory. Keeping the compiled tree inside the project preserves
+Node's upward `node_modules` resolution, so bridged JavaScript dependencies
+(`import js` packages declared in `package.json`) resolve against the
+project's real installation with no environment overrides. The sandbox is
+removed after each run; add `.velar/` to `.gitignore` (the project templates
+already do).
+
 `velar format` recursively owns project `.vel` files while excluding `.git`,
-`node_modules`, `publicDir`, and `outDir`. `velar format --check` is read-only.
+`node_modules`, `.velar`, `publicDir`, and `outDir`. `velar format --check` is read-only.
 Build, verification, preview, and remote-deployment verification continue to
 operate on isolated, integrity-checked production output.
 

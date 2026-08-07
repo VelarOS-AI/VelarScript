@@ -1,11 +1,8 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
-import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.ts";
+import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { prepareStandardModules } from "./test-runner.ts";
 
 export async function runProgram(config: VelarProjectConfig, programArguments: readonly string[]): Promise<number> {
@@ -32,14 +29,13 @@ export async function runProgram(config: VelarProjectConfig, programArguments: r
     return 1;
   }
 
-  const temporary = await mkdtemp(join(tmpdir(), "velar-run-"));
+  const temporary = await createCompiledSandbox(config.root, "run");
   try {
-    await writeFile(join(temporary, "package.json"), JSON.stringify({ name: "velar-run", private: true, type: "module" }), "utf8");
     await prepareStandardModules(temporary, config);
     await writeCompiledTestProject(project, temporary);
     return await executeNodeProgram(compiledTestModulePath(project, entry, temporary), programArguments);
   } finally {
-    await rm(temporary, { recursive: true, force: true });
+    await removeCompiledSandbox(temporary);
   }
 }
 
