@@ -771,7 +771,7 @@ component App:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /onChoose\(label\)/u);
+  assert.match(result.code ?? "", /onChoose\.get\(\)\(label\.get\(\)\)/u);
   const callback = result.semanticIndex.symbols.find((item) => item.kind === "parameter" && item.name === "onChoose");
   assert.equal(callback?.type, "(string) -> null");
   assert.equal(describeType({
@@ -1579,6 +1579,160 @@ print(total)
   const execution = executeModule(contextualArrow.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "6\n");
+});
+
+test("break and continue guards narrow the loop fall-through path like return", () => {
+  const pullLoop = compileCore(`
+def drain(chunks: List<string>) -> string:
+    let assembled = ""
+    while true:
+        const chunk = chunks.pop(0)
+        if chunk == null:
+            break
+        assembled += chunk
+    return assembled
+
+print(drain(["stream", "ing", " works"]))
+`.trimStart());
+  assert.deepEqual(pullLoop.diagnostics, []);
+  const pullExecution = executeModule(pullLoop.code ?? "");
+  assert.equal(pullExecution.status, 0, String(pullExecution.stderr));
+  assert.equal(pullExecution.stdout, "streaming works\n");
+
+  const continueGuard = compileCore(`
+def total(values: List<number?>) -> number:
+    let sum = 0
+    for value in values:
+        if value == null:
+            continue
+        sum += value
+    return sum
+
+print(total([1, null, 2, null, 3]))
+`.trimStart());
+  assert.deepEqual(continueGuard.diagnostics, []);
+  const continueExecution = executeModule(continueGuard.code ?? "");
+  assert.equal(continueExecution.status, 0, String(continueExecution.stderr));
+  assert.equal(continueExecution.stdout, "6\n");
+
+  // A break in the inner loop narrows only the inner fall-through and leaves
+  // the outer loop's established facts alone.
+  const nestedLoops = compileCore(`
+def flatten(rows: List<List<string?>>, separator: string?) -> string:
+    let out = ""
+    if separator == null:
+        return out
+    for row in rows:
+        for cell in row:
+            if cell == null:
+                break
+            out += cell
+        out += separator
+    return out
+
+print(flatten([["a", "b", null, "c"], ["d"]], "|"))
+`.trimStart());
+  assert.deepEqual(nestedLoops.diagnostics, []);
+  const nestedExecution = executeModule(nestedLoops.code ?? "");
+  assert.equal(nestedExecution.status, 0, String(nestedExecution.stderr));
+  assert.equal(nestedExecution.stdout, "ab|d|\n");
+
+  const matchArm = compileCore(`
+def compact(values: List<string?>) -> string:
+    let out = ""
+    for value in values:
+        match value:
+            case null:
+                continue
+        out += value
+    return out
+
+print(compact(["a", null, "b"]))
+`.trimStart());
+  assert.deepEqual(matchArm.diagnostics, []);
+  const matchExecution = executeModule(matchArm.code ?? "");
+  assert.equal(matchExecution.status, 0, String(matchExecution.stderr));
+  assert.equal(matchExecution.stdout, "ab\n");
+});
+
+test("break and continue still carry loop-body writes to the after-loop merge", () => {
+  // A write in a break arm escapes the loop, so the outer fact cannot survive.
+  const breakCarriesWrite = compileCore(`
+def leak(flag: bool) -> string:
+    let value: string? = "seed"
+    if value != null:
+        while flag:
+            if flag:
+                value = null
+                break
+        return value
+    return ""
+`.trimStart());
+  assert.ok(
+    breakCarriesWrite.diagnostics.some((item) => /Cannot assign string\? to string/u.test(item.message)),
+    breakCarriesWrite.diagnostics.map((item) => item.message).join("\n"),
+  );
+
+  // A write in a continue arm reaches the next iteration and the loop exit.
+  const continueCarriesWrite = compileCore(`
+def carry(flag: bool) -> string:
+    let value: string? = "seed"
+    if value != null:
+        while flag:
+            if flag:
+                value = null
+                continue
+            return ""
+        return value
+    return ""
+`.trimStart());
+  assert.ok(
+    continueCarriesWrite.diagnostics.some((item) => /Cannot assign string\? to string/u.test(item.message)),
+    continueCarriesWrite.diagnostics.map((item) => item.message).join("\n"),
+  );
+
+  // A reachable break can leave the loop while the condition still holds, so
+  // the condition's negated facts must not persist past the loop.
+  const breakSkipsConditionFacts = compileCore(`
+def guard(value: string?) -> string:
+    while value == null:
+        if true:
+            break
+        return ""
+    return value
+`.trimStart());
+  assert.ok(
+    breakSkipsConditionFacts.diagnostics.some((item) => /Cannot assign string\? to string/u.test(item.message)),
+    breakSkipsConditionFacts.diagnostics.map((item) => item.message).join("\n"),
+  );
+
+  // A break without writes leaves the outer fact intact after the loop.
+  const cleanBreak = compileCore(`
+def keep(flag: bool) -> string:
+    let value: string? = "seed"
+    if value != null:
+        while flag:
+            if flag:
+                break
+            return ""
+        return value
+    return ""
+`.trimStart());
+  assert.deepEqual(cleanBreak.diagnostics, []);
+
+  // Writes and breaks behind an unconditional return stay off reachable flow.
+  const deadTail = compileCore(`
+def dead(flag: bool) -> string:
+    let value: string? = "seed"
+    if value != null:
+        while flag:
+            return ""
+            value = null
+            break
+        return value
+    return ""
+`.trimStart());
+  assert.deepEqual(deadTail.diagnostics, []);
 });
 
 test("assertions enforce runtime invariants and narrow following stable values", () => {
@@ -3963,6 +4117,125 @@ mount(<App />, "#app")
   await waitForOutput(/VelarScript dev server:/u);
   await writeFile(declarationPath, "export declare function format(value: string): string;\n", "utf8");
   await waitForOutput(/VelarScript app has 1 error/u);
+  child.kill("SIGTERM");
+  const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
+});
+
+test("dev server serves dual CJS/ESM packages through their import condition", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-dev-dual-esm-"));
+  const projectRoot = join(directory, "app");
+  await mkdir(join(projectRoot, "node_modules", "dual-lib"), { recursive: true });
+  await mkdir(join(projectRoot, "node_modules", "dual-dep"), { recursive: true });
+  await writeFile(join(projectRoot, "node_modules", "dual-lib", "package.json"), JSON.stringify({
+    name: "dual-lib",
+    exports: {
+      ".": { import: "./index.mjs", require: "./index.js" },
+    },
+  }), "utf8");
+  await writeFile(
+    join(projectRoot, "node_modules", "dual-lib", "index.js"),
+    "const { star } = require(\"dual-dep\");\nmodule.exports.decorate = (value) => `${star}${value}${star}`;\n",
+    "utf8",
+  );
+  await writeFile(
+    join(projectRoot, "node_modules", "dual-lib", "index.mjs"),
+    "import { star } from \"dual-dep\";\nexport const decorate = (value) => `${star}${value}${star}`;\n",
+    "utf8",
+  );
+  await writeFile(join(projectRoot, "node_modules", "dual-dep", "package.json"), JSON.stringify({
+    name: "dual-dep",
+    exports: {
+      ".": { import: "./star.mjs", require: "./star.cjs" },
+    },
+  }), "utf8");
+  await writeFile(join(projectRoot, "node_modules", "dual-dep", "star.mjs"), "export const star = \"*\";\n", "utf8");
+  await writeFile(join(projectRoot, "node_modules", "dual-dep", "star.cjs"), "module.exports.star = \"*\";\n", "utf8");
+  await linkWorkspaceWebExtension(projectRoot);
+  await writeFile(join(projectRoot, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
+  await writeFile(join(projectRoot, "main.vel"), `
+extern module "dual-lib":
+    export def decorate(value: string) -> string
+
+import js {decorate} from "dual-lib"
+
+component App:
+    return <main>{decorate("velar")}</main>
+
+mount(<App />, "#app")
+`.trimStart(), "utf8");
+
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42886"], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  context.after(() => stopDevServer(child));
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  const deadline = Date.now() + 10_000;
+  while (!output.includes("VelarScript dev server:") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.match(output, /VelarScript dev server:/u);
+  const page = await fetch("http://127.0.0.1:42886/");
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.doesNotMatch(html, /Cannot resolve browser npm import/u);
+  // The import map points both the direct dependency and the transitive bare
+  // import of its ESM entry at their "import"-condition files.
+  assert.match(html, /"dual-lib":"\/@npm\/dual-lib\/index\.mjs"/u);
+  assert.match(html, /"dual-dep":"\/@npm\/dual-dep\/star\.mjs"/u);
+  const entry = await fetch("http://127.0.0.1:42886/@npm/dual-lib/index.mjs");
+  assert.equal(entry.status, 200);
+  assert.match(await entry.text(), /import \{ star \} from "dual-dep"/u);
+  const dependency = await fetch("http://127.0.0.1:42886/@npm/dual-dep/star.mjs");
+  assert.equal(dependency.status, 200);
+  assert.match(await dependency.text(), /export const star/u);
+  child.kill("SIGTERM");
+  const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
+});
+
+test("dev server names genuinely CommonJS-only packages in its refusal", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-dev-cjs-only-"));
+  const projectRoot = join(directory, "app");
+  await mkdir(join(projectRoot, "node_modules", "legacy-lib"), { recursive: true });
+  await writeFile(join(projectRoot, "node_modules", "legacy-lib", "package.json"), JSON.stringify({
+    name: "legacy-lib",
+    main: "index.js",
+  }), "utf8");
+  await writeFile(join(projectRoot, "node_modules", "legacy-lib", "index.js"), "module.exports.decorate = (value) => value;\n", "utf8");
+  await linkWorkspaceWebExtension(projectRoot);
+  await writeFile(join(projectRoot, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
+  await writeFile(join(projectRoot, "main.vel"), `
+extern module "legacy-lib":
+    export def decorate(value: string) -> string
+
+import js {decorate} from "legacy-lib"
+
+component App:
+    return <main>{decorate("velar")}</main>
+
+mount(<App />, "#app")
+`.trimStart(), "utf8");
+
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42887"], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  context.after(() => stopDevServer(child));
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  const deadline = Date.now() + 10_000;
+  while (!output.includes("VelarScript dev server:") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.match(output, /VelarScript dev server:/u);
+  const page = await fetch("http://127.0.0.1:42887/");
+  const html = await page.text();
+  assert.match(html, /Cannot resolve browser npm import 'legacy-lib'/u);
+  assert.match(html, /resolves to the CommonJS file &#39;index\.js&#39;|resolves to the CommonJS file 'index\.js'/u);
+  assert.match(html, /needs an ESM build/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
@@ -9331,7 +9604,7 @@ component App:
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /document\.createDocumentFragment\(\)/);
-  assert.match(result.code ?? "", /Panel\(\{ children:/);
+  assert.match(result.code ?? "", /__velarChild\(Panel, \{ {2}\}, \(/);
   assert.match(result.code ?? "", /__velarOn\([^\n]+"submit"[^\n]+\["prevent","stop"\]/);
   assert.match(result.code ?? "", /__velarBindValue\([^\n]+age[^\n]+true\)/);
   assert.match(result.code ?? "", /__velarBindChecked/);
@@ -9477,7 +9750,7 @@ component Chart:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /__velarCreateElement\("svg", "svg"\)/u);
   assert.match(result.code ?? "", /__velarCreateElement\("g", "svg"\)/u);
-  assert.match(result.code ?? "", /Point\(\{ x: 12, y: 20 \}, "svg"\)/u);
+  assert.match(result.code ?? "", /__velarChild\(Point, \{ x: \(\) => \(12\), y: \(\) => \(20\) \}, undefined, __scope, "svg"\)/u);
   assert.match(result.code ?? "", /__velarCreateElement\("circle", __namespace\)/u);
   assert.match(result.code ?? "", /__velarCreateElement\("foreignObject", __namespace\)/u);
   assert.match(result.code ?? "", /__velarCreateElement\("div", "html"\)/u);
@@ -11716,7 +11989,7 @@ component App:
   assertMapped('__velarCreateElement("main"', source.indexOf("<main"));
   assertMapped('__velarCreateElement("section"', source.indexOf("<section"));
   assertMapped("__velarStaticAttr(__el", source.indexOf("aria-label"));
-  assertMapped("Child({", source.indexOf("<Child"));
+  assertMapped("__velarChild(Child,", source.indexOf("<Child"));
   assertMapped("label:", source.indexOf("label={"));
   assertMapped('__velarCreateElement("p"', source.indexOf("<p>"));
   assertMapped("=> title", source.lastIndexOf("title"));
@@ -14810,7 +15083,7 @@ mount(<Counter start={1} />, "#app")
 
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.extensions, ["@velarscript/web"]);
-  assert.match(result.code ?? "", /const count = __velarState\(start\)/);
+  assert.match(result.code ?? "", /const count = __velarState\(start\.get\(\)\)/);
   assert.match(result.code ?? "", /const doubled = __velarComputed/);
   assert.match(result.code ?? "", /__velarWatch/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
@@ -15346,11 +15619,11 @@ catch (error) { console.log(error.message + ":" + save.pending + ":" + save.erro
 const eventTarget = new EventTarget();
 const eventScope = __velarScope("EventProbe");
 const ownedFailure = __velarAction(() => Promise.reject(Error("Owned failure")), eventScope, "owned");
-__velarOn(eventTarget, "owned", ownedFailure, eventScope);
-__velarOn(eventTarget, "plain", () => Promise.reject(Error("Plain failure")), eventScope);
+__velarOn(eventTarget, "owned", () => ownedFailure, eventScope);
+__velarOn(eventTarget, "plain", () => () => Promise.reject(Error("Plain failure")), eventScope);
 let eventThenReads = 0;
 const fakeThenable = Object.defineProperty({}, "then", { get() { eventThenReads += 1; return () => null; } });
-__velarOn(eventTarget, "ordinary", () => fakeThenable, eventScope);
+__velarOn(eventTarget, "ordinary", () => () => fakeThenable, eventScope);
 eventTarget.dispatchEvent(new Event("owned"));
 eventTarget.dispatchEvent(new Event("plain"));
 eventTarget.dispatchEvent(new Event("ordinary"));
@@ -15567,7 +15840,7 @@ component App:
     return <main><Badge label={label} /></main>
 `.trimStart());
   assert.deepEqual(reactiveProps.diagnostics, []);
-  assert.match(reactiveProps.code ?? "", /__velarDynamic\(__el\d+, \(__childScope\) => __velarUseComponent\(Badge\(\{ label: label\.get\(\) \}, __namespace\)/u);
+  assert.match(reactiveProps.code ?? "", /__velarAppend\(__el\d+, __velarChild\(Badge, \{ label: \(\) => \(label\.get\(\)\) \}, undefined, __scope, __namespace\)\)/u);
 
   const props = compile(`
 component Badge(label: string):
@@ -15643,9 +15916,11 @@ component Profile(user: User?, failed: Error?, loading: bool):
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /if \(loading\)/u);
-  assert.match(result.code ?? "", /\(failed \?\? null\) != null/u);
-  assert.match(result.code ?? "", /\(user \?\? null\) != null/u);
+  // Prop reads route through the live prop handle, so narrowed branch reads
+  // lower through .get() like state and computed reads.
+  assert.match(result.code ?? "", /if \(loading\.get\(\)\)/u);
+  assert.match(result.code ?? "", /\(failed\.get\(\) \?\? null\) != null/u);
+  assert.match(result.code ?? "", /\(user\.get\(\) \?\? null\) != null/u);
   assert.doesNotMatch(result.code ?? "", /__velarStaticAttr\([^\n]+"(?:if|else-if|else)"/u);
 
   const invalid = compile(`
@@ -15772,6 +16047,186 @@ console.log(getterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada:Lin:0\nTypeError\nTypeError\nTypeError\nTypeError\n0\n");
+});
+
+test("reactive props update child components in place without destroying their state", () => {
+  const result = compile(`
+type Row:
+    id: string
+
+state busy = false
+state banner = "b0"
+state showFirst = true
+state rows: List<Row> = [{id: "a"}, {id: "b"}, {id: "c"}]
+let stamps = 0
+
+component Field(label: string, busy: bool = false):
+    state draft = "d0"
+    watch busy:
+        draft = draft + "|" + label + ":" + (busy ? "on" : "off")
+    watch draft:
+        print("draft:" + draft)
+    mounted:
+        print("mounted:" + label)
+    cleanup:
+        print("cleanup:" + label)
+    return <section data-busy={busy ? "yes" : "no"}>{draft}</section>
+
+component RowView(row: Row):
+    stamps += 1
+    const stamp = stamps
+    mounted:
+        print("row-mounted:" + row.id)
+    cleanup:
+        print("row-cleanup:" + row.id)
+    return <article data-id={row.id} data-stamp={stamp}></article>
+
+component PropsApp:
+    return <main><p>{banner}</p><Field label="alpha" busy={busy} /></main>
+
+component BranchApp:
+    return <div>{showFirst ? <Field label="one" /> : <Field label="two" />}</div>
+
+component ListApp:
+    return <ul>{rows.map(row => <RowView key={row.id} row={row} />)}</ul>
+
+mount(<PropsApp />, "#props")
+mount(<BranchApp />, "#branch")
+mount(<ListApp />, "#list")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+
+  // A component element becomes a stable child instance fed by per-prop
+  // observers; the child function itself must not run inside a tracked read.
+  assert.match(result.code ?? "", /__velarChild\(Field, \{ label: \(\) => \("alpha"\), busy: \(\) => \(busy\.get\(\)\) \}, undefined, __scope, __namespace\)/u);
+  assert.match(result.code ?? "", /const busy = __velarProp\(__props, "busy", \(\) => \(false\)\);/u);
+  assert.match(result.code ?? "", /const label = __velarRequiredProp\(__props, "label", "Field"\);/u);
+  assert.doesNotMatch(result.code ?? "", /__velarDynamic\(__el\d+, \(__childScope\) => __velarChild/u);
+
+  const dom = `
+class FakeNode {
+  constructor(nodeType, tagName = "", value = "") {
+    this.nodeType = nodeType;
+    this.tagName = tagName;
+    this.value = value;
+    this.childNodes = [];
+    this.parentNode = null;
+    this.attributes = new Map();
+  }
+  static detach(node) {
+    if (!node.parentNode) return;
+    const siblings = node.parentNode.childNodes;
+    const index = siblings.indexOf(node);
+    if (index !== -1) siblings.splice(index, 1);
+    node.parentNode = null;
+  }
+  static insert(parent, node, before) {
+    if (node.nodeType === 11) {
+      for (const child of [...node.childNodes]) FakeNode.insert(parent, child, before);
+      return;
+    }
+    FakeNode.detach(node);
+    node.parentNode = parent;
+    const index = before === null ? -1 : parent.childNodes.indexOf(before);
+    if (index === -1) parent.childNodes.push(node);
+    else parent.childNodes.splice(index, 0, node);
+  }
+  append(...values) { for (const value of values) FakeNode.insert(this, value, null); }
+  insertBefore(node, before = null) { FakeNode.insert(this, node, before); return node; }
+  before(...values) { for (const value of values) FakeNode.insert(this.parentNode, value, this); }
+  remove() { FakeNode.detach(this); }
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  removeAttribute(name) { this.attributes.delete(name); }
+  getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
+}
+const targets = new Map([
+  ["#props", new FakeNode(1, "root")],
+  ["#branch", new FakeNode(1, "root")],
+  ["#list", new FakeNode(1, "root")],
+]);
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement(tag) { return new FakeNode(1, tag); },
+  createTextNode(value) { return new FakeNode(3, "", String(value)); },
+  createComment(value) { return new FakeNode(8, "", String(value)); },
+  createDocumentFragment() { return new FakeNode(11); },
+  querySelector(selector) { return targets.get(selector) ?? null; },
+};
+function dumpNode(node) {
+  if (node.nodeType === 3) return node.value;
+  if (node.nodeType === 8) return "";
+  const attributes = [...node.attributes.entries()].map(([name, value]) => " " + name + "=" + JSON.stringify(String(value))).join("");
+  return "<" + node.tagName + attributes + ">" + node.childNodes.map(dumpNode).join("") + "</" + node.tagName + ">";
+}
+function dump(selector) { return targets.get(selector).childNodes.map(dumpNode).join(""); }
+`;
+  const execution = executeModule(`${dom}\n${result.code ?? ""}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+await flush();
+console.log("props:" + dump("#props"));
+console.log("branch:" + dump("#branch"));
+console.log("list:" + dump("#list"));
+console.log("phase:busy-on");
+busy.set(true);
+await flush();
+console.log("props:" + dump("#props"));
+console.log("phase:busy-off");
+busy.set(false);
+await flush();
+console.log("props:" + dump("#props"));
+console.log("phase:banner");
+banner.set("b1");
+await flush();
+console.log("props:" + dump("#props"));
+console.log("phase:branch-swap");
+showFirst.set(false);
+await flush();
+console.log("branch:" + dump("#branch"));
+console.log("phase:reorder");
+rows.set([...rows.get()].reverse());
+await flush();
+console.log("list:" + dump("#list"));
+console.log("phase:removal");
+rows.set([rows.get()[2]]);
+await flush();
+console.log("list:" + dump("#list"));
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    // Mount order: lifecycle runs once per instance.
+    "mounted:alpha",
+    "mounted:one",
+    "row-mounted:a",
+    "row-mounted:b",
+    "row-mounted:c",
+    'props:<main><p>b0</p><section data-busy="no">d0</section></main>',
+    'branch:<div><section data-busy="no">d0</section></div>',
+    'list:<ul><article data-id="a" data-stamp="1"></article><article data-id="b" data-stamp="2"></article><article data-id="c" data-stamp="3"></article></ul>',
+    // (a)+(e): a reactive prop update reaches the child in place; local state
+    // survives and no cleanup/mounted runs.
+    "phase:busy-on",
+    "draft:d0|alpha:on",
+    'props:<main><p>b0</p><section data-busy="yes">d0|alpha:on</section></main>',
+    "phase:busy-off",
+    "draft:d0|alpha:on|alpha:off",
+    'props:<main><p>b0</p><section data-busy="no">d0|alpha:on|alpha:off</section></main>',
+    // (b): a parent re-render around the child leaves the instance alone.
+    "phase:banner",
+    'props:<main><p>b1</p><section data-busy="no">d0|alpha:on|alpha:off</section></main>',
+    // (c): switching a conditional branch destroys and recreates.
+    "phase:branch-swap",
+    "cleanup:one",
+    "mounted:two",
+    'branch:<div><section data-busy="no">d0</section></div>',
+    // (d): a keyed reorder moves instances without lifecycle churn.
+    "phase:reorder",
+    'list:<ul><article data-id="c" data-stamp="3"></article><article data-id="b" data-stamp="2"></article><article data-id="a" data-stamp="1"></article></ul>',
+    "phase:removal",
+    "row-cleanup:c",
+    "row-cleanup:b",
+    'list:<ul><article data-id="a" data-stamp="1"></article></ul>',
+    "",
+  ].join("\n"));
 });
 
 test("checks accessible button names and safe native links", () => {

@@ -252,7 +252,10 @@ Mutually exclusive branches are analyzed independently. A write in one branch
 does not contaminate a sibling that cannot execute it, while any write that can
 reach the following statement invalidates the merged fact. Facts established
 with the same type on every continuing branch remain available after the
-branch. A terminating guard therefore reads naturally:
+branch. A guard whose arm ends in `return`, `throw`, or — inside a loop —
+`break` or `continue` never reaches the following statement, so the negated
+facts persist on the fall-through path. A terminating guard therefore reads
+naturally:
 
 ```velar fragment
 if user == null:
@@ -640,7 +643,24 @@ while attempts < 3:
 `break` and `continue` are available only inside loops. Iterating a Map yields
 its keys. A `while` body receives the successful condition's facts on every
 iteration; assigning a narrowed optional back to `null` invalidates that fact
-for the remainder of the current iteration. Writes after an unconditional
+for the remainder of the current iteration. A guard arm ending in `break` or
+`continue` terminates like a `return` for the current iteration: the statement
+after the `if` keeps the negated condition facts, so a pull loop reads
+naturally:
+
+```velar fragment
+while true:
+    const chunk = chunks.pop(0)
+    if chunk == null:
+        break
+    assembled += chunk
+```
+
+The two exits differ after the loop. An arm's writes still escape it — `break`
+carries them directly to the code after the loop, and `continue` carries them
+back through the condition — so the after-loop merge sees them either way, and
+a loop that can `break` may exit while its condition still holds, so the
+condition's negated facts do not persist past it. Writes after an unconditional
 `return`, `throw`, `break`, or `continue` do not affect reachable flow facts. If
 a loop body can only return or throw, its writes cannot escape to the skipped
 path after the loop.
@@ -863,6 +883,27 @@ valueless. JSX expressions use ordinary VelarScript expressions, and the
 interpolation braces are a bracket context: the expression inside `{...}`
 continues across physical lines without parentheses, exactly as it would
 inside a call's parentheses.
+
+A component element owns one stable instance for as long as its position is
+mounted. Props are live inputs, not construction-time values: when a reactive
+value passed as a prop changes, the existing instance sees the new value
+through every prop read — render positions, watches, computed values, and
+event handlers — and its local state, refs, and lifecycle are untouched. The
+component body still runs exactly once per instance, so a `state` initializer
+captures the construction-time prop value, and a body-level `const` derived
+from a prop does not follow later updates — derive with `computed` when it
+should. An instance is destroyed and recreated only when its position
+unmounts: a conditional branch switches, a keyed list entry's key or value
+disappears, or the enclosing region re-renders away. Runtime-implemented
+components (`Head`, `Router`, `Link`, `NavLink`) snapshot their props once at
+construction.
+
+```velar fragment
+export component TicketBadge(count: number):
+    computed label = count == 1 ? "1 open ticket" : f"{count} open tickets"
+
+    return <span class="badge">{label}</span>
+```
 
 JSX children render strings, finite numbers, booleans, enums, `WebNode` values,
 or Lists containing those values. `null` and booleans render no text. Native

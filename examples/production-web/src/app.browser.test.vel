@@ -75,3 +75,42 @@ async def test_unknown_route_renders_typed_fallback_and_recovers():
     await browser.click('[data-release-primary] a[href="/app/"]')
     await browser.waitForText("h1", "VelarScript Release Studio")
     expect(await browser.currentPath()).toBe("/")
+
+async def test_reactive_props_update_children_in_place():
+    await browser.open("/state-lab")
+    // (a) A reactive bool prop flips while a half-typed draft sits in the
+    // child; the child instance must survive with its state intact.
+    await browser.fill("[data-draft-panel='first'] input", "half-typed draft")
+    expect(await browser.text("[data-draft-panel='first'] [data-draft-busy]")).toBe("idle")
+    await browser.click("[data-lab-busy]")
+    await browser.waitForText("[data-draft-panel='first'] [data-draft-busy]", "busy")
+    expect(await browser.text("[data-draft-panel='first'] [data-draft-value]")).toBe("half-typed draft")
+    // (f) The S1 theme-toggle shape: dark={dark} as a prop must not destroy
+    // the draft either.
+    await browser.click("[data-lab-theme]")
+    await browser.waitForText("[data-draft-panel='first'] [data-draft-dark]", "dark")
+    expect(await browser.text("[data-draft-panel='first'] [data-draft-value]")).toBe("half-typed draft")
+    // (c) Switching the conditional branch is a genuine unmount: the new
+    // child starts fresh while still seeing the current prop values.
+    await browser.click("[data-lab-branch]")
+    await browser.waitFor("[data-draft-panel='second']")
+    expect(await browser.count("[data-draft-panel='first']")).toBe(0)
+    expect(await browser.text("[data-draft-panel='second'] [data-draft-value]")).toBe("")
+    expect(await browser.text("[data-draft-panel='second'] [data-draft-busy]")).toBe("busy")
+    expect(await browser.text("[data-draft-panel='second'] [data-draft-dark]")).toBe("dark")
+
+async def test_keyed_reorder_preserves_component_instances():
+    await browser.open("/state-lab")
+    // (d) Per-key component state accumulates, then a reorder moves the
+    // instances without resetting any of them.
+    await browser.click("[data-lab-hit='beta']")
+    await browser.click("[data-lab-hit='beta']")
+    await browser.click("[data-lab-hit='gamma']")
+    await browser.waitForText("[data-lab-count='beta']", "2")
+    expect(await browser.text("[data-lab-count='gamma']")).toBe("1")
+    expect(await browser.text("[data-lab-list] li:first-child button")).toBe("alpha")
+    await browser.click("[data-lab-reverse]")
+    await browser.waitForText("[data-lab-list] li:first-child button", "gamma")
+    expect(await browser.text("[data-lab-count='gamma']")).toBe("1")
+    expect(await browser.text("[data-lab-count='beta']")).toBe("2")
+    expect(await browser.text("[data-lab-count='alpha']")).toBe("0")

@@ -1,6 +1,7 @@
 import {NavLink, RouteContext, Router, lazy, route} from "velar/web"
 import {Home} from "./pages/home.vel"
 import {ConstructionFailure} from "./pages/construction-failure.vel"
+import {StateLab} from "./pages/state-lab.vel"
 
 component RouteLoading:
     return <main aria-busy="true"><p>Loading page…</p></main>
@@ -19,6 +20,7 @@ const routes = [
     route("/about", About),
     route("/construction-failure", ConstructionFailure),
     route("/lazy-failure", Broken),
+    route("/state-lab", StateLab),
 ]
 
 const shellLook = look:

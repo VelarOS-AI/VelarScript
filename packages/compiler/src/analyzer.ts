@@ -330,6 +330,12 @@ export class Analyzer implements TypeEnvironment {
   private parameterDefaultDepth = 0;
   private loopDepth = 0;
   private finallyLoopDepths: number[] = [];
+  private readonly loopFlowContexts: {
+    readonly baseline: FlowFactsSnapshot;
+    readonly carried: FlowFactInvalidations[];
+    sawBreak: boolean;
+  }[] = [];
+  private loopCaptureFloor = 0;
   private currentClass: string | null = null;
   private superMemberContext: "instance" | "static" | null = null;
   private classFieldInitializerDepth = 0;
@@ -1303,22 +1309,26 @@ export class Analyzer implements TypeEnvironment {
         const thenInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           thenFacts = this.analyzeBlock(statement.thenBody, truthy);
         });
-        const thenReturns = this.blockAlwaysReturns(statement.thenBody);
-        if (!thenReturns) continuingInvalidations.push(thenInvalidations);
+        // A branch ending in return/throw never rejoins this flow; a branch
+        // ending in break/continue never reaches the statement after the if
+        // either — its writes are carried to the enclosing loop's merge points
+        // by the break/continue capture instead.
+        const thenExits = this.blockAlwaysExits(statement.thenBody);
+        if (!thenExits) continuingInvalidations.push(thenInvalidations);
         let elseFacts: ReadonlyMap<string, ValueType> = new Map();
-        let elseReturns = false;
+        let elseExits = false;
         if (statement.elseBody) {
           const elseInvalidations = this.analyzeIsolatedFlow(baseline, () => {
             elseFacts = this.analyzeBlock(statement.elseBody!, falsy);
           });
-          elseReturns = this.blockAlwaysReturns(statement.elseBody);
-          if (!elseReturns) continuingInvalidations.push(elseInvalidations);
+          elseExits = this.blockAlwaysExits(statement.elseBody);
+          if (!elseExits) continuingInvalidations.push(elseInvalidations);
         }
         this.applyFlowInvalidations(continuingInvalidations, !statement.elseBody);
-        if (!statement.elseBody && thenReturns) this.persistNarrowings(falsy);
-        else if (statement.elseBody && thenReturns && !elseReturns) this.persistNarrowings(elseFacts);
-        else if (statement.elseBody && elseReturns && !thenReturns) this.persistNarrowings(thenFacts);
-        else if (statement.elseBody && !thenReturns && !elseReturns) {
+        if (!statement.elseBody && thenExits) this.persistNarrowings(falsy);
+        else if (statement.elseBody && thenExits && !elseExits) this.persistNarrowings(elseFacts);
+        else if (statement.elseBody && elseExits && !thenExits) this.persistNarrowings(thenFacts);
+        else if (statement.elseBody && !thenExits && !elseExits) {
           this.persistNarrowings(this.commonNarrowings([thenFacts, elseFacts]));
         }
         break;
@@ -1453,7 +1463,7 @@ export class Analyzer implements TypeEnvironment {
               this.exitScope();
             }
           });
-          if (branchReachable && !this.blockAlwaysReturns(branch.body)) {
+          if (branchReachable && !this.blockAlwaysExits(branch.body)) {
             continuingInvalidations.push(...fallthroughInvalidations, branchInvalidations);
             continuingFacts.push(branchFacts);
           }
@@ -1475,7 +1485,7 @@ export class Analyzer implements TypeEnvironment {
           const elseInvalidations = this.analyzeIsolatedFlow(elseBaseline, () => {
             elseFacts = this.analyzeBlock(statement.elseBody!, fallthroughNarrowings);
           });
-          if (!universalCovered && !this.blockAlwaysReturns(statement.elseBody)) {
+          if (!universalCovered && !this.blockAlwaysExits(statement.elseBody)) {
             continuingInvalidations.push(...fallthroughInvalidations, elseInvalidations);
             continuingFacts.push(elseFacts);
           }
@@ -1521,6 +1531,7 @@ export class Analyzer implements TypeEnvironment {
           this.typeError(`Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
         }
         const baseline = this.snapshotFlowFacts();
+        this.loopFlowContexts.push({ baseline, carried: [], sawBreak: false });
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.enterScope();
           try {
@@ -1538,7 +1549,9 @@ export class Analyzer implements TypeEnvironment {
             this.exitScope();
           }
         });
-        if (!this.blockAlwaysReturns(statement.body)) this.applyFlowInvalidations([bodyInvalidations]);
+        const loopFlow = this.loopFlowContexts.pop()!;
+        if (this.blockAlwaysReturns(statement.body)) this.applyFlowInvalidations(loopFlow.carried);
+        else this.applyFlowInvalidations([bodyInvalidations, ...loopFlow.carried]);
         break;
       }
       case "WhileStatement": {
@@ -1547,13 +1560,21 @@ export class Analyzer implements TypeEnvironment {
         const truthy = this.narrowingFor(statement.condition, condition);
         const falsy = this.negativeNarrowingFor(statement.condition, condition);
         const baseline = this.snapshotFlowFacts();
+        this.loopFlowContexts.push({ baseline, carried: [], sawBreak: false });
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.loopDepth += 1;
           this.analyzeBlock(statement.body, truthy);
           this.loopDepth -= 1;
         });
-        if (this.blockAlwaysReturns(statement.body)) this.persistNarrowings(falsy);
-        else this.applyFlowInvalidations([bodyInvalidations]);
+        const loopFlow = this.loopFlowContexts.pop()!;
+        if (this.blockAlwaysReturns(statement.body)) {
+          // The loop can only be left through a captured break/continue arm or
+          // by the condition failing, so only the carried writes escape it.
+          this.applyFlowInvalidations(loopFlow.carried);
+          if (!loopFlow.sawBreak) this.persistNarrowings(falsy);
+        } else {
+          this.applyFlowInvalidations([bodyInvalidations, ...loopFlow.carried]);
+        }
         break;
       }
       case "BreakStatement":
@@ -1562,6 +1583,12 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic("VEL3005", `'${statement.kind === "BreakStatement" ? "break" : "continue"}' can only be used in a loop`, statement.span));
         } else if (this.finallyLoopDepths.some((depth) => this.loopDepth <= depth)) {
           this.diagnostics.push(diagnostic("VEL3015", `'${statement.kind === "BreakStatement" ? "break" : "continue"}' cannot leave a finally block`, statement.span));
+        } else {
+          const context = this.loopFlowContexts.at(-1);
+          if (context && this.loopFlowContexts.length > this.loopCaptureFloor) {
+            context.carried.push(this.flowInvalidationsSince(context.baseline));
+            if (statement.kind === "BreakStatement") context.sawBreak = true;
+          }
         }
         break;
       case "TryStatement": {
@@ -2245,9 +2272,19 @@ export class Analyzer implements TypeEnvironment {
   protected analyzeStatements(statements: readonly Statement[]): void {
     let completedFlow: FlowFactsSnapshot | null = null;
     for (const statement of statements) {
-      this.analyzeStatement(statement);
-      if (!completedFlow && this.statementAlwaysExitsBlock(statement)) {
-        completedFlow = this.snapshotFlowFacts();
+      if (completedFlow) {
+        // Statements after an unconditional exit are analyzed for diagnostics
+        // only; a break or continue in that dead tail must not carry writes to
+        // an enclosing loop's reachable merge points.
+        const previousFloor = this.loopCaptureFloor;
+        this.loopCaptureFloor = Math.max(previousFloor, this.loopFlowContexts.length);
+        this.analyzeStatement(statement);
+        this.loopCaptureFloor = previousFloor;
+      } else {
+        this.analyzeStatement(statement);
+        if (this.statementAlwaysExitsBlock(statement)) {
+          completedFlow = this.snapshotFlowFacts();
+        }
       }
     }
     if (completedFlow) this.restoreFlowFacts(completedFlow);
@@ -5978,6 +6015,12 @@ export class Analyzer implements TypeEnvironment {
   private analyzeIsolatedFlow(snapshot: FlowFactsSnapshot, analyze: () => void): FlowFactInvalidations {
     this.restoreFlowFacts(snapshot);
     analyze();
+    const invalidations = this.flowInvalidationsSince(snapshot);
+    this.restoreFlowFacts(snapshot);
+    return invalidations;
+  }
+
+  private flowInvalidationsSince(snapshot: FlowFactsSnapshot): FlowFactInvalidations {
     const bindings = new Set<Binding>();
     const storageTypes = new Map<Binding, ValueType>();
     for (const [binding, state] of snapshot.bindings) {
@@ -5995,7 +6038,6 @@ export class Analyzer implements TypeEnvironment {
       }
       if (invalidated.size > 0) members.set(index, invalidated);
     });
-    this.restoreFlowFacts(snapshot);
     return { bindings, members, storageTypes };
   }
 

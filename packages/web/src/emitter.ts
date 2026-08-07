@@ -52,7 +52,7 @@ function __velarFileTypeIs(value) {
 `.trimStart();
 
 export class WebJavaScriptEmitter extends JavaScriptEmitter {
-  private readonly reactive = new Map<string, "state" | "computed">();
+  private readonly reactive = new Map<string, "state" | "computed" | "prop">();
   private currentScope: string | null = null;
   private currentJsxNamespace = '"html"';
   private readonly resourceContents: ReadonlyMap<string, string>;
@@ -335,7 +335,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const previousJsxNamespace = this.currentJsxNamespace;
     this.currentScope = "__scope";
     this.currentJsxNamespace = "__namespace";
-    for (const parameter of statement.parameters) this.reactive.delete(parameter.name);
+    // Props are live reactive inputs: every parameter becomes a read-only
+    // handle over the per-instance props store, so prop reads lower through
+    // .get() exactly like state and computed reads do.
+    for (const parameter of statement.parameters) this.reactive.set(parameter.name, "prop");
     for (const item of statement.body) {
       if (item.kind === "StateDeclaration") this.reactive.set(item.name, "state");
       else if (item.kind === "ComputedDeclaration") this.reactive.set(item.name, "computed");
@@ -344,7 +347,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const lines: string[] = [];
     for (const parameter of statement.parameters) {
       if (parameter.defaultValue) {
-        lines.push(`${bodyIndent}const ${parameter.name} = __props.${parameter.name} === undefined ? ${this.emitMappedExpression(parameter.defaultValue)} : __props.${parameter.name};`);
+        lines.push(`${bodyIndent}const ${parameter.name} = __velarProp(__props, ${JSON.stringify(parameter.name)}, () => (${this.emitMappedExpression(parameter.defaultValue)}));`);
       } else {
         lines.push(`${bodyIndent}const ${parameter.name} = __velarRequiredProp(__props, ${JSON.stringify(parameter.name)}, ${JSON.stringify(statement.name)});`);
       }
@@ -381,9 +384,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
     }
 
-    const renderedRoot = render?.kind === "JSXElementExpression" && /^[A-Z]/u.test(render.tag)
-      ? `(() => { const __rootFragment = document.createDocumentFragment(); __velarDynamic(__rootFragment, (__childScope) => ${this.emitJsx(render, "__childScope", true, "__namespace")}, __scope); return __rootFragment; })()`
-      : render ? this.emitMappedExpression(render) : "document.createComment(\"missing render\")";
+    // A component-root render delegates through the same stable child path as
+    // any other component element; emitExpression already routes JSX through
+    // __velarChild with the current scope, so no dynamic wrapper is needed.
+    const renderedRoot = render ? this.emitMappedExpression(render) : "document.createComment(\"missing render\")";
     lines.push(`${bodyIndent}const __root = ${renderedRoot};`);
     lines.push(`${bodyIndent}if (__props.class !== undefined) __velarClassBindRoot(__root, () => __props.class, __scope);`);
     lines.push(`${bodyIndent}if (__props.look !== undefined) __velarLookBindRoot(__root, () => __props.look, __scope);`);
@@ -438,16 +442,24 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   private emitJsxCode(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string): string {
     if (/^[A-Z]/u.test(expression.tag)) {
+      // Component identity at a JSX position is stable: props are passed as
+      // thunks that the runtime turns into per-prop observers feeding a live
+      // props store, so a reactive prop update reaches the existing instance
+      // instead of re-creating it. Children render once per instance.
       const properties = expression.attributes
         .filter((attribute) => attribute.name !== "key")
         .map((attribute) => this.emitMappedJavaScript(
           attribute.span,
-          () => `${this.emitObjectKey(attribute.name)}: ${this.emitJsxAttributeValue(attribute)}`,
+          () => `${this.emitObjectKey(attribute.name)}: () => (${this.emitJsxAttributeValue(attribute)})`,
         ));
-      if (hasMeaningfulChildren(expression.children)) properties.push(`children: ${this.emitJsxChildren(expression.children, scope, namespace)}`);
-      const props = properties.join(", ");
-      const component = `${expression.tag}({ ${props} }, ${namespace})`;
-      return asChild ? `__velarUseComponent(${component}, ${scope})` : component;
+      // Children stay a thunk so the charter's evaluation order holds at the
+      // runtime boundary: props left to right, then children, then the
+      // component function.
+      const children = hasMeaningfulChildren(expression.children)
+        ? `() => (${this.emitJsxChildren(expression.children, scope, namespace)})`
+        : "undefined";
+      const arguments_ = `${expression.tag}, { ${properties.join(", ")} }, ${children}, ${scope}, ${namespace}`;
+      return asChild ? `__velarChild(${arguments_})` : `__velarInstantiate(${arguments_})`;
     }
 
     const id = ++this.jsxId;
@@ -466,7 +478,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         }
         if (attribute.name.startsWith("on:") && value && typeof value !== "string") {
           const [event, ...modifiers] = attribute.name.slice(3).split(".");
-          return `__velarOn(${element}, ${JSON.stringify(event)}, ${this.emitMappedExpression(value)}, ${scope}, ${JSON.stringify(modifiers)});`;
+          return `__velarOn(${element}, ${JSON.stringify(event)}, () => (${this.emitMappedExpression(value)}), ${scope}, ${JSON.stringify(modifiers)});`;
         }
         if (attribute.name === "bind:value" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
           const numeric = expression.tag === "input" && expression.attributes.some((item) => item.name === "type" && item.value === "number");
@@ -501,9 +513,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         const text = normalizeJsxText(child.value);
         if (text) lines.push(this.emitMappedJavaScript(child.span, () => `${element}.append(document.createTextNode(${JSON.stringify(text)}));`));
       } else if (child.kind === "JSXElementExpression") {
-        lines.push(this.emitMappedJavaScript(child.span, () => /^[A-Z]/u.test(child.tag)
-          ? `__velarDynamic(${element}, (__childScope) => ${this.emitJsx(child, "__childScope", true, childNamespace)}, ${scope});`
-          : `__velarAppend(${element}, ${this.emitJsx(child, scope, true, childNamespace)});`));
+        lines.push(this.emitMappedJavaScript(child.span, () => `__velarAppend(${element}, ${this.emitJsx(child, scope, true, childNamespace)});`));
       } else {
         lines.push(this.emitMappedJavaScript(child.expression.span, () => this.emitDynamicChild(element, child.expression, scope, childNamespace)));
       }
@@ -815,6 +825,12 @@ function __velarTrack(subscribers) {
   if (!__velarRuntime.activeObserver || __velarRuntime.activeObserver.stopped) return;
   subscribers.add(__velarRuntime.activeObserver);
   __velarRuntime.activeObserver.dependencies.add(subscribers);
+}
+
+function __velarUntracked(read) {
+  const previous = __velarRuntime.activeObserver;
+  __velarRuntime.activeObserver = null;
+  try { return read(); } finally { __velarRuntime.activeObserver = previous; }
 }
 
 function __velarCleanupObserver(observer) {
@@ -1591,8 +1607,8 @@ function __velarHtml(element, read, scope) {
   }, "dom", scope);
 }
 
-function __velarOn(element, event, handler, scope, modifiers = []) {
-  if (typeof handler !== "function") throw new TypeError("Event '" + event + "' requires a function");
+function __velarOn(element, event, read, scope, modifiers = []) {
+  if (typeof __velarUntracked(read) !== "function") throw new TypeError("Event '" + event + "' requires a function");
   const capture = modifiers.includes("capture");
   const options = { capture, once: modifiers.includes("once") };
   const listener = (value) => {
@@ -1600,6 +1616,10 @@ function __velarOn(element, event, handler, scope, modifiers = []) {
     if (modifiers.includes("prevent")) value.preventDefault();
     if (modifiers.includes("stop")) value.stopPropagation();
     try {
+      // The handler expression is re-read per dispatch so handlers routed
+      // through live props always see the current value.
+      const handler = __velarUntracked(read);
+      if (typeof handler !== "function") throw new TypeError("Event '" + event + "' requires a function");
       const result = handler(value);
       __velarObservePromise(result, (error) => __velarReportEvent(error, scope, event));
     } catch (error) { __velarReportEvent(error, scope, event); }
@@ -1636,9 +1656,71 @@ function __velarBindChecked(element, state, scope) {
   scope.cleanups.push(() => element.removeEventListener("change", update));
 }
 
+// Prop handles give a component body live reads over its props store. The
+// component function still runs exactly once per instance; only reads race
+// ahead, so state initializers can never re-run on a prop update.
 function __velarRequiredProp(props, name, component) {
-  if (props[name] === undefined) throw new TypeError("Component " + component + " requires prop " + name);
-  return props[name];
+  if (__velarUntracked(() => props[name]) === undefined) throw new TypeError("Component " + component + " requires prop " + name);
+  return Object.freeze({
+    get() {
+      const value = props[name];
+      if (value === undefined) throw new TypeError("Component " + component + " requires prop " + name);
+      return value;
+    },
+  });
+}
+
+function __velarProp(props, name, fallback) {
+  const fallbackValue = __velarUntracked(() => props[name]) === undefined ? fallback() : undefined;
+  return Object.freeze({
+    get() {
+      const value = props[name];
+      return value === undefined ? fallbackValue : value;
+    },
+  });
+}
+
+// Instantiates a component with a live props store: each prop thunk runs in
+// its own observer that writes a reactive cell, and the props object exposes
+// tracked getters over those cells. The component call itself is untracked so
+// construction can never subscribe an enclosing dynamic region to prop reads.
+function __velarInstantiate(component, thunks, children, scope, namespace) {
+  if (component != null && component.__velarSnapshotProps === true) {
+    // Runtime-implemented components (Head, Router, Link, NavLink) consume a
+    // one-time plain snapshot so their strict record validation still holds.
+    const snapshot = {};
+    for (const name of Object.getOwnPropertyNames(thunks)) snapshot[name] = __velarUntracked(thunks[name]);
+    if (children !== undefined) snapshot.children = __velarUntracked(children);
+    return __velarUntracked(() => component(snapshot, namespace));
+  }
+  const props = {};
+  for (const name of Object.getOwnPropertyNames(thunks)) {
+    const read = thunks[name];
+    const cell = __velarState(undefined);
+    __velarObserver(() => cell.set(read()), "dom", scope);
+    Object.defineProperty(props, name, { enumerable: true, get: () => cell.get() });
+  }
+  if (children !== undefined) Object.defineProperty(props, "children", { enumerable: true, value: __velarUntracked(children) });
+  return __velarUntracked(() => component(props, namespace));
+}
+
+// A component element in child position: one stable instance whose prop
+// observers live in a dedicated scope, destroyed only when the position
+// itself unmounts. Construction failures stay contained to the position.
+function __velarChild(component, thunks, children, scope, namespace) {
+  const childScope = __velarScope(scope.component);
+  let constructed = false;
+  scope.mounts.push(() => { if (constructed) __velarMountScope(childScope); });
+  scope.cleanups.push(() => { if (constructed) __velarDestroyScope(childScope); });
+  try {
+    const node = __velarUseComponent(__velarInstantiate(component, thunks, children, childScope, namespace), childScope);
+    constructed = true;
+    return node;
+  } catch (error) {
+    __velarDestroyScope(childScope);
+    __velarReport(error, "render", scope);
+    return document.createComment("velar:component-error");
+  }
 }
 
 function __velarTick() {

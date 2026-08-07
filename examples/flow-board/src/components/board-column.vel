@@ -42,7 +42,7 @@ const emptyLook = look:
     fontSize = 13px
 
 export component BoardColumn(title: string, status: TaskStatus, tasks: List<Task>, onAdvance: TaskIdHandler, onDelete: TaskIdHandler):
-    const items = tasks.filter(task => task.status == status)
+    computed items = tasks.filter(task => task.status == status)
 
     return <section class="column" look={columnLook} data-column={status}>
         <header class="heading" look={headingLook}><h2 look={titleLook}>{title}</h2><span class="count" look={countLook}>{items.size}</span></header>

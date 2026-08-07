@@ -829,14 +829,21 @@ export class VelarWebAnalyzer extends Analyzer {
     const previousStates = this.componentStates;
     const previousReactiveNames = this.componentReactiveNames;
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
-    this.componentReactiveNames = new Set(statement.body
-      .filter((item) => item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration")
-      .map((item) => item.name));
+    // Props lower reactively like component state and computed values, so a
+    // local binding that reuses a prop name must suppress reactive lowering
+    // for its own references exactly like a state-name shadow does.
+    this.componentReactiveNames = new Set([
+      ...statement.parameters.map((parameter) => parameter.name),
+      ...statement.body
+        .filter((item) => item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration")
+        .map((item) => item.name),
+    ]);
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       this.declareBinding(parameter.name, false, valid ? type : this.resolveValidatedAnnotation(parameter.type), parameter.span);
+      this.markDeclaredBindingReactive(parameter.name);
     }
     this.constructorDepth = 0;
     let renders = 0;

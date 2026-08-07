@@ -110,7 +110,7 @@ const chartLook = look:
     minHeight = 220px
 
 component TrafficChart(points: List<TrafficPoint>, maxValue: number, peakLabel: string):
-    const scale = ChartScale(maxValue)
+    computed scale = ChartScale(maxValue)
 
     return <section class="chart-shell" look={chartShellLook} aria-labelledby="traffic-heading">
         <h2 id="traffic-heading">Weekly traffic</h2>

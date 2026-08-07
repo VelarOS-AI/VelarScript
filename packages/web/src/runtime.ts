@@ -579,6 +579,15 @@ export function NavLink(props) {
   });
 }
 
+// These runtime-implemented components read their props exactly once at
+// construction; the emitted instantiation path snapshots each prop thunk for
+// them instead of building a live reactive props store, so their strict
+// record validation keeps rejecting accessor fields.
+Head.__velarSnapshotProps = true;
+Router.__velarSnapshotProps = true;
+Link.__velarSnapshotProps = true;
+NavLink.__velarSnapshotProps = true;
+
 function forwardHost(node, props) {
   const cleanups = [];
   if (props.class != null) {
