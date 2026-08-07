@@ -17183,3 +17183,32 @@ def test_bridged_dependency():
   const entries = await readdir(directory);
   assert.ok(!entries.includes(".velar"), JSON.stringify(entries));
 });
+
+test("route components check without importing RouteContext at the call site", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-route-context-"));
+  const pagePath = join(directory, "page.vel");
+  const mainPath = join(directory, "main.vel");
+  await writeFile(pagePath, `
+import {RouteContext} from "velar/web"
+
+export component ItemPage(route: RouteContext):
+    return <p>{route.path}</p>
+`.trimStart(), "utf8");
+  // The importing module uses route() and Router without naming RouteContext:
+  // the check must resolve the canonical identity rather than the bare name.
+  await writeFile(mainPath, `
+import {Router, route} from "velar/web"
+import {ItemPage} from "./page.vel"
+
+component App:
+    return <Router routes={[route("/items/:id", ItemPage)]} fallback={ItemPage} />
+
+mount(<App />, "#app")
+`.trimStart(), "utf8");
+
+  const project = await compileProject(mainPath);
+  assert.deepEqual(project.failures, []);
+  for (const module of project.modules) {
+    assert.deepEqual(module.result.diagnostics, []);
+  }
+});

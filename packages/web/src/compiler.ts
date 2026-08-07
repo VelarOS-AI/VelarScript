@@ -1,6 +1,6 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
-import { inferWebIntrinsic, VelarWebAnalyzer } from "./analyzer.ts";
+import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension } from "./editor.ts";
 import { velarWebInspectionExtension } from "./inspection.ts";
@@ -177,7 +177,7 @@ const routeContextFields = new Map<string, ValueType>([
   ["query", mapString(stringType)],
   ["hash", stringType],
 ]);
-const routeContextType: ValueType = { kind: "named", name: "RouteContext" };
+const routeContextType: ValueType = { kind: "named", name: "RouteContext", identity: routeContextIdentity };
 const navigationOptionsType = object({ replace: optional(boolType), scroll: optional(boolType) });
 const formValuesType: ValueType = { kind: "map", key: stringType, value: unknownType };
 const browserLocationType = object({

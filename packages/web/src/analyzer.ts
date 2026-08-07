@@ -29,6 +29,11 @@ type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
 type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
 type JSXAttribute = JSXElementExpression["attributes"][number];
 
+// The canonical nominal identity of the Web RouteContext record. Route checks
+// probe with this identity so they succeed in modules that use route() without
+// importing RouteContext by name.
+export const routeContextIdentity = "@velarscript/web:velar/web#type:RouteContext";
+
 const removedJsxControlAttributes = new Set(["if", "else-if", "else"]);
 const nativeDomEventNames = new Set([
   "click", "dblclick", "input", "beforeinput", "change", "submit", "reset", "invalid", "select", "toggle", "close",
@@ -371,7 +376,7 @@ function checkRouteComponent(type: ValueType, sourceSpan: Span, subject: string,
   const unsupported = [...type.requiredProps].filter((name) => name !== "route");
   if (unsupported.length > 0) context.typeError(`${subject} component cannot require props other than route: ${unsupported.join(", ")}`, sourceSpan);
   const routeProp = type.props.get("route");
-  if (routeProp && !context.isAssignable({ kind: "named", name: "RouteContext" }, routeProp)) context.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
+  if (routeProp && !context.isAssignable({ kind: "named", name: "RouteContext", identity: routeContextIdentity }, routeProp)) context.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
 }
 
 function checkRoutePath(path: string, sourceSpan: Span, context: CompilerIntrinsicAnalysisContext): void {
@@ -1271,7 +1276,7 @@ export class VelarWebAnalyzer extends Analyzer {
     const unsupported = [...type.requiredProps].filter((name) => name !== "route");
     if (unsupported.length > 0) this.typeError(`${subject} component cannot require props other than route: ${unsupported.join(", ")}`, sourceSpan);
     const routeProp = type.props.get("route");
-    if (routeProp && !isAssignable({ kind: "named", name: "RouteContext" }, routeProp, this)) this.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
+    if (routeProp && !isAssignable({ kind: "named", name: "RouteContext", identity: routeContextIdentity }, routeProp, this)) this.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
   }
 }
 
