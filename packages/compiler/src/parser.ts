@@ -92,6 +92,13 @@ const comparisonOperators: Partial<Record<TokenKind, ComparisonChainExpression["
   greaterEqual: ">=",
 };
 
+// An extension keyword directly followed by ':' opens an indentation-owned
+// extension block (such as the Web 'look:' block) whose capture depends on
+// physical lines; a bracket fragment containing one keeps line-sensitive form.
+function containsExtensionBlockStart(tokens: readonly Token[]): boolean {
+  return tokens.some((token, index) => token.kind === "extensionKeyword" && tokens[index + 1]?.kind === "colon");
+}
+
 const assignmentOperators: Partial<Record<TokenKind, AssignmentStatement["operator"]>> = {
   assign: "=",
   plusAssign: "+=",
@@ -1918,8 +1925,16 @@ export class Parser {
     return undefined;
   }
 
-  protected parseNestedExpression(fragment: string, offset: number): Expression {
-    const lexed = new Lexer(fragment, this.lexicalExtensions).lex();
+  // A bracket fragment (a JSX interpolation '{...}') lexes with insignificant
+  // newlines, matching ordinary bracket continuation. An indentation-owning
+  // extension expression inside the fragment — an extension keyword followed
+  // by ':' such as a Web 'look:' block — still needs physical lines, so that
+  // fragment falls back to the ordinary line-sensitive lex.
+  protected parseNestedExpression(fragment: string, offset: number, bracketFragment = false): Expression {
+    let lexed = bracketFragment ? new Lexer(fragment, this.lexicalExtensions, { bracketFragment: true }).lex() : null;
+    if (!lexed || containsExtensionBlockStart(lexed.tokens)) {
+      lexed = new Lexer(fragment, this.lexicalExtensions).lex();
+    }
     const shiftedTokens = lexed.tokens.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
     const shiftedDiagnostics = lexed.diagnostics.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
     const parsed = this.createNestedParser(shiftedTokens).parseExpressionFragment();

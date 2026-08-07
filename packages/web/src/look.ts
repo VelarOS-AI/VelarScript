@@ -29,7 +29,7 @@ export const LOOK_PROPERTIES = new Set([
   "border", "borderWidth", "borderStyle", "borderColor", "borderTop", "borderRight", "borderBottom", "borderLeft", "borderRadius",
   "boxShadow", "outline", "opacity", "filter", "backdropFilter", "content",
   "color", "font", "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing",
-  "textAlign", "textDecoration", "textTransform", "whiteSpace", "textOverflow", "wordBreak", "listStyle",
+  "textAlign", "textDecoration", "textTransform", "whiteSpace", "textOverflow", "textWrap", "overflowWrap", "wordBreak", "hyphens", "listStyle",
   "translate", "scale", "rotate", "transform", "transformOrigin",
   "transition", "transitionProperty", "transitionDuration", "transitionDelay", "transitionTimingFunction", "animation",
   "cursor", "pointerEvents", "userSelect", "touchAction", "scrollBehavior", "appearance", "zIndex",

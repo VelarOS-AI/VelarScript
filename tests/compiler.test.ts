@@ -1382,7 +1382,7 @@ def title(ready: bool) -> string:
 def answer():
     return 42
 `.trimStart());
-  assert.ok(implicitValue.diagnostics.some((item) => /Cannot assign number to null/u.test(item.message)));
+  assert.ok(implicitValue.diagnostics.some((item) => item.message === "This function has no result annotation, so it returns null; declare '-> number' to return a value"));
 
   const asynchronous = compile(`
 async def save():
@@ -8373,12 +8373,117 @@ test("VelarScript source packages cannot escape their package root", async () =>
   assert.ok(project.failures.some((failure) => /cannot escape VelarScript package 'unsafe-package'/u.test(failure.message)));
 });
 
-test("reactive bindings cannot be declared in functions or shadowed", () => {
+test("reactive bindings cannot be declared in functions", () => {
   const nested = compile("def invalid():\n    state count = 0\n");
   assert.ok(nested.diagnostics.some((diagnostic) => diagnostic.code === "VEL3010"));
+});
 
-  const shadowed = compile("state count = 0\ndef invalid(count: number):\n    print(count)\n");
-  assert.ok(shadowed.diagnostics.some((diagnostic) => /cannot shadow a module reactive binding/.test(diagnostic.message)));
+test("locals shadow module reactive bindings with ordinary lexical semantics", () => {
+  const result = compile(`
+state dark: bool = false
+
+def darkLabel(dark: bool) -> string:
+    return dark ? "dark" : "light"
+
+def localShadow() -> bool:
+    let dark = true
+    dark = not dark
+    return dark
+
+def toggle():
+    dark = not dark
+
+const labels = [true, false].map(dark => darkLabel(dark))
+
+component App:
+    return <p>{darkLabel(dark)} {localShadow()} {labels.join(",")}</p>
+
+mount(<App />, "#app")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  // A shadowing parameter or local is an ordinary lexical binding: reads and
+  // writes inside the shadow scope never lower to reactive .get()/.set().
+  assert.match(result.code ?? "", /function darkLabel\(dark\) \{\n  return \(dark \? "dark" : "light"\);/u);
+  assert.match(result.code ?? "", /let dark = true;\n  dark = !\(dark\);\n  return dark;/u);
+  assert.match(result.code ?? "", /dark => darkLabel\(dark\)/u);
+  // Assignment that resolves to the module reactive binding still publishes.
+  assert.match(result.code ?? "", /dark\.set\(!\(dark\.get\(\)\)\);/u);
+  // Reads outside any shadow scope still lower reactively.
+  assert.match(result.code ?? "", /darkLabel\(dark\.get\(\)\)/u);
+
+  // Component state and computed names follow the same lexical rule.
+  const component = compile(`
+component App:
+    state open = false
+    computed title: string = open ? "open" : "closed"
+
+    def describe(open: bool) -> string:
+        return open ? "yes" : "no"
+
+    def echo(title: string) -> string:
+        return title
+
+    action toggle():
+        open = not open
+
+    return <p>{describe(open)} {echo(title)}</p>
+`.trimStart());
+  assert.deepEqual(component.diagnostics, []);
+  assert.match(component.code ?? "", /function describe\(open\) \{\n {6}return \(open \? "yes" : "no"\);/u);
+  assert.match(component.code ?? "", /function echo\(title\) \{\n {6}return title;/u);
+  assert.match(component.code ?? "", /open\.set\(!\(open\.get\(\)\)\);/u);
+  assert.match(component.code ?? "", /describe\(open\.get\(\)\)/u);
+  assert.match(component.code ?? "", /echo\(title\.get\(\)\)/u);
+});
+
+test("returning a value from an unannotated def is reported at the return site", async () => {
+  const directive = "This function has no result annotation, so it returns null; declare '-> Pair' to return a value";
+  const source = `
+export type Pair:
+    ink: string
+
+const lightP: Pair = { ink: "black" }
+const darkP: Pair = { ink: "white" }
+
+export def palette(dark: bool):
+    return dark ? darkP : lightP
+`.trimStart();
+
+  const intra = compile(source);
+  assert.ok(intra.diagnostics.some((diagnostic) => diagnostic.code === "VEL4001" && diagnostic.message === directive),
+    intra.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-unannotated-return-"));
+  const lookPath = join(directory, "look.vel");
+  const mainPath = join(directory, "main.vel");
+  await writeFile(lookPath, source, "utf8");
+  await writeFile(mainPath, `
+import {palette} from "./look.vel"
+
+def crossModule() -> string:
+    return palette(true).ink
+
+crossModule()
+`.trimStart(), "utf8");
+
+  const project = await compileProject(mainPath);
+  const lookModule = project.modules.find((module) => module.inputPath === lookPath);
+  assert.ok(lookModule);
+  // The cause is named once, at the return site in the defining module.
+  assert.ok(lookModule.result.diagnostics.some((diagnostic) => diagnostic.message === directive),
+    lookModule.result.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+});
+
+test("actions and getters report unannotated non-null returns with their own kind", () => {
+  const action = compile(`
+component App:
+    action submit():
+        return 7
+
+    return <p>App</p>
+`.trimStart());
+  assert.ok(action.diagnostics.some((diagnostic) => diagnostic.message === "This action has no result annotation, so it returns null; declare '-> number' to return a value"),
+    action.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
 });
 
 test("velar.json defines a self-contained Web project and standard modules", async () => {
@@ -14775,6 +14880,85 @@ component Card:
   assert.match(result.code ?? "", /"-8px"/u);
   assert.doesNotMatch(result.code ?? "", /-"(?:2|8)px"/u);
   assert.doesNotMatch(result.code ?? "", /[A-Za-z0-9_-]{6,}__[A-Za-z0-9_-]{6,}/u);
+});
+
+test("Look accepts the modern text wrapping properties", () => {
+  const result = compile(`
+const bubbleLook = look:
+    overflowWrap = "anywhere"
+    wordBreak = "break-word"
+    hyphens = "auto"
+    textWrap = "balance"
+
+component Bubble:
+    return <p look={bubbleLook}>text</p>
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.css ?? "", /overflow-wrap:var\(--velar-look-base-overflow-wrap\)/u);
+  assert.match(result.css ?? "", /hyphens:var\(--velar-look-base-hyphens\)/u);
+  assert.match(result.css ?? "", /text-wrap:var\(--velar-look-base-text-wrap\)/u);
+});
+
+test("Look color-scheme conditions lower to prefers-color-scheme media queries", () => {
+  const result = compile(`
+const panelLook = look:
+    background = rgb(255, 255, 255)
+
+    if scheme.dark:
+        background = rgb(29, 32, 41)
+
+    if @hover:
+        if scheme.dark:
+            opacity = 0.7
+
+    if scheme.dark and viewport.width <= 600px:
+        padding = 4px
+
+    if not scheme.dark:
+        color = rgb(20, 20, 20)
+
+component Panel:
+    return <div look={panelLook}>panel</div>
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\)\{\[data-velar-look~="scheme-dark:background"\]\[data-velar-look\]\{background:var\(--velar-look-scheme-dark-background\)\}/u);
+  assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\)\{\[data-velar-look~="hover\+scheme-dark:opacity"\]\[data-velar-look\]:where\(:hover\)/u);
+  assert.match(result.css ?? "", /@media \(prefers-color-scheme: dark\) and \(width <= 600px\)\{\[data-velar-look~="scheme-dark\+viewport-width-lte-600px:padding"\]/u);
+  // The schemes are complementary: 'not scheme.dark' is the light scheme.
+  assert.match(result.css ?? "", /@media \(prefers-color-scheme: light\)\{\[data-velar-look~="scheme-light:color"\]/u);
+});
+
+test("JSX interpolation braces continue expressions across physical lines", () => {
+  const result = compile(`
+const messages: List<string> = []
+
+component App:
+    return <div>
+        {messages.size == 0
+            ? <p>Empty</p>
+            : messages.map(message => <span key={message}>{message}</span>)}
+        <p data-note={messages.size == 0
+            ? "empty"
+            : "full"}>note</p>
+    </div>
+
+mount(<App />, "#app")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarCreateElement\("div", __namespace\)/u);
+
+  // An indentation-owned look block inside interpolation braces keeps its
+  // line-sensitive form.
+  const inline = compile(`
+component Card:
+    return <p look={look:
+        color = rgb(1, 2, 3)
+    }>Note</p>
+
+mount(<Card />, "#app")
+`.trimStart());
+  assert.deepEqual(inline.diagnostics, []);
+  assert.match(inline.css ?? "", /base:color/u);
 });
 
 test("unsafe CSS imports are explicit resources around the controlled Look segment", () => {

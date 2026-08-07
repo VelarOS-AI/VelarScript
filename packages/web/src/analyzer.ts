@@ -297,6 +297,13 @@ function isViewportCondition(expression: Expression): boolean {
   return expression.right.kind === "UnitLiteralExpression" && ["px", "rem", "em"].includes(expression.right.unit);
 }
 
+// 'scheme.dark' and 'scheme.light' are Look condition subjects that lower to
+// a prefers-color-scheme media query, mirroring the viewport.* media atoms.
+function isSchemeCondition(expression: Expression): boolean {
+  if (expression.kind !== "MemberExpression" || expression.object.kind !== "IdentifierExpression" || expression.object.name !== "scheme") return false;
+  return expression.property === "dark" || expression.property === "light";
+}
+
 function lookConditionTermCount(expression: Expression, negated = false): number {
   if (expression.kind === "UnaryExpression" && expression.operator === "not") return lookConditionTermCount(expression.operand, !negated);
   if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")) {
@@ -432,6 +439,7 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
 
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
+  private componentReactiveNames: Set<string> | null = null;
   private mountedDepth = 0;
   private synchronousReactiveDepth = 0;
   private jsxDepth = 0;
@@ -662,9 +670,31 @@ export class VelarWebAnalyzer extends Analyzer {
     return super.inferExpression(expression, contextualType);
   }
 
+  // Component state and computed names shadow like module reactive bindings:
+  // an ordinary local binding reusing the name is an ordinary lexical binding
+  // and its references never lower reactively.
+  protected override declareBinding(
+    name: string,
+    mutable: boolean,
+    type: ValueType,
+    declarationSpan: Span,
+    internal = false,
+    declaredType = type,
+  ): void {
+    super.declareBinding(name, mutable, type, declarationSpan, internal, declaredType);
+    if (!internal && this.componentReactiveNames?.has(name)) this.markDeclaredBindingReactiveShadow(name);
+  }
+
+  // A name refers to writable reactive state only when ordinary lexical lookup
+  // still resolves it to the state binding; a shadowing local wins instead.
+  private writableStateName(name: string): boolean {
+    if (this.lookup(name)?.reactiveShadow) return false;
+    return this.componentStates?.has(name) === true || this.reactiveBindings.get(name) === "state";
+  }
+
   private reactiveReference(expression: Expression): { readonly name: string; readonly type: ValueType } | null {
     if (expression.kind === "IdentifierExpression") {
-      if (!this.componentStates?.has(expression.name) && this.reactiveBindings.get(expression.name) !== "state") return null;
+      if (!this.writableStateName(expression.name)) return null;
       return { name: expression.name, type: this.lookup(expression.name)?.type ?? unknownType };
     }
     if (expression.kind === "MemberExpression") {
@@ -797,7 +827,11 @@ export class VelarWebAnalyzer extends Analyzer {
     this.enterScope();
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
+    const previousReactiveNames = this.componentReactiveNames;
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
+    this.componentReactiveNames = new Set(statement.body
+      .filter((item) => item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration")
+      .map((item) => item.name));
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
@@ -825,6 +859,7 @@ export class VelarWebAnalyzer extends Analyzer {
         const declared = annotationContext ?? actual;
         if (annotationValid) this.requireAssignable(actual, declared, item.initializer.span);
         this.declareBinding(item.name, item.kind === "StateDeclaration", declared, item.span);
+        this.markDeclaredBindingReactive(item.name);
       } else if (item.kind === "ResourceDeclaration") {
         this.flowFrameDepth += 1;
         this.analyzeResourceDeclaration(item);
@@ -870,6 +905,7 @@ export class VelarWebAnalyzer extends Analyzer {
     if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
     if (renderValue?.kind === "JSXElementExpression") this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
+    this.componentReactiveNames = previousReactiveNames;
     this.flowFrameDepth -= 1;
     this.exitScope();
     this.constructorDepth = outerConstructorDepth;
@@ -963,6 +999,7 @@ export class VelarWebAnalyzer extends Analyzer {
       return boolType;
     }
     if (isViewportCondition(expression)) return boolType;
+    if (isSchemeCondition(expression)) return boolType;
     const type = this.inferExpression(expression);
     this.requireCondition(type, expression);
     return boolType;
@@ -1095,7 +1132,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.diagnostics.push(diagnostic("VEL5047", `unsafe:html requires string or string?, received ${describeType(inferred)}`, attribute.span));
       }
     } else if (attribute.name === "bind:value") {
-      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || (!this.componentStates?.has(value.name) && this.reactiveBindings.get(value.name) !== "state")) {
+      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || !this.writableStateName(value.name)) {
         this.diagnostics.push(diagnostic("VEL5019", "bind:value requires a writable state name", attribute.span));
       } else {
         if (!["input", "textarea", "select"].includes(expression.tag)) this.diagnostics.push(diagnostic("VEL5019", `bind:value is not valid on <${expression.tag}>`, attribute.span));
@@ -1104,7 +1141,7 @@ export class VelarWebAnalyzer extends Analyzer {
         if (!numeric && inferred.kind === "enum") this.enumValueBindings.set(attribute.span.start, inferred.name);
       }
     } else if (attribute.name === "bind:checked") {
-      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || (!this.componentStates?.has(value.name) && this.reactiveBindings.get(value.name) !== "state")) {
+      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || !this.writableStateName(value.name)) {
         this.diagnostics.push(diagnostic("VEL5019", "bind:checked requires a writable state name", attribute.span));
       } else {
         if (expression.tag !== "input") this.diagnostics.push(diagnostic("VEL5019", `bind:checked is not valid on <${expression.tag}>`, attribute.span));
@@ -1164,7 +1201,7 @@ export class VelarWebAnalyzer extends Analyzer {
     const body = value.body;
     if (body.kind !== "AssignmentExpression" || body.target.kind !== "IdentifierExpression") return null;
     const state = body.target.name;
-    if (!this.componentStates?.has(state) && this.reactiveBindings.get(state) !== "state") return null;
+    if (!this.writableStateName(state)) return null;
     let source = body.value;
     while (source.kind === "MemberExpression") source = source.object;
     return source.kind === "IdentifierExpression" && source.name === value.parameters[0]!.name && body.value.kind === "MemberExpression"

@@ -18,7 +18,7 @@ type LookExpression = Extract<Expression, { readonly kind: "LookExpression" }>;
 type LookEntry = LookExpression["entries"][number];
 
 interface LookStaticAtom {
-  readonly kind: "hook" | "media";
+  readonly kind: "hook" | "media" | "scheme";
   readonly name: string;
   readonly operator?: "<" | "<=" | ">" | ">=";
   readonly value?: string;
@@ -227,7 +227,9 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (expression.kind === "LookHookExpression") return "false";
     if (expression.kind === "LookExpression") return this.emitLook(expression);
     if (expression.kind === "IdentifierExpression") {
-      if (this.reactive.has(expression.name)) return `${expression.name}.get()`;
+      if (this.reactive.has(expression.name) && !this.hints.shadowedReactiveSpans.has(spanIdentity(expression.span))) {
+        return `${expression.name}.get()`;
+      }
       if (expression.name === "mount") return "__velarMount";
       if (expression.name === "tick") return "__velarTick";
       const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
@@ -419,7 +421,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   private emitReactiveAssignment(statement: AssignmentStatement, depth: number): string | null {
     const indentation = "  ".repeat(depth);
-    if (statement.target.kind === "IdentifierExpression" && this.reactive.get(statement.target.name) === "state") {
+    if (statement.target.kind === "IdentifierExpression" && this.reactive.get(statement.target.name) === "state"
+      && !this.hints.shadowedReactiveSpans.has(spanIdentity(statement.target.span))) {
       const state = statement.target.name;
       const value = this.emitMappedExpression(statement.value);
       if (statement.operator === "=") return `${indentation}${state}.set(${value});`;
@@ -575,7 +578,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const lookCss: string[] = [];
     for (const rule of rules.values()) {
       const hookAtoms = rule.staticAtoms.filter((atom) => atom.kind === "hook");
-      const mediaAtoms = rule.staticAtoms.filter((atom) => atom.kind === "media");
+      const mediaAtoms = rule.staticAtoms.filter((atom) => atom.kind === "media" || atom.kind === "scheme");
       const base = `[data-velar-look~=${JSON.stringify(rule.token)}]${rule.staticAtoms.length > 0 ? "[data-velar-look]" : ""}`;
       const selectors = lookSelectors(base, hookAtoms, rule.target);
       const css = `${selectors.join(",")}{${lookDeclaration(rule.token, rule.property)}}`;
@@ -636,7 +639,7 @@ function lookConditionTerms(expression: Expression, negated = false): readonly L
   if (expression.kind === "LookHookExpression") {
     return [{ staticAtoms: [{ kind: "hook", name: expression.name, negated }], runtimeAtoms: [] }];
   }
-  const media = viewportAtom(expression, negated);
+  const media = viewportAtom(expression, negated) ?? schemeAtom(expression, negated);
   if (media) return [{ staticAtoms: [media], runtimeAtoms: [] }];
   return [{ staticAtoms: [], runtimeAtoms: [{ expression, negated }] }];
 }
@@ -646,6 +649,16 @@ function viewportAtom(expression: Expression, negated: boolean): LookStaticAtom 
   if (expression.left.kind !== "MemberExpression" || expression.left.object.kind !== "IdentifierExpression" || expression.left.object.name !== "viewport") return null;
   if ((expression.left.property !== "width" && expression.left.property !== "height") || expression.right.kind !== "UnitLiteralExpression") return null;
   return { kind: "media", name: expression.left.property, operator: expression.operator as "<" | "<=" | ">" | ">=", value: expression.right.raw, negated };
+}
+
+// 'scheme.dark' / 'scheme.light' lower to prefers-color-scheme media atoms.
+// The two subjects are complementary, so negation flips to the other scheme
+// and the atom itself stays canonical.
+function schemeAtom(expression: Expression, negated: boolean): LookStaticAtom | null {
+  if (expression.kind !== "MemberExpression" || expression.object.kind !== "IdentifierExpression" || expression.object.name !== "scheme") return null;
+  if (expression.property !== "dark" && expression.property !== "light") return null;
+  const scheme = negated ? (expression.property === "dark" ? "light" : "dark") : expression.property;
+  return { kind: "scheme", name: scheme, negated: false };
 }
 
 function combineLookTerms(left: readonly LookConditionTerm[], right: readonly LookConditionTerm[]): readonly LookConditionTerm[] {
@@ -665,6 +678,7 @@ function combineLookTerms(left: readonly LookConditionTerm[], right: readonly Lo
 function lookToken(atoms: readonly LookStaticAtom[], target: string, property: string): string {
   const conditions = atoms.map((atom) => {
     if (atom.kind === "hook") return `${atom.negated ? "not-" : ""}${kebab(atom.name)}`;
+    if (atom.kind === "scheme") return `scheme-${atom.name}`;
     return `viewport-${atom.name}-${atom.negated ? "not-" : ""}${lookOperatorName(atom.operator!)}-${atom.value}`;
   }).sort();
   const prefix = [target ? kebab(target) : "", conditions.length > 0 ? conditions.join("+") : "base"].filter(Boolean).join(":");
@@ -685,6 +699,7 @@ function lookOperatorName(operator: "<" | "<=" | ">" | ">="): string {
 }
 
 function lookMediaQuery(atom: LookStaticAtom): string {
+  if (atom.kind === "scheme") return `(prefers-color-scheme: ${atom.name})`;
   const operator = atom.negated
     ? atom.operator === "<" ? ">=" : atom.operator === "<=" ? ">" : atom.operator === ">" ? "<=" : "<"
     : atom.operator!;

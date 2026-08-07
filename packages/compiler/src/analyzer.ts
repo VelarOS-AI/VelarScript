@@ -59,6 +59,10 @@ interface Binding {
   readonly storageBinding?: Binding;
   readonly span: Span;
   narrowingFrame: number | null;
+  // An ordinary lexical binding whose name shadows a module reactive binding.
+  // References that resolve to it are recorded for lowering so the emitter
+  // treats them as plain lexical reads/writes instead of reactive .get()/.set().
+  reactiveShadow?: boolean;
 }
 
 interface CollectionInferenceGroup {
@@ -89,6 +93,8 @@ interface FlowFactInvalidations {
 
 interface ReturnContext {
   readonly expected: ValueType;
+  readonly annotated: boolean;
+  readonly declarationKind: string;
 }
 
 type CallableValueType = Extract<ValueType, { readonly kind: "function" | "action" | "intrinsic" }>;
@@ -194,6 +200,7 @@ export interface LoweringHints {
   readonly staticFieldReads: ReadonlyMap<string, number>;
   readonly optionalBindingEntries: ReadonlySet<number>;
   readonly reactiveBindings: ReadonlyMap<string, "state" | "computed">;
+  readonly shadowedReactiveSpans: ReadonlySet<string>;
   readonly enumValueBindings: ReadonlyMap<number, string>;
   readonly exhaustiveMatches: ReadonlySet<number>;
   readonly formReads: ReadonlyMap<string, readonly FormReadField[]>;
@@ -286,6 +293,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly staticFieldReads = new Map<string, number>();
   private readonly optionalBindingEntries = new Set<number>();
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
+  private readonly shadowedReactiveSpans = new Set<string>();
   protected readonly enumValueBindings = new Map<number, string>();
   private readonly exhaustiveMatches = new Set<number>();
   private readonly formReads = new Map<string, readonly FormReadField[]>();
@@ -680,6 +688,7 @@ export class Analyzer implements TypeEnvironment {
       staticFieldReads: this.staticFieldReads,
       optionalBindingEntries: this.optionalBindingEntries,
       reactiveBindings: this.reactiveBindings,
+      shadowedReactiveSpans: this.shadowedReactiveSpans,
       enumValueBindings: this.enumValueBindings,
       exhaustiveMatches: this.exhaustiveMatches,
       formReads: this.formReads,
@@ -1201,6 +1210,19 @@ export class Analyzer implements TypeEnvironment {
         const expected = returnContext?.expected ?? unknownType;
         const actual = statement.value ? this.inferExpression(statement.value, expected) : nullType;
         const returned = this.asynchronousFunctions.at(-1) ? this.resolvedAsyncResult(actual) : actual;
+        // An unannotated declaration has the result contract null. Returning a
+        // value is reported here, at the cause, with the annotation to add, so
+        // the writer never has to decode downstream null/unknown diagnostics.
+        if (returnContext && !returnContext.annotated && statement.value && expected.kind === "null"
+          && !isAssignable(returned, expected, this)) {
+          const suggested = returned.kind === "unknown" || isInvalidType(returned) ? "<type>" : describeType(returned);
+          this.diagnostics.push(diagnostic(
+            "VEL4001",
+            `This ${returnContext.declarationKind.toLowerCase()} has no result annotation, so it returns null; declare '-> ${suggested}' to return a value`,
+            statement.value.span,
+          ));
+          break;
+        }
         this.requireAssignable(returned, expected, statement.value?.span ?? statement.span);
         break;
       }
@@ -1870,7 +1892,7 @@ export class Analyzer implements TypeEnvironment {
     this.currentClass = statement.name;
     this.superMemberContext = "instance";
     this.asynchronousFunctions.push(false);
-    this.returnContexts.push({ expected: nullType });
+    this.returnContexts.push({ expected: nullType, annotated: true, declarationKind: "Function" });
     this.constructorDepth += 1;
     this.declareBinding("self", false, { kind: "class", name: statement.name }, initialization.span, true);
     this.analyzeStatements(initialization.body);
@@ -2116,7 +2138,11 @@ export class Analyzer implements TypeEnvironment {
     const expectedReturn = returnValid
       ? asynchronous ? this.resolvedAsyncResult(declaredReturn) : declaredReturn
       : invalidType;
-    const returnContext: ReturnContext = { expected: expectedReturn };
+    const returnContext: ReturnContext = {
+      expected: expectedReturn,
+      annotated: statement.returnType !== null,
+      declarationKind,
+    };
     this.returnContexts.push(returnContext);
     if (className && declareSelf) {
       this.declareBinding("self", false, { kind: "class", name: className }, statement.span, true);
@@ -2204,6 +2230,7 @@ export class Analyzer implements TypeEnvironment {
         this.diagnostics.push(diagnostic("VEL3001", `Unknown name '${statement.target.name}'`, statement.target.span));
         return;
       }
+      if (binding.reactiveShadow) this.shadowedReactiveSpans.add(spanIdentity(statement.target.span));
       if (!binding.mutable) {
         this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to const binding '${statement.target.name}'`, statement.target.span));
         targetWritable = false;
@@ -2402,6 +2429,7 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
         }
+        if (binding.reactiveShadow) this.shadowedReactiveSpans.add(spanIdentity(expression.span));
         return binding.type;
       }
       case "SuperExpression":
@@ -5447,10 +5475,6 @@ export class Analyzer implements TypeEnvironment {
       return;
     }
     const scope = this.scopes.at(-1)!;
-    if (!internal && this.scopes.length > 1 && this.reactiveBindings.has(name)) {
-      this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' cannot shadow a module reactive binding`, declarationSpan));
-      return;
-    }
     if (scope.has(name)) {
       this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
       return;
@@ -5462,8 +5486,25 @@ export class Analyzer implements TypeEnvironment {
       storageType: type,
       span: declarationSpan,
       narrowingFrame: null,
+      ...(!internal && this.scopes.length > 1 && this.reactiveBindings.has(name) ? { reactiveShadow: true } : {}),
     });
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
+  }
+
+  // A reactive declaration (state or computed) owns its name as a reactive
+  // binding even when an outer reactive binding uses the same name, so its
+  // references keep reactive lowering instead of shadow suppression.
+  protected markDeclaredBindingReactive(name: string): void {
+    const binding = this.scopes.at(-1)?.get(name);
+    if (binding) delete binding.reactiveShadow;
+  }
+
+  // An extension analyzer marks a just-declared ordinary binding as shadowing
+  // a reactive binding it tracks outside the module-level reactive map, such
+  // as component-scoped state and computed names.
+  protected markDeclaredBindingReactiveShadow(name: string): void {
+    const binding = this.scopes.at(-1)?.get(name);
+    if (binding) binding.reactiveShadow = true;
   }
 
   private recordSemanticBinding(key: string, type: ValueType): void {
@@ -5714,6 +5755,7 @@ export class Analyzer implements TypeEnvironment {
           ...(binding ? { storageBinding: binding.storageBinding ?? binding } : {}),
           span: binding?.span ?? narrowingSpan,
           narrowingFrame: this.flowFrameDepth,
+          ...(binding?.reactiveShadow ? { reactiveShadow: true } : {}),
         });
       }
     }
@@ -5742,6 +5784,7 @@ export class Analyzer implements TypeEnvironment {
           storageBinding: binding.storageBinding ?? binding,
           span: binding.span,
           narrowingFrame: this.flowFrameDepth,
+          ...(binding.reactiveShadow ? { reactiveShadow: true } : {}),
         });
       }
     }

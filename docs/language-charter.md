@@ -75,7 +75,12 @@ attempts += 1
 - `let` can be reassigned.
 - Both are lexically scoped.
 - A binding cannot be declared twice in the same scope.
-- Module reactive bindings cannot be shadowed inside a local scope.
+- Shadowing follows ordinary lexical lookup everywhere, including module
+  reactive bindings: a parameter or local binding may reuse a `state` or
+  `computed` name, and inside that scope the name is that ordinary binding.
+  Reads and writes of a shadowing binding are ordinary lexical reads and
+  writes; only assignment that resolves to the module reactive binding itself
+  publishes an update.
 - Core bindings and the JavaScript host capabilities used directly by generated
   runtime code cannot be shadowed. Extension conveniences follow ordinary
   lexical lookup, so a local or imported `color` or `clamp` naturally wins.
@@ -354,7 +359,9 @@ def formatUser(user: User, prefix: string = "@") -> string:
 
 Omitting a result annotation means `-> null`, not whole-body type inference.
 A function with a non-null result must declare it and return on every reachable
-path.
+path. Returning a non-null value from an unannotated function is reported at
+the return site itself, naming the `-> <type>` annotation to declare, so the
+missing contract never surfaces as null or unknown errors at distant use sites.
 
 Calls support positional and named arguments:
 
@@ -840,7 +847,10 @@ export component Greeting(name: string, emphasized: bool = false):
 
 Component names are PascalCase. Native elements use lowercase HTML/SVG names.
 Props are checked from the component declaration. Boolean attributes may be
-valueless. JSX expressions use ordinary VelarScript expressions.
+valueless. JSX expressions use ordinary VelarScript expressions, and the
+interpolation braces are a bracket context: the expression inside `{...}`
+continues across physical lines without parentheses, exactly as it would
+inside a call's parentheses.
 
 JSX children render strings, finite numbers, booleans, enums, `WebNode` values,
 or Lists containing those values. `null` and booleans render no text. Native
@@ -1048,6 +1058,24 @@ Element-owned states are prefixed with `@`:
 
 `@hover`, `@focus`, `@focusVisible`, `@active`, `@current`, `@disabled`,
 `@checked`, `@invalid`, and `@open`.
+
+Media condition subjects lower to CSS media queries instead of runtime checks:
+`viewport.width` and `viewport.height` compare against typed lengths, and the
+color-scheme subjects `scheme.dark` and `scheme.light` lower to
+`prefers-color-scheme`. The two schemes are complementary, so `not scheme.dark`
+is the same condition as `scheme.light`. Media subjects compose with element
+states and each other:
+
+```velar
+const panelLook = look:
+    background = rgb(255, 255, 255)
+
+    if scheme.dark:
+        background = rgb(29, 32, 41)
+
+    if scheme.dark and viewport.width <= 720px:
+        padding = 12px
+```
 
 Pseudo-element targets also use `@` but own a block:
 

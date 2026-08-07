@@ -69,9 +69,19 @@ export class Lexer {
   private index = 0;
   private atLineStart = true;
   private nesting = 0;
+  // A bracket fragment is an expression lexed inside an enclosing bracket
+  // context, such as a JSX interpolation '{...}': newlines are insignificant
+  // and physical-line indentation never opens or closes blocks, exactly as
+  // between ordinary parentheses.
+  private readonly bracketFragment: boolean;
 
-  constructor(text: string, extensions: readonly CompilerLexicalExtension[] = []) {
+  constructor(
+    text: string,
+    extensions: readonly CompilerLexicalExtension[] = [],
+    options: { readonly bracketFragment?: boolean } = {},
+  ) {
     this.text = text;
+    this.bracketFragment = options.bracketFragment ?? false;
     for (const extension of extensions) {
       for (const [keyword, value] of Object.entries(extension.keywords ?? {})) {
         const existing = this.extensionKeywords.get(keyword);
@@ -98,7 +108,7 @@ export class Lexer {
         this.index = this.text.length;
         break;
       }
-      if (this.atLineStart && this.nesting === 0) {
+      if (this.atLineStart && this.nesting === 0 && !this.bracketFragment) {
         this.readIndentation();
       }
 
@@ -355,7 +365,7 @@ export class Lexer {
       this.index += 1;
     }
 
-    if (this.nesting === 0) {
+    if (this.nesting === 0 && !this.bracketFragment) {
       this.tokens.push({ kind: "newline", value: "", span: span(start, this.index) });
       this.atLineStart = true;
     }

@@ -147,7 +147,9 @@ export class VelarWebParser extends Parser {
       });
       return { kind: "LiteralExpression", value: null, raw: "null", span: source.span };
     }
-    return this.parseNestedExpression(source.source, source.span.start);
+    // JSX interpolation braces are a bracket context: the expression inside
+    // '{...}' continues across physical lines exactly as inside parentheses.
+    return this.parseNestedExpression(source.source, source.span.start, true);
   }
 
   private parseStateDeclaration(start: number, exported: boolean): StateDeclaration {
