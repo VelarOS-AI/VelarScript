@@ -42,6 +42,16 @@ const forbiddenPrototypeMembers = new Set(["prototype", "__proto__"]);
 const MAX_TOKENS = 250000;
 const MAX_NESTING = 512;
 
+// A logical line may continue onto the next physical line when that line's
+// first token is '.' or '?.' member access (a leading-dot method chain). The
+// previous line must end with a token that can end an expression, so block
+// headers, operators, and empty lines never join accidentally.
+const chainContinuationEndKinds = new Set<TokenKind>([
+  "identifier", "extensionKeyword", "number", "unitNumber", "string", "fstring",
+  "true", "false", "null", "super", "rightParen", "rightBracket", "rightBrace",
+  "extensionToken",
+]);
+
 export interface LexResult {
   readonly tokens: readonly Token[];
   readonly diagnostics: readonly Diagnostic[];
@@ -247,7 +257,9 @@ export class Lexer {
           }
           break;
         case "#":
-          if (!this.readHexColor(start)) this.invalidCharacter(character, start);
+          if (this.readHexColor(start)) break;
+          if (this.readHashComment(start)) break;
+          this.invalidCharacter(character, start);
           break;
         default:
           this.invalidCharacter(character, start);
@@ -293,6 +305,14 @@ export class Lexer {
       return;
     }
 
+    // A leading-dot line continues the previous logical line: the newline
+    // tokens that ended it are withdrawn and this line's indentation does not
+    // open or close a block, so '.filter(...)' chains span physical lines.
+    if (this.isChainContinuation()) {
+      while (this.tokens.at(-1)?.kind === "newline") this.tokens.pop();
+      return;
+    }
+
     const current = this.indentStack.at(-1) ?? 0;
     if (width > current) {
       if (this.indentStack.length > MAX_NESTING) {
@@ -315,6 +335,16 @@ export class Lexer {
         this.diagnostics.push(diagnostic("VEL1004", "Indentation does not match an outer block", span(start, this.index)));
       }
     }
+  }
+
+  private isChainContinuation(): boolean {
+    const dotWidth = this.peek() === "." ? 1 : this.peek() === "?" && this.peek(1) === "." ? 2 : 0;
+    if (dotWidth === 0 || !this.isIdentifierStart(this.peek(dotWidth))) return false;
+    let index = this.tokens.length - 1;
+    if (this.tokens[index]?.kind !== "newline") return false;
+    while (this.tokens[index]?.kind === "newline") index -= 1;
+    const previous = this.tokens[index];
+    return previous !== undefined && chainContinuationEndKinds.has(previous.kind);
   }
 
   private readNewline(): void {
@@ -490,6 +520,21 @@ export class Lexer {
     ));
     this.tokens.push({ kind: "string", value: text, span: span(start, end) });
     this.index = end;
+    return true;
+  }
+
+  // A '#' that starts a line is a Python-style comment: it receives "use //"
+  // guidance and the rest of the line is skipped like a comment, so the
+  // commented text never produces its own error cascade. Bare hex colors were
+  // already consumed by readHexColor before this check runs.
+  private readHashComment(start: number): boolean {
+    const previous = this.tokens.at(-1)?.kind;
+    const lineStart = previous === undefined || previous === "newline" || previous === "indent" || previous === "dedent";
+    if (!lineStart) return false;
+    this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '//' for comments; VelarScript comments start with '//'", span(start, start + 1)));
+    this.index = start;
+    this.advance();
+    this.readComment();
     return true;
   }
 

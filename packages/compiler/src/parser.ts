@@ -141,12 +141,32 @@ export class Parser {
 
   parseExpressionFragment(): ExpressionParseResult {
     this.consumeNewlines();
-    const expression = this.parseExpression();
+    const expression = this.recoverExpressionAssignment(this.parseExpression());
     this.consumeNewlines();
     if (!this.check("eof")) {
       this.diagnostics.push(diagnostic("VEL2006", "Unexpected tokens in interpolated expression", this.current().span));
     }
     return { expression, diagnostics: this.diagnostics };
+  }
+
+  // An assignment written where only an expression is valid (an interpolated
+  // fragment or an arrow body) receives directive guidance and recovers as an
+  // AssignmentExpression node, so later stages can report their own guidance
+  // for the same code instead of a bare unexpected-token cascade.
+  private recoverExpressionAssignment(expression: Expression): Expression {
+    const operator = assignmentOperators[this.current().kind];
+    if (!operator) return expression;
+    const operatorToken = this.advance();
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL2028",
+      "Assignment is a statement, not an expression; write it on its own line inside a function, action, or handler body",
+      operatorToken.span,
+    ));
+    if (expression.kind !== "IdentifierExpression" && expression.kind !== "MemberExpression" && expression.kind !== "IndexExpression") {
+      this.diagnostics.push(diagnostic("VEL2005", "Assignment target must be a name, member, or index", expression.span));
+    }
+    const value = this.recoverExpressionAssignment(this.parseExpression());
+    return { kind: "AssignmentExpression", target: expression, operator, value, span: span(expression.span.start, value.span.end) };
   }
 
   protected parseStatement(): Statement | null {
@@ -1534,12 +1554,12 @@ export class Parser {
     if (this.check("leftParen")) {
       const parameters = this.parseParameters();
       this.expect("fatArrow", "Expected '=>' after arrow parameters");
-      const body = this.parseExpression();
+      const body = this.recoverExpressionAssignment(this.parseExpression());
       return { kind: "ArrowFunctionExpression", asynchronous, parameters, body, span: span(start, body.span.end) };
     }
     const parameterToken = this.expect("identifier", "Expected an arrow parameter");
     this.expect("fatArrow", "Expected '=>' after arrow parameter");
-    const body = this.parseExpression();
+    const body = this.recoverExpressionAssignment(this.parseExpression());
     const parameter: Parameter = { name: parameterToken.value, type: null, defaultValue: null, rest: false, span: parameterToken.span };
     return { kind: "ArrowFunctionExpression", asynchronous, parameters: [parameter], body, span: span(start, body.span.end) };
   }

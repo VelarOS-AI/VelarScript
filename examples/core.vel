@@ -31,7 +31,7 @@ const {name: displayName} = user
 const users = [user]
 const names = activeNames(users)
 const firstName = names[0]
-const totalNameLength = names.map(name => name.length).reduce((total, length) => total + length, 0)
+const namedUserCount = names.map(name => name == "" ? 0 : 1).reduce((total, count) => total + count, 0)
 
 const scores = Map()
 scores.set(user.id, 10)
@@ -43,7 +43,7 @@ player.addScore(savedScore ?? 0)
 if raw is User:
     print(player.label())
 
-print(f"{displayName}: {str(totalNameLength)}")
+print(f"{displayName}: {str(namedUserCount)}")
 
 for current in users:
     print(current.name)

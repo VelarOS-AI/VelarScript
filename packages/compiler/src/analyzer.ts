@@ -2542,6 +2542,14 @@ export class Analyzer implements TypeEnvironment {
       }
       case "BinaryExpression":
         return this.inferBinary(expression.left, expression.operator, expression.right, expression.span, contextualType);
+      case "AssignmentExpression": {
+        // A parser-recovered assignment-in-expression: both sides are analyzed
+        // so their own guidance still surfaces, and the recovery produces no
+        // value because assignment is a statement.
+        const target = this.inferExpression(expression.target);
+        this.inferExpression(expression.value, isInvalidType(target) ? unknownType : target);
+        return nullType;
+      }
       case "ComparisonChainExpression": {
         const types: ValueType[] = [this.inferExpression(expression.operands[0]!)];
         let successful = new Map<string, ValueType>();
@@ -2655,6 +2663,10 @@ export class Analyzer implements TypeEnvironment {
         if (object.kind === "map") {
           this.typeError("Use Map.get(key) instead of bracket access", expression.span);
           return object.value;
+        }
+        if (object.kind === "string") {
+          this.typeError("Use char(value, index) from 'velar/text'; strings are not indexable and string operations are functions", expression.span);
+          return unknownType;
         }
         if (object.kind !== "any") {
           this.typeError(`Cannot index ${describeType(object)}`, expression.span);
@@ -3989,11 +4001,7 @@ export class Analyzer implements TypeEnvironment {
       if (isInvalidType(object)) result = invalidType;
       else this.typeError(`Cannot access '${property}' on unknown without validation`, memberSpan);
     } else if (object.kind === "string") {
-      if (property === "length") {
-        result = numberType;
-      } else {
-        this.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
-      }
+      this.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
     } else if (object.kind === "list") {
       result = this.listMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);

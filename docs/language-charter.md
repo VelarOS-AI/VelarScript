@@ -49,6 +49,18 @@ else:
 
 Semicolons and braces are not statement syntax.
 
+A statement normally ends at its newline. One continuation form exists: a line
+whose first token is `.` or `?.` continues the previous logical line, so
+method chains can span physical lines in the familiar formatted style. The
+canonical indentation is one level past the statement being continued;
+trailing-dot continuation is not supported.
+
+```velar fragment
+const urgent = tasks
+    .filter(task => not task.done)
+    .map(task => task.title)
+```
+
 ## 3. Bindings and literals
 
 Bindings deliberately retain the familiar JavaScript words `const` and `let`.
@@ -403,7 +415,7 @@ runtime behavior.
 def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
     return items.map(transform)
 
-const lengths: List<number> = mapValues(["a", "bb"], value => value.length)
+const flags: List<bool> = mapValues(["a", ""], value => value != "")
 ```
 
 Type arguments are inferred at each call site; there is no explicit

@@ -42,6 +42,7 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
   const indentation = [0];
   const formatted: string[] = [];
   let jsxDepth = 0;
+  let statementLevel = 0;
 
   for (const original of lines) {
     const line = original.replace(/[ \t]+$/u, "");
@@ -53,6 +54,13 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     const leading = line.match(/^[ \t]*/u)?.[0] ?? "";
     const width = [...leading].reduce((total, character) => total + (character === "\t" ? indentWidth : 1), 0);
     const content = line.slice(leading.length);
+    // A leading-dot chain continuation keeps its own canonical indentation —
+    // one level past the statement it continues — without opening a block for
+    // the lines that follow it.
+    if (jsxDepth === 0 && isChainContinuationLine(content) && formatted.length > 0) {
+      formatted.push(`${" ".repeat((statementLevel + 1) * indentWidth)}${formatInline(content)}`);
+      continue;
+    }
     const current = indentation.at(-1) ?? 0;
     if (width > current) {
       indentation.push(width);
@@ -60,12 +68,17 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
       while (indentation.length > 1 && width < (indentation.at(-1) ?? 0)) indentation.pop();
       if (width !== (indentation.at(-1) ?? 0)) indentation.push(width);
     }
-    formatted.push(`${" ".repeat((indentation.length - 1) * indentWidth)}${jsxDepth > 0 ? content : formatInline(content)}`);
+    statementLevel = indentation.length - 1;
+    formatted.push(`${" ".repeat(statementLevel * indentWidth)}${jsxDepth > 0 ? content : formatInline(content)}`);
     jsxDepth = nextJsxDepth(content, jsxDepth);
   }
 
   while (formatted.at(-1) === "") formatted.pop();
   return `${formatted.join("\n")}\n`;
+}
+
+function isChainContinuationLine(content: string): boolean {
+  return /^(?:\.|\?\.)[A-Za-z_]/u.test(content);
 }
 
 function nextJsxDepth(source: string, currentDepth: number): number {

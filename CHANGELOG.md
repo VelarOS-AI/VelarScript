@@ -4,6 +4,52 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Blind-usability batch 3: chains, string functions, Look tightening
+
+Language and compiler changes:
+
+- Leading-dot continuation: a line whose first token is `.` or `?.` continues
+  the previous logical line, so method chains can span physical lines in the
+  standard formatted style. Trailing-dot continuation stays unsupported, and a
+  leading `.` not followed by a member name (such as `.5`) never joins lines.
+  The formatter normalizes continuation lines to one level past the statement
+  they continue and never reflows existing single-line chains.
+- `velar/text` gains the string measurement and access trio: `length(value)`
+  (code-point count), `char(value, index)` (code point at an index, negative
+  from the end like `List.get`, `null` out of range), and
+  `slice(value, start = 0, end = length)` (code-point slice with `List.slice`
+  position semantics). Strings expose no members: `value.length`,
+  `value.size`, `value.slice(...)`, `value.substring(...)`, `value.charAt(...)`,
+  `value.at(...)`, and `value[index]` now report directive guidance to the
+  matching `velar/text` function.
+- Look rejects multi-token shorthand strings on properties with a checked
+  builder equivalent — the spacing family (`margin*`, `padding*`, `inset`,
+  plus `borderRadius`/`borderWidth`), the border family (`border`,
+  `borderTop/Right/Bottom/Left`, `outline`), `boxShadow`, and `transition` —
+  with guidance that computes the builder call where the string decomposes
+  cleanly (`Use 'spacing(8px, 12px)'`, `Use 'border(1px, color("#d9dce1"))'`).
+  Single-token keyword strings, hex color strings, and out-of-family strings
+  such as `fontFamily` stacks stay accepted. `flex` now accepts numbers.
+
+Diagnostic guidance changes:
+
+- A `#` that begins a line is guided to `//` comments and the commented text
+  is skipped without an error cascade; bare hex colors keep their quoted-string
+  guidance.
+- A bare (unbraced) `for name in expr:` written directly as JSX content
+  receives the same `.map(...)` guidance as its braced spelling.
+- Assignment written inside an expression (an interpolated fragment or an
+  arrow body) reports "Assignment is a statement" guidance and recovers, so
+  the rest of the module still co-reports its own diagnostics. When an event
+  attribute's arrow assigns a state binding from an event field, the Web
+  extension additionally guides to `bind:value={binding}`.
+- Kebab-case Look properties and multi-value shorthand now recover as their
+  guided spelling, so camelCase guidance, builder guidance, JSX attribute
+  guidance (`on:` directives, `bind:value`), and semantic diagnostics surface
+  together in one compile instead of gating each other.
+- A Look hook written as a target (`@hover:` as a block) is guided to the
+  `if @hover:` condition form.
+
 ## 0.10.0-dev — Minimal generics for def functions
 
 Language and compiler changes:

@@ -29,6 +29,7 @@ type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }
 
 const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
+const recoveredDiagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan, recovered: true });
 const renderBlockSpellings = new Set(["render", "show", "view"]);
 
 export class VelarWebParser extends Parser {
@@ -107,7 +108,7 @@ export class VelarWebParser extends Parser {
         this.diagnostics.push(diagnostic("VEL5001", "The Web JSX token is missing its structured syntax", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       }
-      return jsxExpression(syntax, (source) => this.parseJsxEmbedded(source));
+      return jsxExpression(syntax, (source) => this.parseJsxEmbedded(source), (item) => this.diagnostics.push(item));
     }
     if (token.kind !== "extensionKeyword" || token.value !== "look") return undefined;
     this.expect("colon", "Expected ':' after 'look'");
@@ -252,6 +253,7 @@ export class VelarWebParser extends Parser {
 function jsxExpression(
   syntax: WebJsxElementSyntax,
   parseExpression: (source: WebExpressionSource) => Expression,
+  report: (item: Diagnostic) => void,
 ): JSXElementExpression {
   return {
     kind: "JSXElementExpression",
@@ -264,9 +266,21 @@ function jsxExpression(
       span: attribute.span,
     })),
     children: syntax.children.map((child) => {
-      if (child.kind === "WebJsxElementSyntax") return jsxExpression(child, parseExpression);
+      if (child.kind === "WebJsxElementSyntax") return jsxExpression(child, parseExpression, report);
       if (child.kind === "WebJsxExpressionSyntax") {
         return { kind: "JSXExpressionChild", expression: parseExpression(child.expression), span: child.span };
+      }
+      // A bare (unbraced) 'for name in expr:' line written directly as JSX
+      // content receives the same .map() guidance as its braced spelling;
+      // there is no magic JSX control flow.
+      const bareFor = /(?:^|\n)[ \t]*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^:{<\n]+):/u.exec(child.value);
+      if (bareFor) {
+        const offset = child.span.start + (bareFor.index + bareFor[0].indexOf("for"));
+        report(recoveredDiagnostic(
+          "VEL5049",
+          `Use '{${bareFor[2]!.trim()}.map((${bareFor[1]}) => ...)}'; JSX has no 'for' blocks, so lists render with '.map(...)'`,
+          span(offset, offset + (bareFor[0].length - bareFor[0].indexOf("for"))),
+        ));
       }
       return { kind: "JSXText", value: child.value, span: child.span };
     }),
@@ -319,29 +333,46 @@ class LookSourceParser {
         this.report(diagnostic("VEL5038", "Look 'else' must immediately follow an 'if' at the same indentation", this.lineSpan(line)));
         continue;
       }
-      const kebab = /^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\s*=/u.exec(line.text);
-      if (kebab) {
+      // A kebab-case property receives camelCase guidance and recovers as the
+      // camelCase entry, so semantic analysis still checks its value and every
+      // other Look and JSX diagnostic co-reports in the same compile.
+      const kebab = /^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\s*=(.*)$/u.exec(line.text);
+      const property = kebab
+        ? null
+        : /^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/u.exec(line.text);
+      if (kebab && kebab[2]!.trim().length === 0) {
         const camel = kebab[1]!.replace(/-+([A-Za-z])/gu, (_, letter: string) => letter.toUpperCase());
         this.report(diagnostic("VEL5038", `Use '${camel}'; Look properties use the DOM camelCase spelling`, this.lineSpan(line)));
         continue;
       }
-      const property = /^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/u.exec(line.text);
-      if (property) {
-        const valueText = property[2]!;
-        if (/^(?:margin|padding|inset)/u.test(property[1]!) && /^[+-]?\d[\w.%]*(?:\s+[+-]?\d[\w.%]*)+$/u.test(valueText)) {
+      if (kebab || property) {
+        const propertyName = kebab
+          ? kebab[1]!.replace(/-+([A-Za-z])/gu, (_, letter: string) => letter.toUpperCase())
+          : property![1]!;
+        if (kebab) {
+          this.report(recoveredDiagnostic("VEL5038", `Use '${propertyName}'; Look properties use the DOM camelCase spelling`, this.lineSpan(line)));
+        }
+        const assignment = line.text.indexOf("=");
+        const afterAssignment = line.text.slice(assignment + 1);
+        const valueText = afterAssignment.trim();
+        const valueStart = line.start + assignment + 1 + (afterAssignment.length - afterAssignment.trimStart().length);
+        if (/^(?:margin|padding|inset)/u.test(propertyName) && /^[+-]?\d[\w.%]*(?:\s+[+-]?\d[\w.%]*)+$/u.test(valueText)) {
           const builderArguments = valueText
             .split(/\s+/u)
             .map((token) => (/^[+-]?\d+(?:\.\d+)?$/u.test(token) ? `${token}px` : token))
             .join(", ");
-          this.report(diagnostic("VEL5038", `Use 'spacing(${builderArguments})'; Look multi-value shorthand is written with the spacing builder`, this.lineSpan(line)));
+          this.report(recoveredDiagnostic("VEL5038", `Use 'spacing(${builderArguments})'; Look multi-value shorthand is written with the spacing builder`, this.lineSpan(line)));
+          entries.push({
+            kind: "LookProperty",
+            name: propertyName,
+            value: { kind: "LiteralExpression", value: null, raw: "null", span: span(valueStart, valueStart + valueText.length) },
+            span: this.lineSpan(line),
+          });
           continue;
         }
-        const assignment = line.text.indexOf("=");
-        const afterAssignment = line.text.slice(assignment + 1);
-        const valueStart = line.start + assignment + 1 + (afterAssignment.length - afterAssignment.trimStart().length);
         entries.push({
           kind: "LookProperty",
-          name: property[1]!,
+          name: propertyName,
           value: this.parseExpression(valueText, valueStart),
           span: this.lineSpan(line),
         });

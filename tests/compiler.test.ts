@@ -311,7 +311,7 @@ type Payload:
 
 def display(value: DisplayValue) -> string:
     if value is string:
-        return f"text:{value.length}"
+        return f"text:{value}"
     else if value is number:
         return f"number:{value + 1}"
     else:
@@ -323,7 +323,7 @@ def increment(value: string | number) -> number:
 
 def incrementField(payload: Payload) -> number:
     if payload.value is string:
-        return payload.value.length
+        return payload.value == "" ? 0 : 1
     else:
         return payload.value + 1
 
@@ -336,7 +336,7 @@ def optionalIncrement(value: number?) -> number:
 component Preview(value: DisplayValue):
     def content() -> WebNode:
         if value is string:
-            return <p>{value.length}</p>
+            return <p>{value}</p>
         else if value is number:
             return <p>{value + 1}</p>
         else:
@@ -355,12 +355,12 @@ print(optionalIncrement(null))
   assert.deepEqual(result.diagnostics, []);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "text:5\nnumber:5\nyes\n5\n10\n0\n");
+  assert.equal(execution.stdout, "text:velar\nnumber:5\nyes\n5\n10\n0\n");
 
   const unsafeContinuation = compile(`
 def invalid(value: string | number):
     if value is string:
-        print(value.length)
+        print(value)
     print(value + 1)
 `.trimStart());
   assert.ok(unsafeContinuation.diagnostics.some((item) => /Cannot assign string \| number to number/u.test(item.message)));
@@ -1023,7 +1023,7 @@ async def wrap<T>(value: T) -> T:
     return value
 
 const doubled: List<number> = mapValues([1, 2, 3], value => value * 2)
-const named: List<number> = mapValues(transform = value => value.length, items = ["a", "bb"])
+const named: List<number> = mapValues(transform = value => value == "a" ? 1 : 2, items = ["a", "bb"])
 const collected: List<number> = gather(1, 2, 3)
 const source = [4, 5]
 const spreadOut: List<number> = gather(...source)
@@ -1176,7 +1176,7 @@ export def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
 import {pick, mapValues as remap} from "./library.vel"
 
 const chosen: number? = pick([1, 2, 3])
-const lengths: List<number> = remap(["a", "bb"], value => value.length)
+const lengths: List<number> = remap(["a", "bb"], value => value == "a" ? 1 : 2)
 print(chosen)
 print(lengths)
 `.trimStart(), "utf8");
@@ -1599,7 +1599,7 @@ def submit(draft: Draft):
     const estimate = draft.estimate
     const label: string = draft.label
     const enabled: bool = draft.enabled
-    print(f"{estimate}:{label.length}:{enabled}")
+    print(f"{estimate}:{label}:{enabled}")
 
 submit({estimate: 0, label: "", enabled: false})
 assert true, message()
@@ -1616,7 +1616,7 @@ catch error:
   assert.match(result.code ?? "", /__velarAssertionError\.name = "AssertionError"/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "0:0:false\nAssertionError:Broken invariant\n");
+  assert.equal(execution.stdout, "0::false\nAssertionError:Broken invariant\n");
 
   const invalid = compile(`
 assert 1
@@ -3240,9 +3240,12 @@ test("guides bare hex colors to quoted strings without numeric-unit cascades", (
   assert.deepEqual(look.diagnostics.map((item) => item.code), ["VEL1005"]);
   assert.match(look.diagnostics[0]?.message ?? "", /Use '"#f0f0f0"'/u);
 
+  // A '#' that begins a line is Python-comment intuition, not a color: it is
+  // guided to '//' and the commented text is skipped without a cascade.
   const comment = compile("# note\n");
-  assert.ok(comment.diagnostics.some((item) => item.code === "VEL1001"));
-  assert.ok(!comment.diagnostics.some((item) => item.code === "VEL1005"));
+  assert.deepEqual(comment.diagnostics.map((item) => item.code), ["VEL1005"]);
+  assert.match(comment.diagnostics[0]?.message ?? "", /Use '\/\/' for comments/u);
+  assert.ok(!comment.diagnostics.some((item) => item.code === "VEL1001"));
 });
 
 test("guides Python conditional expressions to the '?:' spelling", () => {
@@ -4960,7 +4963,7 @@ upload.remove("unused")
 const uploadRequest = http.post("/api/upload", {body: upload})
 const nextFrame = await frame()
 download("items.txt", "items")
-const channel = socket("wss://example.com/socket", {message: value => print(value.length)})
+const channel = socket("wss://example.com/socket", {message: value => print(value)})
 const stream = eventStream("/events", {message: (value, id) => print(f"{id}:{value}")})
 channel.close()
 stream.close()
@@ -6623,10 +6626,10 @@ test("0.4 Core standard library combines typed Python ergonomics with explicit J
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 202);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 133);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 205);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 136);
   assert.equal(api.modules["velar/collections"]?.length, 28);
-  assert.equal(api.modules["velar/text"]?.length, 30);
+  assert.equal(api.modules["velar/text"]?.length, 33);
   assert.equal(api.modules["velar/math"]?.length, 36);
   assert.deepEqual(api.modules["velar/json"], ["clone", "deepEqual", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
@@ -11919,7 +11922,7 @@ class Worker:
 
     constructor(label: string):
         self.label = label
-        assert label.length > 0
+        assert label != ""
 
     def init(suffix: string) -> string:
         return self.label + suffix
@@ -12588,7 +12591,7 @@ export class ScoreCard:
 
     constructor(label: string):
         self.label = label
-        assert self.label.length > 0, "ScoreCard label cannot be empty"
+        assert self.label != "", "ScoreCard label cannot be empty"
 
     def add(value: number):
         self.history.append(value)
@@ -12622,7 +12625,7 @@ print(team.total)
   const totalDeclaration = modelSource.indexOf("total: number");
   const categoryDeclaration = modelSource.indexOf("category: string");
   const labelDeclaration = modelSource.indexOf("label: string");
-  const labelInitUse = modelSource.indexOf("self.label.length") + "self.".length;
+  const labelInitUse = modelSource.indexOf("self.label !=") + "self.".length;
   assert.ok(projectCompletionsAt(project, mainPath, totalUse).some((item) => item.label === "total" && item.detail === "number"));
   assert.ok(projectCompletionsAt(project, mainPath, categoryUse).some((item) => item.label === "category" && item.detail === "string"));
   assert.ok(!projectCompletionsAt(project, mainPath, categoryUse).some((item) => item.label === "total"));
@@ -14163,14 +14166,14 @@ def invalid(box: Box) -> string:
   const externField = compile(`
 extern module "host-sdk":
     export class Client:
-        const label: string?
+        const label: List<string>?
         constructor()
 
 import js {Client} from "host-sdk"
 
 def read(client: Client) -> number:
     if client.label:
-        return client.label.length
+        return client.label.size
     return 0
 `.trimStart());
   assert.equal(externField.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
@@ -14178,15 +14181,15 @@ def read(client: Client) -> number:
   const stableExternalValue = compile(`
 extern module "host-sdk":
     export class Client:
-        const label: string?
+        const label: List<string>?
         constructor()
 
 import js {Client} from "host-sdk"
 
-def length(client: Client) -> number:
+def size(client: Client) -> number:
     const label = client.label
     if label:
-        return label.length
+        return label.size
     return 0
 `.trimStart());
   assert.deepEqual(stableExternalValue.diagnostics, []);
@@ -14215,7 +14218,7 @@ let current: string? = "ready"
 
 if current:
     const first = values[0]
-    const copied = [...values, current.length]
+    const copied = [...values, current == "" ? 0 : 1]
     const [bound] = values
     for item in values:
         const seen = item
@@ -16116,4 +16119,175 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   child.stdin.end();
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assert.equal(exitCode, 0);
+});
+
+test("leading-dot lines continue the previous logical line across statement positions", () => {
+  const returned = compile(`
+def titles(items: List<string>) -> List<string>:
+    return items
+        .filter(value => value != "")
+        .map(value => value)
+
+let cleaned = titles(["a", "", "b"])
+    .filter(value => value != "b")
+print(cleaned)
+print(titles(["x", ""])
+    .map(value => value))
+`.trimStart());
+  assert.deepEqual(returned.diagnostics, []);
+  const execution = executeModule(returned.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "[ 'a' ]\n[ 'x' ]\n");
+
+  const optionalContinuation = compile(`
+def measure(values: List<string>?) -> number:
+    return values
+        ?.size ?? 0
+
+print(measure(null))
+`.trimStart());
+  assert.deepEqual(optionalContinuation.diagnostics, []);
+  const optionalExecution = executeModule(optionalContinuation.code ?? "");
+  assert.equal(optionalExecution.stdout, "0\n");
+
+  // '.5' is not a member chain, so the line does not join and still reports
+  // its own expression error rather than silently becoming 'a.5'.
+  const numeric = compile("let a = 1\n.5\n");
+  assert.ok(numeric.diagnostics.some((item) => item.code === "VEL2002"), JSON.stringify(numeric.diagnostics));
+
+  // Trailing-dot continuation stays unsupported.
+  const trailing = compile("def broken(items: List<string>) -> List<string>:\n    return items.\n        filter(value => value != \"\")\n");
+  assert.ok(trailing.diagnostics.some((item) => item.code === "VEL2001"), JSON.stringify(trailing.diagnostics));
+
+  // A block header ending with ':' never joins with a dot line.
+  const header = compile("def broken():\n    .run()\n");
+  assert.ok(header.diagnostics.length > 0);
+});
+
+test("formatter normalizes multi-line chains one level past their statement and round-trips", () => {
+  const formatted = formatSource([
+    "def titles(items: List<string>) -> List<string>:",
+    "    return items",
+    "      .filter(value => value != \"\")",
+    "            .map(value => value)",
+    "",
+  ].join("\n"));
+  assert.equal(formatted, [
+    "def titles(items: List<string>) -> List<string>:",
+    "    return items",
+    "        .filter(value => value != \"\")",
+    "        .map(value => value)",
+    "",
+  ].join("\n"));
+  assert.equal(formatSource(formatted), formatted);
+
+  // Existing single-line chains are not reflowed.
+  const single = "const kept = values.filter(value => value != \"\").map(value => value)\n";
+  assert.equal(formatSource(single), single);
+});
+
+test("string operations are velar/text functions with code-point semantics", async () => {
+  const api = standardModuleApi();
+  assert.ok(["length", "char", "slice"].every((name) => api.modules["velar/text"]?.includes(name)));
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-text-strings-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+import {char, length, slice} from "velar/text"
+
+print(length("héllo"))
+print(length("a😀b"))
+print(char("a😀b", 1) ?? "null")
+print(char("a😀b", -1) ?? "null")
+print(char("abc", 9) ?? "null")
+print(slice("a😀bc", 1, 3))
+print(slice("abcdef", -3))
+print(slice("abcdef", 1))
+`.trimStart(), "utf8");
+  const output = join(directory, "dist");
+  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", entry, "--out-dir", output], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(build.status, 0, build.stderr);
+  const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
+  assert.equal(execution.status, 0, execution.stderr);
+  assert.equal(execution.stdout, "5\n3\n😀\nb\nnull\n😀b\ndef\nbcdef\n");
+
+  // JavaScript string-member intuitions receive directive velar/text guidance.
+  const guided = compile(`
+let word = "hello"
+print(word.length)
+print(word.size)
+print(word.slice(0, 2))
+print(word.substring(0, 2))
+print(word.charAt(1))
+print(word.at(-1))
+print(word[0])
+`.trimStart());
+  const messages = guided.diagnostics.map((item) => item.message);
+  assert.equal(messages.filter((message) => /Use length\(value\) from 'velar\/text'/u.test(message)).length, 2);
+  assert.equal(messages.filter((message) => /Use slice\(value, start, end\) from 'velar\/text'/u.test(message)).length, 2);
+  assert.equal(messages.filter((message) => /Use char\(value, index\) from 'velar\/text'/u.test(message)).length, 3);
+});
+
+test("bare JSX for blocks and event-arrow assignments receive directive guidance", () => {
+  const bareFor = compile(`
+type Message:
+    id: string
+    text: string
+
+component MessageList(messages: List<Message>):
+    return <ul>
+        for message in messages:
+            <li key={message.id}>{message.text}</li>
+    </ul>
+`.trimStart());
+  assert.ok(bareFor.diagnostics.some((item) => item.code === "VEL5049"
+    && item.message.includes("Use '{messages.map((message) => ...)}'")), JSON.stringify(bareFor.diagnostics));
+
+  const eventAssignment = compile(`
+component Composer():
+    state draft: string = ""
+    return <input value={draft} onInput={event => draft = event.value} placeholder="Say hi" />
+`.trimStart());
+  const codes = eventAssignment.diagnostics.map((item) => item.code);
+  assert.ok(codes.includes("VEL2028"), JSON.stringify(eventAssignment.diagnostics));
+  assert.ok(eventAssignment.diagnostics.some((item) => item.code === "VEL5019" && item.message.includes("Use 'bind:value={draft}'")));
+  assert.ok(eventAssignment.diagnostics.some((item) => item.code === "VEL5025" && item.message.includes("Use 'on:input'")));
+
+  // The same guidance appears when the on: directive is already correct.
+  const directive = compile(`
+component Composer():
+    state draft: string = ""
+    return <input value={draft} on:input={event => draft = event.data} placeholder="Say hi" />
+`.trimStart());
+  assert.ok(directive.diagnostics.some((item) => item.code === "VEL5019" && item.message.includes("Use 'bind:value={draft}'")), JSON.stringify(directive.diagnostics));
+
+  const statementGuidance = compile("component App():\n    state count: number = 0\n    return <p>{count = 4}</p>\n");
+  assert.ok(statementGuidance.diagnostics.some((item) => item.code === "VEL2028" && /Assignment is a statement/u.test(item.message)));
+});
+
+test("multi-token Look shorthand strings are rejected with builder guidance", () => {
+  const source = (entry: string): string => `component App():\n    const appearance = look:\n        ${entry}\n    return <div look={appearance}>ok</div>\n`;
+  for (const [entry, guidance] of [
+    ["padding = \"8px 12px\"", "Use 'spacing(8px, 12px)'"],
+    ["margin = \"4px 0\"", "Use 'spacing(4px, 0px)'"],
+    ["borderRadius = \"6px 12px\"", "Use 'spacing(6px, 12px)'"],
+    ["border = \"1px solid #d9dce1\"", "Use 'border(1px, color(\"#d9dce1\"))'"],
+    ["outline = \"2px dashed red\"", "Use 'border(2px, color(\"red\"), \"dashed\")'"],
+    ["boxShadow = \"0 2px 4px #00000022\"", "Use the 'shadow(x, y, blur, color)' builder"],
+    ["transition = \"opacity 0.3s ease\"", "Use 'transition(\"opacity\", 0.3s, \"ease\")'"],
+  ] as const) {
+    const rejected = compile(source(entry));
+    assert.ok(rejected.diagnostics.some((item) => item.code === "VEL5038" && item.message.includes(guidance)),
+      `${entry}: ${JSON.stringify(rejected.diagnostics)}`);
+  }
+
+  // Single-token keyword strings, hex colors, and out-of-family strings stay accepted.
+  const accepted = compile(source("alignSelf = \"flex-start\"\n        marginInline = \"auto\"\n        fontWeight = \"bold\"\n        background = \"#eef0f3\"\n        fontFamily = \"Segoe UI, sans-serif\""));
+  assert.deepEqual(accepted.diagnostics, []);
+
+  // A kebab-case property recovers as its camelCase entry, so the shorthand
+  // rejection and camelCase guidance co-report in one compile.
+  const kebab = compile(source("border-radius = \"6px\"\n        padding = \"8px 12px\""));
+  assert.ok(kebab.diagnostics.some((item) => item.code === "VEL5038" && item.message.includes("Use 'borderRadius'")));
+  assert.ok(kebab.diagnostics.some((item) => item.code === "VEL5038" && item.message.includes("Use 'spacing(8px, 12px)'")));
 });

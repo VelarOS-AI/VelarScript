@@ -557,6 +557,7 @@ export type Expression =
   | SpreadExpression
   | UnaryExpression
   | BinaryExpression
+  | AssignmentExpression
   | ComparisonChainExpression
   | ConditionalExpression
   | IsExpression
@@ -702,6 +703,20 @@ export interface BinaryExpression {
   readonly span: Span;
 }
 
+/**
+ * A parse recovery for an assignment written where an expression is required
+ * (an interpolated fragment or an arrow body). The parser reports directive
+ * guidance and keeps the assignment shape so later stages can add their own
+ * guidance; it never reaches code generation.
+ */
+export interface AssignmentExpression {
+  readonly kind: "AssignmentExpression";
+  readonly target: Expression;
+  readonly operator: "=" | "+=" | "-=" | "*=" | "/=" | "%=";
+  readonly value: Expression;
+  readonly span: Span;
+}
+
 export interface ComparisonChainExpression {
   readonly kind: "ComparisonChainExpression";
   readonly operands: readonly Expression[];
@@ -804,6 +819,8 @@ export function expressionContainsDirectAwait(
       return expressionContainsDirectAwait(expression.value, extension);
     case "BinaryExpression":
       return expressionContainsDirectAwait(expression.left, extension) || expressionContainsDirectAwait(expression.right, extension);
+    case "AssignmentExpression":
+      return expressionContainsDirectAwait(expression.target, extension) || expressionContainsDirectAwait(expression.value, extension);
     case "ComparisonChainExpression":
       return expression.operands.some((operand) => expressionContainsDirectAwait(operand, extension));
     case "ConditionalExpression":

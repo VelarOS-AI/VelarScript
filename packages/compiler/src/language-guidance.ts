@@ -93,6 +93,13 @@ const declarationKeywordGuidanceEntries = new Map<string, DeclarationKeywordGuid
 ]);
 
 const stringMemberGuidanceEntries = new Map<string, string>([
+  ["length", "Use length(value) from 'velar/text'; string operations are functions and count code points"],
+  ["size", "Use length(value) from 'velar/text'; string operations are functions and count code points"],
+  ["slice", "Use slice(value, start, end) from 'velar/text'; string operations are functions"],
+  ["substring", "Use slice(value, start, end) from 'velar/text'; string operations are functions"],
+  ["substr", "Use slice(value, start, end) from 'velar/text'; string operations are functions"],
+  ["charAt", "Use char(value, index) from 'velar/text'; string operations are functions"],
+  ["at", "Use char(value, index) from 'velar/text'; string operations are functions"],
   ["trim", "Use trim(value) from 'velar/text'; string operations are functions"],
   ["trimStart", "Use trimStart(value) from 'velar/text'; string operations are functions"],
   ["trimEnd", "Use trimEnd(value) from 'velar/text'; string operations are functions"],

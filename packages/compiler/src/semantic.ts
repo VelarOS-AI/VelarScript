@@ -523,6 +523,7 @@ export function buildSemanticIndex(
       case "SpreadExpression": visitExpression(expression.value); break;
       case "UnaryExpression": visitExpression(expression.operand); break;
       case "BinaryExpression": visitExpression(expression.left); visitExpression(expression.right); break;
+      case "AssignmentExpression": visitExpression(expression.target); visitExpression(expression.value); break;
       case "ComparisonChainExpression": for (const operand of expression.operands) visitExpression(operand); break;
       case "ConditionalExpression": visitExpression(expression.condition); visitExpression(expression.thenValue); visitExpression(expression.elseValue); break;
       case "IsExpression": visitExpression(expression.value); typeReferences(expression.type); break;

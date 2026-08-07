@@ -116,6 +116,9 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["repeat", apiIntrinsic("collections.repeat", ["value", "count"], [anyType, numberType], listAny)],
   ]))],
   ["velar/text", moduleInterface(new Map([
+    ["length", apiFunction(["value"], [stringType], numberType)],
+    ["char", apiFunction(["value", "index"], [stringType, numberType], optional(stringType))],
+    ["slice", apiFunction(["value", "start", "end"], [stringType, numberType, numberType], stringType, 1)],
     ["trim", apiFunction(["value"], [stringType], stringType)],
     ["trimStart", apiFunction(["value"], [stringType], stringType)],
     ["trimEnd", apiFunction(["value"], [stringType], stringType)],
@@ -687,6 +690,32 @@ function eachMatch(value, pattern, visit) {
     visit(match);
     if (match.value === "") pattern.lastIndex = nextTextIndex(value, pattern.lastIndex);
   }
+}
+export function length(value) { return codePointLength(valueOf(value)); }
+export function char(value, index) {
+  value = valueOf(value);
+  if (!Number.isInteger(index)) return null;
+  if (index < 0) index += codePointLength(value);
+  if (index < 0) return null;
+  let position = 0;
+  for (const character of value) { if (position === index) return character; position += 1; }
+  return null;
+}
+export function slice(value, start = 0, end = null) {
+  value = valueOf(value);
+  const total = codePointLength(value);
+  if (end === null) end = total;
+  if (!Number.isInteger(start) || !Number.isInteger(end)) throw new TypeError("text.slice positions must be integers");
+  const first = start < 0 ? Math.max(total + start, 0) : Math.min(start, total);
+  const last = end < 0 ? Math.max(total + end, 0) : Math.min(end, total);
+  let output = "";
+  let position = 0;
+  for (const character of value) {
+    if (position >= last) break;
+    if (position >= first) output += character;
+    position += 1;
+  }
+  return output;
 }
 export function trim(value) { return valueOf(value).trim(); }
 export function trimStart(value) { return valueOf(value).trimStart(); }

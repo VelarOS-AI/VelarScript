@@ -108,12 +108,27 @@ actual `bool` result at dynamic boundaries.
 ## `velar/text`
 
 String operations are functions so their coercion and naming rules stay
-explicit: `trim`, `trimStart`, `trimEnd`, `lower`, `upper`, `capitalize`,
-`title`, `startsWith`, `endsWith`, `includes`, `split`, `replace`,
-`replaceAll`, `repeat`, `padStart`, `padEnd`, `lines`, `words`, `slug`,
-`truncate`, `indent`, `dedent`, `normalizeWhitespace`, `isBlank`, and
+explicit: `length`, `char`, `slice`, `trim`, `trimStart`, `trimEnd`, `lower`,
+`upper`, `capitalize`, `title`, `startsWith`, `endsWith`, `includes`, `split`,
+`replace`, `replaceAll`, `repeat`, `padStart`, `padEnd`, `lines`, `words`,
+`slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `isBlank`, and
 `escapeHtml`. Stateless pattern operations are `matches`, `findMatch`,
 `findMatches`, `replaceMatches`, and `splitPattern`.
+
+The measurement and access trio uses code points, matching the language's
+string iteration rule rather than JavaScript's UTF-16 code units:
+
+- `length(value) -> number` counts code points, so `length("a😀b")` is `3`.
+- `char(value, index) -> string?` returns the code point at an index. A
+  negative index counts from the end like `List.get`, and an out-of-range or
+  non-integer index returns `null`.
+- `slice(value, start = 0, end = length)` returns a code-point slice with the
+  same position semantics as `List.slice`: negative positions count from the
+  end, out-of-range positions clamp, and non-integer positions throw
+  `TypeError`.
+
+Strings deliberately expose no members, so `value.length`, `value.slice(...)`,
+and `value[index]` are compile-time errors that point to these functions.
 
 `title` treats separators as word boundaries. `truncate` reserves room for its
 suffix. `slug` lowercases Unicode text, removes punctuation, and joins word
@@ -149,11 +164,14 @@ composition such as `replace`, `replaceAll`, `escapeHtml`, and `indent` checks
 its complete output budget before allocating the final string.
 
 ```velar
-import {findMatch, matches, splitPattern} from "velar/text"
+import {char, findMatch, length, matches, slice, splitPattern} from "velar/text"
 
 const valid = matches("VelarScript 42", "^velar [0-9]+$", {ignoreCase: true})
 const ticket = findMatch("ticket-42", "[0-9]+")
 const fields = splitPattern("one, two; three", " *[,;] *")
+const initial = char("Ada", 0)
+const short = slice("VelarScript", 0, 5)
+print(f"{initial ?? "?"}:{length(short)}")
 ```
 
 ## `velar/math`

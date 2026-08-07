@@ -62,7 +62,7 @@ const LOOK_PROPERTY_TYPES = new Map<string, ValueType>([
   ["background", { kind: "union", members: [lookColor, lookImage, stringType] }], ["backgroundColor", { kind: "union", members: [lookColor, stringType] }], ["backgroundImage", { kind: "union", members: [lookImage, stringType] }], ["fill", { kind: "union", members: [lookColor, stringType] }], ["stroke", { kind: "union", members: [lookColor, stringType] }], ["strokeWidth", { kind: "union", members: [lookMetric, stringType] }],
   ["border", { kind: "union", members: [lookBorder, stringType] }], ["borderTop", { kind: "union", members: [lookBorder, stringType] }], ["borderRight", { kind: "union", members: [lookBorder, stringType] }], ["borderBottom", { kind: "union", members: [lookBorder, stringType] }], ["borderLeft", { kind: "union", members: [lookBorder, stringType] }], ["outline", { kind: "union", members: [lookBorder, stringType] }], ["boxShadow", { kind: "union", members: [lookShadow, stringType] }],
   ["color", { kind: "union", members: [lookColor, stringType] }], ["content", stringType], ["font", stringType], ["fontFamily", stringType],
-  ["opacity", numberType], ["zIndex", numberType], ["fontWeight", { kind: "union", members: [numberType, stringType] }], ["aspectRatio", { kind: "union", members: [numberType, stringType] }], ["scale", { kind: "union", members: [numberType, lookSpacing, stringType] }],
+  ["opacity", numberType], ["zIndex", numberType], ["fontWeight", { kind: "union", members: [numberType, stringType] }], ["aspectRatio", { kind: "union", members: [numberType, stringType] }], ["scale", { kind: "union", members: [numberType, lookSpacing, stringType] }], ["flex", { kind: "union", members: [numberType, stringType] }],
   ["flexGrow", numberType], ["flexShrink", numberType], ["order", numberType],
   ["lineHeight", { kind: "union", members: [numberType, lookLength] }], ["rotate", lookAngle],
   ["transition", { kind: "union", members: [lookTransition, stringType] }], ["transitionDuration", lookDuration], ["transitionDelay", lookDuration], ["animation", stringType], ["backdropFilter", stringType],
@@ -226,6 +226,68 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
     default:
       return undefined;
   }
+}
+
+// Multi-token shorthand strings on properties with a checked builder
+// equivalent bypass the builder system, so they are rejected with directive
+// guidance that computes the builder call whenever the string decomposes
+// cleanly. Single-token keyword strings and hex color strings stay accepted.
+const lookSpacingFamily = /^(?:margin|padding|inset)/u;
+const lookSpacingProperties = new Set(["borderRadius", "borderWidth"]);
+const lookBorderProperties = new Set(["border", "borderTop", "borderRight", "borderBottom", "borderLeft", "outline"]);
+const lookBorderStyles = new Set(["solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset", "none", "hidden"]);
+
+function lookBuilderToken(token: string): string {
+  if (/^[+-]?\d+(?:\.\d+)?$/u.test(token)) return `${token}px`;
+  if (/^[+-]?\d+(?:\.\d+)?[a-z%]+$/iu.test(token)) return token;
+  return `"${token}"`;
+}
+
+function lookBorderCall(tokens: readonly string[]): string | null {
+  let width: string | null = null;
+  let style: string | null = null;
+  let color: string | null = null;
+  for (const token of tokens) {
+    if (/^[+-]?\d/u.test(token) && width === null) width = lookBuilderToken(token);
+    else if (lookBorderStyles.has(token) && style === null) style = token;
+    else if (color === null && /^#[0-9a-f]{3,8}$/iu.test(token)) color = `color("${token}")`;
+    else if (color === null && /^[a-z]+$/iu.test(token)) color = `color("${token}")`;
+    else return null;
+  }
+  if (width === null || color === null) return null;
+  const buildArguments = style !== null && style !== "solid" ? `${width}, ${color}, "${style}"` : `${width}, ${color}`;
+  return `border(${buildArguments})`;
+}
+
+function lookShorthandStringGuidance(name: string, value: Expression): string | null {
+  if (value.kind !== "LiteralExpression" || typeof value.value !== "string") return null;
+  const text = value.value.trim();
+  if (!/\s/u.test(text)) return null;
+  const tokens = text.split(/\s+/u);
+  if (lookSpacingFamily.test(name) || lookSpacingProperties.has(name)) {
+    return `Use 'spacing(${tokens.map(lookBuilderToken).join(", ")})'; Look multi-value shorthand is written with the spacing builder`;
+  }
+  if (lookBorderProperties.has(name)) {
+    const call = lookBorderCall(tokens);
+    return call
+      ? `Use '${call}'; Look border shorthand is written with the border builder`
+      : "Use the 'border(width, color, style)' builder; multi-part border strings bypass the checked Look system";
+  }
+  if (name === "boxShadow") {
+    return "Use the 'shadow(x, y, blur, color)' builder; multi-part shadow strings bypass the checked Look system";
+  }
+  if (name === "transition") {
+    const [property, duration, easing, delay] = tokens;
+    const durations = /^[+-]?\d+(?:\.\d+)?(?:ms|s)$/u;
+    if (property && duration && durations.test(duration) && tokens.length <= 4
+      && (easing === undefined || /^[a-z-]+$/iu.test(easing))
+      && (delay === undefined || durations.test(delay))) {
+      const buildArguments = [`"${property}"`, duration, ...easing ? [`"${easing}"`] : [], ...delay ? [delay] : []];
+      return `Use 'transition(${buildArguments.join(", ")})'; Look transition shorthand is written with the transition builder`;
+    }
+    return "Use the 'transition(property, duration, easing, delay)' builder; multi-part transition strings bypass the checked Look system";
+  }
+  return null;
 }
 
 function isViewportCondition(expression: Expression): boolean {
@@ -858,7 +920,11 @@ export class VelarWebAnalyzer extends Analyzer {
         continue;
       }
       if (entry.kind === "LookTarget") {
-        if (!LOOK_TARGETS.has(entry.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look target '@${entry.name}'`, entry.span));
+        if (!LOOK_TARGETS.has(entry.name)) {
+          this.diagnostics.push(diagnostic("VEL5038", LOOK_HOOKS.has(entry.name)
+            ? `Use 'if @${entry.name}:'; '@${entry.name}' is an element state condition, not a pseudo-element target`
+            : `Unknown Look target '@${entry.name}'`, entry.span));
+        }
         if (insideTarget) this.diagnostics.push(diagnostic("VEL5038", "Look targets cannot be nested", entry.span));
         if (seenTargets.has(entry.name)) this.diagnostics.push(diagnostic("VEL5039", `Look target '@${entry.name}' is defined more than once in the same scope`, entry.span));
         seenTargets.add(entry.name);
@@ -868,6 +934,11 @@ export class VelarWebAnalyzer extends Analyzer {
       if (!LOOK_PROPERTIES.has(entry.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look property '${entry.name}'`, entry.span));
       if (seenProperties.has(entry.name)) this.diagnostics.push(diagnostic("VEL5039", `Look property '${entry.name}' is defined more than once in the same scope`, entry.span));
       seenProperties.add(entry.name);
+      const shorthandGuidance = lookShorthandStringGuidance(entry.name, entry.value);
+      if (shorthandGuidance) {
+        this.diagnostics.push(diagnostic("VEL5038", shorthandGuidance, entry.value.span));
+        continue;
+      }
       const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? stringType;
       const actual = this.inferExpression(entry.value, expected);
       if (actual.kind !== "null" && expected.kind !== "unknown") this.requireAssignable(actual, expected, entry.value.span);
@@ -999,7 +1070,19 @@ export class VelarWebAnalyzer extends Analyzer {
     const eventName = attribute.name.startsWith("on:") ? attribute.name.slice(3).split(".")[0] ?? "" : "";
     const expectedEvent = eventName ? webEventType(eventName) : null;
     const eventHandlerType: ValueType | null = expectedEvent ? { kind: "function", parameters: [expectedEvent], requiredParameters: 1, result: unknownType } : null;
-    const inferred = typeof value === "string" ? stringType : value ? this.inferExpression(value, eventHandlerType ?? unknownType) : boolType;
+    // An event arrow that assigns a state binding from an event field is the
+    // hand-rolled spelling of a two-way binding: it receives bind:value
+    // guidance and skips ordinary handler inference so the guidance is not
+    // buried under a cascade from the recovered assignment.
+    const boundState = (eventName || /^on[A-Z]/u.test(attribute.name)) ? this.eventAssignedStateBinding(value) : null;
+    if (boundState) {
+      this.diagnostics.push(diagnostic(
+        "VEL5019",
+        `Use 'bind:value={${boundState}}'; VelarScript binds input state with the bind: directive instead of assigning state from event fields`,
+        attribute.span,
+      ));
+    }
+    const inferred = typeof value === "string" ? stringType : boundState ? anyType : value ? this.inferExpression(value, eventHandlerType ?? unknownType) : boolType;
     if (attribute.name === "style" || attribute.name.startsWith("style:")) {
       this.diagnostics.push(diagnostic("VEL5041", "Controlled VelarScript components do not expose inline style; use a Look or an unsafe CSS import", attribute.span));
     } else if (attribute.name === "look") {
@@ -1070,6 +1153,23 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
       && !expression.attributes.some((item) => item.name === "role")) this.diagnostics.push(diagnostic("VEL5023", `Clickable <${expression.tag}> requires an explicit role`, expression.span));
+  }
+
+  // Matches 'event => stateName = event.field' (any member depth) where the
+  // assignment target is a writable state binding, and returns that binding's
+  // name; anything else returns null.
+  private eventAssignedStateBinding(value: JSXAttribute["value"]): string | null {
+    if (!value || typeof value === "string") return null;
+    if (value.kind !== "ArrowFunctionExpression" || value.asynchronous || value.parameters.length !== 1) return null;
+    const body = value.body;
+    if (body.kind !== "AssignmentExpression" || body.target.kind !== "IdentifierExpression") return null;
+    const state = body.target.name;
+    if (!this.componentStates?.has(state) && this.reactiveBindings.get(state) !== "state") return null;
+    let source = body.value;
+    while (source.kind === "MemberExpression") source = source.object;
+    return source.kind === "IdentifierExpression" && source.name === value.parameters[0]!.name && body.value.kind === "MemberExpression"
+      ? state
+      : null;
   }
 
   private isLookInput(type: ValueType): boolean {
