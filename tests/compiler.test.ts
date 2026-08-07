@@ -4129,6 +4129,7 @@ test("dev server serves dual CJS/ESM packages through their import condition", a
   await mkdir(join(projectRoot, "node_modules", "dual-dep"), { recursive: true });
   await writeFile(join(projectRoot, "node_modules", "dual-lib", "package.json"), JSON.stringify({
     name: "dual-lib",
+    version: "1.2.3",
     exports: {
       ".": { import: "./index.mjs", require: "./index.js" },
     },
@@ -4145,6 +4146,7 @@ test("dev server serves dual CJS/ESM packages through their import condition", a
   );
   await writeFile(join(projectRoot, "node_modules", "dual-dep", "package.json"), JSON.stringify({
     name: "dual-dep",
+    version: "2.0.0",
     exports: {
       ".": { import: "./star.mjs", require: "./star.cjs" },
     },
@@ -4182,15 +4184,23 @@ mount(<App />, "#app")
   const html = await page.text();
   assert.doesNotMatch(html, /Cannot resolve browser npm import/u);
   // The import map points both the direct dependency and the transitive bare
-  // import of its ESM entry at their "import"-condition files.
-  assert.match(html, /"dual-lib":"\/@npm\/dual-lib\/index\.mjs"/u);
-  assert.match(html, /"dual-dep":"\/@npm\/dual-dep\/star\.mjs"/u);
-  const entry = await fetch("http://127.0.0.1:42886/@npm/dual-lib/index.mjs");
+  // import of its ESM entry at their prebundled dev modules; other packages
+  // stay external inside a prebundle and resolve through the import map.
+  assert.match(html, /"dual-lib":"\/@npm\/dual-lib\/index\.js"/u);
+  assert.match(html, /"dual-dep":"\/@npm\/dual-dep\/index\.js"/u);
+  const entry = await fetch("http://127.0.0.1:42886/@npm/dual-lib/index.js");
   assert.equal(entry.status, 200);
-  assert.match(await entry.text(), /import \{ star \} from "dual-dep"/u);
-  const dependency = await fetch("http://127.0.0.1:42886/@npm/dual-dep/star.mjs");
+  assert.match(await entry.text(), /from "dual-dep"/u);
+  const dependency = await fetch("http://127.0.0.1:42886/@npm/dual-dep/index.js");
   assert.equal(dependency.status, 200);
-  assert.match(await dependency.text(), /export const star/u);
+  assert.match(await dependency.text(), /star/u);
+  // The prebundle cache is keyed by package version under .velar/dev-deps.
+  const meta = JSON.parse(await readFile(join(projectRoot, ".velar", "dev-deps", "dual-lib@1.2.3", "meta.json"), "utf8")) as {
+    entries: Record<string, string>;
+    externals: string[];
+  };
+  assert.equal(meta.entries["."], "index.js");
+  assert.deepEqual(meta.externals, ["dual-dep"]);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
@@ -4236,6 +4246,159 @@ mount(<App />, "#app")
   assert.match(html, /Cannot resolve browser npm import 'legacy-lib'/u);
   assert.match(html, /resolves to the CommonJS file &#39;index\.js&#39;|resolves to the CommonJS file 'index\.js'/u);
   assert.match(html, /needs an ESM build/u);
+  child.kill("SIGTERM");
+  const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
+});
+
+test("dev server prebundles dual packages whose ESM entry wraps CommonJS internals", async (context) => {
+  // The npm ecosystem's standard dual-package-hazard wrapper (ledger W-20):
+  // the "import"-condition entry is real ESM that default-imports the
+  // package's own CommonJS internals, which native browser ESM cannot load
+  // raw. The dev prebundle converts the internals exactly like 'velar build'.
+  const directory = await mkdtemp(join(tmpdir(), "velar-dev-cjs-wrapper-"));
+  const projectRoot = join(directory, "app");
+  await mkdir(join(projectRoot, "node_modules", "wrapper-lib", "es"), { recursive: true });
+  await mkdir(join(projectRoot, "node_modules", "wrapper-lib", "lib"), { recursive: true });
+  await writeFile(join(projectRoot, "node_modules", "wrapper-lib", "package.json"), JSON.stringify({
+    name: "wrapper-lib",
+    version: "2.5.0",
+    type: "commonjs",
+    exports: {
+      ".": { import: "./es/index.js", require: "./lib/index.js" },
+      "./lib/util": { import: "./es/util.js", require: "./lib/util.js" },
+    },
+  }), "utf8");
+  await writeFile(join(projectRoot, "node_modules", "wrapper-lib", "es", "package.json"), JSON.stringify({ type: "module" }), "utf8");
+  await writeFile(
+    join(projectRoot, "node_modules", "wrapper-lib", "es", "index.js"),
+    "import Wrapper from '../lib/index.js';\nexport default Wrapper;\n",
+    "utf8",
+  );
+  await writeFile(
+    join(projectRoot, "node_modules", "wrapper-lib", "es", "util.js"),
+    "import Util from '../lib/util.js';\nexport default Util;\n",
+    "utf8",
+  );
+  await writeFile(
+    join(projectRoot, "node_modules", "wrapper-lib", "lib", "index.js"),
+    "const util = require('./util.js');\nmodule.exports = { frame: (value) => util.wrap(value) };\n",
+    "utf8",
+  );
+  await writeFile(
+    join(projectRoot, "node_modules", "wrapper-lib", "lib", "util.js"),
+    "module.exports = { wrap: (value) => `[${value}]` };\n",
+    "utf8",
+  );
+  await linkWorkspaceWebExtension(projectRoot);
+  await writeFile(join(projectRoot, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
+  await writeFile(join(projectRoot, "main.vel"), `
+type Wrapper:
+    frame: (value: string) -> string
+
+type Util:
+    wrap: (value: string) -> string
+
+extern module "wrapper-lib":
+    export const default: Wrapper
+
+extern module "wrapper-lib/lib/util":
+    export const default: Util
+
+import js wrapper from "wrapper-lib"
+import js util from "wrapper-lib/lib/util"
+
+component App:
+    return <main>{wrapper.frame(util.wrap("velar"))}</main>
+
+mount(<App />, "#app")
+`.trimStart(), "utf8");
+
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42888"], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  context.after(() => stopDevServer(child));
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  const deadline = Date.now() + 10_000;
+  while (!output.includes("VelarScript dev server:") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.match(output, /VelarScript dev server:/u);
+  const page = await fetch("http://127.0.0.1:42888/");
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.doesNotMatch(html, /Cannot resolve browser npm import/u);
+  assert.match(html, /"wrapper-lib":"\/@npm\/wrapper-lib\/index\.js"/u);
+  assert.match(html, /"wrapper-lib\/lib\/util":"\/@npm\/wrapper-lib\/lib\/util\.js"/u);
+  const entry = await fetch("http://127.0.0.1:42888/@npm/wrapper-lib/index.js");
+  assert.equal(entry.status, 200);
+  const entryText = await entry.text();
+  // The CommonJS internals were converted rather than left as raw relative
+  // imports the browser would reject with a SyntaxError.
+  assert.doesNotMatch(entryText, /from\s*['"]\.\.\/lib\//u);
+  assert.match(entryText, /export\s*\{[^}]*default[^}]*\}|export default/u);
+  const util = await fetch("http://127.0.0.1:42888/@npm/wrapper-lib/lib/util.js");
+  assert.equal(util.status, 200);
+  // Both entries come from one splitting build, so the shared internals load
+  // as one chunk module instead of two duplicated copies.
+  const chunkImport = entryText.match(/from\s*"(\.\/chunk-[^"]+\.js)"/u);
+  assert.ok(chunkImport, "expected the prebundled entry to import a shared chunk");
+  const chunk = await fetch(`http://127.0.0.1:42888/@npm/wrapper-lib/${chunkImport![1]!.slice(2)}`);
+  assert.equal(chunk.status, 200);
+  const meta = JSON.parse(await readFile(join(projectRoot, ".velar", "dev-deps", "wrapper-lib@2.5.0", "meta.json"), "utf8")) as {
+    entries: Record<string, string>;
+  };
+  assert.equal(meta.entries["."], "index.js");
+  assert.equal(meta.entries["./lib/util"], "lib/util.js");
+  child.kill("SIGTERM");
+  const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+  assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
+});
+
+test("dev server names genuinely broken packages instead of serving raw module errors", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-dev-broken-npm-"));
+  const projectRoot = join(directory, "app");
+  await mkdir(join(projectRoot, "node_modules", "broken-lib"), { recursive: true });
+  await writeFile(join(projectRoot, "node_modules", "broken-lib", "package.json"), JSON.stringify({
+    name: "broken-lib",
+    version: "1.0.0",
+    exports: { ".": { import: "./index.mjs" } },
+  }), "utf8");
+  await writeFile(join(projectRoot, "node_modules", "broken-lib", "index.mjs"), "export default {\n", "utf8");
+  await linkWorkspaceWebExtension(projectRoot);
+  await writeFile(join(projectRoot, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
+  await writeFile(join(projectRoot, "main.vel"), `
+extern module "broken-lib":
+    export def decorate(value: string) -> string
+
+import js {decorate} from "broken-lib"
+
+component App:
+    return <main>{decorate("velar")}</main>
+
+mount(<App />, "#app")
+`.trimStart(), "utf8");
+
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "42889"], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  context.after(() => stopDevServer(child));
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  const deadline = Date.now() + 10_000;
+  while (!output.includes("VelarScript dev server:") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.match(output, /VelarScript dev server:/u);
+  const page = await fetch("http://127.0.0.1:42889/");
+  const html = await page.text();
+  // The failure is velar-voiced and names the package; the browser never
+  // receives a raw module for a package that cannot be prebundled.
+  assert.match(html, /VelarScript build error/u);
+  assert.match(html, /Cannot resolve browser npm import &#39;broken-lib&#39;|Cannot resolve browser npm import 'broken-lib'/u);
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
@@ -6649,7 +6812,7 @@ test("browser npm assets cannot escape a package through symbolic links", async 
   await writeFile(join(directory, "outside.js"), "export const escaped = true\n", "utf8");
   await symlink(join(root, "inside.js"), join(root, "inside-link.js"));
   await symlink(join(directory, "outside.js"), join(root, "outside-link.js"));
-  const packages = [{ name: "package", root, route: "/@npm/package/", entryRoute: "/@npm/package/inside.js" }];
+  const packages = [{ name: "package", root, route: "/@npm/package/", serveRoot: root }];
   assert.equal((await npmAsset(packages, "/@npm/package/inside-link.js"))?.path, await realpath(join(root, "inside.js")));
   assert.equal(await npmAsset(packages, "/@npm/package/outside-link.js"), null);
 });
@@ -16129,6 +16292,191 @@ console.log(getterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada:Lin:0\nTypeError\nTypeError\nTypeError\nTypeError\n0\n");
+});
+
+test("widens the keyed fast path across conditional branches", () => {
+  // The idiomatic empty-state ternary (ledger W-19): the empty branch becomes
+  // a gated dynamic region and the list keeps the identity-cached keyed path,
+  // both gated on the shared branch condition.
+  const ternary = compile(`
+type Message:
+    id: string
+    text: string
+
+component Flow(messages: List<Message>):
+    return <section>{messages.size == 0 ? <p>empty</p> : messages.map(message => <article key={message.id}>{message.text}</article>)}</section>
+`.trimStart());
+  assert.deepEqual(ternary.diagnostics, []);
+  assert.match(ternary.code ?? "", /__velarDynamic\(__el\d+, \(__childScope\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \(/u);
+  assert.match(ternary.code ?? "", /__velarKeyed\(__el\d+, \(\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \[\] : \(messages\.get\(\)\)/u);
+
+  const bothKeyed = compile(`
+component Flow(on: bool, alpha: List<string>, beta: List<string>):
+    return <ul>{on ? alpha.map(name => <li key={name}>{name}</li>) : beta.map(name => <li key={name}>{name}</li>)}</ul>
+`.trimStart());
+  assert.deepEqual(bothKeyed.diagnostics, []);
+  assert.equal(((bothKeyed.code ?? "").match(/__velarKeyed\(__el1,/gu) ?? []).length, 2);
+
+  const chain = compile(`
+component Flow(on: bool, alpha: List<string>, beta: List<string>):
+    return <ul>{on ? alpha.map(name => <li key={name}>{name}</li>) : beta.size == 0 ? <li>none</li> : beta.map(name => <li key={name}>{name}</li>)}</ul>
+`.trimStart());
+  assert.deepEqual(chain.diagnostics, []);
+  assert.equal(((chain.code ?? "").match(/__velarKeyed\(__el1,/gu) ?? []).length, 2);
+  assert.equal(((chain.code ?? "").match(/__velarDynamic\(__el1,/gu) ?? []).length, 1);
+
+  // A conditional without a keyed list stays one dynamic region.
+  const plain = compile(`
+component Flow(on: bool):
+    return <div>{on ? <p>a</p> : <p>b</p>}</div>
+`.trimStart());
+  assert.deepEqual(plain.diagnostics, []);
+  assert.doesNotMatch(plain.code ?? "", /__velarKeyed\(__el/u);
+  assert.equal(((plain.code ?? "").match(/__velarDynamic\(__el1,/gu) ?? []).length, 1);
+});
+
+test("an empty-state ternary keeps keyed identity across branch flips", () => {
+  const result = compile(`
+type Row:
+    id: string
+    text: string
+
+state rows: List<Row> = []
+let stamps = 0
+
+component Entry(row: Row):
+    stamps += 1
+    const stamp = stamps
+    return <article data-id={row.id} data-stamp={stamp}>{row.text}</article>
+
+component Flow:
+    return <section>{rows.size == 0 ? <p>empty</p> : rows.map(row => <Entry key={row.id} row={row} />)}</section>
+
+mount(<Flow />, "#flow")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+
+  const dom = `
+class FakeNode {
+  constructor(nodeType, tagName = "", value = "") {
+    this.nodeType = nodeType;
+    this.tagName = tagName;
+    this.value = value;
+    this.childNodes = [];
+    this.parentNode = null;
+    this.attributes = new Map();
+  }
+  static detach(node) {
+    if (!node.parentNode) return;
+    const siblings = node.parentNode.childNodes;
+    const index = siblings.indexOf(node);
+    if (index !== -1) siblings.splice(index, 1);
+    node.parentNode = null;
+  }
+  static insert(parent, node, before) {
+    if (node.nodeType === 11) {
+      for (const child of [...node.childNodes]) FakeNode.insert(parent, child, before);
+      return;
+    }
+    FakeNode.detach(node);
+    node.parentNode = parent;
+    const index = before === null ? -1 : parent.childNodes.indexOf(before);
+    if (index === -1) parent.childNodes.push(node);
+    else parent.childNodes.splice(index, 0, node);
+  }
+  append(...values) { for (const value of values) FakeNode.insert(this, value, null); }
+  insertBefore(node, before = null) { FakeNode.insert(this, node, before); return node; }
+  before(...values) { for (const value of values) FakeNode.insert(this.parentNode, value, this); }
+  remove() { FakeNode.detach(this); }
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  removeAttribute(name) { this.attributes.delete(name); }
+  getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
+}
+const flowTarget = new FakeNode(1, "root");
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement(tag) { return new FakeNode(1, tag); },
+  createTextNode(value) { return new FakeNode(3, "", String(value)); },
+  createComment(value) { return new FakeNode(8, "", String(value)); },
+  createDocumentFragment() { return new FakeNode(11); },
+  querySelector(selector) { return selector === "#flow" ? flowTarget : null; },
+};
+function dumpNode(node) {
+  if (node.nodeType === 3) return node.value;
+  if (node.nodeType === 8) return "";
+  const attributes = [...node.attributes.entries()].map(([name, value]) => " " + name + "=" + JSON.stringify(String(value))).join("");
+  return "<" + node.tagName + attributes + ">" + node.childNodes.map(dumpNode).join("") + "</" + node.tagName + ">";
+}
+function dump() { return flowTarget.childNodes.map(dumpNode).join(""); }
+`;
+  const execution = executeModule(`${dom}\n${result.code ?? ""}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+await flush();
+console.log(dump());
+rows.set([{ id: "a", text: "a0" }, { id: "b", text: "b0" }]);
+await flush();
+console.log(dump());
+const current = rows.get();
+rows.set([current[0], { ...current[1], text: "b1" }]);
+await flush();
+console.log(dump());
+rows.set([]);
+await flush();
+console.log(dump());
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    // Empty state renders while the keyed region holds zero entries.
+    "<section><p>empty</p></section>",
+    // The flip destroys the empty state and populates the keyed region.
+    '<section><article data-id="a" data-stamp="1">a0</article><article data-id="b" data-stamp="2">b0</article></section>',
+    // A streamed-style update replaces only the changed record's instance;
+    // the untouched entry keeps its component instance (same stamp).
+    '<section><article data-id="a" data-stamp="1">a0</article><article data-id="b" data-stamp="3">b1</article></section>',
+    // Flipping back to empty drops every entry and restores the empty state.
+    "<section><p>empty</p></section>",
+    "",
+  ].join("\n"));
+});
+
+test("diagnoses keys the keyed fast path will ignore", () => {
+  // A branch map without a key is held to the same standard as a bare map.
+  const missingBranchKey = compile(`
+component Flow(names: List<string>):
+    return <ul>{names.size == 0 ? <li>empty</li> : names.map(name => <li>{name}</li>)}</ul>
+`.trimStart());
+  assert.deepEqual(missingBranchKey.diagnostics.map((item) => item.code), ["VEL5017"]);
+
+  // A keyed map that is not an interpolation leaf compiles to the rebuild-all
+  // dynamic path, so the key would be silently meaningless without VEL5050.
+  const wrapped = compile(`
+def pick(rows: List<WebNode>) -> List<WebNode>:
+    return rows
+
+component Flow(names: List<string>):
+    return <ul>{pick(names.map(name => <li key={name}>{name}</li>))}</ul>
+`.trimStart());
+  assert.deepEqual(wrapped.diagnostics.map((item) => item.code), ["VEL5050"]);
+  assert.match(wrapped.diagnostics[0]?.message ?? "", /items\.map\(item => <Row key=\{item\.id\} \/>\)/u);
+  assert.match(wrapped.diagnostics[0]?.message ?? "", /'\?:' branch/u);
+
+  const lonelyBranchKey = compile(`
+component Flow(names: List<string>):
+    return <ul>{names.size == 0 ? <li key="empty">empty</li> : names.map(name => <li key={name}>{name}</li>)}</ul>
+`.trimStart());
+  assert.deepEqual(lonelyBranchKey.diagnostics.map((item) => item.code), ["VEL5050"]);
+
+  // Honored shapes stay silent: a keyed leaf, a keyed branch, and a keyed
+  // list nested inside another keyed body's interpolation.
+  const honored = compile(`
+type Row:
+    id: string
+    tags: List<string>
+
+component Flow(rows: List<Row>):
+    return <ul>{rows.map(row => <li key={row.id}><span>{row.tags.map(tag => <em key={tag}>{tag}</em>)}</span></li>)}</ul>
+`.trimStart());
+  assert.deepEqual(honored.diagnostics, []);
 });
 
 test("reactive props update child components in place without destroying their state", () => {

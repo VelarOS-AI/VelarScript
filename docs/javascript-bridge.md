@@ -199,3 +199,14 @@ for the compiler to wrap the package with implicit validation.
 Declaration files and JavaScript files in installed npm packages are watched by
 the development server. A declaration change performs a full safe reanalysis;
 a runtime JavaScript change reloads the application.
+
+The development server serves npm packages to the browser as native ES
+modules by prebundling each package with the same bundler the production
+build uses. A package's resolved browser entries become one bundle in
+`<project>/.velar/dev-deps`, keyed by package version and reused until the
+version or the installed files change; internal CommonJS converts to ESM (the
+common dual-package wrapper whose ESM entry imports its own CommonJS
+internals works unchanged), while imports of other packages stay bare and
+resolve through the import map. A package that publishes no ESM entry at all
+is refused with an error naming the package — native ES modules cannot
+reproduce CommonJS named exports — and `velar build` can still bundle it.

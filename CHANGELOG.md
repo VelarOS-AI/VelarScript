@@ -4,6 +4,37 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Keyed conditionals and dev-server npm prebundling
+
+Language and compiler changes:
+
+- The keyed-children fast path now reaches through conditionals: an
+  interpolation whose `?:` branches contain `items.map(item => <Row
+  key={item.id} />)` compiles each branch to its own gated region, so the
+  idiomatic empty-state ternary keeps identity-cached keyed children instead
+  of silently demoting the whole list to rebuild-all dynamic updates. A
+  branch that renders a list with `.map(...)` requires a key exactly like a
+  bare keyed interpolation (VEL5017 now applies to branches too).
+- A `key` attribute the keyed path will never read — on a lone element, on a
+  map nested inside a larger expression, or in any other unrecognized
+  position inside an interpolation — is now diagnosed (VEL5050) with the
+  recognized shape named, instead of being silently ignored at runtime.
+
+Tooling changes:
+
+- `velar dev` now prebundles bare npm imports per package with the production
+  bundler and serves the results as native ES modules, cached in
+  `<project>/.velar/dev-deps` keyed by package version and invalidated when
+  the watcher sees the installed files change. Dual packages whose
+  "import"-condition entry wraps their own CommonJS internals (the pattern
+  Node's documentation recommends to dual publishers) now load in
+  development exactly as they do in `velar build`; imports of other packages
+  stay bare and resolve through the import map. A package that cannot be
+  prebundled produces a velar-voiced error naming the package instead of a
+  raw browser SyntaxError on a package-internal file; a CommonJS-only
+  package keeps its explicit refusal, now detected by the bundler's module
+  format instead of a source heuristic.
+
 ## 0.10.0-dev — Module-scope actions
 
 Language and compiler changes:

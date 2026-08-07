@@ -23,6 +23,7 @@ import {
   type ValueType,
 } from "@velarscript/compiler/extension";
 import { LOOK_BUILDERS, LOOK_HOOKS, LOOK_PROPERTIES, LOOK_TARGETS } from "./look.ts";
+import { dynamicChildLeaves } from "./emitter.ts";
 type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
 type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
@@ -412,13 +413,6 @@ function containsPromise(type: ValueType): boolean {
   return false;
 }
 
-function jsxMapExpression(expression: Expression): (Extract<Expression, { kind: "ArrowFunctionExpression" }> & { readonly body: JSXElementExpression }) | null {
-  if (expression.kind !== "CallExpression" || expression.callee.kind !== "MemberExpression" || expression.callee.property !== "map") return null;
-  const callback = expression.arguments[0];
-  return callback?.kind === "ArrowFunctionExpression" && !callback.asynchronous && callback.body.kind === "JSXElementExpression"
-    ? callback as typeof callback & { readonly body: JSXElementExpression }
-    : null;
-}
 
 function hasAccessibleJsxContent(expression: JSXElementExpression): boolean {
   return expression.children.some((child) => {
@@ -1054,14 +1048,55 @@ export class VelarWebAnalyzer extends Analyzer {
           && !this.isJsxRenderable(childType)) {
           this.diagnostics.push(diagnostic("VEL5047", `JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values; received ${describeType(childType)}`, child.expression.span));
         }
-        const list = jsxMapExpression(child.expression);
-        if (list && !list.body.attributes.some((attribute) => attribute.name === "key")) this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", list.body.span));
+        this.checkKeyedInterpolation(child.expression);
       } else if (child.kind === "JSXElementExpression") {
         this.inferJsx(child);
       }
     }
     this.jsxDepth -= 1;
     return { kind: "node" };
+  }
+
+  // Mirrors the emitter's keyed-children recognizer (dynamicChildLeaves): a
+  // leaf shaped `source.map(item => <… key=… />)` — either the interpolation
+  // itself or a '?:' branch of it — compiles to the identity-cached keyed
+  // path. A map leaf without a key must gain one (VEL5017), and a key that
+  // sits anywhere else in the interpolation would be silently ignored at
+  // runtime, so it is diagnosed instead of quietly rebuilding every child.
+  private checkKeyedInterpolation(expression: Expression): void {
+    const honoredKeyRoots = new Set<JSXElementExpression>();
+    for (const leaf of dynamicChildLeaves(expression)) {
+      if (!leaf.list) continue;
+      if (leaf.list.key) honoredKeyRoots.add(leaf.list.arrow.body);
+      else this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", leaf.list.arrow.body.span));
+    }
+    this.reportIneffectiveJsxKeys(expression, honoredKeyRoots);
+  }
+
+  // Walks one interpolation expression looking for `key` attributes that the
+  // keyed fast path will never read. The walk stops at every JSX element:
+  // an element's own children and attribute values are separate render sites
+  // that receive their own checks when analysis recurses into them.
+  private reportIneffectiveJsxKeys(value: unknown, honored: ReadonlySet<JSXElementExpression>): void {
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (record.kind === "JSXElementExpression") {
+      const element = record as unknown as JSXElementExpression;
+      if (honored.has(element)) return;
+      const key = element.attributes.find((attribute) => attribute.name === "key");
+      if (key) {
+        this.diagnostics.push(diagnostic(
+          "VEL5050",
+          "This JSX key has no effect: keys reuse children by identity only when the interpolation is 'items.map(item => <Row key={item.id} />)' or a '?:' branch of one; every other shape rebuilds its children on change — restructure the interpolation into that shape or remove the key",
+          key.span,
+        ));
+      }
+      return;
+    }
+    for (const child of Object.values(record)) {
+      if (Array.isArray(child)) child.forEach((item) => this.reportIneffectiveJsxKeys(item, honored));
+      else this.reportIneffectiveJsxKeys(child, honored);
+    }
   }
 
   private analyzeComponentElement(expression: JSXElementExpression): void {

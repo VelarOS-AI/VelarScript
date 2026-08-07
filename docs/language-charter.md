@@ -934,6 +934,13 @@ Important native directives include:
 
 Refs are restored to `null` during cleanup.
 
+A `key` drives identity-preserving reuse only in the keyed-children shape: an
+interpolation that is `items.map(item => <Row key={item.id} />)`, or a `?:`
+branch of one — so an empty-state ternary around a keyed list keeps the keyed
+path. A list rendered with `.map(...)` in that position requires a key on its
+root element, and a `key` anywhere else in an interpolation is a diagnostic
+rather than a silently ignored attribute.
+
 ## 15. State, computed values, resources, and actions
 
 ```velar fragment

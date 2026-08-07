@@ -539,24 +539,50 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   private emitDynamicChild(parent: string, expression: Expression, scope: string, namespace: string): string {
-    const keyed = keyedListExpression(expression);
+    const leaves = dynamicChildLeaves(expression);
     const previousScope = this.currentScope;
     const previousJsxNamespace = this.currentJsxNamespace;
     this.currentScope = "__childScope";
     this.currentJsxNamespace = namespace;
-    if (keyed) {
-      const source = this.emitMappedExpression(keyed.source);
-      const parameter = keyed.arrow.parameters[0]!.name;
-      const key = this.emitJsxAttributeValue(keyed.key);
-      const render = this.emitJsx(keyed.arrow.body, "__childScope", true, namespace);
-      this.currentScope = previousScope;
-      this.currentJsxNamespace = previousJsxNamespace;
-      return `__velarKeyed(${parent}, () => ${source}, (${parameter}) => ${key}, (${parameter}, __childScope) => ${render}, ${scope});`;
-    }
-    const value = this.emitMappedExpression(expression);
+    // A conditional splits into one region per branch leaf only when a keyed
+    // list is somewhere among them; each region gates itself on the shared
+    // branch conditions, so at most one region renders content at a time and
+    // the keyed list keeps identity-cached children across the branch flip.
+    // Without a keyed leaf the interpolation stays one dynamic region.
+    const statements = leaves.some((leaf) => leaf.list?.key)
+      ? leaves.map((leaf) => this.emitDynamicChildLeaf(parent, leaf, scope, namespace))
+      : [`__velarDynamic(${parent}, (__childScope) => ${this.emitMappedExpression(expression)}, ${scope});`];
     this.currentScope = previousScope;
     this.currentJsxNamespace = previousJsxNamespace;
+    return statements.join(" ");
+  }
+
+  private emitDynamicChildLeaf(parent: string, leaf: DynamicChildLeaf, scope: string, namespace: string): string {
+    const list = leaf.list;
+    if (list?.key) {
+      const source = this.emitGuardedExpression(leaf.guards, this.emitMappedExpression(list.source), "[]");
+      const parameter = list.arrow.parameters[0]!.name;
+      const key = this.emitJsxAttributeValue(list.key);
+      const render = this.emitJsx(list.arrow.body, "__childScope", true, namespace);
+      return `__velarKeyed(${parent}, () => ${source}, (${parameter}) => ${key}, (${parameter}, __childScope) => ${render}, ${scope});`;
+    }
+    const value = this.emitGuardedExpression(leaf.guards, this.emitMappedExpression(leaf.expression), "null");
     return `__velarDynamic(${parent}, (__childScope) => ${value}, ${scope});`;
+  }
+
+  // Wraps a leaf's expression in its branch conditions, innermost last, so the
+  // leaf evaluates only while its branch is active and yields the inactive
+  // placeholder ('[]' for keyed reads, 'null' for dynamic regions) otherwise.
+  private emitGuardedExpression(guards: readonly DynamicChildGuard[], inner: string, inactive: string): string {
+    let output = inner;
+    for (let index = guards.length - 1; index >= 0; index -= 1) {
+      const guard = guards[index]!;
+      const condition = this.emitMappedExpression(guard.condition);
+      output = guard.thenBranch
+        ? `(${condition}) ? (${output}) : ${inactive}`
+        : `(${condition}) ? ${inactive} : (${output})`;
+    }
+    return output;
   }
 
   private emitJsxAttributeValue(attribute: JSXAttribute): string {
@@ -634,16 +660,51 @@ function hasMeaningfulChildren(children: JSXElementExpression["children"]): bool
   return children.some((child) => child.kind !== "JSXText" || child.value.trim().length > 0);
 }
 
-function keyedListExpression(expression: Expression): {
+export interface JsxKeyedList {
   readonly source: Expression;
   readonly arrow: Extract<Expression, { kind: "ArrowFunctionExpression" }> & { readonly body: JSXElementExpression };
-  readonly key: JSXAttribute;
-} | null {
+  readonly key: JSXAttribute | null;
+}
+
+export interface DynamicChildGuard {
+  readonly condition: Expression;
+  readonly thenBranch: boolean;
+}
+
+export interface DynamicChildLeaf {
+  readonly expression: Expression;
+  readonly list: JsxKeyedList | null;
+  readonly guards: readonly DynamicChildGuard[];
+}
+
+// The keyed-children fast path is syntactic: an interpolation leaf must be
+// exactly `source.map(single-parameter arrow returning JSX)`, keyed when the
+// arrow's root element carries a `key` attribute. The analyzer mirrors this
+// recognizer through dynamicChildLeaves, so anything the emitter demotes to a
+// rebuild-all dynamic region is diagnosed rather than silently forfeited.
+export function jsxKeyedList(expression: Expression): JsxKeyedList | null {
   if (expression.kind !== "CallExpression" || expression.callee.kind !== "MemberExpression" || expression.callee.property !== "map") return null;
   const callback = expression.arguments[0];
   if (!callback || callback.kind !== "ArrowFunctionExpression" || callback.asynchronous || callback.parameters.length !== 1 || callback.body.kind !== "JSXElementExpression") return null;
-  const key = callback.body.attributes.find((attribute) => attribute.name === "key");
-  return key ? { source: expression.callee.object, arrow: callback as typeof callback & { readonly body: JSXElementExpression }, key } : null;
+  const arrow = callback as typeof callback & { readonly body: JSXElementExpression };
+  const key = arrow.body.attributes.find((attribute) => attribute.name === "key") ?? null;
+  return { source: expression.callee.object, arrow, key };
+}
+
+// Flattens an interpolation into render leaves. A conditional contributes its
+// branch leaves, each remembering the chain of branch conditions that keeps it
+// active, so an empty-state ternary around a keyed list still reaches the
+// keyed fast path instead of demoting every child to rebuild-all updates.
+export function dynamicChildLeaves(expression: Expression, guards: readonly DynamicChildGuard[] = []): readonly DynamicChildLeaf[] {
+  const list = jsxKeyedList(expression);
+  if (list) return [{ expression, list, guards }];
+  if (expression.kind === "ConditionalExpression") {
+    return [
+      ...dynamicChildLeaves(expression.thenValue, [...guards, { condition: expression.condition, thenBranch: true }]),
+      ...dynamicChildLeaves(expression.elseValue, [...guards, { condition: expression.condition, thenBranch: false }]),
+    ];
+  }
+  return [{ expression, list: null, guards }];
 }
 
 const EMPTY_LOOK_TERM: LookConditionTerm = Object.freeze({ staticAtoms: [], runtimeAtoms: [] });

@@ -38,11 +38,17 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   const dirtyPaths = new Set<string>();
   const clients = new Set<ServerResponse>();
   const packageWatchers = new Map<string, DirectoryTreeWatcher>();
+  // Installed npm package roots whose files changed since the last successful
+  // rebuild; their dev prebundles are rebuilt instead of served from cache.
+  const npmPackageRoots = new Set<string>();
+  const staleNpmRoots = new Set<string>();
   const scheduleRebuild = (): void => {
     if (rebuildTimer) clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(() => void rebuild(), 40);
   };
   const syncPackageWatchers = (project: ProjectResult, npmPackages: readonly BrowserNpmPackage[]): void => {
+    npmPackageRoots.clear();
+    for (const item of npmPackages) npmPackageRoots.add(item.root);
     const roots = new Set([
       ...project.velarPackages.map((item) => item.root),
       ...npmPackages.map((item) => item.root),
@@ -61,6 +67,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
         if (!/\.(?:vel|[cm]?js)$/u.test(name) && !declarationChanged && name !== "package.json") return;
         const path = resolve(root, name);
         dirtyPaths.add(path);
+        if (npmPackageRoots.has(root)) staleNpmRoots.add(root);
         dirtyRevision += 1;
         if (name === "package.json" || declarationChanged) forceFullRebuild = true;
         scheduleRebuild();
@@ -71,13 +78,14 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     if (compiling) return compiling;
     const previous = forceFullRebuild ? null : snapshot.project;
     const rebuildRevision = dirtyRevision;
-    compiling = compileSnapshot(config, previous, dirtyPaths).then((next) => {
+    compiling = compileSnapshot(config, previous, dirtyPaths, staleNpmRoots).then((next) => {
       syncPackageWatchers(next.project, next.npmPackages);
       snapshot = next.errors.length > 0 && snapshot.artifacts
         ? { ...snapshot, errors: next.errors, notices: next.notices, compilation: next.project.stats }
         : next;
       if (next.errors.length === 0 && dirtyRevision === rebuildRevision) {
         dirtyPaths.clear();
+        staleNpmRoots.clear();
         forceFullRebuild = false;
       }
       revision += 1;
@@ -201,7 +209,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       dirtyPaths.add(resolve(config.root, fileName));
     }
     scheduleRebuild();
-  }, new Set([config.outDir]));
+  }, new Set([config.outDir, resolve(config.root, ".velar")]));
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve());
@@ -290,6 +298,7 @@ async function compileSnapshot(
   config: VelarProjectConfig,
   previous: ProjectResult | null = null,
   changedPaths: ReadonlySet<string> = new Set(),
+  staleNpmRoots: ReadonlySet<string> = new Set(),
 ): Promise<Snapshot> {
   const project = await compileProject(
     config.entryPath,
@@ -304,7 +313,7 @@ async function compileSnapshot(
     previous,
     changedPaths,
   );
-  const npm = await resolveBrowserNpm(project);
+  const npm = await resolveBrowserNpm(project, staleNpmRoots);
   const errors = [
     ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
