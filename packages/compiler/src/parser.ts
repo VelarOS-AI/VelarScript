@@ -38,7 +38,7 @@ import type {
   TypeSyntax,
   VariableDeclaration,
 } from "./ast.ts";
-import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd } from "./interpolated-string.ts";
 import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-guidance.ts";
@@ -209,7 +209,21 @@ export class Parser {
       const first = this.current();
       const guidance = declarationKeywordGuidance(first.value);
       if (guidance) {
-        this.diagnostics.push(diagnostic("VEL2026", guidance, first.span));
+        // Parse the remainder as the guided declaration whenever it has the
+        // guided shape, so body-level and semantic-level guidance surfaces in
+        // the same compile instead of hiding behind the skipped block.
+        const shape = this.peekKind(2);
+        if (guidance.keyword === "def" && (shape === "leftParen" || shape === "less")) {
+          this.diagnostics.push(recoveredDiagnostic("VEL2026", guidance.message, first.span));
+          this.advance();
+          return this.parseFunction(start, exported, asynchronous);
+        }
+        if (guidance.keyword === "type" && (shape === "colon" || shape === "assign")) {
+          this.diagnostics.push(recoveredDiagnostic("VEL2026", guidance.message, first.span));
+          this.advance();
+          return this.parseTypeDefinition(start, exported);
+        }
+        this.diagnostics.push(diagnostic("VEL2026", guidance.message, first.span));
         this.skipMistypedDeclaration();
         return { kind: "PassStatement", span: first.span };
       }
@@ -883,7 +897,15 @@ export class Parser {
           ? declarationKeywordGuidance(this.current().value)
           : null;
         if (keywordGuidance) {
-          this.diagnostics.push(diagnostic("VEL2026", keywordGuidance, this.current().span));
+          const shape = this.peekKind(2);
+          if (keywordGuidance.keyword === "def" && (shape === "leftParen" || shape === "less")) {
+            this.diagnostics.push(recoveredDiagnostic("VEL2026", keywordGuidance.message, this.current().span));
+            this.advance();
+            methods.push(this.parseClassMethod(methodStart, asynchronous, methodAbstract, methodOverride, methodStatic, methodPrivate));
+            this.consumeNewlines();
+            continue;
+          }
+          this.diagnostics.push(diagnostic("VEL2026", keywordGuidance.message, this.current().span));
           this.skipMistypedDeclaration();
           this.consumeNewlines();
           continue;
@@ -1316,8 +1338,15 @@ export class Parser {
     }
     const name = this.check("null") ? this.advance() : this.expect("identifier", "Expected a type name");
     const nameGuidance = sourceTypeNameGuidance(name.value);
-    if (nameGuidance) this.diagnostics.push(diagnostic("VEL2012", nameGuidance.message, name.span));
-    let syntax: TypeSyntax = { kind: "NamedTypeSyntax", name: name.value, span: name.span };
+    if (nameGuidance) {
+      // A guidance spelling with a replacement recovers as the guided type
+      // name so semantic analysis still runs and reports its own guidance.
+      this.diagnostics.push(nameGuidance.replacement
+        ? recoveredDiagnostic("VEL2012", nameGuidance.message, name.span)
+        : diagnostic("VEL2012", nameGuidance.message, name.span));
+    }
+    const typeName = nameGuidance?.replacement ?? name.value;
+    let syntax: TypeSyntax = { kind: "NamedTypeSyntax", name: typeName, span: name.span };
     const angleArguments = this.match("less");
     const squareArguments = !angleArguments && this.match("leftBracket");
     if (angleArguments || squareArguments) {
@@ -1330,24 +1359,44 @@ export class Parser {
         } while (this.match("comma") && !this.check(closeKind));
       }
       const close = this.expect(closeKind, squareArguments ? "Expected ']' after type arguments" : "Expected '>' after type arguments");
+      if (squareArguments && arguments_.length === 0) {
+        // A postfix 'Name[]' array annotation guides straight to the List
+        // spelling and recovers as 'List<Name>'.
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL2012",
+          `Use 'List<${name.value}>' for ordered collections; VelarScript has no postfix '[]' array types`,
+          span(name.span.start, close.span.end),
+        ));
+        return this.finishTypeReferenceSuffix({
+          kind: "GenericTypeSyntax",
+          name: "List",
+          nameSpan: name.span,
+          arguments: [syntax],
+          span: span(name.span.start, close.span.end),
+        });
+      }
       if (squareArguments) {
-        this.diagnostics.push(diagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
+        this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
       }
-      const expectedArguments = name.value === "Map" ? 2 : name.value === "List" || name.value === "Set" || name.value === "Promise" ? 1 : null;
+      const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Promise" ? 1 : null;
       if (expectedArguments !== null && arguments_.length !== expectedArguments) {
-        this.diagnostics.push(diagnostic("VEL2012", `Type '${name.value}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
+        this.diagnostics.push(diagnostic("VEL2012", `Type '${typeName}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
       }
-      syntax = { kind: "GenericTypeSyntax", name: name.value, nameSpan: name.span, arguments: arguments_, span: span(name.span.start, close.span.end) };
+      syntax = { kind: "GenericTypeSyntax", name: typeName, nameSpan: name.span, arguments: arguments_, span: span(name.span.start, close.span.end) };
     }
+    return this.finishTypeReferenceSuffix(syntax);
+  }
+
+  private finishTypeReferenceSuffix(syntax: TypeSyntax): TypeSyntax {
     if (this.match("question")) {
-      syntax = this.makeOptionalTypeSyntax(syntax, span(syntax.span.start, this.previous().span.end));
+      return this.makeOptionalTypeSyntax(syntax, span(syntax.span.start, this.previous().span.end));
     }
     return syntax;
   }
 
   private makeOptionalTypeSyntax(inner: TypeSyntax, optionalSpan: Span): TypeSyntax {
     if (inner.kind === "NamedTypeSyntax" && inner.name === "null") {
-      this.diagnostics.push(diagnostic("VEL2012", "'null?' is redundant; use 'null'", optionalSpan));
+      this.diagnostics.push(recoveredDiagnostic("VEL2012", "'null?' is redundant; use 'null'", optionalSpan));
       return { ...inner, span: optionalSpan };
     }
     return { kind: "OptionalTypeSyntax", inner, span: optionalSpan };
@@ -1443,7 +1492,42 @@ export class Parser {
       return { kind: "ConditionalExpression", condition: left, thenValue, elseValue, span: span(left.span.start, elseValue.span.end) };
     }
 
+    if (minimumPrecedence === 0 && this.check("if") && this.hasPythonConditionalElse()) {
+      // 'x if cond else y' guides to the '?:' spelling and recovers as the
+      // equivalent conditional expression so deeper guidance still surfaces.
+      this.diagnostics.push(recoveredDiagnostic(
+        "VEL2027",
+        "Use 'cond ? x : y'; VelarScript writes conditional expressions with '?:', not 'x if cond else y'",
+        this.current().span,
+      ));
+      this.advance();
+      const condition = this.parseExpression();
+      this.expect("else", "Expected 'else' in a conditional expression");
+      const elseValue = this.parseExpression();
+      return { kind: "ConditionalExpression", condition, thenValue: left, elseValue, span: span(left.span.start, elseValue.span.end) };
+    }
+
     return left;
+  }
+
+  // True when an expression is followed by Python's 'x if cond else y'
+  // conditional shape: an 'if' whose matching 'else' appears at the same
+  // bracket depth before the expression context can end. Statement-level if
+  // blocks never reach this check, and 'for x in xs if cond:' style filters
+  // (no 'else') are left to ordinary parse errors.
+  private hasPythonConditionalElse(): boolean {
+    let depth = 0;
+    for (let offset = 1; this.index + offset < this.tokens.length; offset += 1) {
+      const kind = this.peekKind(offset);
+      if (kind === "leftParen" || kind === "leftBracket" || kind === "leftBrace") depth += 1;
+      else if (kind === "rightParen" || kind === "rightBracket" || kind === "rightBrace") {
+        if (depth === 0) return false;
+        depth -= 1;
+      } else if (depth === 0 && kind === "else") return true;
+      else if (depth === 0 && (kind === "colon" || kind === "comma")) return false;
+      else if (kind === "newline" || kind === "indent" || kind === "dedent" || kind === "eof") return false;
+    }
+    return false;
   }
 
   private parseArrowExpression(start: number, asynchronous: boolean): ArrowFunctionExpression {

@@ -1,26 +1,41 @@
-import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { scanInterpolatedString } from "./interpolated-string.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
-const forbiddenSourceIdentifiers = new Map<string, string>([
-  ["var", "Use 'let' or 'const'; VelarScript does not expose 'var'"],
-  ["undefined", "Use 'null'; VelarScript does not expose 'undefined'"],
-  ["none", "Use 'null'; VelarScript uses the Web-native empty value spelling"],
-  ["None", "Use 'null'; VelarScript keywords are lowercase and Web-native"],
-  ["True", "Use 'true'; VelarScript keywords are lowercase"],
-  ["False", "Use 'false'; VelarScript keywords are lowercase"],
-  ["elif", "Use 'else if'; VelarScript keeps ordinary readable if chains"],
-  ["int", "Use 'number'; VelarScript has one JavaScript numeric type"],
-  ["float", "Use 'number'; VelarScript has one JavaScript numeric type"],
-  ["switch", "Use 'match' for strict pattern dispatch"],
-  ["this", "Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'"],
-  ["new", "Call a class directly; VelarScript does not expose 'new'"],
-  ["eval", "VelarScript does not expose 'eval'"],
-  ["with", "Use a record spread such as '{...value, field: next}' to build an updated record; VelarScript does not expose 'with'"],
-  ["arguments", "Use named parameters; VelarScript does not expose 'arguments'"],
-  ["schema", "Use 'type'; VelarScript has no separate schema declaration"],
+interface ForbiddenIdentifierRule {
+  readonly guidance: string;
+  /**
+   * Tokens to emit as if the guided spelling had been written, letting the
+   * parser and analyzer report their own guidance in the same compile. A rule
+   * without recovery has no unambiguous guided form, so it keeps the current
+   * behavior: the diagnostic gates parsing entirely.
+   */
+  readonly recovery: readonly { readonly kind: TokenKind; readonly value: string }[] | null;
+}
+
+function forbidden(guidance: string, recovery: ForbiddenIdentifierRule["recovery"]): ForbiddenIdentifierRule {
+  return { guidance, recovery };
+}
+
+const forbiddenSourceIdentifiers = new Map<string, ForbiddenIdentifierRule>([
+  ["var", forbidden("Use 'let' or 'const'; VelarScript does not expose 'var'", [{ kind: "let", value: "let" }])],
+  ["undefined", forbidden("Use 'null'; VelarScript does not expose 'undefined'", [{ kind: "null", value: "null" }])],
+  ["none", forbidden("Use 'null'; VelarScript uses the Web-native empty value spelling", [{ kind: "null", value: "null" }])],
+  ["None", forbidden("Use 'null'; VelarScript keywords are lowercase and Web-native", [{ kind: "null", value: "null" }])],
+  ["True", forbidden("Use 'true'; VelarScript keywords are lowercase", [{ kind: "true", value: "true" }])],
+  ["False", forbidden("Use 'false'; VelarScript keywords are lowercase", [{ kind: "false", value: "false" }])],
+  ["elif", forbidden("Use 'else if'; VelarScript keeps ordinary readable if chains", [{ kind: "else", value: "else" }, { kind: "if", value: "if" }])],
+  ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
+  ["float", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
+  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "match", value: "match" }])],
+  ["this", forbidden("Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'", [{ kind: "identifier", value: "self" }])],
+  ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [])],
+  ["eval", forbidden("VelarScript does not expose 'eval'", null)],
+  ["with", forbidden("Use a record spread such as '{...value, field: next}' to build an updated record; VelarScript does not expose 'with'", null)],
+  ["arguments", forbidden("Use named parameters; VelarScript does not expose 'arguments'", null)],
+  ["schema", forbidden("Use 'type'; VelarScript has no separate schema declaration", [{ kind: "type", value: "type" }])],
 ]);
 
 const forbiddenPrototypeMembers = new Set(["prototype", "__proto__"]);
@@ -192,7 +207,7 @@ export class Lexer {
           if (this.peek(1) === ">") {
             this.simple("fatArrow", start, 2);
           } else if (this.peek(1) === "=" && this.peek(2) === "=") {
-            this.diagnostics.push(diagnostic("VEL1005", "Use '=='; equality is already strict in VelarScript", span(start, start + 3)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '=='; equality is already strict in VelarScript", span(start, start + 3)));
             this.simple("equal", start, 3);
           } else {
             this.simple(this.peek(1) === "=" ? "equal" : "assign", start, this.peek(1) === "=" ? 2 : 1);
@@ -200,18 +215,18 @@ export class Lexer {
           break;
         case "!":
           if (this.peek(1) === "=" && this.peek(2) === "=") {
-            this.diagnostics.push(diagnostic("VEL1005", "Use '!='; inequality is already strict in VelarScript", span(start, start + 3)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '!='; inequality is already strict in VelarScript", span(start, start + 3)));
             this.simple("notEqual", start, 3);
           } else if (this.peek(1) === "=") {
             this.simple("notEqual", start, 2);
           } else {
-            this.diagnostics.push(diagnostic("VEL1005", "Use 'not'; VelarScript uses readable logical operators", span(start, start + 1)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'not'; VelarScript uses readable logical operators", span(start, start + 1)));
             this.simple("not", start, 1);
           }
           break;
         case "&":
           if (this.peek(1) === "&") {
-            this.diagnostics.push(diagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2)));
             this.simple("and", start, 2);
           } else {
             this.invalidCharacter(character, start);
@@ -225,11 +240,14 @@ export class Lexer {
           break;
         case "|":
           if (this.peek(1) === "|") {
-            this.diagnostics.push(diagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2)));
             this.simple("or", start, 2);
           } else {
             this.simple("pipe", start, 1);
           }
+          break;
+        case "#":
+          if (!this.readHexColor(start)) this.invalidCharacter(character, start);
           break;
         default:
           this.invalidCharacter(character, start);
@@ -325,10 +343,20 @@ export class Lexer {
       this.advance();
     }
     const value = this.text.slice(start, this.index);
-    const forbidden = forbiddenSourceIdentifiers.get(value) ?? this.extensionForbiddenIdentifiers.get(value);
+    const rule = forbiddenSourceIdentifiers.get(value);
+    const extensionGuidance = rule ? undefined : this.extensionForbiddenIdentifiers.get(value);
     const previous = this.tokens.at(-1)?.kind;
-    if (forbidden) {
-      this.diagnostics.push(diagnostic("VEL1005", forbidden, span(start, this.index)));
+    if (rule) {
+      if (rule.recovery) {
+        this.diagnostics.push(recoveredDiagnostic("VEL1005", rule.guidance, span(start, this.index)));
+        for (const item of rule.recovery) {
+          this.tokens.push({ kind: item.kind, value: item.value, span: span(start, this.index) });
+        }
+        return;
+      }
+      this.diagnostics.push(diagnostic("VEL1005", rule.guidance, span(start, this.index)));
+    } else if (extensionGuidance) {
+      this.diagnostics.push(diagnostic("VEL1005", extensionGuidance, span(start, this.index)));
     } else if (forbiddenPrototypeMembers.has(value) && (previous === "dot" || previous === "optionalDot")) {
       this.diagnostics.push(diagnostic("VEL1005", "VelarScript does not expose prototype manipulation", span(start, this.index)));
     }
@@ -442,6 +470,27 @@ export class Lexer {
   private simple(kind: TokenKind, start: number, length: number): void {
     this.index += length;
     this.tokens.push({ kind, value: this.text.slice(start, this.index), span: span(start, this.index) });
+  }
+
+  // A bare hex color such as '#3478f6' is guided to its quoted-string
+  // spelling and recovered as that string token, so the digits never fall
+  // into number lexing and produce a misleading unknown-numeric-unit error.
+  private readHexColor(start: number): boolean {
+    let length = 0;
+    while (/[0-9a-fA-F]/.test(this.peek(1 + length))) length += 1;
+    if ((length !== 3 && length !== 4 && length !== 6 && length !== 8) || this.isIdentifierPart(this.peek(1 + length))) {
+      return false;
+    }
+    const end = start + 1 + length;
+    const text = this.text.slice(start, end);
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL1005",
+      `Use '"${text}"'; VelarScript writes hex colors as quoted strings or color builders such as rgb(...)`,
+      span(start, end),
+    ));
+    this.tokens.push({ kind: "string", value: text, span: span(start, end) });
+    this.index = end;
+    return true;
   }
 
   private invalidCharacter(character: string, start: number): void {

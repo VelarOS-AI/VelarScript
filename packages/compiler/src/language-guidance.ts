@@ -75,10 +75,15 @@ const collectionGuidance = new Map<CollectionKind, ReadonlyMap<string, Collectio
   ])],
 ]);
 
-const functionKeywordGuidance = "Use 'def'; VelarScript declares functions with 'def name(...)'";
-const typeKeywordGuidance = "Use 'type'; VelarScript declares record shapes with 'type Name:'";
+export interface DeclarationKeywordGuidance {
+  readonly message: string;
+  readonly keyword: "def" | "type";
+}
 
-const declarationKeywordGuidanceEntries = new Map<string, string>([
+const functionKeywordGuidance: DeclarationKeywordGuidance = { message: "Use 'def'; VelarScript declares functions with 'def name(...)'", keyword: "def" };
+const typeKeywordGuidance: DeclarationKeywordGuidance = { message: "Use 'type'; VelarScript declares record shapes with 'type Name:'", keyword: "type" };
+
+const declarationKeywordGuidanceEntries = new Map<string, DeclarationKeywordGuidance>([
   ["fn", functionKeywordGuidance],
   ["func", functionKeywordGuidance],
   ["function", functionKeywordGuidance],
@@ -106,7 +111,7 @@ const stringMemberGuidanceEntries = new Map<string, string>([
   ["repeat", "Use repeat(value, count) from 'velar/text'; string operations are functions"],
 ]);
 
-export function declarationKeywordGuidance(name: string): string | null {
+export function declarationKeywordGuidance(name: string): DeclarationKeywordGuidance | null {
   return declarationKeywordGuidanceEntries.get(name) ?? null;
 }
 

@@ -102,7 +102,11 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
   const analysisContext: AnalysisContext = { ...options.analysis, ...(analysisResources ? { resources: analysisResources } : {}) };
   const analyzer = analyzerExtensions[0]?.analyzer?.create(analysisContext, analysisExtensions)
     ?? new Analyzer(analysisContext, analysisExtensions);
-  if (diagnostics.length === 0) {
+  // Semantic analysis also runs when every earlier diagnostic is a guidance
+  // diagnostic that recovered as the guided spelling, so lexer-, parser-, and
+  // analyzer-level guidance co-reports in one compile. Compilation still
+  // fails: the emission gate below requires zero diagnostics.
+  if (diagnostics.every((item) => item.recovered)) {
     diagnostics.push(...analyzer.analyze(parsed.program));
   }
 
@@ -188,7 +192,9 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
   try {
     const lexicalExtensions = extensions.flatMap((extension) => extension.lexical ? [extension.lexical] : []);
     const lexed = new Lexer(text, lexicalExtensions).lex();
-    if (lexed.diagnostics.some((item) => item.code === "VEL1005" || item.code === "VEL1006")) {
+    // Guidance diagnostics that recovered as the guided token stream do not
+    // suppress parsing; only unrecovered lexical failures gate the parser.
+    if (lexed.diagnostics.some((item) => (item.code === "VEL1005" || item.code === "VEL1006") && !item.recovered)) {
       return {
         source,
         program: { kind: "Program", body: [], span: { start: 0, end: text.length } },

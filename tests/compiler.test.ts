@@ -3172,6 +3172,138 @@ function second(value: number) -> number:
   assert.deepEqual(consecutive.diagnostics.map((item) => item.code), ["VEL2026", "VEL2026"]);
 });
 
+test("guidance-token recovery co-reports lexer, parser, and analyzer guidance in one compile", () => {
+  const result = compile("var values: Array<number> = []\nvalues.push(1)\n");
+  assert.equal(result.code, null);
+  assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL1005", "VEL2012", "VEL4001"]);
+  assert.match(result.diagnostics[0]?.message ?? "", /Use 'let' or 'const'/u);
+  assert.match(result.diagnostics[1]?.message ?? "", /Use 'List<T>'/u);
+  assert.match(result.diagnostics[2]?.message ?? "", /Use 'append\(value\)'/u);
+});
+
+test("recovered guidance programs still fail compilation and never emit", () => {
+  const sources = [
+    "const flag = True\n",
+    "var count = 0\n",
+    "const value = 1 if true else 2\n",
+    "const accent = #f0f0f0\n",
+    "const values: number[] = []\n",
+    "fn helper():\n    pass\n",
+    "record Task:\n    id: string\n",
+  ];
+  for (const source of sources) {
+    const result = compile(source);
+    assert.equal(result.code, null, source);
+    assert.equal(result.sourceMap, null, source);
+    assert.equal(result.css, null, source);
+    assert.ok(result.diagnostics.length > 0, source);
+    assert.ok(result.diagnostics.every((item) => item.recovered), source);
+  }
+});
+
+test("mistyped declaration recovery surfaces body-level and semantic guidance together", () => {
+  const fn = compile("fn addTask(tasks: List<number>) -> List<number>:\n    tasks.push(1)\n    return tasks\n");
+  assert.equal(fn.code, null);
+  assert.deepEqual(fn.diagnostics.map((item) => item.code), ["VEL2026", "VEL4001"]);
+  assert.match(fn.diagnostics[0]?.message ?? "", /Use 'def'/u);
+  assert.match(fn.diagnostics[1]?.message ?? "", /Use 'append\(value\)'/u);
+
+  const record = compile("record Task:\n    id: string\n\nconst task = Task(id = \"t1\")\nprint(task.id)\n");
+  assert.equal(record.code, null);
+  assert.deepEqual(record.diagnostics.map((item) => item.code), ["VEL2026", "VEL4001"]);
+  assert.match(record.diagnostics[0]?.message ?? "", /Use 'type'/u);
+  assert.match(record.diagnostics[1]?.message ?? "", /record literal '\{field: value, \.\.\.\}'/u);
+
+  const method = compile("class Player:\n    fn jump() -> number:\n        return 1\n\nconst player = Player()\nprint(player.jump())\n");
+  assert.equal(method.code, null);
+  assert.deepEqual(method.diagnostics.map((item) => item.code), ["VEL2026"]);
+});
+
+test("guidance without an unambiguous guided form keeps gating deeper stages", () => {
+  const withResult = compile("const value = {a: 1}\nconst next = value with {a: 2}\nprint(missing)\n");
+  assert.equal(withResult.code, null);
+  assert.deepEqual(withResult.diagnostics.map((item) => item.code), ["VEL1005"]);
+  assert.match(withResult.diagnostics[0]?.message ?? "", /does not expose 'with'/u);
+});
+
+test("guides bare hex colors to quoted strings without numeric-unit cascades", () => {
+  const core = compile("const accent = #3478f6\nprint(accent)\n");
+  assert.equal(core.code, null);
+  assert.deepEqual(core.diagnostics.map((item) => item.code), ["VEL1005"]);
+  assert.equal(
+    core.diagnostics[0]?.message,
+    "Use '\"#3478f6\"'; VelarScript writes hex colors as quoted strings or color builders such as rgb(...)",
+  );
+
+  const look = compile("component App:\n    look:\n        background = #f0f0f0\n    return <div>ok</div>\n");
+  assert.equal(look.code, null);
+  assert.deepEqual(look.diagnostics.map((item) => item.code), ["VEL1005"]);
+  assert.match(look.diagnostics[0]?.message ?? "", /Use '"#f0f0f0"'/u);
+
+  const comment = compile("# note\n");
+  assert.ok(comment.diagnostics.some((item) => item.code === "VEL1001"));
+  assert.ok(!comment.diagnostics.some((item) => item.code === "VEL1005"));
+});
+
+test("guides Python conditional expressions to the '?:' spelling", () => {
+  const simple = compile("const value = 1 if true else 2\nprint(value)\n");
+  assert.equal(simple.code, null);
+  assert.deepEqual(simple.diagnostics.map((item) => item.code), ["VEL2027"]);
+  assert.equal(
+    simple.diagnostics[0]?.message,
+    "Use 'cond ? x : y'; VelarScript writes conditional expressions with '?:', not 'x if cond else y'",
+  );
+
+  const nested = compile("const items = [1, 2]\nconst next = items.map(t => (t + 1 if t > 0 else t))\nprint(next)\n");
+  assert.equal(nested.code, null);
+  assert.deepEqual(nested.diagnostics.map((item) => item.code), ["VEL2027"]);
+
+  const statement = compile("if true:\n    print(1)\nelse:\n    print(2)\n");
+  assert.deepEqual(statement.diagnostics, []);
+
+  const guarded = compile("match 1:\n    case 1 if true:\n        print(1)\n    else:\n        print(2)\n");
+  assert.deepEqual(guarded.diagnostics, []);
+});
+
+test("postfix array annotations guide directly to the List spelling", () => {
+  const postfix = compile("const values: number[] = []\nprint(values)\n");
+  assert.equal(postfix.code, null);
+  assert.deepEqual(postfix.diagnostics.map((item) => item.code), ["VEL2012"]);
+  assert.equal(
+    postfix.diagnostics[0]?.message,
+    "Use 'List<number>' for ordered collections; VelarScript has no postfix '[]' array types",
+  );
+
+  const named = compile("type Task:\n    id: string\n\nconst tasks: Task[] = []\nprint(tasks)\n");
+  assert.deepEqual(named.diagnostics.map((item) => item.code), ["VEL2012"]);
+  assert.match(named.diagnostics[0]?.message ?? "", /Use 'List<Task>'/u);
+
+  const optional = compile("const values: number[]? = null\nprint(values)\n");
+  assert.deepEqual(optional.diagnostics.map((item) => item.code), ["VEL2012"]);
+
+  const bracketGenerics = compile("const values: List[number] = []\nprint(values)\n");
+  assert.deepEqual(bracketGenerics.diagnostics.map((item) => item.code), ["VEL2012"]);
+  assert.equal(bracketGenerics.diagnostics[0]?.message, "Generic type arguments use '<...>', not '[...]'");
+});
+
+test("guides JSX for blocks to '.map(...)' rendering", () => {
+  const result = compile(`
+component App:
+    state messages: List<string> = []
+
+    return <div>
+        {for m in messages:
+            <p>{m}</p>}
+    </div>
+`.trimStart());
+  assert.equal(result.code, null);
+  assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL5049"]);
+  assert.equal(
+    result.diagnostics[0]?.message,
+    "Use '{messages.map((m) => ...)}'; JSX has no 'for' blocks, so lists render with '.map(...)'",
+  );
+});
+
 test("guides record literals against Map contracts, type-object calls, and JS string methods", () => {
   const emptyMap = compile("let counts: Map<string, number> = {}\n");
   assert.equal(emptyMap.code, null);

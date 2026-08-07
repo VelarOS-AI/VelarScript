@@ -107,7 +107,7 @@ export class VelarWebParser extends Parser {
         this.diagnostics.push(diagnostic("VEL5001", "The Web JSX token is missing its structured syntax", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       }
-      return jsxExpression(syntax, (source) => this.parseNestedExpression(source.source, source.span.start));
+      return jsxExpression(syntax, (source) => this.parseJsxEmbedded(source));
     }
     if (token.kind !== "extensionKeyword" || token.value !== "look") return undefined;
     this.expect("colon", "Expected ':' after 'look'");
@@ -127,6 +127,26 @@ export class VelarWebParser extends Parser {
       (item) => this.diagnostics.push(item),
     ).parse();
     return { kind: "LookExpression", entries, span: span(token.span.start, block.span.end) };
+  }
+
+  // A '{for item in items: ...}' block inside JSX gets targeted guidance to
+  // '.map(...)' instead of an expression-parse cascade; there is no magic JSX
+  // control flow. The child recovers as an inert null literal so the rest of
+  // the module still analyzes and reports its own guidance in the same compile.
+  private parseJsxEmbedded(source: WebExpressionSource): Expression {
+    if (/^\s*for\b/u.test(source.source)) {
+      const detail = /^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^:{\n]+):/u.exec(source.source);
+      const binding = detail?.[1] ?? "item";
+      const iterable = detail?.[2]?.trim() || "items";
+      this.diagnostics.push({
+        code: "VEL5049",
+        message: `Use '{${iterable}.map((${binding}) => ...)}'; JSX has no 'for' blocks, so lists render with '.map(...)'`,
+        span: source.span,
+        recovered: true,
+      });
+      return { kind: "LiteralExpression", value: null, raw: "null", span: source.span };
+    }
+    return this.parseNestedExpression(source.source, source.span.start);
   }
 
   private parseStateDeclaration(start: number, exported: boolean): StateDeclaration {

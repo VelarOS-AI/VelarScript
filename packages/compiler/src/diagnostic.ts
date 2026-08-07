@@ -4,10 +4,21 @@ export interface Diagnostic {
   readonly code: string;
   readonly message: string;
   readonly span: Span;
+  /**
+   * Marks a guidance diagnostic whose compile stage internally recovered as
+   * the guided spelling, so later stages still run and can report their own
+   * guidance in the same compile. Compilation still fails: recovered
+   * diagnostics count toward the zero-diagnostics gate for code generation.
+   */
+  readonly recovered?: boolean;
 }
 
 export function diagnostic(code: string, message: string, span: Span): Diagnostic {
   return { code, message, span };
+}
+
+export function recoveredDiagnostic(code: string, message: string, span: Span): Diagnostic {
+  return { code, message, span, recovered: true };
 }
 
 export function formatDiagnostic(source: SourceText, item: Diagnostic): string {
