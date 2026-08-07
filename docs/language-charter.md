@@ -765,9 +765,11 @@ Larger boundaries should use checked `extern module` declarations. Unsafe
 imports do not silently gain trustworthy VelarScript types. See
 [javascript-bridge.md](javascript-bridge.md).
 Checked declarations are trusted static ABI contracts, not a JavaScript sandbox
-or an implicit runtime schema validator. Values that are not already guaranteed
-by their package should enter as `unknown` and be validated explicitly with the
-application's runtime `Type`.
+or an implicit runtime schema validator. That trust includes member kinds: a
+member declared as a field is a stable narrowing location, exactly like a local
+class field. Values that are not already guaranteed by their package should
+enter as `unknown` and be validated explicitly with the application's runtime
+`Type`.
 
 ## 13. Web extension boundary
 

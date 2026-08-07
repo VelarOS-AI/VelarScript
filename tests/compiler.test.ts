@@ -13524,8 +13524,8 @@ def invalid(box: Box) -> string:
 `.trimStart());
   assert.equal(repeatedGetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 
-  // An extern class member may be an accessor under the hood, so like a
-  // getter it is not a stable narrowing location: copy it to a const first.
+  // Extern declarations are trusted ABI contracts: a member declared as a
+  // field is a stable narrowing location, exactly like a local class field.
   const externField = compile(`
 extern module "host-sdk":
     export class Client:
@@ -13534,12 +13534,12 @@ extern module "host-sdk":
 
 import js {Client} from "host-sdk"
 
-def invalid(client: Client) -> number:
+def read(client: Client) -> number:
     if client.label:
         return client.label.length
     return 0
 `.trimStart());
-  assert.equal(externField.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(externField.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const stableExternalValue = compile(`
 extern module "host-sdk":

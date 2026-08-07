@@ -5522,14 +5522,12 @@ export class Analyzer implements TypeEnvironment {
     if (owner.kind === "named") return this.fieldsOf(owner.identity ?? owner.name)?.has(property) ?? false;
     if (owner.kind === "class") {
       const key = owner.identity ?? owner.name;
-      if (key.startsWith("js:")) return false;
       if (this.findGetter(key, property)) return false;
       if (this.privateGetters.get(this.currentClass ?? "")?.has(property)) return false;
       return Boolean(this.findField(key, property) || this.privateFieldForAccess(key, property, false));
     }
     if (owner.kind !== "classConstructor") return false;
     const key = owner.identity ?? owner.name;
-    if (key.startsWith("js:")) return false;
     if (this.findStaticGetter(key, property)) return false;
     if (this.privateStaticGetters.get(this.currentClass ?? "")?.has(property)) return false;
     return Boolean(this.findStaticField(key, property) || this.privateFieldForAccess(key, property, true));
