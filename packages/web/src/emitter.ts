@@ -200,7 +200,18 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const indentation = "  ".repeat(depth);
       return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarComputed(() => ${this.emitMappedExpression(statement.initializer)}, __velarGlobalScope);`;
     }
-    if (statement.kind === "ResourceDeclaration" || statement.kind === "ActionDeclaration") return "";
+    if (statement.kind === "ResourceDeclaration") return "";
+    if (statement.kind === "ActionDeclaration") {
+      // A module action wires the same reactive pending/error cells as a
+      // component action, but it lives in the never-destroyed global scope, so
+      // its lifetime is the module and no component disposal applies.
+      const indentation = "  ".repeat(depth);
+      const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
+      const actionLines = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean);
+      if (!this.blockAlwaysReturns(statement.body)) actionLines.push(`${"  ".repeat(depth + 1)}return null;`);
+      const actionBody = actionLines.join("\n");
+      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(statement.name)});`;
+    }
     if (statement.kind === "WatchDeclaration") {
       const indentation = "  ".repeat(depth);
       const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");

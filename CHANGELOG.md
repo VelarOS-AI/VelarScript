@@ -4,6 +4,23 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Module-scope actions
+
+Language and compiler changes:
+
+- `action` may now be declared at module scope, so a shared store owns an async
+  operation together with its reactive `pending`/`error` surface next to the
+  module `state` and `computed` it drives. A module action behaves exactly like
+  a component action — reactive `pending`/`error` fields, failures reported
+  through the Web error chain while the call still rejects — but its lifetime
+  is the module: it is never disposed. `export action` is supported; the
+  exported value is imported and called like a function and its reactive
+  fields read without any reactive-import lowering. An action nested in an
+  ordinary function body is still rejected (VEL3013, now phrased "module or
+  component scope"). `resource` remains component-only because its stale-result
+  handling is tied to component destruction; module-scope `resource` keeps
+  VEL3012 with guidance toward a module `action`.
+
 ## 0.10.0-dev — VelarOS-Lite S2 batch: re-exports, bridged-dependency sandboxes, extern default contract
 
 Language and compiler changes:

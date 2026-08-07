@@ -980,7 +980,12 @@ stale-result and component-destruction handling.
 An action is an async UI operation with reactive `pending` and `error` fields.
 It reports the failure through the Web error chain and still rejects its call;
 errors are never silently converted into successful `null` results. Use
-`try`/`catch` when the caller owns recovery.
+`try`/`catch` when the caller owns recovery. Like `state` and `computed`, an
+`action` may also be declared at module scope, so a shared store owns an
+operation together with its `pending`/`error` surface; a module action lives
+for the life of the module and is never disposed. A `resource` remains
+component-owned because its stale-result handling is tied to component
+destruction.
 
 `watch expression as current, previous:` runs an explicit side effect when the
 tracked value changes. A watch body is synchronous. Async component work belongs

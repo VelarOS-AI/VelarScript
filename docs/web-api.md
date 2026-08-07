@@ -68,8 +68,10 @@ component RuntimeStatus:
   synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
   and `cleanup`.
 - JSX rendering and `computed` expressions are synchronous. Async component data
-  belongs in `resource`; explicit UI operations belong in `action`; setup that
-  must finish after insertion belongs in `mounted`.
+  belongs in `resource`; explicit UI operations belong in `action`, declared in
+  the component that triggers them or at module scope when a shared store owns
+  the operation and its `pending`/`error` surface; setup that must finish after
+  insertion belongs in `mounted`.
 - Managed callbacks from browser/media/online/visibility watchers, storage
   watches, WebSocket handlers, and server-sent-event handlers report both
   synchronous failures and rejected promises through the same `velar/app`

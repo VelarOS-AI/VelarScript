@@ -83,6 +83,26 @@ function visitDependencyStatement(statement: Statement, context: CompilerDepende
 }
 
 function contributeInterface(statement: Statement, context: CompilerInterfaceContext): boolean {
+  if (statement.kind === "ActionDeclaration") {
+    // An exported module action travels as its analyzed action type, so the
+    // importing module can call it and read its reactive pending/error fields.
+    // Unlike state and computed exports it needs no reactiveExports entry: the
+    // action value is an ordinary function whose reactive cells live behind
+    // its own property getters, so imported reads never lower through .get().
+    const rest = statement.parameters.find((parameter) => parameter.rest);
+    context.exports.set(
+      statement.name,
+      context.bindingType(statement.name, statement.span.start) ?? {
+        kind: "action",
+        parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => context.resolve(parameter.type)),
+        parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
+        requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
+        ...(rest ? { rest: context.resolve(rest.type) } : {}),
+        result: { kind: "promise", value: statement.returnType ? context.resolve(statement.returnType) : { kind: "null" } },
+      },
+    );
+    return true;
+  }
   if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration") {
     context.exports.set(
       statement.name,

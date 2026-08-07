@@ -15539,7 +15539,7 @@ async def numericLabel() -> number:
 
 resource moduleValue = numericLabel()
 `.trimStart());
-  assert.ok(outside.diagnostics.some((item) => item.code === "VEL3012" && /only valid at component scope/u.test(item.message)));
+  assert.ok(outside.diagnostics.some((item) => item.code === "VEL3012" && /only valid at component scope; a module-scope async operation belongs in a module 'action'/u.test(item.message)));
 
   const exported = compile(`
 async def numericLabel() -> number:
@@ -15655,18 +15655,13 @@ catch (error) { console.log(error.message + ":" + pending.length); }
   ].join("\n"));
 });
 
-test("actions reject exports, non-component ownership, bad returns, and unknown state fields", () => {
-  const outside = compile(`
-action save() -> null:
-    return null
+test("actions reject nested ownership, bad returns, and unknown state fields", () => {
+  const nested = compile(`
+def prepare():
+    action save() -> null:
+        return null
 `.trimStart());
-  assert.ok(outside.diagnostics.some((item) => item.code === "VEL3013" && /only valid at component scope/u.test(item.message)));
-
-  const exported = compile(`
-export action save() -> null:
-    return null
-`.trimStart());
-  assert.ok(exported.diagnostics.some((item) => item.code === "VEL2019" && /component-owned and cannot be exported/u.test(item.message)));
+  assert.ok(nested.diagnostics.some((item) => item.code === "VEL3013" && /only valid at module or component scope/u.test(item.message)));
 
   const invalid = compile(`
 component App:
@@ -15677,6 +15672,93 @@ component App:
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Action has no member 'reload'/u.test(item.message)));
+});
+
+test("module actions own reactive pending state, preserve rejections, and update module state", () => {
+  const result = compile(`
+state message = "idle"
+
+action deliver(text: string) -> string:
+    message = text
+    return message
+
+component App:
+    return <button type="button" disabled={deliver.pending} on:click={() => deliver("clicked")}>{message}</button>
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /const deliver = __velarAction\(async \(text\) => \{[\s\S]*?\}, __velarGlobalScope, "deliver"\)/u);
+  assert.match(result.code ?? "", /message\.set\(text\)/u);
+  const symbol = result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "deliver");
+  assert.match(symbol?.type ?? "", /action \(text: string\) -> Promise<string>/u);
+
+  const execution = executeModule(`${result.code ?? ""}
+__velarRuntime.errorHandlers.add((report) => console.log(report.phase + ":" + report.detail + ":" + report.error.message + ":" + report.component));
+console.log(deliver.pending + ":" + (deliver.error?.message ?? "null") + ":" + message.get());
+const call = deliver("ready");
+console.log(deliver.pending + ":" + message.get());
+console.log((await call) + ":" + deliver.pending + ":" + message.get());
+const failing = __velarAction(() => Promise.reject(Error("Module failure")), __velarGlobalScope, "failing");
+try { await failing(); }
+catch (error) { console.log("caught:" + error.message + ":" + failing.pending + ":" + failing.error.message); }
+const late = failing("again");
+console.log("still-runnable:" + failing.pending);
+try { await late; } catch {}
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "false:null:idle",
+    "true:idle",
+    "ready:false:ready",
+    "action:failing:Module failure:",
+    "caught:Module failure:false:Module failure",
+    "still-runnable:true",
+    "action:failing:Module failure:",
+    "",
+  ].join("\n"));
+});
+
+test("exported module actions travel through the module interface without reactive lowering", async () => {
+  const result = compile(`
+export action save(note: string) -> string:
+    return note
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /export const save = __velarAction\(async \(note\) =>/u);
+  assert.match(describeType(result.moduleInterface.exports.get("save")!), /^action \(note: string\) -> Promise<string>$/u);
+  assert.equal(result.moduleInterface.reactiveExports.has("save"), false);
+
+  const syntaxInterface = inspectModule(`
+export action save(note: string) -> string:
+    return note
+`.trimStart()).moduleInterface;
+  assert.match(describeType(syntaxInterface.exports.get("save")!), /^action \(note: string\) -> Promise<string>$/u);
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-module-actions-"));
+  const storePath = join(directory, "store.vel");
+  const mainPath = join(directory, "main.vel");
+  await writeFile(storePath, `
+export state status = "idle"
+
+export action ship(item: string) -> string:
+    status = item
+    return status
+`.trimStart(), "utf8");
+  await writeFile(mainPath, `
+import {ship, status} from "./store.vel"
+
+component App:
+    return <button type="button" disabled={ship.pending} on:click={() => ship("crate")}>{status}</button>
+`.trimStart(), "utf8");
+
+  const project = await compileProject(mainPath);
+  assert.deepEqual(project.failures, []);
+  const main = project.modules.find((module) => module.inputPath === mainPath);
+  assert.ok(main);
+  assert.deepEqual(main.result.diagnostics, []);
+  assert.match(main.result.code ?? "", /ship\.pending/u);
+  assert.doesNotMatch(main.result.code ?? "", /ship\.get\(\)/u);
+  assert.match(main.result.code ?? "", /status\.get\(\)/u);
 });
 
 test("enforces component lifecycle cardinality", () => {

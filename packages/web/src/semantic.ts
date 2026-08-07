@@ -52,7 +52,7 @@ function visitWatch(statement: Extract<Statement, { kind: "WatchDeclaration" }>,
 export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freeze({
   predeclare(statement: Statement, context: SemanticExtensionContext) {
     if (statement.kind === "ActionDeclaration") {
-      context.declare(statement, statement.name, "action", statement.span, context.nameSpan(statement.span, statement.name));
+      context.declare(statement, statement.name, "action", statement.span, context.nameSpan(statement.span, statement.name), { exported: statement.exported });
       return true;
     }
     if (statement.kind === "ComponentDeclaration") {
@@ -125,7 +125,7 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
         context.declare(statement, statement.name, "resource", statement.span, context.nameSpan(statement.span, statement.name));
         return true;
       case "ActionDeclaration":
-        if (!context.hasDeclaration(statement)) context.declare(statement, statement.name, "action", statement.span, context.nameSpan(statement.span, statement.name));
+        if (!context.hasDeclaration(statement)) context.declare(statement, statement.name, "action", statement.span, context.nameSpan(statement.span, statement.name), { exported: statement.exported });
         context.visitFunction(statement);
         return true;
       case "WatchDeclaration":

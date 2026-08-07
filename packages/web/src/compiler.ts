@@ -456,7 +456,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       state: "Declares writable reactive state at module or component scope.",
       computed: "Declares a lazy cached value derived from module or component state.",
       resource: "Declares component-owned asynchronous data with reactive value, loading, ready, error, and reload fields.",
-      action: "Declares a component-owned asynchronous operation with reactive pending and error fields.",
+      action: "Declares an asynchronous operation with reactive pending and error fields at module or component scope.",
       watch: "Runs a block after a watched expression changes and DOM updates commit.",
       mounted: "Runs once after the component DOM is inserted.",
       cleanup: "Runs once before the component and its owned resources are destroyed.",

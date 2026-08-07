@@ -70,7 +70,6 @@ export class VelarWebParser extends Parser {
       return this.parseResourceDeclaration(start, modifiers.exported);
     }
     if (this.matchExtensionKeyword("action")) {
-      if (modifiers.exported) this.diagnostics.push(diagnostic("VEL2019", "An action is component-owned and cannot be exported", this.previous().span));
       return this.parseActionDeclaration(start, modifiers.exported);
     }
     if (this.matchExtensionKeyword("watch")) {

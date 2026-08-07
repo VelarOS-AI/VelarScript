@@ -494,11 +494,16 @@ export class VelarWebAnalyzer extends Analyzer {
         return true;
       }
       case "ResourceDeclaration":
-        this.diagnostics.push(diagnostic("VEL3012", "'resource' is only valid at component scope", statement.span));
+        this.diagnostics.push(diagnostic("VEL3012", "'resource' is only valid at component scope; a module-scope async operation belongs in a module 'action'", statement.span));
         this.analyzeResourceDeclaration(statement);
         return true;
       case "ActionDeclaration":
-        this.diagnostics.push(diagnostic("VEL3013", "'action' is only valid at component scope", statement.span));
+        // A module-scope action behaves exactly like a component action —
+        // reactive pending/error fields with rejection semantics preserved —
+        // but its lifetime is the module, so it never registers disposal.
+        if (!this.isTopLevelScope()) {
+          this.diagnostics.push(diagnostic("VEL3013", "'action' is only valid at module or component scope", statement.span));
+        }
         this.analyzeActionDeclaration(statement);
         return true;
       case "WatchDeclaration":
