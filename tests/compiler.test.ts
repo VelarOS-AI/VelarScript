@@ -975,6 +975,277 @@ const variadic: (...number) -> null = one
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign \(value: number\) -> null to \(\.\.\.number\) -> null/u.test(item.message)));
 });
 
+test("generic def functions infer type arguments at call sites", () => {
+  const result = compile(`
+def identity<T>(value: T) -> T:
+    return value
+
+def first<T>(items: List<T>) -> T?:
+    return items.get(0)
+
+def hold<T>(value: T) -> T?:
+    let stored: T? = null
+    stored = value
+    return stored
+
+def collect<T>(value: T) -> List<T>:
+    const items = []
+    items.append(value)
+    return items
+
+const chosen: number = identity(21)
+const firstName: string? = first(["Ada", "Grace"])
+const held: number? = hold(chosen)
+const collected: List<number> = collect(3)
+print(identity("ready"))
+print(firstName)
+print(held)
+print(collected)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "ready\nAda\n21\n[ 3 ]\n");
+
+  const mismatched = compile("def identity<T>(value: T) -> T:\n    return value\n\nconst wrong: string = identity(5)\n");
+  assert.deepEqual(mismatched.diagnostics.map((item) => item.message), ["Cannot assign number to string"]);
+});
+
+test("generic call-site inference solves callbacks, named arguments, spreads, and async results", async () => {
+  const result = compile(`
+def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
+    return items.map(transform)
+
+def gather<T>(...values: T) -> List<T>:
+    return values
+
+async def wrap<T>(value: T) -> T:
+    return value
+
+const doubled: List<number> = mapValues([1, 2, 3], value => value * 2)
+const named: List<number> = mapValues(transform = value => value.length, items = ["a", "bb"])
+const collected: List<number> = gather(1, 2, 3)
+const source = [4, 5]
+const spreadOut: List<number> = gather(...source)
+const wrapped: number = await wrap(8)
+print(doubled)
+print(named)
+print(collected)
+print(spreadOut)
+print(wrapped)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "[ 2, 4, 6 ]\n[ 1, 2 ]\n[ 1, 2, 3 ]\n[ 4, 5 ]\n8\n");
+
+  const mismatched = compile(`
+def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
+    return items.map(transform)
+
+const wrong: List<string> = mapValues([1], value => value * 2)
+`.trimStart());
+  assert.deepEqual(mismatched.diagnostics.map((item) => item.message), ["Cannot assign List<number> to List<string>"]);
+});
+
+test("generic inference merges bindings to unions and defaults unsolved parameters to unknown", () => {
+  const merged = compile(`
+def pair<T>(left: T, right: T) -> List<T>:
+    return [left, right]
+
+const mixed: List<number | string> = pair(1, "two")
+print(mixed)
+`.trimStart());
+  assert.deepEqual(merged.diagnostics, []);
+  const execution = executeModule(merged.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "[ 1, 'two' ]\n");
+
+  const narrowed = compile(`
+def pair<T>(left: T, right: T) -> List<T>:
+    return [left, right]
+
+const wrong: List<number> = pair(1, "two")
+`.trimStart());
+  assert.deepEqual(narrowed.diagnostics.map((item) => item.message), ["Cannot assign List<number | string> to List<number>"]);
+
+  const unsolved = compile(`
+def make<T>() -> List<T>:
+    return []
+
+const wrong: List<number> = make()
+`.trimStart());
+  assert.deepEqual(unsolved.diagnostics.map((item) => item.message), ["Cannot assign List<unknown> to List<number>"]);
+});
+
+test("generic callable identities are alpha-equivalent and satisfy concrete contracts by instantiation", () => {
+  const parameterT: ValueType = { kind: "parameter", name: "T", index: 0 };
+  const parameterU: ValueType = { kind: "parameter", name: "U", index: 0 };
+  assert.equal(sameType(parameterT, parameterU), true);
+  assert.equal(sameType(parameterT, { kind: "parameter", name: "T", index: 1 }), false);
+  const genericIdentity: ValueType = { kind: "function", typeParameterNames: ["T"], parameters: [parameterT], requiredParameters: 1, result: parameterT };
+  const renamedIdentity: ValueType = { kind: "function", typeParameterNames: ["U"], parameters: [parameterU], requiredParameters: 1, result: parameterU };
+  assert.equal(sameType(genericIdentity, renamedIdentity), true);
+  const widerArity: ValueType = { kind: "function", typeParameterNames: ["T", "U"], parameters: [parameterT], requiredParameters: 1, result: parameterT };
+  assert.equal(sameType(genericIdentity, widerArity), false);
+  const structuralEnvironment = { fieldsOf: () => null, isSubclassOf: () => false, isPrimitiveType: () => false, isPrimitiveSubtype: () => false };
+  const numberToNumber: ValueType = { kind: "function", parameters: [{ kind: "number" }], requiredParameters: 1, result: { kind: "number" } };
+  const stringToNumber: ValueType = { kind: "function", parameters: [{ kind: "string" }], requiredParameters: 1, result: { kind: "number" } };
+  assert.equal(isAssignable(genericIdentity, numberToNumber, structuralEnvironment), true);
+  assert.equal(isAssignable(numberToNumber, genericIdentity, structuralEnvironment), false);
+  assert.equal(isAssignable(genericIdentity, stringToNumber, structuralEnvironment), false);
+
+  const contract = compile(`
+def identity<T>(value: T) -> T:
+    return value
+
+const typed: (number) -> number = identity
+const alias = identity
+print(typed(4))
+print(alias("threaded"))
+const same: List<number> = [4, 5].map(identity)
+print(same)
+`.trimStart());
+  assert.deepEqual(contract.diagnostics, []);
+  const execution = executeModule(contract.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "4\nthreaded\n[ 4, 5 ]\n");
+
+  const invalid = compile(`
+def identity<T>(value: T) -> T:
+    return value
+
+const wrong: (string) -> number = identity
+`.trimStart());
+  assert.deepEqual(invalid.diagnostics.map((item) => item.message), ["Cannot assign <T>(value: T) -> T to (string) -> number"]);
+});
+
+test("generic methods and extern functions share the def machinery", () => {
+  const result = compile(`
+class Box:
+    def wrap<T>(value: T) -> List<T>:
+        return [value]
+
+    static def pairOf<T>(left: T, right: T) -> List<T>:
+        return [left, right]
+
+const box = Box()
+const wrapped: List<number> = box.wrap(5)
+const paired: List<string> = Box.pairOf("a", "b")
+print(wrapped)
+print(paired)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "[ 5 ]\n[ 'a', 'b' ]\n");
+
+  const extern = compile(`
+extern module "helpers":
+    export def pick<T>(items: List<T>) -> T?
+
+import js { pick } from "helpers"
+
+const value: number? = pick([1, 2, 3])
+`.trimStart());
+  assert.deepEqual(extern.diagnostics, []);
+
+  const externMismatch = compile(`
+extern module "helpers":
+    export def pick<T>(items: List<T>) -> T?
+
+import js { pick } from "helpers"
+
+const value: string? = pick([1, 2, 3])
+`.trimStart());
+  assert.deepEqual(externMismatch.diagnostics.map((item) => item.message), ["Cannot assign number? to string?"]);
+});
+
+test("generic functions cross module boundaries with renamed imports", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-generic-modules-"));
+  const libraryPath = join(directory, "library.vel");
+  const consumerPath = join(directory, "consumer.vel");
+  await writeFile(libraryPath, `
+export def pick<T>(items: List<T>) -> T?:
+    return items.get(0)
+
+export def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
+    return items.map(transform)
+`.trimStart(), "utf8");
+  await writeFile(consumerPath, `
+import {pick, mapValues as remap} from "./library.vel"
+
+const chosen: number? = pick([1, 2, 3])
+const lengths: List<number> = remap(["a", "bb"], value => value.length)
+print(chosen)
+print(lengths)
+`.trimStart(), "utf8");
+
+  const project = await compileProject(consumerPath);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const symbols = project.modules.find((module) => module.inputPath === consumerPath)?.result.semanticIndex.symbols;
+  assert.equal(symbols?.find((item) => item.name === "chosen")?.type, "number?");
+  assert.equal(symbols?.find((item) => item.name === "lengths")?.type, "List<number>");
+});
+
+test("type parameter declarations fail closed", () => {
+  for (const [source, code, message] of [
+    ["def repeat<T, T>(value: T) -> T:\n    return value\n", "VEL4021", /declared more than once/u],
+    ["type User:\n    name: string\n\ndef load<User>(value: User) -> User:\n    return value\n", "VEL4021", /shadows an existing type name/u],
+    ["def outer<T>(value: T) -> T:\n    def inner(other: T) -> T:\n        return other\n    return value\n", "VEL4021", /belongs to the enclosing function; declare '<T>' on this def/u],
+    ["def broken<>() -> null:\n    return null\n", "VEL2025", /requires at least one name/u],
+    ["type Pair<T>:\n    left: number\n", "VEL2025", /only 'def' functions take '<T>'/u],
+    ["class Holder<T>:\n    pass\n", "VEL2025", /only 'def' functions take '<T>'/u],
+    ["class Panel:\n    get title<T>() -> string:\n        return \"top\"\n", "VEL2023", /cannot declare type parameters/u],
+  ] as const) {
+    const result = compile(source);
+    assert.ok(result.diagnostics.some((item) => item.code === code && message.test(item.message)), JSON.stringify(result.diagnostics));
+  }
+
+  const unused = compile(`
+def tagged<T, U>(value: T) -> T:
+    return value
+
+print(tagged("kept"))
+`.trimStart());
+  assert.deepEqual(unused.diagnostics, []);
+});
+
+test("type parameters are erased and fenced out of runtime checks before emission", () => {
+  // Without the analyzer fence these programs would emit 'T.is(value)' and
+  // crash at runtime; the fence must keep the emitter from ever seeing T.
+  const isFence = compile("def check<T>(value: T) -> bool:\n    return value is T\n");
+  assert.equal(isFence.code, null);
+  assert.deepEqual(isFence.diagnostics.map((item) => item.code), ["VEL4022"]);
+  assert.match(isFence.diagnostics[0]?.message ?? "", /Type parameter 'T' is erased at runtime and cannot be checked/u);
+
+  const containedFence = compile("def check<T>(value: T) -> bool:\n    return value is List<T>\n");
+  assert.equal(containedFence.code, null);
+  assert.deepEqual(containedFence.diagnostics.map((item) => item.code), ["VEL4022"]);
+
+  const caseFence = compile(`
+def check<T>(value: T) -> bool:
+    match value:
+        case T:
+            return true
+        else:
+            return false
+`.trimStart());
+  assert.equal(caseFence.code, null);
+  assert.deepEqual(caseFence.diagnostics.map((item) => item.code), ["VEL4022"]);
+});
+
+test("generic declarations format idiomatically without touching comparisons", () => {
+  const canonical = "def first<T>(items: List<T>) -> T?:\n    return items.get(0)\n";
+  assert.equal(formatSource(canonical), canonical);
+  assert.equal(formatSource("def first < T > (items: List<T>) -> T?:\n    return items.get(0)\n"), canonical);
+  const multiple = "def swap<T, U>(a: T, b: U) -> null:\n    return null\n";
+  assert.equal(formatSource(multiple), multiple);
+  assert.equal(formatSource("const smaller = a < b\n"), "const smaller = a < b\n");
+  assert.equal(formatSource("const chained = a < b > c\n"), "const chained = a < b > c\n");
+});
+
 test("contextual record returns preserve positional callable contracts", () => {
   const result = compile(`
 type Composer:

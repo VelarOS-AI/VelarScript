@@ -247,7 +247,8 @@ function tokenizeInline(source: string): InlineToken[] {
     }
     if (character === "<") {
       const previous = tokens.at(-1);
-      const generic = previous?.kind === "word" && genericNames.has(previous.text);
+      const generic = previous?.kind === "word"
+        && (genericNames.has(previous.text) || genericStack.at(-1) === true || beginsTypeBracket(tokens));
       if (generic) genericStack.push(true);
       tokens.push({ kind: generic ? "open" : "operator", text: character, generic });
       index += 1;
@@ -267,6 +268,19 @@ function tokenizeInline(source: string): InlineToken[] {
     index += 1;
   }
   return tokens;
+}
+
+// Structural generic-bracket detection: '<' after the name of a def/type/class
+// declaration or after a type-only operator opens a bracket; every other
+// expression-position '<' stays a comparison.
+const typeBracketDeclarationWords = new Set(["def", "type", "class"]);
+const typeBracketOperators = new Set(["->", "|", "is", "case"]);
+
+function beginsTypeBracket(tokens: readonly InlineToken[]): boolean {
+  const before = tokens.at(-2);
+  if (!before) return false;
+  if (before.kind === "word" && typeBracketDeclarationWords.has(before.text)) return true;
+  return typeBracketOperators.has(before.text);
 }
 
 function formatInterpolatedString(source: string, start: number, scanned: ReturnType<typeof scanInterpolatedString>): string {

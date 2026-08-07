@@ -72,6 +72,7 @@ export interface ExternModuleDeclaration {
 export interface ExternFunctionDeclaration {
   readonly asynchronous: boolean;
   readonly name: string;
+  readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
   readonly span: Span;
@@ -322,9 +323,15 @@ export interface FunctionDeclaration {
   readonly exported: boolean;
   readonly asynchronous: boolean;
   readonly name: string;
+  readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
   readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+export interface TypeParameterDeclaration {
+  readonly name: string;
   readonly span: Span;
 }
 

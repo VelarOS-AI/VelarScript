@@ -14,6 +14,7 @@ import type {
   Statement,
   TypeDeclaration,
   TypeAliasDeclaration,
+  TypeParameterDeclaration,
   TypeReference,
   TypeSyntax,
 } from "./ast.ts";
@@ -26,6 +27,7 @@ import {
   anyType,
   boolType,
   describeType,
+  instantiateGenericCallable,
   invalidType,
   isInvalidType,
   isAssignable,
@@ -39,6 +41,9 @@ import {
   semanticTypeIdentity,
   sameType,
   stringType,
+  substituteTypeParameters,
+  typeContainsParameter,
+  unifyTypeParameters,
   unionOf,
   unknownType,
   type EnumInfo,
@@ -97,6 +102,7 @@ interface NamedArgumentPlan {
 interface AnalyzableFunctionDeclaration {
   readonly kind: string;
   readonly name: string;
+  readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: FunctionDeclaration["parameters"];
   readonly returnType: FunctionDeclaration["returnType"];
   readonly body: FunctionDeclaration["body"];
@@ -211,6 +217,7 @@ export interface AnalysisContext {
 }
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown"]);
+const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "WebNode", "List", "Set", "Map", "Promise"]);
 const reservedBindings = new Set([
   "Array", "Boolean", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
   "Symbol", "TypeError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
@@ -250,6 +257,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly typeAliases = new Map<string, ValueType>();
   private readonly invalidDeclaredTypes = new Set<string>();
   private readonly typeReferenceValidity = new WeakMap<TypeReference, boolean>();
+  private readonly typeParameterFrames: ReadonlyMap<string, ValueType>[] = [];
   private readonly invalidExternTypeReferences = new WeakSet<TypeReference>();
   private readonly enums = new Map<string, EnumInfo>();
   private readonly classes = new Map<string, ClassInfo>();
@@ -449,11 +457,13 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private validateCoreDeclarationSignatures(program: Program): void {
-    const validateFunction = (statement: Pick<FunctionDeclaration, "parameters" | "returnType">): void => {
-      for (const parameter of statement.parameters) {
-        if (parameter.type) this.validateTypeReference(parameter.type);
-      }
-      if (statement.returnType) this.validateTypeReference(statement.returnType);
+    const validateFunction = (statement: Pick<FunctionDeclaration, "typeParameters" | "parameters" | "returnType">): void => {
+      this.withTypeParameterFrame(this.typeParameterFrame(statement.typeParameters), () => {
+        for (const parameter of statement.parameters) {
+          if (parameter.type) this.validateTypeReference(parameter.type);
+        }
+        if (statement.returnType) this.validateTypeReference(statement.returnType);
+      });
     };
     for (const statement of program.body) {
       if (statement.kind === "VariableDeclaration") {
@@ -563,13 +573,17 @@ export class Analyzer implements TypeEnvironment {
         for (const parameter of declaration.parameters) validate(parameter.type);
         for (const field of declaration.fields) validate(field.type);
         for (const method of declaration.methods) {
-          for (const parameter of method.parameters) validate(parameter.type);
-          validate(method.returnType);
+          this.withTypeParameterFrame(this.typeParameterFrame(method.typeParameters), () => {
+            for (const parameter of method.parameters) validate(parameter.type);
+            validate(method.returnType);
+          });
         }
       }
       for (const declaration of statement.functions) {
-        for (const parameter of declaration.parameters) validate(parameter.type);
-        validate(declaration.returnType);
+        this.withTypeParameterFrame(this.typeParameterFrame(declaration.typeParameters), () => {
+          for (const parameter of declaration.parameters) validate(parameter.type);
+          validate(declaration.returnType);
+        });
       }
       for (const declaration of statement.constants) validate(declaration.type);
     }
@@ -1045,17 +1059,20 @@ export class Analyzer implements TypeEnvironment {
               const key = `${method.static ? "static" : "instance"}:${method.name}`;
               if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${method.name}' more than once`, method.span);
               members.add(key);
-              for (const parameter of method.parameters) {
-                const type = this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
-                const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
-                if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-              }
-              if (method.returnType) {
-                const result = this.resolveValidatedExternAnnotation(method.returnType, statement.source, classNames);
-                if (!this.invalidExternTypeReferences.has(method.returnType) && method.asynchronous && this.asyncResultContainsPromise(result)) {
-                  this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
+              this.checkTypeParameterDeclarations(method.typeParameters);
+              this.withTypeParameterFrame(this.typeParameterFrame(method.typeParameters), () => {
+                for (const parameter of method.parameters) {
+                  const type = this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
+                  const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
+                  if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
                 }
-              }
+                if (method.returnType) {
+                  const result = this.resolveValidatedExternAnnotation(method.returnType, statement.source, classNames);
+                  if (!this.invalidExternTypeReferences.has(method.returnType) && method.asynchronous && this.asyncResultContainsPromise(result)) {
+                    this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
+                  }
+                }
+              });
             }
             if (declaration.base && classNames.has(declaration.base)) {
               const base = this.externClassIdentity(statement.source, declaration.base);
@@ -1092,20 +1109,23 @@ export class Analyzer implements TypeEnvironment {
           }
         }
         for (const declaration of statement.functions) {
-          for (const parameter of declaration.parameters) {
-            const classNames = new Set(statement.classes.map((item) => item.name));
-            const type = this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
-            const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
-            if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-          }
-          const classNames = new Set(statement.classes.map((item) => item.name));
-          const result = this.resolveValidatedExternAnnotation(declaration.returnType, statement.source, classNames);
-          if (declaration.returnType) {
-            const valid = !this.invalidExternTypeReferences.has(declaration.returnType);
-            if (valid && declaration.asynchronous && this.asyncResultContainsPromise(result)) {
-              this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", declaration.returnType.span));
+          this.checkTypeParameterDeclarations(declaration.typeParameters);
+          this.withTypeParameterFrame(this.typeParameterFrame(declaration.typeParameters), () => {
+            for (const parameter of declaration.parameters) {
+              const classNames = new Set(statement.classes.map((item) => item.name));
+              const type = this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
+              const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
+              if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
             }
-          }
+            const classNames = new Set(statement.classes.map((item) => item.name));
+            const result = this.resolveValidatedExternAnnotation(declaration.returnType, statement.source, classNames);
+            if (declaration.returnType) {
+              const valid = !this.invalidExternTypeReferences.has(declaration.returnType);
+              if (valid && declaration.asynchronous && this.asyncResultContainsPromise(result)) {
+                this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", declaration.returnType.span));
+              }
+            }
+          });
         }
         break;
       case "TypeDeclaration":
@@ -1295,7 +1315,7 @@ export class Analyzer implements TypeEnvironment {
             }
           } else if (rootPattern.kind === "MatchTypePattern") {
             const checked = this.resolveAnnotation(rootPattern.type);
-            if (!branch.guard && !this.runtimeTypeCheckMayExecute(fallthroughType, checked)) {
+            if (!branch.guard && !typeContainsParameter(checked) && !this.runtimeTypeCheckMayExecute(fallthroughType, checked)) {
               if (coveredTypes.some((covered) => isAssignable(checked, covered, this))) {
                 this.diagnostics.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, rootPattern.span));
               }
@@ -1910,18 +1930,21 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private validateMethodSignature(method: ClassDeclaration["methods"][number]): void {
-    for (const parameter of method.parameters) {
-      const type = this.resolveAnnotation(parameter.type);
-      const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
-      if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-    }
-    if (method.returnType) {
-      const result = this.resolveAnnotation(method.returnType);
-      const valid = this.validateTypeReference(method.returnType);
-      if (valid && method.asynchronous && this.asyncResultContainsPromise(result)) {
-        this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
+    this.checkTypeParameterDeclarations(method.typeParameters);
+    this.withTypeParameterFrame(this.typeParameterFrame(method.typeParameters), () => {
+      for (const parameter of method.parameters) {
+        const type = this.resolveAnnotation(parameter.type);
+        const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
+        if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       }
-    }
+      if (method.returnType) {
+        const result = this.resolveAnnotation(method.returnType);
+        const valid = this.validateTypeReference(method.returnType);
+        if (valid && method.asynchronous && this.asyncResultContainsPromise(result)) {
+          this.diagnostics.push(diagnostic("VEL4018", "An async result annotation names the resolved value; write '-> T', not '-> Promise<T>'", method.returnType.span));
+        }
+      }
+    });
   }
 
   private findField(className: string, name: string): ClassField | null {
@@ -2068,6 +2091,8 @@ export class Analyzer implements TypeEnvironment {
     if (!method && !className && !this.predeclared.has(statement)) {
       this.declareBinding(statement.name, false, this.functionType(statement as FunctionDeclaration), statement.span);
     }
+    this.checkTypeParameterDeclarations(statement.typeParameters);
+    this.typeParameterFrames.push(this.typeParameterFrame(statement.typeParameters));
     this.enterScope();
     this.flowFrameDepth += 1;
     this.functionDepth += 1;
@@ -2119,6 +2144,7 @@ export class Analyzer implements TypeEnvironment {
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
+    this.typeParameterFrames.pop();
     this.constructorDepth = outerConstructorDepth;
   }
 
@@ -2580,6 +2606,7 @@ export class Analyzer implements TypeEnvironment {
         this.inferExpression(expression.value);
         const checked = this.resolveAnnotation(expression.type);
         const valid = this.validateTypeReference(expression.type);
+        if (valid && this.rejectErasedRuntimeCheck(checked, expression.type.span)) return invalidType;
         if (valid && checked.kind === "class") {
           this.classChecks.add(spanIdentity(expression.span));
         }
@@ -2853,11 +2880,13 @@ export class Analyzer implements TypeEnvironment {
       const callee = original.kind === "optional" ? original.inner : original;
       if (isInvalidType(callee)) return invalidType;
       if (callee.kind === "function" || callee.kind === "action") {
-        this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
+        const result = this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
+          if (callee.typeParameterNames?.length) return this.inferGenericCall(callee, arguments_, argumentNames, callSpan);
           this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
+          return callee.result;
         });
         this.optionalCallees.add(spanIdentity(callSpan));
-        return optionalOf(callee.result);
+        return optionalOf(result);
       }
       if (callee.kind === "any") {
         this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
@@ -2940,6 +2969,11 @@ export class Analyzer implements TypeEnvironment {
       return { kind: "node" };
     }
     if (callee.kind === "function" || callee.kind === "action") {
+      if (callee.typeParameterNames?.length) {
+        const result = this.inferGenericCall(callee, arguments_, argumentNames, callSpan);
+        if (result.kind === "optional") this.optionalCalls.add(spanIdentity(callSpan));
+        return result;
+      }
       if (calleeExpression.kind === "MemberExpression" && calleeExpression.property === "parse"
         && arguments_[0]?.kind === "ObjectExpression" && callee.result.kind === "named") {
         this.recordRuntimeObjectShape(arguments_[0], callee.result);
@@ -2950,15 +2984,17 @@ export class Analyzer implements TypeEnvironment {
     }
     if (callee.kind === "optional" && (callee.inner.kind === "function" || callee.inner.kind === "action")) {
       const inner = callee.inner;
-      this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
+      const result = this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
+        if (inner.typeParameterNames?.length) return this.inferGenericCall(inner, arguments_, argumentNames, callSpan);
         this.checkArguments(arguments_, inner.parameters, callSpan, inner.requiredParameters, inner.rest, argumentNames, inner.parameterNames);
+        return inner.result;
       });
       if (!continuesOptionalChain(calleeExpression)) {
         this.typeError("Use a presence check or an optional access chain before calling an optional function", calleeExpression.span);
       }
       this.optionalCalls.add(spanIdentity(callSpan));
       this.optionalCallees.add(spanIdentity(callSpan));
-      return optionalOf(inner.result);
+      return optionalOf(result);
     }
     if (callee.kind === "any") {
       if (hasNamed) this.typeError("Named arguments require a statically known callable signature", callSpan);
@@ -2983,6 +3019,117 @@ export class Analyzer implements TypeEnvironment {
     }
     this.typeError(`${describeType(callee)} is not callable`, callSpan);
     return unknownType;
+  }
+
+  // Two-phase call-site unification for generic callables: phase 1 infers
+  // non-arrow arguments and collects bindings; phase 2 gives arrows contextual
+  // types with the phase-1 substitution applied, then unifies their results.
+  // Unsolved type parameters substitute unknown.
+  private inferGenericCall(
+    callee: Extract<ValueType, { kind: "function" | "action" }>,
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType {
+    const bindings: (ValueType | null)[] = Array.from({ length: callee.typeParameterNames?.length ?? 0 }, () => null);
+    const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => this.fieldsOf(identity);
+    const substitute = (declared: ValueType): ValueType => substituteTypeParameters(declared, bindings);
+    const solvedContext = (declared: ValueType): ValueType =>
+      typeContainsParameter(declared, (parameter) => bindings[parameter.index] == null) ? unknownType : substitute(declared);
+
+    interface PlannedArgument {
+      readonly value: Expression;
+      readonly declared: ValueType | null;
+      readonly errorSpan: Span;
+      readonly spreadList: boolean;
+    }
+    const planned: PlannedArgument[] = [];
+    const plan = this.planNamedArguments(arguments_, argumentNames, callee.parameters, callee.parameterNames, callee.requiredParameters, callSpan, callee.rest);
+    if (plan) {
+      for (const [source, target] of plan.targets.entries()) {
+        const argument = arguments_[source]!;
+        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+        planned.push({ value, declared: target === null ? null : callee.parameters[target] ?? callee.rest ?? null, errorSpan: argument.span, spreadList: false });
+      }
+      if (!plan.valid) {
+        for (const item of planned) this.inferExpression(item.value, item.declared ? solvedContext(item.declared) : unknownType);
+        return substitute(callee.result);
+      }
+    } else {
+      const hasSpread = arguments_.some((argument) => argument.kind === "SpreadExpression");
+      if (!hasSpread && (arguments_.length < callee.requiredParameters || (!callee.rest && arguments_.length > callee.parameters.length))) {
+        const expected = callee.rest
+          ? `at least ${callee.requiredParameters}`
+          : callee.requiredParameters === callee.parameters.length ? String(callee.parameters.length) : `${callee.requiredParameters}-${callee.parameters.length}`;
+        this.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${arguments_.length}`, callSpan);
+      }
+      let fixedIndex = 0;
+      let sawSpread = false;
+      for (const argument of arguments_) {
+        if (argument.kind === "SpreadExpression") {
+          sawSpread = true;
+          if (!callee.rest) this.typeError("Call spread requires a callable with a rest parameter", argument.span);
+          else if (fixedIndex < callee.parameters.length) {
+            this.typeError(`Provide all ${callee.parameters.length} fixed argument${callee.parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
+          }
+          planned.push({ value: argument.value, declared: callee.rest ?? null, errorSpan: argument.span, spreadList: true });
+          fixedIndex = callee.parameters.length;
+          continue;
+        }
+        const declared = sawSpread ? callee.rest ?? null : callee.parameters[fixedIndex] ?? callee.rest ?? null;
+        planned.push({ value: argument, declared, errorSpan: argument.span, spreadList: false });
+        if (!sawSpread && fixedIndex < callee.parameters.length) fixedIndex += 1;
+      }
+    }
+
+    const actuals = new Map<PlannedArgument, ValueType>();
+    const deferredArrows: PlannedArgument[] = [];
+    for (const item of planned) {
+      if (item.value.kind === "ArrowFunctionExpression") {
+        deferredArrows.push(item);
+        continue;
+      }
+      const context = item.declared
+        ? solvedContext(item.spreadList ? { kind: "list", element: item.declared } : item.declared)
+        : unknownType;
+      const actual = this.inferExpression(item.value, context);
+      actuals.set(item, actual);
+      if (!item.declared) continue;
+      if (item.spreadList) {
+        const expanded = this.expandAliases(actual);
+        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf);
+      } else {
+        unifyTypeParameters(item.declared, actual, bindings, fieldsOf);
+      }
+    }
+    for (const item of deferredArrows) {
+      const context = item.declared ? substitute(item.declared) : unknownType;
+      const actual = this.inferExpression(item.value, context);
+      actuals.set(item, actual);
+      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf);
+    }
+    for (const item of planned) {
+      const actual = actuals.get(item) ?? unknownType;
+      if (!item.declared) continue;
+      if (item.spreadList) {
+        const expanded = this.expandAliases(actual);
+        if (expanded.kind === "list") this.requireAssignable(expanded.element, substitute(item.declared), item.errorSpan);
+        else if (expanded.kind !== "any") this.typeError(`Call spread requires a List, received ${describeType(actual)}`, item.errorSpan);
+        continue;
+      }
+      this.requireAssignable(actual, substitute(item.declared), item.errorSpan);
+    }
+    return substitute(callee.result);
+  }
+
+  // A generic callable used where a concrete callback is expected must not
+  // leak its parameter kinds into surrounding inference; instantiate it
+  // against the expected shape before reading its result.
+  private concreteCallableFor(actual: ValueType, expected: ValueType): ValueType {
+    if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return actual;
+    if (!actual.typeParameterNames?.length) return actual;
+    if (expected.kind !== "function" && expected.kind !== "action" && expected.kind !== "intrinsic") return actual;
+    return instantiateGenericCallable(actual, expected, this);
   }
 
   private inferIntrinsicCall(
@@ -3052,7 +3199,7 @@ export class Analyzer implements TypeEnvironment {
     };
     const callbackAt = (index: number, parameters: readonly ValueType[], result: ValueType): ValueType => {
       const expected: ValueType = { kind: "function", parameters, requiredParameters: parameters.length, result };
-      return inferAt(index, expected);
+      return this.concreteCallableFor(inferAt(index, expected), expected);
     };
     const callbackResult = (type: ValueType): ValueType => type.kind === "function" || type.kind === "action" || type.kind === "intrinsic" ? type.result : type.kind === "any" ? anyType : unknownType;
     const promiseValue = (type: ValueType, index: number): ValueType => {
@@ -3447,7 +3594,7 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "map") {
         this.collectionCalls.set(member.span.end, "listMap");
         const callbackExpected: ValueType = { kind: "function", parameters: [object.element], requiredParameters: 1, result: unknownType };
-        const callback = inferArgument(0, callbackExpected);
+        const callback = this.concreteCallableFor(inferArgument(0, callbackExpected), callbackExpected);
         const callbackArgument = argumentAt(0);
         if (callbackArgument) this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         const result = callback.kind === "function" ? callback.result : unknownType;
@@ -4179,33 +4326,41 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private functionType(statement: FunctionDeclaration): ValueType {
-    const result = this.resolveValidatedResult(statement.returnType);
-    const rest = statement.parameters.find((parameter) => parameter.rest);
-    return {
-      kind: "function",
-      parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
-      parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
-      requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-      ...(rest ? { rest: this.resolveValidatedAnnotation(rest.type) } : {}),
-      result: statement.asynchronous ? { kind: "promise", value: this.resolvedAsyncResult(result) } : result,
-    };
+    const frame = this.typeParameterFrame(statement.typeParameters);
+    return this.withTypeParameterFrame(frame, () => {
+      const result = this.resolveValidatedResult(statement.returnType);
+      const rest = statement.parameters.find((parameter) => parameter.rest);
+      return {
+        kind: "function",
+        ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
+        parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
+        parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
+        requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
+        ...(rest ? { rest: this.resolveValidatedAnnotation(rest.type) } : {}),
+        result: statement.asynchronous ? { kind: "promise", value: this.resolvedAsyncResult(result) } : result,
+      };
+    });
   }
 
   private externFunctionType(
     statement: ExternFunctionDeclaration,
     resolve: (reference: TypeReference | null) => ValueType = (reference) => this.resolveAnnotation(reference),
   ): ValueType {
-    const result = statement.returnType ? resolve(statement.returnType) : nullType;
-    const rest = statement.parameters.find((parameter) => parameter.rest);
-    const parameters = statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolve(parameter.type));
-    return {
-      kind: "function",
-      parameters,
-      parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
-      requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-      ...(rest ? { rest: resolve(rest.type) } : {}),
-      result: statement.asynchronous ? { kind: "promise", value: this.resolvedAsyncResult(result) } : result,
-    };
+    const frame = this.typeParameterFrame(statement.typeParameters);
+    return this.withTypeParameterFrame(frame, () => {
+      const result = statement.returnType ? resolve(statement.returnType) : nullType;
+      const rest = statement.parameters.find((parameter) => parameter.rest);
+      const parameters = statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolve(parameter.type));
+      return {
+        kind: "function",
+        ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
+        parameters,
+        parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
+        requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
+        ...(rest ? { rest: resolve(rest.type) } : {}),
+        result: statement.asynchronous ? { kind: "promise", value: this.resolvedAsyncResult(result) } : result,
+      };
+    });
   }
 
   private externConstantType(statement: ExternConstantDeclaration): ValueType {
@@ -4585,6 +4740,64 @@ export class Analyzer implements TypeEnvironment {
     return statuses.some((status) => status === null) ? null : true;
   }
 
+  // The frame comes from the declaration that owns the annotation being
+  // resolved, never from ambient scope, so predeclare-time resolution works.
+  private typeParameterFrame(declarations: readonly TypeParameterDeclaration[] | undefined): ReadonlyMap<string, ValueType> {
+    const frame = new Map<string, ValueType>();
+    for (const declaration of declarations ?? []) {
+      if (!frame.has(declaration.name)) frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+    }
+    return frame;
+  }
+
+  private withTypeParameterFrame<T>(frame: ReadonlyMap<string, ValueType>, action: () => T): T {
+    this.typeParameterFrames.push(frame);
+    try {
+      return action();
+    } finally {
+      this.typeParameterFrames.pop();
+    }
+  }
+
+  private enclosingTypeParameterName(name: string): boolean {
+    return this.typeParameterFrames.slice(0, -1).some((frame) => frame.has(name));
+  }
+
+  private checkTypeParameterDeclarations(declarations: readonly TypeParameterDeclaration[] | undefined): void {
+    const seen = new Set<string>();
+    for (const declaration of declarations ?? []) {
+      if (seen.has(declaration.name)) {
+        this.diagnostics.push(diagnostic("VEL4021", `Type parameter '${declaration.name}' is declared more than once`, declaration.span));
+        continue;
+      }
+      seen.add(declaration.name);
+      if (this.isDeclaredTypeName(declaration.name)) {
+        this.diagnostics.push(diagnostic("VEL4021", `Type parameter '${declaration.name}' shadows an existing type name; choose another name`, declaration.span));
+      }
+    }
+  }
+
+  private isDeclaredTypeName(name: string): boolean {
+    return builtinTypeNames.has(name)
+      || this.primitiveNames.has(name)
+      || this.namedTypes.has(name)
+      || this.namedTypeIdentities.has(name)
+      || this.typeAliases.has(name)
+      || this.classes.has(name)
+      || this.enums.has(name)
+      || this.externTypeImports.has(name);
+  }
+
+  private rejectErasedRuntimeCheck(checked: ValueType, errorSpan: Span): boolean {
+    let name = "";
+    if (!typeContainsParameter(checked, (parameter) => {
+      name = parameter.name;
+      return true;
+    })) return false;
+    this.diagnostics.push(diagnostic("VEL4022", `Type parameter '${name}' is erased at runtime and cannot be checked; check against a concrete type instead`, errorSpan));
+    return true;
+  }
+
   protected resolveAnnotation(reference: TypeReference | null): ValueType {
     return reference ? this.resolveNamedClasses(this.expandAliases(resolveTypeReference(reference))) : unknownType;
   }
@@ -4603,6 +4816,10 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private resolveNamedClasses(type: ValueType): ValueType {
+    if (type.kind === "named" && !type.identity) {
+      const parameter = this.typeParameterFrames.at(-1)?.get(type.name);
+      if (parameter) return parameter;
+    }
     if (type.kind === "named" && this.enums.has(type.name)) {
       return { kind: "enum", name: type.name, identity: this.enums.get(type.name)!.identity };
     }
@@ -4673,6 +4890,7 @@ export class Analyzer implements TypeEnvironment {
             return false;
           }
           if (this.invalidDeclaredTypes.has(syntax.name)) return false;
+          if (this.typeParameterFrames.at(-1)?.has(syntax.name)) return true;
           if (this.primitiveNames.has(syntax.name)
             || this.namedTypes.has(syntax.name)
             || this.namedTypeIdentities.has(syntax.name)
@@ -4683,6 +4901,10 @@ export class Analyzer implements TypeEnvironment {
           const resolved = resolver({ syntax, span: syntax.span });
           if (resolved.kind !== "named"
             || (resolved.identity && this.namedTypes.has(resolved.identity))) return true;
+          if (this.enclosingTypeParameterName(syntax.name)) {
+            this.diagnostics.push(diagnostic("VEL4021", `Type parameter '${syntax.name}' belongs to the enclosing function; declare '<${syntax.name}>' on this def`, syntax.span));
+            return false;
+          }
           this.typeError(`Unknown type '${syntax.name}'`, syntax.span);
           return false;
         }
@@ -4748,6 +4970,7 @@ export class Analyzer implements TypeEnvironment {
       case "MatchTypePattern": {
         const checked = this.resolveAnnotation(pattern.type);
         const valid = this.validateTypeReference(pattern.type);
+        if (valid && this.rejectErasedRuntimeCheck(checked, pattern.type.span)) return invalidType;
         if (valid && input.kind !== "unknown" && !this.matchTypesOverlap(this.expandAliases(input), checked)) {
           this.typeError(`Type pattern ${describeType(checked)} can never match ${describeType(input)}`, pattern.span);
         }

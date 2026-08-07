@@ -203,7 +203,9 @@ The built-in Core types are:
 VelarScript code uses `unknown` and validates it.
 
 VelarScript does not provide TypeScript conditional types, mapped types,
-overload sets, declaration merging, user-defined generics, or type assertions.
+overload sets, declaration merging, or type assertions. Type parameters exist
+only on `def` functions; generic `type`, `class`, and `component` declarations
+are not part of the language.
 
 ### Optional values
 
@@ -392,6 +394,27 @@ async def loadUser(id: string) -> User:
 Its call type is `Promise<User>`. Do not write `-> Promise<User>` on an async
 function. JavaScript Promise adoption and the JavaScript event loop remain the
 runtime behavior.
+
+### Type parameters
+
+`def` functions can declare type parameters after their name:
+
+```velar fragment
+def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
+    return items.map(transform)
+
+const lengths: List<number> = mapValues(["a", "bb"], value => value.length)
+```
+
+Type arguments are inferred at each call site; there is no explicit
+instantiation syntax. Fixed arguments bind parameters first, then callback
+arrows are checked against those bindings and their results solve the rest.
+A parameter the call leaves unsolved becomes `unknown`. Type parameters are
+erased at runtime, so `is T`, `case T`, and every other runtime-checked
+position require a concrete type instead. Only `def` declarations — top-level,
+exported, extern, and class methods — take type parameters; generic `type`,
+`class`, and `component` declarations, bounds, and variance are deliberately
+out of scope.
 
 ## 8. Collections
 

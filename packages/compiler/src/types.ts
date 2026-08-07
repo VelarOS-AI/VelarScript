@@ -23,6 +23,7 @@ export type ValueType =
       readonly readonlyFields?: ReadonlySet<string>;
       readonly optionalFields?: ReadonlySet<string>;
     }
+  | { readonly kind: "parameter"; readonly name: string; readonly index: number }
   | { readonly kind: "named"; readonly name: string; readonly identity?: string }
   | { readonly kind: "class"; readonly name: string; readonly identity?: string }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
@@ -31,9 +32,9 @@ export type ValueType =
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | { readonly kind: "node" }
   | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly intrinsic?: string }
-  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "function"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "action"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "intrinsic"; readonly name: string; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
 export const unknownType: ValueType = { kind: "unknown" };
@@ -255,6 +256,12 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     return objectFieldsAssignable(actual.fields, expected.fields, environment, seen, actual.readonlyFields, expected.readonlyFields, actual.optionalFields, expected.optionalFields);
   }
   if ((actual.kind === "function" || actual.kind === "action" || actual.kind === "intrinsic") && (expected.kind === "function" || expected.kind === "action" || expected.kind === "intrinsic")) {
+    const actualTypeParameters = actual.typeParameterNames?.length ?? 0;
+    const expectedTypeParameters = expected.typeParameterNames?.length ?? 0;
+    if (actualTypeParameters !== expectedTypeParameters) {
+      if (expectedTypeParameters !== 0) return false;
+      return isAssignable(instantiateGenericCallable(actual, expected, environment), expected, environment, seen);
+    }
     return callableInputsAssignable(actual, expected, environment, seen)
       && isAssignable(actual.result, expected.result, environment, seen);
   }
@@ -288,6 +295,10 @@ function typeIdentity(type: ValueType): string {
       return identityNode("class-constructor", [type.identity ?? type.name]);
     case "named":
       return identityNode("named", [type.identity ?? type.name]);
+    case "parameter":
+      // De Bruijn-style: the identity encodes only the index so that (T) -> T
+      // and (U) -> U from any two declarations are the same type.
+      return identityNode("parameter", [String(type.index)]);
     case "enum":
     case "enumObject":
       return identityNode(type.kind, [type.identity]);
@@ -318,6 +329,7 @@ function typeIdentity(type: ValueType): string {
     case "intrinsic":
       return identityNode(type.kind, [
         type.kind === "intrinsic" ? type.name : "",
+        type.typeParameterNames?.length ? String(type.typeParameterNames.length) : "",
         identityNode("parameter-names", type.parameterNames ?? []),
         String(type.requiredParameters),
         identityNode("parameters", type.parameters.map(nested)),
@@ -365,6 +377,7 @@ export function describeType(type: ValueType): string {
     case "object":
       return `{ ${[...type.fields].map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly " : ""}${name}${type.optionalFields?.has(name) ? "?" : ""}: ${describeType(value)}`).join(", ")} }`;
     case "named":
+    case "parameter":
     case "class":
     case "enum":
     case "typeObject":
@@ -379,7 +392,7 @@ export function describeType(type: ValueType): string {
     case "function":
     case "action":
     case "intrinsic":
-      return `${type.kind === "action" ? "action " : ""}(${[
+      return `${type.kind === "action" ? "action " : ""}${type.typeParameterNames?.length ? `<${type.typeParameterNames.join(", ")}>` : ""}(${[
         ...type.parameters.map((parameter, index) => {
           const described = describeType(parameter);
           const labeled = type.parameterNames?.[index] ? `${type.parameterNames[index]}: ${described}` : described;
@@ -400,6 +413,207 @@ function invariant(actual: ValueType, expected: ValueType, environment: TypeEnvi
 }
 
 type CallableType = Extract<ValueType, { readonly kind: "function" | "action" | "intrinsic" }>;
+
+export function typeContainsParameter(
+  type: ValueType,
+  matches: (parameter: Extract<ValueType, { kind: "parameter" }>) => boolean = () => true,
+): boolean {
+  switch (type.kind) {
+    case "parameter":
+      return matches(type);
+    case "optional":
+      return typeContainsParameter(type.inner, matches);
+    case "list":
+    case "set":
+      return typeContainsParameter(type.element, matches);
+    case "map":
+      return typeContainsParameter(type.key, matches) || typeContainsParameter(type.value, matches);
+    case "promise":
+      return typeContainsParameter(type.value, matches);
+    case "object":
+      return [...type.fields.values()].some((field) => typeContainsParameter(field, matches));
+    case "function":
+    case "action":
+    case "intrinsic":
+      // A generic callable owns its parameter indexes; they are not free here.
+      if (type.typeParameterNames?.length) return false;
+      return type.parameters.some((parameter) => typeContainsParameter(parameter, matches))
+        || (type.rest ? typeContainsParameter(type.rest, matches) : false)
+        || typeContainsParameter(type.result, matches);
+    case "union":
+      return type.members.some((member) => typeContainsParameter(member, matches));
+    default:
+      return false;
+  }
+}
+
+export function substituteTypeParameters(type: ValueType, bindings: readonly (ValueType | null)[]): ValueType {
+  switch (type.kind) {
+    case "parameter":
+      return bindings[type.index] ?? unknownType;
+    case "optional":
+      return optionalOf(substituteTypeParameters(type.inner, bindings));
+    case "list":
+    case "set": {
+      const element = substituteTypeParameters(type.element, bindings);
+      return element === type.element ? type : { ...type, element };
+    }
+    case "map": {
+      const key = substituteTypeParameters(type.key, bindings);
+      const value = substituteTypeParameters(type.value, bindings);
+      return key === type.key && value === type.value ? type : { ...type, key, value };
+    }
+    case "promise": {
+      const value = substituteTypeParameters(type.value, bindings);
+      return value === type.value ? type : { kind: "promise", value };
+    }
+    case "object":
+      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])) };
+    case "function":
+    case "action":
+    case "intrinsic":
+      if (type.typeParameterNames?.length) return type;
+      return {
+        ...type,
+        parameters: type.parameters.map((parameter) => substituteTypeParameters(parameter, bindings)),
+        ...(type.rest ? { rest: substituteTypeParameters(type.rest, bindings) } : {}),
+        result: substituteTypeParameters(type.result, bindings),
+      };
+    case "union":
+      return unionOf(type.members.map((member) => substituteTypeParameters(member, bindings)));
+    default:
+      return type;
+  }
+}
+
+export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap<string, ValueType>): ValueType {
+  switch (type.kind) {
+    case "named":
+      return !type.identity && parameters.has(type.name) ? parameters.get(type.name)! : type;
+    case "optional":
+      return optionalOf(bindNamedTypeParameters(type.inner, parameters));
+    case "list":
+    case "set": {
+      const element = bindNamedTypeParameters(type.element, parameters);
+      return element === type.element ? type : { ...type, element };
+    }
+    case "map":
+      return { ...type, key: bindNamedTypeParameters(type.key, parameters), value: bindNamedTypeParameters(type.value, parameters) };
+    case "promise":
+      return { kind: "promise", value: bindNamedTypeParameters(type.value, parameters) };
+    case "object":
+      return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, bindNamedTypeParameters(value, parameters)])) };
+    case "function":
+    case "action":
+    case "intrinsic":
+      if (type.typeParameterNames?.length) return type;
+      return {
+        ...type,
+        parameters: type.parameters.map((parameter) => bindNamedTypeParameters(parameter, parameters)),
+        ...(type.rest ? { rest: bindNamedTypeParameters(type.rest, parameters) } : {}),
+        result: bindNamedTypeParameters(type.result, parameters),
+      };
+    case "union":
+      return { kind: "union", members: type.members.map((member) => bindNamedTypeParameters(member, parameters)) };
+    default:
+      return type;
+  }
+}
+
+export function unifyTypeParameters(
+  pattern: ValueType,
+  actual: ValueType,
+  bindings: (ValueType | null)[],
+  fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null = () => null,
+): void {
+  if (isInvalidType(actual)) return;
+  if (pattern.kind === "parameter") {
+    if (actual.kind === "unknown") return;
+    const existing = bindings[pattern.index];
+    bindings[pattern.index] = existing ? mergeTypes(existing, actual) : actual;
+    return;
+  }
+  if (pattern.kind === "optional") {
+    if (actual.kind === "null") return;
+    if (actual.kind === "optional") return unifyTypeParameters(pattern.inner, actual.inner, bindings, fieldsOf);
+    if (actual.kind === "union") {
+      const remaining = actual.members.filter((member) => member.kind !== "null");
+      if (remaining.length === 0) return;
+      return unifyTypeParameters(pattern.inner, unionOf(remaining), bindings, fieldsOf);
+    }
+    return unifyTypeParameters(pattern.inner, actual, bindings, fieldsOf);
+  }
+  if (pattern.kind === "union") {
+    const concrete = pattern.members.filter((member) => !typeContainsParameter(member));
+    const actualMembers = actual.kind === "union" ? actual.members : [actual];
+    const remaining = actualMembers.filter((member) => !concrete.some((covered) => sameType(covered, member)));
+    if (remaining.length === 0) return;
+    for (const member of pattern.members) {
+      if (typeContainsParameter(member)) unifyTypeParameters(member, unionOf(remaining), bindings, fieldsOf);
+    }
+    return;
+  }
+  if ((pattern.kind === "list" && actual.kind === "list") || (pattern.kind === "set" && actual.kind === "set")) {
+    return unifyTypeParameters(pattern.element, actual.element, bindings, fieldsOf);
+  }
+  if (pattern.kind === "map" && actual.kind === "map") {
+    unifyTypeParameters(pattern.key, actual.key, bindings, fieldsOf);
+    unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
+    return;
+  }
+  if (pattern.kind === "promise" && actual.kind === "promise") {
+    return unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
+  }
+  if (pattern.kind === "object") {
+    const fields = actual.kind === "object" ? actual.fields
+      : actual.kind === "named" ? fieldsOf(actual.identity ?? actual.name)
+        : null;
+    if (!fields) return;
+    for (const [name, field] of pattern.fields) {
+      const provided = fields.get(name);
+      if (provided) unifyTypeParameters(field, provided, bindings, fieldsOf);
+    }
+    return;
+  }
+  if ((pattern.kind === "function" || pattern.kind === "action" || pattern.kind === "intrinsic")
+    && (actual.kind === "function" || actual.kind === "action" || actual.kind === "intrinsic")) {
+    // A generic callable value is sealed: its parameter indexes belong to it.
+    if (actual.typeParameterNames?.length) return;
+    for (let index = 0; index < pattern.parameters.length; index += 1) {
+      const provided = actual.parameters[index] ?? actual.rest;
+      if (provided) unifyTypeParameters(pattern.parameters[index]!, provided, bindings, fieldsOf);
+    }
+    if (pattern.rest && actual.rest) unifyTypeParameters(pattern.rest, actual.rest, bindings, fieldsOf);
+    unifyTypeParameters(pattern.result, actual.result, bindings, fieldsOf);
+  }
+}
+
+export function instantiateGenericCallable(
+  actual: CallableType,
+  expected: CallableType,
+  environment: TypeEnvironment,
+): CallableType {
+  const bindings: (ValueType | null)[] = Array.from({ length: actual.typeParameterNames?.length ?? 0 }, () => null);
+  const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => environment.fieldsOf(identity);
+  for (let index = 0; index < actual.parameters.length; index += 1) {
+    const provided = expected.parameters[index] ?? expected.rest;
+    if (provided) unifyTypeParameters(actual.parameters[index]!, provided, bindings, fieldsOf);
+  }
+  if (actual.rest) {
+    for (let index = actual.parameters.length; index < expected.parameters.length; index += 1) {
+      unifyTypeParameters(actual.rest, expected.parameters[index]!, bindings, fieldsOf);
+    }
+    if (expected.rest) unifyTypeParameters(actual.rest, expected.rest, bindings, fieldsOf);
+  }
+  unifyTypeParameters(actual.result, expected.result, bindings, fieldsOf);
+  const { typeParameterNames: _erased, ...base } = actual;
+  return {
+    ...base,
+    parameters: actual.parameters.map((parameter) => substituteTypeParameters(parameter, bindings)),
+    ...(actual.rest ? { rest: substituteTypeParameters(actual.rest, bindings) } : {}),
+    result: substituteTypeParameters(actual.result, bindings),
+  };
+}
 
 function callableInputsAssignable(actual: CallableType, expected: CallableType, environment: TypeEnvironment, seen: Set<string>): boolean {
   if (actual.requiredParameters > expected.requiredParameters) return false;

@@ -4,6 +4,27 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Minimal generics for def functions
+
+Language and compiler changes:
+
+- `def` functions — top-level, exported, extern, and class methods — can
+  declare type parameters: `def first<T>(items: List<T>) -> T?`. Type
+  arguments are inferred at each call site; there is no explicit instantiation
+  syntax. Callback arrows are checked against the bindings solved from fixed
+  arguments, and their results solve the remaining parameters. An unsolved
+  parameter becomes `unknown`.
+- Type parameters are usable in parameter annotations, result annotations, and
+  value annotations inside the function body. A generic function is an
+  ordinary value: calls through bindings infer per call site, and assigning
+  one to a concrete function contract instantiates it against that contract.
+- Type parameters are erased at runtime: `is T`, `case T`, and any type
+  containing a parameter in a runtime-checked position are rejected with
+  VEL4022. Duplicate or type-shadowing parameters and a nested `def` reusing an
+  enclosing function's parameter are rejected with VEL4021.
+- Generic `type`, `class`, and `component` declarations, bounds, and variance
+  are out of scope for this version and report a targeted diagnostic.
+
 ## 0.10.0-dev — Remove host-origin tracking and call-effect invalidation
 
 Language and compiler changes:

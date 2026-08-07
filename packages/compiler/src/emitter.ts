@@ -1234,6 +1234,9 @@ export class JavaScriptEmitter {
       case "classConstructor":
       case "componentConstructor":
       case "node":
+      // Type parameters are erased; the analyzer rejects them in any
+      // runtime-checked position before emission can happen.
+      case "parameter":
         return "false";
     }
   }

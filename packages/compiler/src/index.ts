@@ -9,6 +9,7 @@ import { SourceText } from "./source.ts";
 import { buildSemanticIndex, type SemanticIndex } from "./semantic.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
+  bindNamedTypeParameters,
   boolType,
   mergeTypes,
   nullType,
@@ -590,14 +591,21 @@ function interfaceOf(
 }
 
 function functionSignature(statement: FunctionDeclaration, resolve: (reference: TypeReference | null) => ValueType): ValueType {
-  const result = statement.returnType ? resolve(statement.returnType) : nullType;
+  const frame = new Map<string, ValueType>();
+  for (const declaration of statement.typeParameters ?? []) {
+    if (!frame.has(declaration.name)) frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+  }
+  const resolveBound = (reference: TypeReference | null): ValueType =>
+    frame.size === 0 ? resolve(reference) : bindNamedTypeParameters(resolve(reference), frame);
+  const result = statement.returnType ? resolveBound(statement.returnType) : nullType;
   const rest = statement.parameters.find((parameter) => parameter.rest);
   return {
     kind: "function",
-    parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolve(parameter.type)),
+    ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
+    parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolveBound(parameter.type)),
     parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
     requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-    ...(rest ? { rest: resolve(rest.type) } : {}),
+    ...(rest ? { rest: resolveBound(rest.type) } : {}),
     result: statement.asynchronous ? { kind: "promise", value: resolvedAsyncType(result) } : result,
   };
 }

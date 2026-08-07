@@ -33,6 +33,7 @@ import type {
   TypeDeclaration,
   TypeAliasDeclaration,
   TypeField,
+  TypeParameterDeclaration,
   TypeReference,
   TypeSyntax,
   VariableDeclaration,
@@ -377,11 +378,13 @@ export class Parser {
         continue;
       }
       const name = this.expect("identifier", "Expected an extern function name");
+      const typeParameters = this.parseTypeParameters();
       const parameters = this.parseParameters();
       const returnType = this.match("arrow") ? this.parseTypeReference() : null;
       functions.push({
         asynchronous,
         name: name.value,
+        ...(typeParameters ? { typeParameters } : {}),
         parameters,
         returnType,
         span: span(declarationStart, returnType?.span.end ?? this.previous().span.end),
@@ -453,12 +456,14 @@ export class Parser {
       }
       if (this.match("def")) {
         const methodName = this.expectMemberName("Expected an extern class method name");
+        const typeParameters = this.parseTypeParameters();
         const methodParameters = this.parseParameters();
         const returnType = this.match("arrow") ? this.parseTypeReference() : null;
         methods.push({
           static: static_,
           asynchronous,
           name: methodName.value,
+          ...(typeParameters ? { typeParameters } : {}),
           parameters: methodParameters,
           returnType,
           span: span(memberStart, returnType?.span.end ?? this.previous().span.end),
@@ -561,6 +566,7 @@ export class Parser {
 
   private parseFunction(start: number, exported: boolean, asynchronous: boolean): FunctionDeclaration {
     const name = this.expect("identifier", "Expected a function name");
+    const typeParameters = this.parseTypeParameters();
     const parameters = this.parseParameters();
     const returnType = this.match("arrow") ? this.parseTypeReference() : null;
     const body = this.parseBlock();
@@ -571,11 +577,29 @@ export class Parser {
       exported,
       asynchronous,
       name: name.value,
+      ...(typeParameters ? { typeParameters } : {}),
       parameters,
       returnType,
       body,
       span: span(start, end),
     };
+  }
+
+  private parseTypeParameters(): readonly TypeParameterDeclaration[] | null {
+    if (!this.match("less")) return null;
+    const open = this.previous();
+    const parameters: TypeParameterDeclaration[] = [];
+    if (!this.check("greater")) {
+      do {
+        const name = this.expect("identifier", "Expected a type parameter name");
+        if (name.value) parameters.push({ name: name.value, span: name.span });
+      } while (this.match("comma") && !this.check("greater"));
+    }
+    const close = this.expect("greater", "Expected '>' after type parameters");
+    if (parameters.length === 0) {
+      this.diagnostics.push(diagnostic("VEL2025", "A type parameter list requires at least one name", span(open.span.start, close.span.end)));
+    }
+    return parameters;
   }
 
   protected parseParameters(): readonly Parameter[] {
@@ -642,6 +666,10 @@ export class Parser {
 
   private parseTypeDefinition(start: number, exported: boolean): TypeDeclaration | TypeAliasDeclaration {
     const name = this.expect("identifier", "Expected a type name");
+    if (this.check("less")) {
+      this.parseTypeParameters();
+      this.diagnostics.push(diagnostic("VEL2025", `Type '${name.value}' cannot declare type parameters; only 'def' functions take '<T>'`, name.span));
+    }
     if (this.match("assign")) {
       const target = this.parseTypeReference();
       return { kind: "TypeAliasDeclaration", exported, name: name.value, target, span: span(start, target.span.end) };
@@ -689,6 +717,10 @@ export class Parser {
 
   private parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration {
     const name = this.expect("identifier", "Expected a class name");
+    if (this.check("less")) {
+      this.parseTypeParameters();
+      this.diagnostics.push(diagnostic("VEL2025", `Class '${name.value}' cannot declare type parameters; only 'def' functions take '<T>'`, name.span));
+    }
     let parameters: ClassParameter[] = [];
     if (this.match("leftParen")) {
       this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' declares its constructor in the class body with 'constructor(...)'`, this.previous().span));
@@ -861,6 +893,10 @@ export class Parser {
     asynchronous: boolean,
   ): ClassGetterDeclaration {
     const name = this.expectMemberName("Expected a getter name");
+    if (this.check("less")) {
+      this.parseTypeParameters();
+      this.diagnostics.push(diagnostic("VEL2023", "A getter cannot declare type parameters", name.span));
+    }
     this.expect("leftParen", "Expected '(' after a getter name");
     if (!this.check("rightParen")) {
       this.diagnostics.push(diagnostic("VEL2023", "A getter cannot accept parameters", this.current().span));
@@ -922,6 +958,7 @@ export class Parser {
     private_: boolean,
   ): ClassMethodDeclaration {
     const name = this.expectMemberName("Expected a method name");
+    const typeParameters = this.parseTypeParameters();
     const parameters = this.parseParameters();
     const returnType = this.match("arrow") ? this.parseTypeReference() : null;
     if (abstract) {
@@ -935,6 +972,7 @@ export class Parser {
         static: static_,
         private: private_,
         name: name.value,
+        ...(typeParameters ? { typeParameters } : {}),
         parameters,
         returnType,
         body: [],
@@ -951,6 +989,7 @@ export class Parser {
       static: static_,
       private: private_,
       name: name.value,
+      ...(typeParameters ? { typeParameters } : {}),
       parameters,
       returnType,
       body,
