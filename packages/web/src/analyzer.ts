@@ -30,6 +30,15 @@ type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }
 type JSXAttribute = JSXElementExpression["attributes"][number];
 
 const removedJsxControlAttributes = new Set(["if", "else-if", "else"]);
+const nativeDomEventNames = new Set([
+  "click", "dblclick", "input", "beforeinput", "change", "submit", "reset", "invalid", "select", "toggle", "close",
+  "keydown", "keyup", "keypress", "focus", "blur", "focusin", "focusout", "scroll", "wheel",
+  "mousedown", "mouseup", "mousemove", "mouseenter", "mouseleave", "mouseover", "mouseout", "contextmenu",
+  "pointerdown", "pointerup", "pointermove", "pointerenter", "pointerleave", "pointerover", "pointerout", "pointercancel",
+  "touchstart", "touchend", "touchmove", "touchcancel",
+  "dragstart", "dragend", "dragover", "dragenter", "dragleave", "drop", "drag",
+  "copy", "cut", "paste", "load", "error", "transitionend", "animationend", "play", "pause", "ended",
+]);
 const textualWebPrimitiveNames = new Set(["Length", "Percentage", "Color", "Duration", "Angle", "Opacity"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
 const LOOK_CONDITION_TERM_LIMIT = 32;
@@ -1027,6 +1036,18 @@ export class VelarWebAnalyzer extends Analyzer {
         const expected = expression.tag === "canvas" ? "CanvasElement" : expression.tag === "dialog" ? "DialogElement" : ["input", "select", "textarea"].includes(expression.tag) ? "InputElement" : "Element";
         if (bindingType.kind !== "any" && bindingType.kind !== "optional") this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element? so cleanup can restore null`, attribute.span));
         else if (target.kind !== "any" && (target.kind !== "named" || (target.name !== expected && target.name !== "Element"))) this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element?`, attribute.span));
+      }
+    } else if (attribute.name === "bind") {
+      this.diagnostics.push(diagnostic("VEL5019", "Use 'bind:value={name}'; the bind directive names the bound property, such as bind:value or bind:checked", attribute.span));
+    } else if (/^on[A-Z]/u.test(attribute.name)) {
+      if (attribute.name === "onEnter") {
+        this.diagnostics.push(diagnostic("VEL5025", "Use 'on:keydown' with a handler that checks 'event.key == \"Enter\"'; VelarScript has no dedicated enter-key event", attribute.span));
+      } else {
+        const camel = attribute.name.slice(2);
+        const event = camel === "DoubleClick" || camel === "DblClick" ? "dblclick" : camel.toLowerCase();
+        this.diagnostics.push(diagnostic("VEL5025", nativeDomEventNames.has(event)
+          ? `Use 'on:${event}'; VelarScript event attributes use the on: directive`
+          : "Use an 'on:event' directive with a native DOM event name, such as 'on:click' or 'on:keydown'", attribute.span));
       }
     } else if (attribute.name.startsWith("on:")) {
       const [event, ...modifiers] = attribute.name.slice(3).split(".");

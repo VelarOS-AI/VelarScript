@@ -41,7 +41,7 @@ import type {
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd } from "./interpolated-string.ts";
-import { sourceTypeNameGuidance } from "./language-guidance.ts";
+import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
@@ -203,6 +203,26 @@ export class Parser {
 
     if (this.check("const") || this.check("let")) {
       return this.parseVariable(start, exported);
+    }
+
+    if (this.check("identifier") && this.peekKind(1) === "identifier") {
+      const first = this.current();
+      const guidance = declarationKeywordGuidance(first.value);
+      if (guidance) {
+        this.diagnostics.push(diagnostic("VEL2026", guidance, first.span));
+        this.skipMistypedDeclaration();
+        return { kind: "PassStatement", span: first.span };
+      }
+      const following = this.peekKind(2);
+      if (following === "leftParen" || following === "colon") {
+        this.diagnostics.push(diagnostic(
+          "VEL2026",
+          `Unknown declaration keyword '${first.value}'; VelarScript declarations start with 'def', 'type', 'enum', 'class', 'const', or 'let'`,
+          first.span,
+        ));
+        this.skipMistypedDeclaration();
+        return { kind: "PassStatement", span: first.span };
+      }
     }
 
     if (exported) {
@@ -856,6 +876,15 @@ export class Parser {
       if (!this.match("def")) {
         if (this.match("pass")) {
           this.expectStatementEnd();
+          this.consumeNewlines();
+          continue;
+        }
+        const keywordGuidance = this.check("identifier") && this.peekKind(1) === "identifier"
+          ? declarationKeywordGuidance(this.current().value)
+          : null;
+        if (keywordGuidance) {
+          this.diagnostics.push(diagnostic("VEL2026", keywordGuidance, this.current().span));
+          this.skipMistypedDeclaration();
           this.consumeNewlines();
           continue;
         }
@@ -1850,6 +1879,24 @@ export class Parser {
     }
   }
 
+  // After a mistyped declaration keyword is reported, consume the rest of the
+  // statement line and any indented block that belongs to it so the wrong
+  // spelling produces one directive diagnostic instead of a misleading cascade.
+  protected skipMistypedDeclaration(): void {
+    this.synchronize();
+    let distance = 0;
+    while (this.peekKind(distance) === "newline") distance += 1;
+    if (this.peekKind(distance) !== "indent") return;
+    this.consumeNewlines();
+    this.advance();
+    let depth = 1;
+    while (depth > 0 && !this.check("eof")) {
+      if (this.check("indent")) depth += 1;
+      else if (this.check("dedent")) depth -= 1;
+      this.advance();
+    }
+  }
+
   protected consumeNewlines(): void {
     while (this.match("newline")) {
       // Intentionally empty.
@@ -1890,11 +1937,11 @@ export class Parser {
     return this.current().kind === kind;
   }
 
-  private peekKind(distance: number): TokenKind {
+  protected peekKind(distance: number): TokenKind {
     return this.tokens[this.index + distance]?.kind ?? "eof";
   }
 
-  private advance(): Token {
+  protected advance(): Token {
     const token = this.current();
     if (token.kind !== "eof") {
       this.index += 1;

@@ -75,6 +75,45 @@ const collectionGuidance = new Map<CollectionKind, ReadonlyMap<string, Collectio
   ])],
 ]);
 
+const functionKeywordGuidance = "Use 'def'; VelarScript declares functions with 'def name(...)'";
+const typeKeywordGuidance = "Use 'type'; VelarScript declares record shapes with 'type Name:'";
+
+const declarationKeywordGuidanceEntries = new Map<string, string>([
+  ["fn", functionKeywordGuidance],
+  ["func", functionKeywordGuidance],
+  ["function", functionKeywordGuidance],
+  ["record", typeKeywordGuidance],
+  ["struct", typeKeywordGuidance],
+  ["interface", typeKeywordGuidance],
+]);
+
+const stringMemberGuidanceEntries = new Map<string, string>([
+  ["trim", "Use trim(value) from 'velar/text'; string operations are functions"],
+  ["trimStart", "Use trimStart(value) from 'velar/text'; string operations are functions"],
+  ["trimEnd", "Use trimEnd(value) from 'velar/text'; string operations are functions"],
+  ["toUpperCase", "Use upper(value) from 'velar/text'; string operations are functions"],
+  ["toLowerCase", "Use lower(value) from 'velar/text'; string operations are functions"],
+  ["upper", "Use upper(value) from 'velar/text'; string operations are functions"],
+  ["lower", "Use lower(value) from 'velar/text'; string operations are functions"],
+  ["includes", "Use includes(value, part) from 'velar/text'; string operations are functions"],
+  ["startsWith", "Use startsWith(value, prefix) from 'velar/text'; string operations are functions"],
+  ["endsWith", "Use endsWith(value, suffix) from 'velar/text'; string operations are functions"],
+  ["split", "Use split(value, separator) from 'velar/text'; string operations are functions"],
+  ["replace", "Use replace(value, search, replacement) from 'velar/text'; string operations are functions"],
+  ["replaceAll", "Use replaceAll(value, search, replacement) from 'velar/text'; string operations are functions"],
+  ["padStart", "Use padStart(value, length) from 'velar/text'; string operations are functions"],
+  ["padEnd", "Use padEnd(value, length) from 'velar/text'; string operations are functions"],
+  ["repeat", "Use repeat(value, count) from 'velar/text'; string operations are functions"],
+]);
+
+export function declarationKeywordGuidance(name: string): string | null {
+  return declarationKeywordGuidanceEntries.get(name) ?? null;
+}
+
+export function stringMemberGuidance(name: string): string | null {
+  return stringMemberGuidanceEntries.get(name) ?? null;
+}
+
 export function sourceTypeNameGuidance(name: string): SourceTypeGuidance | null {
   return sourceTypeGuidance.get(name) ?? null;
 }

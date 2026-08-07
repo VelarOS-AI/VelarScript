@@ -29,6 +29,7 @@ type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }
 
 const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
+const renderBlockSpellings = new Set(["render", "show", "view"]);
 
 export class VelarWebParser extends Parser {
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[]) {
@@ -43,6 +44,18 @@ export class VelarWebParser extends Parser {
     start: number,
     modifiers: { readonly exported: boolean; readonly abstract: boolean; readonly asynchronous: boolean },
   ): Statement | null | undefined {
+    if (this.current().kind === "extensionKeyword" && this.current().value === "look"
+      && this.peekKind(1) === "identifier" && this.peekKind(2) === "colon") {
+      const keyword = this.advance();
+      const name = this.advance();
+      this.diagnostics.push(diagnostic(
+        "VEL5038",
+        `Use 'const ${name.value} = look:'; Look is a value that is attached to an element with look={${name.value}}`,
+        span(keyword.span.start, name.span.end),
+      ));
+      this.skipMistypedDeclaration();
+      return { kind: "PassStatement", span: span(keyword.span.start, name.span.end) };
+    }
     if (this.matchExtensionKeyword("component")) {
       if (modifiers.abstract) this.diagnostics.push(diagnostic("VEL2013", "Only classes can be declared with 'abstract'", this.previous().span));
       if (modifiers.asynchronous) this.diagnostics.push(diagnostic("VEL2013", "Components are not declared with 'async'", this.previous().span));
@@ -196,6 +209,14 @@ export class VelarWebParser extends Parser {
       } else if (this.matchExtensionKeyword("cleanup")) {
         const body = this.parseBlock();
         item = { kind: "CleanupBlock", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
+      } else if (this.check("identifier") && renderBlockSpellings.has(this.current().value) && this.peekKind(1) === "colon") {
+        const keyword = this.advance();
+        this.diagnostics.push(diagnostic(
+          "VEL5048",
+          `Use 'return <...>'; a component returns its JSX directly and has no '${keyword.value}:' block`,
+          keyword.span,
+        ));
+        this.skipMistypedDeclaration();
       } else {
         item = this.parseStatement();
       }
@@ -278,9 +299,23 @@ class LookSourceParser {
         this.report(diagnostic("VEL5038", "Look 'else' must immediately follow an 'if' at the same indentation", this.lineSpan(line)));
         continue;
       }
+      const kebab = /^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\s*=/u.exec(line.text);
+      if (kebab) {
+        const camel = kebab[1]!.replace(/-+([A-Za-z])/gu, (_, letter: string) => letter.toUpperCase());
+        this.report(diagnostic("VEL5038", `Use '${camel}'; Look properties use the DOM camelCase spelling`, this.lineSpan(line)));
+        continue;
+      }
       const property = /^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/u.exec(line.text);
       if (property) {
         const valueText = property[2]!;
+        if (/^(?:margin|padding|inset)/u.test(property[1]!) && /^[+-]?\d[\w.%]*(?:\s+[+-]?\d[\w.%]*)+$/u.test(valueText)) {
+          const builderArguments = valueText
+            .split(/\s+/u)
+            .map((token) => (/^[+-]?\d+(?:\.\d+)?$/u.test(token) ? `${token}px` : token))
+            .join(", ");
+          this.report(diagnostic("VEL5038", `Use 'spacing(${builderArguments})'; Look multi-value shorthand is written with the spacing builder`, this.lineSpan(line)));
+          continue;
+        }
         const assignment = line.text.indexOf("=");
         const afterAssignment = line.text.slice(assignment + 1);
         const valueStart = line.start + assignment + 1 + (afterAssignment.length - afterAssignment.trimStart().length);

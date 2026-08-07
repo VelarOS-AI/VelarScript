@@ -18,7 +18,7 @@ const forbiddenSourceIdentifiers = new Map<string, string>([
   ["this", "Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'"],
   ["new", "Call a class directly; VelarScript does not expose 'new'"],
   ["eval", "VelarScript does not expose 'eval'"],
-  ["with", "VelarScript does not expose 'with'"],
+  ["with", "Use a record spread such as '{...value, field: next}' to build an updated record; VelarScript does not expose 'with'"],
   ["arguments", "Use named parameters; VelarScript does not expose 'arguments'"],
   ["schema", "Use 'type'; VelarScript has no separate schema declaration"],
 ]);

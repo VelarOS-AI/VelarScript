@@ -20,7 +20,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
-import { collectionMemberGuidance, type CollectionKind } from "./language-guidance.ts";
+import { collectionMemberGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
 import { spanIdentity, type Span } from "./source.ts";
 import {
   analysisTypeIdentity,
@@ -3014,6 +3014,18 @@ export class Analyzer implements TypeEnvironment {
       }
       return unknownType;
     }
+    if (callee.kind === "typeObject") {
+      for (const argument of arguments_) {
+        this.inferExpression(argument);
+      }
+      this.typeError(
+        `Use a record literal '{field: value, ...}' to build a '${callee.name}' value; a 'type' declares a shape, not a constructor`,
+        callSpan,
+      );
+      return this.invalidDeclaredTypes.has(callee.name)
+        ? invalidType
+        : this.typeAliases.get(callee.name) ?? { kind: "named", name: callee.name };
+    }
     for (const argument of arguments_) {
       this.inferExpression(argument);
     }
@@ -3976,8 +3988,12 @@ export class Analyzer implements TypeEnvironment {
     } else if (object.kind === "unknown") {
       if (isInvalidType(object)) result = invalidType;
       else this.typeError(`Cannot access '${property}' on unknown without validation`, memberSpan);
-    } else if (object.kind === "string" && property === "length") {
-      result = numberType;
+    } else if (object.kind === "string") {
+      if (property === "length") {
+        result = numberType;
+      } else {
+        this.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
+      }
     } else if (object.kind === "list") {
       result = this.listMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
@@ -4592,6 +4608,15 @@ export class Analyzer implements TypeEnvironment {
   protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): void {
     if (this.contextuallyAssignable(actual, expected, valueSpan)) {
       this.freezeEscapedCollectionInference(actual, expected);
+      return;
+    }
+    const expandedActual = this.expandAliases(actual);
+    const expandedExpected = this.expandAliases(expected);
+    const expectedCore = expandedExpected.kind === "optional" ? this.expandAliases(expandedExpected.inner) : expandedExpected;
+    if (expandedActual.kind === "object" && expectedCore.kind === "map") {
+      this.typeError(expandedActual.fields.size === 0
+        ? "Use 'Map()' to create an empty Map; a record literal '{}' builds a record, not a Map"
+        : "Use 'Map()' and '.set(key, value)' entries; a record literal '{...}' builds a record, not a Map", valueSpan);
       return;
     }
     const actualDescription = describeType(actual);

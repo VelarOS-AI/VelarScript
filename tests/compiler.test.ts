@@ -3079,7 +3079,7 @@ test("rejects legacy and discarded design surface with intentional diagnostics",
     ["const value = this\n", /self.*this/],
     ["const value = new Player()\n", /directly.*new/],
     ["eval(\"1\")\n", /does not expose 'eval'/],
-    ["with value\n", /does not expose 'with'/],
+    ["with value\n", /record spread.*\{\.\.\.value, field: next\}.*does not expose 'with'/],
     ["const value = arguments\n", /named parameters.*arguments/],
     ["const value = Player.prototype\n", /prototype manipulation/],
     ["const value = item.__proto__\n", /prototype manipulation/],
@@ -3105,6 +3105,153 @@ test("rejects legacy and discarded design surface with intentional diagnostics",
       `${source}: ${JSON.stringify(result.diagnostics)}`,
     );
   }
+});
+
+test("guides mistyped declaration keywords to the current spelling", () => {
+  const cases = new Map([
+    ["fn addTask(tasks: List<number>, title: string) -> List<number>:\n    return tasks\n", /Use 'def'.*'def name\(\.\.\.\)'/u],
+    ["func helper():\n    pass\n", /Use 'def'/u],
+    ["function addTask(value: number) -> number:\n    return value\n", /Use 'def'/u],
+    ["record Task(id: string, title: string, done: bool)\n", /Use 'type'.*'type Name:'/u],
+    ["record Task:\n    id: string\n    title: string\n", /Use 'type'/u],
+    ["struct Point:\n    x: number\n", /Use 'type'/u],
+    ["interface Task:\n    id: string\n", /Use 'type'/u],
+    ["class Player:\n    fn jump():\n        pass\n", /Use 'def'/u],
+  ]);
+
+  for (const [source, message] of cases) {
+    const result = compile(source);
+    assert.equal(result.code, null, source);
+    assert.deepEqual(
+      result.diagnostics.map((item) => item.code),
+      ["VEL2026"],
+      `${source}: ${JSON.stringify(result.diagnostics)}`,
+    );
+    assert.match(result.diagnostics[0]?.message ?? "", message, source);
+  }
+});
+
+test("reports one unknown-declaration-keyword diagnostic instead of expression cascades", () => {
+  const cases = new Map([
+    ["defn helper(x: number) -> number:\n    return x\n", "defn"],
+    ["myvar x: number = 5\n", "myvar"],
+  ]);
+
+  for (const [source, keyword] of cases) {
+    const result = compile(source);
+    assert.equal(result.code, null, source);
+    assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL2026"], source);
+    assert.match(result.diagnostics[0]?.message ?? "", new RegExp(`Unknown declaration keyword '${keyword}'.*'def', 'type', 'enum', 'class', 'const', or 'let'`, "u"), source);
+  }
+
+  const legal = compile("def run(value: number) -> number:\n    return value\n\nconst result = run(2)\nprint(result)\n");
+  assert.deepEqual(legal.diagnostics, []);
+});
+
+test("mistyped declaration keywords replace named-argument and reserved-binding cascades", () => {
+  const result = compile(`
+record Task(id: string, title: string, done: bool)
+
+function addTask(tasks: List<number>, title: string) -> List<number>:
+    return tasks
+`.trimStart());
+
+  assert.equal(result.code, null);
+  assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL2026", "VEL2026"]);
+  assert.match(result.diagnostics[0]?.message ?? "", /Use 'type'/u);
+  assert.match(result.diagnostics[1]?.message ?? "", /Use 'def'/u);
+  assert.ok(!result.diagnostics.some((item) => item.code === "VEL2024" || item.code === "VEL3007"));
+
+  const consecutive = compile(`
+function first(value: number) -> number:
+    return value
+
+function second(value: number) -> number:
+    return value
+`.trimStart());
+  assert.deepEqual(consecutive.diagnostics.map((item) => item.code), ["VEL2026", "VEL2026"]);
+});
+
+test("guides record literals against Map contracts, type-object calls, and JS string methods", () => {
+  const emptyMap = compile("let counts: Map<string, number> = {}\n");
+  assert.equal(emptyMap.code, null);
+  assert.ok(emptyMap.diagnostics.some((item) => item.code === "VEL4001"
+    && /Use 'Map\(\)' to create an empty Map.*record literal '\{\}'/u.test(item.message)));
+
+  const filledMap = compile("const counts: Map<string, number> = {a: 1}\n");
+  assert.ok(filledMap.diagnostics.some((item) => item.code === "VEL4001"
+    && /Use 'Map\(\)' and '\.set\(key, value\)' entries/u.test(item.message)));
+
+  const typeCall = compile("type Task:\n    id: string\n\nconst task = Task(id = \"t1\")\nprint(task.id)\n");
+  assert.equal(typeCall.code, null);
+  assert.ok(typeCall.diagnostics.some((item) => item.code === "VEL4001"
+    && /Use a record literal '\{field: value, \.\.\.\}' to build a 'Task' value.*not a constructor/u.test(item.message)));
+
+  const trim = compile("const value = \" x \".trim()\n");
+  assert.ok(trim.diagnostics.some((item) => item.code === "VEL4001"
+    && /Use trim\(value\) from 'velar\/text'/u.test(item.message)));
+
+  const upper = compile("const value = \"x\".toUpperCase()\n");
+  assert.ok(upper.diagnostics.some((item) => item.code === "VEL4001"
+    && /Use upper\(value\) from 'velar\/text'/u.test(item.message)));
+});
+
+test("guides component render-style blocks toward returning JSX directly", () => {
+  for (const keyword of ["render", "show", "view"]) {
+    const result = compile(`component App:\n    ${keyword}:\n        <div>hi</div>\n`);
+    assert.equal(result.code, null, keyword);
+    assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL5048"], keyword);
+    assert.match(result.diagnostics[0]?.message ?? "", /Use 'return <\.\.\.>'/u, keyword);
+    assert.match(result.diagnostics[0]?.message ?? "", new RegExp(`no '${keyword}:' block`, "u"), keyword);
+  }
+});
+
+test("guides camelCase event attributes and bare bind to the Web directive spellings", () => {
+  const result = compile(`
+component App:
+    state draft = ""
+
+    def send():
+        print(draft)
+
+    return <div>
+        <input bind={draft} onEnter={send} />
+        <button onClick={send}>Send</button>
+    </div>
+`.trimStart());
+
+  assert.equal(result.code, null);
+  assert.ok(result.diagnostics.some((item) => item.code === "VEL5019"
+    && /Use 'bind:value=\{name\}'.*bind:value or bind:checked/u.test(item.message)));
+  assert.ok(result.diagnostics.some((item) => item.code === "VEL5025"
+    && /Use 'on:click'.*on: directive/u.test(item.message)));
+  assert.ok(result.diagnostics.some((item) => item.code === "VEL5025"
+    && /Use 'on:keydown'.*event\.key == "Enter"/u.test(item.message)));
+});
+
+test("guides Look statement form, kebab-case properties, and multi-value shorthand", () => {
+  const statement = compile("look bubble:\n    maxWidth = 240px\n");
+  assert.equal(statement.code, null);
+  assert.deepEqual(statement.diagnostics.map((item) => item.code), ["VEL5038"]);
+  assert.match(statement.diagnostics[0]?.message ?? "", /Use 'const bubble = look:'.*look=\{bubble\}/u);
+
+  const kebab = compile("export const bubble = look:\n    max-width = 240px\n    overflow-y = \"auto\"\n");
+  assert.equal(kebab.code, null);
+  assert.ok(kebab.diagnostics.some((item) => item.code === "VEL5038"
+    && /Use 'maxWidth'.*DOM camelCase spelling/u.test(item.message)));
+  assert.ok(kebab.diagnostics.some((item) => item.code === "VEL5038"
+    && /Use 'overflowY'/u.test(item.message)));
+
+  const shorthand = compile("export const bubble = look:\n    margin = 4px 0\n    padding = 8px 12px\n");
+  assert.equal(shorthand.code, null);
+  assert.ok(shorthand.diagnostics.some((item) => item.code === "VEL5038"
+    && /Use 'spacing\(4px, 0px\)'.*spacing builder/u.test(item.message)));
+  assert.ok(shorthand.diagnostics.some((item) => item.code === "VEL5038"
+    && /Use 'spacing\(8px, 12px\)'/u.test(item.message)));
+
+  const hexStrings = compile("export const bubble = look:\n    background = \"#eef0f3\"\n    color = \"#1a1a1a\"\n");
+  assert.deepEqual(hexStrings.diagnostics, []);
+  assert.notEqual(hexStrings.code, null);
 });
 
 test("rejects untyped browser globals with official module guidance", () => {
