@@ -106,6 +106,17 @@ VelarScript initializer. Functions use the same checked parameter/result syntax 
 ordinary VelarScript functions. `export class` provides a complete
 constructor/instance/static contract directly.
 
+Declared exports are presence-checked at load. When a module imports names
+governed by an `extern module` declaration, the emitted bridge verifies at
+module initialization that each imported name actually exists on the
+JavaScript module — one namespace-membership probe per imported binding — and
+refuses with an error naming the source, the export, and the likely fix
+instead of binding `undefined` and failing far from the cause. This is
+existence only, consistent with the trusted-ABI stance above: no shapes, no
+runtime schema. A declared export whose value is legitimately `undefined`
+still loads, because the boundary is membership in the module namespace, not
+the bound value.
+
 Default-export-only packages are declared with the export name `default`. This
 is a supported contract, not a parser accident: `default` is not a VelarScript
 keyword, so it names the extern export directly, and the bare `import js Name
@@ -134,8 +145,9 @@ const renderer = MarkdownIt({html: false})
 ```
 
 The bare form `import js MarkdownIt from "markdown-it"` is the canonical
-default import and lowers to a native JavaScript default import; the explicit
-spelling `import js {default as MarkdownIt} from "markdown-it"` is equivalent.
+default import; the explicit spelling
+`import js {default as MarkdownIt} from "markdown-it"` is equivalent, and both
+lower through the same presence-checked bridge as any other declared export.
 Because `default` is a reserved word in JavaScript, the imported binding must
 always carry another local name — which both forms provide. Use the constant
 shape for default-exported singletons (it tells no lies about

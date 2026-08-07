@@ -3,6 +3,7 @@ import type {
   BindingPattern,
   EnumDeclaration,
   Expression,
+  ImportDeclaration,
   MatchPattern,
   Program,
   Statement,
@@ -33,6 +34,8 @@ export class JavaScriptEmitter {
   private readonly typeDeclarations = new Map<string, TypeDeclaration | TypeAliasDeclaration>();
   private readonly runtimeTypes = new Set<string>();
   private readonly expandedRuntimeTypes = new Set<string>();
+  private readonly externModuleExports = new Map<string, ReadonlySet<string>>();
+  private needsExternExportHelper = false;
   protected readonly hints: LoweringHints;
   private readonly forcedFunctionExports: ReadonlySet<string>;
   private needsIndexHelpers = false;
@@ -64,6 +67,25 @@ export class JavaScriptEmitter {
       .filter((item) => item.code.length > 0);
 
     const helpers: string[] = [...this.additionalHelpers(program)];
+    if (this.needsExternExportHelper) {
+      // W-22: an extern module declaration is trusted for shapes, but the
+      // declared export must actually exist. The bridge verifies presence at
+      // module initialization with one property probe per imported name; a
+      // declared export that legitimately holds undefined stays importable
+      // because the boundary is membership in the module namespace, not the
+      // value.
+      helpers.push([
+        "function __velarExternExport(namespace, name, source) {",
+        "  const value = namespace[name];",
+        "  if (value === undefined && !(name in namespace)) {",
+        "    throw new TypeError(name === \"default\"",
+        "      ? `Extern module '${source}' declares 'default', but the JavaScript module has no default export; declare the module's real named exports instead`",
+        "      : `Extern module '${source}' declares '${name}', but the JavaScript module has no such export; prototype methods and instance members belong on a declared class or singleton const, not module exports`);",
+        "  }",
+        "  return value;",
+        "}",
+      ].join("\n"));
+    }
     if (this.hints.instanceFieldReads.size > 0) {
       helpers.push([
         "function __velarReadInstanceField(receiver, name) {",
@@ -697,6 +719,12 @@ export class JavaScriptEmitter {
         if (statement.exported) {
           this.runtimeTypes.add(statement.name);
         }
+      } else if (statement.kind === "ExternModuleDeclaration") {
+        const names = new Set(this.externModuleExports.get(statement.source));
+        for (const declaration of statement.functions) names.add(declaration.name);
+        for (const declaration of statement.constants) names.add(declaration.name);
+        for (const declaration of statement.classes) names.add(declaration.name);
+        this.externModuleExports.set(statement.source, names);
       }
     }
     for (const name of [...this.runtimeTypes]) {
@@ -879,7 +907,7 @@ export class JavaScriptEmitter {
     const indentation = "  ".repeat(depth);
     switch (statement.kind) {
       case "ImportDeclaration":
-        return this.emitImport(statement.source, statement.specifiers, indentation);
+        return this.emitImport(statement, indentation);
       case "ReExportDeclaration": {
         const emittedSource = statement.source.endsWith(".vel") ? `${statement.source.slice(0, -4)}.js` : statement.source;
         const names = statement.specifiers
@@ -1089,17 +1117,40 @@ export class JavaScriptEmitter {
     }
   }
 
-  private emitImport(source: string, specifiers: readonly { imported: string; local: string; namespace: boolean }[], indentation: string): string {
+  private emitImport(statement: ImportDeclaration, indentation: string): string {
+    const source = statement.source;
     const emittedSource = source.endsWith(".vel") ? `${source.slice(0, -4)}.js` : source;
-    const first = specifiers[0];
+    const first = statement.specifiers[0];
     if (first?.namespace) {
       return `${indentation}import * as ${first.local} from ${JSON.stringify(emittedSource)};`;
     }
-    if (first?.imported === "default" && specifiers.length === 1) {
-      return `${indentation}import ${first.local} from ${JSON.stringify(emittedSource)};`;
+    // W-22: names governed by an extern module declaration import through the
+    // module namespace so a declared-but-missing export fails at this import
+    // site with a velar-voiced error instead of linking to undefined (bundled
+    // CommonJS interop) or a host-voiced link refusal. Only the genuinely
+    // imported declared names are checked; specifiers the declaration does not
+    // name keep the native import form.
+    const declared = statement.javascript && !statement.unsafe
+      ? this.externModuleExports.get(source)
+      : undefined;
+    const checked = declared ? statement.specifiers.filter((specifier) => declared.has(specifier.imported)) : [];
+    const native = declared ? statement.specifiers.filter((specifier) => !declared.has(specifier.imported)) : statement.specifiers;
+    const lines: string[] = [];
+    if (native.length === 1 && native[0]!.imported === "default") {
+      lines.push(`${indentation}import ${native[0]!.local} from ${JSON.stringify(emittedSource)};`);
+    } else if (native.length > 0 || checked.length === 0) {
+      const names = native.map((specifier) => specifier.imported === specifier.local ? specifier.imported : `${specifier.imported} as ${specifier.local}`).join(", ");
+      lines.push(`${indentation}import { ${names} } from ${JSON.stringify(emittedSource)};`);
     }
-    const names = specifiers.map((specifier) => specifier.imported === specifier.local ? specifier.imported : `${specifier.imported} as ${specifier.local}`).join(", ");
-    return `${indentation}import { ${names} } from ${JSON.stringify(emittedSource)};`;
+    if (checked.length > 0) {
+      this.needsExternExportHelper = true;
+      const namespaceName = `__velarExternModule${statement.span.start}`;
+      lines.push(`${indentation}import * as ${namespaceName} from ${JSON.stringify(emittedSource)};`);
+      for (const specifier of checked) {
+        lines.push(`${indentation}const ${specifier.local} = __velarExternExport(${namespaceName}, ${JSON.stringify(specifier.imported)}, ${JSON.stringify(source)});`);
+      }
+    }
+    return lines.join("\n");
   }
 
   private emitTypeDeclaration(statement: TypeDeclaration, depth: number): string {

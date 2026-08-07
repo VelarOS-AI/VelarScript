@@ -10531,6 +10531,95 @@ mystery()
   assert.ok(unknown.diagnostics.some((item) => /Cannot call an unknown JavaScript value/.test(item.message)));
 });
 
+test("extern-declared imports are presence-checked at module initialization", async () => {
+  // The exact W-22 shape: the declaration names an export the real module
+  // lacks (process.on is an EventEmitter prototype method, not a module
+  // export). The compile stays green, and the bridge refuses at load with a
+  // velar-voiced error at the import site instead of binding undefined and
+  // failing far from the cause.
+  const missingSource = `
+extern module "node:process":
+    export def on(event: string) -> null
+
+import js {on} from "node:process"
+
+print("reached")
+`.trimStart();
+  const missing = compile(missingSource);
+  assert.deepEqual(missing.diagnostics, []);
+  assert.match(missing.code ?? "", /import \* as __velarExternModule\d+ from "node:process";/u);
+  assert.match(missing.code ?? "", /const on = __velarExternExport\(__velarExternModule\d+, "on", "node:process"\);/u);
+  const failed = executeModule(missing.code ?? "");
+  assert.notEqual(failed.status, 0);
+  assert.match(String(failed.stderr), /Extern module 'node:process' declares 'on', but the JavaScript module has no such export; prototype methods and instance members belong on a declared class or singleton const, not module exports/u);
+  assert.doesNotMatch(String(failed.stdout), /reached/u);
+
+  // Green path: a declared export that exists imports and runs unchanged.
+  const valid = compile(`
+extern module "node:process":
+    export const version: string
+
+import js {version} from "node:process"
+
+print(version)
+`.trimStart());
+  assert.deepEqual(valid.diagnostics, []);
+  const validExecution = executeModule(valid.code ?? "");
+  assert.equal(validExecution.status, 0, String(validExecution.stderr));
+  assert.match(String(validExecution.stdout), /^v\d+/u);
+
+  // A declared export that legitimately holds undefined stays importable:
+  // the boundary is membership in the module namespace, not the bound value.
+  const undefinedValue = compile(`
+extern module "data:text/javascript,export const gap = undefined":
+    export const gap: unknown
+
+import js {gap} from "data:text/javascript,export const gap = undefined"
+
+print("loaded")
+`.trimStart());
+  assert.deepEqual(undefinedValue.diagnostics, []);
+  const undefinedExecution = executeModule(undefinedValue.code ?? "");
+  assert.equal(undefinedExecution.status, 0, String(undefinedExecution.stderr));
+  assert.equal(undefinedExecution.stdout, "loaded\n");
+
+  // Default-export path: a module without a default export is refused with
+  // the default wording, and a genuine default loads through the same bridge.
+  const missingDefault = compile(`
+extern module "data:text/javascript,export const value = 1":
+    export const default: number
+
+import js banner from "data:text/javascript,export const value = 1"
+
+print(banner)
+`.trimStart());
+  assert.deepEqual(missingDefault.diagnostics, []);
+  const defaultExecution = executeModule(missingDefault.code ?? "");
+  assert.notEqual(defaultExecution.status, 0);
+  assert.match(String(defaultExecution.stderr), /Extern module 'data:text\/javascript,export const value = 1' declares 'default', but the JavaScript module has no default export; declare the module's real named exports instead/u);
+
+  const presentDefault = compile(`
+extern module "data:text/javascript,export default 7":
+    export const default: number
+
+import js seven from "data:text/javascript,export default 7"
+
+print(seven)
+`.trimStart());
+  assert.deepEqual(presentDefault.diagnostics, []);
+  const presentExecution = executeModule(presentDefault.code ?? "");
+  assert.equal(presentExecution.status, 0, String(presentExecution.stderr));
+  assert.equal(presentExecution.stdout, "7\n");
+
+  // velar run reports the same refusal for a project entry.
+  const directory = await mkdtemp(join(tmpdir(), "velar-extern-presence-"));
+  const entryPath = join(directory, "main.vel");
+  await writeFile(entryPath, missingSource, "utf8");
+  const ran = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run", entryPath], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(ran.status, 1, ran.stdout);
+  assert.match(ran.stderr, /Extern module 'node:process' declares 'on', but the JavaScript module has no such export/u);
+});
+
 test("safe JavaScript classes keep constructors, members, aliases, and nominal package identity", () => {
   const valid = compile(`
 extern module "sdk-a":
@@ -17608,14 +17697,15 @@ export def render(text: string) -> string:
 `.trimStart();
   const result = compileCore(source);
   assert.deepEqual(result.diagnostics, []);
-  // The bare import js form is the canonical default import and lowers to a
-  // native JavaScript default import for both shapes.
-  assert.match(result.code ?? "", /import MarkdownIt from "markdown-it";/u);
-  assert.match(result.code ?? "", /import hljs from "highlight\.js\/lib\/common";/u);
+  // The bare import js form is the canonical default import; because the
+  // source is governed by an extern module declaration, both shapes lower
+  // through the presence-checked namespace bridge (W-22).
+  assert.match(result.code ?? "", /const MarkdownIt = __velarExternExport\(__velarExternModule\d+, "default", "markdown-it"\);/u);
+  assert.match(result.code ?? "", /const hljs = __velarExternExport\(__velarExternModule\d+, "default", "highlight\.js\/lib\/common"\);/u);
   // The declared contracts stay checked.
   const misuse = compileCore(source.replace("renderer.render(text)", "renderer.render(1)"));
   assert.ok(misuse.diagnostics.some((item) => item.code === "VEL4001"), JSON.stringify(misuse.diagnostics));
-  // The explicit spelling is equivalent and also lowers to a default import.
+  // The explicit spelling is equivalent and lowers to the same checked bridge.
   const explicit = compileCore(`
 extern module "markdown-it":
     export const default: string
@@ -17625,7 +17715,7 @@ import js {default as banner} from "markdown-it"
 print(banner)
 `.trimStart());
   assert.deepEqual(explicit.diagnostics, []);
-  assert.match(explicit.code ?? "", /import banner from "markdown-it";/u);
+  assert.match(explicit.code ?? "", /const banner = __velarExternExport\(__velarExternModule\d+, "default", "markdown-it"\);/u);
   // The formatter accepts both declaration shapes unchanged.
   assert.equal(formatSource(source), source);
 });
