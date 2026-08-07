@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { analysisTypeIdentity, isAssignable, sameType, type StorageOriginEffect, type ValueType } from "../packages/compiler/src/types.ts";
+import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { compileProject as compileProjectCore, moduleInterfaceIdentity, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
@@ -218,7 +218,9 @@ print(events.join(","))
   assert.equal(execution.stdout, "first:second\ntrue\ncallee,second,first\n");
 });
 
-test("call analysis follows callee-first and source-argument effect order", () => {
+test("calls in argument positions and getter callees preserve narrowing facts", () => {
+  // A call in an earlier named argument does not drop facts read by a later
+  // argument: calls are not invalidation points.
   const named = compileCore(`
 type User:
     name: string
@@ -233,12 +235,14 @@ def clear(box: Box) -> string:
 def consume(first: string, second: string) -> string:
     return first
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     assert box.user
     return consume(second=clear(box), first=box.user.name)
 `.trimStart());
-  assert.equal(named.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(named.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // Reading a getter to obtain the callee is an ordinary read; argument
+  // expressions may still rely on facts narrowed before the call.
   const getter = compileCore(`
 type User:
     name: string
@@ -254,11 +258,11 @@ class Host:
         self.user = null
         return Service()
 
-def invalid(host: Host) -> string:
+def label(host: Host) -> string:
     assert host.user
     return host.service.describe(name=host.user.name)
 `.trimStart());
-  assert.equal(getter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(getter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
 test("keeps Web syntax outside the Core language unless the project loads the Web extension", () => {
@@ -923,27 +927,6 @@ const unsafeSpread: Outer = {...aliasedOuter}
     { kind: "map", key: { kind: "named", name: "Left", identity: "x:named:y" }, value: { kind: "string" } },
     { kind: "map", key: { kind: "named", name: "Left", identity: "x" }, value: { kind: "named", name: "Right", identity: "y:string" } },
   ), false);
-  assert.notEqual(analysisTypeIdentity(leftObject), analysisTypeIdentity({ ...leftObject, external: true }));
-  assert.equal(sameType(leftObject, { ...leftObject, containsExternal: true }), true);
-  assert.notEqual(analysisTypeIdentity(leftObject), analysisTypeIdentity({ ...leftObject, containsExternal: true }));
-  const ownedNamed = { kind: "named" as const, name: "Box" };
-  assert.equal(sameType(ownedNamed, { ...ownedNamed, containsExternal: true }), true);
-  assert.notEqual(analysisTypeIdentity(ownedNamed), analysisTypeIdentity({ ...ownedNamed, containsExternal: true }));
-  assert.notEqual(
-    analysisTypeIdentity({ kind: "list", element: leftObject }),
-    analysisTypeIdentity({ kind: "list", element: { ...leftObject, external: true } }),
-  );
-  for (const collection of [
-    { kind: "set" as const, element: leftObject },
-    { kind: "map" as const, key: { kind: "string" as const }, value: leftObject },
-  ]) {
-    assert.equal(sameType(collection, { ...collection, external: true }), true);
-    assert.notEqual(analysisTypeIdentity(collection), analysisTypeIdentity({ ...collection, external: true }));
-  }
-  const ownedClass = { kind: "class" as const, name: "Box" };
-  const containingClass = { ...ownedClass, containsExternal: true as const };
-  assert.equal(sameType(ownedClass, containingClass), true);
-  assert.notEqual(analysisTypeIdentity(ownedClass), analysisTypeIdentity(containingClass));
   const readonlyObject = { ...leftObject, readonlyFields: new Set(["name"]) };
   const structuralEnvironment = { fieldsOf: () => null, isSubclassOf: () => false, isPrimitiveType: () => false, isPrimitiveSubtype: () => false };
   assert.equal(sameType(leftObject, readonlyObject), false);
@@ -961,19 +944,6 @@ const unsafeSpread: Outer = {...aliasedOuter}
     { kind: "intrinsic", name: "json.stringify", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
     { kind: "intrinsic", name: "json.clone", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
   ), false);
-  const inertCallable = {
-    kind: "function" as const,
-    parameters: [ownedClass, ownedNamed],
-    requiredParameters: 2,
-    result: { kind: "null" as const },
-  };
-  const storageEffectCallable = {
-    ...inertCallable,
-    storageOriginEffects: [{ targetParameter: 0, sourceParameters: [1] }],
-  };
-  assert.equal(sameType(inertCallable, storageEffectCallable), true);
-  assert.notEqual(analysisTypeIdentity(inertCallable), analysisTypeIdentity(storageEffectCallable));
-
   const redundantNull = compile("const value: null? = null\n");
   assert.ok(redundantNull.diagnostics.some((item) => item.message === "'null?' is redundant; use 'null'"));
 });
@@ -1302,7 +1272,9 @@ const initial = null;
   assert.equal(execution.stdout, "true\ntrue\n");
 });
 
-test("List.reduce analyzes its callback before its initial value", () => {
+test("List.reduce arguments preserve narrowing facts", () => {
+  // Reading the getter that supplies the callback does not drop the fact the
+  // initial-value argument relies on: getter reads are ordinary reads.
   const result = compileCore(`
 type User:
     name: string
@@ -1320,13 +1292,13 @@ class Callbacks:
         self.box.user = null
         return (left, value) => left
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     assert box.user
     const callbacks = Callbacks(box)
     return ["value"].reduce(callbacks.combine, box.user.name)
 `.trimStart());
 
-  assert.equal(result.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(result.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const contextualArrow = compileCore(`
 const total = [1, 2, 3].reduce((sum, value) => sum + value, 0)
@@ -1682,6 +1654,8 @@ print(2 in values)
   assert.equal(dynamicExecution.status, 0, String(dynamicExecution.stderr));
   assert.equal(dynamicExecution.stdout, "true\ntrue\n");
 
+  // A call as the left operand of 'in' does not drop the fact the list
+  // literal on the right relies on: calls are not invalidation points.
   const effects = compileCore(`
 type User:
     name: string
@@ -1693,11 +1667,11 @@ def clear(box: Box) -> string:
     box.user = null
     return "Ada"
 
-def invalid(box: Box) -> bool:
+def contains(box: Box) -> bool:
     assert box.user
     return clear(box) in [box.user.name]
 `.trimStart());
-  assert.equal(effects.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(effects.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
 test("exponentiation is numeric and right-associative", () => {
@@ -2014,7 +1988,10 @@ print(sound(Dog()))
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada\nmissing\nLin\nMira\n5\nVelar\nempty\nwoof\n");
 
-  const invalidatedGuard = compileCore(`
+  // A guard call keeps the pattern-established fact: calls are not
+  // invalidation points, so the case body and the else fallthrough may both
+  // rely on the pattern's narrowing.
+  const guardCallKeepsFacts = compileCore(`
 type User:
     name: string
 
@@ -2029,14 +2006,14 @@ def clearAndReject(box: Box) -> bool:
     box.user = null
     return false
 
-def invalid(box: Box) -> string:
+def guarded(box: Box) -> string:
     match box.user:
         case User if clear(box):
             return box.user.name
         else:
             return "missing"
 
-def invalidElse(box: Box) -> string:
+def guardedElse(box: Box) -> string:
     match box.user:
         case null:
             return "missing"
@@ -2045,9 +2022,11 @@ def invalidElse(box: Box) -> string:
         else:
             return box.user.name
 `.trimStart());
-  assert.equal(invalidatedGuard.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 2);
+  assert.equal(guardCallKeepsFacts.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
-  const effectfulTypeCheck = compileCore(`
+  // Matching against an extern class may run a hasInstance hook, but the
+  // check is an ordinary read: the matched member fact survives it.
+  const externTypeCheckKeepsFacts = compileCore(`
 extern module "sdk":
     export class Remote:
         const name: string
@@ -2058,14 +2037,14 @@ import js {Remote} from "sdk"
 type Holder:
     value: Remote?
 
-def invalid(holder: Holder) -> string:
+def label(holder: Holder) -> string:
     match holder.value:
         case Remote:
             return holder.value.name
         case null:
             return "missing"
 `.trimStart());
-  assert.equal(effectfulTypeCheck.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(externTypeCheckKeepsFacts.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
 test("match guards narrow the successful branch", () => {
@@ -2179,7 +2158,7 @@ def invalid(box: Box, kind: string):
   assert.equal(merged.diagnostics.filter((item) => /Cannot assign User\? to User/u.test(item.message)).length, 1);
 });
 
-test("match fallthrough keeps guard and pattern effects in execution order", () => {
+test("match fallthrough preserves narrowing facts across guards and pattern keys", () => {
   const common = compile(`
 type User:
     name: string
@@ -2200,6 +2179,8 @@ print(label({name: "Lin"}, "other"))
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada\nLin\n");
 
+  // A guard call in an earlier case does not drop the outer fact for later
+  // cases: calls are not invalidation points.
   const guarded = compile(`
 type User:
     name: string
@@ -2211,7 +2192,7 @@ def clearAndReject(box: Box) -> bool:
     box.user = null
     return false
 
-def invalid(box: Box, kind: string) -> string:
+def label(box: Box, kind: string) -> string:
     assert box.user
     match kind:
         case "first" if clearAndReject(box):
@@ -2219,8 +2200,10 @@ def invalid(box: Box, kind: string) -> string:
         case _:
             return box.user.name
 `.trimStart());
-  assert.equal(guarded.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(guarded.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // Reading a static getter as a match-pattern key is an ordinary read; the
+  // outer fact survives into later cases.
   const patternEffect = compile(`
 type User:
     name: string
@@ -2235,7 +2218,7 @@ class Keys:
         shared.user = null
         return "first"
 
-def invalid(kind: string) -> string:
+def label(kind: string) -> string:
     assert shared.user
     match kind:
         case Keys.first:
@@ -2243,7 +2226,7 @@ def invalid(kind: string) -> string:
         else:
             return shared.user.name
 `.trimStart());
-  assert.equal(patternEffect.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(patternEffect.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const unreachable = compile(`
 type User:
@@ -9290,6 +9273,8 @@ const mirrored: string = namespaceTools.version
   assert.deepEqual(valid.diagnostics, []);
   assert.doesNotMatch(valid.code ?? "", /extern module/);
 
+  // Extern record fields narrow like ordinary member locations, and index
+  // reads on extern lists do not drop facts narrowed on unrelated bindings.
   const externalAggregates = compile(`
 type Profile:
     label: string?
@@ -9316,7 +9301,7 @@ if current:
     const first = loaded[0]
     const afterResult: string = current
 `.trimStart());
-  assert.equal(externalAggregates.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 3);
+  assert.equal(externalAggregates.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 0);
 
   const invalid = compile(`
 extern module "text-tools":
@@ -9501,12 +9486,6 @@ export declare class InvalidOrder {
   assert.equal(describeType(declarations.exports.get("supply")!), "((unknown) -> null) -> null");
   assert.equal(describeType(declarations.exports.get("createValues")!), "() -> unknown");
   assert.equal(describeType(declarations.exports.get("mutableValues")!), "() -> List<string>");
-  const mutableValues = declarations.exports.get("mutableValues");
-  const mutableValuesResult = mutableValues?.kind === "function" ? mutableValues.result : null;
-  assert.equal(mutableValuesResult?.kind === "list" ? mutableValuesResult.external : false, true);
-  const acceptValues = declarations.exports.get("acceptValues");
-  const acceptedValues = acceptValues?.kind === "function" ? acceptValues.parameters[0] : null;
-  assert.equal(acceptedValues?.kind === "list" ? acceptedValues.external ?? false : null, false);
   assert.equal(describeType(declarations.exports.get("dictionary")!), "() -> unknown");
   assert.equal(describeType(declarations.exports.get("setMode")!), "(unknown) -> null");
   assert.equal(describeType(declarations.exports.get("visit")!), "((string) -> null) -> null");
@@ -9515,11 +9494,6 @@ export declare class InvalidOrder {
   assert.equal(describeType(declarations.exports.get("absent")!), "() -> null");
   assert.equal(describeType(declarations.exports.get("version")!), "string");
   assert.equal(describeType(declarations.exports.get("client")!), "{ readonly version: string, request: (string, number = default) -> Promise<string>, close?: () -> null }");
-  const declaredClient = declarations.exports.get("client");
-  assert.equal(declaredClient?.kind === "object" ? declaredClient.external : false, true);
-  const declaredFormat = declarations.exports.get("format");
-  const formatOptions = declaredFormat?.kind === "function" ? declaredFormat.parameters[1] : null;
-  assert.equal(formatOptions?.kind === "object" ? formatOptions.external ?? false : null, false);
   assert.equal(describeType(declarations.exports.get("recursiveClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("genericClient")!), "unknown");
   assert.equal(describeType(declarations.exports.get("Formatter")!), "Formatter");
@@ -9531,12 +9505,6 @@ export declare class InvalidOrder {
   assert.equal(describeType(declarations.classes.get("Formatter")!.methods.get("format")!), "(number, string = default) -> string");
   assert.equal(describeType(declarations.classes.get("Formatter")!.methods.get("setPrecision")!), "(number) -> Formatter");
   assert.equal(describeType(declarations.classes.get("Formatter")!.staticMethods.get("create")!), "(string) -> Formatter");
-  const setPrecision = declarations.classes.get("Formatter")!.methods.get("setPrecision");
-  const setPrecisionResult = setPrecision?.kind === "function" ? setPrecision.result : null;
-  assert.equal(setPrecisionResult?.kind === "class" ? setPrecisionResult.external : false, true);
-  const createFormatter = declarations.classes.get("Formatter")!.staticMethods.get("create");
-  const createFormatterResult = createFormatter?.kind === "function" ? createFormatter.result : null;
-  assert.equal(createFormatterResult?.kind === "class" ? createFormatterResult.external : false, true);
   assert.equal(describeType(declarations.classes.get("Formatter")!.staticFields.get("version")!.type), "string");
   assert.equal(describeType(declarations.exports.get("overloaded")!), "unknown");
   assert.equal(describeType(declarations.exports.get("identity")!), "unknown");
@@ -10251,7 +10219,7 @@ export def clear():
   await writeFile(entryPath, `
 import {current, fixed, clear} from "./store.vel"
 
-def invalid() -> string:
+def live() -> string:
     assert current
     clear()
     return current.name
@@ -10277,16 +10245,18 @@ export def clear():
   await writeFile(reactiveEntryPath, `
 import {current, clear} from "./reactive-store.vel"
 
-def invalid() -> string:
+def live() -> string:
     assert current
     clear()
     return current.name
 `.trimStart(), "utf8");
 
+  // Live imports narrow like ordinary bindings: a call does not drop the
+  // narrowed fact even though the exporting module can reassign the binding.
   const project = await compileProject(entryPath);
   assert.deepEqual(project.failures, []);
   const diagnostics = project.modules.flatMap((module) => module.result.diagnostics);
-  assert.equal(diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
   const store = project.modules.find((module) => module.inputPath === storePath)?.result.moduleInterface;
   assert.equal(store?.mutableExports.has("current"), true);
   assert.equal(store?.mutableExports.has("fixed"), false);
@@ -10299,7 +10269,7 @@ def invalid() -> string:
   const reactive = await compileProject(reactiveEntryPath);
   assert.deepEqual(reactive.failures, []);
   assert.equal(reactive.modules.flatMap((module) => module.result.diagnostics)
-    .filter((item) => /optional access/u.test(item.message)).length, 1);
+    .filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
 test("component callback types cross module and editor boundaries", async () => {
@@ -10581,18 +10551,6 @@ export class Widget:
   assert.notEqual(
     moduleInterfaceIdentity({ ...interface_, namedTypeIdentities: new Map([["a", "b|c:d"]]) }),
     moduleInterfaceIdentity({ ...interface_, namedTypeIdentities: new Map([["a", "b"], ["c", "d"]]) }),
-  );
-
-  const withGetterEffects = (effect: StorageOriginEffect) => moduleInterfaceIdentity({
-    ...interface_,
-    classes: new Map([["Widget", {
-      ...info,
-      getterStorageOriginEffects: new Map([["label", [effect]]]),
-    }]]),
-  });
-  assert.equal(
-    withGetterEffects({ targetParameter: 0, sourceReceiver: true, sourceParameters: [2, 1] }),
-    withGetterEffects({ sourceParameters: [1, 2], sourceReceiver: true, targetParameter: 0 }),
   );
 
   const extensionInterface = (version: number) => ({
@@ -13034,7 +12992,7 @@ test("member receivers are analyzed once across calls and assignments", () => {
   );
 });
 
-test("calls invalidate mutable flow facts but local const values remain stable", () => {
+test("ordinary calls preserve mutable flow facts and local const values stay stable", () => {
   const safe = compile(`
 type User:
     name: string
@@ -13058,6 +13016,8 @@ print(label({user: {name: "Ada"}}))
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada\n");
 
+  // A call is not an invalidation point, even when the callee assigns to the
+  // narrowed location: only assignments visible at this frame invalidate.
   const aliasedMember = compile(`
 type User:
     name: string
@@ -13068,18 +13028,19 @@ type Box:
 def clear(box: Box):
     box.user = null
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     assert box.user
     clear(box)
     return box.user.name
 `.trimStart());
-  assert.equal(aliasedMember.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(aliasedMember.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // Invoking a closure that writes a captured binding keeps the caller's fact.
   const capturedBinding = compile(`
 type User:
     name: string
 
-def invalid(initial: User?) -> string:
+def label(initial: User?) -> string:
     let user = initial
 
     def clear():
@@ -13089,8 +13050,9 @@ def invalid(initial: User?) -> string:
     clear()
     return user.name
 `.trimStart());
-  assert.equal(capturedBinding.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(capturedBinding.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // A call in the right operand of a short-circuit keeps the left-side fact.
   const shortCircuit = compile(`
 type User:
     name: string
@@ -13102,12 +13064,12 @@ def clear(box: Box) -> bool:
     box.user = null
     return true
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     if box.user and clear(box):
         return box.user.name
     return "missing"
 `.trimStart());
-  assert.equal(shortCircuit.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(shortCircuit.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const deferredClosure = compile(`
 type User:
@@ -13139,7 +13101,7 @@ type User:
 type Box:
     user: User?
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     assert box.user
 
     def clearLater():
@@ -13148,10 +13110,63 @@ def invalid(box: Box) -> string:
     clearLater()
     return box.user.name
 `.trimStart());
-  assert.equal(invokedClosure.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(invokedClosure.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
-test("member writes invalidate aliased facts and external setters invalidate captured facts", () => {
+test("narrowed facts persist across calls, await, interpolation, and getter reads until assignment", () => {
+  // The positive statement of the narrowing rule: facts established on a let
+  // binding or member location survive (a) an ordinary call, (b) await,
+  // (c) f-string object interpolation, and (d) a getter read. Only a direct
+  // assignment to the narrowed location drops the fact.
+  const persistent = compileCore(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+class Host:
+    get status() -> string:
+        return "ready"
+
+def touch(box: Box) -> string:
+    return "touched"
+
+async def label(box: Box, initial: User?, pending: Promise<null>, host: Host) -> string:
+    let user = initial
+    assert user
+    assert box.user
+    const afterCall = touch(box)
+    const viaCall: string = box.user.name + user.name
+    await pending
+    const viaAwait: string = box.user.name + user.name
+    const text = f"{box}"
+    const viaInterpolation: string = box.user.name + user.name
+    const status = host.status
+    const viaGetter: string = box.user.name + user.name
+    return viaGetter
+`.trimStart());
+  assert.equal(persistent.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
+
+  const assignmentStillInvalidates = compileCore(`
+type User:
+    name: string
+
+type Box:
+    user: User?
+
+def invalid(box: Box, initial: User?) -> string:
+    let user = initial
+    assert user
+    assert box.user
+    box.user = null
+    user = null
+    return box.user.name + user.name
+`.trimStart());
+  assert.equal(assignmentStillInvalidates.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 2);
+});
+
+test("member writes invalidate aliased facts but unrelated locations keep facts", () => {
   const aliased = compile(`
 type User:
     name: string
@@ -13167,6 +13182,8 @@ def invalid(box: Box) -> string:
 `.trimStart());
   assert.equal(aliased.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 
+  // Writing to an extern member is an assignment to THAT location: facts
+  // narrowed on unrelated locations survive it.
   const externalSetter = compile(`
 type User:
     name: string
@@ -13178,15 +13195,15 @@ extern module "host-sdk":
 
 import js {Client} from "host-sdk"
 
-def invalid(client: Client, initial: User?) -> string:
+def label(client: Client, initial: User?) -> string:
     let user = initial
     assert user
     client.value = 1
     return user.name
 `.trimStart());
-  assert.equal(externalSetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(externalSetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
-  const setterOrderSource = `
+  const setterReadsNarrowed = compile(`
 type User:
     name: string
 
@@ -13197,30 +13214,29 @@ extern module "host-sdk":
 
 import js {Client} from "host-sdk"
 
-def invalid(client: Client, initial: User?) -> string:
+def label(client: Client, initial: User?) -> string:
     let user = initial
     assert user
     client.value = user.name.length
     return user.name
-`.trimStart();
-  const setterOrder = compile(setterOrderSource);
-  const setterOrderErrors = setterOrder.diagnostics.filter((item) => /optional access/u.test(item.message));
-  assert.equal(setterOrderErrors.length, 1);
-  assert.equal(setterOrderErrors[0]?.span.start, setterOrderSource.lastIndexOf("user.name"));
+`.trimStart());
+  assert.equal(setterReadsNarrowed.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // A compound write on an unsafe host value targets client.value only; the
+  // narrowed local binding keeps its fact through both read and write.
   const unsafeCompoundRead = compileCore(`
 type User:
     name: string
 
 import js unsafe {client} from "host-sdk"
 
-def invalid(initial: User?) -> string:
+def label(initial: User?) -> string:
     let user = initial
     assert user
     client.value += user.name.length
     return user.name
 `.trimStart());
-  assert.equal(unsafeCompoundRead.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 2);
+  assert.equal(unsafeCompoundRead.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const stableLocal = compile(`
 type User:
@@ -13243,6 +13259,8 @@ def label(client: Client, initial: User?) -> string:
 });
 
 test("external class checks account for JavaScript Symbol.hasInstance hooks", () => {
+  // An 'is' check against an extern class may run a hasInstance hook, but the
+  // check is an ordinary read: facts on unrelated locations survive it.
   const external = compile(`
 type User:
     name: string
@@ -13253,13 +13271,13 @@ extern module "host-sdk":
 
 import js {Client} from "host-sdk"
 
-def invalid(value: unknown, initial: User?) -> string:
+def label(value: unknown, initial: User?) -> string:
     let user = initial
     assert user
     const matches = value is Client
     return user.name
 `.trimStart());
-  assert.equal(external.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(external.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const externalMatch = compile(`
 type User:
@@ -13271,7 +13289,7 @@ extern module "host-sdk":
 
 import js {Client} from "host-sdk"
 
-def invalid(value: unknown, initial: User?) -> string:
+def label(value: unknown, initial: User?) -> string:
     let user = initial
     assert user
     match value:
@@ -13280,7 +13298,7 @@ def invalid(value: unknown, initial: User?) -> string:
         else:
             return user.name
 `.trimStart());
-  assert.equal(externalMatch.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(externalMatch.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const externalExhaustiveness = compile(`
 extern module "host-sdk":
@@ -13334,7 +13352,7 @@ def label(value: unknown, initial: User?) -> string:
   assert.deepEqual(local.diagnostics, []);
 });
 
-test("runtime record type checks account for host reflection", () => {
+test("runtime record type checks are ordinary reads over any value source", () => {
   const sourcePrefix = `
 type User:
     name: string
@@ -13344,18 +13362,20 @@ extern module "host-sdk":
 
 import js {load} from "host-sdk"
 `;
+  // Running a record validator on a host-returned value is an ordinary read:
+  // it does not drop facts narrowed on unrelated locations.
   const checked = compile(`${sourcePrefix}
-def invalid(initial: User?) -> string:
+def label(initial: User?) -> string:
     const remote = load()
     let user = initial
     assert user
     const matches = remote is User
     return user.name
 `);
-  assert.equal(checked.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(checked.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const matched = compile(`${sourcePrefix}
-def invalid(initial: User?) -> string:
+def label(initial: User?) -> string:
     const remote = load()
     let user = initial
     assert user
@@ -13365,8 +13385,10 @@ def invalid(initial: User?) -> string:
         else:
             return user.name
 `);
-  assert.equal(matched.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(matched.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // 'case User' on a User-typed value is exhaustive regardless of where the
+  // value came from.
   const exhaustive = compile(`${sourcePrefix}
 def label() -> string:
     const remote = load()
@@ -13374,37 +13396,22 @@ def label() -> string:
         case User:
             return remote.name
 `);
-  assert.ok(exhaustive.diagnostics.some((item) => item.code === "VEL4006"));
+  assert.deepEqual(exhaustive.diagnostics, []);
 
   const unknownCheck = compile(`
 type User:
     name: string
 
-def invalid(value: unknown, initial: User?) -> string:
+def label(value: unknown, initial: User?) -> string:
     let user = initial
     assert user
     const matches = value is User
     return user.name
 `.trimStart());
-  assert.equal(unknownCheck.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(unknownCheck.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
-test("runtime List patterns do not claim exhaustiveness across host reflection", () => {
-  const result = compileCore(`
-import js {values} from "host-sdk"
-
-def label() -> string:
-    match values:
-        case [...rest]:
-            return str(rest.size)
-`.trimStart(), { analysis: { imports: new Map([[
-    "values",
-    { kind: "list", element: { kind: "number" }, external: true },
-  ]]) } });
-  assert.ok(result.diagnostics.some((item) => item.code === "VEL4006"));
-});
-
-test("conditional expression branches isolate and merge call effects", () => {
+test("conditional expression call branches preserve narrowing facts", () => {
   const result = compile(`
 type User:
     name: string
@@ -13428,6 +13435,8 @@ print(choose({user: {name: "Ada"}}, true))
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada\ncleared\n");
 
+  // A call in one branch of a conditional expression carries no invalidation
+  // into the merge: only assignments in the branches themselves would.
   const merged = compile(`
 type User:
     name: string
@@ -13439,15 +13448,15 @@ def clear(box: Box) -> string:
     box.user = null
     return "cleared"
 
-def invalid(box: Box, changed: bool) -> string:
+def label(box: Box, changed: bool) -> string:
     assert box.user
     const status = changed ? clear(box) : "kept"
     return box.user.name
 `.trimStart());
-  assert.equal(merged.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(merged.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
-test("getters are effect boundaries rather than stable field locations", () => {
+test("getter results are not stable narrowing locations", () => {
   const safe = compile(`
 type User:
     name: string
@@ -13473,7 +13482,9 @@ print(label(Box()))
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "Ada\n");
 
-  const staleField = compile(`
+  // Reading a getter is an ordinary read: it does not drop facts narrowed on
+  // other locations, even when the getter body assigns to them.
+  const getterReadKeepsFacts = compile(`
 type User:
     name: string
 
@@ -13485,13 +13496,15 @@ class Box:
         self.user = null
         return result
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     assert box.user
     const current = box.current
     return box.user.name
 `.trimStart());
-  assert.equal(staleField.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(getterReadKeepsFacts.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // A getter itself is still not a narrowable location: each read may produce
+  // a different value, so checking box.current cannot guard a second read.
   const repeatedGetter = compile(`
 type User:
     name: string
@@ -13511,7 +13524,9 @@ def invalid(box: Box) -> string:
 `.trimStart());
   assert.equal(repeatedGetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 
-  const externalGetter = compile(`
+  // An extern class member may be an accessor under the hood, so like a
+  // getter it is not a stable narrowing location: copy it to a const first.
+  const externField = compile(`
 extern module "host-sdk":
     export class Client:
         const label: string?
@@ -13524,7 +13539,7 @@ def invalid(client: Client) -> number:
         return client.label.length
     return 0
 `.trimStart());
-  assert.equal(externalGetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(externField.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
 
   const stableExternalValue = compile(`
 extern module "host-sdk":
@@ -13541,545 +13556,24 @@ def length(client: Client) -> number:
     return 0
 `.trimStart());
   assert.deepEqual(stableExternalValue.diagnostics, []);
+});
 
-  const externalRecordType: ValueType = {
+test("host and owned values narrow alike after copies, collection reads, and runtime validation", () => {
+  const hostRecordType: ValueType = {
     kind: "object",
     fields: new Map([
       ["label", { kind: "optional", inner: { kind: "string" } }],
     ]),
     readonlyFields: new Set(["label"]),
-    external: true,
   };
-  const externalRecord = compileCore(`
-import js {payload} from "host-sdk"
-
-let current: string? = "ready"
-if current:
-    const label = payload.label
-    const stale: string = current
-
-if payload.label:
-    const repeated: string = payload.label
-`.trimStart(), { analysis: { imports: new Map([["payload", externalRecordType]]) } });
-  assert.equal(externalRecord.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 2);
-
-  const externalRequiredRecordType: ValueType = {
-    kind: "object",
-    fields: new Map([["label", { kind: "string" }]]),
-    external: true,
-  };
-  const mergedExternalRecord = compileCore(`
-import js {payload} from "host-sdk"
-
-const local = {label: "local"}
-const selected = true ? local : payload
-let current: string? = "ready"
-
-if current:
-    const copied = {...selected}
-    const stale: string = current
-`.trimStart(), { analysis: { imports: new Map([["payload", externalRequiredRecordType]]) } });
-  assert.equal(mergedExternalRecord.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
-
-  const optionalMergedExternalRecord = compileCore(`
-import js {payload} from "host-sdk"
-
-const maybeLocal = true ? {label: "local"} : null
-const selected = true ? maybeLocal : payload
-let current: string? = "ready"
-
-if current:
-    const label = selected?.label
-    const stale: string = current
-`.trimStart(), { analysis: { imports: new Map([["payload", externalRequiredRecordType]]) } });
-  assert.equal(optionalMergedExternalRecord.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
-
   const stableRecordCopy = compileCore(`
 import js {payload} from "host-sdk"
 
 const label = payload.label
 if label:
     const stable: string = label
-`.trimStart(), { analysis: { imports: new Map([["payload", externalRecordType]]) } });
+`.trimStart(), { analysis: { imports: new Map([["payload", hostRecordType]]) } });
   assert.deepEqual(stableRecordCopy.diagnostics, []);
-
-  const externalRecordWrite = compileCore(`
-import js {payload} from "host-sdk"
-
-let current: string? = "ready"
-if current:
-    payload.label = current
-    const stale: string = current
-`.trimStart(), { analysis: { imports: new Map([["payload", externalRequiredRecordType]]) } });
-  assert.equal(externalRecordWrite.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
-
-  const externalMutableRecordType: ValueType = {
-    kind: "object",
-    fields: externalRecordType.fields,
-    external: true,
-  };
-  const annotatedExternalValues = compileCore(`
-type Profile:
-    label: string?
-
-type Wrapper:
-    profile: Profile
-
-import js {profile} from "host-sdk"
-
-export const annotated: Profile = profile
-if annotated.label:
-    const repeated: string = annotated.label
-
-const wrapper: Wrapper = {profile}
-if wrapper.profile.label:
-    const repeated: string = wrapper.profile.label
-
-let rebound: Profile = {label: "local"}
-rebound = profile
-if rebound.label:
-    const repeated: string = rebound.label
-
-rebound = {label: "owned"}
-if rebound.label:
-    const repeated: string = rebound.label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(annotatedExternalValues.diagnostics.length, 3);
-  assert.equal(annotatedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 3);
-  const annotatedExport = annotatedExternalValues.moduleInterface.exports.get("annotated");
-  assert.equal(annotatedExport?.kind === "named" ? annotatedExport.external : false, true);
-
-  const branchAssignedExternalValues = compileCore(`
-type Profile:
-    label: string?
-
-import js {profile} from "host-sdk"
-
-let selected: Profile = {label: "owned"}
-if true:
-    selected = profile
-else:
-    selected = {label: "fallback"}
-if selected.label:
-    const repeated: string = selected.label
-
-let reversed: Profile = {label: "owned"}
-if true:
-    reversed = {label: "fallback"}
-else:
-    reversed = profile
-if reversed.label:
-    const repeated: string = reversed.label
-
-let maybe: Profile = {label: "owned"}
-if true:
-    maybe = profile
-if maybe.label:
-    const repeated: string = maybe.label
-
-let reset: Profile = profile
-if true:
-    reset = {label: "left"}
-else:
-    reset = {label: "right"}
-if reset.label:
-    const repeated: string = reset.label
-
-let narrowed: Profile? = {label: "owned"}
-if narrowed:
-    narrowed = profile
-if narrowed:
-    if narrowed.label:
-        const repeated: string = narrowed.label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(branchAssignedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
-
-  const storedExternalMembers = compileCore(`
-type Profile:
-    label: string?
-
-type Wrapper:
-    profile: Profile
-
-class Box:
-    let profile: Profile
-
-    constructor(profile: Profile):
-        self.profile = profile
-
-    def same() -> Box:
-        return self
-
-import js {profile} from "host-sdk"
-
-const owned: Profile = {label: "owned"}
-
-export const box = Box(owned)
-box.profile = profile
-const classStored = box.profile
-if classStored.label:
-    const repeated: string = classStored.label
-
-const values = [owned]
-values[0] = profile
-const listStored = values[0]
-if listStored.label:
-    const repeated: string = listStored.label
-
-const record: Wrapper = {profile: owned}
-record.profile = profile
-const recordStored = record.profile
-if recordStored.label:
-    const repeated: string = recordStored.label
-
-const aliased = Box(owned)
-const alias = aliased
-alias.profile = profile
-const aliasStored = aliased.profile
-if aliasStored.label:
-    const repeated: string = aliasStored.label
-
-let rebound = Box(owned)
-const previous = rebound
-rebound = Box(owned)
-previous.profile = profile
-const previousStored = previous.profile
-if previousStored.label:
-    const repeated: string = previousStored.label
-const reboundStored = rebound.profile
-if reboundStored.label:
-    const stable: string = reboundStored.label
-
-const left = Box(owned)
-const right = Box(owned)
-const selected = true ? left : right
-selected.profile = profile
-const leftStored = left.profile
-if leftStored.label:
-    const repeated: string = leftStored.label
-const rightStored = right.profile
-if rightStored.label:
-    const repeated: string = rightStored.label
-
-def identity(value: Box) -> Box:
-    return value
-
-const functionSource = Box(owned)
-const functionAlias = identity(functionSource)
-functionAlias.profile = profile
-const functionStored = functionSource.profile
-if functionStored.label:
-    const repeated: string = functionStored.label
-
-const methodSource = Box(owned)
-const methodAlias = methodSource.same()
-methodAlias.profile = profile
-const methodStored = methodSource.profile
-if methodStored.label:
-    const repeated: string = methodStored.label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(storedExternalMembers.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 9);
-  const storedBox = storedExternalMembers.moduleInterface.exports.get("box");
-  assert.equal(storedBox?.kind === "class" ? storedBox.containsExternal : false, true);
-
-  const storedExternalCollectionValues = compileCore(`
-type Profile:
-    label: string?
-
-import js {profile} from "host-sdk"
-
-const owned: Profile = {label: "owned"}
-
-const appended = [owned]
-appended.append(profile)
-const appendedValue = appended[1]
-if appendedValue.label:
-    const repeated: string = appendedValue.label
-
-const inserted = [owned]
-inserted.insert(0, profile)
-const insertedValue = inserted[0]
-if insertedValue.label:
-    const repeated: string = insertedValue.label
-
-const extended = [owned]
-extended.extend([profile])
-const extendedValue = extended[1]
-if extendedValue.label:
-    const repeated: string = extendedValue.label
-
-const mapped: Map<string, Profile> = Map()
-mapped.set("host", profile)
-const mappedValue = mapped.get("host")
-if mappedValue:
-    if mappedValue.label:
-        const repeated: string = mappedValue.label
-
-const sourceMap: Map<string, Profile> = Map()
-sourceMap.set("host", profile)
-const updatedMap: Map<string, Profile> = Map()
-updatedMap.update(sourceMap)
-const updatedMapValue = updatedMap.get("host")
-if updatedMapValue:
-    if updatedMapValue.label:
-        const repeated: string = updatedMapValue.label
-
-const added: Set<Profile> = Set()
-added.add(profile)
-const addedValues = added.values()
-if addedValues[0].label:
-    const repeated: string = addedValues[0].label
-
-const sourceSet: Set<Profile> = Set()
-sourceSet.add(profile)
-const updatedSet: Set<Profile> = Set()
-updatedSet.update(sourceSet)
-const updatedSetValues = updatedSet.values()
-if updatedSetValues[0].label:
-    const repeated: string = updatedSetValues[0].label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(storedExternalCollectionValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 7);
-
-  const callableStoredExternalValues = compileCore(`
-type Profile:
-    label: string?
-
-class Box:
-    let profile: Profile
-
-    constructor(profile: Profile):
-        self.profile = profile
-
-    def store(value: Profile):
-        self.profile = value
-
-    def capture():
-        self.profile = profile
-
-    get touch() -> Profile:
-        self.profile = profile
-        return self.profile
-
-class ChildBox extends Box:
-    constructor(profile: Profile):
-        super(profile)
-
-extern module "host-sdk":
-    export def hydrate(box: Box)
-
-import js {profile} from "host-sdk"
-import js {hydrate} from "host-sdk"
-
-const owned: Profile = {label: "owned"}
-
-const early = Box(owned)
-store(value=profile, box=early)
-const earlyValue = early.profile
-if earlyValue.label:
-    const repeated: string = earlyValue.label
-
-const capturedBox = Box(owned)
-captured(capturedBox)
-const capturedValue = capturedBox.profile
-if capturedValue.label:
-    const repeated: string = capturedValue.label
-
-const forwardedBox = Box(owned)
-forward(forwardedBox, profile)
-const forwardedValue = forwardedBox.profile
-if forwardedValue.label:
-    const repeated: string = forwardedValue.label
-
-const defaultedBox = Box(owned)
-storeDefault(defaultedBox)
-const defaultedValue = defaultedBox.profile
-if defaultedValue.label:
-    const repeated: string = defaultedValue.label
-
-const explicitBox = Box(owned)
-storeDefault(explicitBox, owned)
-const explicitValue = explicitBox.profile
-if explicitValue.label:
-    const stable: string = explicitValue.label
-
-const restLeft = Box(owned)
-const restRight = Box(owned)
-storeRest(profile, restLeft, restRight)
-const restLeftValue = restLeft.profile
-if restLeftValue.label:
-    const repeated: string = restLeftValue.label
-const restRightValue = restRight.profile
-if restRightValue.label:
-    const repeated: string = restRightValue.label
-
-const methodBox = Box(owned)
-methodBox.store(profile)
-const methodValue = methodBox.profile
-if methodValue.label:
-    const repeated: string = methodValue.label
-
-const capturedMethodBox = Box(owned)
-capturedMethodBox.capture()
-const capturedMethodValue = capturedMethodBox.profile
-if capturedMethodValue.label:
-    const repeated: string = capturedMethodValue.label
-
-const hydratedBox = Box(owned)
-hydrate(hydratedBox)
-const hydratedValue = hydratedBox.profile
-if hydratedValue.label:
-    const repeated: string = hydratedValue.label
-
-const getterBox = Box(owned)
-const touched = getterBox.touch
-const getterValue = getterBox.profile
-if getterValue.label:
-    const repeated: string = getterValue.label
-
-const inheritedGetterBox = ChildBox(owned)
-const inheritedTouched = inheritedGetterBox.touch
-const inheritedGetterValue = inheritedGetterBox.profile
-if inheritedGetterValue.label:
-    const repeated: string = inheritedGetterValue.label
-
-export def store(box: Box, value: Profile):
-    box.profile = value
-
-def captured(box: Box):
-    box.profile = profile
-
-def forward(box: Box, value: Profile):
-    store(box, value)
-
-def storeDefault(box: Box, value: Profile = profile):
-    box.profile = value
-
-def storeRest(value: Profile, ...boxes: Box):
-    for box in boxes:
-        box.profile = value
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(callableStoredExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 11);
-  const callableStoreInterface = callableStoredExternalValues.moduleInterface.exports.get("store");
-  assert.deepEqual(callableStoreInterface?.kind === "function" ? callableStoreInterface.storageOriginEffects : null, [{
-    targetParameter: 0,
-    sourceParameters: [1],
-  }]);
-  const callableBox = callableStoredExternalValues.moduleInterface.classes.get("Box");
-  const callableStoreMethod = callableBox?.methods.get("store");
-  assert.deepEqual(callableStoreMethod?.kind === "function"
-    ? callableStoreMethod.storageOriginEffects
-    : null, [{ targetReceiver: true, sourceParameters: [0] }]);
-  assert.deepEqual(callableBox?.getterStorageOriginEffects?.get("touch"), [{
-    targetReceiver: true,
-    external: true,
-  }]);
-
-  const externalListType: ValueType = { kind: "list", element: { kind: "number" }, external: true };
-  const externalList = compileCore(`
-import js {values} from "host-sdk"
-
-let current: string? = "ready"
-if current:
-    const first = values[0]
-    const afterIndex: string = current
-
-current = "ready"
-if current:
-    const size = values.size
-    const afterSize: string = current
-
-current = "ready"
-if current:
-    const copied = [...values, current.length]
-    const afterSpread: string = current
-
-current = "ready"
-if current:
-    const [first] = values
-    const afterBinding: string = current
-
-current = "ready"
-if current:
-    for item in values:
-        const seen = item
-    const afterIteration: string = current
-
-current = "ready"
-if current:
-    match values:
-        case [first, ...rest]:
-            const seen = first
-    const afterMatch: string = current
-
-const owned = values.copy()
-current = "ready"
-if current:
-    const first = owned[0]
-    const afterCopy: string = current
-
-current = "ready"
-if current:
-    values[0] = current.length
-    const afterWrite: string = current
-`.trimStart(), { analysis: { imports: new Map([["values", externalListType]]) } });
-  assert.equal(externalList.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 7);
-
-  const externalSetType: ValueType = { kind: "set", element: externalRecordType, external: true };
-  const externalMapType: ValueType = {
-    kind: "map",
-    key: { kind: "string" },
-    value: externalRecordType,
-    external: true,
-  };
-  const externalSetAndMap = compileCore(`
-import js {profiles, profilesById} from "host-sdk"
-
-let current: string? = "ready"
-if current:
-    const size = profiles.size
-    const stale: string = current
-
-current = "ready"
-if current:
-    for profile in profiles:
-        const seen = profile
-    const stale: string = current
-
-current = "ready"
-if current:
-    const size = profilesById.size
-    const stale: string = current
-
-current = "ready"
-if current:
-    for id in profilesById:
-        const seen = id
-    const stale: string = current
-
-const setValues = profiles.values()
-if setValues[0].label:
-    const repeated: string = setValues[0].label
-
-const mapValues = profilesById.values()
-if mapValues[0].label:
-    const repeated: string = mapValues[0].label
-
-const ownedSet = profiles.copy()
-current = "ready"
-if current:
-    const size = ownedSet.size
-    const stable: string = current
-
-const ownedMap = Map(profilesById)
-current = "ready"
-if current:
-    const size = ownedMap.size
-    const stable: string = current
-`.trimStart(), { analysis: { imports: new Map<string, ValueType>([
-    ["profiles", externalSetType],
-    ["profilesById", externalMapType],
-  ]) } });
-  assert.equal(externalSetAndMap.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 6);
 
   const internalList = compile(`
 const values = [1]
@@ -14098,6 +13592,8 @@ if current:
 `.trimStart());
   assert.deepEqual(internalList.diagnostics, []);
 
+  // Runtime validation narrows regardless of where the value came from:
+  // host-provided unknowns validate exactly like owned values.
   const runtimeValidatedHostValues = compileCore(`
 type Profile:
     label: string?
@@ -14112,22 +13608,22 @@ import js {raw} from "host-sdk"
 
 const parsed = Profile.parse(raw)
 if parsed.label:
-    const repeated: string = parsed.label
+    const narrowed: string = parsed.label
 
 if raw is Profile:
     if raw.label:
-        const repeated: string = raw.label
+        const narrowed: string = raw.label
 
 match raw:
     case Profile as matched:
         if matched.label:
-            const repeated: string = matched.label
+            const narrowed: string = matched.label
 
 if raw is LocalProfile:
     if raw.label:
-        const repeated: string = raw.label
+        const narrowed: string = raw.label
 `.trimStart(), { analysis: { imports: new Map([["raw", { kind: "unknown" }]]) } });
-  assert.equal(runtimeValidatedHostValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
+  assert.equal(runtimeValidatedHostValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 0);
 
   const runtimeValidatedOwnedValues = compile(`
 type Profile:
@@ -14148,409 +13644,12 @@ if local.label:
     const repeated: string = local.label
 `.trimStart());
   assert.deepEqual(runtimeValidatedOwnedValues.diagnostics, []);
-
-  const forwardedExternalValues = compileCore(`
-type Profile:
-    label: string?
-
-import js {profile} from "host-sdk"
-
-const hoistedValue = hoisted()
-if hoistedValue.label:
-    const repeated: string = hoistedValue.label
-
-const forwarded: Profile = profile
-const forwardedValue = fromForwarded()
-if forwardedValue.label:
-    const repeated: string = forwardedValue.label
-
-export def hoisted() -> Profile:
-    return profile
-
-export def fromForwarded() -> Profile:
-    return forwarded
-
-export def direct() -> Profile:
-    return profile
-
-export def earlier() -> Profile:
-    return later()
-
-export def throughLocal() -> Profile:
-    const value: Profile = later()
-    return value
-
-export def identity(value: Profile) -> Profile:
-    return value
-
-export def defaultIdentity(value: Profile = profile) -> Profile:
-    return value
-
-export def namedIdentity(prefix: string, value: Profile) -> Profile:
-    return value
-
-export def wrapped(value: Profile) -> Profile:
-    return identity(value)
-
-export def nestedIdentity(value: Profile) -> Profile:
-    def local(input: Profile) -> Profile:
-        return input
-    return local(value)
-
-export def makeGetter(value: Profile) -> () -> Profile:
-    return () => value
-
-export def matched(value: Profile) -> Profile:
-    match value:
-        case Profile as current:
-            return current
-
-export def firstFrom(values: List<Profile>, fallback: Profile) -> Profile:
-    for value in values:
-        return value
-    return fallback
-
-export async def asyncIdentity(value: Profile) -> Profile:
-    return value
-
-export def first(...values: Profile) -> Profile:
-    return values[0]
-
-export const arrowIdentity = (value: Profile) => value
-
-def later() -> Profile:
-    return profile
-
-export async def asynchronous() -> Profile:
-    return profile
-
-class Store:
-    get current() -> Profile:
-        return profile
-
-    def load() -> Profile:
-        return profile
-
-    def echo(value: Profile) -> Profile:
-        return value
-
-    static def loadStatic() -> Profile:
-        return profile
-
-    static def echoStatic(value: Profile) -> Profile:
-        return value
-
-const directValue = direct()
-if directValue.label:
-    const repeated: string = directValue.label
-
-const earlierValue = earlier()
-if earlierValue.label:
-    const repeated: string = earlierValue.label
-
-const localValue = throughLocal()
-if localValue.label:
-    const repeated: string = localValue.label
-
-const identityValue = identity(profile)
-if identityValue.label:
-    const repeated: string = identityValue.label
-
-const ownedIdentity = identity({label: "owned"})
-if ownedIdentity.label:
-    const repeated: string = ownedIdentity.label
-
-const defaultedValue = defaultIdentity()
-if defaultedValue.label:
-    const repeated: string = defaultedValue.label
-
-const explicitDefaultValue = defaultIdentity({label: "owned"})
-if explicitDefaultValue.label:
-    const repeated: string = explicitDefaultValue.label
-
-const namedValue = namedIdentity(value=profile, prefix="host")
-if namedValue.label:
-    const repeated: string = namedValue.label
-
-const wrappedValue = wrapped(profile)
-if wrappedValue.label:
-    const repeated: string = wrappedValue.label
-
-const nestedValue = nestedIdentity(profile)
-if nestedValue.label:
-    const repeated: string = nestedValue.label
-
-const getter = makeGetter(profile)
-const closureValue = getter()
-if closureValue.label:
-    const repeated: string = closureValue.label
-
-const matchedValue = matched(profile)
-if matchedValue.label:
-    const repeated: string = matchedValue.label
-
-export const iteratedValue = firstFrom([profile], {label: "fallback"})
-if iteratedValue.label:
-    const repeated: string = iteratedValue.label
-
-const asyncIdentityValue = await asyncIdentity(profile)
-if asyncIdentityValue.label:
-    const repeated: string = asyncIdentityValue.label
-
-const firstValue = first(profile)
-if firstValue.label:
-    const repeated: string = firstValue.label
-
-const ownedFirst = first({label: "owned"})
-if ownedFirst.label:
-    const repeated: string = ownedFirst.label
-
-const arrowValue = arrowIdentity(profile)
-if arrowValue.label:
-    const repeated: string = arrowValue.label
-
-const mappedValues = [profile].map(identity)
-if mappedValues[0].label:
-    const repeated: string = mappedValues[0].label
-
-const asynchronousValue = await asynchronous()
-if asynchronousValue.label:
-    const repeated: string = asynchronousValue.label
-
-const store = Store()
-if store.current.label:
-    const repeated: string = store.current.label
-
-const methodValue = store.load()
-if methodValue.label:
-    const repeated: string = methodValue.label
-
-const echoValue = store.echo(profile)
-if echoValue.label:
-    const repeated: string = echoValue.label
-
-const staticValue = Store.loadStatic()
-if staticValue.label:
-    const repeated: string = staticValue.label
-
-const staticEchoValue = Store.echoStatic(profile)
-if staticEchoValue.label:
-    const repeated: string = staticEchoValue.label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(forwardedExternalValues.diagnostics.length, 23);
-  assert.equal(forwardedExternalValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 23);
-  for (const name of ["hoisted", "fromForwarded", "direct", "earlier", "throughLocal", "asynchronous"]) {
-    const exported = forwardedExternalValues.moduleInterface.exports.get(name);
-    const result = exported?.kind === "function" ? exported.result : null;
-    const resolved = result?.kind === "promise" ? result.value : result;
-    assert.equal(resolved?.kind === "named" ? resolved.external : false, true);
-  }
-  const identityExport = forwardedExternalValues.moduleInterface.exports.get("identity");
-  assert.deepEqual(identityExport?.kind === "function" ? identityExport.resultOriginParameters : null, [0]);
-  assert.equal(identityExport?.kind === "function" && identityExport.result.kind === "named" ? identityExport.result.external ?? false : false, false);
-  const defaultIdentityExport = forwardedExternalValues.moduleInterface.exports.get("defaultIdentity");
-  assert.deepEqual(defaultIdentityExport?.kind === "function" ? defaultIdentityExport.resultOriginExternalDefaults : null, [0]);
-  assert.equal(defaultIdentityExport?.kind === "function" && defaultIdentityExport.result.kind === "named" ? defaultIdentityExport.result.external ?? false : false, false);
-  for (const name of ["namedIdentity", "wrapped", "nestedIdentity", "makeGetter", "matched", "asyncIdentity"]) {
-    const exported = forwardedExternalValues.moduleInterface.exports.get(name);
-    assert.deepEqual(exported?.kind === "function" ? exported.resultOriginParameters : null, [name === "namedIdentity" ? 1 : 0]);
-  }
-  const firstFromExport = forwardedExternalValues.moduleInterface.exports.get("firstFrom");
-  assert.deepEqual(firstFromExport?.kind === "function" ? firstFromExport.resultOriginParameters : null, [0, 1]);
-  const iteratedExport = forwardedExternalValues.moduleInterface.exports.get("iteratedValue");
-  assert.equal(iteratedExport?.kind === "named" ? iteratedExport.external : false, true);
-  const firstExport = forwardedExternalValues.moduleInterface.exports.get("first");
-  assert.equal(firstExport?.kind === "function" ? firstExport.resultOriginRest : false, true);
-  const arrowExport = forwardedExternalValues.moduleInterface.exports.get("arrowIdentity");
-  assert.deepEqual(arrowExport?.kind === "function" ? arrowExport.resultOriginParameters : null, [0]);
-  const storeInterface = forwardedExternalValues.moduleInterface.classes.get("Store");
-  const echoInterface = storeInterface?.methods.get("echo");
-  assert.deepEqual(echoInterface?.kind === "function" ? echoInterface.resultOriginParameters : null, [0]);
-  const loadInterface = storeInterface?.methods.get("load");
-  assert.equal(loadInterface?.kind === "function" && loadInterface.result.kind === "named" ? loadInterface.result.external : false, true);
-  const currentInterface = storeInterface?.fields.get("current")?.type;
-  assert.equal(currentInterface?.kind === "named" ? currentInterface.external : false, true);
-
-  const constructorStoredExternalValue = compileCore(`
-type Profile:
-    label: string?
-
-import js {profile} from "host-sdk"
-
-const earlyBox = ProfileBox(profile=profile)
-
-class ProfileBox:
-    const profile: Profile
-    const title: string? = "Profile"
-
-    constructor(profile: Profile):
-        self.profile = profile
-
-    def same() -> ProfileBox:
-        return self
-
-export const box = ProfileBox(profile)
-if box.profile.label:
-    const repeated: string = box.profile.label
-if box.title:
-    const repeated: string = box.title
-
-const returned = box.same()
-if returned.profile.label:
-    const repeated: string = returned.profile.label
-if returned.title:
-    const repeated: string = returned.title
-
-if earlyBox.profile.label:
-    const repeated: string = earlyBox.profile.label
-
-if box is ProfileBox:
-    if box.profile.label:
-        const repeated: string = box.profile.label
-
-const owned = ProfileBox({label: "owned"})
-if owned.profile.label:
-    const repeated: string = owned.profile.label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(constructorStoredExternalValue.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
-  const profileBox = constructorStoredExternalValue.moduleInterface.classes.get("ProfileBox");
-  assert.deepEqual(profileBox?.constructorOriginParameters, [0]);
-  assert.equal(profileBox?.constructorContainsExternal ?? false, false);
-  const boxInterface = constructorStoredExternalValue.moduleInterface.exports.get("box");
-  assert.equal(boxInterface?.kind === "class" ? boxInterface.containsExternal : false, true);
-  assert.equal(boxInterface?.kind === "class" ? boxInterface.external ?? false : false, false);
-
-  const constructorCapturedExternalValue = compileCore(`
-type Profile:
-    label: string?
-
-import js {profile as source} from "host-sdk"
-
-class CapturedBox:
-    const profile: Profile = source
-
-const box = CapturedBox()
-if box.profile.label:
-    const repeated: string = box.profile.label
-`.trimStart(), { analysis: { imports: new Map([["source", externalMutableRecordType]]) } });
-  assert.equal(constructorCapturedExternalValue.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
-  assert.equal(constructorCapturedExternalValue.moduleInterface.classes.get("CapturedBox")?.constructorContainsExternal, true);
-
-  const constructorExternalDefault = compileCore(`
-type Profile:
-    label: string?
-
-import js {profile as source} from "host-sdk"
-
-class DefaultBox:
-    const profile: Profile
-
-    constructor(profile: Profile = source):
-        self.profile = profile
-
-const defaulted = DefaultBox()
-if defaulted.profile.label:
-    const repeated: string = defaulted.profile.label
-
-const explicit = DefaultBox({label: "owned"})
-if explicit.profile.label:
-    const repeated: string = explicit.profile.label
-`.trimStart(), { analysis: { imports: new Map([["source", externalMutableRecordType]]) } });
-  assert.equal(constructorExternalDefault.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
-  const defaultBox = constructorExternalDefault.moduleInterface.classes.get("DefaultBox");
-  assert.deepEqual(defaultBox?.constructorExternalDefaults, [0]);
-  assert.equal(defaultBox?.constructorContainsExternal ?? false, false);
-
-  const inheritedConstructorOrigin = compileCore(`
-type Profile:
-    label: string?
-
-import js {profile} from "host-sdk"
-
-class BaseBox:
-    const profile: Profile
-
-    constructor(profile: Profile):
-        self.profile = profile
-
-class ChildBox extends BaseBox:
-    constructor(profile: Profile):
-        super(profile)
-
-const child = ChildBox(profile)
-if child.profile.label:
-    const repeated: string = child.profile.label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalMutableRecordType]]) } });
-  assert.equal(inheritedConstructorOrigin.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 1);
-  assert.deepEqual(inheritedConstructorOrigin.moduleInterface.classes.get("ChildBox")?.constructorOriginParameters, [0]);
 });
 
-test("callable annotations preserve inferred origin and storage effects", () => {
-  const externalProfile: ValueType = {
-    kind: "object",
-    fields: new Map([["label", { kind: "optional", inner: { kind: "string" } }]]),
-    external: true,
-  };
-  const result = compileCore(`
-type Profile:
-    label: string?
-
-type Box:
-    profile: Profile
-
-import js {profile} from "host-sdk"
-
-def identity(value: Profile) -> Profile:
-    return value
-
-def first(...values: Profile) -> Profile:
-    return values[0]
-
-def defaultIdentity(value: Profile = profile) -> Profile:
-    return value
-
-def store(box: Box, value: Profile):
-    box.profile = value
-
-export const identityAlias: (Profile) -> Profile = identity
-export const restAlias: (Profile, Profile) -> Profile = first
-export const defaultAlias: () -> Profile = defaultIdentity
-export const storeAlias: (Box, Profile) -> null = store
-
-const identityValue = identityAlias(profile)
-if identityValue.label:
-    const repeated: string = identityValue.label
-
-const restValue = restAlias({label: "owned"}, profile)
-if restValue.label:
-    const repeated: string = restValue.label
-
-const defaultValue = defaultAlias()
-if defaultValue.label:
-    const repeated: string = defaultValue.label
-
-const box: Box = {profile: {label: "owned"}}
-storeAlias(box, profile)
-if box.profile.label:
-    const repeated: string = box.profile.label
-`.trimStart(), { analysis: { imports: new Map([["profile", externalProfile]]) } });
-  assert.equal(result.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 4);
-  const exported = result.moduleInterface.exports;
-  const identityAlias = exported.get("identityAlias");
-  const restAlias = exported.get("restAlias");
-  const defaultAlias = exported.get("defaultAlias");
-  const storeAlias = exported.get("storeAlias");
-  assert.deepEqual(identityAlias?.kind === "function" ? identityAlias.resultOriginParameters : null, [0]);
-  assert.deepEqual(restAlias?.kind === "function" ? restAlias.resultOriginParameters : null, [0, 1]);
-  assert.deepEqual(defaultAlias?.kind === "function" ? defaultAlias.resultOriginExternalDefaults : null, [0]);
-  assert.deepEqual(storeAlias?.kind === "function" ? storeAlias.storageOriginEffects : null, [{
-    targetParameter: 0,
-    sourceParameters: [1],
-  }]);
-});
-
-test("f-strings invalidate facts only when object coercion can execute user code", () => {
-  const unsafeCoercion = compile(`
+test("f-strings preserve narrowing facts across interpolation", () => {
+  // Object interpolation may run a toString hook, but coercion is not an
+  // invalidation point: narrowed member facts survive the f-string.
+  const objectCoercion = compile(`
 type User:
     name: string
 
@@ -14567,13 +13666,13 @@ class Mutator:
         self.box.user = null
         return "changed"
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     const mutator = Mutator(box)
     assert box.user
     const text = f"{mutator}"
     return box.user.name
 `.trimStart());
-  assert.equal(unsafeCoercion.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(objectCoercion.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const primitiveCoercion = compile(`
 type User:
@@ -14593,8 +13692,10 @@ print(label({name: "Ada"}))
   assert.equal(execution.stdout, "1:true:null:Ada\n");
 });
 
-test("component JSX follows props children and invocation effect order", () => {
-  const componentEffect = compile(`
+test("component JSX invocations preserve narrowing facts", () => {
+  // Component invocation is an ordinary call: narrowed member facts survive it,
+  // even when the component body assigns to the narrowed location.
+  const componentInvocation = compile(`
 type User:
     name: string
 
@@ -14605,13 +13706,14 @@ component Clear(box: Box):
     box.user = null
     return <span>cleared</span>
 
-def invalid(box: Box) -> string:
+def label(box: Box) -> string:
     assert box.user
     const view = <Clear box={box} />
     return box.user.name
 `.trimStart());
-  assert.equal(componentEffect.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(componentInvocation.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
+  // A call inside a prop expression does not invalidate facts read by children.
   const propBeforeChildren = compile(`
 type User:
     name: string
@@ -14626,11 +13728,11 @@ def clear(box: Box) -> string:
     box.user = null
     return "cleared"
 
-def invalid(box: Box) -> WebNode:
+def label(box: Box) -> WebNode:
     assert box.user
     return <Panel label={clear(box)}>{box.user.name}</Panel>
 `.trimStart());
-  assert.equal(propBeforeChildren.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(propBeforeChildren.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const stableLocal = compile(`
 type User:
@@ -14652,7 +13754,7 @@ def label(box: Box) -> string:
   assert.deepEqual(stableLocal.diagnostics, []);
 });
 
-test("await invalidates facts that can change during suspension", () => {
+test("await preserves narrowing facts across suspension", () => {
   const safe = compile(`
 type User:
     name: string
@@ -14668,6 +13770,8 @@ async def label(box: Box, pending: Promise<null>) -> string:
 `.trimStart());
   assert.deepEqual(safe.diagnostics, []);
 
+  // Suspension is not an invalidation point: only assignments to the narrowed
+  // location (and branch merges carrying such assignments) drop facts.
   const aliasedMember = compile(`
 type User:
     name: string
@@ -14675,24 +13779,24 @@ type User:
 type Box:
     user: User?
 
-async def invalid(box: Box, pending: Promise<null>) -> string:
+async def label(box: Box, pending: Promise<null>) -> string:
     assert box.user
     await pending
     return box.user.name
 `.trimStart());
-  assert.equal(aliasedMember.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(aliasedMember.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 
   const capturedBinding = compile(`
 type User:
     name: string
 
-async def invalid(initial: User?, pending: Promise<null>) -> string:
+async def label(initial: User?, pending: Promise<null>) -> string:
     let user = initial
     assert user
     await pending
     return user.name
 `.trimStart());
-  assert.equal(capturedBinding.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(capturedBinding.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
 });
 
 test("lowering hints use exact spans across nested expressions", () => {

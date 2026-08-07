@@ -29,7 +29,7 @@ export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
-export { analysisTypeIdentity, describeType, optionalOf, semanticTypeIdentity, type EnumInfo, type StorageOriginEffect, type ValueType } from "./types.ts";
+export { analysisTypeIdentity, describeType, optionalOf, semanticTypeIdentity, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
 
 export interface CompileOptions {
@@ -614,7 +614,6 @@ function resolveNominals(
       kind: "class",
       name: type.name,
       ...(identity === type.name ? {} : { identity }),
-      ...(type.external ? { external: true } : {}),
     };
   }
   if (type.kind === "named" && enumNames.has(type.name)) return { kind: "enum", name: type.name, identity: enumNames.get(type.name)!.identity };

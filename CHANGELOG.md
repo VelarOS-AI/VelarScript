@@ -4,6 +4,23 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Remove host-origin tracking and call-effect invalidation
+
+Language and compiler changes:
+
+- Narrowed facts now persist across ordinary calls, `await`, string
+  interpolation, getter reads, and spreads. A fact is invalidated only by an
+  assignment to its location and by merging branches where such an assignment
+  can reach that location.
+- Host-origin propagation — result origins, storage-origin effects, constructor
+  origins, and contains-external instance marks — is removed from the language
+  and from module contracts.
+- Live `export let` imports now narrow like ordinary bindings.
+- Runtime guards are unchanged: bounded collection helpers, record validators,
+  and `undefined`-to-`null` normalization stay active.
+- Module contract identities changed, so the first build after this change
+  performs a one-time full project re-analysis.
+
 ## 0.10.0-dev — Clarity Reset
 
 Breaking language changes:

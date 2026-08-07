@@ -10,7 +10,6 @@ import {
   type CompileResult,
   type EnumInfo,
   type ModuleInspection,
-  type StorageOriginEffect,
   type ValueType,
 } from "@velarscript/compiler";
 import type { ResolvedFrameworkHost } from "./config.ts";
@@ -481,7 +480,6 @@ export function moduleInterfaceIdentity(
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, type]) => node("type-entry", [name, analysisTypeIdentity(type)])));
   const names = (values: ReadonlySet<string>): string => node("names", [...values].sort());
-  const numbers = (values: readonly number[] | undefined): string => node("numbers", (values ?? []).map(String));
   const types = (values: readonly ValueType[]): string => node("types", values.map(analysisTypeIdentity));
   const namedTypes = node("named-types", [...interface_.namedTypes]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -492,19 +490,6 @@ export function moduleInterfaceIdentity(
   const enums = node("enums", [...interface_.enums]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, info]) => node("enum", [name, info.identity, names(info.members)])));
-  const effectIdentity = (effect: StorageOriginEffect): string => node("storage-origin", [
-    effect.targetReceiver ? "receiver" : effect.targetRest ? "rest" : `parameter:${effect.targetParameter ?? ""}`,
-    effect.sourceReceiver ? "receiver" : "",
-    effect.sourceRest ? "rest" : "",
-    effect.external ? "external" : "",
-    numbers([...(effect.sourceExternalDefaults ?? [])].sort((a, b) => a - b)),
-    numbers([...(effect.sourceParameters ?? [])].sort((a, b) => a - b)),
-  ]);
-  const getterEffects = (values: ReadonlyMap<string, readonly StorageOriginEffect[]> | undefined): string => (
-    node("getter-effects", [...values ?? []]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, effects]) => node("getter-effect", [name, node("effects", effects.map(effectIdentity).sort())])))
-  );
   const classes = node("classes", [...interface_.classes]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, info]) => node("class", [
@@ -516,16 +501,10 @@ export function moduleInterfaceIdentity(
       String(info.requiredParameters),
       types(info.parameters),
       info.constructorRest ? analysisTypeIdentity(info.constructorRest) : "",
-      numbers(info.constructorOriginParameters),
-      info.constructorOriginRest ? "rest" : "",
-      info.constructorContainsExternal ? "contains-external" : "",
-      numbers(info.constructorExternalDefaults),
       names(info.getters),
       names(info.abstractGetters),
-      getterEffects(info.getterStorageOriginEffects),
       names(info.abstractMethods),
       names(info.staticGetters),
-      getterEffects(info.staticGetterStorageOriginEffects),
       typeMap(new Map([
         ...[...info.fields].map(([field, value]) => [`field:${field}:${value.mutable ? "let" : "const"}`, value.type] as const),
         ...[...info.methods].map(([method, type]) => [`method:${method}`, type] as const),
@@ -591,7 +570,6 @@ async function createAnalysisContext(
   const imports = new Map<string, ValueType>();
   const dynamicImports = new Map<string, ValueType>();
   const reactiveImports = new Map<string, "state" | "computed">();
-  const effectfulImports = new Set<string>();
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const namedTypeIdentities = new Map<string, string>();
   const typeAliases = new Map<string, ValueType>();
@@ -660,7 +638,7 @@ async function createAnalysisContext(
       for (const specifier of dependency.specifiers) {
         if (specifier.namespace) {
           const fields = new Map([...declarations.exports].map(([name, type]) => [name, renameType(type, aliases)]));
-          imports.set(specifier.local, { kind: "object", fields, readonlyFields: new Set(fields.keys()), external: true });
+          imports.set(specifier.local, { kind: "object", fields, readonlyFields: new Set(fields.keys()) });
           continue;
         }
         const type = declarations.exports.get(specifier.imported);
@@ -671,7 +649,7 @@ async function createAnalysisContext(
     }
     const standard = standardModuleInterface(dependency.source, compilerExtensions);
     if (standard) {
-      importInterface(module, dependency, standard, imports, reactiveImports, effectfulImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
+      importInterface(module, dependency, standard, imports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
       continue;
     }
     const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
@@ -680,13 +658,12 @@ async function createAnalysisContext(
     if (!targetPath) continue;
     const target = loaded.get(targetPath);
     if (!target) continue;
-    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, effectfulImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
+    importInterface(module, dependency, resolvedModuleInterface(target, loaded, velarImports, interfaceCache, compiledInterfaces, compilerExtensions), imports, reactiveImports, namedTypes, namedTypeIdentities, typeAliases, enums, classes, extensionImports, failures);
   }
   return {
     imports,
     dynamicImports,
     reactiveImports,
-    effectfulImports,
     namedTypes,
     namedTypeIdentities,
     typeAliases,
@@ -861,7 +838,6 @@ function importInterface(
   interface_: ModuleInspection["moduleInterface"],
   imports: Map<string, ValueType>,
   reactiveImports: Map<string, "state" | "computed">,
-  effectfulImports: Set<string>,
   namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
   namedTypeIdentities: Map<string, string>,
   typeAliases: Map<string, ValueType>,
@@ -946,7 +922,6 @@ function importInterface(
       imports.set(specifier.local, resolveImportedType(exported));
       const reactive = interface_.reactiveExports.get(specifier.imported);
       if (reactive) reactiveImports.set(specifier.local, reactive);
-      if (reactive || interface_.mutableExports.has(specifier.imported)) effectfulImports.add(specifier.local);
     }
 }
 
@@ -957,21 +932,15 @@ function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): Cla
     ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
     requiredParameters: info.requiredParameters,
     ...(info.constructorRest ? { constructorRest: renameType(info.constructorRest, aliases) } : {}),
-    ...(info.constructorOriginParameters ? { constructorOriginParameters: info.constructorOriginParameters } : {}),
-    ...(info.constructorOriginRest ? { constructorOriginRest: true } : {}),
-    ...(info.constructorContainsExternal ? { constructorContainsExternal: true } : {}),
-    ...(info.constructorExternalDefaults ? { constructorExternalDefaults: info.constructorExternalDefaults } : {}),
     base: info.base ? aliases.get(info.base) ?? info.base : null,
     abstract: info.abstract,
     fields: new Map([...info.fields].map(([name, field]) => [name, { mutable: field.mutable, type: renameType(field.type, aliases) }])),
     getters: info.getters,
-    ...(info.getterStorageOriginEffects ? { getterStorageOriginEffects: info.getterStorageOriginEffects } : {}),
     abstractGetters: info.abstractGetters,
     methods: new Map([...info.methods].map(([name, type]) => [name, renameType(type, aliases)])),
     abstractMethods: info.abstractMethods,
     staticFields: new Map([...info.staticFields].map(([name, field]) => [name, { mutable: field.mutable, type: renameType(field.type, aliases) }])),
     staticGetters: info.staticGetters,
-    ...(info.staticGetterStorageOriginEffects ? { staticGetterStorageOriginEffects: info.staticGetterStorageOriginEffects } : {}),
     staticMethods: new Map([...info.staticMethods].map(([name, type]) => [name, renameType(type, aliases)])),
   };
 }
@@ -1038,7 +1007,6 @@ function resolveKnownNominals(
       kind: "class",
       name: type.name,
       ...(identity ? { identity } : {}),
-      ...(type.external ? { external: true } : {}),
     };
   }
   if (type.kind === "named" && enums.has(type.name)) return { kind: "enum", name: type.name, identity: enums.get(type.name)!.identity };

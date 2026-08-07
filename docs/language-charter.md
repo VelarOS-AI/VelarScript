@@ -241,86 +241,37 @@ if user == null:
 return user.name
 ```
 
-Ordinary calls are boundaries for mutable bindings and object-field facts
-because VelarScript keeps JavaScript reference and closure semantics. Save a
-checked value in a local `const` when it must remain stable across calls:
+Narrowing is flow-based and deliberately practical. A fact established by a
+check persists across ordinary calls, `await`, string interpolation, and other
+expressions. It is invalidated by exactly two things: an assignment to that
+location (including through destructuring or a compound target), and merging
+branches where an assignment can reach the same location. A member write counts
+as an assignment to that field and invalidates facts reached through every
+alias of the object.
 
 ```velar fragment
 if form:
-    const currentForm = form
-    setError(currentForm, "email", "Required")
-    focusFirstError(currentForm)
+    setError(form, "email", "Required")
+    focusFirstError(form)
 ```
 
-Getters and fields supplied by safe JavaScript imports use the same boundary:
-their implementation may run code or expose an accessor. Read once into a local
-`const`, then check and reuse that value. Plain VelarScript record and class
-fields remain stable until an assignment or effect boundary can change them. A
-member write invalidates facts reached through every alias of that object;
-writes to safe-JavaScript fields additionally account for a possible setter.
-An `is` check against a safe-JavaScript class also accounts for its possible
-`Symbol.hasInstance` hook; local VelarScript class checks are inert.
-`await` is also an effect boundary because other event-loop work can run during
-the suspension. Declaring a nested function does not itself invalidate facts;
-invoking it does.
+This is the same trade TypeScript makes: a callee or another alias could in
+principle write `null` back into a checked location, and the compiler does not
+try to prove it cannot. VelarScript prefers one visible rule over a hidden
+alias analysis. Runtime guards — bounded collection helpers, record
+validators, and `undefined`-to-`null` normalization — do not depend on this
+analysis and stay active either way.
 
-Structural records, Lists, Sets, and Maps produced by safe JavaScript declarations retain
-that host origin through functions, Promises, conditionals, and VelarScript
-module exports. Record reads and reflective operations on those values are
-effect boundaries because a getter or Proxy hook may execute. Collection size,
-indexing, spreading, binding, iteration, and structural matching likewise
-account for host reflection. Saving one field in a local `const`,
-object-spreading into a new record, or copying a collection creates an owned
-container with ordinary local rules; referenced elements retain their own
-origin.
-Writing a field or List index on a host-origin value is also an effect boundary.
-An explicit type annotation constrains the visible shape but never claims
-ownership: assigning a host-origin value to `const value: T` or `let value: T`
-preserves that origin, and assigning a fresh owned value back to a `let` restores
-ordinary local behavior. This current storage state is merged across reachable
-branches, so reversing `if` branches cannot change the analysis result and two
-explicitly owned branches can jointly restore local behavior.
+Two boundaries remain because they are visible in source:
 
-Functions do not erase this distinction. A return annotation describes the
-visible result shape; it does not claim that a returned reference was newly
-allocated. VelarScript tracks direct returns, local forwarding, async adoption,
-named arguments, rest arguments, expression arrows, getters, and methods. A
-helper such as `def identity(value: Profile) -> Profile: return value` therefore
-returns an owned `Profile` for an owned argument and a host-origin `Profile` for
-a host-origin argument. This relationship is part of the analyzed module
-contract but is not another source-level type feature or editor-visible syntax.
-
-Local class construction keeps the instance itself locally owned. If a
-constructor stores a host-origin argument or captured value, the compiler tracks
-that the instance contains host references. Reading an ordinary primitive field
-remains inert; a field or getter that can expose an aggregate is treated as
-host-origin. Constructor parameter forwarding, named calls, defaults, base
-constructors, methods returning `self`, and module boundaries preserve this
-distinction. Create an explicit owned snapshot before construction when the
-class should contain only stable local data.
-An external default contributes origin only when the caller omits that
-parameter; passing an explicit owned value keeps the result owned.
-
-Mutation does not erase the distinction. Storing a host-origin aggregate in a
-local field or collection makes later aggregate reads from that container
-host-origin, while primitive fields and the local container itself remain
-ordinary values. This follows direct and conditional aliases, including a
-helper that returns its input or a method that returns `self`. Rebinding a
-variable to a freshly allocated value separates it from aliases of the previous
-object.
-
-This rule crosses function boundaries. A helper that stores one parameter in
-another parameter or in `self` carries that relationship in its analyzed module
-contract, including named arguments, rest parameters, forwarding helpers,
-external defaults, captured host values, and mutating getters. Passing a local
-aggregate to safe JavaScript also permits the host to retain or populate it, so
-later aggregate reads use host-origin rules unless the caller passes an owned
-snapshot that is discarded afterward.
+- Narrowing does not flow into a nested function body. A callback may run at
+  any later time, so it re-checks what it needs or receives checked values as
+  parameters.
+- A getter is a computed value, not a stable location. Read it into a `const`
+  to narrow the result.
 
 An f-string converts each embedded value at its source position. Primitive and
-enum conversion is inert. Converting an object may invoke its `toString`, so
-object interpolation is an ordinary effect boundary; save any checked value
-that must survive it in a local `const`.
+enum conversion is inert.
 
 Optional access is explicit at each optional continuation:
 
@@ -620,9 +571,7 @@ matches, and a successful guard narrows its case body by the same rules as
 stable data field in its guard and body, so `case User:` makes the matched value
 a `User` without requiring an `as` alias. Pattern failure also carries facts to
 later cases and `else`, so the path after `case null` treats an optional matched
-location as present. Checks owned by a host JavaScript class may execute
-`Symbol.hasInstance`; use `as` when a stable captured value is needed across
-that boundary. A failed guard continues to the next case after
+location as present. A failed guard continues to the next case after
 retaining any effects it already performed. Cases are mutually exclusive: a
 write in one case cannot erase a fact used only by a sibling, but facts
 invalidated by a case that reaches the code after `match` stay invalidated.
@@ -788,11 +737,10 @@ const user: Account = loadUser()
 ```
 
 An imported name is read-only in the receiving module, but an `export let`
-remains a live ES-module value. The module contract records that distinction,
-so calls, `await`, and other effect boundaries invalidate a narrowed live import
-without pretending it can be assigned locally. `export const` remains stable.
-Modules with live exports must be imported by name rather than through `* as`;
-namespace fields are always read-only.
+remains a live ES-module value: the exporting module can reassign it between
+reads. The module contract records that distinction, and modules with live
+exports must be imported by name rather than through `* as`; namespace fields
+are always read-only.
 
 Different modules may use the same record display name; their field metadata is
 kept separate until ordinary structural assignability is checked.
@@ -804,12 +752,8 @@ Inherited fields and accessors do not satisfy a record contract, and validation
 never invokes a getter. This is the same owned-record invariant used by
 structural `match`.
 
-Validation establishes the shape observed at that operation; it does not turn
-an unchecked Proxy into a VelarScript-owned value. A successful `Type.parse`,
-`is`, or type-pattern match therefore retains host origin when its input was
-`unknown`, `any`, or already host-origin. Repeated record or class reads keep
-the host effect rules. Validating an already owned VelarScript record or class
-keeps its ordinary local behavior.
+Validation proves the shape a value has at that operation; it does not
+constrain what an unchecked Proxy may do on later reads.
 
 Native JavaScript is explicit:
 
@@ -830,8 +774,7 @@ application's runtime `Type`.
 Core does not contain JSX, components, reactivity, lifecycle, or styling.
 Projects enable those features with `@velarscript/web` in `velar.json`.
 Component JSX follows JavaScript evaluation order: props evaluate from left to
-right, then JSX children, then the component function. Calling the component is
-an effect boundary just like an ordinary function call. Native JSX remains an
+right, then JSX children, then the component function. Native JSX remains an
 owned DOM construction rather than a hidden Core-language operation.
 
 The source package then exposes the following language extension:

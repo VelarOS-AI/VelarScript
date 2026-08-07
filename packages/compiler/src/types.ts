@@ -5,17 +5,6 @@ export interface EnumInfo {
   readonly members: ReadonlySet<string>;
 }
 
-export interface StorageOriginEffect {
-  readonly targetParameter?: number;
-  readonly targetRest?: true;
-  readonly targetReceiver?: true;
-  readonly sourceParameters?: readonly number[];
-  readonly sourceExternalDefaults?: readonly number[];
-  readonly sourceRest?: true;
-  readonly sourceReceiver?: true;
-  readonly external?: true;
-}
-
 export type ValueType =
   | { readonly kind: "unknown"; readonly restricted?: boolean }
   | { readonly kind: "any" }
@@ -24,29 +13,27 @@ export type ValueType =
   | { readonly kind: "number" }
   | { readonly kind: "bool" }
   | { readonly kind: "optional"; readonly inner: ValueType }
-  | { readonly kind: "list"; readonly element: ValueType; readonly external?: true }
-  | { readonly kind: "set"; readonly element: ValueType; readonly external?: true }
-  | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType; readonly external?: true }
+  | { readonly kind: "list"; readonly element: ValueType }
+  | { readonly kind: "set"; readonly element: ValueType }
+  | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType }
   | { readonly kind: "promise"; readonly value: ValueType }
   | {
       readonly kind: "object";
       readonly fields: ReadonlyMap<string, ValueType>;
       readonly readonlyFields?: ReadonlySet<string>;
       readonly optionalFields?: ReadonlySet<string>;
-      readonly external?: true;
-      readonly containsExternal?: true;
     }
-  | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly external?: true; readonly containsExternal?: true }
-  | { readonly kind: "class"; readonly name: string; readonly identity?: string; readonly external?: true; readonly containsExternal?: true }
+  | { readonly kind: "named"; readonly name: string; readonly identity?: string }
+  | { readonly kind: "class"; readonly name: string; readonly identity?: string }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
   | { readonly kind: "enumObject"; readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> }
   | { readonly kind: "typeObject"; readonly name: string }
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | { readonly kind: "node" }
   | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly intrinsic?: string }
-  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[]; readonly storageOriginEffects?: readonly StorageOriginEffect[] }
-  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[]; readonly storageOriginEffects?: readonly StorageOriginEffect[] }
-  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType; readonly resultOriginParameters?: readonly number[]; readonly resultOriginRest?: true; readonly resultOriginReceiver?: true; readonly resultOriginExternalDefaults?: readonly number[]; readonly storageOriginEffects?: readonly StorageOriginEffect[] }
+  | { readonly kind: "function"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "action"; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "intrinsic"; readonly name: string; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
 export const unknownType: ValueType = { kind: "unknown" };
@@ -147,7 +134,6 @@ export function unionOf(types: readonly ValueType[]): ValueType {
       if (isInvalidType(candidate)) return invalidType;
       const existing = members.findIndex((member) => sameType(member, candidate));
       if (existing < 0) members.push(candidate);
-      else members[existing] = mergeEquivalentMetadata(members[existing]!, candidate);
     }
   }
   return members.length === 0 ? unknownType : members.length === 1 ? members[0]! : { kind: "union", members };
@@ -164,13 +150,13 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
     return left;
   }
   if (sameType(left, right)) {
-    return mergeEquivalentMetadata(left, right);
+    return left;
   }
   if (left.kind === "optional" && sameType(left.inner, right)) {
-    return optionalOf(mergeEquivalentMetadata(left.inner, right));
+    return left;
   }
   if (right.kind === "optional" && sameType(right.inner, left)) {
-    return optionalOf(mergeEquivalentMetadata(left, right.inner));
+    return right;
   }
   if (left.kind === "null") {
     return optionalOf(right);
@@ -179,131 +165,6 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
     return optionalOf(left);
   }
   return unionOf([left, right]);
-}
-
-function storageOriginEffectIdentity(effect: StorageOriginEffect): string {
-  return identityNode("storage-origin", [
-    effect.targetReceiver ? "receiver" : effect.targetRest ? "rest" : `parameter:${effect.targetParameter ?? ""}`,
-    effect.sourceReceiver ? "receiver" : "",
-    effect.sourceRest ? "rest" : "",
-    effect.external ? "external" : "",
-    [...(effect.sourceExternalDefaults ?? [])].sort((a, b) => a - b).join(","),
-    [...(effect.sourceParameters ?? [])].sort((a, b) => a - b).join(","),
-  ]);
-}
-
-function mergeStorageOriginEffects(
-  left: readonly StorageOriginEffect[] | undefined,
-  right: readonly StorageOriginEffect[] | undefined,
-): readonly StorageOriginEffect[] {
-  const effects = new Map<string, StorageOriginEffect>();
-  for (const effect of [...(left ?? []), ...(right ?? [])]) {
-    const normalized: StorageOriginEffect = {
-      ...(effect.targetParameter !== undefined ? { targetParameter: effect.targetParameter } : {}),
-      ...(effect.targetRest ? { targetRest: true } : {}),
-      ...(effect.targetReceiver ? { targetReceiver: true } : {}),
-      ...(effect.sourceParameters?.length
-        ? { sourceParameters: [...new Set(effect.sourceParameters)].sort((a, b) => a - b) }
-        : {}),
-      ...(effect.sourceExternalDefaults?.length
-        ? { sourceExternalDefaults: [...new Set(effect.sourceExternalDefaults)].sort((a, b) => a - b) }
-        : {}),
-      ...(effect.sourceRest ? { sourceRest: true } : {}),
-      ...(effect.sourceReceiver ? { sourceReceiver: true } : {}),
-      ...(effect.external ? { external: true } : {}),
-    };
-    effects.set(storageOriginEffectIdentity(normalized), normalized);
-  }
-  return [...effects.values()].sort((a, b) => storageOriginEffectIdentity(a).localeCompare(storageOriginEffectIdentity(b)));
-}
-
-function mergeEquivalentMetadata(left: ValueType, right: ValueType): ValueType {
-  if (left.kind === "object" && right.kind === "object") {
-    return {
-      ...left,
-      fields: new Map([...left.fields].map(([name, value]) => [
-        name,
-        right.fields.has(name) ? mergeEquivalentMetadata(value, right.fields.get(name)!) : value,
-      ])),
-      ...(left.external || right.external ? { external: true as const } : {}),
-      ...(left.containsExternal || right.containsExternal ? { containsExternal: true as const } : {}),
-    };
-  }
-  if (left.kind === "named" && right.kind === "named") {
-    return {
-      ...left,
-      ...(left.external || right.external ? { external: true as const } : {}),
-      ...(left.containsExternal || right.containsExternal ? { containsExternal: true as const } : {}),
-    };
-  }
-  if (left.kind === "class" && right.kind === "class") {
-    return {
-      ...left,
-      ...(left.external || right.external ? { external: true as const } : {}),
-      ...(left.containsExternal || right.containsExternal ? { containsExternal: true as const } : {}),
-    };
-  }
-  if (left.kind === "optional" && right.kind === "optional") {
-    return { kind: "optional", inner: mergeEquivalentMetadata(left.inner, right.inner) };
-  }
-  if (left.kind === "list" && right.kind === "list") {
-    return {
-      kind: "list",
-      element: mergeEquivalentMetadata(left.element, right.element),
-      ...(left.external || right.external ? { external: true } : {}),
-    };
-  }
-  if (left.kind === "set" && right.kind === "set") {
-    return {
-      kind: "set",
-      element: mergeEquivalentMetadata(left.element, right.element),
-      ...(left.external || right.external ? { external: true } : {}),
-    };
-  }
-  if (left.kind === "map" && right.kind === "map") {
-    return {
-      kind: "map",
-      key: mergeEquivalentMetadata(left.key, right.key),
-      value: mergeEquivalentMetadata(left.value, right.value),
-      ...(left.external || right.external ? { external: true } : {}),
-    };
-  }
-  if (left.kind === "promise" && right.kind === "promise") {
-    return { kind: "promise", value: mergeEquivalentMetadata(left.value, right.value) };
-  }
-  if (left.kind === "union" && right.kind === "union") {
-    return {
-      kind: "union",
-      members: left.members.map((member) => {
-        const matching = right.members.find((candidate) => sameType(member, candidate));
-        return matching ? mergeEquivalentMetadata(member, matching) : member;
-      }),
-    };
-  }
-  if ((left.kind === "function" || left.kind === "action" || left.kind === "intrinsic")
-    && right.kind === left.kind) {
-    const resultOriginParameters = [...new Set([
-      ...(left.resultOriginParameters ?? []),
-      ...(right.resultOriginParameters ?? []),
-    ])].sort((a, b) => a - b);
-    const resultOriginExternalDefaults = [...new Set([
-      ...(left.resultOriginExternalDefaults ?? []),
-      ...(right.resultOriginExternalDefaults ?? []),
-    ])].sort((a, b) => a - b);
-    const storageOriginEffects = mergeStorageOriginEffects(left.storageOriginEffects, right.storageOriginEffects);
-    return {
-      ...left,
-      parameters: left.parameters.map((parameter, index) => mergeEquivalentMetadata(parameter, right.parameters[index]!)),
-      ...(left.rest && right.rest ? { rest: mergeEquivalentMetadata(left.rest, right.rest) } : {}),
-      result: mergeEquivalentMetadata(left.result, right.result),
-      ...(resultOriginParameters.length > 0 ? { resultOriginParameters } : {}),
-      ...(left.resultOriginRest || right.resultOriginRest ? { resultOriginRest: true as const } : {}),
-      ...(left.resultOriginReceiver || right.resultOriginReceiver ? { resultOriginReceiver: true as const } : {}),
-      ...(resultOriginExternalDefaults.length > 0 ? { resultOriginExternalDefaults } : {}),
-      ...(storageOriginEffects.length > 0 ? { storageOriginEffects } : {}),
-    };
-  }
-  return left;
 }
 
 export function resolvedAsyncType(type: ValueType): ValueType {
@@ -404,17 +265,13 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
 }
 
 export function semanticTypeIdentity(type: ValueType): string {
-  return typeIdentity(type, false);
+  return typeIdentity(type);
 }
 
-export function analysisTypeIdentity(type: ValueType): string {
-  return typeIdentity(type, true);
-}
+export const analysisTypeIdentity = semanticTypeIdentity;
 
-function typeIdentity(type: ValueType, includeExternal: boolean): string {
-  const external = includeExternal && "external" in type && type.external === true ? "external" : "";
-  const containsExternal = includeExternal && "containsExternal" in type && type.containsExternal === true ? "contains-external" : "";
-  const nested = (value: ValueType): string => typeIdentity(value, includeExternal);
+function typeIdentity(type: ValueType): string {
+  const nested = (value: ValueType): string => typeIdentity(value);
   switch (type.kind) {
     case "unknown":
       return identityNode("unknown", [isInvalidType(type) ? "diagnosed" : type.restricted ? "restricted" : ""]);
@@ -426,11 +283,11 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
     case "node":
       return identityNode(type.kind);
     case "class":
-      return identityNode("class", [external, containsExternal, type.identity ?? type.name]);
+      return identityNode("class", [type.identity ?? type.name]);
     case "classConstructor":
       return identityNode("class-constructor", [type.identity ?? type.name]);
     case "named":
-      return identityNode("named", [external, containsExternal, type.identity ?? type.name]);
+      return identityNode("named", [type.identity ?? type.name]);
     case "enum":
     case "enumObject":
       return identityNode(type.kind, [type.identity]);
@@ -439,15 +296,15 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
     case "optional":
       return identityNode("optional", [nested(type.inner)]);
     case "list":
-      return identityNode("list", [external, nested(type.element)]);
+      return identityNode("list", [nested(type.element)]);
     case "set":
-      return identityNode("set", [external, nested(type.element)]);
+      return identityNode("set", [nested(type.element)]);
     case "map":
-      return identityNode("map", [external, nested(type.key), nested(type.value)]);
+      return identityNode("map", [nested(type.key), nested(type.value)]);
     case "promise":
       return identityNode("promise", [nested(type.value)]);
     case "object":
-      return identityNode("object", [external, containsExternal, ...[...type.fields]
+      return identityNode("object", [...[...type.fields]
         .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([name, value]) => identityNode("field", [
@@ -466,13 +323,6 @@ function typeIdentity(type: ValueType, includeExternal: boolean): string {
         identityNode("parameters", type.parameters.map(nested)),
         type.rest ? nested(type.rest) : "",
         nested(type.result),
-        ...(includeExternal ? [
-          identityNode("result-origin-parameters", (type.resultOriginParameters ?? []).map(String)),
-          type.resultOriginRest ? "rest" : "",
-          type.resultOriginReceiver ? "receiver" : "",
-          identityNode("result-origin-defaults", (type.resultOriginExternalDefaults ?? []).map(String)),
-          identityNode("storage-origin-effects", (type.storageOriginEffects ?? []).map(storageOriginEffectIdentity).sort()),
-        ] : []),
       ]);
     case "componentConstructor":
       return identityNode("component", [type.intrinsic ?? "", type.name, ...[...type.props]

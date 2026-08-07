@@ -53,7 +53,7 @@ interface passes until their complete exported contracts stabilize; a cycle that
 cannot converge is a project failure. The convergence identity includes live
 and reactive exports, named-type identities and fields, aliases, enums, and the
 complete public class contract: constructor names, arity, fixed/rest types,
-inheritance, abstract members, getters, fields, methods, and host-origin effects.
+inheritance, abstract members, getters, fields, and methods.
 Extension-owned cross-module interface values must provide their own bounded,
 deterministic `interfaceExportIdentity`; missing contracts fail the project
 instead of being treated as stable. Changing one of those contracts cannot be
@@ -106,64 +106,20 @@ during the Core token pass. The Web parser only sends embedded VelarScript
 expression slices through the normal nested Core parser; it never receives an
 opaque JSX or Look source block to split a second time.
 
-Structural object, List, and instance types also carry non-display host-origin metadata.
-The TypeScript declaration bridge and explicit extern results attach it, type
-composition preserves it without changing assignability or editor spelling,
-and fresh VelarScript copies intentionally remove it. Flow analysis uses this
-metadata wherever descriptor or index reflection could execute host Proxy or
-accessor behavior.
-Bindings keep three concerns separate: the immutable declared contract used for
-assignment checks, the current unnarrowed storage type including provenance,
-and the current flow-narrowed read type. Rebinding mutable storage recomputes
-only the storage overlay, so provenance follows the current runtime reference
-without rewriting the source contract. Branch snapshots include that storage
-state and merge it by reachable path rather than analysis order.
+Bindings keep the immutable declared contract used for assignment checks
+separate from the current flow-narrowed read type. Branch snapshots merge by
+reachable path rather than analysis order.
 Contextual collection typing overlays the expected visible element shape onto
-the inferred elements instead of replacing them, so a fresh List is owned while
-references stored inside it keep their own origin.
-Callable analysis also records non-display parameter, rest-parameter, and
-receiver dependencies on the result. These summaries are computed to a fixed
-point across hoisted declarations, calls, local forwarding, async results,
-arrows, getters, and methods. Call sites apply the summary to arguments in
-formal-parameter order while preserving source evaluation order. Public class
-interfaces consume the analyzed member tables, so the same contract survives
-module boundaries instead of being reconstructed from annotations.
-Assigning a callable to an explicit function type changes its visible signature,
-not its inferred behavior: parameter/default/rest result origins and storage
-effects are translated to the visible positional contract and retained.
-Constructor analysis maintains a separate fixed-point summary for arguments or
-captured values stored by the instance, including `super(...)` forwarding. A
-local instance that stores one of those values receives `containsExternal`
-metadata rather than the `external` marker used for a host-owned object. Member
-analysis can therefore keep the local receiver inert while retaining host origin
-on aggregate values exposed from it. Callable and constructor summaries are
-refined together so hoisted factories cannot observe a declaration-order gap.
-External default metadata is keyed by formal parameter and applied only when a
-positional or named call omits that parameter.
+the inferred elements instead of replacing them.
+Public class interfaces consume the analyzed member tables, so the same
+contract survives module boundaries instead of being reconstructed from
+annotations.
 
-The same contained-origin state applies after construction. Writing a
-host-origin aggregate into a local record, class field, List slot, Set, or Map
-widens the owning storage while leaving the locally allocated container inert.
-Bindings also carry flow-scoped reference identities. Direct aliases,
-conditional aliases, narrowed bindings, identity-style callable results, and
-methods returning `self` therefore observe the same widening; rebinding a
-variable to a fresh allocation gives it a distinct identity. Collection
-mutators route through this storage operation instead of maintaining a second
-origin model.
-
-Callable contracts additionally carry storage-origin effects. Each effect maps
-a mutated parameter, rest item, or method receiver to the parameters, rest
-values, receiver, external default, or captured host value that may be stored
-inside it. The same declaration-order-independent fixed point used for return
-provenance composes these effects through forwarding helpers, named calls,
-methods, getters, and module interfaces. Safe-JavaScript functions conservatively
-expose reference arguments to host mutation. Call sites apply the effect to the
-same flow-scoped reference identities used by direct writes.
-
-Runtime validation proves a value's current shape; it does not prove that a
-Proxy will preserve that shape on its next operation. `Type.parse`, `is`, and
-type-pattern narrowing therefore keep host origin when their input is unchecked
-or already host-owned. A checked VelarScript-owned value keeps its local origin.
+Bindings carry flow-scoped reference identities: direct aliases, conditional
+aliases, narrowed bindings, identity-style callable results, and methods
+returning `self` share one identity, while rebinding a variable to a fresh
+allocation gives it a distinct one. Member-write invalidation applies to every
+alias of that identity.
 
 Source classes keep constructor inputs, one constructor body, instance fields,
 static fields, getters, and methods as separate AST collections. Class-body fields require an annotation,
@@ -342,15 +298,13 @@ Parent expressions and their first child often share a start offset, so
 start-only keys are forbidden for expression hints such as optional reads,
 private members, named calls, conditions, and Web-controlled calls.
 
-Null normalization is type-directed rather than provenance-directed. Every
+Null normalization is type-directed. Every
 checked expression whose expanded type is optional, `null`, or `unknown`
 observes JavaScript `undefined` as VelarScript `null`; `Promise<T>` receives the
 same treatment when `T` has that nullish contract. This rule survives values,
 objects, collections, classes, aliases, cycles, namespace imports, and dynamic
 imports without a second propagation model. Unsafe JavaScript `any` remains
-outside the guarantee. Cross-module fixed-point analysis therefore converges on
-analysis identities that include hidden host-origin metadata, while ordinary
-type equality and editor spelling continue to use the visible semantic identity.
+outside the guarantee.
 Assignment targets are a separate lowering context: they never receive the
 read-side `?? null` normalization. Flow-narrowed reads use the current fact,
 while plain assignment is checked against the declared location type and
@@ -364,7 +318,7 @@ checking the deferred index or arguments. A statically skipped index is checked
 for diagnostics in isolated flow, so code that cannot execute cannot erase a
 continuing fact. Optional callable contexts unwrap only for contextual function
 inference and remain optional at the declared storage boundary.
-Flow facts snapshot the complete binding and provenance state around mutually exclusive `if`,
+Flow facts snapshot the complete binding state around mutually exclusive `if`,
 `match`, `try`/`catch`, and inline conditional branches and around loop bodies.
 Only invalidations from paths that can reach the next statement are merged;
 unreachable tails cannot mutate the continuing fact set. Facts created with the
@@ -372,38 +326,32 @@ same semantic type on every continuing path are intersected back into the outer
 scope. Match pattern values and guards are processed in runtime order, so a
 failed effectful guard changes the facts available to later cases. Successful
 match guards and terminating guard clauses reuse the same fact model.
-Every ordinary call clears mutable binding facts and member-path facts before
-later expressions are checked, matching JavaScript closure and reference
-semantics. Getter reads and safe-JavaScript class fields are handled as the same
-effect boundary because repeated property access may execute host code. `await`
-clears the same facts before the resumed continuation is checked. A local
-non-optional `const` is the explicit stable-value boundary. Invalidations remain
-inside their current flow frame, so analyzing a deferred function, callback,
-component, or instance initializer does not pretend that declaration is an
-immediate execution.
+Narrowed facts persist across ordinary calls, `await`, getter reads, and
+f-string interpolation. Exactly two things clear a fact: an assignment to the
+narrowed location, including destructuring and compound targets, and merging
+branches where such an assignment can reach that location. A getter result is a
+computed value rather than a stable location, so narrowing applies to it only
+after it is read into a local binding. Narrowing does not flow into a nested
+function body, and invalidations remain inside their current flow frame, so
+analyzing a deferred function, callback, component, or instance initializer
+does not pretend that declaration is an immediate execution.
 
 Assertion messages are analyzed on an isolated failing path with the condition's
 negative facts. That path always throws, so message effects never contaminate
 the successful continuation where the positive assertion facts apply.
 
-Bindings separately record assignment permission and stability across effects.
-Local `let` has both, an imported `export let` is read-only locally but remains
-effect-mutable, and `export const` has neither. `ModuleInterface.mutableExports`
-survives project fixed-point analysis and participates in the interface cache
-identity. Namespace imports reject live exports and expose read-only fields,
+Bindings record assignment permission. Local `let` is assignable, an imported
+`export let` is read-only locally even though the exporting module can reassign
+it between reads, and `export const` is never reassigned.
+`ModuleInterface.mutableExports` survives project fixed-point analysis and
+participates in the interface cache identity. Namespace imports reject live exports and expose read-only fields,
 avoiding an untrackable mixture of property syntax and ES-module live bindings.
 
 Member writes clear aliased member-path facts even when their source bindings
-differ. Safe-JavaScript writes additionally clear mutable binding facts because
-the declared field may be implemented by a setter. A plain assignment only
-locates its target before evaluating the right side and applies that setter
-boundary afterward; compound assignment also performs an effectful old-value
-read before the right side. Object interpolation in an f-string performs the
-same operation for a possible `toString` call, and
-`instanceof` checks against safe-JavaScript classes do so for a possible
-`Symbol.hasInstance` hook. The Web analyzer checks component JSX in emitted
-order—props, children, invocation—and marks the final invocation as an effect
-boundary.
+differ. A plain assignment only locates its target before evaluating the right
+side; compound assignment also performs an old-value read before the right
+side. The Web analyzer checks component JSX in emitted order—props, children,
+invocation.
 
 Catch lowering uses the host's cross-realm Error brand check, then converts
 foreign non-Error throws without applying JavaScript string coercion to objects
@@ -527,11 +475,9 @@ and browser runtimes and do not define a separate VelarScript memory model.
   result.
 - Match analysis carries the successful pattern type back to a stable matched
   identifier or owned data-field path. Guard analysis begins with that fact and
-  publishes it to the body only if guard effects did not invalidate it.
+  publishes it to the body unless an assignment in the guard invalidates it.
   Representable exclusions such as a rejected `null` or union member feed later
-  cases, `else`, and the unmatched continuation. Runtime checks that may invoke
-  host JavaScript hooks discard any re-read location fact the hook can
-  invalidate; an explicit `as` binding still captures the already matched value.
+  cases, `else`, and the unmatched continuation.
 - Binary operands retain source grouping when JavaScript has a lower-precedence
   form such as an arrow function; emitted code never relies on discarded source
   parentheses to remain syntactically valid.

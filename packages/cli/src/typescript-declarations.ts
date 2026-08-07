@@ -1072,7 +1072,6 @@ function parseTsType(
   if (value.endsWith("[]")) return {
     kind: "list",
     element: parseTsType(value.slice(0, -2), aliases, warnings, stack, classTypes, "invariant"),
-    ...(direction !== "to-js" ? { external: true } : {}),
   };
   const generic = /^([A-Za-z_$][\w$]*)\s*<([\s\S]+)>$/u.exec(value);
   if (generic) {
@@ -1080,7 +1079,6 @@ function parseTsType(
     if (generic[1] === "Array") return {
       kind: "list",
       element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant"),
-      ...(direction !== "to-js" ? { external: true } : {}),
     };
     if (generic[1] === "Set") return { kind: "set", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant") };
     if (generic[1] === "ReadonlyArray" || generic[1] === "ReadonlySet") {
@@ -1153,9 +1151,7 @@ function parseTsType(
     return unknownType;
   }
   const classType = classTypes.get(value);
-  if (classType) return direction !== "to-js" && classType.kind === "class"
-    ? { ...classType, external: true }
-    : classType;
+  if (classType) return classType;
   const alias = aliases.get(value);
   if (alias && !stack.has(value)) return parseTsType(alias, aliases, warnings, new Set([...stack, value]), classTypes, direction);
   if (alias) warnings.push(`Recursive declaration '${value}' is outside the VelarScript declaration bridge and was kept as unknown`);
@@ -1203,7 +1199,6 @@ function objectType(source: string, aliases: ReadonlyMap<string, string>, warnin
     fields,
     ...(readonlyFields.size > 0 ? { readonlyFields } : {}),
     ...(optionalFields.size > 0 ? { optionalFields } : {}),
-    ...(direction !== "to-js" ? { external: true } : {}),
   };
 }
 

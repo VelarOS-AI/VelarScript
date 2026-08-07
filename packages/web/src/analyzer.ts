@@ -908,7 +908,6 @@ export class VelarWebAnalyzer extends Analyzer {
         this.inferJsx(child);
       }
     }
-    if (component) this.invalidateEffectfulFlowFacts();
     this.jsxDepth -= 1;
     return { kind: "node" };
   }
