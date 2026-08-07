@@ -99,7 +99,7 @@ async function discoverTestFiles(root: string, excluded: ReadonlySet<string>): P
   return output.sort();
 }
 
-async function prepareStandardModules(root: string, config: VelarProjectConfig): Promise<void> {
+export async function prepareStandardModules(root: string, config: VelarProjectConfig): Promise<void> {
   const packageRoot = join(root, "node_modules", "velar");
   await mkdir(packageRoot, { recursive: true });
   const exports: Record<string, string> = {};

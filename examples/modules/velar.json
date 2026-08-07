@@ -1,0 +1,7 @@
+{
+  "formatVersion": 2,
+  "entry": "main.vel",
+  "outDir": "dist",
+  "publicDir": "public",
+  "extensions": []
+}

@@ -84,6 +84,14 @@ dependency and consumer peer contract. Assertions come from `velar/test`.
 Browser automation is a Web extension surface imported from `velar/web-test`
 and runs only through `velar test --browser`.
 
+`velar run [entry.vel | project-directory] [-- <program-arguments>...]`
+compiles the resolved Core module graph and executes its entry module once on
+Node.js with inherited stdio; the program's exit code becomes the command's
+exit code, arguments after `--` reach the program through `process.argv`, and
+stack traces map back to `.vel` sources. Entry resolution mirrors
+`velar check`. Projects that enable a web application framework are rejected
+and belong to `velar dev` and `velar build`.
+
 `velar format` recursively owns project `.vel` files while excluding `.git`,
 `node_modules`, `publicDir`, and `outDir`. `velar format --check` is read-only.
 Build, verification, preview, and remote-deployment verification continue to

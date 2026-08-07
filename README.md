@@ -163,6 +163,7 @@ velar remove <package>...
 velar update [package...]
 velar dev [entry.vel | project-directory] [--port <port>]
 velar build [entry.vel | project-directory] [--out-dir <directory>]
+velar run [entry.vel | project-directory] [-- <program-arguments>...]
 velar test [project-directory | file.test.vel]
 velar test [project-directory] --browser [chromium|firefox|webkit|all]
 velar format [file.vel | project-directory] [--check]

@@ -12,6 +12,7 @@ import { runLanguageServer } from "./language-server.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
+import { runProgram } from "./program-runner.ts";
 import { runBrowserTests, type BrowserEngineSelection } from "./browser-test-runner.ts";
 import { buildProductionFramework, writeProductionManifest } from "./production-build.ts";
 import { VELAR_VERSION } from "./version.ts";
@@ -48,6 +49,11 @@ interface TestArguments {
 interface PreviewArguments {
   readonly input: string | null;
   readonly port: number;
+}
+
+interface RunArguments {
+  readonly input: string | null;
+  readonly programArguments: readonly string[];
 }
 
 interface DeploymentVerificationArguments {
@@ -90,7 +96,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return 0;
   }
 
-  if (commandNames.has(command) && rest.some((argument) => argument === "--help" || argument === "-h")) {
+  if (commandNames.has(command) && helpRequested(command, rest)) {
     printCommandHelp(command);
     return 0;
   }
@@ -193,6 +199,31 @@ async function main(arguments_: readonly string[]): Promise<number> {
       return 0;
     } catch (error) {
       process.stderr.write(`velar verify-deployment: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "run") {
+    const parsed = parseRunArguments(rest);
+    if (typeof parsed === "string") {
+      process.stderr.write(`velar run: ${parsed}\n`);
+      return 2;
+    }
+    let projectConfig: VelarProjectConfig;
+    try {
+      projectConfig = await resolveVelarProject(parsed.input);
+    } catch (error) {
+      process.stderr.write(`velar run: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+    if (projectConfig.framework) {
+      process.stderr.write(`velar run: this project enables the '${projectConfig.framework.host.id}' application framework; use 'velar dev' or 'velar build' instead\n`);
+      return 1;
+    }
+    try {
+      return await runProgram(projectConfig, parsed.programArguments);
+    } catch (error) {
+      process.stderr.write(`velar run: ${hostErrorMessage(error)}\n`);
       return 1;
     }
   }
@@ -530,6 +561,28 @@ function parseTestArguments(arguments_: readonly string[]): TestArguments | stri
   return { input, browser };
 }
 
+function parseRunArguments(arguments_: readonly string[]): RunArguments | string {
+  let input: string | null = null;
+  const programArguments: string[] = [];
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index]!;
+    if (argument === "--") {
+      programArguments.push(...arguments_.slice(index + 1));
+      break;
+    }
+    if (argument.startsWith("--")) return `unknown option '${argument}'; program arguments belong after '--'`;
+    if (input) return `unexpected extra input '${argument}'`;
+    input = argument;
+  }
+  return { input, programArguments };
+}
+
+function helpRequested(command: string, arguments_: readonly string[]): boolean {
+  const separator = command === "run" ? arguments_.indexOf("--") : -1;
+  const visible = separator === -1 ? arguments_ : arguments_.slice(0, separator);
+  return visible.some((argument) => argument === "--help" || argument === "-h");
+}
+
 function parseSingleOptionalInput(arguments_: readonly string[]): string | null | { readonly error: string } {
   if (arguments_.some((argument) => argument.startsWith("--"))) {
     return { error: `unknown option '${arguments_.find((argument) => argument.startsWith("--"))}'` };
@@ -643,6 +696,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar update [package...]",
     "  velar dev [entry.vel | project-directory] [--port <port>]",
     "  velar build [entry.vel | project-directory] [--out-dir <directory>]",
+    "  velar run [entry.vel | project-directory] [-- <program-arguments>...]",
     "  velar verify [project-directory | build-directory]",
     "  velar preview [project-directory | build-directory] [--port <port>]",
     "  velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]",
@@ -657,7 +711,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 }
 
 const commandNames = new Set([
-  "check", "create", "install", "add", "remove", "update", "dev", "build", "verify", "preview",
+  "check", "create", "install", "add", "remove", "update", "dev", "build", "run", "verify", "preview",
   "verify-deployment", "test", "format", "lsp",
 ]);
 
@@ -671,6 +725,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Runs the development server; the default port is 5173."],
     build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated framework application output or JavaScript modules."],
+    run: ["Usage: velar run [entry.vel | project-directory] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],
     preview: ["Usage: velar preview [project-directory | build-directory] [--port <1-65535>]", "Serves only a verified production build; the default port is 4173."],
     "verify-deployment": ["Usage: velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]", "Compares verified local bytes, routes, MIME types, and headers with an HTTPS deployment."],

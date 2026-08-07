@@ -3026,6 +3026,71 @@ test("CLI builds a real .vel file", async () => {
   assert.deepEqual(map.sourcesContent, ["const answer = 40 + 2\n"]);
 });
 
+test("CLI runs Core programs on Node with forwarded arguments and propagated exit codes", async () => {
+  const cli = resolve("packages/cli/src/cli.ts");
+  const directory = await mkdtemp(join(tmpdir(), "velar-run-"));
+
+  const printPath = join(directory, "printing.vel");
+  await writeFile(printPath, `
+import {stringify} from "velar/json"
+import {clamp} from "velar/math"
+import {iso} from "velar/time"
+
+print(stringify({limit: clamp(12, 0, 10)}))
+print(iso(0))
+`.trimStart(), "utf8");
+  const printed = spawnSync(process.execPath, [cli, "run", printPath], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.equal(printed.stdout, "{\"limit\":10}\n1970-01-01T00:00:00.000Z\n");
+
+  const projectRun = spawnSync(process.execPath, [cli, "run", "examples/modules"], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(projectRun.status, 0, projectRun.stderr);
+  assert.equal(projectRun.stdout, "Hello, Velar\n");
+
+  const failingPath = join(directory, "failing.vel");
+  await writeFile(failingPath, "throw Error(\"boom\")\n", "utf8");
+  const failed = spawnSync(process.execPath, [cli, "run", failingPath], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /Error: boom/u);
+  assert.match(failed.stderr, /failing\.vel:1/u);
+
+  const exitPath = join(directory, "exits.vel");
+  await writeFile(exitPath, "import js unsafe {exit} from \"node:process\"\n\nexit(7)\n", "utf8");
+  const exited = spawnSync(process.execPath, [cli, "run", exitPath], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(exited.status, 7, exited.stderr);
+
+  const argumentsPath = join(directory, "arguments.vel");
+  await writeFile(argumentsPath, "import js unsafe {argv} from \"node:process\"\n\nprint(argv.slice(2).join(\",\"))\n", "utf8");
+  const forwarded = spawnSync(process.execPath, [cli, "run", argumentsPath, "--", "alpha", "--beta=1", "--help"], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(forwarded.status, 0, forwarded.stderr);
+  assert.equal(forwarded.stdout, "alpha,--beta=1,--help\n");
+
+  const optionBeforeSeparator = spawnSync(process.execPath, [cli, "run", argumentsPath, "--beta=1"], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(optionBeforeSeparator.status, 2);
+  assert.match(optionBeforeSeparator.stderr, /unknown option '--beta=1'; program arguments belong after '--'/u);
+
+  const help = spawnSync(process.execPath, [cli, "run", "--help"], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /Usage: velar run \[entry\.vel \| project-directory\] \[-- <program-arguments>\.\.\.\]/u);
+});
+
+test("CLI run rejects web framework projects and points to dev and build", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-run-web-"));
+  const projectRoot = join(directory, "web-app");
+  await mkdir(join(projectRoot, "src"), { recursive: true });
+  await writeFile(join(projectRoot, "velar.json"), JSON.stringify({
+    formatVersion: 2,
+    entry: "src/main.vel",
+    extensions: ["@velarscript/web"],
+    web: { title: "App", base: "/" },
+  }), "utf8");
+  await writeFile(join(projectRoot, "src", "main.vel"), "print(\"hello\")\n", "utf8");
+  await linkWorkspaceWebExtension(projectRoot);
+  const rejected = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run", projectRoot], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(rejected.status, 1);
+  assert.equal(rejected.stderr, "velar run: this project enables the '@velarscript/web' application framework; use 'velar dev' or 'velar build' instead\n");
+});
+
 test("dev server exits cleanly after browser requests", async (context) => {
   const child = spawn(process.execPath, [
     "packages/cli/src/cli.ts",
@@ -12479,6 +12544,25 @@ const called = hooks.handler()
   assert.ok(invalid.diagnostics.filter((item) => /Optional chains cannot be assignment targets/u.test(item.message)).length >= 2);
   assert.ok(invalid.diagnostics.some((item) => /Use optional access '\?\.'/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /presence check or an optional access chain/u.test(item.message)));
+});
+
+test("web extension reports optional-access diagnostics on '+' operands exactly once", () => {
+  const source = `
+type Person:
+    name: string
+    age: number
+
+let person: Person? = null
+const message = person.name + "!" + person.name
+const negated = -person.age
+`.trimStart();
+  const core = compileCore(source);
+  const web = compile(source);
+  assert.ok(core.diagnostics.length > 0);
+  assert.deepEqual(
+    web.diagnostics.map((item) => ({ code: item.code, message: item.message, span: item.span })),
+    core.diagnostics.map((item) => ({ code: item.code, message: item.message, span: item.span })),
+  );
 });
 
 test("optional calls and indexes carry successful-chain facts into deferred expressions", () => {

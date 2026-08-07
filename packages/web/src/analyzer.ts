@@ -366,6 +366,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private jsxDepth = 0;
   private readonly resources: ReadonlyMap<string, string>;
   private readonly unsafeCssImports = new Set<string>();
+  private readonly probedOperandTypes = new Map<string, ValueType>();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
@@ -541,11 +542,15 @@ export class VelarWebAnalyzer extends Analyzer {
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {
       const operand = this.inferExpression(expression.operand);
       if (isLookNumericType(operand)) return operand;
+      this.probedOperandTypes.set(spanIdentity(expression.operand.span), operand);
     }
     if (expression.kind === "BinaryExpression" && ["+", "-", "*", "/"].includes(expression.operator)) {
       const left = this.inferExpression(expression.left);
       const right = this.inferExpression(expression.right);
-      if (isLookNumericType(left) || isLookNumericType(right)) {
+      if (!isLookNumericType(left) && !isLookNumericType(right)) {
+        this.probedOperandTypes.set(spanIdentity(expression.left.span), left);
+        this.probedOperandTypes.set(spanIdentity(expression.right.span), right);
+      } else {
         if ((expression.operator === "+" || expression.operator === "-") && semanticTypeIdentity(left) === semanticTypeIdentity(right)) return left;
         if ((expression.operator === "+" || expression.operator === "-") && isLookMetricPair(left, right)) return lookLength;
         if ((expression.operator === "*" || expression.operator === "/") && isLookNumericType(left) && right.kind === "number") return left;
@@ -571,6 +576,19 @@ export class VelarWebAnalyzer extends Analyzer {
       return unknownType;
     }
     return undefined;
+  }
+
+  protected override inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
+    // Operands probed for Look arithmetic are re-requested by the core analyzer immediately after the
+    // probe declines; reusing the probe result (consume-once) keeps operand analysis single-run so
+    // operand diagnostics are not reported twice.
+    const key = spanIdentity(expression.span);
+    const probed = this.probedOperandTypes.get(key);
+    if (probed !== undefined) {
+      this.probedOperandTypes.delete(key);
+      return probed;
+    }
+    return super.inferExpression(expression, contextualType);
   }
 
   private reactiveReference(expression: Expression): { readonly name: string; readonly type: ValueType } | null {
