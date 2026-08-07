@@ -255,6 +255,42 @@ export function isCoreReservedBinding(name: string): boolean {
   return reservedBindings.has(name);
 }
 
+// The human-readable origin of a nominal contract, recovered from its
+// identity: extern classes name their JavaScript source and Velar nominals
+// name their declaring module. Structural types have no origin.
+function contractOrigin(type: ValueType): string | null {
+  const identity = type.kind === "class" || type.kind === "classConstructor" || type.kind === "named" || type.kind === "enum" || type.kind === "enumObject"
+    ? type.identity
+    : undefined;
+  if (!identity) return null;
+  const separator = identity.lastIndexOf("#");
+  if (separator < 0) return null;
+  if (identity.startsWith("js:")) return `the extern class from "${identity.slice(3, separator)}"`;
+  if (identity.startsWith("velar:")) return `declared in ${identity.slice(6, separator)}`;
+  return null;
+}
+
+// The structural contract of an extern class declaration, canonicalized so
+// that declarations of the same JavaScript class from different modules can
+// be compared for agreement. Parameter names are intentionally excluded:
+// extern constructors take positional arguments only.
+function externClassContract(info: ClassInfo): string {
+  const fieldEntries = (fields: ReadonlyMap<string, ClassField>): readonly string[] =>
+    [...fields].map(([name, field]) => `${name}\0${field.mutable ? "let" : "const"}\0${semanticTypeIdentity(field.type)}`).sort();
+  const methodEntries = (methods: ReadonlyMap<string, ValueType>): readonly string[] =>
+    [...methods].map(([name, type]) => `${name}\0${semanticTypeIdentity(type)}`).sort();
+  return JSON.stringify([
+    info.parameters.map((parameter) => semanticTypeIdentity(parameter)),
+    info.requiredParameters,
+    info.constructorRest ? semanticTypeIdentity(info.constructorRest) : null,
+    info.base,
+    fieldEntries(info.fields),
+    methodEntries(info.methods),
+    fieldEntries(info.staticFields),
+    methodEntries(info.staticMethods),
+  ]);
+}
+
 export class Analyzer implements TypeEnvironment {
   protected readonly diagnostics: Diagnostic[] = [];
   private readonly scopes: Map<string, Binding>[] = [new Map()];
@@ -271,6 +307,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly classDisplayNames = new Map<string, string>();
   private readonly externModules = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly externTypeImports = new Map<string, ValueType>();
+  private readonly externClassDeclarations = new Map<string, ReadonlySet<string>>();
   private readonly returnContexts: ReturnContext[] = [];
   private readonly asynchronousFunctions: boolean[] = [];
   private readonly collectionCalls = new Map<number, CollectionOperation>();
@@ -415,6 +452,7 @@ export class Analyzer implements TypeEnvironment {
     this.validateCoreDeclarationSignatures(program);
     this.registerClassShapes(program);
     this.rejectUnproductiveRecursiveTypes(program);
+    this.registerExternClassDeclarations(program);
     this.validateExternDeclarations(program);
     this.registerExternModules(program);
     this.validateReExports(program);
@@ -574,6 +612,17 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  private registerExternClassDeclarations(program: Program): void {
+    for (const statement of program.body) {
+      if (statement.kind !== "ExternModuleDeclaration") continue;
+      for (const declaration of statement.classes) {
+        const sources = new Set(this.externClassDeclarations.get(declaration.name));
+        sources.add(statement.source);
+        this.externClassDeclarations.set(declaration.name, sources);
+      }
+    }
+  }
+
   private validateExternDeclarations(program: Program): void {
     for (const statement of program.body) {
       if (statement.kind !== "ExternModuleDeclaration") continue;
@@ -678,7 +727,7 @@ export class Analyzer implements TypeEnvironment {
           ));
         }
         const rest = declaration.parameters.find((parameter) => parameter.rest);
-        this.classes.set(identity, {
+        const info: ClassInfo = {
           identity,
           parameters: declaration.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames)),
           requiredParameters: declaration.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
@@ -693,7 +742,21 @@ export class Analyzer implements TypeEnvironment {
           staticFields,
           staticGetters: new Set(),
           staticMethods,
-        });
+        };
+        // A class already registered under the same identity is the same
+        // nominal class declared by another module (or bridged declaration).
+        // Matching shapes share the one contract silently; a disagreement is
+        // reported here, at the later declaration, instead of forking the
+        // identity into two contracts that can never assign to each other.
+        const existing = this.classes.get(identity);
+        if (existing && externClassContract(existing) !== externClassContract(info)) {
+          this.diagnostics.push(diagnostic(
+            "VEL4005",
+            `Extern class '${declaration.name}' from '${statement.source}' is already declared with a different shape; every declaration of an extern class shares one contract`,
+            declaration.span,
+          ));
+        }
+        this.classes.set(identity, info);
         exports.set(declaration.name, { kind: "classConstructor", name: declaration.name, identity });
       }
       for (const declaration of [...statement.functions, ...statement.constants]) {
@@ -4504,6 +4567,10 @@ export class Analyzer implements TypeEnvironment {
       if (type.kind === "named" && classNames.has(type.name)) {
         return { kind: "class", name: type.name, identity: this.externClassIdentity(source, type.name) };
       }
+      if (type.kind === "named" && !type.identity) {
+        const crossBlock = this.crossBlockExternClassType(type.name);
+        if (crossBlock) return crossBlock;
+      }
       if (type.kind === "optional") return optionalOf(resolve(type.inner));
       if (type.kind === "list") return { ...type, element: resolve(type.element) };
       if (type.kind === "set") return { ...type, element: resolve(type.element) };
@@ -4520,6 +4587,25 @@ export class Analyzer implements TypeEnvironment {
       return this.resolveNamedClasses(type);
     };
     return reference ? resolve(this.expandAliases(resolveTypeReference(reference))) : unknownType;
+  }
+
+  // An extern class carries one nominal identity per JavaScript source and
+  // class name, so a reference from another extern block (or through an
+  // 'import js' alias) resolves to the declaring source's class instead of
+  // freezing into a structural named type that can never match it.
+  private crossBlockExternClassType(name: string): ValueType | null {
+    if (this.typeParameterFrames.at(-1)?.has(name)) return null;
+    if (this.namedTypes.has(name)
+      || this.namedTypeIdentities.has(name)
+      || this.typeAliases.has(name)
+      || this.classes.has(name)
+      || this.enums.has(name)) return null;
+    const imported = this.externTypeImports.get(name);
+    if (imported?.kind === "class") return imported;
+    const sources = this.externClassDeclarations.get(name);
+    if (sources?.size !== 1) return null;
+    const [declaringSource] = sources;
+    return { kind: "class", name, identity: this.externClassIdentity(declaringSource!, name) };
   }
 
   private resolveValidatedExternAnnotation(reference: TypeReference | null, source: string, classNames: ReadonlySet<string>): ValueType {
@@ -4733,9 +4819,19 @@ export class Analyzer implements TypeEnvironment {
     }
     const actualDescription = describeType(actual);
     const expectedDescription = describeType(expected);
-    this.typeError(actualDescription === expectedDescription
-      ? `Cannot assign ${actualDescription} to a different ${expectedDescription} contract`
-      : `Cannot assign ${actualDescription} to ${expectedDescription}`, valueSpan);
+    if (actualDescription !== expectedDescription) {
+      this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}`, valueSpan);
+      return;
+    }
+    // Same-named contracts read identically, so name the declaring sources
+    // when the identities show where each contract actually comes from.
+    const actualCore = expandedActual.kind === "optional" ? this.expandAliases(expandedActual.inner) : expandedActual;
+    const actualOrigin = contractOrigin(actualCore);
+    const expectedOrigin = contractOrigin(expectedCore);
+    const origins = actualOrigin !== expectedOrigin && (actualOrigin !== null || expectedOrigin !== null)
+      ? ` (the value is ${actualOrigin ?? "a structural type"} and the target is ${expectedOrigin ?? "a structural type"})`
+      : "";
+    this.typeError(`Cannot assign ${actualDescription} to a different ${expectedDescription} contract${origins}`, valueSpan);
   }
 
   private freezeEscapedCollectionInference(actual: ValueType, expected: ValueType, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): void {
@@ -5040,6 +5136,12 @@ export class Analyzer implements TypeEnvironment {
             || (resolved.identity && this.namedTypes.has(resolved.identity))) return true;
           if (this.enclosingTypeParameterName(syntax.name)) {
             this.diagnostics.push(diagnostic("VEL4021", `Type parameter '${syntax.name}' belongs to the enclosing function; declare '<${syntax.name}>' on this def`, syntax.span));
+            return false;
+          }
+          const externSources = this.externClassDeclarations.get(syntax.name);
+          if (externSources && externSources.size > 1) {
+            const sources = [...externSources].map((source) => `"${source}"`).join(", ");
+            this.typeError(`Extern class '${syntax.name}' is declared by more than one extern module (${sources}); import the intended class with 'import js' to name it here`, syntax.span);
             return false;
           }
           this.typeError(`Unknown type '${syntax.name}'`, syntax.span);

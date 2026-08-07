@@ -555,6 +555,47 @@ print((await makeAsync(4)).squared)
   assert.equal(execution.stdout, "9\n16\n");
 });
 
+test("a JavaScript statement block after '=>' receives one expression-arrow diagnostic", () => {
+  // The reflexive JavaScript shape: braces holding statements after '=>'.
+  // One targeted diagnostic replaces the record-literal error cascade.
+  const multiStatement = compile(`
+def register(handler: () -> null) -> null:
+    pass
+
+register(() => {
+    print("closing")
+    print("done")
+})
+`.trimStart());
+  assert.deepEqual(multiStatement.diagnostics.map((item) => item.code), ["VEL2030"]);
+  assert.match(
+    multiStatement.diagnostics[0]?.message ?? "",
+    /An arrow body is a single expression; write the expression directly or move multi-statement logic into a named 'def'/u,
+  );
+
+  const returning = compile("const load = () => { return 1 }\n");
+  assert.deepEqual(returning.diagnostics.map((item) => item.code), ["VEL2030"]);
+
+  const declaring = compile("const worker = value => { let doubled = value * 2 }\n");
+  assert.deepEqual(declaring.diagnostics.map((item) => item.code), ["VEL2030"]);
+
+  // Record-literal arrow bodies keep parsing: spread and field syntax decide
+  // for a record, with or without wrapping parentheses.
+  const legal = compile(`
+type Todo:
+    id: number
+    done: bool
+
+const finish = (t: Todo) => {...t, done: true}
+const make = (value: number) => ({id: value, done: false})
+const plain = (value: number) => {id: value, done: value == 0}
+print(finish({id: 1, done: false}))
+print(make(2))
+print(plain(3))
+`.trimStart());
+  assert.deepEqual(legal.diagnostics, []);
+});
+
 test("all async function forms adopt returned Promises without requiring return await", () => {
   const result = compile(`
 async def inner(value: number) -> number:
@@ -10574,6 +10615,68 @@ extern module "old-sdk":
   assert.ok(removedHeaderConstructor.diagnostics.some((item) => item.code === "VEL2022" && /constructor in the class body/u.test(item.message)));
 });
 
+test("extern class identities unify across extern module blocks", () => {
+  // The W-21 shape: node:stream/consumers consumes node:http's request class.
+  // The reference from another block resolves to the declaring source's
+  // nominal identity instead of freezing into a structural named type.
+  const shared = compile(`
+extern module "node:http":
+    export class IncomingMessage:
+        const url: string
+        pass
+
+    export def createServer(handler: (request: IncomingMessage) -> null) -> unknown
+
+extern module "node:stream/consumers":
+    export async def text(stream: IncomingMessage) -> string
+
+import js {IncomingMessage, createServer} from "node:http"
+import js {text} from "node:stream/consumers"
+
+async def readBody(request: IncomingMessage) -> string:
+    return await text(request)
+
+const server = createServer(request => print(request.url))
+print(server)
+`.trimStart());
+  assert.deepEqual(shared.diagnostics, []);
+
+  // An 'import js' alias carries the same identity under its local name.
+  const aliased = compile(`
+extern module "node:http":
+    export class IncomingMessage:
+        const url: string
+        pass
+
+extern module "node:stream/consumers":
+    export async def text(stream: Message) -> string
+
+import js {IncomingMessage as Message} from "node:http"
+import js {text} from "node:stream/consumers"
+
+async def readBody(request: Message) -> string:
+    return await text(request)
+`.trimStart());
+  assert.deepEqual(aliased.diagnostics, []);
+
+  // A bare name declared by more than one extern module stays ambiguous and
+  // says so instead of freezing silently or picking a winner.
+  const ambiguous = compile(`
+extern module "sdk-a":
+    export class Client:
+        pass
+
+extern module "sdk-b":
+    export class Client:
+        pass
+
+extern module "sdk-c":
+    export def connect(client: Client) -> null
+`.trimStart());
+  assert.ok(ambiguous.diagnostics.some((item) =>
+    /Extern class 'Client' is declared by more than one extern module \("sdk-a", "sdk-b"\); import the intended class with 'import js' to name it here/u.test(item.message)));
+});
+
 test("limited TypeScript declarations bridge safe JavaScript imports without importing TypeScript's type system", async () => {
   const declarations = parseTypeScriptDeclarations(`
 export interface FormatOptions {
@@ -17562,6 +17665,89 @@ print(helper())
   const undeclared = await compileProject(undeclaredPath);
   assert.ok(undeclared.notices.some((notice) => notice.message.includes("manual-owned")
     && notice.message.includes("was not found and was kept as unknown")), JSON.stringify(undeclared.notices));
+});
+
+test("extern classes share one contract across modules and conflicting redeclarations are reported", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-extern-contract-"));
+  const libraryPath = join(directory, "library.vel");
+  const mainPath = join(directory, "main.vel");
+  await writeFile(libraryPath, `
+extern module "node:http":
+    export class IncomingMessage:
+        const url: string
+        pass
+
+import js {IncomingMessage} from "node:http"
+
+export def describe(request: IncomingMessage) -> string:
+    return request.url
+`.trimStart(), "utf8");
+
+  // Each module declares its own extern block for the same source; matching
+  // declarations of the same class are one nominal identity everywhere.
+  await writeFile(mainPath, `
+import {describe} from "./library.vel"
+
+extern module "node:http":
+    export class IncomingMessage:
+        const url: string
+        pass
+
+    export def request(target: string) -> IncomingMessage
+
+import js {IncomingMessage, request} from "node:http"
+
+const message: IncomingMessage = request("/status")
+print(describe(message))
+`.trimStart(), "utf8");
+  const unified = await compileProject(mainPath);
+  assert.deepEqual(unified.failures, []);
+  assert.deepEqual(unified.modules.flatMap((module) => module.result.diagnostics), []);
+
+  // A redeclaration that disagrees structurally is reported at the later
+  // declaration instead of silently forking the identity.
+  await writeFile(mainPath, `
+import {describe} from "./library.vel"
+
+extern module "node:http":
+    export class IncomingMessage:
+        const url: number
+        pass
+
+    export def request(target: string) -> IncomingMessage
+
+import js {IncomingMessage, request} from "node:http"
+
+const message: IncomingMessage = request("/status")
+print(describe(message))
+`.trimStart(), "utf8");
+  const conflicting = await compileProject(mainPath);
+  assert.deepEqual(conflicting.failures, []);
+  assert.ok((conflicting.modules.find((module) => module.inputPath === mainPath)?.result.diagnostics ?? [])
+    .some((item) => item.code === "VEL4005"
+      && /Extern class 'IncomingMessage' from 'node:http' is already declared with a different shape/u.test(item.message)));
+
+  // Genuinely different identities with the same class name report both
+  // declaring sources instead of an unexplained "different contract".
+  await writeFile(mainPath, `
+import {describe} from "./library.vel"
+
+extern module "node:http2":
+    export class IncomingMessage:
+        const url: string
+        pass
+
+    export def request(target: string) -> IncomingMessage
+
+import js {IncomingMessage, request} from "node:http2"
+
+const message: IncomingMessage = request("/status")
+print(describe(message))
+`.trimStart(), "utf8");
+  const mismatched = await compileProject(mainPath);
+  assert.deepEqual(mismatched.failures, []);
+  assert.ok((mismatched.modules.find((module) => module.inputPath === mainPath)?.result.diagnostics ?? [])
+    .some((item) => /Cannot assign IncomingMessage to a different IncomingMessage contract \(the value is the extern class from "node:http2" and the target is the extern class from "node:http"\)/u.test(item.message)));
 });
 
 test("velar test and velar run resolve bridged npm dependencies from the project", async () => {

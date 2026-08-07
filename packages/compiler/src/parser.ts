@@ -49,6 +49,15 @@ import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
 const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ...Object.values(keywordKinds)]);
+// Token kinds that begin a statement but can never begin a record field or
+// appear inside a record literal's field list. A keyword followed by ':' is a
+// keyword-named field, so it never counts as statement evidence.
+const statementStarterKinds = new Set<TokenKind>([
+  "const", "let", "def", "return", "throw", "assert", "if", "match", "for", "while", "break", "continue", "try", "pass",
+]);
+// Token kinds that legally appear at the top level of a record literal's
+// field list: field names, shorthand entries, and their separators.
+const recordFieldLevelKinds = new Set<TokenKind>(["identifier", "extensionKeyword", "string", "comma", ...Object.values(keywordKinds)]);
 const MAX_PARSE_DEPTH = 512;
 const PARSER_COMPLEXITY_FAILURE = Object.freeze({ kind: "VelarParserComplexityFailure" });
 
@@ -1596,14 +1605,70 @@ export class Parser {
     if (this.check("leftParen")) {
       const parameters = this.parseParameters();
       this.expect("fatArrow", "Expected '=>' after arrow parameters");
-      const body = this.recoverExpressionAssignment(this.parseExpression());
+      const body = this.parseArrowBody();
       return { kind: "ArrowFunctionExpression", asynchronous, parameters, body, span: span(start, body.span.end) };
     }
     const parameterToken = this.expect("identifier", "Expected an arrow parameter");
     this.expect("fatArrow", "Expected '=>' after arrow parameter");
-    const body = this.recoverExpressionAssignment(this.parseExpression());
+    const body = this.parseArrowBody();
     const parameter: Parameter = { name: parameterToken.value, type: null, defaultValue: null, rest: false, span: parameterToken.span };
     return { kind: "ArrowFunctionExpression", asynchronous, parameters: [parameter], body, span: span(start, body.span.end) };
+  }
+
+  // An arrow body is one expression by design (charter §7): '{' after '=>'
+  // opens a record literal, never a JavaScript statement block. When the
+  // braces clearly hold statements, one targeted diagnostic replaces the
+  // record-literal error cascade and the braces are skipped whole. Record
+  // shapes — '{...t, done: true}', '{id: value}', '{a, b}' — parse normally.
+  private parseArrowBody(): Expression {
+    if (this.check("leftBrace") && this.arrowBraceHoldsStatements()) {
+      const open = this.advance();
+      let end = open.span.end;
+      let depth = 1;
+      while (depth > 0) {
+        const kind = this.current().kind;
+        if (kind === "eof" || kind === "newline" || kind === "indent" || kind === "dedent") break;
+        if (kind === "leftBrace") depth += 1;
+        else if (kind === "rightBrace") depth -= 1;
+        end = this.advance().span.end;
+      }
+      this.diagnostics.push(diagnostic(
+        "VEL2030",
+        "An arrow body is a single expression; write the expression directly or move multi-statement logic into a named 'def'",
+        span(open.span.start, end),
+      ));
+      return { kind: "LiteralExpression", value: null, raw: "null", span: span(open.span.start, end) };
+    }
+    return this.recoverExpressionAssignment(this.parseExpression());
+  }
+
+  // Scans the braces after '=>' without consuming tokens. Statement keywords
+  // that cannot open a record field decide first; a top-level ':' or '...'
+  // decides for a record; otherwise any token that cannot sit in a record
+  // field list (call parentheses, operators, literals) marks statements.
+  private arrowBraceHoldsStatements(): boolean {
+    let depth = 0;
+    let sawNonRecordToken = false;
+    for (let offset = 0; this.index + offset < this.tokens.length; offset += 1) {
+      const token = this.tokens[this.index + offset]!;
+      const kind = token.kind;
+      if (kind === "eof" || kind === "newline" || kind === "indent" || kind === "dedent") break;
+      if (kind === "leftBrace" || kind === "leftParen" || kind === "leftBracket") {
+        if (depth === 1) sawNonRecordToken = true;
+        depth += 1;
+        continue;
+      }
+      if (kind === "rightBrace" || kind === "rightParen" || kind === "rightBracket") {
+        depth -= 1;
+        if (depth === 0) break;
+        continue;
+      }
+      if (depth !== 1) continue;
+      if (statementStarterKinds.has(kind) && this.tokens[this.index + offset + 1]?.kind !== "colon") return true;
+      if (kind === "colon" || kind === "ellipsis") return false;
+      if (!recordFieldLevelKinds.has(kind)) sawNonRecordToken = true;
+    }
+    return sawNonRecordToken;
   }
 
   private isParenthesizedArrow(initialOffset = 0): boolean {

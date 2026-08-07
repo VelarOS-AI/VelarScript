@@ -1,4 +1,4 @@
-import { Analyzer, isCorePrimitiveName, isCoreReservedBinding, type AnalysisContext, type ClassInfo } from "./analyzer.ts";
+import { Analyzer, isCorePrimitiveName, isCoreReservedBinding, type AnalysisContext, type ClassField, type ClassInfo } from "./analyzer.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
@@ -449,6 +449,15 @@ function interfaceOf(
   for (const statement of program.body) {
     if (statement.kind === "ClassDeclaration") classIdentities.set(statement.name, `velar:${path}#${statement.name}`);
   }
+  // Extern classes are nominal per JavaScript source and class name, so
+  // signatures that mention them stay nominal across module interfaces. A
+  // Velar class declaration owns its bare name if both exist in one module.
+  for (const statement of program.body) {
+    if (statement.kind !== "ExternModuleDeclaration") continue;
+    for (const declaration of statement.classes) {
+      if (!classIdentities.has(declaration.name)) classIdentities.set(declaration.name, `js:${statement.source}#${declaration.name}`);
+    }
+  }
   const enumNames = new Map(program.body
     .filter((statement) => statement.kind === "EnumDeclaration")
     .map((statement) => [statement.name, { identity: `${path}#enum:${statement.name}`, members: new Set(statement.members.map((member) => member.name)) }] satisfies [string, EnumInfo]));
@@ -563,6 +572,57 @@ function interfaceOf(
           staticMethods: new Map([...analyzed.staticMethods].map(([name, type]) => [name, resolveAnalyzed(type)])),
         });
       }
+    } else if (statement.kind === "ExternModuleDeclaration") {
+      // Extern classes travel with the interface under their identity so a
+      // dependent module that declares the same class for the same source can
+      // verify that both declarations agree on one contract.
+      for (const declaration of statement.classes) {
+        const identity = `js:${statement.source}#${declaration.name}`;
+        const analyzed = analyzedClasses.get(identity);
+        if (analyzed) {
+          classes.set(identity, {
+            ...analyzed,
+            identity,
+            parameters: analyzed.parameters.map(resolveAnalyzed),
+            ...(analyzed.constructorRest ? { constructorRest: resolveAnalyzed(analyzed.constructorRest) } : {}),
+            fields: new Map([...analyzed.fields].map(([name, field]) => [name, { ...field, type: resolveAnalyzed(field.type) }])),
+            methods: new Map([...analyzed.methods].map(([name, type]) => [name, resolveAnalyzed(type)])),
+            staticFields: new Map([...analyzed.staticFields].map(([name, field]) => [name, { ...field, type: resolveAnalyzed(field.type) }])),
+            staticMethods: new Map([...analyzed.staticMethods].map(([name, type]) => [name, resolveAnalyzed(type)])),
+          });
+          continue;
+        }
+        const fields = new Map<string, ClassField>();
+        const staticFields = new Map<string, ClassField>();
+        for (const parameter of declaration.parameters) {
+          if (parameter.binding) fields.set(parameter.name, { mutable: parameter.binding === "let", type: resolve(parameter.type) });
+        }
+        for (const field of declaration.fields) {
+          (field.static ? staticFields : fields).set(field.name, { mutable: field.mutable, type: resolve(field.type) });
+        }
+        const methods = new Map<string, ValueType>();
+        const staticMethods = new Map<string, ValueType>();
+        for (const method of declaration.methods) {
+          (method.static ? staticMethods : methods).set(method.name, functionSignature(method, resolve));
+        }
+        const rest = declaration.parameters.find((parameter) => parameter.rest);
+        classes.set(identity, {
+          identity,
+          parameters: declaration.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolve(parameter.type)),
+          requiredParameters: declaration.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
+          ...(rest ? { constructorRest: resolve(rest.type) } : {}),
+          base: declaration.base ? `js:${statement.source}#${declaration.base}` : null,
+          abstract: false,
+          fields,
+          getters: new Set(),
+          abstractGetters: new Set(),
+          methods,
+          abstractMethods: new Set(),
+          staticFields,
+          staticGetters: new Set(),
+          staticMethods,
+        });
+      }
     } else if (statement.kind === "FunctionDeclaration" && statement.name.startsWith("test_")) {
       testFunctions.push(statement.name);
     }
@@ -630,7 +690,10 @@ function interfaceOf(
   };
 }
 
-function functionSignature(statement: FunctionDeclaration, resolve: (reference: TypeReference | null) => ValueType): ValueType {
+function functionSignature(
+  statement: Pick<FunctionDeclaration, "typeParameters" | "parameters" | "returnType" | "asynchronous">,
+  resolve: (reference: TypeReference | null) => ValueType,
+): ValueType {
   const frame = new Map<string, ValueType>();
   for (const declaration of statement.typeParameters ?? []) {
     if (!frame.has(declaration.name)) frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
