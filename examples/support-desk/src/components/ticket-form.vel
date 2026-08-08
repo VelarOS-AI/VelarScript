@@ -75,7 +75,7 @@ export component TicketForm:
             if errors(currentForm).size > 0:
                 focusFirstError(currentForm)
             else:
-                assert draft.estimate != null, "Ticket estimate must be present after validation"
+                assert draft.estimate != null else "Ticket estimate must be present after validation"
                 addTicket({...draft, title, requester, summary: draft.summary.trim()})
                 reset(currentForm)
                 announce("Ticket created")

@@ -72,7 +72,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
       extensions: [],
     })],
     ["README.md", `# ${displayName}\n\nA reusable VelarScript source library.\n\n\`\`\`sh\nnpm install\nnpm run validate\n\`\`\`\n\nAfter bootstrap, use \`npm exec velar -- add <package>\`, \`remove\`, and \`update\` for project-aware dependency changes. The package is private by default. Remove \`private\` only after choosing a public package name, license, and release policy.\n`],
-    ["src/index.vel", `export type Greeting:\n    message: string\n    recipient: string\n\nexport def greet(name: string) -> Greeting:\n    const recipient = name.trim()\n    assert recipient != "", "A greeting requires a name"\n    return {message: f"Hello, {recipient}!", recipient: recipient}\n`],
+    ["src/index.vel", `export type Greeting:\n    message: string\n    recipient: string\n\nexport def greet(name: string) -> Greeting:\n    const recipient = name.trim()\n    assert recipient != "" else "A greeting requires a name"\n    return {message: f"Hello, {recipient}!", recipient: recipient}\n`],
     ["src/index.test.vel", `import {expect} from "velar/test"\nimport {greet} from "./index.vel"\n\ndef test_greeting():\n    const greeting = greet("Velar")\n    expect(greeting.message).toBe("Hello, Velar!")\n    expect(greeting.recipient).toBe("Velar")\n\ndef test_greeting_rejects_blank_names():\n    expect(() => greet("   ")).toThrow()\n`],
   ]);
 }

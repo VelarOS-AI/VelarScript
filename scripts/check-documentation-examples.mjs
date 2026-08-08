@@ -10,7 +10,9 @@ const requested = process.argv.slice(2);
 const files = requested.length > 0
   ? requested.map((file) => resolve(file))
   : [join(root, "README.md"), ...await markdownFiles(join(root, "docs")), ...await packageReadmes(join(root, "packages"))];
-const fence = /```velar(?:[ \t]+([^\n]+))?\n([\s\S]*?)```/gu;
+// Match the opening fence's exact backtick count so VelarScript layout-string
+// examples may contain shorter Markdown fences as literal text.
+const fence = /^(?<ticks>`{3,})velar(?:[ \t]+(?<metadata>[^\n]+))?[ \t]*\r?\n(?<source>[\s\S]*?)^\k<ticks>[ \t]*$/gmu;
 const failures = [];
 let examples = 0;
 let fragments = 0;
@@ -19,8 +21,8 @@ for (const file of files) {
   const markdown = await readFile(file, "utf8");
   for (const match of markdown.matchAll(fence)) {
     examples += 1;
-    const metadata = (match[1] ?? "").trim();
-    const source = match[2] ?? "";
+    const metadata = (match.groups?.metadata ?? "").trim();
+    const source = match.groups?.source ?? "";
     const line = lineAt(markdown, match.index ?? 0);
     if (metadata !== "" && metadata !== "fragment") {
       failures.push(`${display(file)}:${line}: unknown VelarScript fence annotation '${metadata}'`);

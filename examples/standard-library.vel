@@ -19,8 +19,10 @@ const users: List<User> = [
 const grouped = groupBy(users, user => user.role)
 const scores = Map({Ada: 9, Lin: 7})
 const parsed = parseJson("{\"name\":\"Nova\",\"role\":\"admin\"}", User)
-const banner = `VelarScript
-standard library`
+const banner = "
+    VelarScript
+    standard library
+"
 
 await sleep(1)
 print(title("velar standard library"))
