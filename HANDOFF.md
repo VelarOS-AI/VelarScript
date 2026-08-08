@@ -6,9 +6,13 @@
 
 ## 一、现状快照
 
-**VelarScript**（本仓，`main`）：两天 21 个提交（`c56660a`…`d1187a4` + memo/batch
-提交），编译器测试 310 → 370+，`npm test` 现在整编四个示例应用（`35ead9e` 加固，
-教训见下），`npm run test:browser` 是唯一整编浏览器门禁。最后在途工作见第四节。
+**VelarScript**（本仓，`main`）：两天 23 个提交（`c56660a`…`20b8245`），编译器
+测试 310 → 375（主树 379 含芯片会话 WIP 测试），`npm test` 现在整编四个示例应用
+（`35ead9e` 加固，教训见下），`npm run test:browser` 是唯一整编浏览器门禁。
+D14' 已终局落地（`20b8245` + Lite `b34bc6d`）：memo/batch **无公开 API**，
+computed/watch/渲染上下文的纯一元派生由编译器自动记忆化（purity.ts 默认拒绝式
+纯度证明；跨模块纯度标记 `pure-unary-derivation` 走 extensionExports 并计入接口
+身份）；调度合并升格为 web-api.md「Performance contracts」成文契约。
 
 **VelarOS-Lite**（`/Users/mac/Documents/VelarOS-Lite`，本地 git）：蓝图五片全通
 （聊天 UI / markdown extern 桥 / 流式 / 持久化 / 全 Vel Core 服务器 + bin 引导），
@@ -58,11 +62,13 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 
 ## 四、在途与队列（按序执行，防文件冲突）
 
-1. **在途**：D14' agent（memo/batch 终态 + computed 自动记忆化）可能仍在收尾 ——
-   查 `git log`/工作树确认其提交是否落地；其自动 memo 部分将被 D26 吸收改造（已知
-   弃件，可接受）。用户还有芯片会话（TDZ 自引用初始化、component 泛型头诊断）在
-   独立运行，工作树可能有其未提交 WIP —— **动手前先看 `git status`**，沿用「隔离
-   worktree 验证 + 主树精确 hunk 提交」协议。
+1. **已落定**：D14' 终局（`20b8245`/`b34bc6d`，见第一节）。**D26 实施时注意**：
+   新的 __velarAutoMemo + purity.ts 机制建立在身份缓存上 —— 深层突变下同样有陈旧
+   危险，D26 必须将其对深层追踪源禁用或按目标版本号重键（D26 设计文档第 8 条不变
+   量同时覆盖新旧两套 memo 机制）。用户的芯片会话（TDZ 自引用初始化、component
+   泛型头诊断）可能仍在独立运行，工作树有其未提交 WIP（compiler/web 的
+   analyzer+parser、tests/CHANGELOG/charter 各若干 hunk）—— **动手前先看
+   `git status`**，沿用「隔离 worktree 验证 + 主树精确 hunk 提交」协议。
 2. **D26 深层响应式**（旗舰，设计已可执行）→ 验收=打败 S4 memo 基线。
 3. **L1**：D17 打点方法化 + D22 聚合 + D23 字符串 in + get-default 指引。
 4. **L2**：D19 双槽 for + D20 range + D21 集合构造 + D24 反引号多行。
