@@ -248,6 +248,25 @@ major 29、minor 8。完整清单含复现：`docs/handoff/HARDENING-DEFECTS.md`
 - 每波结束跑全量门禁；两波全清后**重跑一次搜捕**（同一 workflow 脚本），零 blocker
   且无新 major 才恢复第七节的发布流程。
 
+### 交接状态：第一波被中途叫停，工作树里有未验证的半成品
+
+用户因额度耗尽叫停（2026-08-09），三个修复 agent 在跑到一半时被终止。**工作树里
+留下 8 个文件、约 +412/−50 的未提交改动，全部未过门禁、不可信**：
+
+| 文件 | 来自哪一路 | 被打断时的自述进度 |
+|---|---|---|
+| `packages/compiler/src/{analyzer,parser}.ts` | ① 流分析健全性 | 「五条缺陷都已表现正确」，但全量测试没跑完 |
+| `packages/web/src/{emitter,runtime-foundation}.ts` | ② 深层响应式 | 正在做让解构/展开/match 模式可追踪的 descriptor 陷阱 |
+| `packages/cli/src/{local-platform-modules,preview-server,project}.ts` | ③ 平台互操作 | 两个新测试通过，但正在核实 IPv6 测试是否被静默跳过 |
+| `tests/compiler.test.ts` | 三路共同 | 新增回归测试，来源交织 |
+
+**接手时先决定这堆怎么处理。** 建议 `git checkout -- .` 从干净状态按上面的编排
+重做 —— 未验证的半成品比重做更贵，尤其是三路的 `tests/compiler.test.ts` 改动交织
+在一起，无法按路拆分。若选择接着改，必须先逐文件读懂再跑全量门禁，不要假设它是对的。
+
+缺陷清单（`docs/handoff/HARDENING-DEFECTS.md`，41 条含最小复现）与本节的分波编排
+都已提交，不受这堆半成品影响。
+
 ## 七、下一个大阶段：从「造出来」到「有人用」（发布恢复后执行）
 
 **为什么是这个**：语言已冻结并验证完毕，再做任何工程都是无外部证据的猜测。
