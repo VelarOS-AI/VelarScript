@@ -4,7 +4,42 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
-## 0.10.0-dev — First-party local platform modules
+## 0.10.0 — 2026-08-09
+
+VelarScript 0.10.0 is the first public toolchain release: a checked, Web-first
+language for people who already think in JavaScript and Python, shipped as the
+version-locked compiler, Web framework, project creator, and CLI package set.
+
+### Release highlights
+
+- Familiar values now carry their operations directly. Strings and numbers use
+  checked method chains; Lists add aggregation and key-based sorting; Set and
+  Map retain one controlled collection vocabulary without leaking JavaScript
+  prototype behavior.
+- Iteration and construction cover the application shapes proven by
+  VelarOS-Lite: two-slot `for` loops expose value/index or key/value pairs,
+  `range` has one bounded materialized contract, and Set/Map constructors accept
+  checked Lists and records.
+- One quote family covers inline, raw, interpolated, and indentation-bounded
+  layout strings. Markdown fences and HTML remain literal content without a
+  backtick delimiter family; assertion messages read as
+  `assert condition else message`.
+- Web state is deeply reactive by default. Direct nested record assignment and
+  compiler-owned List/Map/Set mutation publish at the property or collection-key
+  granularity, including through aliases and shared module state. There is no
+  public memoization or batching API.
+- Core local applications use the first-party `velar/serve`, `velar/fs`,
+  `velar/env`, and `velar/host` modules instead of rebuilding Node extern
+  surfaces. Browser targets reject those modules before bundling.
+- The fourth no-document usability gate covered these new surfaces with one
+  independent writer and two complete programs. Its first compile produced 16
+  diagnostics, converged 16 → 2 → 2 in three rounds, and found zero missing
+  language capabilities; the remaining misses were discoverability of the
+  explicit `range` import and JavaScript-style interpolation text.
+
+The detailed entries below retain the development evidence behind this release.
+
+### First-party local platform modules
 
 Standard library and CLI changes:
 
@@ -25,7 +60,7 @@ Standard library and CLI changes:
   quit; `velar/env` permits only explicit portable variable names. The
   JavaScript bridge remains the third-party package boundary.
 
-## 0.10.0-dev — Unified quoted strings and assertion failure branches
+### Unified quoted strings and assertion failure branches
 
 Language and compiler changes:
 
@@ -42,7 +77,7 @@ Language and compiler changes:
   `assert condition else message`. The old comma separator receives a targeted
   migration diagnostic and no longer emits runnable output.
 
-## 0.10.0-dev — Two-slot iteration and collection construction
+### Two-slot iteration and collection construction
 
 Language and compiler changes:
 
@@ -66,7 +101,7 @@ Language and compiler changes:
   iteration, labeled breaks, for-else, or match expressions; their existing
   single-spelling and evidence decisions remain unchanged.
 
-## 0.10.0-dev — Checked value methods and List aggregation
+### Checked value methods and List aggregation
 
 Language and compiler changes:
 
@@ -89,7 +124,7 @@ Language and compiler changes:
   membership contract. `map.get(key, fallback)` now points directly to
   `get(key) ?? fallback`.
 
-## 0.10.0-dev — Deep state reactivity is the only default
+### Deep state reactivity is the only default
 
 Web framework changes:
 
@@ -114,7 +149,7 @@ Web framework changes:
   exposes no `memo` or `batch` API; synchronous state bursts remain coalesced
   by the scheduler.
 
-## 0.10.0-dev — For-loop bindings own their name from the loop head
+### For-loop bindings own their name from the loop head
 
 Language and compiler changes:
 
@@ -130,7 +165,7 @@ Language and compiler changes:
   same-scope read above the loop stays legal. An arrow parameter inside
   the iterable that reuses the name keeps being an ordinary inner binding.
 
-## 0.10.0-dev — Shadowed names are owned by their shadow's whole scope
+### Shadowed names are owned by their shadow's whole scope
 
 Language and compiler changes:
 
@@ -145,7 +180,7 @@ Language and compiler changes:
   parameter default keeps reading the enclosing scope, exactly as emitted
   JavaScript does.
 
-## 0.10.0-dev — Keyed conditionals and dev-server npm prebundling
+### Keyed conditionals and dev-server npm prebundling
 
 Language and compiler changes:
 
@@ -176,7 +211,7 @@ Tooling changes:
   package keeps its explicit refusal, now detected by the bundler's module
   format instead of a source heuristic.
 
-## 0.10.0-dev — Module-scope actions
+### Module-scope actions
 
 Language and compiler changes:
 
@@ -193,7 +228,7 @@ Language and compiler changes:
   handling is tied to component destruction; module-scope `resource` keeps
   VEL3012 with guidance toward a module `action`.
 
-## 0.10.0-dev — VelarOS-Lite S2 batch: re-exports, bridged-dependency sandboxes, extern default contract
+### VelarOS-Lite S2 batch: re-exports, bridged-dependency sandboxes, extern default contract
 
 Language and compiler changes:
 
@@ -223,7 +258,7 @@ Tooling changes:
   TypeScript-declaration probe no longer runs for that module's imports of
   that source, so it emits no notices that second-guess the manual contract.
 
-## 0.10.0-dev — Blind-usability batch 3: chains, string functions, Look tightening
+### Blind-usability batch 3: chains, string functions, Look tightening
 
 Language and compiler changes:
 
@@ -269,7 +304,7 @@ Diagnostic guidance changes:
 - A Look hook written as a target (`@hover:` as a block) is guided to the
   `if @hover:` condition form.
 
-## 0.10.0-dev — Minimal generics for def functions
+### Minimal generics for def functions
 
 Language and compiler changes:
 
@@ -290,7 +325,7 @@ Language and compiler changes:
 - Generic `type`, `class`, and `component` declarations, bounds, and variance
   are out of scope for this version and report a targeted diagnostic.
 
-## 0.10.0-dev — Remove host-origin tracking and call-effect invalidation
+### Remove host-origin tracking and call-effect invalidation
 
 Language and compiler changes:
 
@@ -307,7 +342,7 @@ Language and compiler changes:
 - Module contract identities changed, so the first build after this change
   performs a one-time full project re-analysis.
 
-## 0.10.0-dev — Clarity Reset
+### Clarity Reset
 
 Breaking language changes:
 

@@ -1,6 +1,6 @@
 # VelarScript Toolchain Release Process
 
-Status: VelarScript 0.10 release contract retained but execution deferred
+Status: VelarScript 0.10.0 release candidate; registry publication deferred
 
 VelarScript builds the compiler, official Web framework, project creator, and CLI into four
 independently installable npm packages, but treats them as one version-locked

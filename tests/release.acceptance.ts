@@ -20,20 +20,26 @@ test("publication rehearsal emits reproducible verified package identities witho
     await runRelease(["rehearse", "--output-dir", second]);
     const firstManifest = JSON.parse(await readFile(join(first, "velar-toolchain-release.json"), "utf8"));
     const secondManifest = JSON.parse(await readFile(join(second, "velar-toolchain-release.json"), "utf8"));
-    assert.equal(firstManifest.version, "0.10.0-dev");
+    assert.equal(firstManifest.version, "0.10.0");
     assert.equal(firstManifest.mode, "rehearse");
     assert.equal(firstManifest.publish.performed, false);
     assert.equal(firstManifest.publish.publishable, false);
-    assert.ok(firstManifest.publish.blockers.some((item: string) => item.includes("stable release version")));
+    assert.ok(!firstManifest.publish.blockers.some((item: string) => item.includes("stable release version")));
     assert.ok(!firstManifest.publish.blockers.some((item: string) => item.includes("publishable license")));
     assert.deepEqual(
       firstManifest.packages.map((item: { name: string; version: string; sha256: string }) => ({ name: item.name, version: item.version, sha256: item.sha256 })),
       secondManifest.packages.map((item: { name: string; version: string; sha256: string }) => ({ name: item.name, version: item.version, sha256: item.sha256 })),
     );
     assert.equal(await readFile(join(first, "SHA256SUMS"), "utf8"), await readFile(join(second, "SHA256SUMS"), "utf8"));
-    const candidate = await runRelease(["candidate", "--output-dir", join(temporary, "candidate")], true);
-    assert.notEqual(candidate.code, 0);
-    assert.match(candidate.stderr, /release candidate refused/u);
+    const candidatePath = join(temporary, "candidate");
+    const candidate = await runRelease(["candidate", "--output-dir", candidatePath], true);
+    if (firstManifest.publish.blockers.length === 0) {
+      assert.equal(candidate.code, 0, candidate.stderr);
+      await runRelease(["verify", candidatePath]);
+    } else {
+      assert.notEqual(candidate.code, 0);
+      assert.match(candidate.stderr, /release candidate refused/u);
+    }
 
     const unrelated = join(temporary, "unrelated");
     await mkdir(unrelated);

@@ -10528,8 +10528,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.10.0-dev");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.10.0-dev");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "^0.10.0");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "^0.10.0");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -10639,8 +10639,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   };
   assert.deepEqual(componentPackage.files, ["src/index.vel", "README.md"]);
   assert.equal(componentPackage.velar.entry, "src/index.vel");
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "0.10.0-dev");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.10.0-dev");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.10.0");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "^0.10.0");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -10698,7 +10698,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.10.0-dev\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.10.0\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -18232,7 +18232,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.10",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.10.0-dev" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.10.0" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

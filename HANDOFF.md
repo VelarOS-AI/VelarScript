@@ -118,9 +118,9 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
    浏览器门禁也让安装后的生成应用导入九个运行时 Web 模块，由其浏览器测试导入第十个
    `velar/web-test`，再完成 check/test/build/verify/浏览器执行。稳定版本、tag、push 与
    npm publish 仍是独立授权，不属于本阶段自动动作。最终门禁为 check/83 个文档示例、
-   385 tests、package consumer、开发与 CSP 生产三引擎、四个示例项目三引擎、安装后浏览器
-   工程、release rehearsal + manifest verify 全绿；演练清单 clean、remote 匹配，唯一阻塞
-   是版本仍为 `0.10.0-dev` 且没有稳定版 tag。
+   389 tests、package consumer、开发与 CSP 生产三引擎、四个示例项目三引擎、安装后浏览器
+   工程、release rehearsal + manifest verify 全绿；当时的 dev 版本与 tag 阻塞由第六节
+   1–3 步正式关闭，push 与 npm publish 仍维持独立授权。
 
 ## 五、血泪教训（免重蹈）
 
@@ -146,16 +146,18 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 
 ### 步骤（严格按序，每步门禁绿再进下一步）
 
-1. **收尾**：提交工作树里的芯片成果（TDZ 自引用遮蔽 + component 泛型头诊断，
-   ~577 行 / 7 文件），跑 `npm run check` + `npm test` + `npm run test:browser`。
-2. **第四期盲测（发版闸门）**：协议见 `docs/handoff/BLIND-TEST-LEDGER.md`（三期完整
+1. **已完成：收尾**：芯片成果（TDZ 自引用遮蔽 + component 泛型头诊断）提交为
+   `53edca6`；剔除了一个会倒退 D26 深层响应式文案的并行残留，最终 574+/1-、7 文件。
+   `npm run check` + 389 tests + `npm run test:browser` 全绿。
+2. **已完成：第四期盲测（发版闸门）**：协议见 `docs/handoff/BLIND-TEST-LEDGER.md`（三期完整
    记录与评分法）。**只测第三期之后改动的表面**：字符串/数字方法链、双槽 `for`、
    `range`、集合构造、**布局字符串**（无先例语法，风险最高）、深层 state 直接突变。
    干净盲写者、无文档、≤3 轮、真实编译器裁判。产出：(a) 发版前的最后一道证据；
-   (b) 官网首屏要用的那个数字（无文档 AI 首次编译错误数）。发现 L 类先修再发版。
-3. **0.10.0 收敛**：四个包版本号去 `-dev`；CHANGELOG 写正式发布条目（把本轮
+   (b) 官网首屏要用的那个数字（无文档 AI 首次编译错误数）。结果 16 → 2 → 2，
+   **L=0**，规范参考程序 Core/Web 零诊断并实际执行；证据提交为 `2660954`。
+3. **已完成：0.10.0 收敛**：四个包版本号去 `-dev`；CHANGELOG 写正式发布条目（把本轮
    D17/D18/D19-D26 汇总成用户视角的变更说明）；`npm run release:rehearse` +
-   `release:verify` 全绿；打 tag `v0.10.0`。
+   `release:verify` 全绿；本地 tag 为 `v0.10.0`。push 与 npm publish 未执行。
 4. **面世三件套**（可并行）：
    - **官网**：卖点一句话 —— *有 JS/Python 背景？不用看文档就能读懂*，配第四期
      盲测数字当证据。用 `create-velar --template docs` 自举（吃自己的狗粮就是最好的

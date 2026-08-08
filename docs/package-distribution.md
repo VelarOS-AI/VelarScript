@@ -1,6 +1,6 @@
 # VelarScript Toolchain Distribution
 
-Status: pre-release package contract for VelarScript 0.10; publication deferred
+Status: stable package contract for VelarScript 0.10; publication separately authorized
 
 The toolchain is distributed as four independent npm packages:
 
@@ -103,6 +103,7 @@ before installing them; it does not import this repository's verifier.
 The workspace, compiler, Web framework, creator, and CLI use Apache-2.0. Every npm tarball contains the
 complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
-remains intentionally not publishable because the development version, source
-commit/tag, matching remote, and explicit publication authority are separate
-release gates.
+is always marked non-publishable because rehearsal mode is evidence only. A
+strict candidate becomes publishable only from the clean, exactly tagged
+`v0.10.0` source with the matching remote; actual registry publication remains
+a separate explicit authority.

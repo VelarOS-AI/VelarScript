@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/cli",
-  "version": "0.10.0-dev",
+  "version": "0.10.0",
   "description": "The VelarScript command-line compiler, dev server, test runner, and language server.",
   "license": "Apache-2.0",
   "type": "module",
@@ -29,8 +29,8 @@
     "velar": "./dist/cli.js"
   },
   "dependencies": {
-    "@velarscript/compiler": "0.10.0-dev",
-    "create-velar": "0.10.0-dev",
+    "@velarscript/compiler": "0.10.0",
+    "create-velar": "0.10.0",
     "esbuild": "^0.28.1",
     "playwright": "^1.58.2"
   }
