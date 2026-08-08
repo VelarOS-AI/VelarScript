@@ -17,6 +17,12 @@ The repository defines three GitHub Actions workflows:
   extension and standard modules; explicitly marked `fragment` blocks must
   still pass the real lexer and parser. Project scaffolds are compiled again by
   packed-package consumer acceptance.
+- The checked-in Release Studio imports all ten public Web modules from real
+  `.vel` source. Its realtime acceptance path creates WebSocket and server-sent
+  event resources inside a component, observes their typed callbacks in
+  Chromium, Firefox, and WebKit, and releases both resources through component
+  cleanup. Host-side tests do not bypass that source contract by importing the
+  generated realtime JavaScript module directly.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
   access redirects, and asset-to-HTML fallback are rejected. A real preview

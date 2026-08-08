@@ -196,34 +196,11 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     assert.equal(uploadRequests, 1);
 
     if (!production) {
-      const realtime = await page.evaluate(async ({ moduleUrl, socketUrl, eventsUrl }) => {
-        const api = await import(moduleUrl) as {
-          socket: (url: string, handlers: Record<string, (...arguments_: unknown[]) => void>) => { close(): void };
-          eventStream: (url: string, handlers: Record<string, (...arguments_: unknown[]) => void>) => { close(): void };
-        };
-        const socketMessage = await new Promise<string>((resolvePromise, reject) => {
-          let channel: { close(): void } | null = null;
-          const timer = setTimeout(() => reject(new Error("WebSocket test timed out")), 3_000);
-          channel = api.socket(socketUrl, {
-            message: (value) => { clearTimeout(timer); channel?.close(); resolvePromise(String(value)); },
-            error: (value) => { clearTimeout(timer); reject(new Error(String(value))); },
-          });
-        });
-        const eventMessage = await new Promise<string>((resolvePromise, reject) => {
-          let stream: { close(): void } | null = null;
-          const timer = setTimeout(() => reject(new Error("EventSource test timed out")), 3_000);
-          stream = api.eventStream(eventsUrl, {
-            message: (value) => { clearTimeout(timer); stream?.close(); resolvePromise(String(value)); },
-            error: (value) => { clearTimeout(timer); stream?.close(); reject(new Error(String(value))); },
-          });
-        });
-        return { socketMessage, eventMessage };
-      }, {
-        moduleUrl: new URL("@velar/realtime.js", baseUrl).href,
-        socketUrl: `ws://127.0.0.1:${realtimePort}/socket`,
-        eventsUrl: `http://127.0.0.1:${realtimePort}/events`,
-      });
-      assert.deepEqual(realtime, { socketMessage: "velar-ws", eventMessage: "velar-sse" });
+      await page.locator("[data-realtime-socket-url]").fill(`ws://127.0.0.1:${realtimePort}/socket`);
+      await page.locator("[data-realtime-events-url]").fill(`http://127.0.0.1:${realtimePort}/events`);
+      await page.locator("[data-realtime-connect]").click();
+      await page.waitForFunction(() => document.querySelector("[data-realtime]")?.textContent === "velar-ws/1:velar-sse");
+      assert.equal(await page.locator("[data-realtime]").textContent(), "velar-ws/1:velar-sse");
     }
 
     const downloadPromise = page.waitForEvent("download");

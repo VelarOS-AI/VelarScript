@@ -7,6 +7,7 @@ import {onError} from "velar/app"
 import {publicConfig} from "velar/config"
 import {logger, useSink} from "velar/log"
 import {formBody, http} from "velar/http"
+import {eventStream, socket} from "velar/realtime"
 import {matches} from "velar/text"
 
 type CapabilityStatus:
@@ -68,6 +69,45 @@ const eventInputLook = look:
     color = "inherit"
     background = rgb(21, 28, 54)
 
+component RealtimeProbe(socketUrl: string, eventsUrl: string):
+    state socketLabel = "connecting"
+    state eventLabel = "connecting"
+
+    def socketOpened():
+        socketLabel = "open"
+
+    def socketMessage(value: string):
+        socketLabel = value
+
+    def socketFailed(message: string):
+        socketLabel = f"error:{message}"
+
+    def eventOpened():
+        eventLabel = "open"
+
+    def eventMessage(value: string, id: string):
+        eventLabel = f"{id}:{value}"
+
+    def eventFailed(message: string):
+        eventLabel = f"error:{message}"
+
+    const channel = socket(socketUrl, {
+        open: socketOpened,
+        message: socketMessage,
+        error: socketFailed,
+    })
+    const events = eventStream(eventsUrl, {
+        open: eventOpened,
+        message: eventMessage,
+        error: eventFailed,
+    })
+
+    cleanup:
+        channel.close()
+        events.close()
+
+    return <span data-realtime>{socketLabel}/{eventLabel}</span>
+
 export component WebCapabilities:
     const initialEnvironment = environment()
     const initialLocation = location()
@@ -102,6 +142,9 @@ export component WebCapabilities:
     state timerLabel = "timer-pending"
     state timerTicks = 0
     state renderFails = false
+    state socketUrl = ""
+    state eventsUrl = ""
+    state realtimeEnabled = false
     let panel: Element? = null
 
     def onlineChanged(value: bool):
@@ -203,6 +246,9 @@ export component WebCapabilities:
     def saveStatus():
         download("velar-status.txt", f"{sessionLabel}/{databaseLabel}")
 
+    def connectRealtime():
+        realtimeEnabled = true
+
     mounted:
         await loadCapabilities()
         await verifyRecovery()
@@ -256,7 +302,11 @@ export component WebCapabilities:
             <button look={actionButtonLook} type="button" data-test-render on:click={failRender}>Fail render safely</button>
             <button look={actionButtonLook} type="button" data-resource-retry on:click={recoveryResource.reload}>Retry resource</button>
             <button look={actionButtonLook} type="button" data-action-retry disabled={recoverAction.pending} on:click={recoverAction}>Run action</button>
+            <input look={eventInputLook} data-realtime-socket-url aria-label="WebSocket test URL" bind:value={socketUrl} />
+            <input look={eventInputLook} data-realtime-events-url aria-label="Event stream test URL" bind:value={eventsUrl} />
+            <button look={actionButtonLook} data-realtime-connect type="button" on:click={connectRealtime}>Connect realtime</button>
         </div>
+        {realtimeEnabled ? <RealtimeProbe socketUrl={socketUrl} eventsUrl={eventsUrl} /> : <span data-realtime>idle</span>}
         <span data-file>{fileName}</span>
         <span data-file-text>{fileText}</span>
         <span data-upload>{uploadLabel}</span>
