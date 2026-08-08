@@ -156,7 +156,15 @@ native class methods. The semantic index marks private declarations, exposes
 them only to expressions analyzed inside the owner class, and prevents
 project-wide inheritance rename from absorbing them.
 
-Core `List`, `Set`, and `Map` types remain distinct compiler values. `Set()`
+Core strings, numbers, `List`, `Set`, and `Map` remain distinct compiler
+values. String and number members are analyzer-owned signatures whose spans
+carry primitive-lowering hints; generated code calls bounded compiler helpers
+and never trusts a JavaScript prototype method. The same hint path makes a
+stored method a receiver-once bound wrapper. The text helper source is shared
+with the surviving advanced `velar/text` functions, so Unicode and 16 MiB
+limits have one implementation.
+
+`List`, `Set`, and `Map` constructors remain compiler-owned. `Set()`
 construction accepts zero arguments or one checked List/Set. Empty collection
 inference follows the runtime collection identity across direct aliases and
 record fields, freezes when the value crosses an open typed boundary, and is
@@ -166,9 +174,13 @@ validate dense Lists and invoke native Map/Set prototype operations directly.
 Reading a collection method as a value lowers to a receiver-once bound wrapper
 around the same helper, including optional access; it never leaks a nonexistent
 or overridable JavaScript instance method.
+List aggregation and keyed sorting reuse the checked shallow snapshot and
+reactive-read boundary. A `sorted(by=selector)` call computes one ordered key
+per snapshot entry before sorting and rejects simultaneous comparator use.
 Membership lowers to a source-shaped `candidate, collection` helper signature,
 so ordinary JavaScript argument evaluation preserves the language order without
-an extra generated function boundary.
+an extra generated function boundary; a string right operand selects the same
+controlled substring contract as `string.has(text)`.
 `List.reduce(callback, initial)` likewise analyzes a callable getter or factory
 before the initial expression. A literal arrow can receive the initial value's
 context afterward because creating that arrow executes no user code; its body

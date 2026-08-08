@@ -4,6 +4,29 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Checked value methods and List aggregation
+
+Language and compiler changes:
+
+- Strings now expose the checked members `size`, `trim`, `upper`, `lower`,
+  `slice`, `char`, `has`, `startsWith`, `endsWith`, `split`, `replace`,
+  `replaceAll`, `padStart`, `padEnd`, and `repeat`; numbers expose `abs`,
+  `round`, `floor`, `ceil`, and `toFixed`. These methods support named calls,
+  optional access, and first-class receiver binding without patching or
+  trusting JavaScript prototypes. `0.abs()` and decimal-literal chains lex as
+  member access. String size, character access, and slicing retain Unicode
+  code-point semantics and the existing 16 MiB bounds.
+- The receiver-shaped `velar/text` and `velar/math` exports moved to those
+  methods with no compatibility aliases. Old imports, bare calls, JavaScript
+  spellings such as `.toUpperCase()`/`.length`, string indexing, and number
+  `.toString()` receive one-current-spelling guidance.
+- Lists add `sum()`, `min()`, and `max()`. `sorted(by=selector)` computes one
+  number/string key per checked snapshot value and is mutually exclusive with
+  its comparator form. Empty `min`/`max` return `null`.
+- String right operands are explicitly covered by the controlled `in`
+  membership contract. `map.get(key, fallback)` now points directly to
+  `get(key) ?? fallback`.
+
 ## 0.10.0-dev — Deep state reactivity is the only default
 
 Web framework changes:

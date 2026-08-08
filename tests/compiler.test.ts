@@ -3502,7 +3502,7 @@ component App:
   );
 });
 
-test("guides record literals against Map contracts, type-object calls, and JS string methods", () => {
+test("guides record literals against Map contracts, type-object calls, and legacy JS string methods", () => {
   const emptyMap = compile("let counts: Map<string, number> = {}\n");
   assert.equal(emptyMap.code, null);
   assert.ok(emptyMap.diagnostics.some((item) => item.code === "VEL4001"
@@ -3518,12 +3518,11 @@ test("guides record literals against Map contracts, type-object calls, and JS st
     && /Use a record literal '\{field: value, \.\.\.\}' to build a 'Task' value.*not a constructor/u.test(item.message)));
 
   const trim = compile("const value = \" x \".trim()\n");
-  assert.ok(trim.diagnostics.some((item) => item.code === "VEL4001"
-    && /Use trim\(value\) from 'velar\/text'/u.test(item.message)));
+  assert.deepEqual(trim.diagnostics, []);
 
   const upper = compile("const value = \"x\".toUpperCase()\n");
   assert.ok(upper.diagnostics.some((item) => item.code === "VEL4001"
-    && /Use upper\(value\) from 'velar\/text'/u.test(item.message)));
+    && /Use '\.upper\(\)'/u.test(item.message)));
 });
 
 test("guides component render-style blocks toward returning JSX directly", () => {
@@ -5609,18 +5608,13 @@ const label = greet(ada)
   assert.deepEqual(projectCompletionsAt(project, mainPath, parsedMember), [
     { label: "name", detail: "string", kind: "field" },
   ]);
-  assert.deepEqual(projectExpressionAt(project, mainPath, parsedMember + 1), {
-    span: {
-      start: mainSource.indexOf("Person.parse({name: \"Grace\"}).name"),
-      end: mainSource.indexOf("Person.parse({name: \"Grace\"}).name") + "Person.parse({name: \"Grace\"}).name".length,
-    },
-    type: "string",
-    members: [{ name: "length", kind: "field", type: "number" }],
-    memberName: "name",
-    selectionSpan: { start: parsedMember, end: parsedMember + "name".length },
-    ownerType: "Person",
-    ownerKind: "named",
-  });
+  const parsedExpression = projectExpressionAt(project, mainPath, parsedMember + 1);
+  assert.equal(parsedExpression?.type, "string");
+  assert.equal(parsedExpression?.memberName, "name");
+  assert.equal(parsedExpression?.ownerType, "Person");
+  assert.ok(parsedExpression?.members.some((member) => member.name === "size" && member.kind === "field" && member.type === "number"));
+  assert.ok(parsedExpression?.members.some((member) => member.name === "trim" && member.kind === "method" && member.type === "() -> string"));
+  assert.ok(parsedExpression?.members.some((member) => member.name === "slice" && member.kind === "method"));
   assert.deepEqual(projectDefinitionAt(project, mainPath, parsedMember + 1), {
     path: modelsPath,
     span: { start: userField, end: userField + "name".length },
@@ -7594,11 +7588,11 @@ test("0.4 Core standard library combines typed Python ergonomics with explicit J
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 205);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 136);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 186);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 117);
   assert.equal(api.modules["velar/collections"]?.length, 28);
-  assert.equal(api.modules["velar/text"]?.length, 33);
-  assert.equal(api.modules["velar/math"]?.length, 36);
+  assert.equal(api.modules["velar/text"]?.length, 18);
+  assert.equal(api.modules["velar/math"]?.length, 32);
   assert.deepEqual(api.modules["velar/json"], ["clone", "deepEqual", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
   assert.deepEqual(api.modules["velar/url"], ["decode", "encode", "isExternal", "join", "normalize", "parse", "parseQuery", "query", "withHash", "withQuery"]);
@@ -7611,8 +7605,8 @@ test("0.4 Core standard library combines typed Python ergonomics with explicit J
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, range, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
-import {capitalize, escapeHtml, findMatch, findMatches, isBlank, lines, lower, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, upper, words} from "velar/text"
-import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians, round} from "velar/math"
+import {capitalize, escapeHtml, findMatch, findMatches, isBlank, lines, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, words} from "velar/text"
+import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians} from "velar/math"
 import {clone as cloneJson, deepEqual, parse as parseJson, stableStringify, stringify, tryParse} from "velar/json"
 import {all as allAsync, map as asyncMap, retry, series, sleep, timeout} from "velar/async"
 import {decode, encode, isExternal, join as joinUrl, parse as parseUrl, parseQuery, query, withHash, withQuery} from "velar/url"
@@ -7655,8 +7649,8 @@ print(truncate("VelarScript", 6))
 print(normalizeWhitespace("  a   b  "))
 print(lines("a\\nb").size)
 print(words("a  b").size)
-print(lower("ABC"))
-print(upper("abc"))
+print("ABC".lower())
+print("abc".upper())
 print(isBlank("   "))
 print(escapeHtml("<velar>"))
 print(matches("Velar 42", "^velar [0-9]+$", {ignoreCase: true}))
@@ -7683,11 +7677,11 @@ try:
 catch error:
     print(error.name)
 
-print(round(pi, 2))
+print(pi.toFixed(2))
 print(clamp(12, 0, 10))
 print(minNumber(4, 2, 8))
 print(maxNumber(4, 2, 8))
-print(round(degrees(radians(90))))
+print(degrees(radians(90)).round())
 print(gcd(18, 12))
 print(lcm(6, 8))
 
@@ -7796,8 +7790,6 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {enumerate, join as joinItems} from "velar/collections"
-import {trim} from "velar/text"
-import {round} from "velar/math"
 import {parse as parseJson} from "velar/json"
 import {map as asyncMap} from "velar/async"
 import {expect} from "velar/test"
@@ -7819,8 +7811,8 @@ def markValues(label: string, values: List<string>) -> List<string>:
 
 print(value=joinItems(separator=markText("separator", ","), values=markValues("values", ["a", "b"])))
 print(value=enumerate(start=10, values=["x"])[0].index)
-print(value=round(digits=2, value=3.14159))
-print(value=trim(value=" Velar "))
+print(value=3.14159.toFixed(digits=2))
+print(value=" Velar ".trim())
 
 const parsed = parseJson(target=User, text="{\\\"name\\\":\\\"Ada\\\"}")
 const typed = User.parse(value={name: "Lin"})
@@ -8247,17 +8239,14 @@ console.log(coercions);
 test("velar/math never reintroduces JavaScript numeric coercion", () => {
   const source = standardModuleSource("velar/math") ?? "";
   const execution = executeModule(`${source}
-console.log(round(1.005, 2));
-console.log(round(1234, -2));
-console.log(round(Number.MAX_VALUE, 308) === Number.MAX_VALUE);
 console.log(gcd(54, 24), lcm(6, 8));
 for (const operation of [
-  () => abs("2"),
+  () => sign("2"),
   () => min(1, "2"),
   () => clamp(1, "0", 2),
   () => pow(2, "3"),
   () => hypot([], 2),
-  () => round(1, 309),
+  () => log(1, "2"),
   () => randomInt(-Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
   () => gcd(2.5, 1),
   () => lcm(Number.MAX_SAFE_INTEGER, 2),
@@ -8274,9 +8263,9 @@ Math.random = originalMathRandom;
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    "1.01", "1200", "true", "6 24",
+    "6 24",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
-    "RangeError", "RangeError", "TypeError", "RangeError",
+    "TypeError", "RangeError", "TypeError", "RangeError",
     "RangeError", "RangeError", "TypeError", "",
   ].join("\n"));
 });
@@ -8345,18 +8334,18 @@ console.log(consoleBoundaryFailure + ":" + consoleGetterReads);
   ].join("\n"));
 });
 
-test("velar/text rejects native count coercion and accessor options", () => {
+test("text methods and velar/text reject native count coercion and accessor options", () => {
   const source = standardModuleSource("velar/text") ?? "";
   const execution = executeModule(`${source}
-console.log(padStart("7", 3, "0"));
+console.log(__velarStringPadStart("7", 3, "0"));
 console.log(truncate("VelarScript", 6));
 let getterReads = 0;
 const options = {};
 Object.defineProperty(options, "ignoreCase", { enumerable: true, get() { getterReads += 1; return true; } });
 for (const operation of [
-  () => repeat("x", "2"),
-  () => padStart("x", "3"),
-  () => padEnd("x", -1),
+  () => __velarStringRepeat("x", "2"),
+  () => __velarStringPadStart("x", "3"),
+  () => __velarStringPadEnd("x", -1),
   () => truncate("x", Number.MAX_SAFE_INTEGER + 1),
   () => matches("Velar", "velar", options),
   () => matches("Velar", "velar", new (class PatternOptions { constructor() { this.ignoreCase = true; } })()),
@@ -8408,19 +8397,19 @@ let replacementCalls = 0;
 String.prototype.replace = () => { replacementCalls += 1; throw new Error("late replacement allocation"); };
 String.prototype.replaceAll = () => { replacementCalls += 1; throw new Error("late replacement allocation"); };
 for (const operation of [
-  () => repeat("ab", 9000000),
-  () => padStart("x", 20000000),
-  () => split("x".repeat(1000001), ""),
+  () => __velarStringRepeat("ab", 9000000),
+  () => __velarStringPadStart("x", 20000000),
+  () => __velarStringSplit("x".repeat(1000001), ""),
   () => indent("a\\nb", "x".repeat(9 * 1024 * 1024)),
-  () => replace("xx", "x", "y".repeat(16 * 1024 * 1024)),
-  () => replaceAll("xx", "x", "y".repeat(9 * 1024 * 1024)),
+  () => __velarStringReplace("xx", "x", "y".repeat(16 * 1024 * 1024)),
+  () => __velarStringReplaceAll("xx", "x", "y".repeat(9 * 1024 * 1024)),
   () => escapeHtml("&".repeat(4 * 1024 * 1024)),
 ]) {
   try { operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
-console.log(replace("abc", "b", "x"));
-console.log(replaceAll("aaa", "aa", "x"));
-console.log(replaceAll("ab", "", "-"));
+console.log(__velarStringReplace("abc", "b", "x"));
+console.log(__velarStringReplaceAll("aaa", "aa", "x"));
+console.log(__velarStringReplaceAll("ab", "", "-"));
 console.log(escapeHtml('<a href="x">'));
 console.log(replacementCalls);
 String.prototype.replace = originalReplace;
@@ -10723,6 +10712,60 @@ print(getScore(key="Ada"))
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "2\n1\ntrue\n4\ntrue\n9\n");
+});
+
+test("List aggregation and key sorting use checked snapshot semantics", () => {
+  const result = compileCore(`
+type Item:
+    name: string
+    rank: number
+
+let items: List<Item> = [
+    {name: "long", rank: 2},
+    {name: "a", rank: 1},
+    {name: "mid", rank: 2},
+]
+let keyCalls = 0
+def rank(item: Item) -> number:
+    keyCalls += 1
+    if keyCalls == 1:
+        items.append({name: "late", rank: 0})
+    return item.rank
+
+print([1, 2, 3].sum())
+print([3, 1, 2].min())
+print([3, 1, 2].max())
+print([].min() == null)
+print(["b", "a"].min())
+print(items.sorted(by=rank).map(item => item.name).join("|"))
+print(keyCalls)
+print(items.size)
+
+const sort = items.sorted
+print(sort(by=item => item.name.size).get(0)?.name ?? "missing")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarListSum/u);
+  assert.match(result.code ?? "", /__velarListMin/u);
+  assert.match(result.code ?? "", /__velarListMax/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "6\n1\n3\ntrue\na\na|long|mid\n3\n4\na\n");
+
+  const invalid = compileCore(`
+print([true].sum())
+print([true].min())
+print([1, 2].sorted((left, right) => left - right, by=value => value))
+print([1, 2].sorted(value => value))
+const scores: Map<string, number> = Map()
+print(scores.get("Ada", 0))
+`.trimStart());
+  const messages = invalid.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /List\.sum requires List<number>/u);
+  assert.match(messages, /List\.min requires List<number> or List<string>/u);
+  assert.match(messages, /either a comparator or 'by=selector', not both/u);
+  assert.match(messages, /Use 'sorted\(by=selector\)'/u);
+  assert.match(messages, /Use 'get\(key\) \?\? fallback'/u);
 });
 
 test("empty Lists infer one element type from append or extend", () => {
@@ -17960,46 +18003,95 @@ test("formatter normalizes multi-line chains one level past their statement and 
   assert.equal(formatSource(single), single);
 });
 
-test("string operations are velar/text functions with code-point semantics", async () => {
+test("string and number methods are checked, bindable, and Unicode-aware", async () => {
   const api = standardModuleApi();
-  assert.ok(["length", "char", "slice"].every((name) => api.modules["velar/text"]?.includes(name)));
+  assert.ok(["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd"]
+    .every((name) => !api.modules["velar/text"]?.includes(name)));
+  assert.ok(["abs", "round", "floor", "ceil"].every((name) => !api.modules["velar/math"]?.includes(name)));
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-text-strings-"));
-  const entry = join(directory, "main.vel");
-  await writeFile(entry, `
-import {char, length, slice} from "velar/text"
+  const result = compile(`
+const sample = "VelarScript"
+const decimal = 3.14159
+print("héllo".size)
+print("a😀b".size)
+print(" a😀b ".trim().upper())
+print("a😀b".char(index=1) ?? "null")
+print("a😀b".char(-1) ?? "null")
+print("abc".char(9) ?? "null")
+print("a😀bc".slice(start=1, end=3))
+print("abcdef".slice(-3))
+print("abcdef".slice(end=3))
+print(sample.has("Script"))
+print("VelarScript".startsWith("Velar"))
+print("VelarScript".endsWith(text="Script"))
+print("a,b".split(",").join("|"))
+print("a-a".replace("a", "x"))
+print("a-a".replaceAll(from="a", to="x"))
+print("7".padStart(3, "0"))
+print("7".padEnd(size=3, fill="0"))
+print("ab".repeat(2))
+print(0.abs())
+print((-2).abs())
+print(1.5.round())
+print(1.5.floor())
+print(1.5.ceil())
+print(decimal.toFixed(digits=2))
 
-print(length("héllo"))
-print(length("a😀b"))
-print(char("a😀b", 1) ?? "null")
-print(char("a😀b", -1) ?? "null")
-print(char("abc", 9) ?? "null")
-print(slice("a😀bc", 1, 3))
-print(slice("abcdef", -3))
-print(slice("abcdef", 1))
-`.trimStart(), "utf8");
-  const output = join(directory, "dist");
-  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", entry, "--out-dir", output], { cwd: process.cwd(), encoding: "utf8" });
-  assert.equal(build.status, 0, build.stderr);
-  const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
-  assert.equal(execution.status, 0, execution.stderr);
-  assert.equal(execution.stdout, "5\n3\n😀\nb\nnull\n😀b\ndef\nbcdef\n");
+let receiverReads = 0
+def title() -> string:
+    receiverReads += 1
+    return "Velar"
+const cut = title().slice
+print(cut(start=1, end=4))
+print(receiverReads)
+const maybe: string? = null
+print(maybe?.trim() ?? "missing")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarStringSlice/u);
+  assert.match(result.code ?? "", /__velarNumberToFixed/u);
+  const sampleSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "sample");
+  const decimalSymbol = result.semanticIndex.symbols.find((symbol) => symbol.name === "decimal");
+  assert.ok(sampleSymbol?.members.some((member) => member.name === "size" && member.kind === "field"));
+  assert.ok(sampleSymbol?.members.some((member) => member.name === "trim" && member.kind === "method"));
+  assert.ok(decimalSymbol?.members.some((member) => member.name === "toFixed" && member.kind === "method"));
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "5", "3", "A😀B", "😀", "b", "null", "😀b", "def", "abc", "true", "true", "true", "a|b", "x-a", "x-x", "007", "700", "abab",
+    "0", "2", "2", "1", "2", "3.14", "ela", "1", "missing", "",
+  ].join("\n"));
 
-  // JavaScript string-member intuitions receive directive velar/text guidance.
+  // Removed function forms and JavaScript spellings point at the one current method surface.
   const guided = compile(`
 let word = "hello"
 print(word.length)
-print(word.size)
-print(word.slice(0, 2))
 print(word.substring(0, 2))
 print(word.charAt(1))
 print(word.at(-1))
 print(word[0])
+print(word.toUpperCase())
+print(word.includes("e"))
+print((1).toString())
+print(trim(word))
+print(abs(1))
 `.trimStart());
   const messages = guided.diagnostics.map((item) => item.message);
-  assert.equal(messages.filter((message) => /Use length\(value\) from 'velar\/text'/u.test(message)).length, 2);
-  assert.equal(messages.filter((message) => /Use slice\(value, start, end\) from 'velar\/text'/u.test(message)).length, 2);
-  assert.equal(messages.filter((message) => /Use char\(value, index\) from 'velar\/text'/u.test(message)).length, 3);
+  assert.ok(messages.some((message) => /Use '\.size'/u.test(message)));
+  assert.ok(messages.some((message) => /Use '\.slice\(start, end\)'/u.test(message)));
+  assert.equal(messages.filter((message) => /Use '\.char\(index\)'/u.test(message)).length, 3);
+  assert.ok(messages.some((message) => /Use '\.upper\(\)'/u.test(message)));
+  assert.ok(messages.some((message) => /Use '\.has\(text\)'/u.test(message)));
+  assert.ok(messages.some((message) => /Use 'str\(value\)'/u.test(message)));
+  assert.ok(messages.some((message) => /Use 'value\.trim\(\)'/u.test(message)));
+  assert.ok(messages.some((message) => /Use 'value\.abs\(\)'/u.test(message)));
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-method-guidance-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `import {trim} from "velar/text"\nimport {round} from "velar/math"\nprint(trim("x"))\nprint(round(1))\n`, "utf8");
+  const project = await compileProject(entry);
+  assert.ok(project.failures.some((failure) => failure.message.includes("Use 'value.trim()'")), JSON.stringify(project.failures));
+  assert.ok(project.failures.some((failure) => failure.message.includes("Use 'value.round()'")), JSON.stringify(project.failures));
 });
 
 test("bare JSX for blocks and event-arrow assignments receive directive guidance", () => {

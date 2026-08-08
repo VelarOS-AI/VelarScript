@@ -4,6 +4,7 @@ import {
   compile,
   inspectModule,
   optionalOf,
+  removedStandardFunctionGuidance,
   type AnalysisContext,
   type ClassInfo,
   type CompilerExtension,
@@ -65,6 +66,11 @@ export interface ProjectCompilationStats {
   readonly reusedModules: number;
   readonly affectedModules: number;
   readonly durationMs: number;
+}
+
+function missingExportMessage(source: string, name: string): string {
+  const guidance = removedStandardFunctionGuidance(source, name);
+  return guidance ?? `Module '${source}' has no export named '${name}'`;
 }
 
 export interface CompileProjectOptions {
@@ -621,7 +627,7 @@ async function createAnalysisContext(
       if (interface_) {
         for (const specifier of dependency.specifiers) {
           if (!interface_.exports.has(specifier.imported)) {
-            failures.push({ path: module.inputPath, message: `Module '${dependency.source}' has no export named '${specifier.imported}'` });
+            failures.push({ path: module.inputPath, message: missingExportMessage(dependency.source, specifier.imported) });
           }
         }
       }
@@ -958,7 +964,7 @@ function importInterface(
       }
       const exported = interface_.exports.get(specifier.imported);
       if (!exported) {
-        failures.push({ path: module.inputPath, message: `Module '${dependency.source}' has no export named '${specifier.imported}'` });
+        failures.push({ path: module.inputPath, message: missingExportMessage(dependency.source, specifier.imported) });
         imports.set(specifier.local, { kind: "unknown" });
         continue;
       }

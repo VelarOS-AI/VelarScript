@@ -93,29 +93,42 @@ const declarationKeywordGuidanceEntries = new Map<string, DeclarationKeywordGuid
 ]);
 
 const stringMemberGuidanceEntries = new Map<string, string>([
-  ["length", "Use length(value) from 'velar/text'; string operations are functions and count code points"],
-  ["size", "Use length(value) from 'velar/text'; string operations are functions and count code points"],
-  ["slice", "Use slice(value, start, end) from 'velar/text'; string operations are functions"],
-  ["substring", "Use slice(value, start, end) from 'velar/text'; string operations are functions"],
-  ["substr", "Use slice(value, start, end) from 'velar/text'; string operations are functions"],
-  ["charAt", "Use char(value, index) from 'velar/text'; string operations are functions"],
-  ["at", "Use char(value, index) from 'velar/text'; string operations are functions"],
-  ["trim", "Use trim(value) from 'velar/text'; string operations are functions"],
+  ["length", "Use '.size'; strings count Unicode code points like List.size"],
+  ["substring", "Use '.slice(start, end)'; VelarScript has one string slicing method"],
+  ["substr", "Use '.slice(start, end)'; VelarScript has one string slicing method"],
+  ["charAt", "Use '.char(index)'; string positions count Unicode code points"],
+  ["at", "Use '.char(index)'; string positions count Unicode code points"],
   ["trimStart", "Use trimStart(value) from 'velar/text'; string operations are functions"],
   ["trimEnd", "Use trimEnd(value) from 'velar/text'; string operations are functions"],
-  ["toUpperCase", "Use upper(value) from 'velar/text'; string operations are functions"],
-  ["toLowerCase", "Use lower(value) from 'velar/text'; string operations are functions"],
-  ["upper", "Use upper(value) from 'velar/text'; string operations are functions"],
-  ["lower", "Use lower(value) from 'velar/text'; string operations are functions"],
-  ["includes", "Use includes(value, part) from 'velar/text'; string operations are functions"],
-  ["startsWith", "Use startsWith(value, prefix) from 'velar/text'; string operations are functions"],
-  ["endsWith", "Use endsWith(value, suffix) from 'velar/text'; string operations are functions"],
-  ["split", "Use split(value, separator) from 'velar/text'; string operations are functions"],
-  ["replace", "Use replace(value, search, replacement) from 'velar/text'; string operations are functions"],
-  ["replaceAll", "Use replaceAll(value, search, replacement) from 'velar/text'; string operations are functions"],
-  ["padStart", "Use padStart(value, length) from 'velar/text'; string operations are functions"],
-  ["padEnd", "Use padEnd(value, length) from 'velar/text'; string operations are functions"],
-  ["repeat", "Use repeat(value, count) from 'velar/text'; string operations are functions"],
+  ["toUpperCase", "Use '.upper()'; VelarScript exposes one string uppercase spelling"],
+  ["toLowerCase", "Use '.lower()'; VelarScript exposes one string lowercase spelling"],
+  ["includes", "Use '.has(text)'; strings and collections share one membership method"],
+]);
+
+const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<string, string>>([
+  ["velar/text", new Map([
+    ["length", "Use 'value.size'; string measurement is a checked member"],
+    ["char", "Use 'value.char(index)'; string access is a checked member"],
+    ["slice", "Use 'value.slice(start, end)'; string slicing is a checked member"],
+    ["trim", "Use 'value.trim()'; string trimming is a checked member"],
+    ["lower", "Use 'value.lower()'; string lowercasing is a checked member"],
+    ["upper", "Use 'value.upper()'; string uppercasing is a checked member"],
+    ["startsWith", "Use 'value.startsWith(text)'; string prefix checks are checked members"],
+    ["endsWith", "Use 'value.endsWith(text)'; string suffix checks are checked members"],
+    ["includes", "Use 'value.has(text)'; strings and collections share one membership method"],
+    ["split", "Use 'value.split(separator)'; string splitting is a checked member"],
+    ["replace", "Use 'value.replace(from, to)'; string replacement is a checked member"],
+    ["replaceAll", "Use 'value.replaceAll(from, to)'; string replacement is a checked member"],
+    ["repeat", "Use 'value.repeat(count)'; string repetition is a checked member"],
+    ["padStart", "Use 'value.padStart(size, fill)'; string padding is a checked member"],
+    ["padEnd", "Use 'value.padEnd(size, fill)'; string padding is a checked member"],
+  ])],
+  ["velar/math", new Map([
+    ["abs", "Use 'value.abs()'; absolute value is a checked number member"],
+    ["round", "Use 'value.round()'; number rounding is a checked member"],
+    ["floor", "Use 'value.floor()'; number flooring is a checked member"],
+    ["ceil", "Use 'value.ceil()'; number ceiling is a checked member"],
+  ])],
 ]);
 
 export function declarationKeywordGuidance(name: string): DeclarationKeywordGuidance | null {
@@ -124,6 +137,18 @@ export function declarationKeywordGuidance(name: string): DeclarationKeywordGuid
 
 export function stringMemberGuidance(name: string): string | null {
   return stringMemberGuidanceEntries.get(name) ?? null;
+}
+
+export function removedStandardFunctionGuidance(source: string, name: string): string | null {
+  return removedStandardFunctionGuidanceEntries.get(source)?.get(name) ?? null;
+}
+
+export function removedGlobalFunctionGuidance(name: string): string | null {
+  for (const entries of removedStandardFunctionGuidanceEntries.values()) {
+    const guidance = entries.get(name);
+    if (guidance) return guidance;
+  }
+  return null;
 }
 
 export function sourceTypeNameGuidance(name: string): SourceTypeGuidance | null {

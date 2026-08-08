@@ -41,8 +41,11 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
   永不销毁重建（位置卸载才重建）。顶层 `const` 不追 prop 是成文刀锋（用 computed）。
 - **D14/D14'/D14''**：memo/batch 之争的终局 —— 见 D26（属性级追踪覆盖后公开 API
   退场；无记忆化关键字，规格封存）。
-- **D17/D19-D24**：语言人体工学批次（打点方法化、双槽 for、range、集合构造、
-  字符串 in、**反引号多行**）—— 规格在 docs/handoff/，**尚未实施**。
+- **D17/D22/D23**：L1 人体工学批次（打点方法化、List 聚合/排序、字符串 `in`）
+  **已实施**；字符串/数字固有操作仅保留方法面，旧 `velar/text`/`velar/math` 函数
+  拼写已干净移除并提供定向指引。
+- **D19-D21/D24**：L2 人体工学批次（双槽 for、range、集合构造、**反引号多行**）
+  —— 规格在 docs/handoff/，**尚未实施**。
 - **D18**：velar/serve 第一方平台面 —— 规格在 docs/handoff/，尚未实施。
 - **D25'→D26**：深层响应式为唯一默认 —— 完整设计与验收记录见
   docs/handoff/D26-DEEP-REACTIVITY.md，**已实施并打败 Lite S4 memo 基线**。
@@ -75,7 +78,9 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
    `git status`**，沿用「隔离 worktree 验证 + 主树精确 hunk 提交」协议。
 2. **已落定：D26 深层响应式**（旗舰）→ Lite S4 每 chunk 从 10 次构建/~7 次
    M 扫描降为 0/0；上游与 Lite 三引擎门禁全绿。
-3. **L1**：D17 打点方法化 + D22 聚合 + D23 字符串 in + get-default 指引。
+3. **已落定：L1**：D17 打点方法化 + D22 聚合 + D23 字符串 in + get-default
+   指引；上游 check/test/package/三引擎门禁全绿，Lite 完成 clean-break 迁移并通过
+   shared 22 + server 11 + app build/format + 三引擎 33 场景。
 4. **L2**：D19 双槽 for + D20 range + D21 集合构造 + D24 反引号多行。
 5. **D18** velar/serve/fs/env/host + Lite 服务器重写（删光 extern 声明）。
 6. Backlog：W-23/W-25（emitter/重载 extern 声明）、W-26 字节面、增量流式

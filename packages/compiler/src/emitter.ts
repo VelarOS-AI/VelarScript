@@ -16,6 +16,7 @@ import { formatTypeReference, resolveTypeReference, type ValueType } from "./typ
 import type { LoweringHints } from "./analyzer.ts";
 import { VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
 import { spanIdentity, type SourceText, type Span } from "./source.ts";
+import { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
 
 interface JavaScriptNode {
   readonly id: number;
@@ -40,6 +41,7 @@ export class JavaScriptEmitter {
   private readonly forcedFunctionExports: ReadonlySet<string>;
   private needsIndexHelpers = false;
   private needsCollectionHelpers = false;
+  private needsPrimitiveHelpers = false;
   private needsRecordHelpers = false;
   private needsObjectBindingHelpers = false;
   private needsListBindingHelpers = false;
@@ -94,6 +96,18 @@ export class JavaScriptEmitter {
         "  const runtime = descriptor.value;",
         "  return runtime && runtime.version === \"0.11\" && typeof runtime.toRaw === \"function\" ? runtime.toRaw(value) : value;",
         "}",
+      ].join("\n"));
+    }
+    if (this.needsPrimitiveHelpers) {
+      helpers.push(VELAR_TEXT_METHOD_RUNTIME);
+      helpers.push([
+        "const __velarNativeNumberToFixed = Object.getOwnPropertyDescriptor(Number.prototype, \"toFixed\").value;",
+        "function __velarNumberValue(value) { if (typeof value !== \"number\") throw new TypeError(\"Number methods require a number receiver\"); return value; }",
+        "function __velarNumberAbs(value) { return Math.abs(__velarNumberValue(value)); }",
+        "function __velarNumberRound(value) { return Math.round(__velarNumberValue(value)); }",
+        "function __velarNumberFloor(value) { return Math.floor(__velarNumberValue(value)); }",
+        "function __velarNumberCeil(value) { return Math.ceil(__velarNumberValue(value)); }",
+        "function __velarNumberToFixed(value, digits) { if (!Number.isSafeInteger(digits) || digits < 0 || digits > 100) throw new RangeError(\"Number.toFixed digits must be an integer from 0 through 100\"); return __velarNativeNumberToFixed.call(__velarNumberValue(value), digits); }",
       ].join("\n"));
     }
     if (this.hints.instanceFieldReads.size > 0) {
@@ -466,7 +480,28 @@ export class JavaScriptEmitter {
         "function __velarListFilter(value, predicate) { const items = __velarCopyList(value, \"List.filter\"); __velarReactiveCollectionTrack(value); const output = []; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); const accepted = predicate(item); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.filter predicate must return bool\"); if (accepted) output.push(__velarReactiveRaw(item)); } return output; }",
         "function __velarListReduce(value, combine, initial) { const items = __velarCopyList(value, \"List.reduce\"); __velarReactiveCollectionTrack(value); let result = initial; for (let index = 0; index < items.length; index += 1) { const next = combine(result, __velarReactiveCollectionRead(value, index, items[index])); result = next === undefined ? null : next; } return result; }",
         "function __velarListJoin(value, separator = \"\") { value = __velarValidateDenseList(value, \"List.join\"); __velarReactiveCollectionTrack(value); if (typeof separator !== \"string\") throw new TypeError(\"List.join separator must be string\"); for (let index = 0; index < value.length; index += 1) if (typeof value[index] !== \"string\") throw new TypeError(\"List.join requires string values\"); return Array.prototype.join.call(value, separator); }",
-        "function __velarListSorted(value, compare = null) { __velarReactiveCollectionTrack(value); const output = __velarCopyList(value, \"List.sorted\"); const compareValues = compare ?? ((left, right) => { if ((typeof left !== \"string\" && typeof left !== \"number\") || typeof left !== typeof right || (typeof left === \"number\" && (!Number.isFinite(left) || !Number.isFinite(right)))) throw new TypeError(\"List.sorted() requires uniform finite numbers or strings\"); return left < right ? -1 : left > right ? 1 : 0; }); Array.prototype.sort.call(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== \"number\" || !Number.isFinite(order)) throw new TypeError(\"List.sorted comparator must return a finite number\"); return order; }); return output; }",
+        "function __velarOrderedListValue(value, name, kind = null) { const current = typeof value; if ((current !== \"string\" && current !== \"number\") || (current === \"number\" && !Number.isFinite(value)) || (kind !== null && current !== kind)) throw new TypeError(name + \" requires uniform finite numbers or strings\"); return current; }",
+        "function __velarListSorted(value, compare = null, by = null) {",
+        "  if (compare !== null && by !== null) throw new TypeError(\"List.sorted accepts either a comparator or by, not both\");",
+        "  if (compare !== null && typeof compare !== \"function\") throw new TypeError(\"List.sorted comparator must be a function\");",
+        "  if (by !== null && typeof by !== \"function\") throw new TypeError(\"List.sorted by must be a function\");",
+        "  __velarReactiveCollectionTrack(value);",
+        "  const output = __velarCopyList(value, \"List.sorted\");",
+        "  if (by !== null) {",
+        "    let kind = null;",
+        "    const decorated = output.map((item, index) => { const key = by(__velarReactiveCollectionRead(value, index, item)); kind = __velarOrderedListValue(key, \"List.sorted by\", kind); return { item, key }; });",
+        "    Array.prototype.sort.call(decorated, (left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);",
+        "    return decorated.map((entry) => entry.item);",
+        "  }",
+        "  let kind = null;",
+        "  const compareValues = compare ?? ((left, right) => { kind = __velarOrderedListValue(left, \"List.sorted()\", kind); __velarOrderedListValue(right, \"List.sorted()\", kind); return left < right ? -1 : left > right ? 1 : 0; });",
+        "  Array.prototype.sort.call(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== \"number\" || !Number.isFinite(order)) throw new TypeError(\"List.sorted comparator must return a finite number\"); return order; });",
+        "  return output;",
+        "}",
+        "function __velarListSum(value) { const items = __velarCopyList(value, \"List.sum\"); __velarReactiveCollectionTrack(value); let total = 0; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); if (typeof item !== \"number\") throw new TypeError(\"List.sum requires numbers\"); total += item; } return total; }",
+        "function __velarListExtremum(value, maximum) { const items = __velarCopyList(value, maximum ? \"List.max\" : \"List.min\"); __velarReactiveCollectionTrack(value); if (items.length === 0) return null; let result = __velarReactiveCollectionRead(value, 0, items[0]); let kind = __velarOrderedListValue(result, maximum ? \"List.max\" : \"List.min\"); for (let index = 1; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); __velarOrderedListValue(item, maximum ? \"List.max\" : \"List.min\", kind); if (maximum ? item > result : item < result) result = item; } return result; }",
+        "function __velarListMin(value) { return __velarListExtremum(value, false); }",
+        "function __velarListMax(value) { return __velarListExtremum(value, true); }",
         "function __velarListReversed(value) { __velarReactiveCollectionTrack(value); const output = __velarCopyList(value, \"List.reversed\"); Array.prototype.reverse.call(output); return output; }",
         "",
         "function __velarSetAdd(value, item) {",
@@ -1596,6 +1631,24 @@ export class JavaScriptEmitter {
       }
       case "CallExpression": {
         if (expression.callee.kind === "MemberExpression") {
+          const primitiveHelper = this.primitiveHelper(expression.callee);
+          if (primitiveHelper) {
+            this.needsPrimitiveHelpers = true;
+            const object = this.emitMappedExpression(expression.callee.object);
+            const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
+            const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
+            const arguments_ = namedOrder
+              ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
+              : sourceArguments;
+            const emittedArguments = namedOrder
+              ? `...((__namedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+              : arguments_.join(", ");
+            const suffix = arguments_.length > 0 ? `, ${emittedArguments}` : "";
+            const invocation = `${primitiveHelper}(__value${suffix})`;
+            return this.hints.optionalCallees.has(spanIdentity(expression.span))
+              ? `(__value => __value == null ? null : ${invocation})(${object})`
+              : `${primitiveHelper}(${object}${suffix})`;
+          }
           const helper = this.collectionHelper(expression.callee);
           if (helper) {
             this.needsCollectionHelpers = true;
@@ -1653,6 +1706,22 @@ export class JavaScriptEmitter {
         return this.hints.optionalCalls.has(spanIdentity(expression.span)) ? `(${call} ?? null)` : call;
       }
       case "MemberExpression": {
+        const primitiveHelper = this.primitiveHelper(expression);
+        if (primitiveHelper) {
+          this.needsPrimitiveHelpers = true;
+          const object = this.emitMappedExpression(expression.object);
+          const bound = `(...__velarArguments) => ${primitiveHelper}(__value, ...__velarArguments)`;
+          return expression.optional
+            ? `(__value => __value == null ? null : ${bound})(${object})`
+            : `(__value => ${bound})(${object})`;
+        }
+        if (this.hints.stringSizes.has(expression.span.end)) {
+          this.needsPrimitiveHelpers = true;
+          const object = this.emitMappedExpression(expression.object);
+          return expression.optional
+            ? `(__value => __value == null ? null : __velarStringSize(__value))(${object})`
+            : `__velarStringSize(${object})`;
+        }
         const collectionHelper = this.collectionHelper(expression);
         if (collectionHelper) {
           this.needsCollectionHelpers = true;
@@ -1772,6 +1841,9 @@ export class JavaScriptEmitter {
       case "listJoin": return "__velarListJoin";
       case "listSorted": return "__velarListSorted";
       case "listReversed": return "__velarListReversed";
+      case "listSum": return "__velarListSum";
+      case "listMin": return "__velarListMin";
+      case "listMax": return "__velarListMax";
       case "setAdd": return "__velarSetAdd";
       case "setUpdate": return "__velarSetUpdate";
       case "setCopy": return "__velarSetCopy";
@@ -1784,6 +1856,31 @@ export class JavaScriptEmitter {
       case "keys": return "__velarCollectionKeys";
       case "values": return "__velarCollectionValues";
       case "entries": return "__velarCollectionEntries";
+      default: return null;
+    }
+  }
+
+  private primitiveHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {
+    switch (this.hints.primitiveCalls.get(expression.span.end)) {
+      case "stringTrim": return "__velarStringTrim";
+      case "stringUpper": return "__velarStringUpper";
+      case "stringLower": return "__velarStringLower";
+      case "stringSlice": return "__velarStringSlice";
+      case "stringChar": return "__velarStringChar";
+      case "stringHas": return "__velarStringHas";
+      case "stringStartsWith": return "__velarStringStartsWith";
+      case "stringEndsWith": return "__velarStringEndsWith";
+      case "stringSplit": return "__velarStringSplit";
+      case "stringReplace": return "__velarStringReplace";
+      case "stringReplaceAll": return "__velarStringReplaceAll";
+      case "stringPadStart": return "__velarStringPadStart";
+      case "stringPadEnd": return "__velarStringPadEnd";
+      case "stringRepeat": return "__velarStringRepeat";
+      case "numberAbs": return "__velarNumberAbs";
+      case "numberRound": return "__velarNumberRound";
+      case "numberFloor": return "__velarNumberFloor";
+      case "numberCeil": return "__velarNumberCeil";
+      case "numberToFixed": return "__velarNumberToFixed";
       default: return null;
     }
   }

@@ -1,6 +1,6 @@
 import {announce} from "velar/web"
 import {clearErrors, errors, focusFirstError, read, reset, setError} from "velar/forms"
-import {isBlank, trim} from "velar/text"
+import {isBlank} from "velar/text"
 import {TicketDraft, TicketPriority} from "../domain.vel"
 import {addTicket} from "../store.vel"
 
@@ -64,8 +64,8 @@ export component TicketForm:
             const currentForm = form
             clearErrors(currentForm)
             const draft = read(currentForm, TicketDraft)
-            const title = trim(draft.title)
-            const requester = trim(draft.requester)
+            const title = draft.title.trim()
+            const requester = draft.requester.trim()
             if isBlank(title):
                 setError(currentForm, "title", "Add a short issue title")
             if isBlank(requester):
@@ -76,7 +76,7 @@ export component TicketForm:
                 focusFirstError(currentForm)
             else:
                 assert draft.estimate != null, "Ticket estimate must be present after validation"
-                addTicket({...draft, title, requester, summary: trim(draft.summary)})
+                addTicket({...draft, title, requester, summary: draft.summary.trim()})
                 reset(currentForm)
                 announce("Ticket created")
 

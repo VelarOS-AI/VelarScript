@@ -1,6 +1,6 @@
-import {groupBy, range, sum} from "velar/collections"
+import {groupBy, range} from "velar/collections"
 import {title} from "velar/text"
-import {round, pi} from "velar/math"
+import {pi} from "velar/math"
 import {parse as parseJson} from "velar/json"
 import {sleep} from "velar/async"
 import {withQuery} from "velar/url"
@@ -22,8 +22,8 @@ const parsed = parseJson("{\"name\":\"Nova\",\"role\":\"admin\"}", User)
 await sleep(1)
 print(title("velar standard library"))
 print(grouped.get("admin")?.size ?? 0)
-print(sum(range(1, 5)))
-print(round(pi, 2))
+print(range(1, 5).sum())
+print(pi.toFixed(2))
 print(parsed.name)
 print(withQuery("/users", {role: "admin"}))
 print(iso(utc(2026, 8, 1)))

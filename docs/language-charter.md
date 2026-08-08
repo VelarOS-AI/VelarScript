@@ -384,7 +384,7 @@ users expect and JavaScript users can read immediately.
 - An optional call that short-circuits does not evaluate its arguments.
 - Lowered JavaScript receives arguments in declaration order.
 - No runtime keyword-argument record is created.
-- Core collection methods follow this same contract and expose the parameter
+- Core checked value and collection methods follow this same contract and expose the parameter
   names documented in their signatures.
 - Official fixed-signature APIs follow it too. Positional overloads and pure
   rest calls do not invent names for positions that have no single meaning.
@@ -397,6 +397,36 @@ Arrows are concise expression functions:
 const doubled = values.map(value => value * 2)
 const load = async id => await fetchUser(id)
 ```
+
+### Checked value methods
+
+Everyday string and number operations use the same dot-method surface as
+collections. They are compiler-owned operations, not JavaScript prototype
+calls: the receiver is checked, evaluated once, and captured when a method is
+stored as a value.
+
+String members are:
+
+| Member | Result |
+| --- | --- |
+| `size` | Unicode code-point count. |
+| `trim()`, `upper()`, `lower()` | Transformed string. |
+| `slice(start=0, end=size)` | Code-point slice. |
+| `char(index)` | Code point or `null`; negative indexes count from the end. |
+| `has(text)`, `startsWith(text)`, `endsWith(text)` | Membership or boundary check. |
+| `split(separator)` | `List<string>`. |
+| `replace(from, to)`, `replaceAll(from, to)` | Replaced string. |
+| `padStart(size, fill=" ")`, `padEnd(size, fill=" ")` | Padded string. |
+| `repeat(count)` | Repeated string. |
+
+`"ad" in title` is the operator form of substring membership and follows the
+same left-then-right evaluation order as collection membership. Direct string
+indexing is intentionally absent; use `text.char(index)` when absence is an
+expected result.
+
+Number members are `abs()`, `round()`, `floor()`, `ceil()`, and
+`toFixed(digits) -> string`. Conversion still has one spelling: use
+`str(value)` or an f-string, never `.toString()`.
 
 Rest parameters use `...values`. A rest parameter is always final and may
 follow defaulted fixed parameters.
@@ -475,15 +505,20 @@ List members:
 | `map(transform)` | Transformed List. |
 | `filter(test)` | Filtered List. |
 | `reduce(combine, initial)` | Folded result. |
-| `sorted(compare?)` | Sorted copy. |
+| `sum()` | Sum of a `List<number>` from zero. |
+| `min()`, `max()` | Smallest/largest number or string, or `null` when empty. |
+| `sorted(compare?)`, `sorted(by=selector)` | Sorted copy by a comparator or ordered key. |
 | `reversed()` | Reversed copy. |
 | `join(separator="")` | Joined string for `List<string>`. |
 
 Direct indexing is strict and throws `IndexError` outside the List. Use `get`
 for an optional read. `sorted` and `reversed` do not mutate the source. Callback
-operations (`find`, `some`, `every`, `map`, `filter`, and `reduce`) read one
+operations (`find`, `some`, `every`, `map`, `filter`, `reduce`, keyed `sorted`,
+`sum`, `min`, and `max`) read one
 checked shallow snapshot, so a callback may mutate the original List without
 changing which values belong to the current operation.
+The `by` selector is called exactly once per snapshot value. Comparator and
+`by` forms are mutually exclusive.
 
 VelarScript does not expose `splice`, variadic `push`, `shift`, `unshift`, or
 mutating `sort`/`reverse`.
@@ -515,7 +550,7 @@ For example, `slice(end=5, start=1)`, `Map.set(value=user, key=user.id)`, and
 `Set.add(value="web")` are checked exactly like calls to user-defined
 functions. Source expressions still evaluate from left to right even when the
 named values are reordered for the runtime call.
-Collection methods are first-class bound values. `const add = tags.add` keeps
+Checked value and collection methods are first-class bound values. `const add = tags.add` keeps
 the checked `tags` receiver, and calling `add(value="web")` uses the same typed
 helper as `tags.add(value="web")`; the receiver expression is evaluated once
 when the method value is created. Optional collection method access returns

@@ -20,7 +20,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
-import { collectionMemberGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
+import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
 import { spanIdentity, type Span } from "./source.ts";
 import {
   analysisTypeIdentity,
@@ -152,7 +152,9 @@ export interface ClassInfo {
   readonly staticMethods: ReadonlyMap<string, ValueType>;
 }
 
-export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
+export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
+
+export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed";
 
 const listCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "get"], ["slice", "slice"], ["append", "listAppend"], ["extend", "listExtend"],
@@ -160,7 +162,7 @@ const listCollectionOperations = new Map<string, CollectionOperation>([
   ["clear", "clear"], ["copy", "listCopy"], ["has", "has"], ["count", "listCount"],
   ["index", "listIndex"], ["find", "listFind"], ["some", "listSome"], ["every", "listEvery"],
   ["map", "listMap"], ["filter", "listFilter"], ["reduce", "listReduce"], ["join", "listJoin"],
-  ["sorted", "listSorted"], ["reversed", "listReversed"],
+  ["sorted", "listSorted"], ["reversed", "listReversed"], ["sum", "listSum"], ["min", "listMin"], ["max", "listMax"],
 ]);
 const mapCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "get"], ["set", "mapSet"], ["update", "mapUpdate"], ["has", "has"],
@@ -170,6 +172,15 @@ const mapCollectionOperations = new Map<string, CollectionOperation>([
 const setCollectionOperations = new Map<string, CollectionOperation>([
   ["add", "setAdd"], ["update", "setUpdate"], ["has", "has"], ["remove", "remove"],
   ["clear", "clear"], ["copy", "setCopy"], ["values", "values"],
+]);
+const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
+  ["trim", "stringTrim"], ["upper", "stringUpper"], ["lower", "stringLower"], ["slice", "stringSlice"],
+  ["char", "stringChar"], ["has", "stringHas"], ["startsWith", "stringStartsWith"], ["endsWith", "stringEndsWith"],
+  ["split", "stringSplit"], ["replace", "stringReplace"], ["replaceAll", "stringReplaceAll"],
+  ["padStart", "stringPadStart"], ["padEnd", "stringPadEnd"], ["repeat", "stringRepeat"],
+]);
+const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
+  ["abs", "numberAbs"], ["round", "numberRound"], ["floor", "numberFloor"], ["ceil", "numberCeil"], ["toFixed", "numberToFixed"],
 ]);
 export interface FormReadField {
   readonly name: string;
@@ -181,6 +192,8 @@ export interface FormReadField {
 export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlySet<number>;
+  readonly primitiveCalls: ReadonlyMap<number, PrimitiveOperation>;
+  readonly stringSizes: ReadonlySet<number>;
   readonly constructorCalls: ReadonlySet<string>;
   readonly javaScriptCallBoundaries: ReadonlySet<string>;
   readonly classChecks: ReadonlySet<string>;
@@ -242,6 +255,8 @@ const coreGlobalGuidance = new Map([
   ["Boolean", "Use an explicit boolean comparison; VelarScript does not expose JavaScript truthiness conversion"],
   ["Number", "Use number(text), typed forms, or validated data instead of JavaScript Number coercion"],
   ["String", "Use str(value) instead of the JavaScript String global"],
+  ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil"]
+    .map((name) => [name, removedGlobalFunctionGuidance(name)!] as const),
 ]);
 
 function argumentNoun(expected: string): "argument" | "arguments" {
@@ -313,6 +328,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly asynchronousFunctions: boolean[] = [];
   private readonly collectionCalls = new Map<number, CollectionOperation>();
   private readonly collectionSizes = new Set<number>();
+  private readonly primitiveCalls = new Map<number, PrimitiveOperation>();
+  private readonly stringSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
   private readonly javaScriptBindings = new Set<string>();
   private readonly javaScriptCallBoundaries = new Set<string>();
@@ -779,6 +796,8 @@ export class Analyzer implements TypeEnvironment {
     return {
       collectionCalls: this.collectionCalls,
       collectionSizes: this.collectionSizes,
+      primitiveCalls: this.primitiveCalls,
+      stringSizes: this.stringSizes,
       constructorCalls: this.constructorCalls,
       javaScriptCallBoundaries: this.javaScriptCallBoundaries,
       classChecks: this.classChecks,
@@ -2837,7 +2856,7 @@ export class Analyzer implements TypeEnvironment {
           return object.value;
         }
         if (object.kind === "string") {
-          this.typeError("Use char(value, index) from 'velar/text'; strings are not indexable and string operations are functions", expression.span);
+          this.typeError("Use '.char(index)'; strings are not indexable and string positions count Unicode code points", expression.span);
           return unknownType;
         }
         if (object.kind !== "any") {
@@ -3126,6 +3145,8 @@ export class Analyzer implements TypeEnvironment {
     }
 
     if (calleeExpression.kind === "MemberExpression" && calleeExpression.object.kind !== "SuperExpression") {
+      const primitiveResult = this.inferPrimitiveCall(calleeExpression, arguments_, argumentNames, callSpan);
+      if (primitiveResult) return primitiveResult;
       const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, argumentNames, callSpan);
       if (collectionResult) return collectionResult;
     }
@@ -3710,7 +3731,7 @@ export class Analyzer implements TypeEnvironment {
     argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
   ): ValueType | null {
-    const object = this.inferExpression(member.object);
+    const object = this.inferredOrAnalyze(member.object);
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set") return null;
     this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, nonOptional(object));
     const memberType = object.kind === "list" ? this.listMember(object, member.property)
@@ -3793,7 +3814,7 @@ export class Analyzer implements TypeEnvironment {
       if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
     };
     const lowered = object.kind === "list"
-      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed"].includes(member.property)
+      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
       : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property)
         : object.kind === "set" ? ["add", "update", "has", "remove", "clear", "copy", "values"].includes(member.property) : false;
     if (lowered && arguments_.some((argument) => argument.kind === "SpreadExpression")) {
@@ -3892,11 +3913,48 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "sorted") {
         this.collectionCalls.set(member.span.end, "listSorted");
         const comparator: ValueType = { kind: "function", parameters: [object.element, object.element], requiredParameters: 2, result: numberType };
-        checkCollectionArguments([comparator], 0);
-        if (!argumentAt(0) && !this.defaultSortableType(object.element)) {
+        const selector: ValueType = { kind: "function", parameters: [object.element], requiredParameters: 1, result: unionOf([numberType, stringType]) };
+        const compareArgument = argumentAt(0);
+        const byArgument = argumentAt(1);
+        const positionalSelector = !namedPreanalyzed
+          && compareArgument?.kind === "ArrowFunctionExpression"
+          && compareArgument.parameters.length === 1
+          && !argumentNames?.some((name) => name !== null);
+        if (!namedPreanalyzed) {
+          if (compareArgument) this.requireAssignable(inferArgument(0, positionalSelector ? selector : comparator), positionalSelector ? selector : comparator, compareArgument.span);
+          if (byArgument) this.requireAssignable(inferArgument(1, selector), selector, byArgument.span);
+          if (arguments_.length > 2) {
+            for (const extra of arguments_.slice(2)) this.inferExpression(extra);
+            this.typeError(`Expected 0-2 arguments but received ${arguments_.length}`, callSpan);
+          }
+        }
+        if (byArgument && !argumentNames?.includes("by")) {
+          this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", byArgument.span);
+        }
+        if (positionalSelector) this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", compareArgument.span);
+        if (compareArgument && byArgument) {
+          this.typeError("sorted accepts either a comparator or 'by=selector', not both", callSpan);
+        }
+        if (!compareArgument && !byArgument && !this.defaultSortableType(object.element)) {
           this.typeError(`List<${describeType(object.element)}>.sorted() requires an explicit comparator`, callSpan);
         }
         return { kind: "list", element: object.element };
+      }
+      if (member.property === "sum") {
+        this.collectionCalls.set(member.span.end, "listSum");
+        checkCollectionArguments([]);
+        if (object.element.kind !== "any" && object.element.kind !== "unknown" && !isAssignable(object.element, numberType, this)) {
+          this.typeError(`List.sum requires List<number>, received ${describeType(object)}`, member.span);
+        }
+        return numberType;
+      }
+      if (member.property === "min" || member.property === "max") {
+        this.collectionCalls.set(member.span.end, member.property === "min" ? "listMin" : "listMax");
+        checkCollectionArguments([]);
+        if (!this.listAggregationOrderedType(object.element)) {
+          this.typeError(`List.${member.property} requires List<number> or List<string>, received ${describeType(object)}`, member.span);
+        }
+        return optionalOf(object.element);
       }
       if (["some", "every", "find"].includes(member.property)) {
         const callbackExpected: ValueType = { kind: "function", parameters: [object.element], requiredParameters: 1, result: boolType };
@@ -3967,6 +4025,14 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "get") {
         this.collectionCalls.set(member.span.end, "get");
+        if (!namedPreanalyzed && sourceArguments.length === 2 && !sourceArguments.some((argument) => argument.kind === "SpreadExpression")) {
+          const key = inferArgument(0, object.key);
+          const keyArgument = argumentAt(0);
+          if (keyArgument) this.requireAssignable(key, object.key, keyArgument.span);
+          inferArgument(1);
+          this.typeError("Use 'get(key) ?? fallback'; Map.get has one optional-result contract", callSpan);
+          return optionalOf(object.value);
+        }
         checkCollectionArguments([object.key]);
         return optionalOf(object.value);
       }
@@ -4058,6 +4124,34 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return null;
+  }
+
+  private inferPrimitiveCall(
+    member: Extract<Expression, { kind: "MemberExpression" }>,
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType | null {
+    const object = this.inferredOrAnalyze(member.object);
+    if (object.kind !== "string" && object.kind !== "number") return null;
+    const memberType = object.kind === "string" ? this.stringMember(member.property) : this.numberMember(member.property);
+    if (!memberType || memberType.kind !== "function") return null;
+    this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, object);
+    this.recordSemanticExpression(member, memberType);
+    const operation = object.kind === "string"
+      ? stringPrimitiveOperations.get(member.property)
+      : numberPrimitiveOperations.get(member.property);
+    if (operation) this.primitiveCalls.set(member.span.end, operation);
+    this.checkArguments(
+      arguments_,
+      memberType.parameters,
+      callSpan,
+      memberType.requiredParameters,
+      memberType.rest,
+      argumentNames,
+      memberType.parameterNames,
+    );
+    return memberType.result;
   }
 
   private planNamedArguments(
@@ -4176,6 +4270,12 @@ export class Analyzer implements TypeEnvironment {
     if (guardedCollectionOperation) {
       this.collectionCalls.set(memberSpan.end, guardedCollectionOperation);
     }
+    const guardedPrimitiveOperation = object.kind === "string"
+      ? stringPrimitiveOperations.get(property) ?? null
+      : object.kind === "number"
+        ? numberPrimitiveOperations.get(property) ?? null
+        : null;
+    if (guardedPrimitiveOperation) this.primitiveCalls.set(memberSpan.end, guardedPrimitiveOperation);
     const basePath = this.stableMemberAccessPath(objectExpression);
     const narrowedMember = basePath ? this.lookupMemberNarrowing(`${basePath}.${property}`) : null;
     let result = unknownType;
@@ -4186,7 +4286,16 @@ export class Analyzer implements TypeEnvironment {
       if (isInvalidType(object)) result = invalidType;
       else this.typeError(`Cannot access '${property}' on unknown without validation`, memberSpan);
     } else if (object.kind === "string") {
-      this.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
+      result = this.stringMember(property) ?? unknownType;
+      if (property === "size") this.stringSizes.add(memberSpan.end);
+      if (result.kind === "unknown") this.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
+    } else if (object.kind === "number") {
+      result = this.numberMember(property) ?? unknownType;
+      if (result.kind === "unknown") {
+        this.typeError(property === "toString"
+          ? "Use 'str(value)' or an f-string; VelarScript has one explicit text conversion spelling"
+          : `${describeType(object)} has no member '${property}'`, memberSpan);
+      }
     } else if (object.kind === "list") {
       result = this.listMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
@@ -4337,6 +4446,8 @@ export class Analyzer implements TypeEnvironment {
     const test: ValueType = { kind: "function", parameters: [list.element], requiredParameters: 1, result: boolType };
     const transform: ValueType = { kind: "function", parameters: [list.element], requiredParameters: 1, result: unknownType };
     const compare: ValueType = { kind: "function", parameters: [list.element, list.element], requiredParameters: 2, result: numberType };
+    const orderedKey: ValueType = unionOf([numberType, stringType]);
+    const selectKey: ValueType = { kind: "function", parameters: [list.element], requiredParameters: 1, result: orderedKey };
     switch (property) {
       case "size":
         return numberType;
@@ -4364,7 +4475,12 @@ export class Analyzer implements TypeEnvironment {
       case "count":
         return callable(["value"], [list.element], numberType);
       case "sorted":
-        return callable(["compare"], [compare], owned, 0);
+        return callable(["compare", "by"], [compare, selectKey], owned, 0);
+      case "sum":
+        return callable([], [], numberType);
+      case "min":
+      case "max":
+        return callable([], [], optionalOf(list.element));
       case "map":
         return callable(["transform"], [transform], { kind: "list", element: unknownType });
       case "filter":
@@ -4382,6 +4498,47 @@ export class Analyzer implements TypeEnvironment {
         return callable(["separator"], [stringType], stringType, 0);
       default:
         return null;
+    }
+  }
+
+  private stringMember(property: string): ValueType | null {
+    const callable = (
+      parameterNames: readonly string[],
+      parameters: readonly ValueType[],
+      result: ValueType,
+      requiredParameters = parameters.length,
+    ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
+    switch (property) {
+      case "size": return numberType;
+      case "trim":
+      case "upper":
+      case "lower": return callable([], [], stringType);
+      case "slice": return callable(["start", "end"], [numberType, numberType], stringType, 0);
+      case "char": return callable(["index"], [numberType], optionalOf(stringType));
+      case "has": return callable(["text"], [stringType], boolType);
+      case "startsWith":
+      case "endsWith": return callable(["text"], [stringType], boolType);
+      case "split": return callable(["separator"], [stringType], { kind: "list", element: stringType });
+      case "replace":
+      case "replaceAll": return callable(["from", "to"], [stringType, stringType], stringType);
+      case "padStart":
+      case "padEnd": return callable(["size", "fill"], [numberType, stringType], stringType, 1);
+      case "repeat": return callable(["count"], [numberType], stringType);
+      default: return null;
+    }
+  }
+
+  private numberMember(property: string): ValueType | null {
+    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
+      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
+    });
+    switch (property) {
+      case "abs":
+      case "round":
+      case "floor":
+      case "ceil": return callable([], [], numberType);
+      case "toFixed": return callable(["digits"], [numberType], stringType);
+      default: return null;
     }
   }
 
@@ -5485,6 +5642,12 @@ export class Analyzer implements TypeEnvironment {
     return type.kind === "union" && type.members.every((member) => this.defaultSortableType(member));
   }
 
+  private listAggregationOrderedType(original: ValueType): boolean {
+    const type = this.expandAliases(original);
+    if (type.kind === "string" || type.kind === "number" || type.kind === "any" || type.kind === "unknown") return true;
+    return type.kind === "union" && type.members.every((member) => this.listAggregationOrderedType(member));
+  }
+
   private matchTypeFullyCovered(
     target: ValueType,
     coveredTypes: readonly ValueType[],
@@ -5733,8 +5896,11 @@ export class Analyzer implements TypeEnvironment {
 
   private createSemanticMembersOf(original: ValueType): ReadonlyMap<string, ValueType> {
     const type = nonOptional(this.expandAliases(original));
-    if (type.kind === "string") return new Map([["length", numberType]]);
-    if (type.kind === "list") return new Map(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "filter", "reduce", "some", "every", "find", "join"]
+    if (type.kind === "string") return new Map(["size", "trim", "upper", "lower", "slice", "char", "has", "startsWith", "endsWith", "split", "replace", "replaceAll", "padStart", "padEnd", "repeat"]
+      .map((name) => [name, this.stringMember(name)!]));
+    if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed"]
+      .map((name) => [name, this.numberMember(name)!]));
+    if (type.kind === "list") return new Map(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"]
       .map((name) => [name, this.listMember(type, name)!]));
     if (type.kind === "map") return new Map(["size", "get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"]
       .map((name) => [name, this.mapMember(type, name)!]));

@@ -1,6 +1,6 @@
 import {uuid} from "velar/id"
 import {now} from "velar/time"
-import {isBlank, lower, trim} from "velar/text"
+import {isBlank} from "velar/text"
 
 export enum TaskStatus:
     todo
@@ -51,8 +51,8 @@ export def newTask(draft: TaskDraft) -> Task:
         case {title, description, priority}:
             return {
                 id: uuid(),
-                title: trim(title),
-                description: trim(description),
+                title: title.trim(),
+                description: description.trim(),
                 status: TaskStatus.todo,
                 priority,
                 createdAt: timestamp,
@@ -90,8 +90,8 @@ def matchesFilter(task: Task, filter: TaskFilter) -> bool:
             return task.status == TaskStatus.done
 
 export def filterTasks(tasks: List<Task>, query: string, filter: TaskFilter) -> List<Task>:
-    const needle = lower(trim(query))
-    return tasks.filter(task => matchesFilter(task, filter) and (isBlank(needle) or needle in lower(task.title) or needle in lower(task.description)))
+    const needle = query.trim().lower()
+    return tasks.filter(task => matchesFilter(task, filter) and (isBlank(needle) or needle in task.title.lower() or needle in task.description.lower()))
 
 export def countStatus(tasks: List<Task>, status: TaskStatus) -> number:
     return tasks.filter(task => task.status == status).size

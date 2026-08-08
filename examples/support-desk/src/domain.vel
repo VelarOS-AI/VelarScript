@@ -1,7 +1,7 @@
 import {find, sortBy} from "velar/collections"
 import {uuid} from "velar/id"
 import {now} from "velar/time"
-import {isBlank, lower, trim} from "velar/text"
+import {isBlank} from "velar/text"
 
 export enum TicketStatus:
     open
@@ -70,8 +70,8 @@ def priorityRank(priority: TicketPriority) -> number:
             return 3
 
 export def selectTickets(tickets: List<Ticket>, query: string, filter: TicketFilter, sort: TicketSort) -> List<Ticket>:
-    const needle = lower(trim(query))
-    const filtered = tickets.filter(ticket => matchesStatus(ticket, filter) and (isBlank(needle) or needle in lower(ticket.title) or needle in lower(ticket.requester)))
+    const needle = query.trim().lower()
+    const filtered = tickets.filter(ticket => matchesStatus(ticket, filter) and (isBlank(needle) or needle in ticket.title.lower() or needle in ticket.requester.lower()))
     match sort:
         case TicketSort.recent:
             return sortBy(filtered, ticket => ticket.updatedAt, true)
@@ -92,9 +92,9 @@ export def createTicket(draft: TicketDraft) -> Ticket:
     assert estimate != null, "Ticket estimate is required"
     return {
         id: uuid(),
-        title: trim(title),
-        requester: trim(requester),
-        summary: trim(summary),
+        title: title.trim(),
+        requester: requester.trim(),
+        summary: summary.trim(),
         status: TicketStatus.open,
         priority,
         urgent,

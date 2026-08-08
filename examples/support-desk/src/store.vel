@@ -1,4 +1,4 @@
-import {ceil, isInteger, max, min} from "velar/math"
+import {isInteger, max, min} from "velar/math"
 import {http} from "velar/http"
 import {storage} from "velar/storage"
 import {DeskData, Ticket, TicketCatalog, TicketDraft, TicketFilter, TicketSort, createTicket, findTicket as findInList, pageTickets, resolveTicket as resolveInList, selectTickets} from "./domain.vel"
@@ -14,7 +14,7 @@ export state sort: TicketSort = TicketSort.recent
 export state page = 1
 export computed selectedTickets: List<Ticket> = selectTickets(tickets, query, filter, sort)
 export computed visibleTickets: List<Ticket> = pageTickets(selectedTickets, page, pageSize)
-export computed totalPages: number = max(1, ceil(selectedTickets.size / pageSize))
+export computed totalPages: number = max(1, (selectedTickets.size / pageSize).ceil())
 
 def persist():
     deskStorage.set("desk", {tickets})

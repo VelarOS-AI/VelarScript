@@ -1754,7 +1754,7 @@ export class Parser {
         let sawSpread = false;
         if (!this.check("rightParen")) {
           do {
-            if (this.check("identifier") && this.peekKind(1) === "colon") {
+            if ((this.check("identifier") || this.check("from")) && this.peekKind(1) === "colon") {
               const name = this.advance();
               this.advance();
               this.diagnostics.push(diagnostic("VEL2024", `Named argument '${name.value}' uses ':' rather than '='`, name.span));
@@ -1762,7 +1762,7 @@ export class Parser {
               sawNamed = true;
               argumentNames.push(name.value);
               arguments_.push(this.parseExpression());
-            } else if (this.check("identifier") && this.peekKind(1) === "assign") {
+            } else if ((this.check("identifier") || this.check("from")) && this.peekKind(1) === "assign") {
               const name = this.advance();
               this.advance();
               if (sawSpread) this.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));

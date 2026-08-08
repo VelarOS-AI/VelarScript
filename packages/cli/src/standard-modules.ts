@@ -1,5 +1,5 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
-import { VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_STRICT_JSON_RUNTIME } from "@velarscript/compiler/extension";
+import { VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_STRICT_JSON_RUNTIME, VELAR_TEXT_METHOD_RUNTIME } from "@velarscript/compiler/extension";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
 
 const anyType: ValueType = { kind: "any" };
@@ -116,25 +116,10 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["repeat", apiIntrinsic("collections.repeat", ["value", "count"], [anyType, numberType], listAny)],
   ]))],
   ["velar/text", moduleInterface(new Map([
-    ["length", apiFunction(["value"], [stringType], numberType)],
-    ["char", apiFunction(["value", "index"], [stringType, numberType], optional(stringType))],
-    ["slice", apiFunction(["value", "start", "end"], [stringType, numberType, numberType], stringType, 1)],
-    ["trim", apiFunction(["value"], [stringType], stringType)],
     ["trimStart", apiFunction(["value"], [stringType], stringType)],
     ["trimEnd", apiFunction(["value"], [stringType], stringType)],
-    ["lower", apiFunction(["value"], [stringType], stringType)],
-    ["upper", apiFunction(["value"], [stringType], stringType)],
     ["capitalize", apiFunction(["value"], [stringType], stringType)],
     ["title", apiFunction(["value"], [stringType], stringType)],
-    ["startsWith", apiFunction(["value", "prefix"], [stringType, stringType], boolType)],
-    ["endsWith", apiFunction(["value", "suffix"], [stringType, stringType], boolType)],
-    ["includes", apiFunction(["value", "part"], [stringType, stringType], boolType)],
-    ["split", apiFunction(["value", "separator"], [stringType, stringType], listString)],
-    ["replace", apiFunction(["value", "search", "replacement"], [stringType, stringType, stringType], stringType)],
-    ["replaceAll", apiFunction(["value", "search", "replacement"], [stringType, stringType, stringType], stringType)],
-    ["repeat", apiFunction(["value", "count"], [stringType, numberType], stringType)],
-    ["padStart", apiFunction(["value", "length", "fill"], [stringType, numberType, stringType], stringType, 2)],
-    ["padEnd", apiFunction(["value", "length", "fill"], [stringType, numberType, stringType], stringType, 2)],
     ["lines", apiFunction(["value"], [stringType], listString)],
     ["words", apiFunction(["value"], [stringType], listString)],
     ["slug", apiFunction(["value"], [stringType], stringType)],
@@ -152,15 +137,11 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
   ]))],
   ["velar/math", moduleInterface(new Map([
     ["pi", numberType], ["e", numberType], ["tau", numberType], ["infinity", numberType],
-    ["abs", apiFunction(["value"], [numberType], numberType)],
     // min and max are pure rest calls and therefore have no named rest value.
     ["min", intrinsic("math.min", [numberType], numberType)],
     ["max", intrinsic("math.max", [numberType], numberType)],
     ["clamp", apiFunction(["value", "minimum", "maximum"], [numberType, numberType, numberType], numberType)],
     ["sign", apiFunction(["value"], [numberType], numberType)],
-    ["round", apiFunction(["value", "digits"], [numberType, numberType], numberType, 1)],
-    ["floor", apiFunction(["value"], [numberType], numberType)],
-    ["ceil", apiFunction(["value"], [numberType], numberType)],
     ["trunc", apiFunction(["value"], [numberType], numberType)],
     ["sqrt", apiFunction(["value"], [numberType], numberType)],
     ["cbrt", apiFunction(["value"], [numberType], numberType)],
@@ -599,36 +580,17 @@ export function join(values, separator = "") {
 export function repeat(value, count) { count = requireCount(count, "repeat count"); if (count > __velarMaxListItems) throw new RangeError("repeat cannot produce more than " + __velarMaxListItems + " items"); return Array.from({ length: count }, () => value); }
 `.trimStart()],
   ["velar/text", String.raw`
-const maxTextCodeUnits = 16 * 1024 * 1024;
-const maxTextItems = 1000000;
+${VELAR_TEXT_METHOD_RUNTIME}
+const maxTextCodeUnits = __velarMaxTextCodeUnits;
+const maxTextItems = __velarMaxTextItems;
 const nativeRegExpPrototype = Object.getPrototypeOf(/(?:)/u);
 const NativeRegExp = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "constructor").value;
 const nativeRegExpExec = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "exec").value;
-const nativeStringIndexOf = Object.getOwnPropertyDescriptor(String.prototype, "indexOf").value;
-const nativeStringReplace = Object.getOwnPropertyDescriptor(String.prototype, "replace").value;
-const nativeStringReplaceAll = Object.getOwnPropertyDescriptor(String.prototype, "replaceAll").value;
-function valueOf(value) { if (typeof value !== "string") throw new TypeError("velar/text requires strings"); if (value.length > maxTextCodeUnits) throw new RangeError("velar/text strings cannot exceed 16 MiB"); return value; }
-function textOutput(value, name) { if (value.length > maxTextCodeUnits) throw new RangeError(name + " output cannot exceed 16 MiB"); return value; }
-function textCount(value, name) { if (!Number.isSafeInteger(value) || value < 0 || value > maxTextCodeUnits) throw new RangeError(name + " must be an integer from 0 through " + maxTextCodeUnits); return value; }
-function textList(values, name) { if (values.length > maxTextItems) throw new RangeError(name + " cannot produce more than " + maxTextItems + " items"); return values; }
-function replacementOutputUnits(value, search, replacement, all) {
-  let matches = 0;
-  if (search === "") matches = all ? value.length + 1 : 1;
-  else {
-    let cursor = 0;
-    while (true) {
-      const index = nativeStringIndexOf.call(value, search, cursor);
-      if (index < 0) break;
-      matches += 1;
-      if (!all) break;
-      cursor = index + search.length;
-    }
-  }
-  if (replacement.length <= search.length || matches === 0) return value.length;
-  const growth = replacement.length - search.length;
-  if (matches > Math.floor((maxTextCodeUnits - value.length) / growth)) return maxTextCodeUnits + 1;
-  return value.length + matches * growth;
-}
+const nativeStringReplaceAll = __velarNativeStringReplaceAll;
+function valueOf(value) { return __velarTextArgument(value, "velar/text value"); }
+function textOutput(value, name) { return __velarTextOutput(value, name); }
+function textCount(value, name) { return __velarTextCount(value, name); }
+function textList(values, name) { return __velarTextList(values, name); }
 function htmlOutputUnits(value) {
   let units = value.length;
   for (let index = 0; index < value.length; index += 1) {
@@ -640,8 +602,8 @@ function htmlOutputUnits(value) {
   }
   return units;
 }
-function codePointLength(value) { let length = 0; for (const _ of value) length += 1; return length; }
-function codePointPrefix(value, count) { let output = "", length = 0; for (const character of value) { if (length >= count) break; output += character; length += 1; } return output; }
+const codePointLength = __velarTextCodePointLength;
+const codePointPrefix = __velarTextCodePointPrefix;
 function patternOptions(value) {
   if (value == null) return {};
   if (typeof value !== "object" || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) throw new TypeError("text pattern options must be a record");
@@ -707,48 +669,10 @@ function eachMatch(value, pattern, visit) {
     if (match.value === "") pattern.lastIndex = nextTextIndex(value, pattern.lastIndex);
   }
 }
-export function length(value) { return codePointLength(valueOf(value)); }
-export function char(value, index) {
-  value = valueOf(value);
-  if (!Number.isInteger(index)) return null;
-  if (index < 0) index += codePointLength(value);
-  if (index < 0) return null;
-  let position = 0;
-  for (const character of value) { if (position === index) return character; position += 1; }
-  return null;
-}
-export function slice(value, start = 0, end = null) {
-  value = valueOf(value);
-  const total = codePointLength(value);
-  if (end === null) end = total;
-  if (!Number.isInteger(start) || !Number.isInteger(end)) throw new TypeError("text.slice positions must be integers");
-  const first = start < 0 ? Math.max(total + start, 0) : Math.min(start, total);
-  const last = end < 0 ? Math.max(total + end, 0) : Math.min(end, total);
-  let output = "";
-  let position = 0;
-  for (const character of value) {
-    if (position >= last) break;
-    if (position >= first) output += character;
-    position += 1;
-  }
-  return output;
-}
-export function trim(value) { return valueOf(value).trim(); }
 export function trimStart(value) { return valueOf(value).trimStart(); }
 export function trimEnd(value) { return valueOf(value).trimEnd(); }
-export function lower(value) { return textOutput(valueOf(value).toLowerCase(), "lower"); }
-export function upper(value) { return textOutput(valueOf(value).toUpperCase(), "upper"); }
 export function capitalize(value) { value = valueOf(value); if (!value) return ""; const first = String.fromCodePoint(value.codePointAt(0)); return textOutput(first.toUpperCase() + value.slice(first.length).toLowerCase(), "capitalize"); }
 export function title(value) { return textOutput(valueOf(value).toLowerCase().replace(/[_\-/]+/gu, " ").replace(/(^|\s)([\p{L}\p{N}])/gu, (_, before, char) => before + char.toUpperCase()), "title"); }
-export function startsWith(value, prefix) { return valueOf(value).startsWith(valueOf(prefix)); }
-export function endsWith(value, suffix) { return valueOf(value).endsWith(valueOf(suffix)); }
-export function includes(value, part) { return valueOf(value).includes(valueOf(part)); }
-export function split(value, separator) { value = valueOf(value); separator = valueOf(separator); if (!separator && value.length > maxTextItems) throw new RangeError("split cannot produce more than " + maxTextItems + " items"); const result = value.split(separator, maxTextItems + 1); return textList(result, "split"); }
-export function replace(value, search, replacement) { value = valueOf(value); search = valueOf(search); replacement = valueOf(replacement); if (replacementOutputUnits(value, search, replacement, false) > maxTextCodeUnits) throw new RangeError("replace output cannot exceed 16 MiB"); return nativeStringReplace.call(value, search, replacement); }
-export function replaceAll(value, search, replacement) { value = valueOf(value); search = valueOf(search); replacement = valueOf(replacement); if (replacementOutputUnits(value, search, replacement, true) > maxTextCodeUnits) throw new RangeError("replaceAll output cannot exceed 16 MiB"); return nativeStringReplaceAll.call(value, search, replacement); }
-export function repeat(value, count) { value = valueOf(value); count = textCount(count, "text.repeat count"); if (value.length > 0 && count > Math.floor(maxTextCodeUnits / value.length)) throw new RangeError("text.repeat output cannot exceed 16 MiB"); return value.repeat(count); }
-export function padStart(value, length, fill = " ") { return valueOf(value).padStart(textCount(length, "padStart length"), valueOf(fill)); }
-export function padEnd(value, length, fill = " ") { return valueOf(value).padEnd(textCount(length, "padEnd length"), valueOf(fill)); }
 export function lines(value) { return textList(valueOf(value).split(/\r?\n/u, maxTextItems + 1), "lines"); }
 export function words(value) { const cleaned = valueOf(value).trim(); return cleaned ? textList(cleaned.split(/\s+/u, maxTextItems + 1), "words") : []; }
 export function slug(value) { return textOutput(valueOf(value).normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/gu, ""), "slug"); }
@@ -807,23 +731,10 @@ export const pi = Math.PI;
 export const e = Math.E;
 export const tau = Math.PI * 2;
 export const infinity = Number.POSITIVE_INFINITY;
-export function abs(value) { return unary(value, Math.abs, "abs"); }
 export function min(...values) { if (!values.length) throw new RangeError("min requires at least one number"); let result = requireNumber(values[0], "min"); for (let index = 1; index < values.length; index += 1) result = Math.min(result, requireNumber(values[index], "min")); return result; }
 export function max(...values) { if (!values.length) throw new RangeError("max requires at least one number"); let result = requireNumber(values[0], "max"); for (let index = 1; index < values.length; index += 1) result = Math.max(result, requireNumber(values[index], "max")); return result; }
 export function clamp(value, minimum, maximum) { value = requireNumber(value, "clamp"); minimum = requireNumber(minimum, "clamp"); maximum = requireNumber(maximum, "clamp"); if (minimum > maximum) throw new RangeError("clamp minimum cannot exceed maximum"); return Math.min(maximum, Math.max(minimum, value)); }
 export function sign(value) { return unary(value, Math.sign, "sign"); }
-export function round(value, digits = 0) {
-  value = requireNumber(value, "round");
-  if (!Number.isSafeInteger(digits) || digits < -308 || digits > 308) throw new RangeError("round digits must be an integer from -308 through 308");
-  if (!Number.isFinite(value) || digits === 0) return Math.round(value);
-  const [coefficient, exponent = "0"] = value.toString().split("e");
-  const shifted = Math.round(Number(coefficient + "e" + (Number(exponent) + digits)));
-  if (!Number.isFinite(shifted)) return value;
-  const [rounded, roundedExponent = "0"] = shifted.toString().split("e");
-  return Number(rounded + "e" + (Number(roundedExponent) - digits));
-}
-export function floor(value) { return unary(value, Math.floor, "floor"); }
-export function ceil(value) { return unary(value, Math.ceil, "ceil"); }
 export function trunc(value) { return unary(value, Math.trunc, "trunc"); }
 export function sqrt(value) { return unary(value, Math.sqrt, "sqrt"); }
 export function cbrt(value) { return unary(value, Math.cbrt, "cbrt"); }

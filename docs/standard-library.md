@@ -10,8 +10,9 @@ The Core library combines the most useful everyday parts of Python and modern
 JavaScript behind a small explicit VelarScript surface. It is not a copy of either
 standard library.
 
-- Every capability is imported from an official `velar/*` module. Nothing
-  patches JavaScript prototypes or creates new global names.
+- Module-level capabilities are imported from official `velar/*` modules.
+  Everyday value operations live on checked string, number, and collection
+  members. Nothing patches JavaScript prototypes or creates new global names.
 - Collection transforms return new lists and maps unless their name explicitly
   describes another result. JavaScript reference identity and `number`
   semantics remain unchanged.
@@ -61,6 +62,9 @@ The JavaScript-specific variadic `push` surface is not part of VelarScript sourc
 Language-level callback methods read a checked shallow snapshot, so callback
 mutation cannot silently extend, truncate, or replace the values participating
 in the current operation.
+`List<number>.sum()` and ordered `List<T>.min()`/`.max()` are the direct
+aggregation surface. `List.sorted(by=selector)` computes one number/string key
+per snapshot value and is mutually exclusive with the comparator form.
 The imported collection helpers use the same snapshot boundary, including for
 Array subclasses with overridden methods or iterators. Values returned from
 host callbacks and async combinators normalize JavaScript `undefined` to
@@ -107,28 +111,23 @@ actual `bool` result at dynamic boundaries.
 
 ## `velar/text`
 
-String operations are functions so their coercion and naming rules stay
-explicit: `length`, `char`, `slice`, `trim`, `trimStart`, `trimEnd`, `lower`,
-`upper`, `capitalize`, `title`, `startsWith`, `endsWith`, `includes`, `split`,
-`replace`, `replaceAll`, `repeat`, `padStart`, `padEnd`, `lines`, `words`,
+Common string operations are checked members: `size`, `trim`, `upper`, `lower`,
+`slice`, `char`, `has`, `startsWith`, `endsWith`, `split`, `replace`,
+`replaceAll`, `repeat`, `padStart`, and `padEnd`. The compiler lowers them to
+bounded helpers rather than trusting JavaScript prototype methods. They support
+named arguments and first-class binding exactly like collection methods.
+
+`size`, `char(index)`, and `slice(start=0, end=size)` use Unicode code points,
+matching string iteration rather than JavaScript UTF-16 units. Negative
+positions count from the end, out-of-range `char` returns `null`, and slice
+positions clamp. `text.has(part)` and `part in text` are the method and operator
+forms of the same substring test. Direct string indexing stays absent.
+
+The `velar/text` module keeps transformations that are not simple receiver
+operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `words`,
 `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `isBlank`, and
 `escapeHtml`. Stateless pattern operations are `matches`, `findMatch`,
 `findMatches`, `replaceMatches`, and `splitPattern`.
-
-The measurement and access trio uses code points, matching the language's
-string iteration rule rather than JavaScript's UTF-16 code units:
-
-- `length(value) -> number` counts code points, so `length("a😀b")` is `3`.
-- `char(value, index) -> string?` returns the code point at an index. A
-  negative index counts from the end like `List.get`, and an out-of-range or
-  non-integer index returns `null`.
-- `slice(value, start = 0, end = length)` returns a code-point slice with the
-  same position semantics as `List.slice`: negative positions count from the
-  end, out-of-range positions clamp, and non-integer positions throw
-  `TypeError`.
-
-Strings deliberately expose no members, so `value.length`, `value.slice(...)`,
-and `value[index]` are compile-time errors that point to these functions.
 
 `title` treats separators as word boundaries. `truncate` reserves room for its
 suffix. `slug` lowercases Unicode text, removes punctuation, and joins word
@@ -153,25 +152,25 @@ code-point progress, and replacement size is checked before the final string is
 allocated. Patterns
 are application code, not a sandbox for executing arbitrary user-supplied
 regular expressions; applications that accept search text should use the
-literal `includes`/`startsWith`/`endsWith` operations unless they deliberately
+literal `.has()`/`.startsWith()`/`.endsWith()` operations unless they deliberately
 own a pattern grammar.
 
-Text counts used by `repeat`, `padStart`, `padEnd`, and `truncate` are
+Text counts used by `.repeat`, `.padStart`, `.padEnd`, and `truncate` are
 non-negative safe integers; native string-to-number coercion is not exposed.
 Dynamic pattern options must be plain enumerable data fields, so getters,
 symbols, and class instances are rejected without hidden evaluation. Text
-composition such as `replace`, `replaceAll`, `escapeHtml`, and `indent` checks
+composition such as `.replace`, `.replaceAll`, `escapeHtml`, and `indent` checks
 its complete output budget before allocating the final string.
 
 ```velar
-import {char, findMatch, length, matches, slice, splitPattern} from "velar/text"
+import {findMatch, matches, splitPattern} from "velar/text"
 
 const valid = matches("VelarScript 42", "^velar [0-9]+$", {ignoreCase: true})
 const ticket = findMatch("ticket-42", "[0-9]+")
 const fields = splitPattern("one, two; three", " *[,;] *")
-const initial = char("Ada", 0)
-const short = slice("VelarScript", 0, 5)
-print(f"{initial ?? "?"}:{length(short)}")
+const initial = "Ada".char(0)
+const short = "VelarScript".slice(0, 5)
+print(f"{initial ?? "?"}:{short.size}")
 ```
 
 ## `velar/math`
@@ -184,14 +183,15 @@ or another dynamic JavaScript value into a VelarScript number.
 | Group | Exports |
 | --- | --- |
 | Constants | `pi`, `e`, `tau`, `infinity` |
-| Bounds and rounding | `abs`, `min`, `max`, `clamp`, `sign`, `round`, `floor`, `ceil`, `trunc` |
+| Bounds | `min`, `max`, `clamp`, `sign`, `trunc` |
 | Powers and logarithms | `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10` |
 | Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians` |
 | Numeric helpers | `hypot`, `random`, `randomInt`, `isFinite`, `isInteger`, `gcd`, `lcm` |
 
-`round(value, digits)` supports an optional decimal-place count from -308
-through 308 without the former multiply-and-divide overflow for large finite
-values. `randomInt` uses an inclusive lower and exclusive upper safe-integer
+The receiver-shaped operations are number members: `.abs()`, `.round()`,
+`.floor()`, `.ceil()`, and `.toFixed(digits)`. `round` returns a number at the
+nearest integer; `toFixed` returns decimal text with 0 through 100 digits.
+`randomInt` uses an inclusive lower and exclusive upper safe-integer
 bound; with one argument its lower bound is zero. `gcd` and `lcm` likewise own
 safe integers, and `lcm` rejects an inexact result. Randomness is the host
 JavaScript runtime's `Math.random` and is not cryptographically secure. Its

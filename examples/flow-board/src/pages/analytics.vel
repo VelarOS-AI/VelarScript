@@ -1,5 +1,4 @@
 import {countBy, sortBy} from "velar/collections"
-import {round} from "velar/math"
 import {format} from "velar/time"
 import {Head, Link} from "velar/web"
 import {Task} from "../domain.vel"
@@ -16,7 +15,7 @@ def metricText(value: MetricValue) -> string:
 def completion(total: number, done: number) -> number:
     if total == 0:
         return 0
-    return round(done / total * 100)
+    return (done / total * 100).round()
 
 def progressLabel(progress: number) -> string:
     if progress == 100:
