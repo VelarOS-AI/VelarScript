@@ -159,6 +159,11 @@ component RuntimeStatus:
 - Root construction passed to `mount` is synchronous so the runtime can own its
   failure transaction. Await module-level preload work into a binding before
   calling `mount`; component data continues to use `resource`.
+- `unsafe:html` is an explicit wholesale `innerHTML` assignment on every
+  reactive update. It does not morph DOM or preserve descendant identity.
+  Incremental Markdown therefore requires a parser-owned stable-prefix/dirty-tail
+  contract and a separately designed DOM morph boundary; it is not inferred
+  from an arbitrary trusted HTML string.
 - Cleanup remains the sibling `cleanup` block, not a React-style effect. Its
   independent cleanup steps continue after one fails, and every failure is
   reported. `mounted` may await asynchronous work; `cleanup` remains
