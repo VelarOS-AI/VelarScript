@@ -4,6 +4,27 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — First-party local platform modules
+
+Standard library and CLI changes:
+
+- Standard API 0.5 adds `velar/serve`, `velar/fs`, `velar/env`, and
+  `velar/host` for Core servers and local applications. HTTP callbacks,
+  filesystem buffers, environment access, and process signals remain inside
+  bounded first-party runtime implementations instead of user `extern`
+  declarations.
+- `velar/serve` provides checked request/response records, bounded JSON/text
+  bodies and async chunk producers, real-root static containment, MIME types,
+  SPA fallback, opaque handler failures, actual bound ports, and idempotent
+  shutdown. `velar/fs` exposes async bounded text/list/blob operations;
+  `Blob` is opaque and non-constructible.
+- Web-capable projects reject local platform imports during dependency
+  analysis with targeted diagnostics. The browser production bundler retains
+  the same refusal as a fail-closed second boundary.
+- `velar/host` owns ordered SIGINT/SIGTERM cleanup and double-signal force
+  quit; `velar/env` permits only explicit portable variable names. The
+  JavaScript bridge remains the third-party package boundary.
+
 ## 0.10.0-dev — Two-slot iteration, collection construction, and multiline strings
 
 Language and compiler changes:

@@ -47,7 +47,10 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 - **D19-D21/D24**：L2 人体工学批次（双槽 for、range、集合构造、**反引号多行**）
   **已实施**；单槽/解构语义不变，range 选择一个受限物化 List 契约，Lite 的真实
   Markdown/流式文本已迁移到反引号原文。
-- **D18**：velar/serve 第一方平台面 —— 规格在 docs/handoff/，尚未实施。
+- **D18**：第一方本地平台面 **已实施**。Standard API 0.5 提供
+  `velar/serve`、`velar/fs`、`velar/env`、`velar/host`；Node 仅是内部引擎，Web
+  目标在项目编译期定向拒绝，本地运行时统一拥有 HTTP/静态文件/边界/信号清理。
+  Lite 服务器已删光平台 `extern`/`import js`，bin 引导不变。
 - **D25'→D26**：深层响应式为唯一默认 —— 完整设计与验收记录见
   docs/handoff/D26-DEEP-REACTIVITY.md，**已实施并打败 Lite S4 memo 基线**。
 - 有意不做（各有存档理由，勿翻案除非新证据）：match 表达式化、真值条件、List `+`、
@@ -85,8 +88,16 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 4. **已落定：L2**：D19 双槽 for + D20 range + D21 集合构造 + D24 反引号
    多行；上游 check/test 382/package/三引擎门禁全绿，Lite 通过 shared 22 +
    server 11 + app build/format + 三引擎 33 场景，无新墙。
-5. **D18** velar/serve/fs/env/host + Lite 服务器重写（删光 extern 声明）。
-6. Backlog：W-23/W-25（emitter/重载 extern 声明）、W-26 字节面、增量流式
+5. **已落定：D18**：Standard API 0.5 四个本地平台模块 + Web 编译期门禁；上游
+   check/385 tests/package/三引擎门禁全绿。Lite 主服务器 266→146 行，平台 extern
+   5→0、`import js` 5→0；shared 22 + server 6 + HTTP smoke 16 + 三引擎 33 场景
+   全绿，W-21..W-26 的平台内建暴露关闭（通用 extern/公开字节操作仍归 backlog）。
+6. **用户新增 clean-break 语法整理（D18 后、backlog 前）**：删除反引号与
+   `f` 反引号字符串；普通 `"..."` / `f"..."` 同时支持单行和物理多行，保留统一
+   转义与精确换行，旧拼写给一个当前写法的指引。`assert condition, message` 的读感
+   同时审计；用户只否定现状，冒号并非指定答案，先用真实批量代码比较
+   `assert condition else message` 等单一拼写后再落。
+7. Backlog：W-23/W-25（emitter/重载 extern 声明）、W-26 字节面、增量流式
    （W-12/W-17）、computed 纯度差一步的编辑器提示、enter 键语义（证据不足暂缓）。
 
 ## 五、血泪教训（免重蹈）

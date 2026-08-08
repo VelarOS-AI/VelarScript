@@ -1,5 +1,6 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import { VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_STRICT_JSON_RUNTIME, VELAR_TEXT_METHOD_RUNTIME } from "@velarscript/compiler/extension";
+import { localPlatformModuleInterfaces, localPlatformModuleSources } from "./local-platform-modules.ts";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
 
 const anyType: ValueType = { kind: "any" };
@@ -218,6 +219,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["setLevel", apiFunction(["value"], [stringType], nullType)],
     ["useSink", apiFunction(["sink"], [functionType([logRecordType], unknownType)], cleanupType)],
   ]))],
+  ...localPlatformModuleInterfaces,
   ["velar/test", moduleInterface(new Map([
     ["expect", apiIntrinsic("test.expect", ["actual"], [anyType], anyType)],
   ]))],
@@ -394,6 +396,7 @@ function __velarRequireRuntimeType(value, name, optional = false) {
 `.trimStart();
 
 const coreModuleSources: ReadonlyMap<string, string> = new Map([
+  ...localPlatformModuleSources,
   ["velar/collections", String.raw`
 ${listRuntime}
 const maxCollectionTextCodeUnits = 16 * 1024 * 1024;

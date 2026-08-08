@@ -14,6 +14,7 @@ import {
   type ValueType,
 } from "@velarscript/compiler";
 import type { ResolvedFrameworkHost } from "./config.ts";
+import { isLocalPlatformModule, localPlatformModuleDiagnostic } from "./local-platform-modules.ts";
 import { isStandardModule, standardModuleInterface } from "./standard-modules.ts";
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./typescript-declarations.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
@@ -222,6 +223,10 @@ export async function compileProjectEntries(
 
     for (const dependency of inspection.dependencies) {
       if (dependency.javascript) continue;
+      if (isLocalPlatformModule(dependency.source) && (capabilities.has("web") || framework?.host.target === "browser")) {
+        failures.push({ path: inputPath, message: localPlatformModuleDiagnostic(dependency.source) });
+        continue;
+      }
       if (!dependency.source.startsWith(".")) {
         if (isStandardModule(dependency.source, compilerExtensions)) continue;
         try {

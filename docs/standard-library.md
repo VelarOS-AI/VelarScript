@@ -44,7 +44,9 @@ standard library.
   globals are not source bindings, so truthiness, empty-string-to-zero, partial
   parsing, and `NaN` do not re-enter through ambient coercion.
 - Core Node builds copy only imported official modules beside the generated
-  output. Web builds bundle and tree-shake the same module implementations.
+  output. Portable modules also bundle and tree-shake in Web builds. Local
+  platform modules (`velar/serve`, `velar/fs`, `velar/env`, `velar/host`) are
+  compile-time rejected for Web targets with platform-specific guidance.
 - Resource-producing APIs are bounded contracts, not best-effort host calls.
   A List contains at most 1,000,000 items; text and encoded JSON are limited to
   16 MiB; JSON data contains at most 1,000,000 values and 128 nested
@@ -426,6 +428,77 @@ component BuildStatus:
   the internal host logger and cannot recursively invoke the failing sink.
 - VelarScript never uploads logs or telemetry automatically.
 
+## Local platform modules
+
+Standard API 0.5 adds a small first-party surface for local applications and
+servers. Node is the current internal engine, but Node classes, callbacks,
+events, buffers, and overloads are not part of the VelarScript contract. These
+modules work under `velar run`, Core tests, and Core builds. A Web project that
+imports one fails during project compilation; `velar/serve` points Web code to
+the application dev server and `velar/http`.
+
+### `velar/serve`
+
+`serve(handler, port, host="127.0.0.1")` binds an HTTP server and resolves to a
+`Server` record containing the actual `port` and an idempotent async `stop()`.
+The handler receives a `ServeRequest` with method, decoded URL path, first-value
+query and normalized header Maps, plus cached async `text()` and `json()` body
+readers. Request bodies are valid UTF-8 and cannot exceed 16 MiB.
+
+```velar fragment
+import {ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
+
+async def handle(request: ServeRequest) -> ServeResponse:
+    if request.path == "/api/health":
+        return {status: 200, json: {ok: true}}
+    return fileResponse(root="dist", path=request.path, fallback="index.html")
+
+const server = await serve(handle, port=8787)
+```
+
+A response is one checked plain record body:
+
+- `{status, json, headers?}` serializes bounded, finite, acyclic JSON data
+  without invoking getters or `toJSON` hooks;
+- `{status, text, contentType?, headers?}` sends at most 16 MiB of UTF-8 text;
+- `{status, stream, headers?}` runs an async producer whose awaited `write`
+  accepts at most 1 MiB per chunk and 64 MiB in total.
+
+Transport-owned headers cannot be overridden. Handler failures are reported to
+stderr and return an opaque `500 Internal server error`; no development stack
+is disclosed. `fileResponse(root, path, fallback=null)` resolves the real root
+and target, rejects decoded traversal/backslashes/symlink escape, reads only
+regular files up to 64 MiB, and owns the static content-type table. The optional
+fallback goes through the identical containment and size checks.
+
+### `velar/fs`
+
+| Export | Behavior |
+| --- | --- |
+| `readText(path)` | Reads one valid UTF-8 file up to 16 MiB. |
+| `writeText(path, text)` | Writes at most 16 MiB of UTF-8 text. |
+| `exists(path)` | Resolves to `false` only for a missing path; permission and host failures remain errors. |
+| `list(path)` | Returns a sorted List of at most 100,000 names and 2 MiB of name text. |
+| `readBlob(path)` | Returns an opaque, non-constructible `Blob` for a regular file up to 16 MiB. |
+
+Paths are non-empty, NUL-free strings of at most 4,096 code units. V1 has no
+synchronous forms, directory mutation, byte inspection, or public streams.
+
+### `velar/env`
+
+`get(name) -> string?` reads one explicit environment variable. `require(name)
+-> string` throws a VelarScript error naming an absent variable. Names use the
+portable `[A-Za-z_][A-Za-z0-9_]*` shape and at most 256 characters; there is no
+process-wide environment dump.
+
+### `velar/host`
+
+`exit(code=0)` accepts integer exit codes from 0 through 255.
+`onShutdown(cleanup)` registers an async `() -> Promise<null>` cleanup for
+SIGINT/SIGTERM. Cleanups run in registration order and the process exits after
+all settle; a cleanup failure is reported and selects exit 1. A second signal
+force-quits immediately.
+
 ## `velar/test`
 
 `velar/test` provides the small assertion surface used by `velar test` without
@@ -455,8 +528,9 @@ def test_profile_name():
 
 ## Deliberate omissions
 
-Standard API 0.4 does not copy Node-only filesystem/process APIs, Python's OS,
-subprocess, reflection, pickle, or import machinery, or JavaScript's legacy
-prototype surface. Browser capabilities remain in independently versioned Web
-modules. Canvas and game development remain a later `velar/game` package built
-on the Web platform, not part of the language runtime.
+Standard API 0.5 deliberately keeps subprocesses, sockets below the checked
+server abstraction, filesystem streams/watchers/mutation, byte inspection,
+reflection, pickle, dynamic import machinery, and JavaScript's legacy prototype
+surface out of Core. Browser capabilities remain in independently versioned
+Web modules. Canvas and game development remain a later `velar/game` package
+built on the Web platform, not part of the language runtime.

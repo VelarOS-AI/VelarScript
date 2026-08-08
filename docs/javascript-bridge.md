@@ -2,6 +2,10 @@
 
 Status: deliberately limited in VelarScript 0.10
 
+Platform builtins are first-party standard modules; `extern module` and
+`import js` are for third-party packages, not for reaching Node's filesystem,
+HTTP server, environment, process signals, or shutdown lifecycle.
+
 Safe `import js` first uses an explicit local `extern module` when present; the
 manual declaration owns the whole source contract, so the automatic
 TypeScript-declaration probe below neither runs nor prints notices for that

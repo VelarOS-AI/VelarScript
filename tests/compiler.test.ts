@@ -5784,7 +5784,7 @@ test("project sessions key reuse by the exact manifest identity", async () => {
 
 test("0.10 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
-  assert.equal(api.standardVersion, "0.4");
+  assert.equal(api.standardVersion, "0.5");
   assert.equal(api.extensions["@velarscript/web"], "0.10");
   assert.deepEqual(api.modules["velar/app"], ["onError", "reportError"]);
   assert.deepEqual(api.modules["velar/config"], ["has", "keys", "publicConfig"]);
@@ -7582,13 +7582,13 @@ print(status == ItemState.ready)
   assert.equal(execution.stdout, "7\ntrue\n");
 });
 
-test("0.4 Core standard library combines typed Python ergonomics with explicit JavaScript semantics", async () => {
+test("0.5 Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
-    "velar/test", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
+    "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/test", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 186);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 201);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 117);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 18);
@@ -7599,6 +7599,10 @@ test("0.4 Core standard library combines typed Python ergonomics with explicit J
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
+  assert.deepEqual(api.modules["velar/serve"], ["ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
+  assert.deepEqual(api.modules["velar/fs"], ["Blob", "exists", "list", "readBlob", "readText", "writeText"]);
+  assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
+  assert.deepEqual(api.modules["velar/host"], ["exit", "onShutdown"]);
 
   const directory = await mkdtemp(join(tmpdir(), "velar-standard-library-"));
   const entry = join(directory, "main.vel");
@@ -7854,6 +7858,202 @@ Set(values=[])
   assert.match(messages, /Unknown named argument 'item'/u);
   assert.match(messages, /Unknown named argument 'value'/u);
   assert.match(messages, /Unknown named argument 'values'/u);
+});
+
+test("local platform modules are typed Core APIs and refuse browser targets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-local-platform-types-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+import {ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
+import {Blob, exists, list, readBlob, readText, writeText} from "velar/fs"
+import {get, require as requireEnv} from "velar/env"
+import {exit, onShutdown} from "velar/host"
+
+async def handle(request: ServeRequest) -> ServeResponse:
+    if request.path == "/health":
+        return {status: 200, json: {ok: true}}
+    return fileResponse(root="dist", path=request.path, fallback="index.html")
+
+async def cleanup() -> null:
+    return null
+
+onShutdown(cleanup)
+const configured = get("PORT") ?? requireEnv("FALLBACK_PORT")
+print(configured)
+`.trimStart(), "utf8");
+
+  const core = await compileProjectCore(entry, new Map(), { extensions: [] });
+  assert.deepEqual(core.failures, []);
+  assert.deepEqual(core.modules.flatMap((module) => module.result.diagnostics), []);
+
+  const web = await compileProject(entry);
+  assert.ok(web.failures.some((failure) => failure.message === "velar/serve is a local runtime module; web applications use the dev server and velar/http"), JSON.stringify(web.failures));
+  assert.ok(web.failures.some((failure) => failure.message === "velar/fs is a local runtime module and cannot run in a web application"), JSON.stringify(web.failures));
+});
+
+test("local filesystem and environment modules keep their runtime boundaries bounded and opaque", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-local-platform-fs-"));
+  const textPath = join(directory, "note.txt");
+  const invalidPath = join(directory, "invalid.txt");
+  const fsRuntime = standardModuleSourceCore("velar/fs") ?? "";
+  const fsModule = await import(`data:text/javascript;base64,${Buffer.from(fsRuntime, "utf8").toString("base64")}`) as {
+    readonly Blob: new (...arguments_: unknown[]) => unknown;
+    readonly exists: (path: string) => Promise<boolean>;
+    readonly list: (path: string) => Promise<readonly string[]>;
+    readonly readBlob: (path: string) => Promise<unknown>;
+    readonly readText: (path: string) => Promise<string>;
+    readonly writeText: (path: string, text: string) => Promise<null>;
+  };
+  assert.equal(await fsModule.writeText(textPath, "Velar 本地运行时"), null);
+  assert.equal(await fsModule.readText(textPath), "Velar 本地运行时");
+  assert.equal(await fsModule.exists(textPath), true);
+  assert.equal(await fsModule.exists(join(directory, "missing.txt")), false);
+  assert.deepEqual(await fsModule.list(directory), ["note.txt"]);
+  const blob = await fsModule.readBlob(textPath);
+  assert.equal(blob instanceof fsModule.Blob, true);
+  assert.throws(() => new fsModule.Blob(), /created only by velar\/fs\.readBlob/u);
+  await writeFile(invalidPath, Buffer.from([0xc3, 0x28]));
+  await assert.rejects(fsModule.readText(invalidPath), /valid UTF-8/u);
+  await assert.rejects(fsModule.readText("x".repeat(4097)), /outside the supported bounds/u);
+
+  const envRuntime = standardModuleSourceCore("velar/env") ?? "";
+  const envModule = await import(`data:text/javascript;base64,${Buffer.from(envRuntime, "utf8").toString("base64")}`) as {
+    readonly get: (name: string) => string | null;
+    readonly require: (name: string) => string;
+  };
+  const variable = `VELAR_D18_TEST_${process.pid}`;
+  process.env[variable] = "ready";
+  try {
+    assert.equal(envModule.get(variable), "ready");
+    assert.equal(envModule.require(variable), "ready");
+    assert.equal(envModule.get(`${variable}_MISSING`), null);
+    assert.throws(() => envModule.require(`${variable}_MISSING`), new RegExp(`${variable}_MISSING`, "u"));
+    assert.throws(() => envModule.get("invalid-name"), /Environment variable names/u);
+  } finally {
+    delete process.env[variable];
+  }
+});
+
+test("velar run serves checked responses, bounded static files, streams, and ordered shutdown", { skip: process.platform === "win32" }, async () => {
+  const cli = resolve("packages/cli/src/cli.ts");
+  const directory = await mkdtemp(join(tmpdir(), "velar-local-platform-run-"));
+  const publicRoot = join(directory, "public");
+  await mkdir(publicRoot, { recursive: true });
+  await writeFile(join(publicRoot, "index.html"), "<h1>Velar local platform</h1>\n", "utf8");
+  await writeFile(join(publicRoot, "app.js"), "globalThis.ready = true;\n", "utf8");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
+  await writeFile(join(directory, "main.vel"), `
+import {ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
+import {sleep} from "velar/async"
+import {onShutdown} from "velar/host"
+
+type Body:
+    text: string
+
+async def chunks(write: (chunk: string) -> Promise<null>) -> null:
+    await write("first")
+    await sleep(40)
+    await write("second")
+    return null
+
+async def handle(request: ServeRequest) -> ServeResponse:
+    if request.path == "/api/health":
+        return {status: 200, json: {ok: true}}
+    if request.path == "/api/body":
+        try:
+            const valid = Body.parse(await request.json())
+            if valid.text.size > 0:
+                return {status: 200, json: {text: valid.text}}
+        catch error:
+            pass
+        return {status: 400, json: {error: "invalid body"}}
+    if request.path == "/api/stream":
+        return {status: 200, stream: chunks, headers: Map([["Cache-Control", "no-store"]])}
+    if request.path == "/traversal":
+        return fileResponse(root=${JSON.stringify(publicRoot)}, path="/../secret.txt")
+    return fileResponse(root=${JSON.stringify(publicRoot)}, path=request.path, fallback="index.html")
+
+const server = await serve(handle, port=0)
+
+async def firstCleanup() -> null:
+    print("cleanup:first")
+    return null
+
+async def stopServer() -> null:
+    print("cleanup:server")
+    await server.stop()
+    return null
+
+onShutdown(firstCleanup)
+onShutdown(stopServer)
+print(f"PORT:{str(server.port)}")
+`.trimStart(), "utf8");
+
+  const child = spawn(process.execPath, [cli, "run"], { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  const port = await new Promise<number>((resolvePort, rejectPort) => {
+    const timer = setTimeout(() => rejectPort(new Error(`velar run did not report a port\nstdout: ${stdout}\nstderr: ${stderr}`)), 5_000);
+    const inspect = () => {
+      const match = /(?:^|\n)PORT:(\d+)\n/u.exec(stdout);
+      if (!match) return;
+      clearTimeout(timer);
+      child.stdout.off("data", inspect);
+      resolvePort(Number(match[1]));
+    };
+    child.stdout.on("data", inspect);
+    inspect();
+  });
+  const origin = `http://127.0.0.1:${port}`;
+
+  const health = await fetch(`${origin}/api/health`);
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(), { ok: true });
+
+  const invalid = await fetch(`${origin}/api/body`, { method: "POST", body: JSON.stringify({ text: "" }) });
+  assert.equal(invalid.status, 400);
+  const valid = await fetch(`${origin}/api/body`, { method: "POST", body: JSON.stringify({ text: "hello" }) });
+  assert.equal(valid.status, 200);
+  assert.deepEqual(await valid.json(), { text: "hello" });
+
+  const stream = await fetch(`${origin}/api/stream`);
+  const reader = stream.body!.getReader();
+  const arrivals: string[] = [];
+  const decoder = new TextDecoder();
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    arrivals.push(decoder.decode(next.value, { stream: true }));
+  }
+  assert.equal(arrivals.join(""), "firstsecond");
+  assert.ok(arrivals.length >= 2, JSON.stringify(arrivals));
+
+  const script = await fetch(`${origin}/app.js`);
+  assert.equal(script.status, 200);
+  assert.equal(script.headers.get("content-type"), "text/javascript; charset=utf-8");
+  const fallback = await fetch(`${origin}/nested/route`);
+  assert.equal(fallback.status, 200);
+  assert.match(await fallback.text(), /Velar local platform/u);
+  const traversal = await fetch(`${origin}/traversal`);
+  assert.equal(traversal.status, 404);
+
+  const processTable = spawnSync("ps", ["ax", "-o", "pid=,ppid=,command="], { encoding: "utf8" });
+  assert.equal(processTable.status, 0, processTable.stderr);
+  const programPid = processTable.stdout.split("\n")
+    .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line))
+    .find((match) => match && Number(match[2]) === child.pid && match[3]?.includes(".velar/run-") === true)?.[1];
+  assert.ok(programPid, processTable.stdout);
+  process.kill(Number(programPid), "SIGINT");
+  const exitCode = await new Promise<number | null>((resolveExit, rejectExit) => {
+    const timer = setTimeout(() => { child.kill("SIGKILL"); rejectExit(new Error(`velar run did not stop\nstdout: ${stdout}\nstderr: ${stderr}`)); }, 5_000);
+    child.once("exit", (code) => { clearTimeout(timer); resolveExit(code); });
+  });
+  assert.equal(exitCode, 0, stderr);
+  assert.match(stdout, /cleanup:first\ncleanup:server\n$/u);
 });
 
 test("every declared standard-module export exists in the shipped runtime", async () => {
@@ -9232,7 +9432,7 @@ console.log(uuidCoercions);
   assert.equal(execution.stdout, "Error\nfalse\nTypeError\n0\nError:true\n0\n");
 });
 
-test("0.4 Core standard library rejects invalid typed calls before runtime", async () => {
+test("0.5 Core standard library rejects invalid typed calls before runtime", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-standard-library-invalid-"));
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
