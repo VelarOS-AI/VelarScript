@@ -7,7 +7,7 @@
 ## 一、现状快照
 
 **VelarScript**（本仓，`main`）：两天 23 个提交（`c56660a`…`20b8245`），编译器
-测试 310 → 375（主树 379 含芯片会话 WIP 测试），`npm test` 现在整编四个示例应用
+测试 310 → 382（主树另含芯片会话 WIP 测试），`npm test` 现在整编四个示例应用
 （`35ead9e` 加固，教训见下），`npm run test:browser` 是唯一整编浏览器门禁。
 D14' 已终局落地（`20b8245` + Lite `b34bc6d`）：memo/batch **无公开 API**，
 computed/watch/渲染上下文的纯一元派生由编译器自动记忆化（purity.ts 默认拒绝式
@@ -45,7 +45,8 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
   **已实施**；字符串/数字固有操作仅保留方法面，旧 `velar/text`/`velar/math` 函数
   拼写已干净移除并提供定向指引。
 - **D19-D21/D24**：L2 人体工学批次（双槽 for、range、集合构造、**反引号多行**）
-  —— 规格在 docs/handoff/，**尚未实施**。
+  **已实施**；单槽/解构语义不变，range 选择一个受限物化 List 契约，Lite 的真实
+  Markdown/流式文本已迁移到反引号原文。
 - **D18**：velar/serve 第一方平台面 —— 规格在 docs/handoff/，尚未实施。
 - **D25'→D26**：深层响应式为唯一默认 —— 完整设计与验收记录见
   docs/handoff/D26-DEEP-REACTIVITY.md，**已实施并打败 Lite S4 memo 基线**。
@@ -81,7 +82,9 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 3. **已落定：L1**：D17 打点方法化 + D22 聚合 + D23 字符串 in + get-default
    指引；上游 check/test/package/三引擎门禁全绿，Lite 完成 clean-break 迁移并通过
    shared 22 + server 11 + app build/format + 三引擎 33 场景。
-4. **L2**：D19 双槽 for + D20 range + D21 集合构造 + D24 反引号多行。
+4. **已落定：L2**：D19 双槽 for + D20 range + D21 集合构造 + D24 反引号
+   多行；上游 check/test 382/package/三引擎门禁全绿，Lite 通过 shared 22 +
+   server 11 + app build/format + 三引擎 33 场景，无新墙。
 5. **D18** velar/serve/fs/env/host + Lite 服务器重写（删光 extern 声明）。
 6. Backlog：W-23/W-25（emitter/重载 extern 声明）、W-26 字节面、增量流式
    （W-12/W-17）、computed 纯度差一步的编辑器提示、enter 键语义（证据不足暂缓）。

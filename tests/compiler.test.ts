@@ -3510,7 +3510,7 @@ test("guides record literals against Map contracts, type-object calls, and legac
 
   const filledMap = compile("const counts: Map<string, number> = {a: 1}\n");
   assert.ok(filledMap.diagnostics.some((item) => item.code === "VEL4001"
-    && /Use 'Map\(\)' and '\.set\(key, value\)' entries/u.test(item.message)));
+    && /Use 'Map\(\{\.\.\.\}\)' to convert record fields/u.test(item.message)));
 
   const typeCall = compile("type Task:\n    id: string\n\nconst task = Task(id = \"t1\")\nprint(task.id)\n");
   assert.equal(typeCall.code, null);
@@ -11924,6 +11924,103 @@ print(tags.size)
   assert.equal(execution.stdout, "3\ntrue\ntrue\nvelar\ngame\ntrue\n1\n0\n");
 });
 
+test("two-slot for loops preserve single-slot iteration and expose typed companion slots", () => {
+  const result = compileCore(`
+let reads = 0
+def load() -> List<List<number>>:
+    reads += 1
+    return [[1, 2], [3, 4]]
+
+for [left, right], index in load():
+    print(f"{index}:{left + right}")
+
+const scores = Map({Ada: 9, Lin: 7})
+for name, score in scores:
+    print(f"{name}:{score}")
+
+for value, index in Set(["a", "b"]):
+    print(f"{index}:{value}")
+
+for character, index in "A😀B":
+    print(f"{index}:{character}")
+
+for name in scores:
+    print(name)
+print(reads)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarCollectionPairIterator\(load\(\)\)/u);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "0:3\n1:7\nAda:9\nLin:7\n0:a\n1:b\n0:A\n1:😀\n2:B\nAda\nLin\n1\n");
+
+  const invalid = compileCore("for first, second, third in [1]:\n    pass\n");
+  assert.ok(invalid.diagnostics.some((item) => /accepts one binding or two slots/u.test(item.message)));
+});
+
+test("range named signatures and collection constructors keep checked Core boundaries", () => {
+  const rangeType = standardModuleInterface("velar/collections")!.exports.get("range")!;
+  const result = compileCore(`
+import {range} from "velar/collections"
+
+const forward = range(end = 4)
+const descending = range(start = 5, end = 0, step = -2)
+const pairs = Map([["Ada", 9], ["Lin", 7]])
+const record = Map({first: 1, second: 2})
+print(f"{forward.size}:{forward[0]}:{forward[3]}")
+print(f"{descending.size}:{descending[0]}:{descending[2]}")
+print(pairs.get("Lin") ?? 0)
+print(record.get("second") ?? 0)
+`.trimStart(), { analysis: { imports: new Map([["range", rangeType]]) } });
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "pairs")?.type, "Map<string, number>");
+  assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "record")?.type, "Map<string, number>");
+  const collectionRuntime = standardModuleSource("velar/collections") ?? "";
+  const execution = executeModule(`${collectionRuntime}\n${(result.code ?? "").replace(/^import .*velar\/collections.*;\n/mu, "")}`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "4:0:3\n3:5:1\n7\n2\n");
+
+  const invalid = compileCore(`
+import {range} from "velar/collections"
+const missing = range(start = 1)
+const malformed = Map([["only"]])
+`.trimStart(), { analysis: { imports: new Map([["range", rangeType]]) } });
+  assert.ok(invalid.diagnostics.some((item) => /Named range calls use range\(end/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /exactly \[key, value\]/u.test(item.message)));
+});
+
+test("backticks preserve multiline text while f-backticks own interpolation", () => {
+  const source = [
+    "const name = \"Velar\"",
+    "const plain = `first",
+    "{literal} \"quote\" \\`tick\\`",
+    "last`",
+    "const rich = f`hello {name}",
+    "value {1 + 2}`",
+    "print(plain)",
+    "print(rich)",
+  ].join("\n") + "\n";
+  const result = compileCore(source, { path: "multiline.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "first\n{literal} \"quote\" `tick`\nlast\nhello Velar\nvalue 3\n");
+
+  const formattedSource = "const text=`a\r\n  b`  \r\nprint(text)\r\n";
+  const formatted = formatSource(formattedSource);
+  assert.equal(formatted, "const text = `a\r\n  b`\nprint(text)\n");
+  assert.equal(formatSource(formatted), formatted);
+
+  const triple = compileCore('const text = """legacy\ntext"""\n');
+  assert.ok(triple.diagnostics.some((item) => item.code === "VEL1005" && /Use backticks for multiline strings/u.test(item.message)));
+
+  const generatedLines = (result.code ?? "").split("\n");
+  const generatedLine = generatedLines.findIndex((line) => line.includes("console.log(plain)"));
+  const generatedColumn = generatedLines[generatedLine]!.indexOf("plain");
+  const mapping = new SourceMap(JSON.parse(result.sourceMap ?? "{}")).findEntry(generatedLine, generatedColumn) as { originalLine: number };
+  assert.equal(mapping.originalLine, 6);
+});
+
 test("Set rejects invalid construction, element mutation, annotations, and shadowing", () => {
   const result = compile(`
 const invalid = Set(1)
@@ -11970,7 +12067,7 @@ print(copiedScores.get("Ada") ?? 0)
   assert.equal(execution.stdout, "Ada:7:Ada:9:game\n9\n");
 
   const invalid = compile("const bad = Map(1)\n");
-  assert.ok(invalid.diagnostics.some((item) => /Map construction requires another Map/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /Map construction requires a Map, a List of \[key, value\] Lists, or a record/u.test(item.message)));
 });
 
 test("predeclares top-level functions and rejects incomplete typed returns", () => {

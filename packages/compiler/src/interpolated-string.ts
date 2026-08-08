@@ -7,7 +7,7 @@ export interface InterpolatedStringScan {
 
 export function findInterpolatedExpressionEnd(source: string, start: number, end = source.length): number {
   let depth = 1;
-  let quote: "\"" | "'" | null = null;
+  let quote: "\"" | "'" | "`" | null = null;
   for (let index = start; index < end; index += 1) {
     const character = source[index]!;
     if (quote) {
@@ -18,7 +18,7 @@ export function findInterpolatedExpressionEnd(source: string, start: number, end
       }
       continue;
     }
-    if (character === "\"" || character === "'") {
+    if (character === "\"" || character === "'" || character === "`") {
       quote = character;
     } else if (character === "{") {
       depth += 1;
@@ -31,6 +31,7 @@ export function findInterpolatedExpressionEnd(source: string, start: number, end
 
 export function scanInterpolatedString(source: string, start: number): InterpolatedStringScan {
   const quote = source[start + 1];
+  const multiline = quote === "`";
   const contentStart = start + 2;
   let expressionDepth = 0;
   let expressionQuote = "";
@@ -41,11 +42,11 @@ export function scanInterpolatedString(source: string, start: number): Interpola
     if (expressionDepth === 0 && character === quote) {
       return { contentStart, contentEnd: index, end: index + 1, closed: true };
     }
-    if (character === "\n" || character === "\r") {
+    if (!multiline && (character === "\n" || character === "\r")) {
       return { contentStart, contentEnd: index, end: index, closed: false };
     }
     if (character === "\\") {
-      if (source[index + 1] === "\n" || source[index + 1] === "\r") {
+      if (!multiline && (source[index + 1] === "\n" || source[index + 1] === "\r")) {
         return { contentStart, contentEnd: index + 1, end: index + 1, closed: false };
       }
       index += Math.min(2, source.length - index);
@@ -59,7 +60,7 @@ export function scanInterpolatedString(source: string, start: number): Interpola
       if (character === "{") expressionDepth = 1;
     } else if (expressionQuote) {
       if (character === expressionQuote) expressionQuote = "";
-    } else if (character === "\"" || character === "'") {
+    } else if (character === "\"" || character === "'" || character === "`") {
       expressionQuote = character;
     } else if (character === "{") {
       expressionDepth += 1;

@@ -98,12 +98,23 @@ const ratio = 0.75
 const enabled = true
 const missing = null
 const message = f"{title}: {count}"
+const poem = `first line
+second "quoted" line`
+const report = f`owner: {title}
+count: {count}`
 const values = [1, 2, 3]
 const user = {id: "user-1", title}
 ```
 
 `null` is the only ordinary empty value. `undefined`, `none`, and `None` are
 not VelarScript values.
+
+Single and double quotes delimit one-line strings. Backticks delimit multiline
+strings: physical newlines are values, ordinary quotes need no escaping, and
+`\`` writes a backtick. Braces stay literal unless the string has the `f`
+prefix; `f` uses the same `{expression}` interpolation for every delimiter.
+JavaScript `${...}` is not a second interpolation syntax, and multiline
+strings perform no indentation stripping.
 
 A bare `return` returns `null`, including at JavaScript and asynchronous
 boundaries. Falling through a function without another result has the same
@@ -527,6 +538,7 @@ mutating `sort`/`reverse`.
 
 ```velar
 const tags: Set<string> = Set()
+const initialTags = Set(["web", "tooling"])
 tags.add("web")
 tags.update(["game", "tooling"])
 ```
@@ -540,10 +552,19 @@ Set members are `size`, `add`, `update`, `remove`, `has`, `clear`, `copy`, and
 const users: Map<string, User> = Map()
 users.set(user.id, user)
 const selected = users.get("user-1")
+const scores = Map([["Ada", 9], ["Lin", 7]])
+const flags = Map({preview: true, compact: false})
 ```
 
 Map members are `size`, `get`, `set`, `update`, `remove`, `has`, `clear`,
 `copy`, `keys`, `values`, and `entries`.
+
+`Set(values)` copies one checked dense List (or another Set). `Map(entries)`
+accepts a checked dense List whose every item is exactly `[key, value]`;
+`Map(record)` converts own enumerable string data fields into entries. Both
+forms reject accessors, sparse or malformed Lists, symbol fields, and
+overridable collection iterators at their runtime boundary. Empty `Set()` and
+`Map()` keep their existing contextual and first-mutation inference.
 
 Every method signature in the tables is also its named-argument vocabulary.
 For example, `slice(end=5, start=1)`, `Map.set(value=user, key=user.id)`, and
@@ -671,12 +692,31 @@ introducing a second expression form.
 for user in users:
     print(user.name)
 
+for user, index in users:
+    print(f"{index}: {user.name}")
+
+for id, {name} in usersById:
+    print(f"{id}: {name}")
+
 while attempts < 3:
     attempts += 1
 ```
 
-`break` and `continue` are available only inside loops. Iterating a Map yields
-its keys. A `while` body receives the successful condition's facts on every
+`break` and `continue` are available only inside loops. A single-slot `for`
+keeps its original contract: List/Set values, Unicode string characters, and
+Map keys. A two-slot `for first, second in value` yields value/index for Lists,
+Sets, and strings (the string index counts code points), and key/value for Maps.
+Both slots accept the complete binding-pattern grammar. Brackets continue to
+mean destructuring one item, so `for [left, right] in pairs` is not a two-slot
+loop; three slots are rejected.
+
+`range(end)`, `range(start, end)`, and `range(start, end, step)` from
+`velar/collections` produce a stop-exclusive bounded `List<number>` for loops
+and ordinary List use. Negative steps count down and zero steps fail. Named
+forms are `range(end=...)`, `range(start=..., end=...)`, and the same with
+`step=...`.
+
+A `while` body receives the successful condition's facts on every
 iteration; assigning a narrowed optional back to `null` invalidates that fact
 for the remainder of the current iteration. A guard arm ending in `break` or
 `continue` terminates like a `return` for the current iteration: the statement

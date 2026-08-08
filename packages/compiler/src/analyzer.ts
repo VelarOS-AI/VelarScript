@@ -1611,9 +1611,12 @@ export class Analyzer implements TypeEnvironment {
       }
       case "ForStatement": {
         const iterable = this.inferExpression(statement.iterable);
-        const element = iterable.kind === "list" || iterable.kind === "set"
+        const first = iterable.kind === "list" || iterable.kind === "set"
           ? iterable.element
           : iterable.kind === "map" ? iterable.key : iterable.kind === "string" ? stringType : unknownType;
+        const second = iterable.kind === "map" ? iterable.value
+          : iterable.kind === "list" || iterable.kind === "set" || iterable.kind === "string" ? numberType
+            : unknownType;
         if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "string" && iterable.kind !== "any") {
           this.typeError(`Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
         }
@@ -1622,7 +1625,8 @@ export class Analyzer implements TypeEnvironment {
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.enterScope();
           try {
-            this.declarePattern(statement.pattern, false, element);
+            this.declarePattern(statement.pattern, false, first);
+            if (statement.secondPattern) this.declarePattern(statement.secondPattern, false, second);
             if (statement.iterable.kind === "ListExpression"
               && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
               for (const item of statement.iterable.elements) {
@@ -3105,22 +3109,56 @@ export class Analyzer implements TypeEnvironment {
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Map") {
       const collectionContext = this.contextualCollectionType(contextualType);
+      const expectedMap = collectionContext?.kind === "map" ? collectionContext : null;
       const named = this.planNamedArguments(arguments_, argumentNames, [unknownType], ["source"], 0, callSpan);
       if (named && !named.valid) {
         for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-        return collectionContext?.kind === "map" ? collectionContext : { kind: "map", key: unknownType, value: unknownType };
+        return expectedMap ?? { kind: "map", key: unknownType, value: unknownType };
       }
       const ordered = named?.ordered ?? arguments_;
       if (ordered.length > 1) this.typeError(`Expected 0-1 arguments but received ${ordered.length}`, callSpan);
       const argument = ordered[0];
       if (!argument || (argument.kind === "IdentifierExpression" && argument.name === "\u0000omitted-named-argument")) {
-        return collectionContext?.kind === "map" ? collectionContext : { kind: "map", key: unknownType, value: unknownType };
+        return expectedMap ?? { kind: "map", key: unknownType, value: unknownType };
       }
-      const source = this.inferExpression(argument, collectionContext?.kind === "map" ? collectionContext : unknownType);
+      if (argument.kind === "ListExpression") {
+        let key = unknownType;
+        let value = unknownType;
+        for (const entry of argument.elements) {
+          if (entry.kind !== "ListExpression" || entry.elements.length !== 2 || entry.elements.some((item) => item.kind === "SpreadExpression")) {
+            this.inferExpression(entry);
+            this.typeError("Map entry construction requires each List item to contain exactly [key, value]", entry.span);
+            continue;
+          }
+          const entryKey = this.inferExpression(entry.elements[0]!, expectedMap?.key ?? unknownType);
+          const entryValue = this.inferExpression(entry.elements[1]!, expectedMap?.value ?? unknownType);
+          if (expectedMap) {
+            this.requireAssignable(entryKey, expectedMap.key, entry.elements[0]!.span);
+            this.requireAssignable(entryValue, expectedMap.value, entry.elements[1]!.span);
+          }
+          key = mergeTypes(key, entryKey);
+          value = mergeTypes(value, entryValue);
+        }
+        for (const extra of ordered.slice(1)) this.inferExpression(extra);
+        return argument.elements.length === 0 && expectedMap ? expectedMap : { kind: "map", key, value };
+      }
+      const source = this.inferExpression(argument, expectedMap ?? unknownType);
       for (const extra of ordered.slice(1)) this.inferExpression(extra);
       if (source.kind === "map") return { kind: "map", key: source.key, value: source.value };
+      if (source.kind === "list" && source.element.kind === "list") {
+        return { kind: "map", key: source.element.element, value: source.element.element };
+      }
+      if (source.kind === "object") {
+        let value = unknownType;
+        for (const field of source.fields.values()) value = mergeTypes(value, field);
+        if (expectedMap) {
+          this.requireAssignable(stringType, expectedMap.key, argument.span);
+          for (const field of source.fields.values()) this.requireAssignable(field, expectedMap.value, argument.span);
+        }
+        return source.fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
+      }
       if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
-      this.typeError(`Map construction requires another Map, received ${describeType(source)}`, argument.span);
+      this.typeError(`Map construction requires a Map, a List of [key, value] Lists, or a record, received ${describeType(source)}`, argument.span);
       return { kind: "map", key: unknownType, value: unknownType };
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Set") {
@@ -3368,6 +3406,9 @@ export class Analyzer implements TypeEnvironment {
     argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
   ): ValueType {
+    if (intrinsic.name === "collections.range") {
+      return this.inferRangeCall(intrinsic, sourceArguments, argumentNames, callSpan);
+    }
     let arguments_ = sourceArguments;
     let namedPreanalyzed = false;
     const deferredNamedArrows = new Set<Expression>();
@@ -3723,6 +3764,62 @@ export class Analyzer implements TypeEnvironment {
         this.checkArguments(arguments_, intrinsic.parameters, callSpan, intrinsic.requiredParameters, intrinsic.rest);
         return intrinsic.result;
     }
+  }
+
+  private inferRangeCall(
+    intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType {
+    const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
+    if (!hasNamed) {
+      if (arguments_.length < 1 || arguments_.length > 3) {
+        this.typeError(`Expected 1-3 arguments but received ${arguments_.length}`, callSpan);
+      }
+      for (const argument of arguments_) {
+        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+        if (argument.kind === "SpreadExpression") this.typeError("range does not accept a call spread", argument.span);
+        this.requireAssignable(this.inferExpression(value, numberType), numberType, value.span);
+      }
+      return intrinsic.result;
+    }
+
+    const plan = this.planNamedArguments(
+      arguments_,
+      argumentNames,
+      intrinsic.parameters,
+      intrinsic.parameterNames,
+      0,
+      callSpan,
+    );
+    if (!plan) return intrinsic.result;
+    for (const [source, target] of plan.targets.entries()) {
+      const argument = arguments_[source]!;
+      const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+      const expected = target === null ? unknownType : numberType;
+      const actual = this.inferExpression(value, expected);
+      if (target !== null) this.requireAssignable(actual, numberType, value.span);
+    }
+    if (!plan.valid) return intrinsic.result;
+
+    const sources = Array<number>(3).fill(-1);
+    for (const [source, target] of plan.targets.entries()) if (target !== null) sources[target] = source;
+    const hasStart = sources[0] !== -1;
+    const hasEnd = sources[1] !== -1;
+    const hasStep = sources[2] !== -1;
+    if (!hasEnd || (!hasStart && hasStep)) {
+      this.typeError(
+        "Named range calls use range(end = ...), range(start = ..., end = ...), or range(start = ..., end = ..., step = ...)",
+        callSpan,
+      );
+      return intrinsic.result;
+    }
+    this.namedArgumentOrders.set(
+      spanIdentity(callSpan),
+      hasStart ? [sources[0]!, sources[1]!, sources[2]!] : [sources[1]!],
+    );
+    return intrinsic.result;
   }
 
   private inferCollectionCall(
@@ -4989,7 +5086,7 @@ export class Analyzer implements TypeEnvironment {
     if (expandedActual.kind === "object" && expectedCore.kind === "map") {
       this.typeError(expandedActual.fields.size === 0
         ? "Use 'Map()' to create an empty Map; a record literal '{}' builds a record, not a Map"
-        : "Use 'Map()' and '.set(key, value)' entries; a record literal '{...}' builds a record, not a Map", valueSpan);
+        : "Use 'Map({...})' to convert record fields into string-keyed entries; a record literal '{...}' builds a record, not a Map", valueSpan);
       return;
     }
     const actualDescription = describeType(actual);

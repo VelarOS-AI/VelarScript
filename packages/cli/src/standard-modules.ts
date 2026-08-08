@@ -84,9 +84,7 @@ const loggerType = object({
 
 const coreModuleInterfaces = new Map<string, ModuleInterface>([
   ["velar/collections", moduleInterface(new Map([
-    // range has Python's one-argument and start/stop positional forms, so it
-    // intentionally has no single fixed parameter-name contract.
-    ["range", functionType([numberType, numberType, numberType], listNumber, 1)],
+    ["range", apiIntrinsic("collections.range", ["start", "end", "step"], [numberType, numberType, numberType], listNumber, 1)],
     ["enumerate", apiIntrinsic("collections.enumerate", ["values", "start"], [listAny, numberType], listAny, 1)],
     ["zip", apiIntrinsic("collections.zip", ["left", "right"], [listAny, listAny], listAny)],
     ["unique", apiIntrinsic("collections.unique", ["values"], [listAny], listAny)],

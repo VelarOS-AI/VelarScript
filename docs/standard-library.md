@@ -72,7 +72,7 @@ VelarScript `null` before becoming observable.
 
 | Export | Behavior |
 | --- | --- |
-| `range` | Stop-exclusive numeric range with optional start and step; step cannot be zero or too small to advance at the current magnitude. |
+| `range` | Stop-exclusive bounded `List<number>` via `range(end)`, `range(start, end)`, or `range(start, end, step)`; negative steps count down and zero/tiny non-advancing steps fail. |
 | `enumerate` | Returns `{index, value}` entries, with an optional integer start. |
 | `zip` | Pairs two lists as `{first, second}` up to the shorter length. |
 | `unique` | Keeps the first value for each JavaScript `Set` identity. |
@@ -99,9 +99,15 @@ VelarScript `null` before becoming observable.
 import {enumerate, groupBy, range} from "velar/collections"
 
 const pages = enumerate(range(1, 4), 10)
+const descending = range(start=5, end=0, step=-2)
 const byRole = groupBy(users, user => user.role)
 const labeled = enumerate(start=10, values=users)
 ```
+
+`range` deliberately materializes the same checked, at-most-1,000,000-item List
+whether it is used by `for` or as a value. This keeps one public iterable type,
+one named-call contract, and ordinary List reuse; it does not hide a second
+lazy object behind a call-shape optimization.
 
 Ordering never uses JavaScript's mixed-type relational coercion. The compiler
 rejects known boolean/record/optional/mixed key results, dynamic keys are

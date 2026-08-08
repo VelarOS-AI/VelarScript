@@ -164,8 +164,21 @@ stored method a receiver-once bound wrapper. The text helper source is shared
 with the surviving advanced `velar/text` functions, so Unicode and 16 MiB
 limits have one implementation.
 
+Backtick strings travel through the same literal and f-string AST forms as
+one-line strings. The lexer scanner switches only the delimiter's newline rule;
+the `f` prefix remains the interpolation switch. Formatter preprocessing
+protects complete backtick spans before line normalization and restores them
+after surrounding code is formatted, so raw newlines (including CRLF inside a
+literal) and indentation cannot change value. Source-map nodes retain the full
+multiline source span and following declarations keep their physical line.
+
 `List`, `Set`, and `Map` constructors remain compiler-owned. `Set()`
-construction accepts zero arguments or one checked List/Set. Empty collection
+construction accepts zero arguments or one checked List/Set. `Map()` accepts a
+Map copy, a dense List of exact two-item Lists, or an ordinary record whose own
+enumerable string data fields become entries. Analyzer inference preserves
+separate key/value types for literal entry Lists; runtime helpers revalidate
+every outer and inner descriptor without invoking accessors or overridable
+iterators. Empty collection
 inference follows the runtime collection identity across direct aliases and
 record fields, freezes when the value crosses an open typed boundary, and is
 written back to the semantic index for editor hover. Iteration, membership,
@@ -174,6 +187,12 @@ validate dense Lists and invoke native Map/Set prototype operations directly.
 Reading a collection method as a value lowers to a receiver-once bound wrapper
 around the same helper, including optional access; it never leaks a nonexistent
 or overridable JavaScript instance method.
+Single-slot loops keep their historical iterator helper. A two-slot loop owns a
+second binding pattern in the AST and lowers through a pair helper: List/Set/
+string values receive a code-point-aware insertion index, while Map entries
+receive their key and reactively read value. The iterable expression appears
+once in generated JavaScript, and both slots reuse the normal checked binding
+pattern lowering.
 List aggregation and keyed sorting reuse the checked shallow snapshot and
 reactive-read boundary. A `sorted(by=selector)` call computes one ordered key
 per snapshot entry before sorting and rejects simultaneous comparator use.

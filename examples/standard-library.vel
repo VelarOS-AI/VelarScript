@@ -17,13 +17,19 @@ const users: List<User> = [
 ]
 
 const grouped = groupBy(users, user => user.role)
+const scores = Map({Ada: 9, Lin: 7})
 const parsed = parseJson("{\"name\":\"Nova\",\"role\":\"admin\"}", User)
+const banner = `VelarScript
+standard library`
 
 await sleep(1)
 print(title("velar standard library"))
 print(grouped.get("admin")?.size ?? 0)
 print(range(1, 5).sum())
+for name, score in scores:
+    print(f"{name}: {score}")
 print(pi.toFixed(2))
 print(parsed.name)
+print(banner)
 print(withQuery("/users", {role: "admin"}))
 print(iso(utc(2026, 8, 1)))

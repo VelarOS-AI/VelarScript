@@ -334,6 +334,16 @@ export class JavaScriptEmitter {
         "  }",
         "  throw new TypeError(\"VelarScript iteration requires a List, Set, or Map\");",
         "}",
+        "function* __velarCollectionPairIterator(value) {",
+        "  const raw = __velarReactiveRaw(value);",
+        "  if (__velarIsMap(raw)) {",
+        "    if (Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(raw) > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
+        "    for (const entry of Map.prototype.entries.call(raw)) yield [entry[0], __velarReactiveCollectionRead(raw, entry[0], entry[1])];",
+        "    return;",
+        "  }",
+        "  let index = 0;",
+        "  for (const item of __velarCollectionIterator(value)) yield [item, index++];",
+        "}",
         "",
         "function __velarCollectionSize(value) {",
         "  value = __velarReactiveRaw(value);",
@@ -385,9 +395,34 @@ export class JavaScriptEmitter {
         "",
         "function __velarCreateMap(value) {",
         "  if (value === undefined) return new Map();",
-        "  if (!__velarIsMap(value)) throw new TypeError(\"Map construction requires another Map\");",
-        "  if (Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
-        "  return new Map(Map.prototype.entries.call(value));",
+        "  value = __velarReactiveRaw(value);",
+        "  if (__velarIsMap(value)) {",
+        "    if (Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
+        "    return new Map(Map.prototype.entries.call(value));",
+        "  }",
+        "  if (Array.isArray(value)) {",
+        "    const entries = __velarValidateDenseList(value, \"Map construction\");",
+        "    const output = new Map();",
+        "    for (let index = 0; index < entries.length; index += 1) {",
+        "      const entry = __velarValidateDenseList(Object.getOwnPropertyDescriptor(entries, index).value, \"Map entry construction\");",
+        "      if (entry.length !== 2) throw new TypeError(\"Map entry construction requires exactly [key, value]\");",
+        "      Map.prototype.set.call(output, Object.getOwnPropertyDescriptor(entry, 0).value, Object.getOwnPropertyDescriptor(entry, 1).value);",
+        "    }",
+        "    return output;",
+        "  }",
+        "  if (value && typeof value === \"object\") {",
+        "    const prototype = Object.getPrototypeOf(value);",
+        "    const names = Object.getOwnPropertyNames(value);",
+        "    if ((prototype !== Object.prototype && prototype !== null) || Object.getOwnPropertySymbols(value).length > 0 || names.length > __velarMaxCollectionItems) throw new TypeError(\"Map record construction requires an ordinary record\");",
+        "    const output = new Map();",
+        "    for (const name of names) {",
+        "      const descriptor = Object.getOwnPropertyDescriptor(value, name);",
+        "      if (!descriptor?.enumerable || !(\"value\" in descriptor)) throw new TypeError(\"Map record construction requires own enumerable data fields\");",
+        "      Map.prototype.set.call(output, name, descriptor.value);",
+        "    }",
+        "    return output;",
+        "  }",
+        "  throw new TypeError(\"Map construction requires a Map, a List of [key, value] Lists, or a record\");",
         "}",
         "",
         "function __velarCollectionGet(value, key) {",
@@ -1143,9 +1178,18 @@ export class JavaScriptEmitter {
       case "ForStatement": {
         this.needsCollectionHelpers = true;
         const iterable = this.emitMappedExpression(statement.iterable);
-        if (statement.pattern.kind === "NameBindingPattern") {
+        if (!statement.secondPattern && statement.pattern.kind === "NameBindingPattern") {
           const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
           return `${indentation}for (const ${statement.pattern.name} of __velarCollectionIterator(${iterable})) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
+        }
+        if (statement.secondPattern) {
+          const pairName = `__velarForPair${statement.pattern.span.start}`;
+          const lines = [
+            ...this.emitBindingPatternStatements(statement.pattern, `${pairName}[0]`, "const", false, depth + 1, "For first slot"),
+            ...this.emitBindingPatternStatements(statement.secondPattern, `${pairName}[1]`, "const", false, depth + 1, "For second slot"),
+            ...statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean),
+          ];
+          return `${indentation}for (const ${pairName} of __velarCollectionPairIterator(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
         }
         const valueName = `__velarForValue${statement.pattern.span.start}`;
         const lines = [

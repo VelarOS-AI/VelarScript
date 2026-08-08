@@ -38,7 +38,8 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     throw new RangeError("VelarScript formatter indentWidth must be an integer from 1 through 16");
   }
 
-  const lines = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+  const protectedStrings = protectBacktickStrings(text);
+  const lines = protectedStrings.text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
   const indentation = [0];
   const formatted: string[] = [];
   let jsxDepth = 0;
@@ -74,7 +75,58 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
   }
 
   while (formatted.at(-1) === "") formatted.pop();
-  return `${formatted.join("\n")}\n`;
+  return protectedStrings.restore(`${formatted.join("\n")}\n`);
+}
+
+function protectBacktickStrings(source: string): { readonly text: string; readonly restore: (formatted: string) => string } {
+  const replacements: { readonly placeholder: string; readonly value: string }[] = [];
+  let output = "";
+  let index = 0;
+  while (index < source.length) {
+    if (source.startsWith("//", index)) {
+      const end = source.indexOf("\n", index + 2);
+      const next = end === -1 ? source.length : end;
+      output += source.slice(index, next);
+      index = next;
+      continue;
+    }
+    const character = source[index]!;
+    if (character === '"' || character === "'") {
+      const start = index++;
+      while (index < source.length) {
+        const current = source[index++]!;
+        if (current === "\\" && index < source.length) index += 1;
+        else if (current === character || current === "\n" || current === "\r") break;
+      }
+      output += source.slice(start, index);
+      continue;
+    }
+    const prefixed = character === "f" && source[index + 1] === "`";
+    if (character !== "`" && !prefixed) {
+      output += character;
+      index += 1;
+      continue;
+    }
+    const start = index;
+    index += prefixed ? 2 : 1;
+    while (index < source.length) {
+      const current = source[index++]!;
+      if (current === "\\" && index < source.length) index += 1;
+      else if (current === "`") break;
+    }
+    let marker = `__velar_formatter_backtick_${replacements.length}__`;
+    while (source.includes(marker)) marker += "_";
+    const placeholder = JSON.stringify(marker);
+    replacements.push({ placeholder, value: source.slice(start, index) });
+    output += placeholder;
+  }
+  return {
+    text: output,
+    restore: (formatted) => replacements.reduce(
+      (current, replacement) => current.replaceAll(replacement.placeholder, replacement.value),
+      formatted,
+    ),
+  };
 }
 
 function isChainContinuationLine(content: string): boolean {
@@ -170,7 +222,7 @@ function tokenizeInline(source: string): InlineToken[] {
       tokens.push({ kind: "comment", text: source.slice(index).trimEnd() });
       break;
     }
-    if (character === "f" && (source[index + 1] === '"' || source[index + 1] === "'")) {
+    if (character === "f" && (source[index + 1] === '"' || source[index + 1] === "'" || source[index + 1] === "`")) {
       const start = index;
       const scanned = scanInterpolatedString(source, start);
       index = scanned.end;

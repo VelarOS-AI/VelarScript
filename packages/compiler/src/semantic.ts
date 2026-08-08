@@ -757,6 +757,7 @@ export function buildSemanticIndex(
         visitExpression(statement.iterable);
         enterScope(statement.span);
         visitPattern(statement.pattern, "variable", statement.pattern.span, false, false);
+        if (statement.secondPattern) visitPattern(statement.secondPattern, "variable", statement.secondPattern.span, false, false);
         for (const child of statement.body) visitStatement(child);
         exitScope();
         break;

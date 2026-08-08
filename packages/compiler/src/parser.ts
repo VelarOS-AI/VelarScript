@@ -329,10 +329,19 @@ export class Parser {
 
     if (this.match("for")) {
       const pattern = this.parseBindingPattern();
+      const secondPattern = this.match("comma") ? this.parseBindingPattern() : null;
+      if (secondPattern && this.match("comma")) {
+        const third = this.parseBindingPattern();
+        this.diagnostics.push(diagnostic(
+          "VEL2017",
+          "A for loop accepts one binding or two slots; use 'for [a, b] in ...' to destructure one item",
+          third.span,
+        ));
+      }
       this.expect("in", "Expected 'in' after loop binding");
       const iterable = this.parseExpression();
       const body = this.parseBlock();
-      return { kind: "ForStatement", pattern, iterable, body, span: span(start, body.at(-1)?.span.end ?? iterable.span.end) };
+      return { kind: "ForStatement", pattern, secondPattern, iterable, body, span: span(start, body.at(-1)?.span.end ?? iterable.span.end) };
     }
 
     if (this.match("while")) {

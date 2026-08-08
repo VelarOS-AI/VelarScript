@@ -4,6 +4,30 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Two-slot iteration, collection construction, and multiline strings
+
+Language and compiler changes:
+
+- `for first, second in value` is a distinct two-slot loop: List/Set/string
+  iteration yields value plus insertion/code-point index, while Map iteration
+  yields key plus value. Both slots accept full binding patterns. Single-slot
+  loops and `for [a, b] in pairs` destructuring are unchanged; a third slot is
+  rejected with direct guidance.
+- `range` now exposes its three named signatures in addition to positional
+  calls. It remains one bounded materialized `List<number>` contract everywhere
+  rather than adding a second lazy iterable type.
+- `Map` accepts checked dense `[key, value]` entry Lists and ordinary records;
+  `Set(List)` remains the checked content constructor. The runtime copies by
+  data descriptor and native collection slots, never by replaceable iterators
+  or accessors. Record-to-Map diagnostics now point at `Map({...})`.
+- Backticks delimit raw multiline layout with `\`` for a literal backtick;
+  `f` remains the only interpolation switch and still uses `{expression}`.
+  Formatter and source-map handling preserve physical newlines. Python triple
+  quotes receive one-current-spelling guidance.
+- This batch deliberately does not add truthy conditions, List `+`, async
+  iteration, labeled breaks, for-else, or match expressions; their existing
+  single-spelling and evidence decisions remain unchanged.
+
 ## 0.10.0-dev — Checked value methods and List aggregation
 
 Language and compiler changes:

@@ -136,7 +136,7 @@ export class Lexer {
 
       if (this.readExtensionToken()) continue;
 
-      if (character === "f" && (this.peek(1) === '"' || this.peek(1) === "'")) {
+      if (character === "f" && (this.peek(1) === '"' || this.peek(1) === "'" || this.peek(1) === "`")) {
         this.readFString();
         continue;
       }
@@ -151,8 +151,13 @@ export class Lexer {
         continue;
       }
 
-      if (character === '"' || character === "'") {
-        this.readString(character);
+      if (character === '"' && this.peek(1) === '"' && this.peek(2) === '"') {
+        this.readTripleQuoteGuidance();
+        continue;
+      }
+
+      if (character === '"' || character === "'" || character === "`") {
+        this.readString(character, character === "`");
         continue;
       }
 
@@ -436,7 +441,7 @@ export class Lexer {
     this.tokens.push({ kind: "number", value: this.text.slice(start, numberEnd), span: span(start, numberEnd) });
   }
 
-  private readString(quote: string): void {
+  private readString(quote: string, multiline = false): void {
     const start = this.index;
     this.advance();
     let value = "";
@@ -448,12 +453,12 @@ export class Lexer {
         closed = true;
         break;
       }
-      if (character === "\n" || character === "\r") {
+      if (!multiline && (character === "\n" || character === "\r")) {
         this.index -= 1;
         break;
       }
       if (character === "\\") {
-        if (this.isAtEnd() || this.peek() === "\n" || this.peek() === "\r") break;
+        if (this.isAtEnd() || (!multiline && (this.peek() === "\n" || this.peek() === "\r"))) break;
         const escaped = this.advance();
         value += escaped === "n" ? "\n" : escaped === "r" ? "\r" : escaped === "t" ? "\t" : escaped;
       } else {
@@ -465,6 +470,23 @@ export class Lexer {
       this.diagnostics.push(diagnostic("VEL1003", "Unterminated string literal", span(start, this.index)));
     }
     this.tokens.push({ kind: "string", value, span: span(start, this.index) });
+  }
+
+  private readTripleQuoteGuidance(): void {
+    const start = this.index;
+    this.index += 3;
+    const contentStart = this.index;
+    while (!this.isAtEnd() && !this.text.startsWith('"""', this.index)) this.index += 1;
+    const closed = !this.isAtEnd();
+    const contentEnd = this.index;
+    if (closed) this.index += 3;
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL1005",
+      "Use backticks for multiline strings; prefix with 'f' only when interpolation is needed",
+      span(start, this.index),
+    ));
+    if (!closed) this.diagnostics.push(diagnostic("VEL1003", "Unterminated triple-quoted string", span(start, this.index)));
+    this.tokens.push({ kind: "string", value: this.text.slice(contentStart, contentEnd), span: span(start, this.index) });
   }
 
   private readFString(): void {

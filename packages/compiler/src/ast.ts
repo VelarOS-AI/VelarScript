@@ -509,6 +509,7 @@ export type MatchValue = LiteralExpression | MemberExpression;
 export interface ForStatement {
   readonly kind: "ForStatement";
   readonly pattern: BindingPattern;
+  readonly secondPattern: BindingPattern | null;
   readonly iterable: Expression;
   readonly body: readonly Statement[];
   readonly span: Span;
