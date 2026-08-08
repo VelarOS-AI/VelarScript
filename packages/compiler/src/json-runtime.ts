@@ -5,7 +5,9 @@ const __velarMaxJsonDepth = 128;
 function __velarJsonRaw(value) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1"));
   const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
-  return runtime && runtime.version === "0.11" && typeof runtime.toRaw === "function" ? runtime.toRaw(value) : value;
+  if (!runtime || runtime.version !== "0.11" || typeof runtime.toRaw !== "function") return value;
+  if (typeof runtime.trackDeep === "function") runtime.trackDeep(value);
+  return runtime.toRaw(value);
 }
 function __velarJsonFailure(path, message) {
   throw new TypeError("Invalid JSON value at " + path + ": " + message);

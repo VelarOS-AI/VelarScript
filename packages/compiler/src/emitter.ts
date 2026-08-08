@@ -280,7 +280,8 @@ export class JavaScriptEmitter {
     if (this.needsCollectionHelpers) {
       helpers.push([
         "const __velarMaxCollectionItems = 1000000;",
-        "const __velarSameValueZero = (left, right) => left === right || (left !== left && right !== right);",
+        "const __velarCollectionValue = value => value === undefined ? null : value;",
+        "const __velarSameValueZero = (left, right) => { left = __velarCollectionValue(left); right = __velarCollectionValue(right); return left === right || (left !== left && right !== right); };",
         "const __velarReactiveIterateKey = Symbol.for(\"velar.reactive.iterate.v1\");",
         "",
         "function __velarReactiveRuntime() {",
@@ -293,7 +294,7 @@ export class JavaScriptEmitter {
         "    && typeof runtime.track === \"function\" ? runtime : null;",
         "}",
         "function __velarReactiveRaw(value) { const runtime = __velarReactiveRuntime(); return runtime ? runtime.toRaw(value) : value; }",
-        "function __velarReactiveCollectionRead(value, key, child) { const runtime = __velarReactiveRuntime(); return runtime ? runtime.collectionRead(value, key, child) : child; }",
+        "function __velarReactiveCollectionRead(value, key, child) { child = __velarCollectionValue(child); const runtime = __velarReactiveRuntime(); return runtime ? runtime.collectionRead(value, key, child) : child; }",
         "function __velarReactiveCollectionTrack(value, key = __velarReactiveIterateKey) { const runtime = __velarReactiveRuntime(); if (runtime) runtime.track(runtime.toRaw(value), key); }",
         "function __velarReactiveCollectionLink(value, child) { const runtime = __velarReactiveRuntime(); if (runtime) runtime.reactive(child, runtime.toRaw(value)); }",
         "function __velarReactiveCollectionTrigger(value, key, iterate = true) { const runtime = __velarReactiveRuntime(); if (runtime) runtime.collectionTrigger(value, key, iterate); }",
@@ -312,11 +313,11 @@ export class JavaScriptEmitter {
         "  }",
         "  return value;",
         "}",
-        "function* __velarReactiveIterator(value, iterator) { for (const item of iterator) yield __velarReactiveCollectionRead(value, __velarReactiveIterateKey, item); }",
+        "function* __velarReactiveIterator(value, iterator) { __velarReactiveCollectionTrack(value); for (const item of iterator) yield __velarReactiveCollectionRead(value, __velarReactiveIterateKey, item); }",
         "function __velarCopyList(value, name) {",
         "  __velarValidateDenseList(value, name);",
         "  const output = [];",
-        "  for (let index = 0; index < value.length; index += 1) output.push(Object.getOwnPropertyDescriptor(value, index).value);",
+        "  for (let index = 0; index < value.length; index += 1) output.push(__velarCollectionValue(Object.getOwnPropertyDescriptor(value, index).value));",
         "  return output;",
         "}",
         "",
@@ -338,7 +339,8 @@ export class JavaScriptEmitter {
         "  const raw = __velarReactiveRaw(value);",
         "  if (__velarIsMap(raw)) {",
         "    if (Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(raw) > __velarMaxCollectionItems) throw new RangeError(\"A Map cannot exceed 1000000 entries\");",
-        "    for (const entry of Map.prototype.entries.call(raw)) yield [entry[0], __velarReactiveCollectionRead(raw, entry[0], entry[1])];",
+        "    __velarReactiveCollectionTrack(raw);",
+        "    for (const entry of Map.prototype.entries.call(raw)) yield [__velarReactiveCollectionRead(raw, __velarReactiveIterateKey, entry[0]), __velarReactiveCollectionRead(raw, entry[0], entry[1])];",
         "    return;",
         "  }",
         "  let index = 0;",
@@ -361,12 +363,12 @@ export class JavaScriptEmitter {
         "  for (const [spread, read] of parts) {",
         "    if (!spread) {",
         "      if (output.length >= __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
-        "      output.push(read());",
+        "      output.push(__velarCollectionValue(read()));",
         "      continue;",
         "    }",
         "    const values = __velarValidateDenseList(read(), \"List spread\");",
         "    if (output.length + values.length > __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
-        "    for (let index = 0; index < values.length; index += 1) output.push(Object.getOwnPropertyDescriptor(values, index).value);",
+        "    for (let index = 0; index < values.length; index += 1) output.push(__velarCollectionValue(Object.getOwnPropertyDescriptor(values, index).value));",
         "  }",
         "  return output;",
         "}",
@@ -375,22 +377,22 @@ export class JavaScriptEmitter {
         "  for (const [spread, asynchronous, read] of parts) {",
         "    if (!spread) {",
         "      if (output.length >= __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
-        "      output.push(asynchronous ? await read() : read());",
+        "      output.push(__velarCollectionValue(asynchronous ? await read() : read()));",
         "      continue;",
         "    }",
         "    const values = __velarValidateDenseList(asynchronous ? await read() : read(), \"List spread\");",
         "    if (output.length + values.length > __velarMaxCollectionItems) throw new RangeError(\"A List cannot exceed 1000000 items\");",
-        "    for (let index = 0; index < values.length; index += 1) output.push(Object.getOwnPropertyDescriptor(values, index).value);",
+        "    for (let index = 0; index < values.length; index += 1) output.push(__velarCollectionValue(Object.getOwnPropertyDescriptor(values, index).value));",
         "  }",
         "  return output;",
         "}",
         "",
         "function __velarCreateSet(value) {",
         "  if (value === undefined) return new Set();",
-        "  if (Array.isArray(value)) { const values = __velarValidateDenseList(value, \"Set construction\"); const output = new Set(); for (let index = 0; index < values.length; index += 1) Set.prototype.add.call(output, Object.getOwnPropertyDescriptor(values, index).value); return output; }",
+        "  if (Array.isArray(value)) { const values = __velarValidateDenseList(value, \"Set construction\"); const output = new Set(); for (let index = 0; index < values.length; index += 1) Set.prototype.add.call(output, __velarCollectionValue(Object.getOwnPropertyDescriptor(values, index).value)); return output; }",
         "  if (!__velarIsSet(value)) throw new TypeError(\"Set construction requires a List or Set\");",
         "  if (Reflect.getOwnPropertyDescriptor(Set.prototype, \"size\").get.call(value) > __velarMaxCollectionItems) throw new RangeError(\"A Set cannot exceed 1000000 items\");",
-        "  return new Set(Set.prototype.values.call(value));",
+        "  const output = new Set(); for (const item of Set.prototype.values.call(value)) Set.prototype.add.call(output, __velarCollectionValue(item)); return output;",
         "}",
         "",
         "function __velarCreateMap(value) {",
@@ -406,7 +408,7 @@ export class JavaScriptEmitter {
         "    for (let index = 0; index < entries.length; index += 1) {",
         "      const entry = __velarValidateDenseList(Object.getOwnPropertyDescriptor(entries, index).value, \"Map entry construction\");",
         "      if (entry.length !== 2) throw new TypeError(\"Map entry construction requires exactly [key, value]\");",
-        "      Map.prototype.set.call(output, Object.getOwnPropertyDescriptor(entry, 0).value, Object.getOwnPropertyDescriptor(entry, 1).value);",
+        "      Map.prototype.set.call(output, __velarCollectionValue(Object.getOwnPropertyDescriptor(entry, 0).value), __velarCollectionValue(Object.getOwnPropertyDescriptor(entry, 1).value));",
         "    }",
         "    return output;",
         "  }",
@@ -418,7 +420,7 @@ export class JavaScriptEmitter {
         "    for (const name of names) {",
         "      const descriptor = Object.getOwnPropertyDescriptor(value, name);",
         "      if (!descriptor?.enumerable || !(\"value\" in descriptor)) throw new TypeError(\"Map record construction requires own enumerable data fields\");",
-        "      Map.prototype.set.call(output, name, descriptor.value);",
+        "      Map.prototype.set.call(output, name, __velarCollectionValue(descriptor.value));",
         "    }",
         "    return output;",
         "  }",
@@ -431,7 +433,10 @@ export class JavaScriptEmitter {
         "    __velarValidateDenseList(value, \"List.get\");",
         "    if (!Number.isInteger(key)) return null;",
         "    const index = key < 0 ? value.length + key : key;",
-        "    return index >= 0 && index < value.length ? __velarReactiveCollectionRead(value, index, value[index]) : null;",
+        "    if (index >= 0 && index < value.length) return __velarReactiveCollectionRead(value, index, value[index]);",
+        "    __velarReactiveCollectionTrack(value, key < 0 ? __velarReactiveIterateKey : index);",
+        "    __velarReactiveCollectionTrack(value);",
+        "    return null;",
         "  }",
         "  if (!__velarIsMap(value)) throw new TypeError(\"Map.get requires a Map\");",
         "  const size = Reflect.getOwnPropertyDescriptor(Map.prototype, \"size\").get.call(value);",
@@ -515,7 +520,7 @@ export class JavaScriptEmitter {
         "function __velarListFilter(value, predicate) { const items = __velarCopyList(value, \"List.filter\"); __velarReactiveCollectionTrack(value); const output = []; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); const accepted = predicate(item); if (typeof accepted !== \"boolean\") throw new TypeError(\"List.filter predicate must return bool\"); if (accepted) output.push(__velarReactiveRaw(item)); } return output; }",
         "function __velarListReduce(value, combine, initial) { const items = __velarCopyList(value, \"List.reduce\"); __velarReactiveCollectionTrack(value); let result = initial; for (let index = 0; index < items.length; index += 1) { const next = combine(result, __velarReactiveCollectionRead(value, index, items[index])); result = next === undefined ? null : next; } return result; }",
         "function __velarListJoin(value, separator = \"\") { value = __velarValidateDenseList(value, \"List.join\"); __velarReactiveCollectionTrack(value); if (typeof separator !== \"string\") throw new TypeError(\"List.join separator must be string\"); for (let index = 0; index < value.length; index += 1) if (typeof value[index] !== \"string\") throw new TypeError(\"List.join requires string values\"); return Array.prototype.join.call(value, separator); }",
-        "function __velarOrderedListValue(value, name, kind = null) { const current = typeof value; if ((current !== \"string\" && current !== \"number\") || (current === \"number\" && !Number.isFinite(value)) || (kind !== null && current !== kind)) throw new TypeError(name + \" requires uniform finite numbers or strings\"); return current; }",
+        "function __velarOrderedListValue(value, name, kind = null) { const current = typeof value; if ((current !== \"string\" && current !== \"number\") || (current === \"number\" && Number.isNaN(value)) || (kind !== null && current !== kind)) throw new TypeError(name + \" requires uniform non-NaN numbers or strings\"); return current; }",
         "function __velarListSorted(value, compare = null, by = null) {",
         "  if (compare !== null && by !== null) throw new TypeError(\"List.sorted accepts either a comparator or by, not both\");",
         "  if (compare !== null && typeof compare !== \"function\") throw new TypeError(\"List.sorted comparator must be a function\");",
@@ -651,6 +656,7 @@ export class JavaScriptEmitter {
         "function __velarSpreadRecord(output, value, count) {",
         "  if (value === null || typeof value !== \"object\" || Array.isArray(value)) throw new TypeError(\"Object spread requires a record object\");",
         "  if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError(\"Object spread cannot copy symbol fields\");",
+        "  __velarReactiveCollectionTrack(value);",
         "  const fields = Object.getOwnPropertyNames(value);",
         "  if (fields.length > __velarMaxRecordFields) throw new RangeError(\"Object spread cannot inspect more than 1000000 fields\");",
         "  for (const field of fields) {",
@@ -658,7 +664,7 @@ export class JavaScriptEmitter {
         "    if (!descriptor) throw new TypeError(\"Object spread source changed while it was being copied\");",
         "    if (!descriptor.enumerable) continue;",
         "    if (!(\"value\" in descriptor)) throw new TypeError(\"Object spread cannot copy accessor field '\" + field + \"'\");",
-        "    count = __velarSetRecordField(output, field, descriptor.value, count);",
+        "    count = __velarSetRecordField(output, field, __velarReactiveCollectionRead(value, field, descriptor.value), count);",
         "  }",
         "  return count;",
         "}",
@@ -697,16 +703,18 @@ export class JavaScriptEmitter {
         "  return value;",
         "}",
         "function __velarReadBindingField(value, field, optional, name) {",
+        "  __velarReactiveCollectionTrack(value, field);",
         "  const descriptor = Object.getOwnPropertyDescriptor(value, field);",
         "  if (descriptor === undefined) {",
         "    if (optional) return null;",
         "    throw new TypeError(name + \" object binding requires own data field '\" + field + \"'\");",
         "  }",
         "  if (!descriptor.enumerable || !(\"value\" in descriptor)) throw new TypeError(name + \" object binding requires enumerable data field '\" + field + \"'\");",
-        "  return descriptor.value ?? null;",
+        "  return __velarReactiveCollectionRead(value, field, descriptor.value) ?? null;",
         "}",
         "function __velarBindingObjectRest(value, excluded, name) {",
         "  if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError(name + \" object rest cannot copy symbol fields\");",
+        "  __velarReactiveCollectionTrack(value);",
         "  const fields = Object.getOwnPropertyNames(value);",
         "  if (fields.length > __velarMaxBindingFields) throw new RangeError(name + \" object rest cannot copy more than 1000000 fields\");",
         "  const output = {};",
@@ -717,7 +725,7 @@ export class JavaScriptEmitter {
         "    const descriptor = Object.getOwnPropertyDescriptor(value, field);",
         "    if (!descriptor?.enumerable) continue;",
         "    if (!(\"value\" in descriptor)) throw new TypeError(name + \" object rest cannot copy accessor field '\" + field + \"'\");",
-        "    Object.defineProperty(output, field, { value: descriptor.value ?? null, writable: true, enumerable: true, configurable: true });",
+        "    Object.defineProperty(output, field, { value: __velarReactiveCollectionRead(value, field, descriptor.value) ?? null, writable: true, enumerable: true, configurable: true });",
         "  }",
         "  return output;",
         "}",
@@ -727,16 +735,17 @@ export class JavaScriptEmitter {
       helpers.push([
         "function __velarRequireBindingList(value, size, hasRest, name) {",
         "  __velarValidateDenseList(value, name + \" List binding\");",
+        "  __velarReactiveCollectionTrack(value);",
         "  const valid = hasRest ? value.length >= size : value.length === size;",
         "  if (!valid) throw new RangeError(name + \" List binding\" + (hasRest ? \" requires at least \" : \" requires exactly \") + size + (size === 1 ? \" item\" : \" items\") + \", received \" + value.length);",
         "  return value;",
         "}",
         "function __velarReadBindingListItem(value, index) {",
-        "  return Object.getOwnPropertyDescriptor(value, index).value ?? null;",
+        "  return __velarReactiveCollectionRead(value, index, Object.getOwnPropertyDescriptor(value, index).value) ?? null;",
         "}",
         "function __velarBindingListRest(value, start) {",
         "  const output = [];",
-        "  for (let index = start; index < value.length; index += 1) output.push(Object.getOwnPropertyDescriptor(value, index).value ?? null);",
+        "  for (let index = start; index < value.length; index += 1) output.push(__velarReactiveCollectionRead(value, index, Object.getOwnPropertyDescriptor(value, index).value) ?? null);",
         "  return output;",
         "}",
       ].join("\n"));
@@ -1613,6 +1622,7 @@ export class JavaScriptEmitter {
             ? `${this.emitObjectKey(property.name)}: ${this.emitMappedExpression(property.value)}`
             : "").join(", ")} }`;
         }
+        this.needsCollectionHelpers = true;
         this.needsRecordHelpers = true;
         const asynchronous = expression.properties.some((property) => this.expressionContainsDirectAwait(property.value));
         const parts = expression.properties.map((property) => {
@@ -1970,8 +1980,10 @@ export class JavaScriptEmitter {
           rejectUnless(this.emitTypeCheck(resolveTypeReference(current.type), value));
           break;
         case "MatchListPattern": {
+          this.needsCollectionHelpers = true;
           const items = temporary("List");
           const length = current.elements.length;
+          lines.push(`${indentation}__velarReactiveCollectionTrack(${value});`);
           rejectUnless(`Array.isArray(${value}) && ${value}.length <= 1000000 && ${value}.length ${current.rest ? ">=" : "==="} ${length} && Object.getOwnPropertySymbols(${value}).length === 0 && Object.getOwnPropertyNames(${value}).length === ${value}.length + 1`);
           const lengthDescriptor = temporary("Length");
           lines.push(`${indentation}const ${lengthDescriptor} = Object.getOwnPropertyDescriptor(${value}, "length");`);
@@ -1982,7 +1994,7 @@ export class JavaScriptEmitter {
           lines.push(`${indentation}for (let ${cursor} = 0; ${cursor} < ${value}.length; ${cursor} += 1) {`);
           lines.push(`${indentation}  const ${descriptor} = Object.getOwnPropertyDescriptor(${value}, ${cursor});`);
           lines.push(`${indentation}  if (!${descriptor}?.enumerable || !${descriptor}.configurable || !${descriptor}.writable || !("value" in ${descriptor})) return null;`);
-          lines.push(`${indentation}  Object.defineProperty(${items}, ${items}.length, { value: ${descriptor}.value, writable: true, enumerable: true, configurable: true });`);
+          lines.push(`${indentation}  Object.defineProperty(${items}, ${items}.length, { value: __velarReactiveCollectionRead(${value}, ${cursor}, ${descriptor}.value), writable: true, enumerable: true, configurable: true });`);
           lines.push(`${indentation}}`);
           current.elements.forEach((child, index) => emit(child, `${items}[${index}]`));
           if (current.rest) {
@@ -1997,13 +2009,15 @@ export class JavaScriptEmitter {
           break;
         }
         case "MatchObjectPattern": {
+          this.needsCollectionHelpers = true;
           rejectUnless(`${value} !== null && typeof ${value} === "object" && !Array.isArray(${value})`);
           for (const entry of current.entries) {
             const descriptor = temporary("Field");
             const fieldValue = temporary("Value");
+            lines.push(`${indentation}__velarReactiveCollectionTrack(${value}, ${JSON.stringify(entry.property)});`);
             lines.push(`${indentation}const ${descriptor} = Object.getOwnPropertyDescriptor(${value}, ${JSON.stringify(entry.property)});`);
             rejectUnless(`${descriptor}?.enumerable && "value" in ${descriptor}`);
-            lines.push(`${indentation}const ${fieldValue} = ${descriptor}.value;`);
+            lines.push(`${indentation}const ${fieldValue} = __velarReactiveCollectionRead(${value}, ${JSON.stringify(entry.property)}, ${descriptor}.value);`);
             emit(entry.pattern, fieldValue);
           }
           if (current.rest) {
@@ -2012,13 +2026,14 @@ export class JavaScriptEmitter {
             const descriptor = temporary("RestField");
             const selected = current.entries.map((entry) => `${key} === ${JSON.stringify(entry.property)}`).join(" || ") || "false";
             rejectUnless(`Object.getOwnPropertySymbols(${value}).length === 0`);
+            lines.push(`${indentation}__velarReactiveCollectionTrack(${value});`);
             lines.push(`${indentation}const ${rest} = {};`);
             lines.push(`${indentation}for (const ${key} of Object.getOwnPropertyNames(${value})) {`);
             lines.push(`${indentation}  if (${selected}) continue;`);
             lines.push(`${indentation}  const ${descriptor} = Object.getOwnPropertyDescriptor(${value}, ${key});`);
             lines.push(`${indentation}  if (!${descriptor}?.enumerable) continue;`);
             lines.push(`${indentation}  if (!("value" in ${descriptor})) return null;`);
-            lines.push(`${indentation}  Object.defineProperty(${rest}, ${key}, { value: ${descriptor}.value, writable: true, enumerable: true, configurable: true });`);
+            lines.push(`${indentation}  Object.defineProperty(${rest}, ${key}, { value: __velarReactiveCollectionRead(${value}, ${key}, ${descriptor}.value), writable: true, enumerable: true, configurable: true });`);
             lines.push(`${indentation}}`);
             bind(current.rest.name, rest);
           }
@@ -2052,6 +2067,7 @@ export class JavaScriptEmitter {
         return;
       }
       if (current.kind === "ObjectBindingPattern") {
+        this.needsCollectionHelpers = true;
         this.needsObjectBindingHelpers = true;
         const object = nextTemporary("Object", current);
         lines.push(`${indentation}const ${object} = __velarRequireBindingObject(${currentValue}, ${JSON.stringify(label)});`);
@@ -2099,7 +2115,7 @@ export class JavaScriptEmitter {
   }
 
   private escapeTemplateText(value: string): string {
-    return value.replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
+    return value.replaceAll("\\", "\\\\").replaceAll("\r", "\\r").replaceAll("`", "\\`").replaceAll("${", "\\${");
   }
 
   protected blockAlwaysReturns(statements: readonly Statement[]): boolean {

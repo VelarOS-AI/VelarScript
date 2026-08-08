@@ -1,6 +1,6 @@
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
-import { scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
@@ -135,6 +135,15 @@ export class Lexer {
       }
 
       if (this.readExtensionToken()) continue;
+
+      // A raw inline string may legally start with a doubled delimiter:
+      // r"""quoted"" text". Prefer that unambiguous current spelling over
+      // the removed triple-quote migration scanner.
+      const rawString = scanStringLiteral(this.text, start);
+      if (rawString?.raw && rawString.closed && !rawString.layout) {
+        this.readString(rawString);
+        continue;
+      }
 
       const legacyTriple = this.legacyTripleQuotePrefix();
       if (legacyTriple) {
@@ -451,6 +460,7 @@ export class Lexer {
   private readString(scanned: StringLiteralScan): void {
     const start = this.index;
     this.index = scanned.end;
+    this.diagnoseUnknownStringEscapes(scanned);
     if (!scanned.closed) {
       const message = scanned.layout
         ? "Unterminated layout string; close it with a quote at the opening line's indentation"
@@ -481,6 +491,37 @@ export class Lexer {
       payload,
     });
     if (scanned.recoverAtLineStart) this.atLineStart = true;
+  }
+
+  private diagnoseUnknownStringEscapes(scanned: StringLiteralScan): void {
+    if (scanned.raw) return;
+    const known = new Set(["\\", scanned.quote, "n", "r", "t"]);
+    const sourceOffset = (index: number): number => scanned.contentOffsets?.[index] ?? scanned.contentStart + index;
+    for (let index = 0; index < scanned.content.length; index += 1) {
+      const character = scanned.content[index]!;
+      const next = scanned.content[index + 1];
+      if (character === "\\") {
+        if (next !== undefined && !known.has(next)) {
+          const start = sourceOffset(index);
+          const shown = next === "\n" || next === "\r" ? "line break" : `\\${next}`;
+          this.diagnostics.push(diagnostic(
+            "VEL1008",
+            `Unknown string escape '${shown}'; use '\\\\' for a literal backslash or an r\"...\" raw string`,
+            span(start, sourceOffset(index + 2)),
+          ));
+        }
+        index += Math.min(1, scanned.content.length - index - 1);
+        continue;
+      }
+      if (!scanned.interpolated || character !== "{") continue;
+      if (next === "{") {
+        index += 1;
+        continue;
+      }
+      const close = findInterpolatedExpressionEnd(scanned.content, index + 1);
+      if (close < 0) break;
+      index = close;
+    }
   }
 
   private decodeStringText(value: string, raw: boolean, quote: "\"" | "'", layout: boolean): string {

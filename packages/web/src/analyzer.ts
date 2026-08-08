@@ -19,6 +19,7 @@ import {
   type CompilerIntrinsicAnalysisContext,
   type Expression,
   type FormReadField,
+  type Program,
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
@@ -29,6 +30,29 @@ type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
 type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
 type JSXAttribute = JSXElementExpression["attributes"][number];
+type FunctionDeclaration = Extract<Statement, { kind: "FunctionDeclaration" }>;
+type BindingPattern = Extract<Statement, { kind: "VariableDeclaration" }>["pattern"];
+interface AnalyzerBindingIdentity {
+  readonly span: Span;
+  readonly storageBinding?: AnalyzerBindingIdentity;
+}
+interface MutatingFunctionParameters {
+  readonly parameters: readonly string[];
+  readonly mutated: ReadonlySet<string>;
+  readonly returned: ReadonlySet<string>;
+}
+interface DirectPropOwnership {
+  readonly kind: "direct";
+  readonly name: string;
+  readonly type: ValueType;
+}
+interface ContainerPropOwnership {
+  readonly kind: "container";
+  readonly fields: ReadonlyMap<string, PropOwnership>;
+  readonly element: PropOwnership | null;
+  readonly spread: readonly DirectPropOwnership[];
+}
+type PropOwnership = DirectPropOwnership | ContainerPropOwnership;
 
 // The canonical nominal identity of the Web RouteContext record. Route checks
 // probe with this identity so they succeed in modules that use route() without
@@ -436,6 +460,151 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
     && child.tag === "title" && hasAccessibleJsxContent(child));
 }
 
+function canonicalBinding(binding: AnalyzerBindingIdentity): AnalyzerBindingIdentity {
+  let current = binding;
+  const visited = new Set<AnalyzerBindingIdentity>();
+  while (current.storageBinding && !visited.has(current)) {
+    visited.add(current);
+    current = current.storageBinding;
+  }
+  return current;
+}
+
+function callArgument(
+  call: Extract<Expression, { kind: "CallExpression" }>,
+  effect: MutatingFunctionParameters,
+  parameter: string,
+): Expression | null {
+  const named = call.argumentNames?.findIndex((name) => name === parameter) ?? -1;
+  if (named >= 0) return call.arguments[named] ?? null;
+  const position = effect.parameters.indexOf(parameter);
+  return position >= 0 ? call.arguments[position] ?? null : null;
+}
+
+function functionParameterEffects(
+  statement: FunctionDeclaration,
+  effectsByName: ReadonlyMap<string, readonly MutatingFunctionParameters[]>,
+): MutatingFunctionParameters {
+  const parameters = statement.parameters.map((parameter) => parameter.name);
+  const parameterSet = new Set(parameters);
+  const mutated = new Set<string>();
+  const returned = new Set<string>();
+  const sources = (expression: Expression, shadowed: ReadonlySet<string>): ReadonlySet<string> => {
+    if (expression.kind === "IdentifierExpression") {
+      return parameterSet.has(expression.name) && !shadowed.has(expression.name)
+        ? new Set([expression.name])
+        : new Set();
+    }
+    if (expression.kind === "MemberExpression" || expression.kind === "IndexExpression") return sources(expression.object, shadowed);
+    if (expression.kind === "ConditionalExpression") {
+      return new Set([...sources(expression.thenValue, shadowed), ...sources(expression.elseValue, shadowed)]);
+    }
+    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
+      const result = new Set<string>();
+      for (const effect of effectsByName.get(expression.callee.name) ?? []) {
+        for (const parameter of effect.returned) {
+          const argument = callArgument(expression, effect, parameter);
+          if (argument) sources(argument, shadowed).forEach((source) => result.add(source));
+        }
+      }
+      return result;
+    }
+    return new Set();
+  };
+  const visit = (value: unknown, shadowed: ReadonlySet<string> = new Set()): void => {
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (record.kind === "FunctionDeclaration" || record.kind === "ClassDeclaration") return;
+    if (record.kind === "ArrowFunctionExpression") {
+      const arrow = record as unknown as Extract<Expression, { kind: "ArrowFunctionExpression" }>;
+      const arrowShadowed = new Set(shadowed);
+      for (const parameter of arrow.parameters) {
+        if (parameterSet.has(parameter.name)) arrowShadowed.add(parameter.name);
+      }
+      for (const parameter of arrow.parameters) visit(parameter.defaultValue, arrowShadowed);
+      visit(arrow.body, arrowShadowed);
+      return;
+    }
+    if (record.kind === "AssignmentStatement") {
+      const target = (record as unknown as Extract<Statement, { kind: "AssignmentStatement" }>).target;
+      if (target.kind !== "IdentifierExpression") sources(target, shadowed).forEach((source) => mutated.add(source));
+    } else if (record.kind === "CallExpression") {
+      const call = record as unknown as Extract<Expression, { kind: "CallExpression" }>;
+      if (call.callee.kind === "MemberExpression"
+        && ["append", "extend", "insert", "pop", "add", "set", "update", "remove", "clear"].includes(call.callee.property)) {
+        sources(call.callee.object, shadowed).forEach((source) => mutated.add(source));
+      } else if (call.callee.kind === "IdentifierExpression") {
+        for (const effect of effectsByName.get(call.callee.name) ?? []) {
+          for (const parameter of effect.mutated) {
+            const argument = callArgument(call, effect, parameter);
+            if (argument) sources(argument, shadowed).forEach((source) => mutated.add(source));
+          }
+        }
+      }
+    } else if (record.kind === "ReturnStatement") {
+      const value = (record as unknown as Extract<Statement, { kind: "ReturnStatement" }>).value;
+      if (value) sources(value, shadowed).forEach((source) => returned.add(source));
+    }
+    for (const child of Object.values(record)) {
+      if (Array.isArray(child)) child.forEach((item) => visit(item, shadowed));
+      else visit(child, shadowed);
+    }
+  };
+  statement.body.forEach((child) => visit(child));
+  return { parameters, mutated, returned };
+}
+
+function collectFunctionParameterEffects(program: Program): Map<string, MutatingFunctionParameters> {
+  const declarations: FunctionDeclaration[] = [];
+  const collect = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (record.kind === "FunctionDeclaration") declarations.push(record as unknown as FunctionDeclaration);
+    for (const child of Object.values(record)) {
+      if (Array.isArray(child)) child.forEach(collect);
+      else collect(child);
+    }
+  };
+  collect(program);
+  const effects = new Map<string, MutatingFunctionParameters>();
+  for (const declaration of declarations) {
+    effects.set(spanIdentity(declaration.span), {
+      parameters: declaration.parameters.map((parameter) => parameter.name),
+      mutated: new Set(),
+      returned: new Set(),
+    });
+  }
+  const byName = (): Map<string, readonly MutatingFunctionParameters[]> => {
+    const grouped = new Map<string, MutatingFunctionParameters[]>();
+    for (const declaration of declarations) {
+      const effect = effects.get(spanIdentity(declaration.span));
+      if (!effect) continue;
+      const group = grouped.get(declaration.name) ?? [];
+      group.push(effect);
+      grouped.set(declaration.name, group);
+    }
+    return grouped;
+  };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const grouped = byName();
+    for (const declaration of declarations) {
+      const key = spanIdentity(declaration.span);
+      const previous = effects.get(key)!;
+      const next = functionParameterEffects(declaration, grouped);
+      if ([...next.mutated].some((name) => !previous.mutated.has(name))
+        || [...next.returned].some((name) => !previous.returned.has(name))) changed = true;
+      effects.set(key, {
+        parameters: next.parameters,
+        mutated: new Set([...previous.mutated, ...next.mutated]),
+        returned: new Set([...previous.returned, ...next.returned]),
+      });
+    }
+  }
+  return effects;
+}
+
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
   private componentProps: Set<string> | null = null;
@@ -446,10 +615,20 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly resources: ReadonlyMap<string, string>;
   private readonly unsafeCssImports = new Set<string>();
   private readonly probedOperandTypes = new Map<string, ValueType>();
+  private readonly propOwnershipByBinding = new WeakMap<object, PropOwnership>();
+  private readonly mutatingFunctionParameters = new Map<string, MutatingFunctionParameters>();
+  private readonly reportedPropMutationCalls = new Set<string>();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
     this.resources = context.resources ?? new Map();
+  }
+
+  override analyze(program: Program): readonly Diagnostic[] {
+    this.mutatingFunctionParameters.clear();
+    this.reportedPropMutationCalls.clear();
+    collectFunctionParameterEffects(program).forEach((effect, key) => this.mutatingFunctionParameters.set(key, effect));
+    return super.analyze(program);
   }
 
   protected override predeclareExtensionStatement(statement: Statement): boolean {
@@ -557,7 +736,34 @@ export class VelarWebAnalyzer extends Analyzer {
     }
   }
 
+  protected override analyzeStatement(statement: Statement): void {
+    super.analyzeStatement(statement);
+    if (statement.kind !== "VariableDeclaration") return;
+    const source = this.propOwnership(statement.initializer);
+    if (source) this.bindPropOwnership(statement.pattern, source);
+  }
+
   protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
+    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
+      const calleeName = expression.callee.name;
+      const binding = this.lookup(calleeName);
+      const declaration = binding ? canonicalBinding(binding) : null;
+      const effect = declaration ? this.mutatingFunctionParameters.get(spanIdentity(declaration.span)) : null;
+      if (effect) {
+        effect.mutated.forEach((parameterName) => {
+          const argument = callArgument(expression, effect, parameterName);
+          const prop = argument ? this.propReference(argument) : null;
+          const reportKey = `${expression.span.start}:${parameterName}`;
+          if (!argument || !prop || this.reportedPropMutationCalls.has(reportKey)) return;
+          this.reportedPropMutationCalls.add(reportKey);
+          this.diagnostics.push(diagnostic(
+            "VEL5051",
+            `Component prop '${prop.name}' is read-only; helper '${calleeName}' mutates the parameter receiving it`,
+            argument.span,
+          ));
+        });
+      }
+    }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && expression.callee.name === "mount") {
       const namedNode = expression.argumentNames?.findIndex((name) => name === "node") ?? -1;
@@ -659,27 +865,133 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private propReference(expression: Expression): { readonly name: string; readonly type: ValueType } | null {
+    const ownership = this.propOwnership(expression);
+    return ownership?.kind === "direct" ? ownership : null;
+  }
+
+  private propOwnership(expression: Expression): PropOwnership | null {
     if (expression.kind === "IdentifierExpression") {
+      const binding = this.lookup(expression.name);
+      const alias = binding ? this.propOwnershipByBinding.get(canonicalBinding(binding)) : null;
+      if (alias) return alias;
       return this.componentProps?.has(expression.name) === true && !this.lookup(expression.name)?.reactiveShadow
-        ? { name: expression.name, type: this.lookup(expression.name)?.type ?? unknownType }
+        ? { kind: "direct", name: expression.name, type: this.lookup(expression.name)?.type ?? unknownType }
         : null;
     }
     if (expression.kind === "MemberExpression") {
-      const parent = this.propReference(expression.object);
+      const parent = this.propOwnership(expression.object);
       if (!parent) return null;
-      const owner = nonOptional(this.expandAliases(parent.type));
-      return { name: parent.name, type: this.semanticMembersOf(owner).get(expression.property) ?? unknownType };
+      return this.memberPropOwnership(parent, expression.property);
     }
     if (expression.kind === "IndexExpression") {
-      const parent = this.propReference(expression.object);
+      const parent = this.propOwnership(expression.object);
       if (!parent) return null;
+      if (parent.kind === "container") return parent.element;
       const owner = nonOptional(this.expandAliases(parent.type));
       return {
+        kind: "direct",
         name: parent.name,
         type: owner.kind === "list" ? owner.element : owner.kind === "map" ? owner.value : unknownType,
       };
     }
+    if (expression.kind === "ConditionalExpression") {
+      return this.propOwnership(expression.thenValue) ?? this.propOwnership(expression.elseValue);
+    }
+    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
+      const binding = this.lookup(expression.callee.name);
+      const declaration = binding ? canonicalBinding(binding) : null;
+      const effect = declaration ? this.mutatingFunctionParameters.get(spanIdentity(declaration.span)) : null;
+      if (effect) {
+        for (const parameter of effect.returned) {
+          const argument = callArgument(expression, effect, parameter);
+          const ownership = argument ? this.propOwnership(argument) : null;
+          if (ownership) return ownership;
+        }
+      }
+    }
+    if (expression.kind === "ListExpression") {
+      for (const value of expression.elements) {
+        const ownership = value.kind === "SpreadExpression"
+          ? this.listElementPropOwnership(this.propOwnership(value.value))
+          : this.propOwnership(value);
+        if (ownership) return { kind: "container", fields: new Map(), element: ownership, spread: [] };
+      }
+      return null;
+    }
+    if (expression.kind === "ObjectExpression") {
+      const fields = new Map<string, PropOwnership>();
+      const spread: DirectPropOwnership[] = [];
+      for (const property of expression.properties) {
+        const ownership = this.propOwnership(property.value);
+        if (!ownership) continue;
+        if (property.kind === "ObjectProperty") fields.set(property.name, ownership);
+        else if (ownership.kind === "direct") spread.push(ownership);
+        else {
+          ownership.fields.forEach((value, name) => fields.set(name, value));
+          spread.push(...ownership.spread);
+        }
+      }
+      return fields.size > 0 || spread.length > 0
+        ? { kind: "container", fields, element: null, spread }
+        : null;
+    }
     return null;
+  }
+
+  private memberPropOwnership(ownership: PropOwnership, property: string): PropOwnership | null {
+    if (ownership.kind === "container") {
+      const field = ownership.fields.get(property);
+      if (field) return field;
+      const spread = ownership.spread[0];
+      return spread ? this.memberPropOwnership(spread, property) : null;
+    }
+    const owner = nonOptional(this.expandAliases(ownership.type));
+    return {
+      kind: "direct",
+      name: ownership.name,
+      type: this.semanticMembersOf(owner).get(property) ?? unknownType,
+    };
+  }
+
+  private listElementPropOwnership(ownership: PropOwnership | null): PropOwnership | null {
+    if (!ownership) return null;
+    if (ownership.kind === "container") return ownership.element;
+    const owner = nonOptional(this.expandAliases(ownership.type));
+    return {
+      kind: "direct",
+      name: ownership.name,
+      type: owner.kind === "list" ? owner.element : owner.kind === "set" ? owner.element : unknownType,
+    };
+  }
+
+  private bindPropOwnership(pattern: BindingPattern, ownership: PropOwnership): void {
+    if (pattern.kind === "NameBindingPattern") {
+      const binding = this.lookup(pattern.name);
+      if (binding) this.propOwnershipByBinding.set(canonicalBinding(binding), ownership);
+      return;
+    }
+    if (pattern.kind === "ObjectBindingPattern") {
+      for (const entry of pattern.entries) {
+        const field = this.memberPropOwnership(ownership, entry.property);
+        if (field) this.bindPropOwnership(entry.pattern, field);
+      }
+      if (pattern.rest) {
+        const rest: PropOwnership = ownership.kind === "direct"
+          ? { kind: "container", fields: new Map(), element: null, spread: [ownership] }
+          : ownership;
+        this.bindPropOwnership(pattern.rest, rest);
+      }
+      return;
+    }
+    pattern.elements.forEach((element) => {
+      if (!element) return;
+      const item = this.listElementPropOwnership(ownership);
+      if (item) this.bindPropOwnership(element, item);
+    });
+    if (pattern.rest) {
+      const item = this.listElementPropOwnership(ownership);
+      if (item) this.bindPropOwnership(pattern.rest, { kind: "container", fields: new Map(), element: item, spread: [] });
+    }
   }
 
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {

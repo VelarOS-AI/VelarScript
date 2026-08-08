@@ -222,7 +222,15 @@ export async function compileProjectEntries(
     loaded.set(inputPath, { inputPath, relativePath, text, inspection, package: pendingModule.package, resourceContents });
 
     for (const dependency of inspection.dependencies) {
-      if (dependency.javascript) continue;
+      if (dependency.javascript) {
+        if (dependency.source.startsWith(".")) {
+          failures.push({
+            path: inputPath,
+            message: `Relative JavaScript import target '${dependency.source}' cannot be emitted; move the JavaScript module into a package and import it by package name`,
+          });
+        }
+        continue;
+      }
       if (isLocalPlatformModule(dependency.source) && (capabilities.has("web") || framework?.host.target === "browser")) {
         failures.push({ path: inputPath, message: localPlatformModuleDiagnostic(dependency.source) });
         continue;
@@ -308,13 +316,13 @@ export async function compileProjectEntries(
           compiledInterfaces,
           compilerExtensions,
         );
-        const result = compile(module.text, {
+        const result = importedReactiveAssignmentDiagnostics(compile(module.text, {
           path: module.inputPath,
           analysis,
           extensions: compilerExtensions,
           resourceContents: module.resourceContents,
           ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.testFunctions) } : {}),
-        });
+        }), analysis.reactiveImports ?? new Map());
         nextResults.set(module.inputPath, { inputPath: module.inputPath, relativePath: module.relativePath, result });
       }
       passResults = nextResults;
@@ -361,6 +369,31 @@ export async function compileProjectEntries(
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     },
   };
+}
+
+function importedReactiveAssignmentDiagnostics(
+  result: CompileResult,
+  reactiveImports: ReadonlyMap<string, "state" | "computed">,
+): CompileResult {
+  if (reactiveImports.size === 0) return result;
+  const diagnostics = result.diagnostics.map((item) => {
+    if (item.code !== "VEL3002" || !item.message.startsWith("Cannot assign to const binding '")) return item;
+    const reference = result.semanticIndex.references.find((candidate) => candidate.write
+      && candidate.span.start === item.span.start
+      && candidate.span.end === item.span.end);
+    const imported = reference?.symbolId
+      ? result.semanticIndex.imports.find((candidate) => candidate.localSymbolId === reference.symbolId)
+      : null;
+    const kind = imported ? reactiveImports.get(imported.local) : null;
+    if (!kind) return item;
+    return {
+      ...item,
+      message: `Cannot assign to imported ${kind} binding '${imported!.local}'; it is read-only here. Export a mutator from the owning module and call it instead`,
+    };
+  });
+  return diagnostics.some((item, index) => item !== result.diagnostics[index])
+    ? { ...result, diagnostics }
+    : result;
 }
 
 function affectedModules(

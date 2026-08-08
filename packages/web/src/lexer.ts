@@ -1,4 +1,5 @@
 import type { Diagnostic, Span } from "@velarscript/compiler";
+import { findInterpolatedExpressionEnd } from "@velarscript/compiler/extension";
 import type { CompilerLexicalScanContext, CompilerLexicalScanResult, Token } from "@velarscript/compiler/extension";
 
 export const WEB_JSX_TOKEN = "@velarscript/web:jsx";
@@ -7,6 +8,7 @@ export const WEB_LOOK_TOKEN = "@velarscript/web:look";
 export interface WebExpressionSource {
   readonly source: string;
   readonly span: Span;
+  readonly openingIndent: string;
 }
 
 export interface WebJsxAttributeSyntax {
@@ -42,6 +44,7 @@ export interface WebLookLineSyntax {
   readonly text: string;
   readonly start: number;
   readonly end: number;
+  readonly openingIndent: string;
 }
 
 export interface WebLookBlockSyntax {
@@ -91,6 +94,7 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
 
   while (cursor < context.source.length) {
     const physicalStart = cursor;
+    const physicalLineStart = previousPhysicalLineStart(context.source, physicalStart);
     const lineBreak = nextPhysicalLineBreak(context.source, physicalStart);
     const physicalEnd = lineBreak?.start ?? context.source.length;
     let content = physicalStart;
@@ -111,11 +115,30 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
       const leading = /^\s*/u.exec(raw)?.[0] ?? "";
       const text = raw.slice(leading.length).trimEnd();
       if (text && !text.startsWith("//")) {
+        const start = content + leading.length;
+        const openingIndent = leadingWhitespace(context.source.slice(physicalLineStart, start));
+        const layout = /^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)*)\s*=\s*(?:rf|fr|f|r)?(["'])$/u.exec(text);
+        const close = layout && lineBreak
+          ? findLookLayoutClose(context.source, lineBreak.end, openingIndent, layout[2]!)
+          : null;
+        if (close) {
+          lines.push({
+            indent: Math.max(0, width - context.currentIndent),
+            text: context.source.slice(start, close.lineEnd),
+            start,
+            end: close.lineEnd,
+            openingIndent,
+          });
+          cursor = close.nextStart;
+          first = false;
+          continue;
+        }
         lines.push({
           indent: Math.max(0, width - context.currentIndent),
           text,
-          start: content + leading.length,
+          start,
           end: content + raw.length,
+          openingIndent,
         });
       }
     }
@@ -134,6 +157,47 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
     diagnostics,
     startsLine: cursor < context.source.length,
   };
+}
+
+function findLookLayoutClose(
+  source: string,
+  start: number,
+  openingIndent: string,
+  quote: string,
+): { readonly lineEnd: number; readonly nextStart: number } | null {
+  const openingWidth = indentationWidth(openingIndent);
+  let cursor = start;
+  while (cursor < source.length) {
+    const lineBreak = nextPhysicalLineBreak(source, cursor);
+    const lineEnd = lineBreak?.start ?? source.length;
+    const line = source.slice(cursor, lineEnd);
+    const indent = leadingWhitespace(line);
+    const body = line.slice(indent.length);
+    if (body.length > 0 && indentationWidth(indent) <= openingWidth) {
+      if (indent === openingIndent && body.startsWith(quote)) {
+        return { lineEnd, nextStart: lineBreak?.end ?? source.length };
+      }
+      return null;
+    }
+    if (!lineBreak) return null;
+    cursor = lineBreak.end;
+  }
+  return null;
+}
+
+function previousPhysicalLineStart(source: string, index: number): number {
+  while (index > 0 && source[index - 1] !== "\n" && source[index - 1] !== "\r") index -= 1;
+  return index;
+}
+
+function leadingWhitespace(value: string): string {
+  return /^[ \t]*/u.exec(value)?.[0] ?? "";
+}
+
+function indentationWidth(value: string): number {
+  let width = 0;
+  for (const character of value) width += character === "\t" ? 4 : 1;
+  return width;
 }
 
 function nextPhysicalLineBreak(source: string, start: number): { readonly start: number; readonly end: number } | null {
@@ -236,22 +300,15 @@ class WebJsxScanner {
   private readEmbedded(): WebExpressionSource {
     this.expect("{", "Expected '{'");
     const start = this.index;
-    let depth = 1;
-    let quote = "";
-    while (this.index < this.source.length) {
-      const character = this.source[this.index++]!;
-      if (quote) {
-        if (character === "\\" && this.index < this.source.length) this.index += 1;
-        else if (character === quote) quote = "";
-      } else if (character === '"' || character === "'" || character === "`") quote = character;
-      else if (character === "{") depth += 1;
-      else if (character === "}") {
-        depth -= 1;
-        if (depth === 0) return { source: this.source.slice(start, this.index - 1), span: { start, end: this.index - 1 } };
-      }
+    const openingIndent = leadingWhitespace(this.source.slice(previousPhysicalLineStart(this.source, start), start));
+    const close = findInterpolatedExpressionEnd(this.source, start);
+    if (close >= 0) {
+      this.index = close + 1;
+      return { source: this.source.slice(start, close), span: { start, end: close }, openingIndent };
     }
+    this.index = this.source.length;
     this.report("VEL5006", "Unclosed JSX expression", start - 1, this.index);
-    return { source: this.source.slice(start), span: { start, end: this.index } };
+    return { source: this.source.slice(start), span: { start, end: this.index }, openingIndent };
   }
 
   private readQuoted(): string {
@@ -260,7 +317,7 @@ class WebJsxScanner {
     while (this.index < this.source.length) {
       const character = this.source[this.index++]!;
       if (character === quote) return value;
-      if (character === "\\" && this.index < this.source.length) value += this.source[this.index++]!;
+      if (character === "\\" && this.index < this.source.length) value += character + this.source[this.index++]!;
       else value += character;
     }
     this.report("VEL5007", "Unclosed JSX attribute string", this.index, this.index);

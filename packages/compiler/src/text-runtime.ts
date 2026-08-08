@@ -8,8 +8,6 @@ const __velarNativeStringLower = Object.getOwnPropertyDescriptor(String.prototyp
 const __velarNativeStringSplit = Object.getOwnPropertyDescriptor(String.prototype, "split").value;
 const __velarNativeStringReplace = Object.getOwnPropertyDescriptor(String.prototype, "replace").value;
 const __velarNativeStringReplaceAll = Object.getOwnPropertyDescriptor(String.prototype, "replaceAll").value;
-const __velarNativeStringPadStart = Object.getOwnPropertyDescriptor(String.prototype, "padStart").value;
-const __velarNativeStringPadEnd = Object.getOwnPropertyDescriptor(String.prototype, "padEnd").value;
 const __velarNativeStringRepeat = Object.getOwnPropertyDescriptor(String.prototype, "repeat").value;
 
 function __velarTextValue(value) {
@@ -40,7 +38,7 @@ function __velarTextCodePointLength(value) { let length = 0; for (const _ of val
 function __velarTextCodePointPrefix(value, count) { let output = "", length = 0; for (const character of value) { if (length >= count) break; output += character; length += 1; } return output; }
 function __velarTextReplacementOutputUnits(value, search, replacement, all) {
   let matches = 0;
-  if (search === "") matches = all ? value.length + 1 : 1;
+  if (search === "") matches = all ? __velarTextCodePointLength(value) + 1 : 1;
   else {
     let cursor = 0;
     while (true) {
@@ -98,21 +96,56 @@ function __velarStringEndsWith(value, text) {
 }
 function __velarStringSplit(value, separator) {
   value = __velarTextValue(value); separator = __velarTextArgument(separator, "String.split separator");
-  if (separator === "" && value.length > __velarMaxTextItems) throw new RangeError("String.split cannot produce more than " + __velarMaxTextItems + " items");
+  if (separator === "") {
+    const count = __velarTextCodePointLength(value);
+    if (count > __velarMaxTextItems) throw new RangeError("String.split cannot produce more than " + __velarMaxTextItems + " items");
+    return Array.from(value);
+  }
   return __velarTextList(__velarNativeStringSplit.call(value, separator, __velarMaxTextItems + 1), "String.split");
 }
 function __velarStringReplace(value, from, to) {
   value = __velarTextValue(value); from = __velarTextArgument(from, "String.replace from"); to = __velarTextArgument(to, "String.replace to");
   if (__velarTextReplacementOutputUnits(value, from, to, false) > __velarMaxTextCodeUnits) throw new RangeError("String.replace output cannot exceed 16 MiB");
-  return __velarNativeStringReplace.call(value, from, to);
+  return __velarNativeStringReplace.call(value, from, () => to);
 }
 function __velarStringReplaceAll(value, from, to) {
   value = __velarTextValue(value); from = __velarTextArgument(from, "String.replaceAll from"); to = __velarTextArgument(to, "String.replaceAll to");
   if (__velarTextReplacementOutputUnits(value, from, to, true) > __velarMaxTextCodeUnits) throw new RangeError("String.replaceAll output cannot exceed 16 MiB");
-  return __velarNativeStringReplaceAll.call(value, from, to);
+  if (from === "") {
+    let output = to;
+    for (const character of value) output += character + to;
+    return output;
+  }
+  return __velarNativeStringReplaceAll.call(value, from, () => to);
 }
-function __velarStringPadStart(value, size, fill = " ") { return __velarNativeStringPadStart.call(__velarTextValue(value), __velarTextCount(size, "String.padStart size"), __velarTextArgument(fill, "String.padStart fill")); }
-function __velarStringPadEnd(value, size, fill = " ") { return __velarNativeStringPadEnd.call(__velarTextValue(value), __velarTextCount(size, "String.padEnd size"), __velarTextArgument(fill, "String.padEnd fill")); }
+function __velarStringPad(value, size, fill, start) {
+  const name = start ? "String.padStart" : "String.padEnd";
+  value = __velarTextValue(value); size = __velarTextCount(size, name + " size"); fill = __velarTextArgument(fill, name + " fill");
+  const needed = size - __velarTextCodePointLength(value);
+  if (needed <= 0 || fill.length === 0) return value;
+  let outputUnits = value.length;
+  let counted = 0;
+  while (counted < needed) {
+    for (const character of fill) {
+      if (counted >= needed) break;
+      outputUnits += character.length;
+      if (outputUnits > __velarMaxTextCodeUnits) throw new RangeError(name + " output cannot exceed 16 MiB");
+      counted += 1;
+    }
+  }
+  let padding = "";
+  counted = 0;
+  while (counted < needed) {
+    for (const character of fill) {
+      if (counted >= needed) break;
+      padding += character;
+      counted += 1;
+    }
+  }
+  return start ? padding + value : value + padding;
+}
+function __velarStringPadStart(value, size, fill = " ") { return __velarStringPad(value, size, fill, true); }
+function __velarStringPadEnd(value, size, fill = " ") { return __velarStringPad(value, size, fill, false); }
 function __velarStringRepeat(value, count) {
   value = __velarTextValue(value); count = __velarTextCount(count, "String.repeat count");
   if (value.length > 0 && count > Math.floor(__velarMaxTextCodeUnits / value.length)) throw new RangeError("String.repeat output cannot exceed 16 MiB");

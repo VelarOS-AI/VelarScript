@@ -10,6 +10,7 @@ import type { EnumInfo, ValueType } from "./types.ts";
 
 export { expressionContainsDirectAwait } from "./ast.ts";
 export { JavaScriptEmitter } from "./emitter.ts";
+export { findInterpolatedExpressionEnd, scanStringLiteral } from "./interpolated-string.ts";
 export { VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
 export { VELAR_STRICT_JSON_RUNTIME } from "./json-runtime.ts";
 export { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";

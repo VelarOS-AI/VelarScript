@@ -253,7 +253,9 @@ function buildLayoutContent(
   };
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    const bodyStart = line.blank ? line.end : line.start + (margin && source.startsWith(margin, line.start) ? margin.length : line.indent.length);
+    const bodyStart = line.blank
+      ? margin && source.startsWith(margin, line.start) ? line.start + margin.length : line.end
+      : line.start + (margin && source.startsWith(margin, line.start) ? margin.length : line.indent.length);
     append(bodyStart, line.end);
     if (index < lines.length - 1) append(line.end, line.newlineEnd);
   }

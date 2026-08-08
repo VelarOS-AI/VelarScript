@@ -280,7 +280,9 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         : `[${arguments_.join(", ")}]`;
       return `__velarLookCall(${JSON.stringify(controlledCall)}, ${orderedArguments})`;
     }
-    return super.emitExpression(expression);
+    const emitted = super.emitExpression(expression);
+    if (this.webOutput && emitted.includes("__velarListPop(")) return emitted.replace("__velarListPop(", "__velarWebListPop(");
+    return emitted;
   }
 
   private emitLook(expression: LookExpression): string {
@@ -901,6 +903,10 @@ function __velarTrack(subscribers) {
 function __velarToRaw(value) { return __velarRuntime.toRaw(value); }
 function __velarReactive(value, parent = null) { return __velarRuntime.reactive(value, parent); }
 
+function __velarWebListPop(value, requested = -1) {
+  return __velarReactive(__velarListPop(value, requested));
+}
+
 function __velarUntracked(read) {
   const previous = __velarRuntime.activeObserver;
   __velarRuntime.activeObserver = null;
@@ -916,17 +922,33 @@ function __velarObserver(read, mode, scope) {
   const observer = {
     mode,
     stopped: false,
+    running: false,
+    selfInvalidations: 0,
     dependencies: new Set(),
     run() {
       if (observer.stopped) return;
       __velarCleanupObserver(observer);
       const previous = __velarRuntime.activeObserver;
       __velarRuntime.activeObserver = observer;
+      observer.running = true;
       try { read(); }
       catch (error) { __velarReport(error, mode === "watch" ? "watch" : "render", scope); }
-      finally { __velarRuntime.activeObserver = previous; }
+      finally { observer.running = false; __velarRuntime.activeObserver = previous; }
     },
-    notify() { if (!observer.stopped) __velarSchedule(observer); },
+    notify() {
+      if (observer.stopped) return;
+      if (observer.running) {
+        observer.selfInvalidations += 1;
+        if (observer.selfInvalidations > 100) {
+          observer.stop();
+          __velarReport(new RangeError("A reactive render cannot invalidate itself more than 100 times"), mode === "watch" ? "watch" : "render", scope);
+          return;
+        }
+      } else {
+        observer.selfInvalidations = 0;
+      }
+      __velarSchedule(observer);
+    },
     stop() { observer.stopped = true; __velarCleanupObserver(observer); },
   };
   scope.cleanups.push(() => observer.stop());
@@ -1316,17 +1338,21 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
     const created = [];
     try {
       for (const value of values) {
-        const trackedValue = __velarReactive(value, source);
+        const rawValue = __velarToRaw(value);
+        // The keyed source may be a fresh derived List on every render. A row
+        // is observed directly by its child scope, so linking it to that
+        // ephemeral container only retains dead Lists and slows later writes.
+        const trackedValue = __velarReactive(rawValue);
         const key = __velarKey(keyOf(trackedValue));
         if (next.has(key)) throw new Error("Duplicate JSX key '" + (typeof key === "string" ? key : String(key)) + "'");
         let entry = entries.get(key);
-        if (entry && !Object.is(entry.value, value)) entry = null;
+        if (entry && !Object.is(entry.value, rawValue)) entry = null;
         if (!entry) {
           const childScope = __velarScope(scope.component);
           const fragment = document.createDocumentFragment();
           try { __velarAppend(fragment, render(trackedValue, childScope)); }
           catch (error) { __velarDestroyScope(childScope); throw error; }
-          entry = { value, scope: childScope, nodes: [...fragment.childNodes], fragment };
+          entry = { value: rawValue, scope: childScope, nodes: [...fragment.childNodes], fragment };
           created.push(entry);
         }
         next.set(key, entry);

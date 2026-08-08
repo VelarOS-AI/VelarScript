@@ -123,12 +123,18 @@ export class Parser {
   private readonly tokens: readonly Token[];
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
+  private readonly genericCallableNames = new Set<string>();
   private index = 0;
   private parseDepth = 0;
 
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[] = []) {
     this.tokens = tokens;
     this.lexicalExtensions = lexicalExtensions;
+    for (let index = 0; index + 2 < tokens.length; index += 1) {
+      if (tokens[index]?.kind === "def" && tokens[index + 1]?.kind === "identifier" && tokens[index + 2]?.kind === "less") {
+        this.genericCallableNames.add(tokens[index + 1]!.value);
+      }
+    }
   }
 
   parse(): ParseResult {
@@ -655,8 +661,18 @@ export class Parser {
           if (!this.check("rightBrace")) this.diagnostics.push(diagnostic("VEL2011", "A rest binding must be last", name.span));
           break;
         }
-        const property = this.expect("identifier", "Expected an object binding name");
-        const pattern = this.match("colon") ? this.parseBindingPattern() : { kind: "NameBindingPattern", name: property.value, span: property.span } satisfies BindingPattern;
+        const property = this.expectMemberName("Expected an object binding field name");
+        const renamed = this.match("colon");
+        if (!renamed && property.kind !== "identifier") {
+          this.diagnostics.push(diagnostic(
+            "VEL2011",
+            `Keyword-named field '${property.value}' requires ': name' in an object binding pattern`,
+            property.span,
+          ));
+        }
+        const pattern = renamed
+          ? this.parseBindingPattern()
+          : { kind: "NameBindingPattern", name: property.kind === "identifier" ? property.value : "_invalid", span: property.span } satisfies BindingPattern;
         entries.push({ property: property.value, pattern, span: span(property.span.start, pattern.span.end) });
         if (!this.match("comma")) break;
       }
@@ -1233,12 +1249,20 @@ export class Parser {
           }
           break;
         }
-        const property = this.expect("identifier", "Expected a field name in an object pattern");
-        const child = this.match("colon")
+        const property = this.expectMemberName("Expected a field name in an object pattern");
+        const renamed = this.match("colon");
+        if (!renamed && property.kind !== "identifier") {
+          this.diagnostics.push(diagnostic(
+            "VEL2015",
+            `Keyword-named field '${property.value}' requires ': name' in an object pattern`,
+            property.span,
+          ));
+        }
+        const child = renamed
           ? this.parseMatchPattern(false)
           : {
               kind: "MatchCapturePattern" as const,
-              binding: { name: property.value, span: property.span },
+              binding: { name: property.kind === "identifier" ? property.value : "_invalid", span: property.span },
               span: property.span,
             };
         entries.push({ property: property.value, pattern: child, span: span(property.span.start, child.span.end) });
@@ -1382,15 +1406,15 @@ export class Parser {
     return statements;
   }
 
-  protected parseTypeReference(): TypeReference {
-    return this.withParseDepth(() => this.parseTypeReferenceBody());
+  protected parseTypeReference(allowTrailingOptional = true): TypeReference {
+    return this.withParseDepth(() => this.parseTypeReferenceBody(allowTrailingOptional));
   }
 
-  private parseTypeReferenceBody(): TypeReference {
+  private parseTypeReferenceBody(allowTrailingOptional: boolean): TypeReference {
     const start = this.current().span.start;
-    const members: TypeSyntax[] = [this.parseSingleTypeReference()];
+    const members: TypeSyntax[] = [this.parseSingleTypeReference(allowTrailingOptional)];
     while (this.match("pipe")) {
-      members.push(this.parseSingleTypeReference());
+      members.push(this.parseSingleTypeReference(allowTrailingOptional));
     }
     const referenceSpan = span(start, this.previous().span.end);
     return {
@@ -1399,12 +1423,12 @@ export class Parser {
     };
   }
 
-  private parseSingleTypeReference(): TypeSyntax {
+  private parseSingleTypeReference(allowTrailingOptional = true): TypeSyntax {
     if (this.check("leftParen") && !this.isFunctionTypeParenthesis()) {
       const open = this.advance();
       const grouped = this.parseTypeReference();
       const close = this.expect("rightParen", "Expected ')' after grouped type");
-      if (!this.match("question")) return grouped.syntax;
+      if (!allowTrailingOptional || !this.match("question")) return grouped.syntax;
       return this.makeOptionalTypeSyntax(grouped.syntax, span(open.span.start, this.previous().span.end));
     }
     if (this.match("leftParen")) {
@@ -1465,7 +1489,7 @@ export class Parser {
           nameSpan: name.span,
           arguments: [syntax],
           span: span(name.span.start, close.span.end),
-        });
+        }, allowTrailingOptional);
       }
       if (squareArguments) {
         this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
@@ -1476,11 +1500,11 @@ export class Parser {
       }
       syntax = { kind: "GenericTypeSyntax", name: typeName, nameSpan: name.span, arguments: arguments_, span: span(name.span.start, close.span.end) };
     }
-    return this.finishTypeReferenceSuffix(syntax);
+    return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
   }
 
-  private finishTypeReferenceSuffix(syntax: TypeSyntax): TypeSyntax {
-    if (this.match("question")) {
+  private finishTypeReferenceSuffix(syntax: TypeSyntax, allowTrailingOptional = true): TypeSyntax {
+    if (allowTrailingOptional && this.match("question")) {
       return this.makeOptionalTypeSyntax(syntax, span(syntax.span.start, this.previous().span.end));
     }
     return syntax;
@@ -1562,7 +1586,15 @@ export class Parser {
         continue;
       }
       if (operator.kind === "is") {
-        const type = this.parseTypeReference();
+        const conditionalTypeTest = this.typeTestHasConditionalQuestion();
+        const type = this.parseTypeReference(!conditionalTypeTest);
+        if (conditionalTypeTest) {
+          this.diagnostics.push(recoveredDiagnostic(
+            "VEL2031",
+            "Parenthesize the type test before a conditional: '(value is Type) ? then : else'; '?' immediately after a type can also mean an optional type",
+            span(left.span.start, this.current().span.end),
+          ));
+        }
         left = { kind: "IsExpression", value: left, type, span: span(left.span.start, type.span.end) };
         continue;
       }
@@ -1758,6 +1790,20 @@ export class Parser {
     let expression = this.parsePrimary();
 
     while (true) {
+      const explicitTypeArgumentsEnd = this.explicitTypeArgumentsEnd(expression);
+      if (explicitTypeArgumentsEnd !== null) {
+        const start = this.current().span.start;
+        while (this.index <= explicitTypeArgumentsEnd) this.advance();
+        const name = expression.kind === "IdentifierExpression" ? expression.name
+          : expression.kind === "MemberExpression" ? expression.property
+            : "function";
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL2031",
+          `Type arguments are inferred at each call site; write '${name}(...)' without '<...>'`,
+          span(start, this.previous().span.end),
+        ));
+        continue;
+      }
       let call = false;
       let optionalCall = false;
       if (this.match("leftParen")) {
@@ -1838,6 +1884,55 @@ export class Parser {
     }
 
     return expression;
+  }
+
+  private explicitTypeArgumentsEnd(expression: Expression): number | null {
+    const callableName = expression.kind === "IdentifierExpression" ? expression.name
+      : expression.kind === "MemberExpression" ? expression.property
+        : null;
+    if (callableName === null || !this.genericCallableNames.has(callableName)
+      || !this.check("less") || this.current().span.start !== expression.span.end) return null;
+    let depth = 0;
+    for (let index = this.index; index < this.tokens.length; index += 1) {
+      const token = this.tokens[index]!;
+      if (token.kind === "newline" || token.kind === "eof") return null;
+      if (token.kind === "less") depth += 1;
+      else if (token.kind === "greater") {
+        depth -= 1;
+        if (depth === 0) {
+          const call = this.tokens[index + 1];
+          return call?.kind === "leftParen" && call.span.start === token.span.end ? index : null;
+        }
+      }
+    }
+    return null;
+  }
+
+  private typeTestHasConditionalQuestion(): boolean {
+    let angles = 0;
+    let parentheses = 0;
+    let brackets = 0;
+    for (let offset = 0; this.index + offset < this.tokens.length; offset += 1) {
+      const token = this.tokens[this.index + offset]!;
+      if (token.kind === "newline" || token.kind === "dedent" || token.kind === "eof") return false;
+      if (token.kind === "less") angles += 1;
+      else if (token.kind === "greater") angles = Math.max(0, angles - 1);
+      else if (token.kind === "leftParen") parentheses += 1;
+      else if (token.kind === "rightParen") {
+        if (parentheses === 0) return false;
+        parentheses -= 1;
+      }
+      else if (token.kind === "leftBracket") brackets += 1;
+      else if (token.kind === "rightBracket") {
+        if (brackets === 0) return false;
+        brackets -= 1;
+      }
+      else if (token.kind === "question" && angles === 0 && parentheses === 0 && brackets === 0) {
+        const next = this.tokens[this.index + offset + 1]?.kind;
+        return next !== undefined && next !== "newline" && next !== "dedent" && next !== "eof";
+      }
+    }
+    return false;
   }
 
   private parsePrimary(): Expression {

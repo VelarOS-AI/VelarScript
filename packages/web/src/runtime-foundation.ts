@@ -169,13 +169,14 @@ function __velarCreateRuntime() {
       },
       set(target, key, next) {
         next = toRaw(next);
+        const present = Reflect.has(target, key);
         const previous = toRaw(Reflect.get(target, key, target));
         const changed = !Object.is(previous, next);
         const written = Reflect.set(target, key, next, target);
         if (!written || !changed) return written;
         link(next, target);
         if (!contains(target, previous)) unlink(previous, target);
-        trigger(target, key, false);
+        trigger(target, key, !present);
         return true;
       },
       has(target, key) { track(target, key); return Reflect.has(target, key); },
@@ -185,7 +186,7 @@ function __velarCreateRuntime() {
         const deleted = Reflect.deleteProperty(target, key);
         if (deleted) {
           if (!contains(target, previous)) unlink(previous, target);
-          trigger(target, key, false);
+          trigger(target, key, true);
         }
         return deleted;
       },

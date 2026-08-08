@@ -268,6 +268,12 @@ function argumentNoun(expected: string): "argument" | "arguments" {
   return expected === "1" || expected === "at least 1" ? "argument" : "arguments";
 }
 
+function trimTrailingOmittedArguments(sources: readonly number[]): readonly number[] {
+  let length = sources.length;
+  while (length > 0 && sources[length - 1] === -1) length -= 1;
+  return sources.slice(0, length);
+}
+
 export function isCorePrimitiveName(name: string): boolean {
   return corePrimitiveNames.has(name);
 }
@@ -397,6 +403,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly loopFlowContexts: {
     readonly baseline: FlowFactsSnapshot;
     readonly carried: FlowFactInvalidations[];
+    readonly backEdges: FlowFactInvalidations[];
     sawBreak: boolean;
   }[] = [];
   private loopCaptureFloor = 0;
@@ -1649,7 +1656,8 @@ export class Analyzer implements TypeEnvironment {
           this.typeError(`Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
         }
         const baseline = this.snapshotFlowFacts();
-        this.loopFlowContexts.push({ baseline, carried: [], sawBreak: false });
+        this.loopFlowContexts.push({ baseline, carried: [], backEdges: [], sawBreak: false });
+        const diagnosticStart = this.diagnostics.length;
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.enterScope();
           try {
@@ -1669,6 +1677,28 @@ export class Analyzer implements TypeEnvironment {
           }
         });
         const loopFlow = this.loopFlowContexts.pop()!;
+        const backEdges = [
+          ...(!this.blockAlwaysExits(statement.body) ? [bodyInvalidations] : []),
+          ...loopFlow.backEdges,
+        ];
+        this.reanalyzeLoopBackEdge(baseline, backEdges, statement.body, diagnosticStart, () => {
+          this.enterScope();
+          try {
+            this.declarePattern(statement.pattern, false, first);
+            if (statement.secondPattern) this.declarePattern(statement.secondPattern, false, second);
+            if (statement.iterable.kind === "ListExpression"
+              && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
+              for (const item of statement.iterable.elements) {
+                this.validateKnownBindingShape(statement.pattern, item);
+              }
+            }
+            this.loopDepth += 1;
+            this.analyzeStatements(statement.body);
+            this.loopDepth -= 1;
+          } finally {
+            this.exitScope();
+          }
+        });
         if (this.blockAlwaysReturns(statement.body)) this.applyFlowInvalidations(loopFlow.carried);
         else this.applyFlowInvalidations([bodyInvalidations, ...loopFlow.carried]);
         break;
@@ -1679,13 +1709,27 @@ export class Analyzer implements TypeEnvironment {
         const truthy = this.narrowingFor(statement.condition, condition);
         const falsy = this.negativeNarrowingFor(statement.condition, condition);
         const baseline = this.snapshotFlowFacts();
-        this.loopFlowContexts.push({ baseline, carried: [], sawBreak: false });
+        this.loopFlowContexts.push({ baseline, carried: [], backEdges: [], sawBreak: false });
+        const diagnosticStart = this.diagnostics.length;
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.loopDepth += 1;
           this.analyzeBlock(statement.body, truthy);
           this.loopDepth -= 1;
         });
         const loopFlow = this.loopFlowContexts.pop()!;
+        const backEdges = [
+          ...(!this.blockAlwaysExits(statement.body) ? [bodyInvalidations] : []),
+          ...loopFlow.backEdges,
+        ];
+        this.reanalyzeLoopBackEdge(baseline, backEdges, statement.body, diagnosticStart, () => {
+          this.clearCachedFlowTypesInSpan(statement.condition.span);
+          const repeatedCondition = this.inferExpression(statement.condition);
+          this.requireCondition(repeatedCondition, statement.condition);
+          const repeatedTruthy = this.narrowingFor(statement.condition, repeatedCondition);
+          this.loopDepth += 1;
+          this.analyzeBlock(statement.body, repeatedTruthy);
+          this.loopDepth -= 1;
+        });
         if (this.blockAlwaysReturns(statement.body)) {
           // The loop can only be left through a captured break/continue arm or
           // by the condition failing, so only the carried writes escape it.
@@ -1705,7 +1749,9 @@ export class Analyzer implements TypeEnvironment {
         } else {
           const context = this.loopFlowContexts.at(-1);
           if (context && this.loopFlowContexts.length > this.loopCaptureFloor) {
-            context.carried.push(this.flowInvalidationsSince(context.baseline));
+            const invalidations = this.flowInvalidationsSince(context.baseline);
+            context.carried.push(invalidations);
+            if (statement.kind === "ContinueStatement") context.backEdges.push(invalidations);
             if (statement.kind === "BreakStatement") context.sawBreak = true;
           }
         }
@@ -3848,7 +3894,7 @@ export class Analyzer implements TypeEnvironment {
     }
     this.namedArgumentOrders.set(
       spanIdentity(callSpan),
-      hasStart ? [sources[0]!, sources[1]!, sources[2]!] : [sources[1]!],
+      trimTrailingOmittedArguments(hasStart ? [sources[0]!, sources[1]!, sources[2]!] : [sources[1]!]),
     );
     return intrinsic.result;
   }
@@ -4055,6 +4101,9 @@ export class Analyzer implements TypeEnvironment {
             for (const extra of arguments_.slice(2)) this.inferExpression(extra);
             this.typeError(`Expected 0-2 arguments but received ${arguments_.length}`, callSpan);
           }
+        } else {
+          if (compareArgument) this.requireAssignable(this.inferredExpressionType(compareArgument), comparator, compareArgument.span);
+          if (byArgument) this.requireAssignable(this.inferredExpressionType(byArgument), selector, byArgument.span);
         }
         if (byArgument && !argumentNames?.includes("by")) {
           this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", byArgument.span);
@@ -4343,7 +4392,7 @@ export class Analyzer implements TypeEnvironment {
       this.typeError(`Missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, callSpan);
       valid = false;
     }
-    this.namedArgumentOrders.set(spanIdentity(callSpan), sources);
+    this.namedArgumentOrders.set(spanIdentity(callSpan), trimTrailingOmittedArguments(sources));
     return {
       ordered: sources.map((source) => source === -1
         ? { kind: "IdentifierExpression", name: "\u0000omitted-named-argument", span: callSpan } satisfies Expression
@@ -5824,7 +5873,8 @@ export class Analyzer implements TypeEnvironment {
         && (!statement.elseBody || this.blockAlwaysReturns(statement.elseBody))) return true;
       if (statement.kind === "TryStatement") {
         if (statement.finallyBody && this.blockAlwaysReturns(statement.finallyBody)) return true;
-        if (statement.catchBody && this.blockAlwaysReturns(statement.tryBody) && this.blockAlwaysReturns(statement.catchBody)) return true;
+        if (this.blockAlwaysReturns(statement.tryBody)
+          && (!statement.catchBody || this.blockAlwaysReturns(statement.catchBody))) return true;
       }
     }
     return false;
@@ -5842,9 +5892,8 @@ export class Analyzer implements TypeEnvironment {
     }
     if (statement.kind !== "TryStatement") return false;
     if (statement.finallyBody && this.blockAlwaysExits(statement.finallyBody)) return true;
-    return Boolean(statement.catchBody
-      && this.blockAlwaysExits(statement.tryBody)
-      && this.blockAlwaysExits(statement.catchBody));
+    return this.blockAlwaysExits(statement.tryBody)
+      && (!statement.catchBody || this.blockAlwaysExits(statement.catchBody));
   }
 
   private blockAlwaysExits(statements: readonly Statement[]): boolean {
@@ -6525,6 +6574,67 @@ export class Analyzer implements TypeEnvironment {
       if (invalidated.size > 0) members.set(index, invalidated);
     });
     return { bindings, members, storageTypes };
+  }
+
+  private reanalyzeLoopBackEdge(
+    baseline: FlowFactsSnapshot,
+    backEdges: readonly FlowFactInvalidations[],
+    body: readonly Statement[],
+    diagnosticStart: number,
+    analyze: () => void,
+  ): void {
+    if (!this.flowInvalidationsAffectFacts(backEdges)) return;
+    const loopHead = this.flowSnapshotAfterInvalidations(baseline, backEdges);
+    this.loopFlowContexts.push({ baseline: loopHead, carried: [], backEdges: [], sawBreak: false });
+    const secondDiagnosticStart = this.diagnostics.length;
+    this.clearCachedFlowTypes(body);
+    try {
+      this.analyzeIsolatedFlow(loopHead, analyze);
+      this.deduplicateDiagnostics(diagnosticStart, secondDiagnosticStart);
+    } finally {
+      this.loopFlowContexts.pop();
+      this.restoreFlowFacts(baseline);
+    }
+  }
+
+  private flowInvalidationsAffectFacts(invalidations: readonly FlowFactInvalidations[]): boolean {
+    return invalidations.some((item) => item.bindings.size > 0
+      || [...item.members.values()].some((paths) => paths.size > 0));
+  }
+
+  private deduplicateDiagnostics(firstStart: number, secondStart: number): void {
+    const repeated = this.diagnostics.splice(secondStart);
+    const seen = new Set(this.diagnostics.slice(firstStart).map((item) =>
+      `${item.code}\u0000${item.message}\u0000${item.span.start}\u0000${item.span.end}`));
+    for (const item of repeated) {
+      const key = `${item.code}\u0000${item.message}\u0000${item.span.start}\u0000${item.span.end}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      this.diagnostics.push(item);
+    }
+  }
+
+  private clearCachedFlowTypes(statements: readonly Statement[]): void {
+    const first = statements[0];
+    const last = statements.at(-1);
+    if (!first || !last) return;
+    this.clearCachedFlowTypesInSpan({ start: first.span.start, end: last.span.end });
+  }
+
+  private clearCachedFlowTypesInSpan(sourceSpan: Span): void {
+    const insideBody = (key: string): boolean => {
+      const separator = key.indexOf(":");
+      if (separator < 0) return false;
+      const start = Number(key.slice(0, separator));
+      const end = Number(key.slice(separator + 1));
+      return start >= sourceSpan.start && end <= sourceSpan.end;
+    };
+    for (const key of this.inferredExpressionTypes.keys()) {
+      if (insideBody(key)) this.inferredExpressionTypes.delete(key);
+    }
+    for (const key of this.logicalConditionNarrowings.keys()) {
+      if (insideBody(key)) this.logicalConditionNarrowings.delete(key);
+    }
   }
 
   private flowSnapshotAfterInvalidations(

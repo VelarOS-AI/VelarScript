@@ -6,6 +6,20 @@
 
 **修完之前不发布。** 探针程序保留在搜捕 scratch 目录。
 
+## 修复与复核状态
+
+41 条缺陷已按第七 A 节的两波编排全部修复，并为每条缺陷建立了永久回归覆盖：
+
+- `tests/hardening-flow.test.ts`：#1、#5、#6、#23、#24
+- `tests/hardening-cli.test.ts`：#7、#31、#33、#38
+- `tests/hardening-reactivity.test.ts`：#2–#4、#25–#30
+- `tests/hardening-language.test.ts`：#8、#11–#22、#34–#37、#40、#41
+- `tests/hardening-web-syntax.test.ts`：#9、#10、#32、#39
+
+两波合并后重新执行了六路对抗性搜捕。结果为 **blocker 0 / new major 0**；复搜捕额外发现并关闭了三处原缺陷的变形：JSX 布局文本中的普通引号（#9）、Unicode 空串分割与空搜索替换（#15/#20），以及跨解构、条件、浅容器、函数返回和传递 helper 的 prop 所有权绕过（#28）。#28 的独立复核覆盖 14 个非法 mutation、15 个合法对照、37 个 Chromium 场景与 4 个 keyed 压力场景，未发现误拒。
+
+最终门禁：`npm run check`、425/425 测试、包消费者验收、开发/生产/外部预览浏览器矩阵，以及四个示例在 Chromium、Firefox、WebKit 下的 48 个浏览器测试全部通过。发布动作仍保持中止；本轮没有创建 tag、提交、推送或执行 npm publish。
+
 ## 1. [blocker] Loop back edges never invalidate narrowing facts: a write inside a for/while body is invisible to the next iteration
 
 - **类型**：unsound-accept
@@ -1992,10 +2006,10 @@ Documentation check (this is where I tried hardest to refute):
 
 <details><summary>复现</summary>
 
-```
+````text
 Web project (`extensions: ["@velarscript/web"]`), src/main.vel — 4 lines, no state/JSX/mount needed:
 
-```velar
+```text
 export const cardLook = look:
     gridTemplateAreas = "
         head head
@@ -2017,7 +2031,7 @@ export const cardLook = look:
 Contrast (both `Checked 1 module`):
 - same layout string bound outside the block, then `gridTemplateAreas = areas`
 - the identical layout string inside a JSX attribute: `<section title={"\n    head head\n"}>` — this one enters layout mode and, when closed at the opening line's indentation, compiles clean.
-```
+````
 
 </details>
 

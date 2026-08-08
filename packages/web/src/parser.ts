@@ -123,7 +123,9 @@ export class VelarWebParser extends Parser {
     this.expect("dedent", "Expected the end of the Look block");
     const entries = new LookSourceParser(
       syntax ?? { kind: "WebLookBlockSyntax", lines: [], span: block.span },
-      (text, offset) => this.parseNestedExpression(text, offset),
+      (text, offset, openingIndent) => openingIndent
+        ? this.parseNestedExpression(openingIndent + text, offset - openingIndent.length, true)
+        : this.parseNestedExpression(text, offset),
       (item) => this.diagnostics.push(item),
     ).parse();
     return { kind: "LookExpression", entries, span: span(token.span.start, block.span.end) };
@@ -148,7 +150,14 @@ export class VelarWebParser extends Parser {
     }
     // JSX interpolation braces are a bracket context: the expression inside
     // '{...}' continues across physical lines exactly as inside parentheses.
-    return this.parseNestedExpression(source.source, source.span.start, true);
+    const layoutAtStart = /^[ \t]*(?:rf|fr|f|r)?["'](?:\r\n|\r|\n)/u.test(source.source);
+    return layoutAtStart
+      ? this.parseNestedExpression(
+        source.openingIndent + source.source,
+        source.span.start - source.openingIndent.length,
+        true,
+      )
+      : this.parseNestedExpression(source.source, source.span.start, true);
   }
 
   private parseStateDeclaration(start: number, exported: boolean): StateDeclaration {
@@ -296,13 +305,13 @@ function jsxExpression(
 class LookSourceParser {
   private readonly lines: readonly WebLookLineSyntax[];
   private readonly blockSpan: Span;
-  private readonly parseExpression: (text: string, offset: number) => Expression;
+  private readonly parseExpression: (text: string, offset: number, openingIndent?: string) => Expression;
   private readonly report: (item: Diagnostic) => void;
   private index = 0;
 
   constructor(
     block: WebLookBlockSyntax,
-    parseExpression: (text: string, offset: number) => Expression,
+    parseExpression: (text: string, offset: number, openingIndent?: string) => Expression,
     report: (item: Diagnostic) => void,
   ) {
     this.blockSpan = block.span;
@@ -344,7 +353,7 @@ class LookSourceParser {
       const kebab = /^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\s*=(.*)$/u.exec(line.text);
       const property = kebab
         ? null
-        : /^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/u.exec(line.text);
+        : /^([A-Za-z][A-Za-z0-9]*)\s*=\s*([\s\S]+)$/u.exec(line.text);
       if (kebab && kebab[2]!.trim().length === 0) {
         const camel = kebab[1]!.replace(/-+([A-Za-z])/gu, (_, letter: string) => letter.toUpperCase());
         this.report(diagnostic("VEL5038", `Use '${camel}'; Look properties use the DOM camelCase spelling`, this.lineSpan(line)));
@@ -378,7 +387,7 @@ class LookSourceParser {
         entries.push({
           kind: "LookProperty",
           name: propertyName,
-          value: this.parseExpression(valueText, valueStart),
+          value: this.parseExpression(valueText, valueStart, /[\r\n]/u.test(valueText) ? line.openingIndent : undefined),
           span: this.lineSpan(line),
         });
         continue;

@@ -96,6 +96,15 @@ export function inspectModule(text: string, options: Pick<CompileOptions, "path"
 }
 
 export function compile(text: string, options: CompileOptions = {}): CompileResult {
+  try {
+    return compileUnchecked(text, options);
+  } catch (error) {
+    if (!isJavaScriptStackOverflow(error)) throw error;
+    return complexityFailureResult(text, options);
+  }
+}
+
+function compileUnchecked(text: string, options: CompileOptions): CompileResult {
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
   const diagnostics = [...parsed.diagnostics];
@@ -165,6 +174,26 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
   };
 }
 
+function complexityFailureResult(text: string, options: CompileOptions): CompileResult {
+  const path = options.path ?? "<source>";
+  const extensions = normalizedExtensions(options.extensions ?? []);
+  const source = new SourceText(path, text);
+  const program: Program = { kind: "Program", body: [], span: { start: 0, end: 0 } };
+  return {
+    code: null,
+    sourceMap: null,
+    css: null,
+    styleSegments: null,
+    extensions: extensions.map((extension) => extension.id),
+    diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to process safely", { start: 0, end: Math.min(1, text.length) })],
+    source,
+    dependencies: [],
+    resources: [],
+    moduleInterface: interfaceOf(program, path, extensions),
+    semanticIndex: buildSemanticIndex(program, source),
+  };
+}
+
 function resourcesOf(program: Program, extensions: readonly CompilerExtension[]): readonly CompilerResourceDependency[] {
   const output: CompilerResourceDependency[] = [];
   const seen = new Set<string>();
@@ -212,13 +241,17 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
     const parsed = parser.parse();
     return { source, program: parsed.program, diagnostics: [...lexed.diagnostics, ...parsed.diagnostics] };
   } catch (error) {
-    if (!isParserComplexityFailure(error)) throw error;
+    if (!isParserComplexityFailure(error) && !isJavaScriptStackOverflow(error)) throw error;
     return {
       source,
       program: { kind: "Program", body: [], span: { start: 0, end: 0 } },
       diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to parse safely", { start: 0, end: Math.min(1, text.length) })],
     };
   }
+}
+
+function isJavaScriptStackOverflow(error: unknown): boolean {
+  return error instanceof RangeError && /Maximum call stack size exceeded|too much recursion/iu.test(error.message);
 }
 
 function normalizedExtensions(extensions: readonly CompilerExtension[]): readonly CompilerExtension[] {

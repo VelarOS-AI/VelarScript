@@ -364,8 +364,7 @@ export const Server = typeObject(value => plainRecord(value) && Number.isSafeInt
 
 function requestPath(value) {
   if (typeof value !== "string" || value.length === 0 || value.length > maxPathCodeUnits || value.includes("\0") || value.includes("\\")) throw new StaticNotFound();
-  let decoded;
-  try { decoded = decodeURIComponent(value.split("?", 1)[0]); } catch { throw new StaticNotFound(); }
+  const decoded = value;
   if (!decoded.startsWith("/") || decoded.includes("\0") || decoded.includes("\\")) throw new StaticNotFound();
   const segments = decoded.split("/").filter(Boolean);
   if (segments.some(segment => segment === "." || segment === "..")) throw new StaticNotFound();
@@ -525,8 +524,11 @@ function requestBody(nodeRequest) {
   };
 }
 
-function serveRequest(nodeRequest, host) {
-  const url = new URL(nodeRequest.url ?? "/", "http://" + host);
+function serveRequest(nodeRequest) {
+  const url = new URL(nodeRequest.url ?? "/", "http://velar.invalid");
+  let path;
+  try { path = decodeURIComponent(url.pathname); }
+  catch { throw new TypeError("ServeRequest.path must use valid URL encoding"); }
   const body = requestBody(nodeRequest);
   const headers = new Map();
   for (const [name, value] of Object.entries(nodeRequest.headers)) {
@@ -537,7 +539,7 @@ function serveRequest(nodeRequest, host) {
   for (const [name, value] of url.searchParams) if (!query.has(name)) query.set(name, value);
   return Object.freeze({
     method: nodeRequest.method ?? "GET",
-    path: url.pathname,
+    path,
     query,
     headers,
     text: body,
@@ -557,7 +559,7 @@ export async function serve(handler, port, host = "127.0.0.1") {
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new RangeError("serve port must be an integer from 0 through 65535");
   if (typeof host !== "string" || host.length === 0 || host.length > 255) throw new TypeError("serve host must be bounded text");
   const nodeServer = createNodeServer((request, response) => {
-    Promise.resolve().then(() => handler(serveRequest(request, host))).then(value => writeResponse(response, value)).catch(error => {
+    Promise.resolve().then(() => handler(serveRequest(request))).then(value => writeResponse(response, value)).catch(error => {
       console.error("[velar/serve] request handler failed:", error);
       opaqueFailure(response);
     });

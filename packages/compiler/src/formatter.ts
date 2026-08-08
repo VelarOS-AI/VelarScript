@@ -133,24 +133,37 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
 }
 
 function reindentLayoutLiteral(value: string, originalIndent: string, formattedIndent: string): string {
-  let output = "";
+  const lines: { readonly text: string; readonly newline: string }[] = [];
   let cursor = 0;
-  let first = true;
   while (cursor < value.length) {
     const boundary = /\r\n|\r|\n/gu;
     boundary.lastIndex = cursor;
     const match = boundary.exec(value);
     const end = match?.index ?? value.length;
-    const line = value.slice(cursor, end);
-    output += first || !line.startsWith(originalIndent)
-      ? line
-      : `${formattedIndent}${line.slice(originalIndent.length)}`;
-    first = false;
+    lines.push({ text: value.slice(cursor, end), newline: match?.[0] ?? "" });
     if (!match) break;
-    output += match[0];
     cursor = end + match[0].length;
   }
-  return output;
+  const leading = (line: string): string => /^[ \t]*/u.exec(line)?.[0] ?? "";
+  const width = (indent: string): number => [...indent].reduce((total, character) => total + (character === "\t" ? 4 : 1), 0);
+  const contentMargin = lines.slice(1, -1)
+    .map((line) => line.text)
+    .find((line) => line.trim().length > 0);
+  const originalMargin = contentMargin === undefined ? null : leading(contentMargin);
+  const marginWidth = originalMargin === null ? 0 : width(originalMargin);
+  const shiftedMarginWidth = Math.max(width(formattedIndent) + 1, marginWidth + width(formattedIndent) - width(originalIndent));
+  const formattedMargin = " ".repeat(shiftedMarginWidth);
+
+  return lines.map((line, index) => {
+    let text = line.text;
+    if (index === lines.length - 1) {
+      if (text.startsWith(originalIndent)) text = `${formattedIndent}${text.slice(originalIndent.length)}`;
+    } else if (index > 0 && originalMargin !== null) {
+      if (text.startsWith(originalMargin)) text = `${formattedMargin}${text.slice(originalMargin.length)}`;
+      else if (text.trim().length === 0) text = formattedMargin;
+    }
+    return `${text}${line.newline}`;
+  }).join("");
 }
 
 function isChainContinuationLine(content: string): boolean {
