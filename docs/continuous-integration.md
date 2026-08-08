@@ -23,6 +23,11 @@ The repository defines three GitHub Actions workflows:
   Chromium, Firefox, and WebKit, and releases both resources through component
   cleanup. Host-side tests do not bypass that source contract by importing the
   generated realtime JavaScript module directly.
+- Packed-browser acceptance independently creates an application from the four
+  installed tarballs. Its application graph imports all nine browser
+  application modules before mounting, while its generated browser test loads
+  the tenth module, `velar/web-test`; the installed CLI then checks, tests,
+  builds, verifies, and executes that project.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
   access redirects, and asset-to-HTML fallback are rejected. A real preview

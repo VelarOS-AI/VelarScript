@@ -77,6 +77,12 @@ builds and verifies its production output, and runs its browser test. A
 successful source build without this consumer test is not considered
 publishable.
 
+The packed browser gate does not stop at a minimal framework import. Its
+generated application imports all nine runtime-facing Web modules from the
+installed `@velarscript/web` tarball, and the generated browser test imports
+`velar/web-test`. The installed CLI must check, test, build, integrity-verify,
+and run the resulting project before the release set is accepted.
+
 `npm run release:rehearse` adds the release-set boundary: all four tarballs,
 deterministic SHA-256 values, source identity, npm integrity, and explicit
 publication blockers. Candidate mode fails closed unless Git/version/remote
