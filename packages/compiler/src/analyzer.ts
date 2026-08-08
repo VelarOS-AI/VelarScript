@@ -76,6 +76,11 @@ interface MemberNarrowing {
   readonly frame: number;
 }
 
+interface PendingScopeDeclaration {
+  readonly span: Span;
+  readonly loopHead: boolean;
+}
+
 interface FlowFactsSnapshot {
   readonly bindings: ReadonlyMap<Binding, {
     readonly type: ValueType;
@@ -351,6 +356,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly optionalBindingEntries = new Set<number>();
   protected readonly reactiveBindings = new Map<string, "state" | "computed">();
   private readonly shadowedReactiveSpans = new Set<string>();
+  private readonly pendingScopeDeclarations: Map<string, PendingScopeDeclaration>[] = [new Map()];
+  private readonly reportedShadowedReads = new Set<string>();
   protected readonly enumValueBindings = new Map<number, string>();
   private readonly exhaustiveMatches = new Set<number>();
   private readonly formReads = new Map<string, readonly FormReadField[]>();
@@ -1610,7 +1617,28 @@ export class Analyzer implements TypeEnvironment {
         break;
       }
       case "ForStatement": {
+        // The emitted loop head evaluates the iterable inside the loop
+        // binding's temporal dead zone, so an iterable reference to a name
+        // the pattern declares cannot reach the outer binding the analyzer
+        // resolves. The names are pending only while the iterable is
+        // inferred: the loop binding owns its name in the loop head and
+        // body alone, so earlier statements of the same scope still read
+        // the outer binding.
+        const pendingLoopNames: string[] = [];
+        {
+          const pending = this.pendingScopeDeclarations.at(-1)!;
+          for (const pattern of [statement.pattern, statement.secondPattern]) {
+            if (!pattern) continue;
+            this.collectPatternNames(pattern, (name) => {
+              if (!pending.has(name)) {
+                pending.set(name, { span: pattern.span, loopHead: true });
+                pendingLoopNames.push(name);
+              }
+            });
+          }
+        }
         const iterable = this.inferExpression(statement.iterable);
+        for (const name of pendingLoopNames) this.pendingScopeDeclarations.at(-1)!.delete(name);
         const first = iterable.kind === "list" || iterable.kind === "set"
           ? iterable.element
           : iterable.kind === "map" ? iterable.key : iterable.kind === "string" ? stringType : unknownType;
@@ -2361,6 +2389,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   protected analyzeStatements(statements: readonly Statement[]): void {
+    this.prescanScopeDeclarations(statements);
     let completedFlow: FlowFactsSnapshot | null = null;
     for (const statement of statements) {
       if (completedFlow) {
@@ -2397,6 +2426,7 @@ export class Analyzer implements TypeEnvironment {
         this.diagnostics.push(diagnostic("VEL3001", `Unknown name '${statement.target.name}'`, statement.target.span));
         return;
       }
+      this.checkShadowedRead(statement.target.name, statement.target.span);
       if (binding.reactiveShadow) this.shadowedReactiveSpans.add(spanIdentity(statement.target.span));
       if (!binding.mutable) {
         this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to const binding '${statement.target.name}'`, statement.target.span));
@@ -2596,6 +2626,7 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
         }
+        this.checkShadowedRead(expression.name, expression.span);
         if (binding.reactiveShadow) this.shadowedReactiveSpans.add(spanIdentity(expression.span));
         return binding.type;
       }
@@ -5914,6 +5945,7 @@ export class Analyzer implements TypeEnvironment {
     internal = false,
     declaredType = type,
   ): void {
+    this.pendingScopeDeclarations.at(-1)?.delete(name);
     if (!internal && javaScriptReservedBindings.has(name)) {
       this.diagnostics.push(diagnostic("VEL3007", `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`, declarationSpan));
       return;
@@ -6081,6 +6113,77 @@ export class Analyzer implements TypeEnvironment {
     };
     if (type.kind === "union") return { kind: "union", members: type.members.map((member) => this.displayExternalClasses(member)) };
     return type;
+  }
+
+  // Emitted JavaScript preserves binding names, so a const or let shadow owns
+  // its name for its whole emitted block: any reference in that block that the
+  // analyzer resolves to the outer binding — an earlier statement or the
+  // shadow's own initializer — lands in the shadow's temporal dead zone (or,
+  // inside an arrow, captures the shadow instead of the outer binding). Each
+  // scope therefore pre-registers the names its statements will declare, and a
+  // reference that resolves past a scope still pending the same name is
+  // reported as the ambiguity it is.
+  protected prescanScopeDeclarations(statements: readonly Statement[]): void {
+    const pending = this.pendingScopeDeclarations.at(-1)!;
+    for (const statement of statements) {
+      if (statement.kind === "VariableDeclaration") {
+        this.collectPatternNames(statement.pattern, (name) => {
+          if (!pending.has(name)) pending.set(name, { span: statement.span, loopHead: false });
+        });
+      } else if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration" || statement.kind === "ResourceDeclaration") {
+        if (!pending.has(statement.name)) pending.set(statement.name, { span: statement.span, loopHead: false });
+      }
+    }
+  }
+
+  private collectPatternNames(pattern: BindingPattern, add: (name: string) => void): void {
+    if (pattern.kind === "NameBindingPattern") {
+      add(pattern.name);
+      return;
+    }
+    if (pattern.kind === "ListBindingPattern") {
+      for (const element of pattern.elements) if (element) this.collectPatternNames(element, add);
+      if (pattern.rest) add(pattern.rest.name);
+      return;
+    }
+    for (const entry of pattern.entries) this.collectPatternNames(entry.pattern, add);
+    if (pattern.rest) add(pattern.rest.name);
+  }
+
+  private checkShadowedRead(name: string, span: Span): void {
+    let resolvedIndex = -1;
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      if (this.scopes[index]?.has(name)) {
+        resolvedIndex = index;
+        break;
+      }
+    }
+    // A Core or extension global resolves by its own emission rules, not by a
+    // lexical name the shadow could capture.
+    if (resolvedIndex === -1) return;
+    for (let index = this.scopes.length - 1; index >= resolvedIndex; index -= 1) {
+      const declaration = this.pendingScopeDeclarations[index]?.get(name);
+      // A pending loop binding lives in the loop's own scope, so it also
+      // captures a read that resolves to the scope holding the loop
+      // statement; a pending declaration in the resolution scope itself is
+      // a same-scope redeclaration, reported on its own.
+      if (!declaration || (index === resolvedIndex && !declaration.loopHead)) continue;
+      const identity = spanIdentity(span);
+      if (!this.reportedShadowedReads.has(identity)) {
+        this.reportedShadowedReads.add(identity);
+        const insideDeclaration = span.start >= declaration.span.start && span.end <= declaration.span.end;
+        this.diagnostics.push(diagnostic(
+          "VEL3017",
+          declaration.loopHead
+            ? `The iterable of this for-loop cannot reference the outer '${name}' its loop binding shadows; rename the loop binding, or read the iterable into a differently named binding first`
+            : insideDeclaration
+              ? `The initializer of shadowing declaration '${name}' cannot reference the outer '${name}' it shadows; rename the new binding to keep the outer '${name}' readable`
+              : `'${name}' is shadowed by a declaration later in this scope, so this reference cannot reach the outer '${name}'; rename the shadowing declaration to keep the outer '${name}' readable`,
+          span,
+        ));
+      }
+      return;
+    }
   }
 
   private declarePattern(pattern: BindingPattern, mutable: boolean, type: ValueType, declaredType = type): void {
@@ -6516,10 +6619,12 @@ export class Analyzer implements TypeEnvironment {
   protected enterScope(): void {
     this.scopes.push(new Map());
     this.memberNarrowings.push(new Map());
+    this.pendingScopeDeclarations.push(new Map());
   }
 
   protected exitScope(): void {
     this.scopes.pop();
     this.memberNarrowings.pop();
+    this.pendingScopeDeclarations.pop();
   }
 }

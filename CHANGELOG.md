@@ -114,6 +114,37 @@ Web framework changes:
   exposes no `memo` or `batch` API; synchronous state bursts remain coalesced
   by the scheduler.
 
+## 0.10.0-dev — For-loop bindings own their name from the loop head
+
+Language and compiler changes:
+
+- A for-loop binding now follows the shadowed-name ownership rule (VEL3017):
+  an iterable expression that references a name the loop's own pattern
+  declares — through a simple name or any list or object destructuring,
+  including rests — is a compile-time error when that reference would
+  resolve to an outer binding, instead of compiling into JavaScript that
+  evaluates the iterable in the loop binding's temporal dead zone and
+  throws at runtime. The directive names the fixes: rename the loop
+  binding, or read the iterable into a differently named binding first —
+  the loop binding owns its name only in the loop head and body, so a
+  same-scope read above the loop stays legal. An arrow parameter inside
+  the iterable that reuses the name keeps being an ordinary inner binding.
+
+## 0.10.0-dev — Shadowed names are owned by their shadow's whole scope
+
+Language and compiler changes:
+
+- A declaration that shadows an outer binding now owns its name for its whole
+  scope: a reference that would reach the outer binding from earlier in that
+  scope — an earlier statement, the shadow's own initializer, a component
+  item above a shadowing `state`, or a prop default — is a compile-time
+  error (VEL3017) instead of compiling into JavaScript that reads the
+  not-yet-initialized shadow at runtime (or, inside an arrow, silently
+  captures the wrong binding). The directive names the fix: rename the
+  shadow, or read the outer value in an enclosing scope. A function
+  parameter default keeps reading the enclosing scope, exactly as emitted
+  JavaScript does.
+
 ## 0.10.0-dev — Keyed conditionals and dev-server npm prebundling
 
 Language and compiler changes:

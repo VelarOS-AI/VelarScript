@@ -81,6 +81,17 @@ attempts += 1
   Reads and writes of a shadowing binding are ordinary lexical reads and
   writes; only assignment that resolves to the module reactive binding itself
   publishes an update.
+- A shadowing declaration owns its name for its entire scope. Referencing the
+  shadowed outer binding anywhere in that scope before the declaration —
+  including in the declaration's own initializer — is a compile-time error,
+  because emitted JavaScript would read the not-yet-initialized shadow.
+  Rename the shadow, or read the outer value in an enclosing scope, to keep
+  both values reachable. A function parameter default reads the enclosing
+  scope and is not affected by a body shadow. A for-loop binding owns its
+  name the same way in the loop head and body: the iterable expression
+  cannot reference the outer binding the loop pattern shadows. Because the
+  loop binding's scope begins at the loop head, reading the iterable into a
+  differently named binding earlier in the same scope stays legal.
 - Core bindings and the JavaScript host capabilities used directly by generated
   runtime code cannot be shadowed. Extension conveniences follow ordinary
   lexical lookup, so a local or imported `color` or `clamp` naturally wins.

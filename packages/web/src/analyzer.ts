@@ -771,6 +771,12 @@ export class VelarWebAnalyzer extends Analyzer {
         .filter((item) => item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration")
         .map((item) => item.name),
     ]);
+    // Component items are analyzed one by one rather than through
+    // analyzeStatements, so the shadow prescan runs here — before the
+    // parameters, whose defaults are emitted as closures inside the component
+    // body where a later item's shadow would capture them.
+    this.prescanScopeDeclarations(statement.body.filter((item): item is Statement =>
+      item.kind !== "MountedBlock" && item.kind !== "CleanupBlock"));
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;

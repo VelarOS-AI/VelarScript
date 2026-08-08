@@ -199,6 +199,10 @@ export class VelarWebParser extends Parser {
 
   private parseComponent(start: number, exported: boolean): ComponentDeclaration {
     const name = this.expect("identifier", "Expected a component name");
+    if (this.check("less")) {
+      this.parseTypeParameters();
+      this.diagnostics.push(diagnostic("VEL2025", `Component '${name.value}' cannot declare type parameters; only 'def' functions take '<T>'`, name.span));
+    }
     const parameters = this.check("leftParen") ? this.parseParameters() : [];
     for (const parameter of parameters) {
       if (parameter.rest) {

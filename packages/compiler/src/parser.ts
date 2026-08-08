@@ -711,7 +711,7 @@ export class Parser {
     };
   }
 
-  private parseTypeParameters(): readonly TypeParameterDeclaration[] | null {
+  protected parseTypeParameters(): readonly TypeParameterDeclaration[] | null {
     if (!this.match("less")) return null;
     const open = this.previous();
     const parameters: TypeParameterDeclaration[] = [];
