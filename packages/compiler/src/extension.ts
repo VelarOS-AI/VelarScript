@@ -171,6 +171,14 @@ export interface CompilerInspectionExtension {
   readonly visitDependencyExpression?: (expression: Expression, context: CompilerDependencyContext) => boolean;
   readonly visitDependencyStatement?: (statement: Statement, context: CompilerDependencyContext) => boolean;
   readonly contributeInterface?: (statement: Statement, context: CompilerInterfaceContext) => boolean;
+  /**
+   * Whole-program annotations for exported names, merged into the module
+   * interface's extension exports under this extension's id. Unlike
+   * contributeInterface, this hook also reaches exports the core interface
+   * builder owns (functions, consts), so an extension can attach metadata —
+   * such as purity markers — without taking over their typing.
+   */
+  readonly exportAnnotations?: (program: Program) => ReadonlyMap<string, unknown>;
   readonly interfaceExportIdentity?: (name: string, value: unknown) => string;
   readonly inferPublicExpression?: (expression: Expression) => ValueType | undefined;
   readonly resources?: (program: Program) => readonly CompilerResourceDependency[];

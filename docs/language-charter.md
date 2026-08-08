@@ -979,11 +979,12 @@ return tasks.copy()
 
 `computed` is read-only and tracks its reactive dependencies. Computed
 expressions are synchronous; asynchronous component data belongs in a
-`resource`. Because immutable updates make identity the change signal, the Web
-globals `memo` (an identity-keyed cache for per-item derivations inside a
-`computed` or render, with generation-based eviction) and `batch` (one
-publication for a synchronous multi-assignment commit) scale derivations
-without changing these semantics; the Web API document owns their contracts.
+`resource`. Because immutable updates make identity the change signal, the
+framework scales derivations without exposing an API: provably pure per-item
+derivations inside a `computed` or render are cached by argument identity
+automatically (with generation-based eviction), and a synchronous
+multi-assignment commit publishes once; the Web API document owns both
+contracts.
 
 A resource exposes `value`, `loading`, `ready`, `error`, and `reload`. It owns
 stale-result and component-destruction handling.

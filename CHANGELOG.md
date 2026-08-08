@@ -4,6 +4,35 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — The framework memoizes automatically; memo and batch retire
+
+Web framework changes (this revises the "Identity-keyed memoization and
+batched reactive commits" entry below within the same unreleased cycle — the
+language ships no memoization or batching API; repeated-computation problems
+are the framework's job):
+
+- Automatic memoization: inside reactive derivation contexts (`computed`
+  initializers, `watch` expressions and bodies, render expressions, and the
+  module or component functions those contexts call), `collection.map(f)` and
+  `collection.filter(f)` with a provably pure-enough `f` — and, inside such a
+  per-item callback, single-positional-argument calls to a provably
+  pure-enough unary function — compile through the identity-cache machinery
+  automatically: cached by argument identity (`Object.is`), evicted by
+  observer-run generation, bypassed entirely outside observer runs. Purity is
+  proved, never assumed (no reactive reads, no mutable captures, no
+  unproved calls; transitive within the module, carried across modules by an
+  interface marker that follows re-exports); any doubt compiles untouched.
+- The Web globals `memo` and `batch` are removed before any release. Manual
+  `memo` is subsumed by automatic memoization; `batch` never changed a
+  number — the scheduler already coalesces a synchronous assignment burst
+  into one publication, which is now a documented framework contract
+  (consecutive synchronous state assignments publish once; reads between
+  them are always fresh) pinned by runtime tests. Both names are ordinary
+  identifiers again.
+- New compiler-extension hook `exportAnnotations`: whole-program annotations
+  for exported names, merged into the module interface's extension exports —
+  the channel the purity markers travel through.
+
 ## 0.10.0-dev — Identity-keyed memoization and batched reactive commits
 
 Web framework changes:

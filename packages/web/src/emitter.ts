@@ -9,6 +9,7 @@ import type {
 import { cssPropertyName } from "./look.ts";
 import { JavaScriptEmitter, spanIdentity } from "@velarscript/compiler/extension";
 import { WEB_RUNTIME_FOUNDATION } from "./runtime-foundation.ts";
+import { collectPatternNames, PurityAnalyzer, PURE_UNARY_DERIVATION_EXPORT, WEB_EXTENSION_ID, type PureFunctionInfo } from "./purity.ts";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
 type ComponentDeclaration = Extract<Statement, { readonly kind: "ComponentDeclaration" }>;
@@ -16,6 +17,31 @@ type JSXElementExpression = Extract<Expression, { readonly kind: "JSXElementExpr
 type JSXAttribute = JSXElementExpression["attributes"][number];
 type LookExpression = Extract<Expression, { readonly kind: "LookExpression" }>;
 type LookEntry = LookExpression["entries"][number];
+type CallExpression = Extract<Expression, { readonly kind: "CallExpression" }>;
+type ArrowFunctionExpression = Extract<Expression, { readonly kind: "ArrowFunctionExpression" }>;
+type FunctionDeclaration = Extract<Statement, { readonly kind: "FunctionDeclaration" }>;
+
+// One automatic-memoization rewrite, keyed by the span identity of the node
+// it replaces: a map/filter callback reference (target carries the function
+// name, or null when the callback is an inline arrow emitted at the site) or
+// a whole per-item call (kind "call"). The slot is a scope-level `const
+// __velarMemoSiteN = {}` holding the lazily created identity cache.
+interface AutoMemoSite {
+  readonly kind: "callback" | "call";
+  readonly slot: string;
+  readonly target: string | null;
+}
+
+// A reactive-derivation compilation context for the auto-memo prepass: the
+// bucket decides where the cache slot lives (module scope or one component's
+// construction scope), purity is the resolver for that scope, and locals is
+// the flat, conservative set of every name bound anywhere inside the context
+// function — a candidate name that appears in it is treated as shadowed.
+interface AutoMemoContext {
+  readonly bucket: "module" | ComponentDeclaration;
+  readonly purity: PurityAnalyzer;
+  readonly locals: ReadonlySet<string>;
+}
 
 interface LookStaticAtom {
   readonly kind: "hook" | "media" | "scheme";
@@ -56,20 +82,28 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private currentScope: string | null = null;
   private currentJsxNamespace = '"html"';
   private readonly resourceContents: ReadonlyMap<string, string>;
+  private readonly extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>>;
   private cssOutput = "";
   private cssSegments: CompilerStyleSegments = { before: "", controlled: "", after: "" };
   private webOutput = false;
   private needsFileTypeHelper = false;
   private jsxId = 0;
+  private readonly autoMemoSites = new Map<string, AutoMemoSite>();
+  private readonly autoMemoEmitting = new Set<string>();
+  private autoMemoModuleSlots: string[] = [];
+  private autoMemoComponentSlots = new Map<ComponentDeclaration, string[]>();
+  private autoMemoSlotsByTarget = new Map<"module" | ComponentDeclaration, Map<string, string>>();
+  private autoMemoSlotId = 0;
 
   constructor(
     hints: LoweringHints,
     forcedFunctionExports: ReadonlySet<string> = new Set(),
     resourceContents: ReadonlyMap<string, string> = new Map(),
-    _extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>> = new Map(),
+    extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>> = new Map(),
   ) {
     super(hints, forcedFunctionExports);
     this.resourceContents = resourceContents;
+    this.extensionImports = extensionImports;
   }
 
   override emit(program: Program): string {
@@ -78,6 +112,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     this.prepareLooks(program);
     this.webOutput = containsWebSyntax(program);
     this.needsFileTypeHelper = false;
+    this.prepareAutoMemo(program);
     return super.emit(program);
   }
 
@@ -117,7 +152,224 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     return [
       ...(this.webOutput ? [WEB_RUNTIME] : []),
       ...(this.needsFileTypeHelper ? [FILE_TYPE_RUNTIME] : []),
+      // Module-scope cache slots for automatic memoization. Helpers precede
+      // the module body, so every slot exists before any derivation runs;
+      // the cache itself is created lazily at the first site execution.
+      ...(this.autoMemoModuleSlots.length > 0
+        ? [this.autoMemoModuleSlots.map((slot) => `const ${slot} = {};`).join("\n")]
+        : []),
     ];
+  }
+
+  // --- Automatic memoization (D14') ---------------------------------------
+  //
+  // Repeated-computation problems are the framework's job: inside reactive
+  // derivation contexts (computed initializers, watch expressions and
+  // bodies, component render expressions, and module or component functions
+  // those contexts call), a per-item derivation of the shape
+  // `collection.map(f)` / `collection.filter(f)` with a provably pure-enough
+  // `f` — or a call `g(argument)` to a provably pure-enough unary `g` inside
+  // such a callback — compiles through the identity-cache machinery
+  // (__velarMemo) automatically. Cache keys are argument identities, the
+  // reactive model's native change signal; eviction is generation-based via
+  // the enclosing observer's runToken; and __velarAutoMemo bypasses the
+  // cache entirely when no observer is active, so event handlers and actions
+  // keep exact call-through semantics. Any shape the analysis cannot prove
+  // is left untouched: correctness over coverage.
+  private prepareAutoMemo(program: Program): void {
+    this.autoMemoSites.clear();
+    this.autoMemoEmitting.clear();
+    this.autoMemoModuleSlots = [];
+    this.autoMemoComponentSlots = new Map();
+    this.autoMemoSlotsByTarget = new Map();
+    this.autoMemoSlotId = 0;
+    if (!this.webOutput) return;
+
+    const importedPure = new Set<string>();
+    for (const [name, marker] of this.extensionImports.get(WEB_EXTENSION_ID) ?? new Map<string, unknown>()) {
+      if (marker === PURE_UNARY_DERIVATION_EXPORT) importedPure.add(name);
+    }
+    const modulePurity = new PurityAnalyzer(program, {
+      reactiveNames: new Set(this.hints.reactiveBindings.keys()),
+      importedPure,
+      collectionCalls: this.hints.collectionCalls,
+    });
+
+    const moduleFunctions = new Map<string, FunctionDeclaration>();
+    for (const statement of program.body) {
+      if (statement.kind === "FunctionDeclaration" && !statement.asynchronous) moduleFunctions.set(statement.name, statement);
+    }
+
+    const processed = new Set<object>();
+    const pending: { readonly root: unknown; readonly context: AutoMemoContext; readonly functions: ReadonlyMap<string, FunctionDeclaration> | null }[] = [];
+    const contextFor = (root: unknown, bucket: "module" | ComponentDeclaration, purity: PurityAnalyzer): AutoMemoContext => {
+      const locals = new Set<string>();
+      collectBoundNames(root, locals);
+      return { bucket, purity, locals };
+    };
+    const enqueueFunction = (declaration: FunctionDeclaration, bucket: "module" | ComponentDeclaration, purity: PurityAnalyzer, functions: ReadonlyMap<string, FunctionDeclaration> | null): void => {
+      if (processed.has(declaration)) return;
+      processed.add(declaration);
+      pending.push({ root: declaration.body, context: contextFor(declaration, bucket, purity), functions });
+    };
+    const enqueueReachable = (name: string, context: AutoMemoContext, componentFunctions: ReadonlyMap<string, FunctionDeclaration> | null): void => {
+      const componentTarget = componentFunctions?.get(name);
+      if (componentTarget && context.bucket !== "module") {
+        enqueueFunction(componentTarget, context.bucket, context.purity, componentFunctions);
+        return;
+      }
+      const moduleTarget = moduleFunctions.get(name);
+      if (moduleTarget) enqueueFunction(moduleTarget, "module", modulePurity, null);
+    };
+
+    const roots: { readonly root: unknown; readonly bucket: "module" | ComponentDeclaration; readonly purity: PurityAnalyzer; readonly functions: ReadonlyMap<string, FunctionDeclaration> | null }[] = [];
+    for (const statement of program.body) {
+      if (statement.kind === "ComputedDeclaration") {
+        roots.push({ root: statement.initializer, bucket: "module", purity: modulePurity, functions: null });
+      } else if (statement.kind === "WatchDeclaration") {
+        roots.push({ root: [statement.expression, statement.body], bucket: "module", purity: modulePurity, functions: null });
+      } else if (statement.kind === "ComponentDeclaration") {
+        const items = statement.body.filter((item): item is Statement => item.kind !== "MountedBlock" && item.kind !== "CleanupBlock");
+        const reactiveNames = new Set<string>([
+          ...statement.parameters.map((parameter) => parameter.name),
+          ...items.filter((item) => item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration").map((item) => (item as { name: string }).name),
+        ]);
+        const componentPurity = modulePurity.forComponent(items, reactiveNames);
+        const componentFunctions = new Map<string, FunctionDeclaration>();
+        for (const item of items) {
+          if (item.kind === "FunctionDeclaration" && !item.asynchronous) componentFunctions.set(item.name, item);
+        }
+        for (const item of statement.body) {
+          if (item.kind === "ComputedDeclaration") {
+            roots.push({ root: item.initializer, bucket: statement, purity: componentPurity, functions: componentFunctions });
+          } else if (item.kind === "WatchDeclaration") {
+            roots.push({ root: [item.expression, item.body], bucket: statement, purity: componentPurity, functions: componentFunctions });
+          } else if (item.kind === "ReturnStatement" && item.value) {
+            roots.push({ root: item.value, bucket: statement, purity: componentPurity, functions: componentFunctions });
+          }
+        }
+      }
+    }
+
+    const walk = (node: unknown, context: AutoMemoContext, functions: ReadonlyMap<string, FunctionDeclaration> | null, inPerItemCallback: boolean): void => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, context, functions, inPerItemCallback);
+        return;
+      }
+      const record = node as Record<string, unknown>;
+      if (record.kind === "CallExpression") {
+        const call = record as unknown as CallExpression;
+        if (call.callee.kind === "MemberExpression" && (call.callee.property === "map" || call.callee.property === "filter")) {
+          const operation = this.hints.collectionCalls.get(call.callee.span.end);
+          if ((operation === "listMap" || operation === "listFilter") && call.arguments.length === 1 && !hasNamedArguments(call)) {
+            const callback = call.arguments[0]!;
+            const memoized = this.tryAutoMemoCallback(callback, context);
+            walk(call.callee.object, context, functions, inPerItemCallback);
+            if (!memoized) walk(callback, context, functions, true);
+            return;
+          }
+        }
+        if (call.callee.kind === "IdentifierExpression" && !context.locals.has(call.callee.name)) {
+          if (inPerItemCallback) this.tryAutoMemoCall(call, context);
+          enqueueReachable(call.callee.name, context, functions);
+          walk(call.arguments, context, functions, inPerItemCallback);
+          return;
+        }
+        walk(call.callee, context, functions, inPerItemCallback);
+        walk(call.arguments, context, functions, inPerItemCallback);
+        return;
+      }
+      for (const child of Object.values(record)) walk(child, context, functions, inPerItemCallback);
+    };
+
+    for (const { root, bucket, purity, functions } of roots) {
+      walk(root, contextFor(root, bucket, purity), functions, false);
+    }
+    while (pending.length > 0) {
+      const { root, context, functions } = pending.shift()!;
+      walk(root, context, functions, false);
+    }
+  }
+
+  // A map/filter callback that is a pure-enough unary function reference or
+  // a pure-enough single-parameter arrow (no captures beyond the module or
+  // component pure surface) memoizes as a whole, keyed by element identity.
+  // Only delegating callbacks qualify: a callback without a single call in
+  // its body is cheaper than its own cache entry.
+  private tryAutoMemoCallback(callback: Expression, context: AutoMemoContext): boolean {
+    if (callback.kind === "IdentifierExpression") {
+      if (context.locals.has(callback.name)) return false;
+      const info = this.resolvePureUnary(callback.name, context);
+      if (!info || !info.delegates) return false;
+      this.autoMemoSites.set(spanIdentity(callback.span), {
+        kind: "callback",
+        slot: this.autoMemoSlot(context.bucket, `name:${callback.name}`),
+        target: callback.name,
+      });
+      return true;
+    }
+    if (callback.kind === "ArrowFunctionExpression") {
+      const info = context.purity.pureUnaryArrow(callback as ArrowFunctionExpression);
+      if (!info || !info.delegates) return false;
+      this.autoMemoSites.set(spanIdentity(callback.span), {
+        kind: "callback",
+        slot: this.autoMemoSlot(context.bucket, null),
+        target: null,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // Inside a per-item callback, a plain single-positional-argument call to a
+  // pure-enough unary function memoizes at the call site, keyed by argument
+  // identity — the shape behind derived per-item inputs such as "the latest
+  // record for this item", where the collection element itself is the wrong
+  // cache key.
+  private tryAutoMemoCall(call: CallExpression, context: AutoMemoContext): void {
+    if (call.optional || call.arguments.length !== 1 || hasNamedArguments(call)) return;
+    if (call.callee.kind !== "IdentifierExpression") return;
+    const argument = call.arguments[0]!;
+    if (argument.kind === "SpreadExpression") return;
+    const info = this.resolvePureUnary(call.callee.name, context);
+    if (!info || !info.delegates) return;
+    this.autoMemoSites.set(spanIdentity(call.span), {
+      kind: "call",
+      slot: this.autoMemoSlot(context.bucket, `name:${call.callee.name}`),
+      target: call.callee.name,
+    });
+  }
+
+  private resolvePureUnary(name: string, context: AutoMemoContext): PureFunctionInfo | null {
+    const local = context.purity.pureFunction(name);
+    if (local) return local.unaryCallable ? local : null;
+    // A cross-module marker asserts both purity and unary callability; the
+    // exporting module could not inspect call bodies here, so delegation is
+    // assumed — an exported derivation helper is not a trivial accessor.
+    if (context.purity.importedPure(name)) return { unaryCallable: true, delegates: true };
+    return null;
+  }
+
+  private autoMemoSlot(bucket: "module" | ComponentDeclaration, targetKey: string | null): string {
+    if (targetKey !== null) {
+      const existing = this.autoMemoSlotsByTarget.get(bucket)?.get(targetKey);
+      if (existing) return existing;
+    }
+    const slot = `__velarMemoSite${++this.autoMemoSlotId}`;
+    if (bucket === "module") {
+      this.autoMemoModuleSlots.push(slot);
+    } else {
+      const slots = this.autoMemoComponentSlots.get(bucket) ?? [];
+      slots.push(slot);
+      this.autoMemoComponentSlots.set(bucket, slots);
+    }
+    if (targetKey !== null) {
+      const byTarget = this.autoMemoSlotsByTarget.get(bucket) ?? new Map<string, string>();
+      byTarget.set(targetKey, slot);
+      this.autoMemoSlotsByTarget.set(bucket, byTarget);
+    }
+    return slot;
   }
 
   protected override includesErrorNormalizationRuntime(): boolean {
@@ -226,6 +478,24 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   protected override emitExpression(expression: Expression): string {
+    const memoSite = this.autoMemoSites.get(spanIdentity(expression.span));
+    if (memoSite && !this.autoMemoEmitting.has(spanIdentity(expression.span))) {
+      const cache = (target: string): string => `(${memoSite.slot}.__memo ??= __velarAutoMemo(${target}))`;
+      if (memoSite.kind === "call" && expression.kind === "CallExpression") {
+        return `${cache(memoSite.target!)}(${this.emitMappedExpression(expression.arguments[0]!)})`;
+      }
+      if (memoSite.target !== null) return cache(memoSite.target);
+      // An inline arrow emits in place so its source mapping stays put; the
+      // first evaluation's closure is cached and reused, which is sound
+      // because the arrow provably captures nothing that can change.
+      const key = spanIdentity(expression.span);
+      this.autoMemoEmitting.add(key);
+      try {
+        return cache(this.emitExpression(expression));
+      } finally {
+        this.autoMemoEmitting.delete(key);
+      }
+    }
     if (expression.kind === "UnitLiteralExpression") return JSON.stringify(expression.raw);
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
       && expression.operand.kind === "UnitLiteralExpression") {
@@ -243,8 +513,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
       if (expression.name === "mount") return "__velarMount";
       if (expression.name === "tick") return "__velarTick";
-      if (expression.name === "memo") return "__velarMemo";
-      if (expression.name === "batch") return "__velarBatch";
       const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
@@ -364,6 +632,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       } else {
         lines.push(`${bodyIndent}const ${parameter.name} = __velarRequiredProp(__props, ${JSON.stringify(parameter.name)}, ${JSON.stringify(statement.name)});`);
       }
+    }
+    // Per-instance cache slots for automatic memoization: declared before any
+    // computed, watch, or render line can execute a memoized site, and freed
+    // with the instance.
+    for (const slot of this.autoMemoComponentSlots.get(statement) ?? []) {
+      lines.push(`${bodyIndent}const ${slot} = {};`);
     }
 
     let render: Expression | null = null;
@@ -853,12 +1127,60 @@ function containsUnitLiteral(value: unknown): boolean {
   return false;
 }
 
+function hasNamedArguments(call: CallExpression): boolean {
+  return call.argumentNames !== undefined && call.argumentNames.some((name) => name !== null);
+}
+
+// Collects every name bound anywhere inside a context function — parameters,
+// locals, loop and match bindings, catch names, watch aliases — as one flat
+// set. The auto-memo prepass treats any candidate name found in it as
+// shadowed, which can only reject sites, never accept them wrongly.
+function collectBoundNames(root: unknown, into: Set<string>): void {
+  if (!root || typeof root !== "object") return;
+  if (Array.isArray(root)) {
+    for (const item of root) collectBoundNames(item, into);
+    return;
+  }
+  const record = root as Record<string, unknown>;
+  switch (record.kind) {
+    case "ArrowFunctionExpression":
+    case "FunctionDeclaration": {
+      if (typeof record.name === "string") into.add(record.name);
+      const parameters = record.parameters as readonly { readonly name: string }[];
+      for (const parameter of parameters) into.add(parameter.name);
+      break;
+    }
+    case "VariableDeclaration":
+    case "ForStatement":
+      collectPatternNames(record.pattern as Parameters<typeof collectPatternNames>[0], into);
+      break;
+    case "TryStatement":
+      if (typeof record.catchName === "string") into.add(record.catchName);
+      break;
+    case "MatchCapturePattern":
+    case "MatchAsPattern":
+      into.add((record.binding as { readonly name: string }).name);
+      break;
+    case "MatchListPattern":
+    case "ObjectBindingPattern":
+      if (record.rest) into.add((record.rest as { readonly name: string }).name);
+      break;
+    case "WatchDeclaration":
+      if (typeof record.currentName === "string") into.add(record.currentName);
+      if (typeof record.previousName === "string") into.add(record.previousName);
+      break;
+    default:
+      break;
+  }
+  for (const child of Object.values(record)) collectBoundNames(child, into);
+}
+
 function containsWebSyntax(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   if (record.kind === "ComponentDeclaration" || record.kind === "UnsafeCssImportDeclaration" || record.kind === "LookExpression" || record.kind === "JSXElementExpression"
     || record.kind === "StateDeclaration" || record.kind === "ComputedDeclaration" || record.kind === "ResourceDeclaration" || record.kind === "ActionDeclaration" || record.kind === "WatchDeclaration") return true;
-  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "memo" || record.name === "batch")) return true;
+  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
 }
 
@@ -983,14 +1305,15 @@ function __velarComputed(read, scope) {
   };
 }
 
-// memo(transform): identity-keyed memoization for pure unary derivations.
-// Cache keys are argument identities (Object.is — the reactive model's native
-// change signal). Eviction is generation-based: the enclosing computed or
-// render observer stamps each re-run with a fresh runToken; on the first call
-// of a new run the cache rotates, entries hit during the current run survive,
-// entries from the previous run remain reachable for one more run, and
-// entries missed for one complete run are dropped — so derivations for
-// removed list items do not leak.
+// __velarMemo(transform): identity-keyed memoization for pure unary
+// derivations — internal machinery, applied by the compiler; the language
+// exposes no memoization API. Cache keys are argument identities (Object.is —
+// the reactive model's native change signal). Eviction is generation-based:
+// the enclosing computed or render observer stamps each re-run with a fresh
+// runToken; on the first call of a new run the cache rotates, entries hit
+// during the current run survive, entries from the previous run remain
+// reachable for one more run, and entries missed for one complete run are
+// dropped — so derivations for removed list items do not leak.
 const __velarMemoNegativeZero = Symbol("velar.memo.negative-zero");
 
 function __velarMemo(transform) {
@@ -1020,31 +1343,15 @@ function __velarMemo(transform) {
   };
 }
 
-// batch(work): runs a synchronous callback with reactive publications
-// deferred. Assignments still commit their values immediately (reads inside
-// the batch stay consistent, computeds are dirtied synchronously), but
-// dom/watch observers are only queued: batch claims the runtime's shared
-// pending-flush latch so __velarSchedule cannot queue an interim microtask
-// flush, and delivers one flush at the end. Nested and cross-bundle batches
-// flatten into the outermost claim because the latch lives on the shared
-// runtime. A throw inside the callback still flushes what was assigned
-// before it propagates, so state never tears.
-function __velarBatch(work) {
-  if (typeof work !== "function") throw new TypeError("batch requires a function");
-  if (__velarRuntime.flushPending) {
-    // A flush is already queued or an outer batch holds the latch; either
-    // way this batch's publications join that single delivery.
-    work();
-    return null;
-  }
-  __velarRuntime.flushPending = true;
-  try {
-    work();
-  } finally {
-    if (__velarRuntime.domQueue.size || __velarRuntime.watchQueue.size) queueMicrotask(__velarFlush);
-    else __velarRuntime.flushPending = false;
-  }
-  return null;
+// __velarAutoMemo(transform): the compiler-applied wrapper over __velarMemo.
+// Inside an observer run (computed, watch, or render), calls flow through
+// the identity cache with generation eviction; outside any observer — event
+// handlers, actions, module initialization — the transform is called
+// directly, so non-derivation calls keep exact call-through semantics and
+// nothing accumulates in the cache.
+function __velarAutoMemo(transform) {
+  const memoized = __velarMemo(transform);
+  return (value) => __velarRuntime.activeObserver ? memoized(value) : transform(value);
 }
 
 function __velarResource(load, scope, name) {

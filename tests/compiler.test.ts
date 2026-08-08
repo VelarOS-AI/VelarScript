@@ -4761,40 +4761,20 @@ mount(target="#app", node=<App />)
   assert.match(reorderedMount.code ?? "", /__namedArguments\[1\], __namedArguments\[0\]/u);
 });
 
-test("memo types generically, caches by argument identity, and evicts after one missed run", () => {
-  // Typing route: memo is a generic web global — memo<T, U>((T) -> U) ->
-  // (T) -> U — solved by the ordinary call-site unification, and the
-  // memoized result stays a first-class callable.
-  const typed = compile(`
-type Message:
-    id: string
-    text: string
-
-def previewOf(message: Message) -> string:
-    return message.text
-
-export const memoPreview = memo(previewOf)
-
-state items: List<Message> = []
-computed previews: List<string> = items.map(memoPreview)
-`.trimStart());
-  assert.deepEqual(typed.diagnostics, []);
-  assert.equal(describeType(typed.moduleInterface.exports.get("memoPreview")!), "(Message) -> string");
-  assert.match(typed.code ?? "", /__velarMemo\(previewOf\)/u);
-
-  const notCallable = compile("const broken = memo(3)\n");
-  assert.ok(notCallable.diagnostics.some((item) => item.code === "VEL4001" && /Cannot assign number to \(unknown\) -> unknown/u.test(item.message)));
-  const binary = compile("def pair(a: number, b: number) -> number:\n    return a + b\n\nconst broken = memo(pair)\n");
-  assert.ok(binary.diagnostics.some((item) => item.code === "VEL4001"));
-  const reserved = compile("const memo = 1\n");
-  assert.ok(reserved.diagnostics.some((item) => item.code === "VEL3007" && /reserved extension binding/u.test(item.message)));
-
-  // Runtime contract, in the S4 store shape (sessions + messages, previews
-  // derived per session through an identity-keyed memo): appending a chunk
-  // to one session's stream re-runs the derivation only for that session —
-  // unchanged sessions are cache hits with zero recomputation — and an
-  // entry missed for one complete run is evicted, so re-adding the same
-  // record afterwards recomputes instead of leaking the old cache entry.
+test("the framework memoizes provably-pure per-item derivations automatically", () => {
+  // D14': repeated-computation problems are the framework's job. Inside
+  // reactive derivation contexts, `collection.map(f)` with a provably
+  // pure-enough `f` compiles through the identity-cache machinery
+  // (__velarMemo) without any API — and inside a per-item callback, a call
+  // `g(argument)` to a provably pure-enough unary `g` memoizes at the call
+  // site, keyed by argument identity, which covers derived per-item inputs
+  // (the latest record for an item) where the element itself is the wrong
+  // cache key. The S4 store shape exercises both the derivation counts and
+  // the generation eviction: a chunk appended to one session's stream
+  // re-runs the derivation only for that session — unchanged sessions are
+  // cache hits with zero recomputation — and an entry missed for one
+  // complete run is evicted, so re-adding the same record afterwards
+  // recomputes instead of leaking the old cache entry.
   const store = compile(`
 type Session:
     id: string
@@ -4805,6 +4785,13 @@ type Message:
     sessionId: string
     text: string
 
+def textOf(message: Message?) -> string:
+    return message == null ? "No messages yet" : message.text
+
+def previewOf(message: Message?) -> string:
+    print(message == null ? "derive:none" : f"derive:{message.id}")
+    return textOf(message)
+
 state sessions: List<Session> = [{id: "s1", title: "one"}, {id: "s2", title: "two"}, {id: "s3", title: "three"}]
 state messages: List<Message> = [
     {id: "m1", sessionId: "s1", text: "alpha"},
@@ -4812,17 +4799,14 @@ state messages: List<Message> = [
     {id: "m3", sessionId: "s3", text: "gamma"},
 ]
 
-def latestFor(sessionId: string) -> Message?:
-    const own = messages.filter(message => message.sessionId == sessionId)
+def latestFor(list: List<Message>, sessionId: string) -> Message?:
+    const own = list.filter(message => message.sessionId == sessionId)
     return own.size == 0 ? null : own[own.size - 1]
 
-def previewOf(message: Message?) -> string:
-    print(message == null ? "derive:none" : f"derive:{message.id}")
-    return message == null ? "No messages yet" : message.text
+def buildEntries(sessionList: List<Session>, messageList: List<Message>) -> List<string>:
+    return sessionList.map(session => previewOf(latestFor(messageList, session.id)))
 
-const memoPreview = memo(previewOf)
-
-computed previews: List<string> = sessions.map(session => memoPreview(latestFor(session.id)))
+computed previews: List<string> = buildEntries(sessions.copy(), messages.copy())
 
 watch previews as current, previous:
     print(f"previews:{current.join("|")}")
@@ -4839,6 +4823,11 @@ export def restoreSession(session: Session):
     sessions = [...sessions, session]
 `.trimStart());
   assert.deepEqual(store.diagnostics, []);
+  // The per-item call compiles through the identity cache; the callback
+  // arrow itself captures the enclosing messageList parameter and therefore
+  // stays plain.
+  assert.match(store.code ?? "", /__velarAutoMemo\(previewOf\)/u);
+  assert.doesNotMatch(store.code ?? "", /__velarAutoMemo\(session/u);
   const execution = executeModule(`
 ${store.code ?? ""}
 
@@ -4872,9 +4861,224 @@ await flush();
     "restore:s2", "derive:m2", "previews:alpha!?|gamma|beta",
     "",
   ].join("\n"));
+
+  // A direct `collection.map(f)` callback reference memoizes as a whole,
+  // and outside observer runs (actions, event handlers, module init) the
+  // wrapper calls straight through — exact call semantics, nothing cached.
+  const direct = compile(`
+type Message:
+    id: string
+    text: string
+
+def textOf(message: Message) -> string:
+    return message.text
+
+def previewOf(message: Message) -> string:
+    print(f"derive:{message.id}")
+    return textOf(message)
+
+state items: List<Message> = [{id: "m1", text: "alpha"}, {id: "m2", text: "beta"}]
+computed previews: List<string> = items.map(previewOf)
+
+watch previews as current, previous:
+    print(f"previews:{current.join("|")}")
+
+export def snapshot() -> List<string>:
+    return items.copy().map(previewOf)
+
+export def touchFirst():
+    items = items.map(message => message.id == "m1" ? {...message, text: message.text + "!"} : message)
+`.trimStart());
+  assert.deepEqual(direct.diagnostics, []);
+  assert.match(direct.code ?? "", /__velarListMap\(items\.get\(\), \(__velarMemoSite\d+\.__memo \?\?= __velarAutoMemo\(previewOf\)\)\)/u);
+  const directExecution = executeModule(`
+${direct.code ?? ""}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+console.log("touch:m1");
+touchFirst();
+await flush();
+console.log("snapshot");
+snapshot();
+`);
+  assert.equal(directExecution.status, 0, String(directExecution.stderr));
+  assert.equal(directExecution.stdout, [
+    "derive:m1", "derive:m2",
+    // Only the touched record re-derives; m2 keeps its identity and hits.
+    "touch:m1", "derive:m1", "previews:alpha!|beta",
+    // The same memoized reference called from an action bypasses the cache
+    // entirely: both items derive again, and nothing is retained.
+    "snapshot", "derive:m1", "derive:m2",
+    "",
+  ].join("\n"));
 });
 
-test("batch defers reactive publications to one flush, flattens nesting, and still flushes on throw", () => {
+test("automatic memoization is conservative: unproved shapes compile untouched", () => {
+  const plain = (source: string, label: string): void => {
+    const result = compile(source);
+    assert.deepEqual(result.diagnostics, [], label);
+    const sites = (result.code ?? "").split("\n")
+      .filter((line) => line.includes("__velarAutoMemo(") && !line.includes("function __velarAutoMemo") && !line.trimStart().startsWith("//"));
+    assert.deepEqual(sites, [], label);
+  };
+
+  // (a) Reading a reactive binding anywhere in the callback graph.
+  plain(`
+state suffix: string = "!"
+
+def shout(value: string) -> string:
+    return value + "?"
+
+def decorate(value: string) -> string:
+    return shout(value) + suffix
+
+state items: List<string> = []
+computed labels: List<string> = items.map(decorate)
+`.trimStart(), "reactive read");
+
+  // (b) Capturing a mutable module binding.
+  plain(`
+let counter = 0
+
+def shout(value: string) -> string:
+    return value
+
+def label(value: string) -> string:
+    return shout(value) + str(counter)
+
+state items: List<string> = []
+computed labels: List<string> = items.map(label)
+`.trimStart(), "mutable capture");
+
+  // (c) Calling anything unproved — an async def here.
+  plain(`
+def shout(value: string) -> string:
+    return value + "!"
+
+async def sideEffect() -> null:
+    return null
+
+def label(value: string) -> string:
+    sideEffect()
+    return shout(value)
+
+state items: List<string> = []
+computed labels: List<string> = items.map(label)
+`.trimStart(), "unproved callee");
+
+  // (d) Mutating the argument through member assignment.
+  plain(`
+type Box:
+    value: number
+
+def helperOf(box: Box) -> number:
+    return box.value
+
+def bump(box: Box) -> number:
+    box.value = box.value + 1
+    return helperOf(box)
+
+state boxes: List<Box> = []
+computed values: List<number> = boxes.map(bump)
+`.trimStart(), "argument mutation");
+
+  // (e) A trivial non-delegating callback is cheaper than its cache entry.
+  plain(`
+def double(value: number) -> number:
+    return value * 2
+
+state items: List<number> = []
+computed doubled: List<number> = items.map(double)
+`.trimStart(), "non-delegating callback");
+
+  // (f) Actions and event handlers are not derivation contexts.
+  plain(`
+def shout(value: string) -> string:
+    return value + "!"
+
+def polish(value: string) -> string:
+    return shout(value)
+
+state items: List<string> = []
+state output: List<string> = []
+
+export def commit():
+    output = items.map(polish)
+`.trimStart(), "non-derivation context");
+
+  // The retired globals are ordinary identifiers again: the language
+  // exposes no memoization or batching API.
+  const freed = compile("const memo = 1\nconst batch = memo + 1\nprint(str(batch))\n");
+  assert.deepEqual(freed.diagnostics, []);
+  const unknown = compile("const broken = memo(3)\n");
+  assert.ok(unknown.diagnostics.some((item) => item.code === "VEL3001" && /Unknown name 'memo'/u.test(item.message)));
+});
+
+test("cross-module purity markers memoize imported derivations through re-exports", async () => {
+  // The exporting module is analyzed at interface time under the strictest
+  // rules; a qualifying export travels with a purity marker through the
+  // extension-exports channel — including `export {name} from` barrels — and
+  // the importing module's emitter memoizes single-argument call sites.
+  const directory = await mkdtemp(join(tmpdir(), "velar-auto-memo-project-"));
+  const domainPath = join(directory, "domain.vel");
+  const barrelPath = join(directory, "barrel.vel");
+  const mainPath = join(directory, "main.vel");
+  await writeFile(domainPath, `
+import {normalizeWhitespace, truncate} from "velar/text"
+
+export type Message:
+    id: string
+    text: string
+
+export def messagePreview(latest: Message?, limit: number = 48) -> string:
+    if latest == null:
+        return "No messages yet"
+    return truncate(normalizeWhitespace(latest.text), limit)
+
+export def sessionPreview(messages: List<Message>, sessionId: string) -> string:
+    return str(messages.size) + sessionId
+`.trimStart(), "utf8");
+  await writeFile(barrelPath, "export {Message, messagePreview, sessionPreview} from \"./domain.vel\"\n", "utf8");
+  await writeFile(mainPath, `
+import {Message, messagePreview} from "./barrel.vel"
+
+type Session:
+    id: string
+
+state sessions: List<Session> = []
+state latestById: Map<string, Message> = Map()
+
+def buildPreviews(sessionList: List<Session>, latest: Map<string, Message>) -> List<string>:
+    return sessionList.map(session => messagePreview(latest.get(session.id)))
+
+computed previews: List<string> = buildPreviews(sessions.copy(), latestById.copy())
+
+mount(<main>{previews.join("|")}</main>, "#app")
+`.trimStart(), "utf8");
+
+  const project = await compileProject(mainPath);
+  assert.deepEqual(project.failures, []);
+  const domain = project.modules.find((module) => module.inputPath === domainPath);
+  assert.ok(domain);
+  // messagePreview qualifies (pure, callable with one positional argument);
+  // sessionPreview requires two arguments and carries no marker.
+  const markers = domain.result.moduleInterface.extensionExports.get("@velarscript/web");
+  assert.equal(markers?.get("messagePreview"), "pure-unary-derivation");
+  assert.equal(markers?.get("sessionPreview"), undefined);
+  const main = project.modules.find((module) => module.inputPath === mainPath);
+  assert.ok(main);
+  assert.deepEqual(main.result.diagnostics, []);
+  assert.match(main.result.code ?? "", /__velarAutoMemo\(messagePreview\)/u);
+});
+
+test("consecutive synchronous state assignments publish once and reads stay fresh", () => {
+  // The framework contract the scheduler owns — no API involved: assignments
+  // commit immediately (a read between two assignments always sees the
+  // latest value, computeds are invalidated synchronously), and every
+  // affected computed, watch, and render observer re-runs once per
+  // synchronous burst, delivered on the microtask flush. The contract's
+  // boundary is the synchronous extent: a burst spread across awaits
+  // publishes per assignment.
   const result = compile(`
 state left: number = 0
 state right: number = 0
@@ -4888,16 +5092,18 @@ computed total: number = sumOf(left, right)
 watch total as current, previous:
     print(f"total:{current}")
 
-def commitBurst():
+export def commitBurst():
     left = left + 1
+    print(f"fresh:{left}")
     right = right + 1
     left = left + 1
 
-export def batchedBurst():
-    batch(() => commitBurst())
+def nestedCommit():
+    right = right + 1
 
-export def nestedBurst():
-    batch(() => batch(() => commitBurst()))
+export def deepBurst():
+    left = left + 1
+    nestedCommit()
 
 export async def spreadBurst():
     left = left + 1
@@ -4910,42 +5116,41 @@ def throwingCommit():
     left = left + 100
     throw Error("burst failed")
 
-export def batchedThrowingBurst():
-    batch(() => throwingCommit())
+export def throwingBurst():
+    throwingCommit()
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarBatch\(/u);
   const execution = executeModule(`
 ${result.code ?? ""}
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-console.log("batched");
-batchedBurst();
+console.log("burst");
+commitBurst();
 await flush();
-console.log("nested");
-nestedBurst();
+console.log("deep");
+deepBurst();
 await flush();
 console.log("spread");
 await spreadBurst();
 await flush();
 console.log("throwing");
-try { batchedThrowingBurst(); console.log("missing throw"); } catch (error) { console.log("caught:" + error.message); }
+try { throwingBurst(); console.log("missing throw"); } catch (error) { console.log("caught:" + error.message); }
 await flush();
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "sum:0:0",
-    // The 3-assignment send burst commits as one publication: the derived
-    // total recomputes once instead of three times.
-    "batched", "sum:2:1", "total:3",
-    // Nested batches flatten into the outermost claim.
-    "nested", "sum:4:2", "total:6",
-    // The same burst spread across microtask boundaries without batch
-    // recomputes per assignment — the tax batch removes.
-    "spread", "sum:5:2", "total:7", "sum:5:3", "total:8", "sum:6:3", "total:9",
-    // A throw inside the callback still flushes what was assigned first;
-    // state never tears, and the error propagates to the caller.
-    "throwing", "caught:burst failed", "sum:106:3", "total:109",
+    // Three synchronous assignments, one publication: the read between them
+    // is fresh, and the derived total recomputes once, not three times.
+    "burst", "fresh:1", "sum:2:1", "total:3",
+    // The burst may span helper calls; the synchronous extent is what counts.
+    "deep", "sum:3:2", "total:5",
+    // Spread across microtask boundaries the same three assignments publish
+    // per assignment — the boundary of the contract.
+    "spread", "sum:4:2", "total:6", "sum:4:3", "total:7", "sum:5:3", "total:8",
+    // A throw does not tear state: what was assigned before the failure
+    // still publishes once the microtask flush runs.
+    "throwing", "caught:burst failed", "sum:105:3", "total:108",
     "",
   ].join("\n"));
 });

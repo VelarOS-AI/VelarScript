@@ -512,6 +512,11 @@ function interfaceOf(
   for (const extension of extensions) {
     const data = extension.inspection?.moduleData?.(program, path);
     if (data !== undefined) extensionData.set(extension.id, data);
+    const annotations = extension.inspection?.exportAnnotations?.(program);
+    if (annotations) {
+      const values = extensionExports.get(extension.id)!;
+      for (const [name, value] of annotations) values.set(name, value);
+    }
   }
 
   for (const [name, declaration] of aliasDeclarations) typeAliases.set(name, resolve(declaration.target));
