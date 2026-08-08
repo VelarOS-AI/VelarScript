@@ -9,10 +9,9 @@
 **VelarScript**（本仓，`main`）：两天 23 个提交（`c56660a`…`20b8245`），编译器
 测试 310 → 382（主树另含芯片会话 WIP 测试），`npm test` 现在整编四个示例应用
 （`35ead9e` 加固，教训见下），`npm run test:browser` 是唯一整编浏览器门禁。
-D14' 已终局落地（`20b8245` + Lite `b34bc6d`）：memo/batch **无公开 API**，
-computed/watch/渲染上下文的纯一元派生由编译器自动记忆化（purity.ts 默认拒绝式
-纯度证明；跨模块纯度标记 `pure-unary-derivation` 走 extensionExports 并计入接口
-身份）；调度合并升格为 web-api.md「Performance contracts」成文契约。
+D26 已终局落地（上游 `bfd0f65` + Lite `9b34b80`）：属性级深层响应是唯一自动
+性能层；memo/batch **无公开 API**，旧自动 memo、purity 证明和跨模块纯度标记已
+全部退役。调度合并与属性级订阅是 web-api.md 成文契约。
 
 **VelarOS-Lite**（`/Users/mac/Documents/VelarOS-Lite`，本地 git）：蓝图五片全通
 （聊天 UI / markdown extern 桥 / 流式 / 持久化 / 全 Vel Core 服务器 + bin 引导），
@@ -44,9 +43,9 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 - **D17/D22/D23**：L1 人体工学批次（打点方法化、List 聚合/排序、字符串 `in`）
   **已实施**；字符串/数字固有操作仅保留方法面，旧 `velar/text`/`velar/math` 函数
   拼写已干净移除并提供定向指引。
-- **D19-D21/D24**：L2 人体工学批次（双槽 for、range、集合构造、**反引号多行**）
-  **已实施**；单槽/解构语义不变，range 选择一个受限物化 List 契约，Lite 的真实
-  Markdown/流式文本已迁移到反引号原文。
+- **D19-D21/D24 + D18 后 clean-break**：双槽 for、range、集合构造与布局字符串
+  **已实施**；反引号方案在同一开发周期内被删除。行内引号以换行为恢复边界，只有
+  引号后立即换行才进入缩进布局字符串；`f`/`r`/`rf` 负责插值与原样反斜杠。
 - **D18**：第一方本地平台面 **已实施**。Standard API 0.5 提供
   `velar/serve`、`velar/fs`、`velar/env`、`velar/host`；Node 仅是内部引擎，Web
   目标在项目编译期定向拒绝，本地运行时统一拥有 HTTP/静态文件/边界/信号清理。
@@ -99,8 +98,19 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
    `assert condition else message`，旧逗号分隔只给迁移诊断。上游 check/385 tests/
    package/开发与生产三引擎门禁全绿；Lite 通过 21 文件格式、shared 22 + server 6、
    app build、HTTP smoke 16 与三引擎 33 场景，Markdown 围栏无需任何反引号转义。
-7. Backlog：W-23/W-25（emitter/重载 extern 声明）、W-26 字节面、增量流式
-   （W-12/W-17）、computed 纯度差一步的编辑器提示、enter 键语义（证据不足暂缓）。
+7. **已审计结案：剩余 backlog 不阻塞下一阶段**：
+   - W-23/W-25 保持第三方 JS 桥的一签名契约；仅加 overload 不能表达按事件字面量
+     改变 listener 类型，反而会把字面量类型/重载解析带进公开语言。第一方平台复杂度
+     已由 D18 内化，第三方包用固定 adapter facade；桥接文档补齐 extern 默认参数仅
+     表示可省略、声明体不执行。
+   - W-26 继续按 Standard API 0.5 的有意省略处理：`Blob` 是受限、不可构造的 opaque
+     handle，不公开字节检查/构造；等真实 hashing/multipart 消费者出现再设计统一
+     Node/Web `Bytes`，不从 Buffer 泄漏偶然 API。
+   - W-12 异步迭代维持既定不做决定；显式 Promise pull 与 D18 async producer 已覆盖
+     两个真实流式链路。W-17 是 Markdown 增量 parser + DOM morph 的跨所有者产品阶段，
+     当前 234 code-point/20 chunk 测量不可见，不扩语言语法。
+   - “computed 纯度提示”随 D26 退役：仓库已无 purity/memo 优化路径可提示；属性级追踪
+     自动生效。Enter 已由 Playwright 三引擎证明正常，手工失败是 CDP 注入伪故障。
 
 ## 五、血泪教训（免重蹈）
 

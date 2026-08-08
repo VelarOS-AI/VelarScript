@@ -1331,6 +1331,8 @@ The following are not part of VelarScript:
 - class-header constructor fields
 - `init:` constructor blocks
 - TypeScript-style interfaces, assertions, overloads, or type programming
+- generators, `yield`, or `for await`; incremental sources expose explicit
+  Promise-returning pull methods or producer callbacks
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
 - magical JSX control-flow attributes

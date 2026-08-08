@@ -110,6 +110,19 @@ VelarScript initializer. Functions use the same checked parameter/result syntax 
 ordinary VelarScript functions. `export class` provides a complete
 constructor/instance/static contract directly.
 
+Each manual export, constructor, or method has exactly one declared signature.
+An extern default parameter controls call arity only: omitting it sends no
+argument to JavaScript, and the written default expression is never executed as
+a declaration body. APIs with overloads or event-name-dependent callback
+shapes should expose one fixed adapter facade (or cross through `unknown` and
+validate) rather than importing JavaScript's overload system into VelarScript.
+This is deliberate: overload resolution alone cannot prove that `on("data",
+listener)` and `on("close", listener)` require different listener contracts
+without adding literal types and a second public type-programming surface.
+First-party platform APIs such as `velar/serve` own those host-specific shapes
+internally; `extern module` remains the fixed-contract boundary for third-party
+packages.
+
 Declared exports are presence-checked at load. When a module imports names
 governed by an `extern module` declaration, the emitted bridge verifies at
 module initialization that each imported name actually exists on the
