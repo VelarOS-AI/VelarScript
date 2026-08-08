@@ -243,6 +243,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
       if (expression.name === "mount") return "__velarMount";
       if (expression.name === "tick") return "__velarTick";
+      if (expression.name === "memo") return "__velarMemo";
+      if (expression.name === "batch") return "__velarBatch";
       const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
@@ -856,7 +858,7 @@ function containsWebSyntax(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   if (record.kind === "ComponentDeclaration" || record.kind === "UnsafeCssImportDeclaration" || record.kind === "LookExpression" || record.kind === "JSXElementExpression"
     || record.kind === "StateDeclaration" || record.kind === "ComputedDeclaration" || record.kind === "ResourceDeclaration" || record.kind === "ActionDeclaration" || record.kind === "WatchDeclaration") return true;
-  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick")) return true;
+  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "memo" || record.name === "batch")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
 }
 
@@ -915,9 +917,13 @@ function __velarObserver(read, mode, scope) {
     mode,
     stopped: false,
     dependencies: new Set(),
+    runToken: null,
     run() {
       if (observer.stopped) return;
       __velarCleanupObserver(observer);
+      // Each run carries a fresh identity so generation-caching helpers
+      // (__velarMemo) can tell one re-run from the next.
+      observer.runToken = {};
       const previous = __velarRuntime.activeObserver;
       __velarRuntime.activeObserver = observer;
       try { read(); }
@@ -953,6 +959,7 @@ function __velarComputed(read, scope) {
   const observer = {
     stopped: false,
     dependencies: new Set(),
+    runToken: null,
     notify() {
       if (dirty) return;
       dirty = true;
@@ -966,6 +973,7 @@ function __velarComputed(read, scope) {
       __velarTrack(subscribers);
       if (dirty) {
         __velarCleanupObserver(observer);
+        observer.runToken = {};
         const previous = __velarRuntime.activeObserver;
         __velarRuntime.activeObserver = observer;
         try { value = read(); dirty = false; } finally { __velarRuntime.activeObserver = previous; }
@@ -973,6 +981,70 @@ function __velarComputed(read, scope) {
       return value;
     },
   };
+}
+
+// memo(transform): identity-keyed memoization for pure unary derivations.
+// Cache keys are argument identities (Object.is — the reactive model's native
+// change signal). Eviction is generation-based: the enclosing computed or
+// render observer stamps each re-run with a fresh runToken; on the first call
+// of a new run the cache rotates, entries hit during the current run survive,
+// entries from the previous run remain reachable for one more run, and
+// entries missed for one complete run are dropped — so derivations for
+// removed list items do not leak.
+const __velarMemoNegativeZero = Symbol("velar.memo.negative-zero");
+
+function __velarMemo(transform) {
+  if (typeof transform !== "function") throw new TypeError("memo requires a function");
+  let current = new Map();
+  let previous = new Map();
+  let lastRun = undefined; // a run is an object or null, so the first call rotates
+  return (value) => {
+    const observer = __velarRuntime.activeObserver;
+    const run = observer ? (observer.runToken ?? observer) : null;
+    if (run !== lastRun) {
+      previous = current;
+      current = new Map();
+      lastRun = run;
+    }
+    // Map keys use SameValueZero; a -0 sentinel keeps the contract Object.is.
+    const key = typeof value === "number" && Object.is(value, -0) ? __velarMemoNegativeZero : value;
+    if (current.has(key)) return current.get(key);
+    if (previous.has(key)) {
+      const cached = previous.get(key);
+      current.set(key, cached);
+      return cached;
+    }
+    const result = transform(value);
+    current.set(key, result);
+    return result;
+  };
+}
+
+// batch(work): runs a synchronous callback with reactive publications
+// deferred. Assignments still commit their values immediately (reads inside
+// the batch stay consistent, computeds are dirtied synchronously), but
+// dom/watch observers are only queued: batch claims the runtime's shared
+// pending-flush latch so __velarSchedule cannot queue an interim microtask
+// flush, and delivers one flush at the end. Nested and cross-bundle batches
+// flatten into the outermost claim because the latch lives on the shared
+// runtime. A throw inside the callback still flushes what was assigned
+// before it propagates, so state never tears.
+function __velarBatch(work) {
+  if (typeof work !== "function") throw new TypeError("batch requires a function");
+  if (__velarRuntime.flushPending) {
+    // A flush is already queued or an outer batch holds the latch; either
+    // way this batch's publications join that single delivery.
+    work();
+    return null;
+  }
+  __velarRuntime.flushPending = true;
+  try {
+    work();
+  } finally {
+    if (__velarRuntime.domQueue.size || __velarRuntime.watchQueue.size) queueMicrotask(__velarFlush);
+    else __velarRuntime.flushPending = false;
+  }
+  return null;
 }
 
 function __velarResource(load, scope, name) {

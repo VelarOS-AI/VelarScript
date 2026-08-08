@@ -44,9 +44,20 @@ function namedFunction(parameterNames: readonly string[], parameters: readonly V
   return { kind: "function", parameterNames, parameters, requiredParameters, result };
 }
 
+// memo(transform) is generic over the argument and result of the unary
+// transform: memo<T, U>((T) -> U) -> (T) -> U. The returned type is the same
+// anonymous callable shape so a memoized transform stays first-class — it can
+// be stored, passed to `.map(...)`, or called directly.
+const memoArgumentType: ValueType = { kind: "parameter", name: "T", index: 0 };
+const memoResultType: ValueType = { kind: "parameter", name: "U", index: 1 };
+const memoTransformType: ValueType = { kind: "function", parameters: [memoArgumentType], requiredParameters: 1, result: memoResultType };
+const memoType: ValueType = { kind: "function", typeParameterNames: ["T", "U"], parameterNames: ["transform"], parameters: [memoTransformType], requiredParameters: 1, result: memoTransformType };
+
 const webGlobals = new Map<string, ValueType>([
   ["mount", namedFunction(["node", "target"], [nodeType, mountTargetType], nullType)],
   ["tick", namedFunction([], [], { kind: "promise", value: nullType })],
+  ["memo", memoType],
+  ["batch", namedFunction(["work"], [{ kind: "function", parameters: [], requiredParameters: 0, result: { kind: "unknown" } }], nullType)],
   ["color", namedFunction(["value"], [stringType], colorType)],
   ["rgb", namedFunction(["red", "green", "blue"], [numberType, numberType, numberType], colorType)],
   ["rgba", namedFunction(["red", "green", "blue", "alpha"], [numberType, numberType, numberType, numberType], colorType)],
@@ -438,7 +449,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["CanvasElement", new Set(["width", "height"])],
     ]),
     globals: webGlobals,
-    reservedBindings: new Set(["mount", "tick"]),
+    reservedBindings: new Set(["mount", "tick", "memo", "batch"]),
     globalGuidance: new Map([
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
       ["window", "Use velar/browser or an explicit JavaScript boundary instead of the untyped window global"],
@@ -477,6 +488,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ...["component", "state", "computed", "resource", "action", "watch", "mounted", "cleanup", "look"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
+      { label: "memo", kind: 3, detail: "memo(transform) -> (T) -> U memoized by argument identity" },
+      { label: "batch", kind: 3, detail: "batch(work) -> null" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
       { label: "on:click", kind: 10, detail: "DOM click handler" },

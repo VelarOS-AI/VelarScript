@@ -4,6 +4,30 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## 0.10.0-dev — Identity-keyed memoization and batched reactive commits
+
+Web framework changes:
+
+- New Web global `memo(transform)`: takes a pure unary function and returns a
+  memoized function of the same type (`memo<T, U>((T) -> U) -> (T) -> U`,
+  inferred per call site) that caches results by argument identity
+  (`Object.is`) — the reactive model's native change signal. Eviction is
+  generation-based: inside a `computed` or render that re-runs on publish,
+  entries hit during the current run survive and entries missed for one
+  complete run are evicted, so derivations for removed list items do not
+  leak. The memoized function is first-class and can be passed to
+  `.map(...)`. This is the charter addition the VelarOS-Lite S4 copy-tax
+  account demanded: per-item derivations now re-run only for the items an
+  update actually touched.
+- New Web global `batch(work)`: runs a synchronous callback with reactive
+  publications deferred — assignments commit immediately and reads stay
+  consistent, but affected computed/watch/render observers re-run once at
+  the end of the outermost batch instead of once per assignment. Nested
+  batches flatten; a throw inside the callback still flushes what was
+  assigned before propagating. Actions and event handlers stay un-batched by
+  default.
+- `memo` and `batch` are reserved Web bindings, like `mount` and `tick`.
+
 ## 0.10.0-dev — Keyed conditionals and dev-server npm prebundling
 
 Language and compiler changes:

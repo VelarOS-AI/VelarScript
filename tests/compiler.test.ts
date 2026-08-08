@@ -4761,6 +4761,195 @@ mount(target="#app", node=<App />)
   assert.match(reorderedMount.code ?? "", /__namedArguments\[1\], __namedArguments\[0\]/u);
 });
 
+test("memo types generically, caches by argument identity, and evicts after one missed run", () => {
+  // Typing route: memo is a generic web global — memo<T, U>((T) -> U) ->
+  // (T) -> U — solved by the ordinary call-site unification, and the
+  // memoized result stays a first-class callable.
+  const typed = compile(`
+type Message:
+    id: string
+    text: string
+
+def previewOf(message: Message) -> string:
+    return message.text
+
+export const memoPreview = memo(previewOf)
+
+state items: List<Message> = []
+computed previews: List<string> = items.map(memoPreview)
+`.trimStart());
+  assert.deepEqual(typed.diagnostics, []);
+  assert.equal(describeType(typed.moduleInterface.exports.get("memoPreview")!), "(Message) -> string");
+  assert.match(typed.code ?? "", /__velarMemo\(previewOf\)/u);
+
+  const notCallable = compile("const broken = memo(3)\n");
+  assert.ok(notCallable.diagnostics.some((item) => item.code === "VEL4001" && /Cannot assign number to \(unknown\) -> unknown/u.test(item.message)));
+  const binary = compile("def pair(a: number, b: number) -> number:\n    return a + b\n\nconst broken = memo(pair)\n");
+  assert.ok(binary.diagnostics.some((item) => item.code === "VEL4001"));
+  const reserved = compile("const memo = 1\n");
+  assert.ok(reserved.diagnostics.some((item) => item.code === "VEL3007" && /reserved extension binding/u.test(item.message)));
+
+  // Runtime contract, in the S4 store shape (sessions + messages, previews
+  // derived per session through an identity-keyed memo): appending a chunk
+  // to one session's stream re-runs the derivation only for that session —
+  // unchanged sessions are cache hits with zero recomputation — and an
+  // entry missed for one complete run is evicted, so re-adding the same
+  // record afterwards recomputes instead of leaking the old cache entry.
+  const store = compile(`
+type Session:
+    id: string
+    title: string
+
+type Message:
+    id: string
+    sessionId: string
+    text: string
+
+state sessions: List<Session> = [{id: "s1", title: "one"}, {id: "s2", title: "two"}, {id: "s3", title: "three"}]
+state messages: List<Message> = [
+    {id: "m1", sessionId: "s1", text: "alpha"},
+    {id: "m2", sessionId: "s2", text: "beta"},
+    {id: "m3", sessionId: "s3", text: "gamma"},
+]
+
+def latestFor(sessionId: string) -> Message?:
+    const own = messages.filter(message => message.sessionId == sessionId)
+    return own.size == 0 ? null : own[own.size - 1]
+
+def previewOf(message: Message?) -> string:
+    print(message == null ? "derive:none" : f"derive:{message.id}")
+    return message == null ? "No messages yet" : message.text
+
+const memoPreview = memo(previewOf)
+
+computed previews: List<string> = sessions.map(session => memoPreview(latestFor(session.id)))
+
+watch previews as current, previous:
+    print(f"previews:{current.join("|")}")
+
+export def appendChunk(replyId: string, chunk: string):
+    messages = messages.map(message => message.id == replyId
+        ? {...message, text: message.text + chunk}
+        : message)
+
+export def removeSession(id: string):
+    sessions = sessions.filter(session => session.id != id)
+
+export def restoreSession(session: Session):
+    sessions = [...sessions, session]
+`.trimStart());
+  assert.deepEqual(store.diagnostics, []);
+  const execution = executeModule(`
+${store.code ?? ""}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+console.log("chunk:s1");
+appendChunk("m1", "!");
+await flush();
+console.log("remove:s2");
+const savedSession = sessions.get().find((session) => session.id === "s2");
+removeSession("s2");
+await flush();
+console.log("missed-run");
+appendChunk("m1", "?");
+await flush();
+console.log("restore:s2");
+restoreSession(savedSession);
+await flush();
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    // Initial computed run derives every session once.
+    "derive:m1", "derive:m2", "derive:m3",
+    // One chunk into s1: only s1's derivation re-runs; s2/s3 are hits.
+    "chunk:s1", "derive:m1", "previews:alpha!|beta|gamma",
+    // Removing s2 re-runs previews with cache hits only.
+    "remove:s2", "previews:alpha!|gamma",
+    // One complete run without s2's entry.
+    "missed-run", "derive:m1", "previews:alpha!?|gamma",
+    // The same message record returns after a full missed run: evicted,
+    // so the derivation runs again instead of serving the stale entry.
+    "restore:s2", "derive:m2", "previews:alpha!?|gamma|beta",
+    "",
+  ].join("\n"));
+});
+
+test("batch defers reactive publications to one flush, flattens nesting, and still flushes on throw", () => {
+  const result = compile(`
+state left: number = 0
+state right: number = 0
+
+def sumOf(a: number, b: number) -> number:
+    print(f"sum:{a}:{b}")
+    return a + b
+
+computed total: number = sumOf(left, right)
+
+watch total as current, previous:
+    print(f"total:{current}")
+
+def commitBurst():
+    left = left + 1
+    right = right + 1
+    left = left + 1
+
+export def batchedBurst():
+    batch(() => commitBurst())
+
+export def nestedBurst():
+    batch(() => batch(() => commitBurst()))
+
+export async def spreadBurst():
+    left = left + 1
+    await tick()
+    right = right + 1
+    await tick()
+    left = left + 1
+
+def throwingCommit():
+    left = left + 100
+    throw Error("burst failed")
+
+export def batchedThrowingBurst():
+    batch(() => throwingCommit())
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarBatch\(/u);
+  const execution = executeModule(`
+${result.code ?? ""}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+console.log("batched");
+batchedBurst();
+await flush();
+console.log("nested");
+nestedBurst();
+await flush();
+console.log("spread");
+await spreadBurst();
+await flush();
+console.log("throwing");
+try { batchedThrowingBurst(); console.log("missing throw"); } catch (error) { console.log("caught:" + error.message); }
+await flush();
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "sum:0:0",
+    // The 3-assignment send burst commits as one publication: the derived
+    // total recomputes once instead of three times.
+    "batched", "sum:2:1", "total:3",
+    // Nested batches flatten into the outermost claim.
+    "nested", "sum:4:2", "total:6",
+    // The same burst spread across microtask boundaries without batch
+    // recomputes per assignment — the tax batch removes.
+    "spread", "sum:5:2", "total:7", "sum:5:3", "total:8", "sum:6:3", "total:9",
+    // A throw inside the callback still flushes what was assigned first;
+    // state never tears, and the error propagates to the caller.
+    "throwing", "caught:burst failed", "sum:106:3", "total:109",
+    "",
+  ].join("\n"));
+});
+
 test("reactive reference state cannot escape through aliases, calls, returns, or nested mutation", () => {
   const invalid = compile(`
 type Store:

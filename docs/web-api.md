@@ -33,6 +33,90 @@ or missing names instead of guessing. Callback parameter names remain local to
 the callback; only the function that receives the callback defines the public
 call contract.
 
+## `memo`
+
+`memo(transform)` is a Web global beside `mount` and `tick`. It takes a pure
+unary function and returns a memoized function of the same type —
+`memo<T, U>((T) -> U) -> (T) -> U`, solved per call site by the ordinary
+generic inference — that caches results **by argument identity** (`Object.is`).
+Identity is the reactive model's native change signal: immutable updates
+replace exactly the records that changed and keep every other record's
+identity, so an identity-keyed cache re-runs a derivation precisely for the
+items an update touched.
+
+```velar fragment
+type Message:
+    id: string
+    sessionId: string
+    text: string
+
+def previewOf(message: Message?) -> string:
+    return message == null ? "No messages yet" : message.text
+
+const memoPreview = memo(previewOf)
+
+state messages: List<Message> = []
+
+def latestFor(sessionId: string) -> Message?:
+    const own = messages.filter(message => message.sessionId == sessionId)
+    return own.size == 0 ? null : own[own.size - 1]
+
+state sessions: List<string> = []
+computed previews: List<string> = sessions.map(id => memoPreview(latestFor(id)))
+```
+
+Appending a stream chunk to one session rebuilds only that session's latest
+message record; every other session's argument keeps its identity, hits the
+cache, and performs zero recomputation. The memoized function is a
+first-class value — store it, call it, or pass it directly to `.map(...)`.
+
+Rules of the contract:
+
+- The transform must be pure in its argument: the cache returns the previous
+  result whenever the argument identity is unchanged, so a transform that
+  reads other mutable inputs would serve stale results. Ordinary functions
+  cannot read reactive state through a mutable reference, which is exactly
+  the discipline the cache relies on.
+- **Eviction is generation-based.** Call the memoized function inside a
+  `computed` (or render position) that re-runs on publish. Each re-run of
+  the enclosing derivation starts a new generation: entries hit during the
+  current run survive, and an entry missed for one complete run is evicted.
+  Derivations for removed list items therefore do not leak.
+- Calls outside any reactive derivation still cache, but nothing bounds the
+  cache until a derivation run rotates it; module-scope one-off calls should
+  use the plain transform instead.
+
+## `batch`
+
+`batch(work)` is a Web global that runs a synchronous callback with reactive
+publications deferred: every `state` assignment inside the callback commits
+its value immediately — reads inside the batch always see the latest values,
+and computed values are invalidated synchronously, so state never tears — but
+affected computed, watch, and render observers re-run **once** at the end of
+the outermost batch instead of once per assignment.
+
+```velar fragment
+state drafts: List<string> = []
+state sent: number = 0
+
+def commitSend(text: string):
+    drafts = [...drafts, text]
+    sent = sent + 1
+
+def send(text: string):
+    batch(() => commitSend(text))
+```
+
+- Nested `batch` calls flatten into the outermost batch; the single flush
+  happens when the outermost callback finishes.
+- A throw inside the callback still publishes what was assigned before the
+  failure, then propagates to the caller — a batch is a commit boundary, not
+  a transaction rollback.
+- The deferral covers only the synchronous extent of the callback. An async
+  callback's continuation after its first `await` runs outside the batch,
+  and actions and event handlers stay un-batched by default — batching is an
+  explicit call.
+
 ## `velar/app`
 
 ```velar
