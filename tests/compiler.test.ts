@@ -4761,20 +4761,7 @@ mount(target="#app", node=<App />)
   assert.match(reorderedMount.code ?? "", /__namedArguments\[1\], __namedArguments\[0\]/u);
 });
 
-test("the framework memoizes provably-pure per-item derivations automatically", () => {
-  // D14': repeated-computation problems are the framework's job. Inside
-  // reactive derivation contexts, `collection.map(f)` with a provably
-  // pure-enough `f` compiles through the identity-cache machinery
-  // (__velarMemo) without any API — and inside a per-item callback, a call
-  // `g(argument)` to a provably pure-enough unary `g` memoizes at the call
-  // site, keyed by argument identity, which covers derived per-item inputs
-  // (the latest record for an item) where the element itself is the wrong
-  // cache key. The S4 store shape exercises both the derivation counts and
-  // the generation eviction: a chunk appended to one session's stream
-  // re-runs the derivation only for that session — unchanged sessions are
-  // cache hits with zero recomputation — and an entry missed for one
-  // complete run is evicted, so re-adding the same record afterwards
-  // recomputes instead of leaking the old cache entry.
+test("deep reactivity retires identity memo caches without changing derivation results", () => {
   const store = compile(`
 type Session:
     id: string
@@ -4806,28 +4793,24 @@ def latestFor(list: List<Message>, sessionId: string) -> Message?:
 def buildEntries(sessionList: List<Session>, messageList: List<Message>) -> List<string>:
     return sessionList.map(session => previewOf(latestFor(messageList, session.id)))
 
-computed previews: List<string> = buildEntries(sessions.copy(), messages.copy())
+computed previews: List<string> = buildEntries(sessions, messages)
 
 watch previews as current, previous:
     print(f"previews:{current.join("|")}")
 
 export def appendChunk(replyId: string, chunk: string):
-    messages = messages.map(message => message.id == replyId
-        ? {...message, text: message.text + chunk}
-        : message)
+    const message = messages.find(item => item.id == replyId)
+    if message:
+        message.text += chunk
 
 export def removeSession(id: string):
     sessions = sessions.filter(session => session.id != id)
 
 export def restoreSession(session: Session):
-    sessions = [...sessions, session]
+    sessions.append(session)
 `.trimStart());
   assert.deepEqual(store.diagnostics, []);
-  // The per-item call compiles through the identity cache; the callback
-  // arrow itself captures the enclosing messageList parameter and therefore
-  // stays plain.
-  assert.match(store.code ?? "", /__velarAutoMemo\(previewOf\)/u);
-  assert.doesNotMatch(store.code ?? "", /__velarAutoMemo\(session/u);
+  assert.doesNotMatch(store.code ?? "", /__velar(?:Auto)?Memo/u);
   const execution = executeModule(`
 ${store.code ?? ""}
 
@@ -4848,23 +4831,14 @@ await flush();
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    // Initial computed run derives every session once.
     "derive:m1", "derive:m2", "derive:m3",
-    // One chunk into s1: only s1's derivation re-runs; s2/s3 are hits.
-    "chunk:s1", "derive:m1", "previews:alpha!|beta|gamma",
-    // Removing s2 re-runs previews with cache hits only.
-    "remove:s2", "previews:alpha!|gamma",
-    // One complete run without s2's entry.
-    "missed-run", "derive:m1", "previews:alpha!?|gamma",
-    // The same message record returns after a full missed run: evicted,
-    // so the derivation runs again instead of serving the stale entry.
-    "restore:s2", "derive:m2", "previews:alpha!?|gamma|beta",
+    "chunk:s1", "derive:m1", "derive:m2", "derive:m3", "previews:alpha!|beta|gamma",
+    "remove:s2", "derive:m1", "derive:m3", "previews:alpha!|gamma",
+    "missed-run", "derive:m1", "derive:m3", "previews:alpha!?|gamma",
+    "restore:s2", "derive:m1", "derive:m3", "derive:m2", "previews:alpha!?|gamma|beta",
     "",
   ].join("\n"));
 
-  // A direct `collection.map(f)` callback reference memoizes as a whole,
-  // and outside observer runs (actions, event handlers, module init) the
-  // wrapper calls straight through — exact call semantics, nothing cached.
   const direct = compile(`
 type Message:
     id: string
@@ -4884,13 +4858,13 @@ watch previews as current, previous:
     print(f"previews:{current.join("|")}")
 
 export def snapshot() -> List<string>:
-    return items.copy().map(previewOf)
+    return items.map(previewOf)
 
 export def touchFirst():
-    items = items.map(message => message.id == "m1" ? {...message, text: message.text + "!"} : message)
+    items[0].text += "!"
 `.trimStart());
   assert.deepEqual(direct.diagnostics, []);
-  assert.match(direct.code ?? "", /__velarListMap\(items\.get\(\), \(__velarMemoSite\d+\.__memo \?\?= __velarAutoMemo\(previewOf\)\)\)/u);
+  assert.doesNotMatch(direct.code ?? "", /__velar(?:Auto)?Memo/u);
   const directExecution = executeModule(`
 ${direct.code ?? ""}
 
@@ -4904,16 +4878,13 @@ snapshot();
   assert.equal(directExecution.status, 0, String(directExecution.stderr));
   assert.equal(directExecution.stdout, [
     "derive:m1", "derive:m2",
-    // Only the touched record re-derives; m2 keeps its identity and hits.
-    "touch:m1", "derive:m1", "previews:alpha!|beta",
-    // The same memoized reference called from an action bypasses the cache
-    // entirely: both items derive again, and nothing is retained.
+    "touch:m1", "derive:m1", "derive:m2", "previews:alpha!|beta",
     "snapshot", "derive:m1", "derive:m2",
     "",
   ].join("\n"));
 });
 
-test("automatic memoization is conservative: unproved shapes compile untouched", () => {
+test("the retired memo surface stays absent from every derivation shape", () => {
   const plain = (source: string, label: string): void => {
     const result = compile(source);
     assert.deepEqual(result.diagnostics, [], label);
@@ -5014,11 +4985,7 @@ export def commit():
   assert.ok(unknown.diagnostics.some((item) => item.code === "VEL3001" && /Unknown name 'memo'/u.test(item.message)));
 });
 
-test("cross-module purity markers memoize imported derivations through re-exports", async () => {
-  // The exporting module is analyzed at interface time under the strictest
-  // rules; a qualifying export travels with a purity marker through the
-  // extension-exports channel — including `export {name} from` barrels — and
-  // the importing module's emitter memoizes single-argument call sites.
+test("cross-module interfaces no longer carry memo purity markers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-auto-memo-project-"));
   const domainPath = join(directory, "domain.vel");
   const barrelPath = join(directory, "barrel.vel");
@@ -5051,7 +5018,7 @@ state latestById: Map<string, Message> = Map()
 def buildPreviews(sessionList: List<Session>, latest: Map<string, Message>) -> List<string>:
     return sessionList.map(session => messagePreview(latest.get(session.id)))
 
-computed previews: List<string> = buildPreviews(sessions.copy(), latestById.copy())
+computed previews: List<string> = buildPreviews(sessions, latestById)
 
 mount(<main>{previews.join("|")}</main>, "#app")
 `.trimStart(), "utf8");
@@ -5060,15 +5027,12 @@ mount(<main>{previews.join("|")}</main>, "#app")
   assert.deepEqual(project.failures, []);
   const domain = project.modules.find((module) => module.inputPath === domainPath);
   assert.ok(domain);
-  // messagePreview qualifies (pure, callable with one positional argument);
-  // sessionPreview requires two arguments and carries no marker.
   const markers = domain.result.moduleInterface.extensionExports.get("@velarscript/web");
-  assert.equal(markers?.get("messagePreview"), "pure-unary-derivation");
-  assert.equal(markers?.get("sessionPreview"), undefined);
+  assert.equal(markers, undefined);
   const main = project.modules.find((module) => module.inputPath === mainPath);
   assert.ok(main);
   assert.deepEqual(main.result.diagnostics, []);
-  assert.match(main.result.code ?? "", /__velarAutoMemo\(messagePreview\)/u);
+  assert.doesNotMatch(main.result.code ?? "", /__velar(?:Auto)?Memo/u);
 });
 
 test("consecutive synchronous state assignments publish once and reads stay fresh", () => {
@@ -5155,52 +5119,185 @@ await flush();
   ].join("\n"));
 });
 
-test("reactive reference state cannot escape through aliases, calls, returns, or nested mutation", () => {
-  const invalid = compile(`
-type Store:
+test("state publishes deep record and collection mutation through aliases and calls", () => {
+  const result = compile(`
+type Task:
     label: string
-    values: List<number>
+    done: bool
 
-def mutate(values: List<number>):
-    values.append(2)
+type Meta:
+    count: number
 
-component Child(values: List<number>):
-    return <span>{values.size}</span>
+type Session:
+    title: string
+    meta: Meta
 
-component App:
-    state store: Store = {label: "ready", values: [1]}
-    const alias = store.values
-    const wrapped = {values: store.values}
+state tasks: List<Task> = [{label: "first", done: false}]
+state byId: Map<string, Task> = Map()
+state byTask: Map<Task, string> = Map()
+state selected: Set<string> = Set()
+state selectedTasks: Set<Task> = Set()
+state session: Session = {title: "old", meta: {count: 0}}
+computed doneCount: number = tasks.filter(task => task.done).size
 
-    def leak() -> List<number>:
-        return store.values
+watch tasks as current, previous:
+    print("tasks:" + str(current.size) + ":same=" + str(current == previous))
 
-    def update():
-        store.values.append(2)
-        mutate(store.values)
+watch session as current, previous:
+    print("session:" + str(current.meta.count) + ":same=" + str(current == previous))
 
-    return <><button type="button" on:click={update}>{store.label}</button><Child values={store.values} /></>
+def mark(task: Task):
+    task.done = true
+
+export async def exercise():
+    const alias = tasks
+    alias.append({label: "second", done: false})
+    await tick()
+    print("size:" + str(tasks.size))
+    mark(alias[0])
+    await tick()
+    print("done:" + str(doneCount))
+    byTask.set(alias[0], "first")
+    selectedTasks.add(alias[0])
+    print("identity:" + str(byTask.get(alias[0])) + ":set=" + str(alias[0] in selectedTasks))
+    byId.set("second", alias[1])
+    const stored = byId.get("second")
+    if stored:
+        stored.done = true
+        selected.add("second")
+        session.meta.count += 1
+        await tick()
+        print("map:" + str(stored.done) + ":set=" + str("second" in selected))
 `.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.doesNotMatch(result.code ?? "", /__velar(?:Auto)?Memo/u);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "tasks:2:same=true",
+    "size:2",
+    "tasks:2:same=true",
+    "done:1",
+    "identity:first:set=true",
+    "tasks:2:same=true",
+    "session:1:same=true",
+    "map:true:set=true",
+    "",
+  ].join("\n"));
 
-  const messages = invalid.diagnostics.filter((item) => item.code === "VEL5046").map((item) => item.message);
-  assert.ok(messages.some((message) => /cannot be aliased/u.test(message)), messages.join("\n"));
-  assert.ok(messages.some((message) => /cannot escape by reference/u.test(message)), messages.join("\n"));
-  assert.ok(messages.some((message) => /mutating collection calls do not publish state/u.test(message)), messages.join("\n"));
-  assert.ok(messages.some((message) => /cannot cross an ordinary call/u.test(message)), messages.join("\n"));
-  assert.ok(messages.some((message) => /cannot cross a component prop/u.test(message)), messages.join("\n"));
+  const propMutation = compile(`
+type Task:
+    done: bool
 
-  const valid = compile(`
-component App:
-    state values: List<number> = [1]
-
-    def update():
-        const next = values.copy()
-        next.append(2)
-        values = next
-
-    return <button type="button" on:click={update}>{values.size}</button>
+component Child(task: Task, tasks: List<Task>):
+    def mutate():
+        task.done = true
+        tasks.append(task)
+    return <button type="button" on:click={mutate}>change</button>
 `.trimStart());
-  assert.deepEqual(valid.diagnostics, []);
+  const propMessages = propMutation.diagnostics.filter((item) => item.code === "VEL5051").map((item) => item.message);
+  assert.equal(propMessages.length, 2, JSON.stringify(propMutation.diagnostics));
+  assert.ok(propMessages.every((message) => /read-only/u.test(message)), propMessages.join("\n"));
+});
+
+test("deep reactivity isolates record properties and Map keys", () => {
+  const result = compile(`
+type Pair:
+    left: number
+    right: number
+
+state pair: Pair = {left: 0, right: 0}
+state scores: Map<string, number> = Map()
+
+def readLeft() -> number:
+    print("derive:left")
+    return pair.left
+
+def readRight() -> number:
+    print("derive:right")
+    return pair.right
+
+def readScore(key: string) -> number?:
+    print("derive:" + key)
+    return scores.get(key)
+
+computed leftValue: number = readLeft()
+computed rightValue: number = readRight()
+computed alpha: number? = readScore("alpha")
+computed beta: number? = readScore("beta")
+
+watch leftValue as current, previous:
+    print("left:" + str(current))
+
+watch rightValue as current, previous:
+    print("right:" + str(current))
+
+watch alpha as current, previous:
+    print("alpha:" + str(current))
+
+watch beta as current, previous:
+    print("beta:" + str(current))
+
+export async def exercise():
+    pair.left += 1
+    await tick()
+    scores.set("alpha", 7)
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "derive:left", "derive:right", "derive:alpha", "derive:beta",
+    "derive:left", "left:1",
+    "derive:alpha", "alpha:7",
+    "",
+  ].join("\n"));
+});
+
+test("the shared runtime preserves proxy identity across Web bundles and skips host-shaped values", async () => {
+  const first = compile("state first = 1\n");
+  const second = compile("state second = 2\n");
+  assert.deepEqual(first.diagnostics, []);
+  assert.deepEqual(second.diagnostics, []);
+  const directory = await mkdtemp(join(tmpdir(), "velar-reactive-bundles-"));
+  const firstPath = join(directory, "first.mjs");
+  const secondPath = join(directory, "second.mjs");
+  const mainPath = join(directory, "main.mjs");
+  await writeFile(firstPath, first.code ?? "", "utf8");
+  await writeFile(secondPath, second.code ?? "", "utf8");
+  await writeFile(mainPath, `
+await import(${JSON.stringify(pathToFileURL(firstPath).href)});
+const key = Symbol.for("velar.runtime.v1");
+const firstRuntime = globalThis[key];
+const raw = {nested: {value: 1}};
+const proxy = firstRuntime.reactive(raw);
+const descriptorChild = Object.getOwnPropertyDescriptor(proxy, "nested").value;
+await import(${JSON.stringify(pathToFileURL(secondPath).href)});
+const secondRuntime = globalThis[key];
+class HostValue {}
+const frozen = Object.freeze({value: 1});
+const sealed = Object.preventExtensions({value: 1});
+const list = [];
+const map = new Map();
+const set = new Set();
+const fn = () => null;
+console.log(JSON.stringify({
+  runtime: firstRuntime === secondRuntime,
+  proxy: proxy !== raw && secondRuntime.reactive(raw) === proxy && secondRuntime.toRaw(proxy) === raw,
+  descriptor: descriptorChild === raw.nested,
+  skipped: secondRuntime.reactive(new HostValue()) instanceof HostValue
+    && secondRuntime.reactive(frozen) === frozen
+    && secondRuntime.reactive(sealed) === sealed
+    && secondRuntime.reactive(list) === list
+    && secondRuntime.reactive(map) === map
+    && secondRuntime.reactive(set) === set
+    && secondRuntime.reactive(fn) === fn,
+}));
+`.trimStart(), "utf8");
+  const execution = spawnSync(process.execPath, [mainPath], { encoding: "utf8" });
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.deepEqual(JSON.parse(execution.stdout), { runtime: true, proxy: true, descriptor: true, skipped: true });
 });
 
 test("reactive module imports lower reads and reject ambiguous access", async () => {
@@ -8508,7 +8605,7 @@ console.log(coercions + ":" + getterReads);
     "manual:test:expected",
     "0",
     "false:false:false",
-    "true:false:0.10",
+    "true:false:0.11",
     "TypeError", "TypeError", "TypeError",
     "TypeError", "TypeError", "TypeError", "RangeError", "TypeError",
     "0:0",
@@ -10925,6 +11022,26 @@ mystery()
   assert.ok(unknown.diagnostics.some((item) => /Cannot call an unknown JavaScript value/.test(item.message)));
 });
 
+test("JavaScript call boundaries receive raw reactive records", () => {
+  const source = "data:text/javascript,export function seesRaw(value){const runtime=globalThis[Symbol.for('velar.runtime.v1')];return runtime.toRaw(value)===value}";
+  const result = compile(`
+import js unsafe {seesRaw} from ${JSON.stringify(source)}
+
+type Payload:
+    value: number
+
+state payload: Payload = {value: 1}
+
+export def probe():
+    print(seesRaw(payload) ? "raw" : "proxy")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /seesRaw\(__velarHostRaw\(payload\.get\(\)\)\)/u);
+  const execution = executeModule(`${result.code ?? ""}\nprobe();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "raw\n");
+});
+
 test("extern-declared imports are presence-checked at module initialization", async () => {
   // The exact W-22 shape: the declaration names an export the real module
   // lacks (process.on is an EventEmitter prototype method, not a module
@@ -11047,8 +11164,8 @@ const version: string = Remote.version
 const session = Session.parse({client: direct})
 `.trimStart());
   assert.deepEqual(valid.diagnostics, []);
-  assert.match(valid.code ?? "", /new Remote\("id", "\/api"\)/u);
-  assert.match(valid.code ?? "", /new sdk\.Client\("id", "\/namespace", 500\)/u);
+  assert.match(valid.code ?? "", /new Remote\(__velarHostRaw\("id"\), __velarHostRaw\("\/api"\)\)/u);
+  assert.match(valid.code ?? "", /new sdk\.Client\(__velarHostRaw\("id"\), __velarHostRaw\("\/namespace"\), __velarHostRaw\(500\)\)/u);
   assert.match(valid.code ?? "", /instanceof Remote/u);
   assert.ok(valid.semanticIndex.expressions.some((expression) => expression.memberName === "request" && expression.type === "(path: string) -> Promise<string>"));
 
@@ -15456,7 +15573,7 @@ print(label({name: "Ada"}))
   assert.equal(execution.stdout, "1:true:null:Ada\n");
 });
 
-test("component JSX invocations preserve narrowing facts", () => {
+test("component JSX invocations preserve narrowing facts while props stay read-only", () => {
   // Component invocation is an ordinary call: narrowed member facts survive it,
   // even when the component body assigns to the narrowed location.
   const componentInvocation = compile(`
@@ -15476,6 +15593,7 @@ def label(box: Box) -> string:
     return box.user.name
 `.trimStart());
   assert.equal(componentInvocation.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
+  assert.ok(componentInvocation.diagnostics.some((item) => item.code === "VEL5051" && /prop 'box' is read-only/u.test(item.message)));
 
   // A call inside a prop expression does not invalidate facts read by children.
   const propBeforeChildren = compile(`
@@ -15515,7 +15633,8 @@ def label(box: Box) -> string:
     const view = <Clear box={box} />
     return user.name
 `.trimStart());
-  assert.deepEqual(stableLocal.diagnostics, []);
+  assert.equal(stableLocal.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
+  assert.ok(stableLocal.diagnostics.some((item) => item.code === "VEL5051" && /prop 'box' is read-only/u.test(item.message)));
 });
 
 test("await preserves narrowing facts across suspension", () => {
@@ -15839,8 +15958,8 @@ mount(<Counter start={1} />, "#app")
   assert.match(result.code ?? "", /__velarCreateElement\("button", __namespace\)/);
   assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\]\[data-velar-look\]:where\(:hover\)\{color:var\(--velar-look-hover-color\)\}/);
   assert.match(result.code ?? "", /__velarLookBind/);
-  assert.doesNotMatch(result.code ?? "", /\bProxy\b/);
-  assert.match(result.code ?? "", /if \(initialized && !Object\.is\(next, current\)\) callback/);
+  assert.match(result.code ?? "", /proxy = new Proxy\(value/u);
+  assert.match(result.code ?? "", /nextVersion !== currentVersion/u);
   assert.match(result.code ?? "", /if \(destroyed\) return null;[\s\S]*__velarCleanupStep/);
   const domCommit = (result.code ?? "").indexOf("for (const observer of [...__velarRuntime.domQueue])");
   const watchCommit = (result.code ?? "").indexOf("for (const observer of [...__velarRuntime.watchQueue])");
@@ -16853,7 +16972,7 @@ component ListView:
   assert.deepEqual(keyed.diagnostics, []);
   assert.match(keyed.code ?? "", /__velarKeyed/);
   assert.match(keyed.code ?? "", /Duplicate JSX key/);
-  assert.match(keyed.code ?? "", /__velarListSnapshot\(read\(\) \?\? \[\], "Keyed JSX"\)/u);
+  assert.match(keyed.code ?? "", /const source = __velarToRaw\(read\(\) \?\? \[\]\);\s+const values = __velarListSnapshot\(source, "Keyed JSX"\)/u);
 
   const execution = executeModule(`${keyed.code ?? ""}
 let iteratorReads = 0;

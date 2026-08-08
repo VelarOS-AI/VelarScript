@@ -4,58 +4,30 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
-## 0.10.0-dev — The framework memoizes automatically; memo and batch retire
-
-Web framework changes (this revises the "Identity-keyed memoization and
-batched reactive commits" entry below within the same unreleased cycle — the
-language ships no memoization or batching API; repeated-computation problems
-are the framework's job):
-
-- Automatic memoization: inside reactive derivation contexts (`computed`
-  initializers, `watch` expressions and bodies, render expressions, and the
-  module or component functions those contexts call), `collection.map(f)` and
-  `collection.filter(f)` with a provably pure-enough `f` — and, inside such a
-  per-item callback, single-positional-argument calls to a provably
-  pure-enough unary function — compile through the identity-cache machinery
-  automatically: cached by argument identity (`Object.is`), evicted by
-  observer-run generation, bypassed entirely outside observer runs. Purity is
-  proved, never assumed (no reactive reads, no mutable captures, no
-  unproved calls; transitive within the module, carried across modules by an
-  interface marker that follows re-exports); any doubt compiles untouched.
-- The Web globals `memo` and `batch` are removed before any release. Manual
-  `memo` is subsumed by automatic memoization; `batch` never changed a
-  number — the scheduler already coalesces a synchronous assignment burst
-  into one publication, which is now a documented framework contract
-  (consecutive synchronous state assignments publish once; reads between
-  them are always fresh) pinned by runtime tests. Both names are ordinary
-  identifiers again.
-- New compiler-extension hook `exportAnnotations`: whole-program annotations
-  for exported names, merged into the module interface's extension exports —
-  the channel the purity markers travel through.
-
-## 0.10.0-dev — Identity-keyed memoization and batched reactive commits
+## 0.10.0-dev — Deep state reactivity is the only default
 
 Web framework changes:
 
-- New Web global `memo(transform)`: takes a pure unary function and returns a
-  memoized function of the same type (`memo<T, U>((T) -> U) -> (T) -> U`,
-  inferred per call site) that caches results by argument identity
-  (`Object.is`) — the reactive model's native change signal. Eviction is
-  generation-based: inside a `computed` or render that re-runs on publish,
-  entries hit during the current run survive and entries missed for one
-  complete run are evicted, so derivations for removed list items do not
-  leak. The memoized function is first-class and can be passed to
-  `.map(...)`. This is the charter addition the VelarOS-Lite S4 copy-tax
-  account demanded: per-item derivations now re-run only for the items an
-  update actually touched.
-- New Web global `batch(work)`: runs a synchronous callback with reactive
-  publications deferred — assignments commit immediately and reads stay
-  consistent, but affected computed/watch/render observers re-run once at
-  the end of the outermost batch instead of once per assignment. Nested
-  batches flatten; a throw inside the callback still flushes what was
-  assigned before propagating. Actions and event handlers stay un-batched by
-  default.
-- `memo` and `batch` are reserved Web bindings, like `mount` and `tick`.
+- `state` now publishes direct nested record assignments and direct
+  `List`/`Map`/`Set` mutations. State references may be aliased, passed to
+  ordinary functions, returned, and mutated through reactive imports; the
+  former VEL5046 copy-and-reassign restrictions are removed.
+- Ordinary mutable records are lazily proxied with property-level dependency
+  tracking. Native collections keep their identities and publish from
+  compiler-owned helpers; nested versions bubble to deep watches. A watch of
+  a deeply mutated value receives the same reference as `current` and
+  `previous`, without an implicit deep snapshot.
+- The raw/proxy cache and dependency graph are shared across application
+  bundles under runtime foundation version 0.11. Classes, host objects,
+  functions, frozen or non-extensible records, and native collections are
+  never wrapped; validation and serialization boundaries share one `toRaw`
+  operation, including `Map` keys and `Set` membership.
+- Component props remain read-only. Direct nested prop assignment or a
+  mutating collection call on a prop is reported as VEL5051.
+- Identity-keyed memoization and its purity metadata are removed because a
+  stable record identity can now contain changing fields. The language still
+  exposes no `memo` or `batch` API; synchronous state bursts remain coalesced
+  by the scheduler.
 
 ## 0.10.0-dev — Keyed conditionals and dev-server npm prebundling
 
@@ -64,7 +36,7 @@ Language and compiler changes:
 - The keyed-children fast path now reaches through conditionals: an
   interpolation whose `?:` branches contain `items.map(item => <Row
   key={item.id} />)` compiles each branch to its own gated region, so the
-  idiomatic empty-state ternary keeps identity-cached keyed children instead
+  idiomatic empty-state ternary keeps identity-preserving keyed children instead
   of silently demoting the whole list to rebuild-all dynamic updates. A
   branch that renders a list with `.map(...)` requires a key exactly like a
   bare keyed interpolation (VEL5017 now applies to branches too).
@@ -237,9 +209,10 @@ Compiler and framework changes:
 
 - Types now have a structured syntax tree and stable semantic identity.
 - Mutable collections and writable structures are invariant.
-- Reactive reference state cannot silently escape through aliases, nested
-  mutation, component props, ordinary calls, or returns; copy and reassign is
-  the explicit update model.
+- Reactive state is deeply tracked through record properties and
+  compiler-owned collection operations. Aliases, ordinary calls, returns, and
+  reactive imports preserve updates; component props remain read-only in the
+  child.
 - Web JSX and Look participate in the Core lexical stream through the Web
   extension instead of being captured as opaque source blocks.
 - JavaScript generation uses structured nodes with nested source-map positions.

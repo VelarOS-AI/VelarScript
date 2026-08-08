@@ -65,78 +65,42 @@ boundary of the contract is the synchronous extent: a burst spread across
 tear state — what was assigned before the failure still publishes on the
 flush.
 
-### Pure per-item derivations are memoized automatically
+### Deep state tracks the property or collection key that was read
 
-Inside reactive derivation contexts — `computed` initializers, `watch`
-expressions and bodies, render expressions, and the module or component
-functions those contexts call — the compiler memoizes per-item derivations by
-argument identity (`Object.is`). Identity is the reactive model's native
-change signal: immutable updates replace exactly the records they touch, so
-an identity-keyed cache re-runs a derivation precisely for the items an
-update changed. Two shapes qualify:
+Only ordinary mutable records receive lazy reactive proxies. `List`, `Map`,
+and `Set` keep their native identities and are tracked by compiler-owned
+collection operations. Classes, functions, DOM and other host objects, frozen
+records, and non-extensible records are never wrapped. The proxy cache and
+dependency graph have one versioned owner on `globalThis`, so application
+modules and lazy chunks share one raw/proxy identity.
 
-- **A whole callback**: `collection.map(f)` or `collection.filter(f)` where
-  `f` is a provably pure-enough named function (or an arrow that captures
-  nothing beyond the module or component pure surface) callable with one
-  argument. The result is cached per element identity.
-- **A call inside a per-item callback**: `g(argument)` with one positional
-  argument and a provably pure-enough unary `g`, cached per argument
-  identity. This covers derived per-item inputs — "the latest message for
-  this session" — where the collection element itself would be the wrong
-  cache key.
+A reactive observer subscribes to the property or collection key it reads.
+Nested mutations bubble a version change to owning state for deep watches, but
+unrelated property and `Map`-key consumers remain clean. Keyed JSX rows receive
+reactive record items even though dense-List validation intentionally reads raw
+descriptors.
 
 ```velar fragment
-def buildEntries(sessionList: List<Session>, latest: Map<string, Message>) -> List<SessionEntry>:
-    return sessionList.map(session => {
-        session: session,
-        preview: messagePreview(latest.get(session.id)),
-    })
+state messagesById: Map<string, Message> = Map()
+state latestBySession: Map<string, Message> = Map()
 
-computed entries: List<SessionEntry> = buildEntries(sessions.copy(), latestOf(messages.copy()))
+def appendChunk(replyId: string, chunk: string):
+    const reply = messagesById.get(replyId)
+    if reply:
+        reply.text += chunk
+
+return <ul>{sessions.map(session =>
+    <SessionRow key={session.id} preview={messagePreview(latestBySession.get(session.id))} />
+)}</ul>
 ```
 
-`messagePreview(...)` compiles through the identity cache automatically:
-appending a stream chunk to one session rebuilds only that session's latest
-message record, every other session's argument keeps its identity, hits the
-cache, and performs zero recomputation.
-
-**Pure-enough** is proved, never assumed — any doubt compiles untouched. A
-function qualifies only when it provably
-
-- never reads or writes a reactive binding (`state`, `computed`, `resource`,
-  `action`, props),
-- never reads a mutable outer binding (`let`) or an outer `const` that could
-  hold mutable data (literal consts, enums, type objects, and other pure
-  functions are readable),
-- never assigns to anything but its own locals — no member or index
-  assignment, so arguments are never mutated,
-- calls only other provably pure functions: module or component functions
-  passing the same test transitively, imports whose defining module proved
-  them pure (the marker travels with the module interface, through
-  re-export barrels and aliases), pure standard-library functions
-  (`velar/text`, `velar/collections`, `velar/math` except `random` and
-  `randomInt`), the pure core builtins (`str`, `number`, `Map`, `Set`,
-  `Error`), read-only collection methods on analyzer-proved collections —
-  and `print`, whose diagnostic output the contract treats as non-semantic,
-- delegates real work: a callback without a single call in its body is
-  cheaper than a cache entry and stays plain.
-
-Cache lifetime follows the reactive lifecycle. Eviction is generation-based:
-each re-run of the enclosing computed, watch, or render observer starts a new
-generation; entries hit during the current run survive, and an entry missed
-for one complete run is evicted, so derivations for removed list items do
-not leak. Component-scope caches live and die with their instance. Outside
-any observer run — event handlers, actions, module initialization — the same
-call sites call straight through and cache nothing, so non-derivation calls
-keep exact call-through semantics.
-
-What stays untouched, by design: callbacks that read reactive state or
-capture per-run locals, functions calling anything unproved (including
-extern and npm imports), multi-argument calls, named-argument calls, and
-every context outside reactive derivations. The one observable relaxation is
-logging: a `print` inside a memoized derivation runs once per computation,
-not once per cache hit — which is exactly what makes derivation-count probes
-representative.
+Appending a chunk performs one `Map.get` and one property assignment. Only the
+message body and the row whose preview read that message's `text` are
+invalidated; no identity-keyed derivation cache can become stale. Serialization,
+storage, HTTP, realtime, forms, unsafe bridges, and equality/test boundaries
+unwrap through the same `toRaw` operation before validation. `Map` keys and
+`Set` members are unwrapped before lookup so a reactive record and its raw
+identity cannot split membership.
 
 ## `velar/app`
 

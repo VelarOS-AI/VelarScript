@@ -438,6 +438,7 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
 
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
+  private componentProps: Set<string> | null = null;
   private componentReactiveNames: Set<string> | null = null;
   private mountedDepth = 0;
   private synchronousReactiveDepth = 0;
@@ -518,47 +519,20 @@ export class VelarWebAnalyzer extends Analyzer {
         this.synchronousReactiveDepth -= 1;
         this.flowFrameDepth -= 1;
         return true;
-      case "VariableDeclaration": {
-        const reactive = this.mutableReactiveReferences(statement.initializer)[0];
-        if (reactive) {
-          this.diagnostics.push(diagnostic(
-            "VEL5046",
-            `Reactive state '${reactive.name}' cannot be aliased; derive a new value or use copy() before local mutation`,
-            statement.initializer.span,
-          ));
-        }
+      case "VariableDeclaration":
         return false;
-      }
-      case "ReturnStatement": {
-        const reactive = statement.value ? this.mutableReactiveReferences(statement.value)[0] : null;
-        if (reactive) {
-          this.diagnostics.push(diagnostic(
-            "VEL5046",
-            `Reactive state '${reactive.name}' cannot escape by reference; return a derived value or an explicit copy`,
-            statement.value!.span,
-          ));
-        }
+      case "ReturnStatement":
         return false;
-      }
       case "AssignmentStatement": {
         const target = statement.target;
-        const root = target.kind === "MemberExpression" || target.kind === "IndexExpression"
-          ? this.reactiveReference(target.object)
+        const prop = target.kind === "MemberExpression" || target.kind === "IndexExpression"
+          ? this.propReference(target.object)?.name ?? null
           : null;
-        if (root) {
+        if (prop) {
           this.diagnostics.push(diagnostic(
-            "VEL5046",
-            `Reactive state '${root.name}' updates by assigning a new value to the state binding; nested mutation is intentionally not reactive`,
+            "VEL5051",
+            `Component prop '${prop}' is read-only; ask the parent to update it instead of mutating a nested value`,
             target.span,
-          ));
-        }
-        const value = this.mutableReactiveReferences(statement.value)[0];
-        if (value
-          && !(target.kind === "IdentifierExpression" && target.name === value.name)) {
-          this.diagnostics.push(diagnostic(
-            "VEL5046",
-            `Reactive state '${value.name}' cannot be assigned into another alias; assign a derived value or an explicit copy`,
-            statement.value.span,
           ));
         }
         return false;
@@ -597,26 +571,14 @@ export class VelarWebAnalyzer extends Analyzer {
       }
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "MemberExpression"
-      && this.reactiveReference(expression.callee.object)
+      && this.propReference(expression.callee.object)
       && ["append", "extend", "insert", "pop", "add", "set", "update", "remove", "clear"].includes(expression.callee.property)) {
-      const reactive = this.reactiveReference(expression.callee.object)!;
+      const prop = this.propReference(expression.callee.object)!.name;
       this.diagnostics.push(diagnostic(
-        "VEL5046",
-        `Reactive state '${reactive.name}' updates by assigning a new value to the state binding; mutating collection calls do not publish state`,
+        "VEL5051",
+        `Component prop '${prop}' is read-only; ask the parent to update it instead of calling a mutating collection method`,
         expression.span,
       ));
-    }
-    if (expression.kind === "CallExpression" && !this.safeReactiveCopyCall(expression)) {
-      for (const argument of expression.arguments) {
-        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-        for (const reactive of this.mutableReactiveReferences(value)) {
-          this.diagnostics.push(diagnostic(
-            "VEL5046",
-            `Reactive state '${reactive.name}' cannot cross an ordinary call by mutable reference; pass a derived value or an explicit copy`,
-            value.span,
-          ));
-        }
-      }
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && LOOK_BUILDERS.has(expression.callee.name) && !this.lookup(expression.callee.name)) {
@@ -696,63 +658,28 @@ export class VelarWebAnalyzer extends Analyzer {
     return this.componentStates?.has(name) === true || this.reactiveBindings.get(name) === "state";
   }
 
-  private reactiveReference(expression: Expression): { readonly name: string; readonly type: ValueType } | null {
+  private propReference(expression: Expression): { readonly name: string; readonly type: ValueType } | null {
     if (expression.kind === "IdentifierExpression") {
-      if (!this.writableStateName(expression.name)) return null;
-      return { name: expression.name, type: this.lookup(expression.name)?.type ?? unknownType };
+      return this.componentProps?.has(expression.name) === true && !this.lookup(expression.name)?.reactiveShadow
+        ? { name: expression.name, type: this.lookup(expression.name)?.type ?? unknownType }
+        : null;
     }
     if (expression.kind === "MemberExpression") {
-      const parent = this.reactiveReference(expression.object);
+      const parent = this.propReference(expression.object);
       if (!parent) return null;
       const owner = nonOptional(this.expandAliases(parent.type));
       return { name: parent.name, type: this.semanticMembersOf(owner).get(expression.property) ?? unknownType };
     }
     if (expression.kind === "IndexExpression") {
-      const parent = this.reactiveReference(expression.object);
+      const parent = this.propReference(expression.object);
       if (!parent) return null;
       const owner = nonOptional(this.expandAliases(parent.type));
-      const type = owner.kind === "list" ? owner.element : owner.kind === "map" ? owner.value : unknownType;
-      return { name: parent.name, type };
+      return {
+        name: parent.name,
+        type: owner.kind === "list" ? owner.element : owner.kind === "map" ? owner.value : unknownType,
+      };
     }
     return null;
-  }
-
-  private mutableReactiveReference(type: ValueType): boolean {
-    const value = nonOptional(this.expandAliases(type));
-    return value.kind === "list" || value.kind === "set" || value.kind === "map"
-      || value.kind === "object" || value.kind === "named" || value.kind === "class"
-      || value.kind === "any" || value.kind === "unknown";
-  }
-
-  private mutableReactiveReferences(expression: Expression): readonly { readonly name: string; readonly type: ValueType }[] {
-    const direct = this.reactiveReference(expression);
-    if (direct) return this.mutableReactiveReference(direct.type) ? [direct] : [];
-    const nested = (values: readonly Expression[]): readonly { readonly name: string; readonly type: ValueType }[] => {
-      const references = values.flatMap((value) => this.mutableReactiveReferences(value));
-      return references.filter((reference, index) => references.findIndex((candidate) => candidate.name === reference.name) === index);
-    };
-    switch (expression.kind) {
-      case "ListExpression":
-        return nested(expression.elements.map((item) => item.kind === "SpreadExpression" ? item.value : item));
-      case "ObjectExpression":
-        return nested(expression.properties.map((property) => property.value));
-      case "SpreadExpression":
-        return this.mutableReactiveReferences(expression.value);
-      case "ConditionalExpression":
-        return nested([expression.thenValue, expression.elseValue]);
-      case "BinaryExpression":
-        return expression.operator === "??" ? nested([expression.left, expression.right]) : [];
-      case "ArrowFunctionExpression":
-        return this.mutableReactiveReferences(expression.body);
-      default:
-        return [];
-    }
-  }
-
-  private safeReactiveCopyCall(expression: Extract<Expression, { kind: "CallExpression" }>): boolean {
-    if (expression.callee.kind === "IdentifierExpression" && expression.arguments.length <= 1
-      && (expression.callee.name === "Map" || expression.callee.name === "Set")) return true;
-    return false;
   }
 
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
@@ -831,8 +758,10 @@ export class VelarWebAnalyzer extends Analyzer {
     this.enterScope();
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
+    const previousProps = this.componentProps;
     const previousReactiveNames = this.componentReactiveNames;
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
+    this.componentProps = new Set(statement.parameters.map((parameter) => parameter.name));
     // Props lower reactively like component state and computed values, so a
     // local binding that reuses a prop name must suppress reactive lowering
     // for its own references exactly like a state-name shadow does.
@@ -916,6 +845,7 @@ export class VelarWebAnalyzer extends Analyzer {
     if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
     if (renderValue?.kind === "JSXElementExpression") this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
+    this.componentProps = previousProps;
     this.componentReactiveNames = previousReactiveNames;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -1059,7 +989,7 @@ export class VelarWebAnalyzer extends Analyzer {
 
   // Mirrors the emitter's keyed-children recognizer (dynamicChildLeaves): a
   // leaf shaped `source.map(item => <… key=… />)` — either the interpolation
-  // itself or a '?:' branch of it — compiles to the identity-cached keyed
+  // itself or a '?:' branch of it — compiles to the identity-preserving keyed
   // path. A map leaf without a key must gain one (VEL5017), and a key that
   // sits anywhere else in the interpolation would be silently ignored at
   // runtime, so it is diagnosed instead of quietly rebuilding every child.
@@ -1120,15 +1050,6 @@ export class VelarWebAnalyzer extends Analyzer {
         const key = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
         if (!isInvalidType(key) && key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
         continue;
-      }
-      if (attribute.value && typeof attribute.value !== "string") {
-        for (const reactive of this.mutableReactiveReferences(attribute.value)) {
-          this.diagnostics.push(diagnostic(
-            "VEL5046",
-            `Reactive state '${reactive.name}' cannot cross a component prop by mutable reference; pass a derived value or an explicit copy`,
-            attribute.value.span,
-          ));
-        }
       }
       const expected = binding.type.props.get(attribute.name);
       if (attribute.name === "look") {

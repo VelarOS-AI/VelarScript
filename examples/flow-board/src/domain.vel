@@ -68,9 +68,12 @@ export def advanceStatus(status: TaskStatus) -> TaskStatus:
         case TaskStatus.done:
             return TaskStatus.todo
 
-export def moveTask(tasks: List<Task>, id: string) -> List<Task>:
+export def moveTask(tasks: List<Task>, id: string):
     const timestamp = now()
-    return tasks.map(task => task.id == id ? {...task, status: advanceStatus(task.status), updatedAt: timestamp} : task)
+    const task = tasks.find(candidate => candidate.id == id)
+    if task:
+        task.status = advanceStatus(task.status)
+        task.updatedAt = timestamp
 
 export def removeTask(tasks: List<Task>, id: string) -> List<Task>:
     return tasks.filter(task => task.id != id)

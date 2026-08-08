@@ -8,7 +8,6 @@ import type {
   Program,
 } from "@velarscript/compiler/extension";
 import { optionalOf } from "@velarscript/compiler";
-import { PurityAnalyzer, PURE_UNARY_DERIVATION_EXPORT } from "./purity.ts";
 
 const publicBuilderTypes = new Map<string, ValueType>([
   ...["color", "rgb", "rgba", "hsl", "alpha", "lighten", "darken"].map((name) => [name, { kind: "named", name: "Color" } as ValueType] as const),
@@ -133,36 +132,10 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
   return false;
 }
 
-// Marks exported functions the framework may memoize automatically at
-// importing call sites: pure-enough under the strictest rules (interface
-// construction runs without analyzer hints, so every method call disqualifies)
-// and callable with exactly one positional argument. The marker travels
-// through the ordinary extension-exports channel, follows re-exports and
-// aliases, and doubles as its own interface identity, so a purity change
-// recompiles every dependent module.
-function exportAnnotations(program: Program): ReadonlyMap<string, unknown> {
-  const annotations = new Map<string, unknown>();
-  const purity = new PurityAnalyzer(program);
-  const mark = (name: string): void => {
-    const info = purity.pureFunction(name);
-    if (info?.unaryCallable) annotations.set(name, PURE_UNARY_DERIVATION_EXPORT);
-  };
-  for (const statement of program.body) {
-    if (statement.kind === "FunctionDeclaration" && statement.exported) mark(statement.name);
-    else if (statement.kind === "VariableDeclaration" && statement.exported
-      && statement.pattern.kind === "NameBindingPattern") mark(statement.pattern.name);
-  }
-  return annotations;
-}
-
 export const velarWebInspectionExtension: CompilerInspectionExtension = Object.freeze({
   visitDependencyExpression,
   visitDependencyStatement,
   contributeInterface,
-  exportAnnotations,
-  interfaceExportIdentity(name: string, value: unknown): string {
-    return typeof value === "string" ? value : `${name}:unknown`;
-  },
   resources(program: Program) {
     const resources: { source: string; kind: string }[] = [];
     for (const statement of program.body) {

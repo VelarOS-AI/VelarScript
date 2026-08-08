@@ -1,10 +1,7 @@
-# D14'' addendum (settled with user 2026-08-09): NO memoization keyword.
-# Three tiers: (1) auto-memo in computed for provably-pure per-item derivations
-# (D14' in flight); (2) follow-up after D14' lands — editor-level HINT (not error)
-# when a computed's .map(f) narrowly fails the purity proof, naming the capture
-# that broke it (the W-19/VEL5050 "no silent performance cliffs" pattern);
-# (3) a computed-sibling keyword with hard purity checking is SPEC-SHELVED,
-# escalation trigger = repeated real-world need for guaranteed granularity.
+# D14'' addendum, superseded by D26: there is no memoization keyword or cache.
+# D26 property-level deep reactivity is the automatic performance layer; no
+# frozen(value), memo(), batch(), or computed-sibling escape hatch is exposed
+# without new real-world evidence.
 
 # D18 — first-party local platform surface (velar/serve, velar/fs, velar/env, velar/host)
 

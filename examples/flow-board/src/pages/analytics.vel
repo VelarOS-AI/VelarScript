@@ -144,8 +144,8 @@ const timeLook = look:
 export component Analytics:
     computed progress = completion(tasks.size, doneCount)
     computed progressState = progressLabel(progress)
-    computed priorityRows = countBy(tasks.copy(), task => task.priority).entries()
-    const recent = sortBy(tasks.copy(), task => task.updatedAt, true)
+    computed priorityRows = countBy(tasks, task => task.priority).entries()
+    const recent = sortBy(tasks, task => task.updatedAt, true)
 
     return <main class="page" look={pageLook} data-analytics>
         <Head title="FlowBoard analytics" description="Project flow and recent task activity" themeColor="#f6f8fc" />
@@ -159,7 +159,7 @@ export component Analytics:
             <div class="progress" look={progressLook} role="progressbar" aria-label="Completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><div class="fill" look={progressFillLook(progress)}></div></div>
         </section>
         <section class="activity" look={sectionLook}>
-            <div><h2 look={sectionTitleLook}>Recent activity</h2><p>{lastUpdated(tasks.copy())}</p></div>
+            <div><h2 look={sectionTitleLook}>Recent activity</h2><p>{lastUpdated(tasks)}</p></div>
             <ol look={activityListLook}>{recent.map(task => <li look={activityItemLook} key={task.id}><span>{task.title}</span><time look={timeLook}>{format(task.updatedAt)}</time></li>)}</ol>
         </section>
         <section class="priorities" look={sectionLook}>

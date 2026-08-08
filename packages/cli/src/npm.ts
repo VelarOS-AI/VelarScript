@@ -89,7 +89,7 @@ export async function resolveBrowserNpm(
     .filter((dependency) => dependency.javascript && !dependency.source.startsWith(".") && !dependency.source.startsWith("/"))
     .map((dependency) => dependency.source)));
   const require = createRequire(pathToFileURL(join(project.sourceRoot, "package.json")));
-  const cacheRoot = join(project.projectRoot, ".velar", "dev-deps");
+  const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
   const states = new Map<string, PackageState>();
   const targets = new Map<string, { readonly state: PackageState; readonly subpath: string }>();
   const imports: Record<string, string> = {};
@@ -226,7 +226,7 @@ async function findInstalledPackageRoot(name: string, specifier: string, require
     const root = join(directory, name);
     try {
       await access(join(root, "package.json"));
-      return root;
+      return await realpath(root);
     } catch {
       // Keep walking the node_modules chain.
     }

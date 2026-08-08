@@ -7,17 +7,15 @@ def test_task_workflow_uses_finite_states():
     expect(advanceStatus(TaskStatus.doing)).toBe(TaskStatus.done)
     expect(advanceStatus(TaskStatus.done)).toBe(TaskStatus.todo)
 
-def test_board_transformations_are_immutable_and_typed():
+def test_board_mutations_are_direct_and_typed():
     const tasks = seedTasks()
-    const moved = moveTask(tasks, "seed-design")
-    expect(tasks[0].status).toBe(TaskStatus.todo)
-    expect(moved[0].status).toBe(TaskStatus.doing)
-    expect(countStatus(moved, TaskStatus.doing)).toBe(2)
+    moveTask(tasks, "seed-design")
+    expect(tasks[0].status).toBe(TaskStatus.doing)
+    expect(countStatus(tasks, TaskStatus.doing)).toBe(2)
     expect(filterTasks(tasks, "compiler", TaskFilter.all)).toHaveLength(1)
     expect(filterTasks(tasks, "", TaskFilter.done)).toHaveLength(1)
     expect(TaskPriority.is(TaskPriority.high)).toBe(true)
-    expect(deepEqual(tasks, seedTasks())).toBe(true)
-    expect(deepEqual(tasks, moved)).toBe(false)
+    expect(deepEqual(tasks, seedTasks())).toBe(false)
 
 def test_task_draft_uses_named_record_fields():
     const title = "  Record-first task  "

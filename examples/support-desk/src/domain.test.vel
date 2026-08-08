@@ -12,11 +12,9 @@ def test_ticket_selection_and_pagination():
     if pageTickets(sample, 2, 1)[0].id != "two":
         throw Error("expected second page")
 
-def test_ticket_resolution_is_immutable():
-    const resolved = resolveTicket(sample, "one")
-    if sample[0].status != TicketStatus.open:
-        throw Error("source list changed")
-    if resolved[0].status != TicketStatus.resolved:
+def test_ticket_resolution_mutates_the_owned_ticket():
+    resolveTicket(sample, "one")
+    if sample[0].status != TicketStatus.resolved:
         throw Error("resolved status missing")
 
 def test_ticket_draft_crosses_the_domain_boundary():

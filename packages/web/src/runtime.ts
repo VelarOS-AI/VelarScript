@@ -67,7 +67,15 @@ function __velarNativeFile(value, message) {
 
 const listRuntime = String.raw`
 const __velarMaxListItems = 1000000;
+function __velarListReactiveRuntime() {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1"));
+  const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
+  return runtime && runtime.version === "0.11" && typeof runtime.toRaw === "function"
+    && typeof runtime.collectionRead === "function" ? runtime : null;
+}
 function __velarRequireList(value, name) {
+  const reactive = __velarListReactiveRuntime();
+  if (reactive) value = reactive.toRaw(value);
   if (!Array.isArray(value)) throw new TypeError(name + " requires a List");
   if (value.length > __velarMaxListItems) throw new RangeError(name + " cannot exceed " + __velarMaxListItems + " items");
   if (Object.getOwnPropertySymbols(value).length > 0
@@ -85,7 +93,7 @@ function __velarRequireList(value, name) {
     if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) {
       throw new TypeError(name + " requires ordinary mutable List elements");
     }
-    output[index] = descriptor.value;
+    output[index] = reactive ? reactive.collectionRead(value, Symbol.for("velar.reactive.iterate.v1"), descriptor.value) : descriptor.value;
   }
   return output;
 }

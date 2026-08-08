@@ -961,30 +961,36 @@ export component Profile(userId: string):
     </section>
 ```
 
-`state` publishes when its binding is assigned. Mutating a List, Set, Map, or
-nested record inside state does not publish a reactive update; construct and
-assign the next value instead. Mutable state references cannot be aliased,
-returned, passed through ordinary calls, or supplied as component props. Use a
-derived value or an explicit `copy()` so a helper cannot mutate state behind the
-binding that owns its update.
+`state` is deeply reactive. Assigning the binding, mutating a `List`, `Set`, or
+`Map`, and assigning a field anywhere inside a nested record all publish the
+affected reactive reads. State references may be aliased, returned, and passed
+through ordinary functions; helpers can mutate the owned value directly.
 
 ```velar fragment
-const next = tasks.copy()
-next.append(task)
-tasks = next
+tasks.append(task)
+tasks[0].done = true
 
-const visible = filterTasks(tasks.copy(), query)
-return tasks.copy()
+def retitle(task: Task, title: string):
+    task.title = title
+
+retitle(tasks[0], "Ready")
 ```
 
 `computed` is read-only and tracks its reactive dependencies. Computed
 expressions are synchronous; asynchronous component data belongs in a
-`resource`. Because immutable updates make identity the change signal, the
-framework scales derivations without exposing an API: provably pure per-item
-derivations inside a `computed` or render are cached by argument identity
-automatically (with generation-based eviction), and a synchronous
-multi-assignment commit publishes once; the Web API document owns both
-contracts.
+`resource`. Record properties and collection keys are tracked independently,
+so changing `task.done` invalidates consumers of that property without
+invalidating unrelated `task.title` reads, and changing one `Map` entry does not
+invalidate consumers of other keys. The language exposes no memoization or
+batching API; property-level tracking and synchronous assignment coalescing are
+framework contracts owned by the Web API document.
+
+Reactive imports keep the same split as ordinary imports: assigning an imported
+binding is forbidden, while mutating the value inside an imported state binding
+is legal and publishes to every consumer. Component props remain read-only in
+the child. A child may call a callback supplied by its parent to request a
+mutation, but it may not assign a prop record field or invoke a mutating
+collection method on a prop.
 
 A resource exposes `value`, `loading`, `ready`, `error`, and `reload`. It owns
 stale-result and component-destruction handling.
@@ -1002,6 +1008,10 @@ destruction.
 `watch expression as current, previous:` runs an explicit side effect when the
 tracked value changes. A watch body is synchronous. Async component work belongs
 in an `action`; lifecycle setup that must wait belongs in `mounted`.
+For a deep mutation, `current` and `previous` are the same reference; a watch
+does not manufacture an unbounded deep snapshot. Inspect the fields needed by
+the side effect, or store an explicit snapshot when the application requires
+one.
 
 ## 16. Lifecycle
 

@@ -182,6 +182,7 @@ export interface LoweringHints {
   readonly collectionCalls: ReadonlyMap<number, CollectionOperation>;
   readonly collectionSizes: ReadonlySet<number>;
   readonly constructorCalls: ReadonlySet<string>;
+  readonly javaScriptCallBoundaries: ReadonlySet<string>;
   readonly classChecks: ReadonlySet<string>;
   readonly privateMembers: ReadonlySet<string>;
   readonly classNames: ReadonlySet<string>;
@@ -313,6 +314,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionCalls = new Map<number, CollectionOperation>();
   private readonly collectionSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
+  private readonly javaScriptBindings = new Set<string>();
+  private readonly javaScriptCallBoundaries = new Set<string>();
   private readonly classChecks = new Set<string>();
   private readonly privateMembers = new Set<string>();
   private readonly optionalMembers = new Set<string>();
@@ -584,6 +587,7 @@ export class Analyzer implements TypeEnvironment {
     for (const statement of program.body) {
       if (statement.kind === "ImportDeclaration") {
         for (const specifier of statement.specifiers) {
+          if (statement.javascript) this.javaScriptBindings.add(specifier.local);
           this.declareBinding(
             specifier.local,
             false,
@@ -776,6 +780,7 @@ export class Analyzer implements TypeEnvironment {
       collectionCalls: this.collectionCalls,
       collectionSizes: this.collectionSizes,
       constructorCalls: this.constructorCalls,
+      javaScriptCallBoundaries: this.javaScriptCallBoundaries,
       classChecks: this.classChecks,
       privateMembers: this.privateMembers,
       classNames: new Set([...this.classes.keys(), ...this.classDisplayNames.values()]),
@@ -3042,6 +3047,7 @@ export class Analyzer implements TypeEnvironment {
     optionalCall = false,
   ): ValueType {
     const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
+    if (this.javaScriptBoundaryCallee(calleeExpression)) this.javaScriptCallBoundaries.add(spanIdentity(callSpan));
     if (calleeExpression.kind === "SuperExpression") {
       if (optionalCall) this.typeError("A base constructor call cannot be optional", callSpan);
       const baseName = this.currentClass ? this.classes.get(this.currentClass)?.base ?? null : null;
@@ -3210,6 +3216,18 @@ export class Analyzer implements TypeEnvironment {
     }
     this.typeError(`${describeType(callee)} is not callable`, callSpan);
     return unknownType;
+  }
+
+  private javaScriptBoundaryCallee(expression: Expression): boolean {
+    if (expression.kind === "IdentifierExpression") {
+      if (this.javaScriptBindings.has(expression.name)) return true;
+      const type = this.lookup(expression.name)?.type;
+      return (type?.kind === "class" || type?.kind === "classConstructor") && type.identity?.startsWith("js:") === true;
+    }
+    if (expression.kind !== "MemberExpression") return false;
+    if (this.javaScriptBoundaryCallee(expression.object)) return true;
+    const type = expression.object.kind === "IdentifierExpression" ? this.lookup(expression.object.name)?.type : null;
+    return (type?.kind === "class" || type?.kind === "classConstructor") && type.identity?.startsWith("js:") === true;
   }
 
   // Two-phase call-site unification for generic callables: phase 1 infers

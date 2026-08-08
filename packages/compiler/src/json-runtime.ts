@@ -2,6 +2,11 @@ export const VELAR_STRICT_JSON_RUNTIME = String.raw`
 const __velarMaxJsonCodeUnits = 16 * 1024 * 1024;
 const __velarMaxJsonNodes = 1000000;
 const __velarMaxJsonDepth = 128;
+function __velarJsonRaw(value) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1"));
+  const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
+  return runtime && runtime.version === "0.11" && typeof runtime.toRaw === "function" ? runtime.toRaw(value) : value;
+}
 function __velarJsonFailure(path, message) {
   throw new TypeError("Invalid JSON value at " + path + ": " + message);
 }
@@ -25,6 +30,7 @@ function __velarJsonBudget(state, path) {
 }
 function __velarJsonState() { return { active: new Set(), nodes: 0, depth: 0, compactUnits: 0, prettyLines: 0, prettyIndentWeight: 0, prettyColonSpaces: 0 }; }
 function __velarInspectJson(value, path, state, copy) {
+  value = __velarJsonRaw(value);
   state.nodes += 1;
   if (value === null) { state.compactUnits += 4; __velarJsonBudget(state, path); return value; }
   if (typeof value === "string") { state.compactUnits += __velarJsonStringUnits(value); __velarJsonBudget(state, path); return value; }
