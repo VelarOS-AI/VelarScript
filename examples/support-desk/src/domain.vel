@@ -89,7 +89,7 @@ export def findTicket(tickets: List<Ticket>, id: string) -> Ticket?:
 
 export def createTicket(draft: TicketDraft) -> Ticket:
     const {title, requester, summary, priority, urgent, estimate} = draft
-    assert estimate != null, "Ticket estimate is required"
+    assert estimate != null else "Ticket estimate is required"
     return {
         id: uuid(),
         title: title.trim(),

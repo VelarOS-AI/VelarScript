@@ -318,7 +318,7 @@ def display(value: DisplayValue) -> string:
         return value ? "yes" : "no"
 
 def increment(value: string | number) -> number:
-    assert not (value is string), "Expected a number"
+    assert not (value is string) else "Expected a number"
     return value + 1
 
 def incrementField(payload: Payload) -> number:
@@ -1379,12 +1379,16 @@ print(f"same quote: {"ready"}")
   assert.equal(spacedExecution.stdout, "VelarScript: Script {ready}\n");
 });
 
-test("unterminated strings stop at the line boundary and preserve following declarations", () => {
-  for (const literal of ['"unfinished', 'f"unfinished', '"unfinished\\', 'f"unfinished\\']) {
+test("inline strings recover at newlines while layout strings recover at dedent", () => {
+  for (const literal of ['"unfinished', 'f"unfinished', 'r"unfinished', 'rf"unfinished']) {
     const result = compile(`const broken = ${literal}\r\nconst recovered = 7\r\n`);
     assert.ok(result.diagnostics.some((item) => item.code === "VEL1003"));
     assert.ok(result.semanticIndex.symbols.some((item) => item.name === "recovered"));
   }
+
+  const brokenLayout = compile('const broken = "\n    unfinished\nconst recovered = 7\n');
+  assert.ok(brokenLayout.diagnostics.some((item) => item.code === "VEL1003" && /layout string/u.test(item.message)));
+  assert.ok(brokenLayout.semanticIndex.symbols.some((item) => item.name === "recovered"));
 });
 
 test("omitted results mean null and end naturally while value functions stay explicit", () => {
@@ -1788,7 +1792,7 @@ def message() -> string:
     return "unused"
 
 def submit(draft: Draft):
-    assert draft.estimate, "Estimate is required"
+    assert draft.estimate else "Estimate is required"
     assert draft.label
     assert draft.enabled
     const estimate = draft.estimate
@@ -1797,10 +1801,10 @@ def submit(draft: Draft):
     print(f"{estimate}:{label}:{enabled}")
 
 submit({estimate: 0, label: "", enabled: false})
-assert true, message()
+assert true else message()
 
 try:
-    assert false, "Broken invariant"
+    assert false else "Broken invariant"
 catch error:
     print(f"{error.name}:{error.message}")
 `;
@@ -1815,7 +1819,7 @@ catch error:
 
   const invalid = compile(`
 assert 1
-assert true, 42
+assert true else 42
 `);
   assert.ok(invalid.diagnostics.some((item) => /Condition must be bool or optional/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
@@ -1833,11 +1837,11 @@ def clear(box: Box) -> string:
 
 def keep(box: Box) -> string:
     assert box.user
-    assert true, clear(box)
+    assert true else clear(box)
     return box.user.name
 
 def failureMessage(user: User?) -> string:
-    assert user == null, user.name
+    assert user == null else user.name
     return "empty"
 
 print(keep({user: {name: "Ada"}}))
@@ -1866,9 +1870,13 @@ const callback: () -> number = () => value
 `);
   assert.equal(deferred.diagnostics.filter((item) => /number\?/u.test(item.message)).length, 2);
 
-  const malformed = compile("assert\nassert true,\n");
+  const malformed = compile("assert\nassert true else\n");
   assert.ok(malformed.diagnostics.some((item) => item.code === "VEL2017" && /requires a condition/u.test(item.message)));
   assert.ok(malformed.diagnostics.some((item) => item.code === "VEL2017" && /requires a message/u.test(item.message)));
+
+  const legacySeparator = compile('assert true, "legacy"\n');
+  assert.ok(legacySeparator.diagnostics.some((item) => item.code === "VEL2017" && /assert condition else message/u.test(item.message)));
+  assert.equal(legacySeparator.code, null);
 });
 
 test("transparent type aliases improve names without changing assignability", () => {
@@ -12189,36 +12197,68 @@ const malformed = Map([["only"]])
   assert.ok(invalid.diagnostics.some((item) => /exactly \[key, value\]/u.test(item.message)));
 });
 
-test("backticks preserve multiline text while f-backticks own interpolation", () => {
+test("quoted strings unify multiline, interpolation, and raw path semantics", () => {
   const source = [
     "const name = \"Velar\"",
-    "const plain = `first",
-    "{literal} \"quote\" \\`tick\\`",
-    "last`",
-    "const rich = f`hello {name}",
-    "value {1 + 2}`",
+    "const plain = \"",
+    "    first",
+    "    {literal} \"quote\"",
+    "    last",
+    "\"",
+    "const rich = f\"",
+    "    hello {name}",
+    "    value {1 + 2}",
+    "\"",
+    "const windows = r\"C:\\Users\\foo\"",
+    "const trailing = r\"C:\\path\\\"",
+    "const quoted = r\"He said \"\"hello\"\"\"",
+    "const root = r\"C:\\repo\"",
+    "const asset = rf\"{root}\\assets\\main.js\"",
+    "const rawLayout = r\"",
+    "    C:\\one \"\"quoted\"\"",
+    "    D:\\two",
+    "\"",
+    "const rfLayout = rf\"",
+    "    {root}\\nested",
+    "\"",
     "print(plain)",
     "print(rich)",
+    "print(windows)",
+    "print(trailing)",
+    "print(quoted)",
+    "print(asset)",
+    "print(rawLayout)",
+    "print(rfLayout)",
   ].join("\n") + "\n";
   const result = compileCore(source, { path: "multiline.vel" });
   assert.deepEqual(result.diagnostics, []);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "first\n{literal} \"quote\" `tick`\nlast\nhello Velar\nvalue 3\n");
+  assert.equal(execution.stdout, "first\n{literal} \"quote\"\nlast\nhello Velar\nvalue 3\nC:\\Users\\foo\nC:\\path\\\nHe said \"hello\"\nC:\\repo\\assets\\main.js\nC:\\one \"\"quoted\"\"\nD:\\two\nC:\\repo\\nested\n");
 
-  const formattedSource = "const text=`a\r\n  b`  \r\nprint(text)\r\n";
+  const formattedSource = "const text=\"\r\n    a\r\n      b\r\n\"  \r\nprint(text)\r\n";
   const formatted = formatSource(formattedSource);
-  assert.equal(formatted, "const text = `a\r\n  b`\nprint(text)\n");
+  assert.equal(formatted, "const text = \"\r\n    a\r\n      b\r\n\"\nprint(text)\n");
   assert.equal(formatSource(formatted), formatted);
 
+  const shiftedLayout = formatSource('if true:\n  const text="\n      first\n        second\n  "\n  print(text)\n');
+  assert.equal(shiftedLayout, 'if true:\n    const text = "\n        first\n          second\n    "\n    print(text)\n');
+  assert.equal(formatSource(shiftedLayout), shiftedLayout);
+  assert.equal(executeModule(compileCore(shiftedLayout).code ?? "").stdout, "first\n  second\n");
+
+  const legacyDelimiter = String.fromCharCode(96);
+  const legacy = compileCore(`const text = ${legacyDelimiter}legacy\ntext${legacyDelimiter}\n`);
+  assert.ok(legacy.diagnostics.some((item) => item.code === "VEL1005" && /layout string/u.test(item.message)));
   const triple = compileCore('const text = """legacy\ntext"""\n');
-  assert.ok(triple.diagnostics.some((item) => item.code === "VEL1005" && /Use backticks for multiline strings/u.test(item.message)));
+  assert.ok(triple.diagnostics.some((item) => item.code === "VEL1005" && /layout string/u.test(item.message)));
+  const noncanonical = compileCore('const path = fr"{1}\\tmp"\n');
+  assert.ok(noncanonical.diagnostics.some((item) => item.code === "VEL1005" && /Use 'rf'/u.test(item.message)));
 
   const generatedLines = (result.code ?? "").split("\n");
   const generatedLine = generatedLines.findIndex((line) => line.includes("console.log(plain)"));
   const generatedColumn = generatedLines[generatedLine]!.indexOf("plain");
   const mapping = new SourceMap(JSON.parse(result.sourceMap ?? "{}")).findEntry(generatedLine, generatedColumn) as { originalLine: number };
-  assert.equal(mapping.originalLine, 6);
+  assert.equal(mapping.originalLine, 22);
 });
 
 test("Set rejects invalid construction, element mutation, annotations, and shadowing", () => {
@@ -13417,7 +13457,7 @@ class Child extends Base:
         super(steps)
         self.value = value
         self.doubled = value * 2
-        assert value > 0, "Value must be positive"
+        assert value > 0 else "Value must be positive"
         invoke(self.record)
 
     def record():
@@ -14175,7 +14215,7 @@ export class ScoreCard:
 
     constructor(label: string):
         self.label = label
-        assert self.label != "", "ScoreCard label cannot be empty"
+        assert self.label != "" else "ScoreCard label cannot be empty"
 
     def add(value: number):
         self.history.append(value)
@@ -16072,7 +16112,7 @@ def inlineLabel(contact: Contact) -> string:
     return contact.email != null ? contact.email : "missing"
 
 def assertedLabel(contact: Contact) -> string:
-    assert contact.email != null, "Email is required"
+    assert contact.email != null else "Email is required"
     const address: string = contact.email
     return address
 

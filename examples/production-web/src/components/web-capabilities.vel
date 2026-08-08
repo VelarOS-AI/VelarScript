@@ -74,7 +74,7 @@ export component WebCapabilities:
     const initialRoute = currentRoute()
     const cache = database("release-studio")
     const config = publicConfig(RuntimeConfig)
-    assert matches(config.releaseChannel, "^[a-z][a-z0-9-]*$"), "Release channel must use a lowercase Web-safe name"
+    assert matches(config.releaseChannel, "^[a-z][a-z0-9-]*$") else "Release channel must use a lowercase Web-safe name"
     const runtimeLog = logger("release-studio")
     const capabilityNames = Set(["http", "storage", "files"])
     capabilityNames.add("realtime")

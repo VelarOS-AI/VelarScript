@@ -1,5 +1,5 @@
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-import { findInterpolatedExpressionEnd, scanInterpolatedString } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
 
 export interface FormatOptions {
   readonly indentWidth?: number;
@@ -38,7 +38,7 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     throw new RangeError("VelarScript formatter indentWidth must be an integer from 1 through 16");
   }
 
-  const protectedStrings = protectBacktickStrings(text);
+  const protectedStrings = protectMultilineStrings(text);
   const lines = protectedStrings.text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
   const indentation = [0];
   const formatted: string[] = [];
@@ -78,8 +78,13 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
   return protectedStrings.restore(`${formatted.join("\n")}\n`);
 }
 
-function protectBacktickStrings(source: string): { readonly text: string; readonly restore: (formatted: string) => string } {
-  const replacements: { readonly placeholder: string; readonly value: string }[] = [];
+function protectMultilineStrings(source: string): { readonly text: string; readonly restore: (formatted: string) => string } {
+  const replacements: {
+    readonly placeholder: string;
+    readonly value: string;
+    readonly layout: boolean;
+    readonly originalIndent: string;
+  }[] = [];
   let output = "";
   let index = 0;
   while (index < source.length) {
@@ -90,43 +95,62 @@ function protectBacktickStrings(source: string): { readonly text: string; readon
       index = next;
       continue;
     }
-    const character = source[index]!;
-    if (character === '"' || character === "'") {
-      const start = index++;
-      while (index < source.length) {
-        const current = source[index++]!;
-        if (current === "\\" && index < source.length) index += 1;
-        else if (current === character || current === "\n" || current === "\r") break;
-      }
-      output += source.slice(start, index);
-      continue;
-    }
-    const prefixed = character === "f" && source[index + 1] === "`";
-    if (character !== "`" && !prefixed) {
-      output += character;
+    const previous = source[index - 1];
+    const scanned = (!previous || !/[A-Za-z0-9_]/u.test(previous)) ? scanStringLiteral(source, index) : null;
+    if (!scanned) {
+      output += source[index]!;
       index += 1;
       continue;
     }
     const start = index;
-    index += prefixed ? 2 : 1;
-    while (index < source.length) {
-      const current = source[index++]!;
-      if (current === "\\" && index < source.length) index += 1;
-      else if (current === "`") break;
+    index = scanned.end;
+    const value = source.slice(start, index);
+    if (!value.includes("\n") && !value.includes("\r")) {
+      output += value;
+      continue;
     }
-    let marker = `__velar_formatter_backtick_${replacements.length}__`;
+    let marker = `__velar_formatter_multiline_string_${replacements.length}__`;
     while (source.includes(marker)) marker += "_";
     const placeholder = JSON.stringify(marker);
-    replacements.push({ placeholder, value: source.slice(start, index) });
+    const lineStart = Math.max(source.lastIndexOf("\n", start - 1), source.lastIndexOf("\r", start - 1)) + 1;
+    const originalIndent = /^[ \t]*/u.exec(source.slice(lineStart, start))?.[0] ?? "";
+    replacements.push({ placeholder, value, layout: scanned.layout, originalIndent });
     output += placeholder;
   }
   return {
     text: output,
-    restore: (formatted) => replacements.reduce(
-      (current, replacement) => current.replaceAll(replacement.placeholder, replacement.value),
-      formatted,
-    ),
+    restore: (formatted) => replacements.reduce((current, replacement) => {
+      const marker = current.indexOf(replacement.placeholder);
+      if (marker < 0) return current;
+      const lineStart = Math.max(current.lastIndexOf("\n", marker - 1), current.lastIndexOf("\r", marker - 1)) + 1;
+      const formattedIndent = /^[ \t]*/u.exec(current.slice(lineStart, marker))?.[0] ?? "";
+      const value = replacement.layout
+        ? reindentLayoutLiteral(replacement.value, replacement.originalIndent, formattedIndent)
+        : replacement.value;
+      return `${current.slice(0, marker)}${value}${current.slice(marker + replacement.placeholder.length)}`;
+    }, formatted),
   };
+}
+
+function reindentLayoutLiteral(value: string, originalIndent: string, formattedIndent: string): string {
+  let output = "";
+  let cursor = 0;
+  let first = true;
+  while (cursor < value.length) {
+    const boundary = /\r\n|\r|\n/gu;
+    boundary.lastIndex = cursor;
+    const match = boundary.exec(value);
+    const end = match?.index ?? value.length;
+    const line = value.slice(cursor, end);
+    output += first || !line.startsWith(originalIndent)
+      ? line
+      : `${formattedIndent}${line.slice(originalIndent.length)}`;
+    first = false;
+    if (!match) break;
+    output += match[0];
+    cursor = end + match[0].length;
+  }
+  return output;
 }
 
 function isChainContinuationLine(content: string): boolean {
@@ -222,23 +246,14 @@ function tokenizeInline(source: string): InlineToken[] {
       tokens.push({ kind: "comment", text: source.slice(index).trimEnd() });
       break;
     }
-    if (character === "f" && (source[index + 1] === '"' || source[index + 1] === "'" || source[index + 1] === "`")) {
+    const scannedString = scanStringLiteral(source, index);
+    if (scannedString) {
       const start = index;
-      const scanned = scanInterpolatedString(source, start);
-      index = scanned.end;
-      tokens.push({ kind: "string", text: formatInterpolatedString(source, start, scanned) });
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      const start = index;
-      const quote = character;
-      index += 1;
-      while (index < source.length) {
-        const current = source[index++]!;
-        if (current === "\\" && index < source.length) index += 1;
-        else if (current === quote) break;
-      }
-      tokens.push({ kind: "string", text: source.slice(start, index) });
+      index = scannedString.end;
+      tokens.push({
+        kind: "string",
+        text: scannedString.interpolated ? formatInterpolatedString(source, start, scannedString) : source.slice(start, index),
+      });
       continue;
     }
     if (character === "<" && beginsJsx(tokens, source, index)) {
@@ -348,14 +363,14 @@ function beginsTypeBracket(tokens: readonly InlineToken[]): boolean {
   return typeBracketOperators.has(before.text);
 }
 
-function formatInterpolatedString(source: string, start: number, scanned: ReturnType<typeof scanInterpolatedString>): string {
+function formatInterpolatedString(source: string, start: number, scanned: StringLiteralScan): string {
   if (!scanned.closed) return source.slice(start, scanned.end);
   let output = source.slice(start, scanned.contentStart);
   let index = scanned.contentStart;
   while (index < scanned.contentEnd) {
     const character = source[index]!;
     const next = source[index + 1];
-    if (character === "\\" && next !== undefined) {
+    if (!scanned.raw && character === "\\" && next !== undefined) {
       output += `${character}${next}`;
       index += 2;
       continue;

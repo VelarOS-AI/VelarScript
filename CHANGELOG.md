@@ -25,7 +25,24 @@ Standard library and CLI changes:
   quit; `velar/env` permits only explicit portable variable names. The
   JavaScript bridge remains the third-party package boundary.
 
-## 0.10.0-dev — Two-slot iteration, collection construction, and multiline strings
+## 0.10.0-dev — Unified quoted strings and assertion failure branches
+
+Language and compiler changes:
+
+- Inline single- and double-quoted strings remain line-bounded recovery units.
+  A quote followed immediately by a newline opens an indentation-bounded layout
+  string; its structural margin is removed while internal lines and extra
+  indentation remain exact. A missing close recovers at dedent.
+- `r"..."` preserves backslashes literally, `f"..."` interpolates, and the
+  canonical combined form is `rf"..."`; the same prefixes apply to layout
+  strings. Raw inline strings double their delimiter to include it. Backtick
+  strings were removed cleanly, and noncanonical `fr`, legacy backticks, and
+  triple quotes receive direct current-spelling guidance.
+- Assertion messages now read as an explicit failure branch:
+  `assert condition else message`. The old comma separator receives a targeted
+  migration diagnostic and no longer emits runnable output.
+
+## 0.10.0-dev — Two-slot iteration and collection construction
 
 Language and compiler changes:
 
@@ -41,10 +58,10 @@ Language and compiler changes:
   `Set(List)` remains the checked content constructor. The runtime copies by
   data descriptor and native collection slots, never by replaceable iterators
   or accessors. Record-to-Map diagnostics now point at `Map({...})`.
-- Backticks delimit raw multiline layout with `\`` for a literal backtick;
-  `f` remains the only interpolation switch and still uses `{expression}`.
-  Formatter and source-map handling preserve physical newlines. Python triple
-  quotes receive one-current-spelling guidance.
+- Multiline-string work from this batch was superseded in the same development
+  cycle by layout strings: the same ordinary quote enters a multiline block
+  only when followed immediately by a newline, while `r`, `f`, and `rf` select
+  raw and interpolation semantics without a separate delimiter family.
 - This batch deliberately does not add truthy conditions, List `+`, async
   iteration, labeled breaks, for-else, or match expressions; their existing
   single-spelling and evidence decisions remain unchanged.

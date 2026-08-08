@@ -75,7 +75,7 @@ const visuallyHiddenLook = look:
 
 export component TicketDetail(route: RouteContext):
     const routeId = route.params.get("id")
-    assert routeId != null, "Ticket detail route requires an id parameter"
+    assert routeId != null else "Ticket detail route requires an id parameter"
     const id = routeId
     let confirmDialog: DialogElement? = null
     let resolveButton: Element? = null

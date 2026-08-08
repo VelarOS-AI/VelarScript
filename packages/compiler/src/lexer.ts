@@ -1,6 +1,6 @@
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
-import { scanInterpolatedString } from "./interpolated-string.ts";
+import { scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
@@ -136,8 +136,20 @@ export class Lexer {
 
       if (this.readExtensionToken()) continue;
 
-      if (character === "f" && (this.peek(1) === '"' || this.peek(1) === "'" || this.peek(1) === "`")) {
-        this.readFString();
+      const legacyTriple = this.legacyTripleQuotePrefix();
+      if (legacyTriple) {
+        this.readLegacyTripleQuote(legacyTriple);
+        continue;
+      }
+
+      const string = scanStringLiteral(this.text, start);
+      if (string) {
+        this.readString(string);
+        continue;
+      }
+
+      if (character === "f" && this.peek(1) === "`") {
+        this.readLegacyBacktick(true);
         continue;
       }
 
@@ -151,13 +163,8 @@ export class Lexer {
         continue;
       }
 
-      if (character === '"' && this.peek(1) === '"' && this.peek(2) === '"') {
-        this.readTripleQuoteGuidance();
-        continue;
-      }
-
-      if (character === '"' || character === "'" || character === "`") {
-        this.readString(character, character === "`");
+      if (character === "`") {
+        this.readLegacyBacktick(false);
         continue;
       }
 
@@ -441,66 +448,118 @@ export class Lexer {
     this.tokens.push({ kind: "number", value: this.text.slice(start, numberEnd), span: span(start, numberEnd) });
   }
 
-  private readString(quote: string, multiline = false): void {
+  private readString(scanned: StringLiteralScan): void {
     const start = this.index;
-    this.advance();
-    let value = "";
-    let closed = false;
-
-    while (!this.isAtEnd()) {
-      const character = this.advance();
-      if (character === quote) {
-        closed = true;
-        break;
-      }
-      if (!multiline && (character === "\n" || character === "\r")) {
-        this.index -= 1;
-        break;
-      }
-      if (character === "\\") {
-        if (this.isAtEnd() || (!multiline && (this.peek() === "\n" || this.peek() === "\r"))) break;
-        const escaped = this.advance();
-        value += escaped === "n" ? "\n" : escaped === "r" ? "\r" : escaped === "t" ? "\t" : escaped;
-      } else {
-        value += character;
-      }
+    this.index = scanned.end;
+    if (!scanned.closed) {
+      const message = scanned.layout
+        ? "Unterminated layout string; close it with a quote at the opening line's indentation"
+        : `Unterminated ${scanned.interpolated ? "interpolated " : ""}string literal before the end of the line`;
+      this.diagnostics.push(diagnostic("VEL1003", message, span(start, this.index)));
     }
-
-    if (!closed) {
-      this.diagnostics.push(diagnostic("VEL1003", "Unterminated string literal", span(start, this.index)));
+    if (scanned.indentationError) {
+      this.diagnostics.push(diagnostic(
+        "VEL1004",
+        "Layout string lines must keep the indentation established by the first content line",
+        span(scanned.indentationError.start, scanned.indentationError.end),
+      ));
     }
-    this.tokens.push({ kind: "string", value, span: span(start, this.index) });
+    if (!scanned.canonical) {
+      this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'rf' rather than 'fr' for raw interpolated strings", span(start, start + scanned.prefixLength)));
+    }
+    const payload: StringTokenPayload = {
+      prefixLength: scanned.prefixLength,
+      quote: scanned.quote,
+      raw: scanned.raw,
+      layout: scanned.layout,
+      ...(scanned.contentOffsets ? { contentOffsets: scanned.contentOffsets } : {}),
+    };
+    this.tokens.push({
+      kind: scanned.interpolated ? "fstring" : "string",
+      value: scanned.interpolated ? scanned.content : this.decodeStringText(scanned.content, scanned.raw, scanned.quote, scanned.layout),
+      span: span(start, this.index),
+      payload,
+    });
+    if (scanned.recoverAtLineStart) this.atLineStart = true;
   }
 
-  private readTripleQuoteGuidance(): void {
+  private decodeStringText(value: string, raw: boolean, quote: "\"" | "'", layout: boolean): string {
+    let decoded = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index]!;
+      const next = value[index + 1];
+      if (raw && !layout && character === quote && next === quote) {
+        decoded += quote;
+        index += 1;
+      } else if (!raw && character === "\\" && next !== undefined) {
+        decoded += next === "n" ? "\n" : next === "r" ? "\r" : next === "t" ? "\t" : next;
+        index += 1;
+      } else {
+        decoded += character;
+      }
+    }
+    return decoded;
+  }
+
+  private readLegacyBacktick(interpolated: boolean): void {
     const start = this.index;
-    this.index += 3;
+    this.index += interpolated ? 2 : 1;
     const contentStart = this.index;
-    while (!this.isAtEnd() && !this.text.startsWith('"""', this.index)) this.index += 1;
+    while (!this.isAtEnd()) {
+      const character = this.advance();
+      if (character === "\\" && !this.isAtEnd()) this.advance();
+      else if (character === "`") break;
+    }
+    const closed = this.text[this.index - 1] === "`";
+    const contentEnd = closed ? this.index - 1 : this.index;
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL1005",
+      `Use a ${interpolated ? "'f\"'" : "'\"'"} layout string; put the opening quote at the end of its line and close it after the indented text block`,
+      span(start, this.index),
+    ));
+    if (!closed) this.diagnostics.push(diagnostic("VEL1003", "Unterminated legacy backtick string", span(start, this.index)));
+    this.tokens.push({
+      kind: interpolated ? "fstring" : "string",
+      value: this.text.slice(contentStart, contentEnd),
+      span: span(start, this.index),
+      ...(interpolated ? { payload: { prefixLength: 1, quote: '"', raw: true, layout: true } satisfies StringTokenPayload } : {}),
+    });
+  }
+
+  private legacyTripleQuotePrefix(): { readonly prefix: "" | "f" | "r" | "rf" | "fr"; readonly interpolated: boolean; readonly raw: boolean } | null {
+    for (const prefix of ["rf", "fr", "f", "r", ""] as const) {
+      if (!this.text.startsWith(`${prefix}\"\"\"`, this.index)) continue;
+      return {
+        prefix,
+        interpolated: prefix === "f" || prefix === "rf" || prefix === "fr",
+        raw: prefix === "r" || prefix === "rf" || prefix === "fr",
+      };
+    }
+    return null;
+  }
+
+  private readLegacyTripleQuote(options: { readonly prefix: "" | "f" | "r" | "rf" | "fr"; readonly interpolated: boolean; readonly raw: boolean }): void {
+    const start = this.index;
+    this.index += options.prefix.length + 3;
+    const contentStart = this.index;
+    while (!this.isAtEnd() && !this.text.startsWith('\"\"\"', this.index)) this.index += 1;
     const closed = !this.isAtEnd();
     const contentEnd = this.index;
     if (closed) this.index += 3;
+    const canonicalPrefix = options.prefix === "fr" ? "rf" : options.prefix;
     this.diagnostics.push(recoveredDiagnostic(
       "VEL1005",
-      "Use backticks for multiline strings; prefix with 'f' only when interpolation is needed",
+      `Use a ${canonicalPrefix ? `'${canonicalPrefix}\"'` : "'\"'"} layout string; VelarScript uses indentation rather than triple-quote delimiters`,
       span(start, this.index),
     ));
-    if (!closed) this.diagnostics.push(diagnostic("VEL1003", "Unterminated triple-quoted string", span(start, this.index)));
-    this.tokens.push({ kind: "string", value: this.text.slice(contentStart, contentEnd), span: span(start, this.index) });
-  }
-
-  private readFString(): void {
-    const start = this.index;
-    const scanned = scanInterpolatedString(this.text, start);
-    this.index = scanned.end;
-
-    if (!scanned.closed) {
-      this.diagnostics.push(diagnostic("VEL1003", "Unterminated interpolated string literal", span(start, this.index)));
-    }
+    if (!closed) this.diagnostics.push(diagnostic("VEL1003", "Unterminated legacy triple-quoted string", span(start, this.index)));
     this.tokens.push({
-      kind: "fstring",
-      value: this.text.slice(scanned.contentStart, scanned.contentEnd),
+      kind: options.interpolated ? "fstring" : "string",
+      value: this.text.slice(contentStart, contentEnd),
       span: span(start, this.index),
+      ...(options.interpolated ? {
+        payload: { prefixLength: options.prefix.length, quote: '"', raw: options.raw, layout: true } satisfies StringTokenPayload,
+      } : {}),
     });
   }
 

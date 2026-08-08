@@ -98,10 +98,16 @@ const ratio = 0.75
 const enabled = true
 const missing = null
 const message = f"{title}: {count}"
-const poem = `first line
-second "quoted" line`
-const report = f`owner: {title}
-count: {count}`
+const poem = "
+    first line
+    second "quoted" line
+"
+const report = f"
+    owner: {title}
+    count: {count}
+"
+const windows = r"C:\Users\foo"
+const asset = rf"{windows}\assets\main.js"
 const values = [1, 2, 3]
 const user = {id: "user-1", title}
 ```
@@ -109,12 +115,39 @@ const user = {id: "user-1", title}
 `null` is the only ordinary empty value. `undefined`, `none`, and `None` are
 not VelarScript values.
 
-Single and double quotes delimit one-line strings. Backticks delimit multiline
-strings: physical newlines are values, ordinary quotes need no escaping, and
-`\`` writes a backtick. Braces stay literal unless the string has the `f`
-prefix; `f` uses the same `{expression}` interpolation for every delimiter.
-JavaScript `${...}` is not a second interpolation syntax, and multiline
-strings perform no indentation stripping.
+Single and double quotes are equivalent string delimiters. An inline string
+must close before its physical line ends; otherwise the lexer diagnoses that
+line and resumes at the next one. A quote followed immediately by a newline
+instead opens a layout string. Its first nonblank content line establishes a
+structural indentation margin, and a quote back at the opening line's
+indentation closes the value:
+
+````velar fragment
+const markdown = "
+    ```html
+    <script>alert(1)</script>
+    ```
+"
+````
+
+The opening and closing newlines and the structural margin are syntax, not
+text. Internal line endings, blank lines, quotes, and indentation beyond that
+margin are preserved exactly; there is no common-dedent or trim pass. A dedent
+without the closing quote diagnoses the layout string before the dedented line,
+so following code remains independently lexable. Ordinary inline and layout
+strings keep the familiar `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
+
+The only string prefixes are `f`, `r`, and `rf`. `f` enables `{expression}`
+interpolation, `r` makes backslashes literal, and canonical `rf` combines both.
+`fr` receives a direct “use `rf`” diagnostic rather than becoming a second
+spelling. In a raw inline string, backslash never escapes the closing delimiter,
+so `r"C:\path\"` includes the final backslash; a delimiter inside raw inline
+text is doubled: `r"He said ""hello"""`. Layout-string quotes are ordinary
+content unless they appear as the dedented closing delimiter. Literal
+interpolation braces in an `f` or `rf` string remain `{{` and `}}`. JavaScript
+`${...}` is not a second interpolation syntax. Backtick and triple-quoted
+strings are not part of the language; their old spellings receive guidance to
+quoted layout strings.
 
 A bare `return` returns `null`, including at JavaScript and asynchronous
 boundaries. Falling through a function without another result has the same
@@ -840,7 +873,7 @@ explicit cleanup error, then return after the `try` statement.
 Assertions remain active in production:
 
 ```velar fragment
-assert 0 < width <= 4096, "Width is outside the supported range"
+assert 0 < width <= 4096 else "Width is outside the supported range"
 ```
 
 A successful assertion narrows checked optional and type facts in the current

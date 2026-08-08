@@ -42,7 +42,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
-import { findInterpolatedExpressionEnd } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, type StringTokenPayload } from "./interpolated-string.ts";
 import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
@@ -309,9 +309,21 @@ export class Parser {
       }
       const condition = this.parseExpression();
       let message = null;
-      if (this.match("comma")) {
+      if (this.match("else")) {
         if (this.atStatementEnd()) {
-          this.diagnostics.push(diagnostic("VEL2017", "'assert' requires a message after ','", this.previous().span));
+          this.diagnostics.push(diagnostic("VEL2017", "'assert' requires a message after 'else'", this.previous().span));
+        } else {
+          message = this.parseExpression();
+        }
+      } else if (this.match("comma")) {
+        const separator = this.previous();
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL2017",
+          "Use 'assert condition else message'; an assertion message belongs to the failing branch",
+          separator.span,
+        ));
+        if (this.atStatementEnd()) {
+          this.diagnostics.push(diagnostic("VEL2017", "'assert' requires a message after 'else'", separator.span));
         } else {
           message = this.parseExpression();
         }
@@ -1944,12 +1956,16 @@ export class Parser {
   }
 
   private parseFString(token: Token): Expression {
+    const payload = token.payload as StringTokenPayload | undefined;
+    const raw = payload?.raw ?? false;
+    const contentOffset = (payload?.prefixLength ?? 1) + 1 + (payload?.layout ? 1 : 0);
+    const sourceOffset = (index: number): number => payload?.contentOffsets?.[index] ?? token.span.start + contentOffset + index;
     const parts: FStringPart[] = [];
     let textStart = 0;
     let index = 0;
 
     while (index < token.value.length) {
-      if (token.value[index] === "\\") {
+      if (!raw && token.value[index] === "\\") {
         index += Math.min(2, token.value.length - index);
         continue;
       }
@@ -1962,7 +1978,7 @@ export class Parser {
         continue;
       }
       if (token.value[index] === "}") {
-        const offset = token.span.start + 2 + index;
+        const offset = sourceOffset(index);
         this.diagnostics.push(diagnostic("VEL2009", "Unmatched '}' in interpolated string", span(offset, offset + 1)));
         index += 1;
         continue;
@@ -1973,14 +1989,14 @@ export class Parser {
       }
 
       if (index > textStart) {
-        parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(textStart, index)) });
+        parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(textStart, index), payload) });
       }
 
       const close = findInterpolatedExpressionEnd(token.value, index + 1);
       if (close < 0) {
-        const offset = token.span.start + 2 + index;
+        const offset = sourceOffset(index);
         this.diagnostics.push(diagnostic("VEL2009", "Unclosed expression in interpolated string", span(offset, token.span.end)));
-        parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(index)) });
+        parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(index), payload) });
         textStart = token.value.length;
         break;
       }
@@ -1988,14 +2004,16 @@ export class Parser {
       const rawFragment = token.value.slice(index + 1, close);
       const fragment = rawFragment.trim();
       const leadingWhitespace = rawFragment.length - rawFragment.trimStart().length;
-      const offset = token.span.start + 2 + index + 1 + leadingWhitespace;
-      parts.push({ kind: "expression", value: this.parseNestedExpression(fragment, offset) });
+      const fragmentStart = index + 1 + leadingWhitespace;
+      const offset = sourceOffset(fragmentStart);
+      const fragmentOffsets = payload?.contentOffsets?.slice(fragmentStart, fragmentStart + fragment.length + 1);
+      parts.push({ kind: "expression", value: this.parseNestedExpression(fragment, offset, false, fragmentOffsets) });
       index = close + 1;
       textStart = index;
     }
 
     if (textStart < token.value.length) {
-      parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(textStart)) });
+      parts.push({ kind: "text", value: this.decodeFStringText(token.value.slice(textStart), payload) });
     }
 
     return { kind: "FStringExpression", parts, span: token.span };
@@ -2012,12 +2030,17 @@ export class Parser {
     };
   }
 
-  private decodeFStringText(value: string): string {
+  private decodeFStringText(value: string, payload: StringTokenPayload | undefined): string {
+    const raw = payload?.raw ?? false;
+    const quote = payload?.quote ?? '"';
     let decoded = "";
     for (let index = 0; index < value.length; index += 1) {
       const character = value[index]!;
       const next = value[index + 1];
-      if (character === "\\" && next !== undefined) {
+      if (raw && !payload?.layout && character === quote && next === quote) {
+        decoded += quote;
+        index += 1;
+      } else if (!raw && character === "\\" && next !== undefined) {
         decoded += next === "n" ? "\n" : next === "r" ? "\r" : next === "t" ? "\t" : next;
         index += 1;
       } else if ((character === "{" && next === "{") || (character === "}" && next === "}")) {
@@ -2039,13 +2062,21 @@ export class Parser {
   // extension expression inside the fragment — an extension keyword followed
   // by ':' such as a Web 'look:' block — still needs physical lines, so that
   // fragment falls back to the ordinary line-sensitive lex.
-  protected parseNestedExpression(fragment: string, offset: number, bracketFragment = false): Expression {
+  protected parseNestedExpression(
+    fragment: string,
+    offset: number,
+    bracketFragment = false,
+    sourceOffsets?: readonly number[],
+  ): Expression {
     let lexed = bracketFragment ? new Lexer(fragment, this.lexicalExtensions, { bracketFragment: true }).lex() : null;
     if (!lexed || containsExtensionBlockStart(lexed.tokens)) {
       lexed = new Lexer(fragment, this.lexicalExtensions).lex();
     }
-    const shiftedTokens = lexed.tokens.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
-    const shiftedDiagnostics = lexed.diagnostics.map((item) => ({ ...item, span: span(item.span.start + offset, item.span.end + offset) }));
+    const mappedSpan = (local: Span): Span => sourceOffsets
+      ? span(sourceOffsets[local.start] ?? offset, sourceOffsets[local.end] ?? sourceOffsets.at(-1) ?? offset)
+      : span(local.start + offset, local.end + offset);
+    const shiftedTokens = lexed.tokens.map((item) => ({ ...item, span: mappedSpan(item.span) }));
+    const shiftedDiagnostics = lexed.diagnostics.map((item) => ({ ...item, span: mappedSpan(item.span) }));
     const parsed = this.createNestedParser(shiftedTokens).parseExpressionFragment();
     this.diagnostics.push(...shiftedDiagnostics, ...parsed.diagnostics);
     return parsed.expression;

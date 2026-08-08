@@ -16,8 +16,8 @@ export class ChartScale:
     private const pixels: number
 
     constructor(maxValue: number, height: number = 120, baseline: number = 150):
-        assert 0 < maxValue <= 1000000, "Chart maximum must be between 0 and 1000000"
-        assert 0 < height <= 10000, "Chart height must be between 0 and 10000"
+        assert 0 < maxValue <= 1000000 else "Chart maximum must be between 0 and 1000000"
+        assert 0 < height <= 10000 else "Chart height must be between 0 and 10000"
         self.maxValue = maxValue
         self.height = height
         self.baseline = baseline

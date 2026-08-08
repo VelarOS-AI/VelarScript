@@ -34,15 +34,14 @@ first-class bindable).
 `"ad" in title` = substring test, same evaluation-order contract as collection
 membership, lowers через the controlled helper family. Symmetric with D17's .has().
 
-## D24 — backtick multiline strings (USER-REVISED: backticks, not triple quotes)
-`` `...` `` = multiline string literal: raw newlines preserved, quotes inside fine,
-`\`` escapes a backtick. Interpolation stays f-prefix-only: `` f`...` `` interpolates
-with `{expr}` exactly like f"..."; a plain backtick string treats braces as literal
-characters (consistent with plain "..."). NO JS `${}` syntax — one interpolation
-spelling. Mental model: quote form picks single/multiline, f picks interpolation.
-No indentation-stripping magic in v1. Formatter and lexer line-tracking must stay
-correct; source maps across multiline literals verified. Guidance: `"""` (Python
-triple quote) at expression position → directive to backticks.
+## D24 — multiline strings (SUPERSEDED BY THE POST-D18 USER CLEAN-BREAK)
+The initial backtick design landed during L2, then the user removed the separate
+delimiter family before the next major stage. Inline quotes remain line-bounded;
+a quote followed immediately by a newline enters an indentation-bounded layout
+string whose missing close recovers at dedent. `f` selects interpolation, `r`
+selects literal backslashes, and `rf` is the sole combined prefix. Backticks and
+triple quotes are legacy input only and always diagnose with guidance to quoted
+layout strings; `fr` likewise guides to canonical `rf`.
 
 ## Guidance addition
 `map.get(key, fallback)` two-arg call → directive: "Use get(key) ?? fallback".

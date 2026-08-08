@@ -164,13 +164,22 @@ stored method a receiver-once bound wrapper. The text helper source is shared
 with the surviving advanced `velar/text` functions, so Unicode and 16 MiB
 limits have one implementation.
 
-Backtick strings travel through the same literal and f-string AST forms as
-one-line strings. The lexer scanner switches only the delimiter's newline rule;
-the `f` prefix remains the interpolation switch. Formatter preprocessing
-protects complete backtick spans before line normalization and restores them
-after surrounding code is formatted, so raw newlines (including CRLF inside a
-literal) and indentation cannot change value. Source-map nodes retain the full
-multiline source span and following declarations keep their physical line.
+Inline and layout strings travel through the same literal and f-string AST
+forms. One shared scanner owns prefixes, raw backslashes, interpolation
+expressions, and both recovery boundaries. Inline quotes stop at the physical
+newline. A quote followed immediately by a newline enters layout mode: the
+first content line establishes its structural margin, a delimiter at the
+opening line's indentation closes it, and an earlier dedent recovers without
+consuming the dedented line. The scanner records a code-unit offset map while
+removing structural indentation, so nested interpolation diagnostics and source
+maps still address the original source.
+
+The `f`, `r`, and canonical `rf` prefixes independently select interpolation
+and raw backslashes. Formatter preprocessing protects complete layout spans
+before surrounding line normalization and restores their physical line endings
+and value-bearing indentation. Legacy backtick/triple-quote forms and
+noncanonical `fr` recover only to emit one-current-spelling guidance;
+diagnostics still prevent output.
 
 `List`, `Set`, and `Map` constructors remain compiler-owned. `Set()`
 construction accepts zero arguments or one checked List/Set. `Map()` accepts a

@@ -32,7 +32,7 @@ def lastUpdated(values: List<Task>) -> string:
         return "No activity yet"
     const ordered = sortBy(values, task => task.updatedAt, true)
     const latest = ordered.get(0)
-    assert latest != null, "A non-empty task list must have a latest task"
+    assert latest != null else "A non-empty task list must have a latest task"
     return format(latest.updatedAt)
 
 const pageLook = look:
