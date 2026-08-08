@@ -92,11 +92,13 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
    check/385 tests/package/三引擎门禁全绿。Lite 主服务器 266→146 行，平台 extern
    5→0、`import js` 5→0；shared 22 + server 6 + HTTP smoke 16 + 三引擎 33 场景
    全绿，W-21..W-26 的平台内建暴露关闭（通用 extern/公开字节操作仍归 backlog）。
-6. **用户已确认、实施中：D18 后 clean-break 语法整理**：删除反引号与 `f`
+6. **已落定：D18 后 clean-break 语法整理**：删除反引号与 `f`
    反引号字符串；行内引号仍以换行为恢复边界，只有引号后立即换行才进入缩进
    布局字符串，缺失关闭引号时在 dedent 前恢复。`f` 负责插值、`r` 负责原样
    反斜杠、`rf` 是唯一组合前缀；不新增关键字或三引号。断言消息统一为失败分支
-   `assert condition else message`，旧逗号分隔只给迁移诊断。
+   `assert condition else message`，旧逗号分隔只给迁移诊断。上游 check/385 tests/
+   package/开发与生产三引擎门禁全绿；Lite 通过 21 文件格式、shared 22 + server 6、
+   app build、HTTP smoke 16 与三引擎 33 场景，Markdown 围栏无需任何反引号转义。
 7. Backlog：W-23/W-25（emitter/重载 extern 声明）、W-26 字节面、增量流式
    （W-12/W-17）、computed 纯度差一步的编辑器提示、enter 键语义（证据不足暂缓）。
 
