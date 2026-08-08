@@ -111,13 +111,16 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
      当前 234 code-point/20 chunk 测量不可见，不扩语言语法。
    - “computed 纯度提示”随 D26 退役：仓库已无 purity/memo 优化路径可提示；属性级追踪
      自动生效。Enter 已由 Playwright 三引擎证明正常，手工失败是 CDP 注入伪故障。
-8. **在途：Velar Web 0.10 发布级收口**：不再扩 Core 语法、不启动 `velar/game`、不新增
+8. **已落定：Velar Web 0.10 发布级收口**：不再扩 Core 语法、不启动 `velar/game`、不新增
    Web API；先把现有十个 Web 模块的 `.vel` 源码、模板、打包安装、开发/生产与三引擎
    契约闭合。首个缺口是 realtime 验收曾由宿主直接导入生成的 JavaScript 模块，现已改为
    Release Studio 组件真实调用 `socket`/`eventStream`，并由组件 cleanup 释放资源；打包
    浏览器门禁也让安装后的生成应用导入九个运行时 Web 模块，由其浏览器测试导入第十个
    `velar/web-test`，再完成 check/test/build/verify/浏览器执行。稳定版本、tag、push 与
-   npm publish 仍是独立授权，不属于本阶段自动动作。
+   npm publish 仍是独立授权，不属于本阶段自动动作。最终门禁为 check/83 个文档示例、
+   385 tests、package consumer、开发与 CSP 生产三引擎、四个示例项目三引擎、安装后浏览器
+   工程、release rehearsal + manifest verify 全绿；演练清单 clean、remote 匹配，唯一阻塞
+   是版本仍为 `0.10.0-dev` 且没有稳定版 tag。
 
 ## 五、血泪教训（免重蹈）
 
