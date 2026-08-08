@@ -38,6 +38,36 @@ try {
     join(directory, create),
     join(directory, cli),
   ], application);
+  await writeFile(join(application, "src", "web-contract.vel"), `
+import {onError} from "velar/app"
+import {environment} from "velar/browser"
+import {has} from "velar/config"
+import {readText} from "velar/files"
+import {errors} from "velar/forms"
+import {http} from "velar/http"
+import {socket} from "velar/realtime"
+import {session} from "velar/storage"
+import {currentRoute} from "velar/web"
+
+export const installedWebModules = [
+    onError,
+    environment,
+    has,
+    readText,
+    errors,
+    http,
+    socket,
+    session,
+    currentRoute,
+].size
+`.trimStart(), "utf8");
+  await writeFile(join(application, "src", "main.vel"), `
+import {App} from "./app.vel"
+import {installedWebModules} from "./web-contract.vel"
+
+assert installedWebModules == 9 else "The installed Web package must expose all application modules"
+mount(<App />, "#app")
+`.trimStart(), "utf8");
   const manifest = JSON.parse(await readFile(join(application, "package.json"), "utf8")) as { scripts: Record<string, string> };
   for (const script of ["format:check", "check", "test", "build", "verify", "test:browser"]) assert.ok(manifest.scripts[script], `missing generated script ${script}`);
   await runNpm(["run", "format:check"], application);

@@ -114,8 +114,10 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 8. **在途：Velar Web 0.10 发布级收口**：不再扩 Core 语法、不启动 `velar/game`、不新增
    Web API；先把现有十个 Web 模块的 `.vel` 源码、模板、打包安装、开发/生产与三引擎
    契约闭合。首个缺口是 realtime 验收曾由宿主直接导入生成的 JavaScript 模块，现已改为
-   Release Studio 组件真实调用 `socket`/`eventStream`，并由组件 cleanup 释放资源。稳定
-   版本、tag、push 与 npm publish 仍是独立授权，不属于本阶段自动动作。
+   Release Studio 组件真实调用 `socket`/`eventStream`，并由组件 cleanup 释放资源；打包
+   浏览器门禁也让安装后的生成应用导入九个运行时 Web 模块，由其浏览器测试导入第十个
+   `velar/web-test`，再完成 check/test/build/verify/浏览器执行。稳定版本、tag、push 与
+   npm publish 仍是独立授权，不属于本阶段自动动作。
 
 ## 五、血泪教训（免重蹈）
 
