@@ -1,2 +1,0 @@
-export def themeLabel(theme: string) -> string:
-    return f"Theme: {theme}"

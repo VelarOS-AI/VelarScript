@@ -16,22 +16,22 @@ export computed doingCount: number = countStatus(tasks, TaskStatus.doing)
 export computed doneCount: number = countStatus(tasks, TaskStatus.done)
 export computed changed: bool = not deepEqual(tasks, baseline)
 
-def persist():
+def persist() -> null:
     boardStorage.set("board", {tasks})
 
-export def addTask(draft: TaskDraft):
+export def addTask(draft: TaskDraft) -> null:
     tasks.append(newTask(draft))
     persist()
 
-export def advanceTask(id: string):
+export def advanceTask(id: string) -> null:
     moveInList(tasks, id)
     persist()
 
-export def deleteTask(id: string):
+export def deleteTask(id: string) -> null:
     tasks = removeFromList(tasks, id)
     persist()
 
-export def resetBoard():
+export def resetBoard() -> null:
     tasks = seedTasks()
     query = ""
     filter = TaskFilter.all

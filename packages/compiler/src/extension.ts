@@ -9,11 +9,29 @@ import type { Token } from "./token.ts";
 import type { EnumInfo, ValueType } from "./types.ts";
 
 export { expressionContainsDirectAwait } from "./ast.ts";
+export { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
+export { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_HOST_MODULE_SOURCE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
+export { VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_MODULE_SOURCE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 export { JavaScriptEmitter } from "./emitter.ts";
 export { findInterpolatedExpressionEnd, scanStringLiteral } from "./interpolated-string.ts";
-export { VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
+export { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE, VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
 export { VELAR_STRICT_JSON_RUNTIME } from "./json-runtime.ts";
+export { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
+export { VELAR_NARROWING_MODULE, VELAR_NARROWING_MODULE_SOURCE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
+export { VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PRIMITIVE_METHOD_MODULE_SOURCE } from "./primitive-runtime.ts";
+export { VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE, VELAR_PROMISE_NORMALIZATION_RUNTIME } from "./promise-runtime.ts";
+export { VELAR_REACTIVE_BRIDGE_MODULE, VELAR_REACTIVE_BRIDGE_MODULE_SOURCE, VELAR_REACTIVE_BRIDGE_RUNTIME, VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME } from "./reactive-bridge-runtime.ts";
+export { VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_RUNTIME_REGISTRY_KEY, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_REGISTRY_KEY } from "./runtime-abi.ts";
+export { VELAR_TYPE_REGISTRY_RUNTIME } from "./type-registry-runtime.ts";
+export {
+  VELAR_RUNTIME_TYPE_COLLECTION_RUNTIME,
+  VELAR_TYPE_VALIDATION_MODULE,
+  VELAR_TYPE_VALIDATION_MODULE_SOURCE,
+  VELAR_TYPE_VALIDATION_RUNTIME,
+  VELAR_VALIDATION_ERROR_RUNTIME,
+} from "./type-validation-runtime.ts";
 export { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
+export { VELAR_UTF8_RUNTIME } from "./utf8-runtime.ts";
 export { Analyzer } from "./analyzer.ts";
 export type {
   Expression,
@@ -30,22 +48,47 @@ export {
   anyType,
   boolType,
   describeType,
+  invalidType,
   isInvalidType,
   isAssignable,
+  isReadonlyView,
   nullType,
   nonOptional,
   numberType,
   optionalOf,
+  readonlyViewOf,
   stringType,
+  unionOf,
   unknownType,
 } from "./types.ts";
 export type { ValueType } from "./types.ts";
 
+export const VELAR_EXTENSION_PROTOCOL_VERSION = 1 as const;
+
+export type VelarExtensionKind = "application" | "capability" | "language";
+
+/**
+ * Semantic identity of an installed Velar extension. npm owns package
+ * acquisition and version resolution; this contract owns compiler/runtime
+ * composition and therefore uses an API version independent of npm semver.
+ */
+export interface VelarExtensionContract {
+  readonly protocolVersion: typeof VELAR_EXTENSION_PROTOCOL_VERSION;
+  readonly apiVersion: string;
+  readonly kind: VelarExtensionKind;
+  readonly extends: Readonly<Record<string, string>>;
+}
+
 export interface CompilerEmitter {
   emit(program: Program): string;
   sourceMap(source: SourceText): string;
+  runtimeModules?(): readonly string[];
   css?(): string;
   styleSegments?(): CompilerStyleSegments;
+}
+
+export interface CompilerEmitterOptions {
+  readonly sharedRuntimeModules?: boolean;
 }
 
 export interface CompilerStyleSegments {
@@ -107,6 +150,12 @@ export interface CompilerModuleExtension {
   readonly apiVersion?: string;
   readonly interfaces: ReadonlyMap<string, ModuleInterface>;
   readonly sources: ReadonlyMap<string, string>;
+  /**
+   * Runtime-module dependencies owned by the same extension module source.
+   * The CLI materializes this graph transitively for unbundled targets; a
+   * dependency is an implementation detail and does not publish an interface.
+   */
+  readonly dependencies?: ReadonlyMap<string, readonly string[]>;
   readonly source?: (specifier: string, projectConfig: unknown) => string | null;
 }
 
@@ -167,6 +216,7 @@ export interface CompilerInterfaceContext {
   readonly resolve: (reference: TypeReference | null) => ValueType;
   readonly inferPublicExpression: (expression: Expression) => ValueType;
   readonly bindingType: (name: string, spanStart: number) => ValueType | null;
+  readonly unresolvedInferredResult: ValueType;
 }
 
 export interface CompilerInspectionExtension {
@@ -207,6 +257,7 @@ export interface ModuleInterface {
   /** Named re-exports (`export {name} from "source"`), keyed by the exported alias. */
   readonly reExports: ReadonlyMap<string, { readonly source: string; readonly imported: string }>;
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
+  readonly namedTypeReadonlyFields?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly namedTypeIdentities: ReadonlyMap<string, string>;
   readonly typeAliases: ReadonlyMap<string, ValueType>;
   readonly enums: ReadonlyMap<string, EnumInfo>;
@@ -218,6 +269,7 @@ export interface ModuleInterface {
 
 export interface CompilerExtension {
   readonly id: string;
+  readonly contract?: VelarExtensionContract;
   readonly capabilities?: readonly string[];
   readonly lexical?: CompilerLexicalExtension;
   readonly analysis?: CompilerAnalysisExtension;
@@ -232,5 +284,6 @@ export interface CompilerExtension {
     forcedFunctionExports: ReadonlySet<string>,
     resourceContents: ReadonlyMap<string, string>,
     extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+    options: CompilerEmitterOptions,
   ): CompilerEmitter;
 }

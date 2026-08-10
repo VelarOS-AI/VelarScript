@@ -13,22 +13,26 @@ export type ValueType =
   | { readonly kind: "number" }
   | { readonly kind: "bool" }
   | { readonly kind: "optional"; readonly inner: ValueType }
-  | { readonly kind: "list"; readonly element: ValueType }
-  | { readonly kind: "set"; readonly element: ValueType }
-  | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType }
+  | { readonly kind: "list"; readonly element: ValueType; readonly readonlyView?: true }
+  | { readonly kind: "set"; readonly element: ValueType; readonly readonlyView?: true }
+  | { readonly kind: "map"; readonly key: ValueType; readonly value: ValueType; readonly readonlyView?: true }
+  | { readonly kind: "record"; readonly value: ValueType; readonly readonlyView?: true }
   | { readonly kind: "promise"; readonly value: ValueType }
   | {
       readonly kind: "object";
       readonly fields: ReadonlyMap<string, ValueType>;
       readonly readonlyFields?: ReadonlySet<string>;
       readonly optionalFields?: ReadonlySet<string>;
+      readonly readonlyView?: true;
     }
   | { readonly kind: "parameter"; readonly name: string; readonly index: number }
-  | { readonly kind: "named"; readonly name: string; readonly identity?: string }
+  | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly readonlyView?: true }
   | { readonly kind: "class"; readonly name: string; readonly identity?: string }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
+  | { readonly kind: "enumMember"; readonly name: string; readonly identity: string; readonly member: string }
   | { readonly kind: "enumObject"; readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> }
-  | { readonly kind: "typeObject"; readonly name: string }
+  | { readonly kind: "typeObject"; readonly name: string; readonly value?: ValueType }
+  | { readonly kind: "runtimeType"; readonly value: ValueType }
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | { readonly kind: "node" }
   | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly intrinsic?: string }
@@ -47,6 +51,7 @@ export const boolType: ValueType = { kind: "bool" };
 
 export interface TypeEnvironment {
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
+  readonlyFieldsOf?(identity: string): ReadonlySet<string> | null;
   isSubclassOf(actual: string, expected: string): boolean;
   isPrimitiveType(name: string): boolean;
   isPrimitiveSubtype(actual: string, expected: string): boolean;
@@ -69,14 +74,20 @@ export function typeFromSyntax(syntax: TypeSyntax): ValueType {
         case "WebNode": return { kind: "node" };
         default: return { kind: "named", name: syntax.name };
       }
+    case "EnumMemberTypeSyntax":
+      return { kind: "enumMember", name: syntax.enumName, identity: syntax.enumName, member: syntax.member };
     case "GenericTypeSyntax": {
       const arguments_ = syntax.arguments.map(typeFromSyntax);
       if (syntax.name === "List") return { kind: "list", element: arguments_[0] ?? unknownType };
       if (syntax.name === "Set") return { kind: "set", element: arguments_[0] ?? unknownType };
       if (syntax.name === "Map") return { kind: "map", key: arguments_[0] ?? unknownType, value: arguments_[1] ?? unknownType };
+      if (syntax.name === "Record") return { kind: "record", value: arguments_[0] ?? unknownType };
       if (syntax.name === "Promise") return { kind: "promise", value: arguments_[0] ?? unknownType };
+      if (syntax.name === "Type") return { kind: "runtimeType", value: arguments_[0] ?? unknownType };
       return { kind: "named", name: formatTypeSyntax(syntax) };
     }
+    case "ReadonlyTypeSyntax":
+      return readonlyViewOf(typeFromSyntax(syntax.inner));
     case "OptionalTypeSyntax":
       return optionalOf(typeFromSyntax(syntax.inner));
     case "UnionTypeSyntax":
@@ -103,11 +114,41 @@ export function formatTypeReference(reference: TypeReference): string {
 export function formatTypeSyntax(syntax: TypeSyntax): string {
   switch (syntax.kind) {
     case "NamedTypeSyntax": return syntax.name;
+    case "EnumMemberTypeSyntax": return `${syntax.enumName}.${syntax.member}`;
     case "GenericTypeSyntax": return `${syntax.name}<${syntax.arguments.map(formatTypeSyntax).join(", ")}>`;
+    case "ReadonlyTypeSyntax": return `readonly ${syntax.inner.kind === "UnionTypeSyntax" || syntax.inner.kind === "FunctionTypeSyntax" ? `(${formatTypeSyntax(syntax.inner)})` : formatTypeSyntax(syntax.inner)}`;
     case "OptionalTypeSyntax": return `${syntax.inner.kind === "UnionTypeSyntax" || syntax.inner.kind === "FunctionTypeSyntax" ? `(${formatTypeSyntax(syntax.inner)})` : formatTypeSyntax(syntax.inner)}?`;
     case "UnionTypeSyntax": return syntax.members.map(formatTypeSyntax).join(" | ");
     case "FunctionTypeSyntax": return `(${syntax.parameters.map((parameter) => `${parameter.rest ? "..." : ""}${parameter.name ? `${parameter.name}: ` : ""}${formatTypeSyntax(parameter.type)}`).join(", ")}) -> ${formatTypeSyntax(syntax.result)}`;
   }
+}
+
+export function isReadonlyView(type: ValueType): boolean {
+  return (type.kind === "list" || type.kind === "set" || type.kind === "map" || type.kind === "record"
+    || type.kind === "object" || type.kind === "named")
+    && type.readonlyView === true;
+}
+
+export function readonlyViewOf(type: ValueType): ValueType {
+  if (type.kind === "optional") return optionalOf(readonlyViewOf(type.inner));
+  if (type.kind === "union") return unionOf(type.members.map(readonlyViewOf));
+  if (type.kind === "list" || type.kind === "set" || type.kind === "map" || type.kind === "record"
+    || type.kind === "object" || type.kind === "named") {
+    return type.readonlyView ? type : { ...type, readonlyView: true };
+  }
+  return type;
+}
+
+export function mutableViewOf(type: ValueType): ValueType {
+  if (type.kind === "optional") return optionalOf(mutableViewOf(type.inner));
+  if (type.kind === "union") return unionOf(type.members.map(mutableViewOf));
+  if (type.kind === "list") return { kind: "list", element: type.element };
+  if (type.kind === "set") return { kind: "set", element: type.element };
+  if (type.kind === "map") return { kind: "map", key: type.key, value: type.value };
+  if (type.kind === "record") return { kind: "record", value: type.value };
+  if (type.kind === "object") return { kind: "object", fields: type.fields, ...(type.readonlyFields ? { readonlyFields: type.readonlyFields } : {}), ...(type.optionalFields ? { optionalFields: type.optionalFields } : {}) };
+  if (type.kind === "named") return { kind: "named", name: type.name, ...(type.identity ? { identity: type.identity } : {}) };
+  return type;
 }
 
 export function optionalOf(type: ValueType): ValueType {
@@ -129,15 +170,24 @@ export function nonOptional(type: ValueType): ValueType {
 
 export function unionOf(types: readonly ValueType[]): ValueType {
   const members: ValueType[] = [];
-  for (const type of types) {
-    const candidates = type.kind === "union" ? type.members : [type];
-    for (const candidate of candidates) {
-      if (isInvalidType(candidate)) return invalidType;
-      const existing = members.findIndex((member) => sameType(member, candidate));
-      if (existing < 0) members.push(candidate);
+  let nullable = false;
+  const add = (type: ValueType): boolean => {
+    if (isInvalidType(type)) return false;
+    if (type.kind === "union") return type.members.every(add);
+    if (type.kind === "optional") {
+      nullable = true;
+      return add(type.inner);
     }
-  }
-  return members.length === 0 ? unknownType : members.length === 1 ? members[0]! : { kind: "union", members };
+    if (type.kind === "null") {
+      nullable = true;
+      return true;
+    }
+    if (!members.some((member) => sameType(member, type))) members.push(type);
+    return true;
+  };
+  if (!types.every(add)) return invalidType;
+  const value = members.length === 0 ? unknownType : members.length === 1 ? members[0]! : { kind: "union", members } satisfies ValueType;
+  return nullable ? members.length === 0 ? nullType : optionalOf(value) : value;
 }
 
 export function mergeTypes(left: ValueType, right: ValueType): ValueType {
@@ -152,6 +202,10 @@ export function mergeTypes(left: ValueType, right: ValueType): ValueType {
   }
   if (sameType(left, right)) {
     return left;
+  }
+  if ((isReadonlyView(left) || isReadonlyView(right))
+    && sameType(mutableViewOf(left), mutableViewOf(right))) {
+    return readonlyViewOf(isReadonlyView(left) ? left : right);
   }
   if (left.kind === "optional" && sameType(left.inner, right)) {
     return left;
@@ -177,6 +231,20 @@ export function resolvedAsyncType(type: ValueType): ValueType {
 
 export function sameType(left: ValueType, right: ValueType): boolean {
   return semanticTypeIdentity(left) === semanticTypeIdentity(right);
+}
+
+// Parameter labels are editor/call-site metadata, not part of the runtime
+// callable domain. Override implementations may keep local names while every
+// declaration still exposes its own checked named-argument surface.
+export function sameTypeIgnoringCallableParameterNames(left: ValueType, right: ValueType): boolean {
+  return typeIdentity(left, false) === typeIdentity(right, false);
+}
+
+function runtimeTypeValue(type: ValueType): ValueType | null {
+  if (type.kind === "runtimeType") return type.value;
+  if (type.kind === "typeObject") return type.value ?? { kind: "named", name: type.name };
+  if (type.kind === "enumObject") return { kind: "enum", name: type.name, identity: type.identity };
+  return null;
 }
 
 export function isAssignable(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string> = new Set()): boolean {
@@ -211,18 +279,63 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   if (expected.kind === "union") {
     return expected.members.some((member) => isAssignable(actual, member, environment, new Set(seen)));
   }
+  if (isReadonlyView(actual) && !isReadonlyView(expected)) {
+    return false;
+  }
+  if (actual.kind === "parameter" && expected.kind === "parameter") {
+    return actual.index === expected.index;
+  }
   if (actual.kind === "enum" && expected.kind === "string") {
     return true;
   }
+  if (actual.kind === "enumMember") {
+    if (expected.kind === "enumMember") {
+      return actual.identity === expected.identity && actual.member === expected.member;
+    }
+    if (expected.kind === "enum") return actual.identity === expected.identity;
+    if (expected.kind === "string") return true;
+  }
+  if (expected.kind === "runtimeType") {
+    const value = runtimeTypeValue(actual);
+    return value !== null && isAssignable(value, expected.value, environment, seen);
+  }
   if (actual.kind === "list" && expected.kind === "list") {
+    if (expected.readonlyView) {
+      return isAssignable(readonlyViewOf(actual.element), readonlyViewOf(expected.element), environment, new Set(seen));
+    }
     return invariant(actual.element, expected.element, environment, seen);
   }
   if (actual.kind === "set" && expected.kind === "set") {
+    if (expected.readonlyView) {
+      return isAssignable(readonlyViewOf(actual.element), readonlyViewOf(expected.element), environment, new Set(seen));
+    }
     return invariant(actual.element, expected.element, environment, seen);
   }
   if (actual.kind === "map" && expected.kind === "map") {
+    if (expected.readonlyView) {
+      return isAssignable(readonlyViewOf(actual.key), readonlyViewOf(expected.key), environment, new Set(seen))
+        && isAssignable(readonlyViewOf(actual.value), readonlyViewOf(expected.value), environment, new Set(seen));
+    }
     return invariant(actual.key, expected.key, environment, seen)
       && invariant(actual.value, expected.value, environment, seen);
+  }
+  if (actual.kind === "record" && expected.kind === "record") {
+    if (expected.readonlyView) {
+      return isAssignable(readonlyViewOf(actual.value), readonlyViewOf(expected.value), environment, new Set(seen));
+    }
+    return invariant(actual.value, expected.value, environment, seen);
+  }
+  if (actual.kind === "object" && expected.kind === "record") {
+    if (expected.readonlyView) {
+      return [...actual.fields.values()].every((field) => isAssignable(
+        readonlyViewOf(field),
+        readonlyViewOf(expected.value),
+        environment,
+        new Set(seen),
+      ));
+    }
+    if (actual.readonlyFields && actual.readonlyFields.size > 0) return false;
+    return [...actual.fields.values()].every((field) => invariant(field, expected.value, environment, seen));
   }
   if (actual.kind === "promise" && expected.kind === "promise") {
     return isAssignable(actual.value, expected.value, environment, seen);
@@ -230,12 +343,15 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   if (actual.kind === "object" && expected.kind === "named") {
     if (environment.isPrimitiveType(expected.name)) return false;
     const fields = environment.fieldsOf(expected.identity ?? expected.name);
-    return fields ? objectFieldsAssignable(actual.fields, fields, environment, seen, actual.readonlyFields, undefined, actual.optionalFields) : false;
+    const expectedReadonly = expected.readonlyView ? new Set(fields?.keys()) : environment.readonlyFieldsOf?.(expected.identity ?? expected.name) ?? undefined;
+    return fields ? objectFieldsAssignable(actual.fields, fields, environment, seen, actual.readonlyView ? new Set(actual.fields.keys()) : actual.readonlyFields, expectedReadonly, actual.optionalFields) : false;
   }
   if (actual.kind === "named" && expected.kind === "object") {
     if (environment.isPrimitiveType(actual.name)) return false;
     const fields = environment.fieldsOf(actual.identity ?? actual.name);
-    return fields ? objectFieldsAssignable(fields, expected.fields, environment, seen, undefined, expected.readonlyFields, undefined, expected.optionalFields) : false;
+    const actualReadonly = actual.readonlyView ? new Set(fields?.keys()) : environment.readonlyFieldsOf?.(actual.identity ?? actual.name) ?? undefined;
+    const expectedReadonly = expected.readonlyView ? new Set(expected.fields.keys()) : expected.readonlyFields;
+    return fields ? objectFieldsAssignable(fields, expected.fields, environment, seen, actualReadonly, expectedReadonly, undefined, expected.optionalFields) : false;
   }
   if (actual.kind === "named" && expected.kind === "named") {
     const actualPrimitive = environment.isPrimitiveType(actual.name);
@@ -246,14 +362,30 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     const actualFields = environment.fieldsOf(actual.identity ?? actual.name);
     const expectedFields = environment.fieldsOf(expected.identity ?? expected.name);
     return actualFields !== null && expectedFields !== null
-      ? writableFieldsAssignable(actualFields, expectedFields, environment, seen)
+      ? objectFieldsAssignable(
+        actualFields,
+        expectedFields,
+        environment,
+        seen,
+        actual.readonlyView ? new Set(actualFields.keys()) : environment.readonlyFieldsOf?.(actual.identity ?? actual.name) ?? undefined,
+        expected.readonlyView ? new Set(expectedFields.keys()) : environment.readonlyFieldsOf?.(expected.identity ?? expected.name) ?? undefined,
+      )
       : false;
   }
   if (actual.kind === "class" && expected.kind === "class") {
     return environment.isSubclassOf(actual.identity ?? actual.name, expected.identity ?? expected.name);
   }
   if (actual.kind === "object" && expected.kind === "object") {
-    return objectFieldsAssignable(actual.fields, expected.fields, environment, seen, actual.readonlyFields, expected.readonlyFields, actual.optionalFields, expected.optionalFields);
+    return objectFieldsAssignable(
+      actual.fields,
+      expected.fields,
+      environment,
+      seen,
+      actual.readonlyView ? new Set(actual.fields.keys()) : actual.readonlyFields,
+      expected.readonlyView ? new Set(expected.fields.keys()) : expected.readonlyFields,
+      actual.optionalFields,
+      expected.optionalFields,
+    );
   }
   if ((actual.kind === "function" || actual.kind === "action" || actual.kind === "intrinsic") && (expected.kind === "function" || expected.kind === "action" || expected.kind === "intrinsic")) {
     const actualTypeParameters = actual.typeParameterNames?.length ?? 0;
@@ -277,8 +409,8 @@ export function semanticTypeIdentity(type: ValueType): string {
 
 export const analysisTypeIdentity = semanticTypeIdentity;
 
-function typeIdentity(type: ValueType): string {
-  const nested = (value: ValueType): string => typeIdentity(value);
+function typeIdentity(type: ValueType, includeCallableParameterNames = true): string {
+  const nested = (value: ValueType): string => typeIdentity(value, includeCallableParameterNames);
   switch (type.kind) {
     case "unknown":
       return identityNode("unknown", [isInvalidType(type) ? "diagnosed" : type.restricted ? "restricted" : ""]);
@@ -294,28 +426,33 @@ function typeIdentity(type: ValueType): string {
     case "classConstructor":
       return identityNode("class-constructor", [type.identity ?? type.name]);
     case "named":
-      return identityNode("named", [type.identity ?? type.name]);
+      return identityNode("named", [type.readonlyView ? "readonly" : "", type.identity ?? type.name]);
     case "parameter":
       // De Bruijn-style: the identity encodes only the index so that (T) -> T
       // and (U) -> U from any two declarations are the same type.
       return identityNode("parameter", [String(type.index)]);
     case "enum":
+    case "enumMember":
     case "enumObject":
-      return identityNode(type.kind, [type.identity]);
+      return identityNode(type.kind, [type.identity, ...(type.kind === "enumMember" ? [type.member] : [])]);
     case "typeObject":
       return identityNode("type-object", [type.name]);
+    case "runtimeType":
+      return identityNode("runtime-type", [nested(type.value)]);
     case "optional":
       return identityNode("optional", [nested(type.inner)]);
     case "list":
-      return identityNode("list", [nested(type.element)]);
+      return identityNode("list", [type.readonlyView ? "readonly" : "", nested(type.element)]);
     case "set":
-      return identityNode("set", [nested(type.element)]);
+      return identityNode("set", [type.readonlyView ? "readonly" : "", nested(type.element)]);
     case "map":
-      return identityNode("map", [nested(type.key), nested(type.value)]);
+      return identityNode("map", [type.readonlyView ? "readonly" : "", nested(type.key), nested(type.value)]);
+    case "record":
+      return identityNode("record", [type.readonlyView ? "readonly" : "", nested(type.value)]);
     case "promise":
       return identityNode("promise", [nested(type.value)]);
     case "object":
-      return identityNode("object", [...[...type.fields]
+      return identityNode("object", [type.readonlyView ? "readonly" : "", ...[...type.fields]
         .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([name, value]) => identityNode("field", [
@@ -330,7 +467,7 @@ function typeIdentity(type: ValueType): string {
       return identityNode(type.kind, [
         type.kind === "intrinsic" ? type.name : "",
         type.typeParameterNames?.length ? String(type.typeParameterNames.length) : "",
-        identityNode("parameter-names", type.parameterNames ?? []),
+        identityNode("parameter-names", includeCallableParameterNames ? type.parameterNames ?? [] : []),
         String(type.requiredParameters),
         identityNode("parameters", type.parameters.map(nested)),
         type.rest ? nested(type.rest) : "",
@@ -367,19 +504,27 @@ export function describeType(type: ValueType): string {
     case "optional":
       return `${["function", "action", "intrinsic", "union"].includes(type.inner.kind) ? `(${describeType(type.inner)})` : describeType(type.inner)}?`;
     case "list":
-      return `List<${describeType(type.element)}>`;
+      return `${type.readonlyView ? "readonly " : ""}List<${describeType(type.element)}>`;
     case "set":
-      return `Set<${describeType(type.element)}>`;
+      return `${type.readonlyView ? "readonly " : ""}Set<${describeType(type.element)}>`;
     case "map":
-      return `Map<${describeType(type.key)}, ${describeType(type.value)}>`;
+      return `${type.readonlyView ? "readonly " : ""}Map<${describeType(type.key)}, ${describeType(type.value)}>`;
+    case "record":
+      return `${type.readonlyView ? "readonly " : ""}Record<${describeType(type.value)}>`;
     case "promise":
       return `Promise<${describeType(type.value)}>`;
+    case "runtimeType":
+      return `Type<${describeType(type.value)}>`;
     case "object":
-      return `{ ${[...type.fields].map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly " : ""}${name}${type.optionalFields?.has(name) ? "?" : ""}: ${describeType(value)}`).join(", ")} }`;
+      return `${type.readonlyView ? "readonly " : ""}{ ${[...type.fields].map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly " : ""}${name}${type.optionalFields?.has(name) ? "?" : ""}: ${describeType(value)}`).join(", ")} }`;
     case "named":
+      return `${type.readonlyView ? "readonly " : ""}${type.name}`;
     case "parameter":
     case "class":
     case "enum":
+      return type.name;
+    case "enumMember":
+      return `${type.name}.${type.member}`;
     case "typeObject":
     case "classConstructor":
       return type.name;
@@ -428,7 +573,10 @@ export function typeContainsParameter(
       return typeContainsParameter(type.element, matches);
     case "map":
       return typeContainsParameter(type.key, matches) || typeContainsParameter(type.value, matches);
+    case "record":
+      return typeContainsParameter(type.value, matches);
     case "promise":
+    case "runtimeType":
       return typeContainsParameter(type.value, matches);
     case "object":
       return [...type.fields.values()].some((field) => typeContainsParameter(field, matches));
@@ -443,6 +591,34 @@ export function typeContainsParameter(
     case "union":
       return type.members.some((member) => typeContainsParameter(member, matches));
     default:
+      return false;
+  }
+}
+
+// Mirrors the recursive positions that emitTypeCheck actually inspects. A
+// Type<T> value carries a compiler-known checker, but the checker object itself
+// has no runtime identity for T, so accepting it in one of these positions
+// would otherwise emit a predicate that can never be sound.
+export function typeContainsRuntimeTypeCheck(type: ValueType): boolean {
+  switch (type.kind) {
+    case "runtimeType":
+      return true;
+    case "optional":
+      return typeContainsRuntimeTypeCheck(type.inner);
+    case "list":
+    case "set":
+      return typeContainsRuntimeTypeCheck(type.element);
+    case "map":
+      return typeContainsRuntimeTypeCheck(type.key) || typeContainsRuntimeTypeCheck(type.value);
+    case "record":
+      return typeContainsRuntimeTypeCheck(type.value);
+    case "object":
+      return [...type.fields.values()].some(typeContainsRuntimeTypeCheck);
+    case "union":
+      return type.members.some(typeContainsRuntimeTypeCheck);
+    default:
+      // Promise and callable checks intentionally validate only their runtime
+      // carrier, just as they already do for every other erased inner type.
       return false;
   }
 }
@@ -463,9 +639,17 @@ export function substituteTypeParameters(type: ValueType, bindings: readonly (Va
       const value = substituteTypeParameters(type.value, bindings);
       return key === type.key && value === type.value ? type : { ...type, key, value };
     }
+    case "record": {
+      const value = substituteTypeParameters(type.value, bindings);
+      return value === type.value ? type : { ...type, value };
+    }
     case "promise": {
       const value = substituteTypeParameters(type.value, bindings);
       return value === type.value ? type : { kind: "promise", value };
+    }
+    case "runtimeType": {
+      const value = substituteTypeParameters(type.value, bindings);
+      return value === type.value ? type : { kind: "runtimeType", value };
     }
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])) };
@@ -488,8 +672,10 @@ export function substituteTypeParameters(type: ValueType, bindings: readonly (Va
 
 export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap<string, ValueType>): ValueType {
   switch (type.kind) {
-    case "named":
-      return !type.identity && parameters.has(type.name) ? parameters.get(type.name)! : type;
+    case "named": {
+      const bound = !type.identity ? parameters.get(type.name) : undefined;
+      return bound ?? type;
+    }
     case "optional":
       return optionalOf(bindNamedTypeParameters(type.inner, parameters));
     case "list":
@@ -499,8 +685,12 @@ export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap
     }
     case "map":
       return { ...type, key: bindNamedTypeParameters(type.key, parameters), value: bindNamedTypeParameters(type.value, parameters) };
+    case "record":
+      return { ...type, value: bindNamedTypeParameters(type.value, parameters) };
     case "promise":
       return { kind: "promise", value: bindNamedTypeParameters(type.value, parameters) };
+    case "runtimeType":
+      return { kind: "runtimeType", value: bindNamedTypeParameters(type.value, parameters) };
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, bindNamedTypeParameters(value, parameters)])) };
     case "function":
@@ -561,8 +751,15 @@ export function unifyTypeParameters(
     unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
     return;
   }
+  if (pattern.kind === "record" && actual.kind === "record") {
+    return unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
+  }
   if (pattern.kind === "promise" && actual.kind === "promise") {
     return unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
+  }
+  if (pattern.kind === "runtimeType") {
+    const value = runtimeTypeValue(actual);
+    if (value) return unifyTypeParameters(pattern.value, value, bindings, fieldsOf);
   }
   if (pattern.kind === "object") {
     const fields = actual.kind === "object" ? actual.fields
@@ -622,8 +819,6 @@ function callableInputsAssignable(actual: CallableType, expected: CallableType, 
   for (let index = 0; index < expected.parameters.length; index += 1) {
     const accepted = actual.parameters[index] ?? actual.rest;
     if (!accepted || !isAssignable(expected.parameters[index]!, accepted, environment, new Set(seen))) return false;
-    const expectedName = expected.parameterNames?.[index];
-    if (expectedName && index < actual.parameters.length && actual.parameterNames?.[index] !== expectedName) return false;
   }
 
   if (expected.rest) {

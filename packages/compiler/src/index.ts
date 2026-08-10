@@ -1,8 +1,8 @@
-import { Analyzer, isCorePrimitiveName, isCoreReservedBinding, type AnalysisContext, type ClassField, type ClassInfo } from "./analyzer.ts";
+import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, isCoreReservedBinding, type AnalysisContext, type ClassField, type ClassInfo } from "./analyzer.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
-import type { CompilerEmitter, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
+import type { CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { isParserComplexityFailure, Parser } from "./parser.ts";
 import { SourceText } from "./source.ts";
@@ -11,11 +11,13 @@ import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
   bindNamedTypeParameters,
   boolType,
+  invalidType,
   mergeTypes,
   nullType,
   numberType,
   optionalOf,
   resolveTypeReference,
+  readonlyViewOf,
   resolvedAsyncType,
   stringType,
   unknownType,
@@ -28,9 +30,10 @@ export { formatSource } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
 export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
+export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
-export { analysisTypeIdentity, describeType, optionalOf, semanticTypeIdentity, type EnumInfo, type ValueType } from "./types.ts";
+export { analysisTypeIdentity, describeType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
 
 export interface CompileOptions {
@@ -39,6 +42,7 @@ export interface CompileOptions {
   readonly exportFunctions?: ReadonlySet<string>;
   readonly extensions?: readonly CompilerExtension[];
   readonly resourceContents?: ReadonlyMap<string, string>;
+  readonly sharedRuntimeModules?: boolean;
 }
 
 export interface CompileResult {
@@ -46,6 +50,7 @@ export interface CompileResult {
   readonly sourceMap: string | null;
   readonly css: string | null;
   readonly styleSegments: CompilerStyleSegments | null;
+  readonly runtimeModules: readonly string[];
   readonly extensions: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
   readonly source: SourceText;
@@ -112,31 +117,69 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   const analyzerExtensions = extensions.filter((extension) => extension.analyzer);
   if (analyzerExtensions.length > 1) throw new Error("Only one compiler extension may own semantic analysis");
   const analysisResources = options.resourceContents ?? options.analysis?.resources;
-  const analysisContext: AnalysisContext = { ...options.analysis, ...(analysisResources ? { resources: analysisResources } : {}) };
-  const analyzer = analyzerExtensions[0]?.analyzer?.create(analysisContext, analysisExtensions)
-    ?? new Analyzer(analysisContext, analysisExtensions);
+  const analysisContext: AnalysisContext = {
+    ...options.analysis,
+    ...(analysisResources ? { resources: analysisResources } : {}),
+  };
+  const createAnalyzer = (
+    inferredFunctionResults: ReadonlyMap<string, ValueType> = new Map(),
+    finalizeFunctionResultInference = false,
+  ): Analyzer => {
+    const context: AnalysisContext = {
+      ...analysisContext,
+      inferredFunctionResults,
+      finalizeFunctionResultInference,
+    };
+    return analyzerExtensions[0]?.analyzer?.create(context, analysisExtensions)
+      ?? new Analyzer(context, analysisExtensions);
+  };
+  let analyzer = createAnalyzer();
   // Semantic analysis also runs when every earlier diagnostic is a guidance
   // diagnostic that recovered as the guided spelling, so lexer-, parser-, and
   // analyzer-level guidance co-reports in one compile. Compilation still
   // fails: the emission gate below requires zero diagnostics.
   if (diagnostics.every((item) => item.recovered)) {
-    diagnostics.push(...analyzer.analyze(parsed.program));
+    // Omitted results use isolated semantic passes so forward and recursive
+    // calls converge before the one authoritative diagnostic/lowering pass.
+    // Intermediate diagnostics are intentionally discarded.
+    const initialDiagnostics = analyzer.analyze(parsed.program);
+    let inferredResults = analyzer.inferredFunctionResults();
+    if (inferredResults.size === 0) {
+      diagnostics.push(...initialDiagnostics);
+    } else {
+      const maximumPasses = Math.min(Math.max(inferredResults.size + 2, 4), 256);
+      for (let pass = 0; pass < maximumPasses; pass += 1) {
+        const probe = createAnalyzer(inferredResults);
+        probe.analyze(parsed.program);
+        const next = probe.inferredFunctionResults();
+        const stable = Analyzer.inferredFunctionResultsMatch(inferredResults, next);
+        inferredResults = next;
+        if (stable) break;
+      }
+      analyzer = createAnalyzer(inferredResults, true);
+      diagnostics.push(...analyzer.analyze(parsed.program));
+    }
   }
 
   diagnostics.sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code));
   const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
   if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
+  const emitterOptions: CompilerEmitterOptions = options.sharedRuntimeModules === undefined
+    ? {}
+    : { sharedRuntimeModules: options.sharedRuntimeModules };
   const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(
     analyzer.loweringHints(),
     options.exportFunctions ?? new Set(),
     options.resourceContents ?? new Map(),
     options.analysis?.extensionImports ?? new Map(),
+    emitterOptions,
   )
-    ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions);
+    ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions, emitterOptions);
   const code = diagnostics.length === 0 ? emitter.emit(parsed.program) : null;
   const sourceMap = code === null ? null : emitter.sourceMap(parsed.source);
   const css = code === null ? null : emitter.css?.() ?? null;
   const styleSegments = code === null ? null : emitter.styleSegments?.() ?? null;
+  const runtimeModules = code === null ? [] : emitter.runtimeModules?.() ?? [];
   const semanticExpressions = analyzer.semanticExpressions();
   const semanticIndex = buildSemanticIndex(
     parsed.program,
@@ -158,6 +201,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     sourceMap,
     css,
     styleSegments,
+    runtimeModules,
     extensions: extensions.map((extension) => extension.id),
     diagnostics,
     source: parsed.source,
@@ -184,6 +228,7 @@ function complexityFailureResult(text: string, options: CompileOptions): Compile
     sourceMap: null,
     css: null,
     styleSegments: null,
+    runtimeModules: [],
     extensions: extensions.map((extension) => extension.id),
     diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to process safely", { start: 0, end: Math.min(1, text.length) })],
     source,
@@ -506,17 +551,20 @@ function interfaceOf(
     if (type.kind === "named" && aliasDeclarations.has(type.name)) {
       if (seen.has(type.name)) return unknownType;
       const cached = aliasCache.get(type.name);
-      if (cached) return cached;
+      if (cached) return type.readonlyView ? readonlyViewOf(cached) : cached;
       const declaration = aliasDeclarations.get(type.name)!;
       const expanded = expandAliases(resolveTypeReference(declaration.target), new Set([...seen, type.name]));
       aliasCache.set(type.name, expanded);
-      return expanded;
+      return type.readonlyView ? readonlyViewOf(expanded) : expanded;
     }
     if (type.kind === "optional") return optionalOf(expandAliases(type.inner, seen));
     if (type.kind === "list") return { ...type, element: expandAliases(type.element, seen) };
     if (type.kind === "set") return { ...type, element: expandAliases(type.element, seen) };
     if (type.kind === "map") return { ...type, key: expandAliases(type.key, seen), value: expandAliases(type.value, seen) };
+    if (type.kind === "record") return { ...type, value: expandAliases(type.value, seen) };
     if (type.kind === "promise") return { kind: "promise", value: expandAliases(type.value, seen) };
+    if (type.kind === "runtimeType") return { kind: "runtimeType", value: expandAliases(type.value, seen) };
+    if (type.kind === "typeObject") return type.value ? { ...type, value: expandAliases(type.value, seen) } : type;
     if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expandAliases(value, seen)])) };
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
       ...type,
@@ -532,6 +580,7 @@ function interfaceOf(
   const resolvedAnalyzedBindings = new Map([...analyzedBindings]
     .map(([name, type]) => [name, resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities)]));
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
+  const namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
   const typeAliases = new Map<string, ValueType>();
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
@@ -557,6 +606,8 @@ function interfaceOf(
   for (const statement of program.body) {
     if (statement.kind === "TypeDeclaration") {
       namedTypes.set(statement.name, new Map(statement.fields.map((field) => [field.name, resolve(field.type)])));
+      const readonlyFields = new Set(statement.fields.filter((field) => field.readonly).map((field) => field.name));
+      if (readonlyFields.size > 0) namedTypeReadonlyFields.set(statement.name, readonlyFields);
     } else if (statement.kind === "EnumDeclaration") {
       enums.set(statement.name, enumNames.get(statement.name)!);
     } else if (statement.kind === "ClassDeclaration") {
@@ -638,6 +689,12 @@ function interfaceOf(
         for (const field of declaration.fields) {
           (field.static ? staticFields : fields).set(field.name, { mutable: field.mutable, type: resolve(field.type) });
         }
+        const getters = new Set<string>();
+        const staticGetters = new Set<string>();
+        for (const getter of declaration.getters) {
+          (getter.static ? staticFields : fields).set(getter.name, { mutable: false, type: resolve(getter.type) });
+          (getter.static ? staticGetters : getters).add(getter.name);
+        }
         const methods = new Map<string, ValueType>();
         const staticMethods = new Map<string, ValueType>();
         for (const method of declaration.methods) {
@@ -652,12 +709,12 @@ function interfaceOf(
           base: declaration.base ? `js:${statement.source}#${declaration.base}` : null,
           abstract: false,
           fields,
-          getters: new Set(),
+          getters,
           abstractGetters: new Set(),
           methods,
           abstractMethods: new Set(),
           staticFields,
-          staticGetters: new Set(),
+          staticGetters,
           staticMethods,
         });
       }
@@ -669,9 +726,17 @@ function interfaceOf(
   for (const statement of program.body) {
     if (!("exported" in statement) || !statement.exported) continue;
     if (statement.kind === "TypeDeclaration") {
-      exports.set(statement.name, { kind: "typeObject", name: statement.name });
+      exports.set(statement.name, {
+        kind: "typeObject",
+        name: statement.name,
+        value: {
+          kind: "named",
+          name: statement.name,
+          identity: namedTypeIdentities.get(statement.name)!,
+        },
+      });
     } else if (statement.kind === "TypeAliasDeclaration") {
-      exports.set(statement.name, { kind: "typeObject", name: statement.name });
+      exports.set(statement.name, { kind: "typeObject", name: statement.name, value: typeAliases.get(statement.name)! });
     } else if (statement.kind === "EnumDeclaration") {
       const info = enums.get(statement.name)!;
       exports.set(statement.name, { kind: "enumObject", name: statement.name, identity: info.identity, members: info.members });
@@ -699,6 +764,7 @@ function interfaceOf(
           resolve,
           inferPublicExpression: (expression: Expression) => inferPublicExpression(expression, inspectionExtensions),
           bindingType: (name: string, spanStart: number) => resolvedAnalyzedBindings.get(`${spanStart}:${name}`) ?? null,
+          unresolvedInferredResult: inferredResultPlaceholderType,
         };
         if (extension.inspection.contributeInterface?.(statement, context)) break;
       }
@@ -718,6 +784,7 @@ function interfaceOf(
     reactiveExports,
     reExports,
     namedTypes,
+    namedTypeReadonlyFields,
     namedTypeIdentities,
     typeAliases,
     enums,
@@ -738,7 +805,9 @@ function functionSignature(
   }
   const resolveBound = (reference: TypeReference | null): ValueType =>
     frame.size === 0 ? resolve(reference) : bindNamedTypeParameters(resolve(reference), frame);
-  const result = statement.returnType ? resolveBound(statement.returnType) : nullType;
+  const result = statement.returnType
+    ? resolveBound(statement.returnType)
+    : "abstract" in statement && statement.abstract === true ? invalidType : inferredResultPlaceholderType;
   const rest = statement.parameters.find((parameter) => parameter.rest);
   return {
     kind: "function",
@@ -773,7 +842,7 @@ function resolveNominals(
     && (!type.identity || type.identity === type.name)) {
     return { ...type, identity: classIdentities.get(type.name)! };
   }
-  if ((type.kind === "enum" || type.kind === "enumObject") && enumNames.has(type.name)
+  if ((type.kind === "enum" || type.kind === "enumMember" || type.kind === "enumObject") && enumNames.has(type.name)
     && type.identity === type.name) {
     return { ...type, identity: enumNames.get(type.name)!.identity };
   }
@@ -781,7 +850,12 @@ function resolveNominals(
   if (type.kind === "list") return { ...type, element: resolveNominals(type.element, classIdentities, enumNames, namedTypeIdentities) };
   if (type.kind === "set") return { ...type, element: resolveNominals(type.element, classIdentities, enumNames, namedTypeIdentities) };
   if (type.kind === "map") return { ...type, key: resolveNominals(type.key, classIdentities, enumNames, namedTypeIdentities), value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "record") return { ...type, value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
   if (type.kind === "promise") return { kind: "promise", value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "runtimeType") return { kind: "runtimeType", value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) };
+  if (type.kind === "typeObject") return type.value
+    ? { ...type, value: resolveNominals(type.value, classIdentities, enumNames, namedTypeIdentities) }
+    : type;
   if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, resolveNominals(value, classIdentities, enumNames, namedTypeIdentities)])) };
   if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
     ...type,

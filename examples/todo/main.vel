@@ -1,3 +1,5 @@
+import {border, color, rgb, rgba, shadow, spacing, tracks} from "velar/look"
+
 type Todo:
     id: number
     title: string
@@ -81,21 +83,21 @@ component TodoApp:
     let nextId = 3
     computed remaining = todos.filter(todo => not todo.done).size
 
-    def addTodo():
+    def addTodo() -> null:
         if draft != "":
             todos = [...todos, {id: nextId, title: draft, done: false}]
             nextId += 1
             draft = ""
 
-    def addTodoOnKey(event: KeyboardEvent):
+    def addTodoOnKey(event: KeyboardEvent) -> null:
         if event.key == "Enter":
             event.preventDefault()
             addTodo()
 
-    def toggleTodo(id: number):
+    def toggleTodo(id: number) -> null:
         todos = todos.map(todo => todo.id == id ? {...todo, done: not todo.done} : todo)
 
-    def removeTodo(id: number):
+    def removeTodo(id: number) -> null:
         todos = todos.filter(todo => todo.id != id)
 
     return <main look={pageLook}><section class="todo-app" look={cardLook}>

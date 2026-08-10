@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { formatDiagnostic, formatSource } from "@velarscript/compiler";
 import type { CompileResult } from "@velarscript/compiler";
@@ -10,7 +10,7 @@ import { runDevServer } from "./dev-server.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
 import { runLanguageServer } from "./language-server.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
-import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
 import { runProgram } from "./program-runner.ts";
 import { runBrowserTests, type BrowserEngineSelection } from "./browser-test-runner.ts";
@@ -22,7 +22,7 @@ import { runProductionPreview } from "./preview-server.ts";
 import { createDeploymentVerificationReport, verifyRemoteDeployment } from "./deployment-verifier.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile } from "./source-limits.ts";
 import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
-import { hostErrorMessage } from "./host-error.ts";
+import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 
 
 interface CommandArguments {
@@ -373,9 +373,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
 
   if (parsed.output) {
     const outputPath = resolve(parsed.output);
-    await mkdir(dirname(outputPath), { recursive: true });
-    await writeCompiled(outputPath, project.modules[0]!.result, true);
-    await writeNodeStandardModules(dirname(outputPath), project);
+    try {
+      await assertNodeStandardModuleOutputAvailable(dirname(outputPath), project);
+      await mkdir(dirname(outputPath), { recursive: true });
+      await writeCompiled(outputPath, project.modules[0]!.result, true);
+      await writeNodeStandardModules(dirname(outputPath), project, true);
+    } catch (error) {
+      process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
     process.stdout.write(`Built ${displayInput(parsed.input, projectConfig)} -> ${outputPath}\n`);
     return 0;
   }
@@ -402,8 +408,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
         production.framework,
       );
       await writeProductionManifest(staging, production, deployment);
-      await rm(outputDirectory, { recursive: true, force: true });
-      await rename(staging, outputDirectory);
+      await replaceOutputDirectory(staging, outputDirectory);
     } catch (error) {
       await rm(staging, { recursive: true, force: true });
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
@@ -412,31 +417,139 @@ async function main(arguments_: readonly string[]): Promise<number> {
     process.stdout.write(`Built production ${project.framework.host.displayName} app -> ${outputDirectory}\n`);
     return 0;
   }
-  for (const module of project.modules) {
-    const outputPath = join(outputDirectory, module.relativePath.replace(/\.vel$/, ".js"));
-    await mkdir(dirname(outputPath), { recursive: true });
-    await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module));
+  const parent = dirname(outputDirectory);
+  await mkdir(parent, { recursive: true });
+  const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
+  try {
+    for (const module of project.modules) {
+      const outputPath = join(staging, module.relativePath.replace(/\.vel$/, ".js"));
+      await mkdir(dirname(outputPath), { recursive: true });
+      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module));
+    }
+    await writeNodeStandardModules(staging, project);
+    await replaceOutputDirectory(staging, outputDirectory);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
+    return 1;
   }
-  await writeNodeStandardModules(outputDirectory, project);
   process.stdout.write(`Built ${project.modules.length} module${project.modules.length === 1 ? "" : "s"} -> ${outputDirectory}\n`);
   return 0;
 }
 
-async function writeNodeStandardModules(outputRoot: string, project: ProjectResult): Promise<void> {
+async function replaceOutputDirectory(staging: string, outputDirectory: string): Promise<void> {
+  const previous = `${staging}-previous`;
+  let movedPrevious = false;
+  let installed = false;
+  try {
+    try {
+      await rename(outputDirectory, previous);
+      movedPrevious = true;
+    } catch (error) {
+      if (!isHostErrorCode(error, "ENOENT")) throw error;
+    }
+    await rename(staging, outputDirectory);
+    installed = true;
+    if (movedPrevious) await rm(previous, { recursive: true, force: true });
+  } catch (error) {
+    if (!installed && movedPrevious) {
+      try {
+        await rename(previous, outputDirectory);
+      } catch (restoreError) {
+        throw new Error(`Build output replacement failed and the previous output could not be restored: ${hostErrorMessage(restoreError)}`, { cause: error });
+      }
+    }
+    throw error;
+  }
+}
+
+const VELAR_GENERATED_RUNTIME_PACKAGE_VERSION = 1;
+
+async function writeNodeStandardModules(outputRoot: string, project: ProjectResult, replaceExisting = false): Promise<void> {
+  const used = requiredNodeStandardModules(project);
+  const packageRoot = join(outputRoot, "node_modules", "velar");
+  if (!replaceExisting) {
+    if (used.size === 0) return;
+    await writeNodeStandardModulePackage(packageRoot, used, project);
+    return;
+  }
+
+  const ownership = await generatedRuntimePackageOwnership(packageRoot);
+  if (used.size === 0) {
+    if (ownership === "generated") await rm(packageRoot, { recursive: true, force: true });
+    return;
+  }
+  if (ownership === "foreign") throw new Error(`Refusing to replace non-generated package '${packageRoot}'`);
+  await mkdir(dirname(packageRoot), { recursive: true });
+  const staging = await mkdtemp(join(dirname(packageRoot), ".velar-runtime-"));
+  try {
+    await writeNodeStandardModulePackage(staging, used, project);
+    if (ownership === "generated") await replaceOutputDirectory(staging, packageRoot);
+    else await rename(staging, packageRoot);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function requiredNodeStandardModules(project: ProjectResult): ReadonlySet<string> {
   const sources = standardModuleSources(project.compilerExtensions);
-  const used = new Set(project.modules.flatMap((module) => module.result.dependencies
+  const roots = new Set(project.modules.flatMap((module) => module.result.dependencies
     .map((dependency) => dependency.source)
     .filter((source) => sources.has(source))));
-  if (used.size === 0) return;
+  for (const module of project.modules) {
+    for (const source of module.result.runtimeModules) if (sources.has(source)) roots.add(source);
+  }
+  return standardModuleClosure(roots, project.extensionConfig, project.compilerExtensions);
+}
+
+async function assertNodeStandardModuleOutputAvailable(outputRoot: string, project: ProjectResult): Promise<void> {
+  if (requiredNodeStandardModules(project).size === 0) return;
   const packageRoot = join(outputRoot, "node_modules", "velar");
+  if (await generatedRuntimePackageOwnership(packageRoot) === "foreign") {
+    throw new Error(`Refusing to replace non-generated package '${packageRoot}'`);
+  }
+}
+
+async function writeNodeStandardModulePackage(packageRoot: string, used: ReadonlySet<string>, project: ProjectResult): Promise<void> {
   await mkdir(packageRoot, { recursive: true });
   const exports: Record<string, string> = {};
   for (const source of [...used].sort()) {
     const name = source.slice("velar/".length);
+    const moduleSource = standardModuleSource(source, project.extensionConfig, project.compilerExtensions);
+    if (moduleSource === null) throw new Error(`Unknown VelarScript standard module '${source}'`);
     exports[`./${name}`] = `./${name}.js`;
-    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, project.extensionConfig, project.compilerExtensions)!, "utf8");
+    await writeFile(join(packageRoot, `${name}.js`), moduleSource, "utf8");
   }
-  await writeFile(join(packageRoot, "package.json"), `${JSON.stringify({ name: "velar", private: true, type: "module", exports }, null, 2)}\n`, "utf8");
+  await writeFile(join(packageRoot, "package.json"), `${JSON.stringify({
+    name: "velar",
+    private: true,
+    type: "module",
+    velarGeneratedRuntime: VELAR_GENERATED_RUNTIME_PACKAGE_VERSION,
+    exports,
+  }, null, 2)}\n`, "utf8");
+}
+
+async function generatedRuntimePackageOwnership(packageRoot: string): Promise<"absent" | "generated" | "foreign"> {
+  try {
+    const stats = await lstat(packageRoot);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) return "foreign";
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT")) return "absent";
+    throw error;
+  }
+  try {
+    const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")) as Record<string, unknown>;
+    return manifest.name === "velar"
+      && manifest.private === true
+      && manifest.type === "module"
+      && manifest.velarGeneratedRuntime === VELAR_GENERATED_RUNTIME_PACKAGE_VERSION
+      ? "generated"
+      : "foreign";
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT") || error instanceof SyntaxError) return "foreign";
+    throw error;
+  }
 }
 
 async function writeCompiled(outputPath: string, result: CompileResult, writeCss: boolean, codeOverride: string | null = null): Promise<void> {
@@ -446,7 +559,10 @@ async function writeCompiled(outputPath: string, result: CompileResult, writeCss
     writeFile(outputPath, code, "utf8"),
     writeFile(mapPath, result.sourceMap ?? "", "utf8"),
   ];
-  if (writeCss && result.css) writes.push(writeFile(outputPath.replace(/\.js$/u, ".css"), result.css, "utf8"));
+  if (writeCss) {
+    const cssPath = outputPath.replace(/\.js$/u, ".css");
+    writes.push(result.css ? writeFile(cssPath, result.css, "utf8") : rm(cssPath, { force: true }));
+  }
   await Promise.all(writes);
 }
 
@@ -493,6 +609,7 @@ function parseCommandArguments(arguments_: readonly string[]): CommandArguments 
         return `${argument} requires a path`;
       }
       if (argument === "--out") {
+        if (extname(value) !== ".js") return "--out requires a .js file path";
         output = value;
       } else {
         outputDirectory = value;

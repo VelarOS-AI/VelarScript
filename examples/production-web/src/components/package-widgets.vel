@@ -1,3 +1,5 @@
+import {alpha, border, color} from "velar/look"
+
 const panelLook = look:
     display = "grid"
     gap = 12px
@@ -9,8 +11,11 @@ const panelTitleLook = look:
     margin = 0
     fontSize = 1.1rem
 
-export component PanelFrame(title: string, children: WebNode):
+export component Panel(title: string, children: WebNode):
     return <section class="panel" look={panelLook}>
         <h2 class="panel-title" look={panelTitleLook}>{title}</h2>
         {children}
     </section>
+
+export component StatusBadge(theme: string):
+    return <strong class="status-badge">Theme: {theme}</strong>

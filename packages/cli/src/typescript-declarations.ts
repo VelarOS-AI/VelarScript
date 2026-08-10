@@ -2,7 +2,7 @@ import { access, readFile, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describeType, optionalOf, semanticTypeIdentity, type ClassInfo, type ValueType } from "@velarscript/compiler";
+import { describeType, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type ClassInfo, type ValueType } from "@velarscript/compiler";
 
 export interface TypeScriptDeclarationBridge {
   readonly path: string;
@@ -1046,10 +1046,13 @@ function parseTsType(
   while (value.startsWith("(") && value.endsWith(")") && balanced(value.slice(1, -1))) value = value.slice(1, -1).trim();
   if (/^readonly\s+/u.test(value)) {
     const inner = value.replace(/^readonly\s+/u, "");
-    if (direction === "to-js" && inner.endsWith("[]")) {
-      return { kind: "list", element: parseTsType(inner.slice(0, -2), aliases, warnings, stack, classTypes, "to-js") };
+    if (inner.endsWith("[]")) {
+      return readonlyViewOf({
+        kind: "list",
+        element: parseTsType(inner.slice(0, -2), aliases, warnings, stack, classTypes, direction),
+      });
     }
-    warnings.push(`Readonly collection type '${value}' has no mutable VelarScript equivalent and was kept as unknown`);
+    warnings.push(`Readonly TypeScript type '${value}' is outside the VelarScript declaration bridge and was kept as unknown`);
     return unsupportedType;
   }
   const union = splitTopLevel(value, "|");
@@ -1081,14 +1084,20 @@ function parseTsType(
       element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant"),
     };
     if (generic[1] === "Set") return { kind: "set", element: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant") };
+    if (generic[1] === "Map") return {
+      kind: "map",
+      key: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "invariant"),
+      value: parseTsType(arguments_[1] ?? "unknown", aliases, warnings, stack, classTypes, "invariant"),
+    };
     if (generic[1] === "ReadonlyArray" || generic[1] === "ReadonlySet") {
-      if (direction === "to-js") {
-        const element = parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, "to-js");
-        return generic[1] === "ReadonlyArray" ? { kind: "list", element } : { kind: "set", element };
-      }
-      warnings.push(`Readonly collection type '${generic[1]}' has no mutable VelarScript equivalent and was kept as unknown`);
-      return unsupportedType;
+      const element = parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, direction);
+      return readonlyViewOf(generic[1] === "ReadonlyArray" ? { kind: "list", element } : { kind: "set", element });
     }
+    if (generic[1] === "ReadonlyMap") return readonlyViewOf({
+      kind: "map",
+      key: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, direction),
+      value: parseTsType(arguments_[1] ?? "unknown", aliases, warnings, stack, classTypes, direction),
+    });
     if (generic[1] === "Promise") return { kind: "promise", value: parseTsType(arguments_[0] ?? "unknown", aliases, warnings, stack, classTypes, direction) };
     if (generic[1] === "Record") {
       warnings.push("TypeScript Record is a plain JavaScript object, not a VelarScript Map, and was kept as unknown");
@@ -1366,12 +1375,6 @@ function balanced(value: string): boolean {
     if (depth < 0) return false;
   }
   return depth === 0;
-}
-
-function unionOf(types: readonly ValueType[]): ValueType {
-  const members = types.flatMap((type) => type.kind === "union" ? type.members : [type])
-    .filter((type, index, values) => values.findIndex((candidate) => semanticTypeIdentity(candidate) === semanticTypeIdentity(type)) === index);
-  return members.length === 0 ? unknownType : members.length === 1 ? members[0]! : { kind: "union", members };
 }
 
 function exportedTypes(value: unknown, subpath: string): string | null {

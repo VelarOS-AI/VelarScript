@@ -285,10 +285,35 @@ export function buildSemanticIndex(
       case "NamedTypeSyntax":
         if (lookup(syntax.name)) reference(syntax.name, syntax.span);
         break;
+      case "EnumMemberTypeSyntax":
+        if (lookup(syntax.enumName)) reference(syntax.enumName, syntax.enumNameSpan);
+        {
+          const owner = lookup(syntax.enumName);
+          const bindingType = owner ? bindingTypes.get(semanticBindingKey(owner.span, owner.name)) : null;
+          const identity = bindingType?.kind === "enumObject" ? bindingType.identity : syntax.enumName;
+          const localMember = owner?.kind === "enum"
+            ? symbols.find((symbol) => symbol.kind === "enum-member" && symbol.container === owner.name && symbol.name === syntax.member)
+            : null;
+          if (localMember) {
+            references.push({ name: syntax.member, path: source.path, span: syntax.memberSpan, symbolId: localMember.id, write: false });
+          }
+        memberReferences.push({
+          name: syntax.member,
+          path: source.path,
+          span: syntax.memberSpan,
+          ownerType: syntax.enumName,
+          ownerKind: "enum",
+          ownerIdentity: identity,
+          syntax: "access",
+          shorthand: false,
+        });
+        }
+        break;
       case "GenericTypeSyntax":
         if (lookup(syntax.name)) reference(syntax.name, syntax.nameSpan);
         for (const argument of syntax.arguments) typeSyntaxReferences(argument);
         break;
+      case "ReadonlyTypeSyntax":
       case "OptionalTypeSyntax":
         typeSyntaxReferences(syntax.inner);
         break;
@@ -392,7 +417,7 @@ export function buildSemanticIndex(
         case "EnumDeclaration": {
           declare(statement, statement.name, "enum", statement.span, nameSpan(statement.span, statement.name), statement.exported);
           for (const member of statement.members) {
-            declare(member, member.name, "enum-member", member.span, member.span, false, false, false, statement.name, statement.name);
+            declare(member, member.name, "enum-member", member.span, member.span, false, false, false, statement.name, `${statement.name}.${member.name}`);
           }
           break;
         }
@@ -658,6 +683,10 @@ export function buildSemanticIndex(
             declare(field, field.name, "field", field.span, nameSpan(field.span, field.name), false, field.mutable, false, declaration.name, undefined, field.static);
             typeReferences(field.type);
           }
+          for (const getter of declaration.getters) {
+            declare(getter, getter.name, "field", getter.span, nameSpan(getter.span, getter.name), false, false, false, declaration.name, formatTypeReference(getter.type), getter.static);
+            typeReferences(getter.type);
+          }
           for (const method of declaration.methods) {
             declare(method, method.name, "method", method.span, nameSpan(method.span, method.name), false, false, false, declaration.name);
             for (const parameter of method.parameters) typeReferences(parameter.type);
@@ -667,7 +696,7 @@ export function buildSemanticIndex(
         break;
       case "TypeDeclaration":
         for (const field of statement.fields) {
-          const selection = { start: field.span.start, end: field.span.start + field.name.length };
+          const selection = nameSpan(field.span, field.name);
           declare(field, field.name, "field", field.span, selection, false, false, false, statement.name);
           typeReferences(field.type);
         }

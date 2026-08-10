@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { compileProject } from "../packages/cli/src/project.ts";
-import { localPlatformModuleSources } from "../packages/cli/src/local-platform-modules.ts";
+import { nodeModuleDependencies, nodeModuleSources } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 const cliPath = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
@@ -115,7 +115,7 @@ import {limit as importedLimit} from "./store.vel"
 
 importedLimit = 2
 
-def local_control():
+def local_control() -> null:
     const importedLimit = 3
     importedLimit = 4
 `.trimStart(), "utf8");
@@ -162,9 +162,73 @@ test("hardening #38 decodes ServeRequest.path before application routing", async
   }
 });
 
+test("velar/serve releases a backpressured stream when its client disconnects", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-serve-disconnect-"));
+  let server: RuntimeServer | null = null;
+  let streamError: unknown = null;
+  let settleStream: (() => void) | null = null;
+  const streamSettled = new Promise<void>((resolve) => { settleStream = resolve; });
+  try {
+    const runtime = await loadServeRuntime(directory);
+    const chunk = "x".repeat(1024 * 1024);
+    server = await runtime.serve(() => ({
+      status: 200,
+      stream: async (write: (value: string) => Promise<null>) => {
+        try {
+          while (true) await write(chunk);
+        } catch (error) {
+          streamError = error;
+          settleStream?.();
+        }
+        return null;
+      },
+    }), 0);
+
+    await new Promise<void>((resolveRequest, rejectRequest) => {
+      const request = httpRequest({ host: "127.0.0.1", port: server!.port, path: "/stream", method: "GET" }, (response) => {
+        response.pause();
+        response.destroy();
+        resolveRequest();
+      });
+      request.setTimeout(5_000, () => request.destroy(new Error("Timed out opening the stream")));
+      request.once("error", rejectRequest);
+      request.end();
+    });
+
+    await Promise.race([
+      streamSettled,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Backpressured stream did not observe the client disconnect")), 2_000)),
+    ]);
+    assert.match(String(streamError), /client connection is closed/u);
+  } finally {
+    await server?.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 async function loadServeRuntime(directory: string): Promise<ServeRuntime> {
-  const source = localPlatformModuleSources.get("velar/serve");
+  const source = nodeModuleSources.get("velar/serve");
   assert.ok(source);
+  const packageRoot = join(directory, "node_modules", "velar");
+  await mkdir(packageRoot, {recursive: true});
+  const exports_: Record<string, string> = {};
+  const dependencies = new Set<string>();
+  const visit = (name: string): void => {
+    for (const dependency of nodeModuleDependencies.get(name) ?? []) {
+      if (dependencies.has(dependency)) continue;
+      dependencies.add(dependency);
+      visit(dependency);
+    }
+  };
+  visit("velar/serve");
+  for (const dependency of dependencies) {
+    const dependencySource = nodeModuleSources.get(dependency);
+    assert.ok(dependencySource, `missing Node runtime dependency ${dependency}`);
+    const name = dependency.slice("velar/".length);
+    exports_[`./${name}`] = `./${name}.js`;
+    await writeFile(join(packageRoot, `${name}.js`), dependencySource, "utf8");
+  }
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({name: "velar", private: true, type: "module", exports: exports_}), "utf8");
   const modulePath = join(directory, "serve.mjs");
   await writeFile(modulePath, source, "utf8");
   return await import(`${pathToFileURL(modulePath).href}?case=${Date.now()}`) as ServeRuntime;

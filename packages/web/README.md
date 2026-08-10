@@ -1,7 +1,7 @@
 # @velarscript/web
 
 The official Web framework for VelarScript. This package is the versioned
-authority for the `velar/app`, `velar/config`, `velar/web`, `velar/forms`,
+authority for the `velar/look`, `velar/app`, `velar/config`, `velar/web`, `velar/forms`,
 `velar/http`, `velar/storage`, `velar/browser`, `velar/files`,
 `velar/realtime`, and `velar/web-test` language modules. It also owns the
 component/JSX, reactive, lifecycle, Look, DOM/CSS lowering, project-manifest,
@@ -19,9 +19,28 @@ checked symbols and members.
 Applications keep the language-level imports:
 
 ```velar
+import {rgb, spacing} from "velar/look"
 import {Head, Link, Router, route} from "velar/web"
 import {http} from "velar/http"
+
+const accent = rgb(45, 79, 190)
+const pagePadding = spacing(24px, 16px)
 ```
+
+One-off base properties use the same checked table through JSX directives, and
+remain ordered after any composed Look:
+
+```velar fragment
+<button
+    look={controlLook}
+    look:color={paper}
+    look:background={accent}
+>Save</button>
+```
+
+State hooks, viewport conditions, pseudo-elements, and other structural visual
+logic remain in a full `look:` value rather than being encoded into directive
+names.
 
 `Head` owns route-scoped metadata and accepts a checked `language` tag when an
 application switches document language at runtime.
@@ -42,8 +61,8 @@ version. It has no dependency on VelarOS Workbench and does not define the
 future Canvas-oriented `velar/game` framework.
 
 The package also owns Look, the checked visual language integrated with VelarScript
-values and JSX. `look:` values, ordinary functions, imports/exports, typed
-builders, unit-aware properties, bounded `if` conditions, `@state` hooks, and
+values and JSX. `look:` values, ordinary functions, imports/exports, named
+`velar/look` builders, unit-aware properties and arithmetic, bounded `if` conditions, `@state` hooks, and
 `@target` blocks lower to extracted standard CSS with stable readable markers.
 Native and component JSX accept universal `class` and `look` props; inline
 `style` directives are rejected. Raw CSS is available only through an explicit

@@ -6,14 +6,14 @@ export type Preferences:
 export state theme = "system"
 export computed dark: bool = theme == "dark"
 
-export def setTheme(next: string):
+export def setTheme(next: string) -> null:
     theme = next
 
-export def saveTheme(next: string):
+export def saveTheme(next: string) -> null:
     setTheme(next)
     storage.set("preferences", {theme: next})
 
-export def toggleTheme():
+export def toggleTheme() -> null:
     if theme == "dark":
         setTheme("light")
     else:

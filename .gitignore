@@ -2,6 +2,7 @@
 .idea/
 .vscode/
 node_modules/
+.velar/
 target/
 dist/
 coverage/

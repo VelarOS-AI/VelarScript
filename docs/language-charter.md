@@ -18,11 +18,36 @@ The language follows five rules:
 3. Prefer one obvious spelling over several nearly equivalent spellings.
 4. Use lightweight static checks to catch ordinary mistakes without adding
    type-level programming.
-5. Keep Web features in the explicit `@velarscript/web` extension rather than
-   hiding them in Core.
+5. Keep target capabilities in explicit extensions rather than hiding Web,
+   Node, or Desktop behavior in Core. An application selects one application
+   framework; capability and language extensions compose through a versioned,
+   cycle-free semantic graph backed by ordinary npm dependencies.
 
 VelarScript compiles to modern JavaScript. Look compiles to readable selectors,
 CSS variables, and DOM bindings owned by the Web package. There is no VelarScript VM.
+
+Desktop does not define a second source language. A Desktop application uses
+one VelarScript module graph with the same components, JSX, Look, state,
+computed values, and actions as Web. Files, paths, processes, HTTP, environment,
+and native window hosting are permission-scoped framework capabilities.
+Renderer/main processes and their versioned transport are internal security
+boundaries, not user-facing project concepts. Host-effectful resource
+acquisition such as `velar/process.start` is asynchronous on every target.
+
+### 1.1 Runtime and JavaScript boundary authority
+
+Every public operation belongs to one or more explicit boundary classes:
+host-inherited behavior, compile-erased semantics, compiler lowering,
+runtime-controlled behavior, a checked foreign ABI, or an explicit unsafe
+boundary. These classes apply to operations rather than whole value families;
+for example, records retain JavaScript reference identity while construction,
+validation, and foreign entry use separate controlled boundaries.
+
+This reference owns all user-observable semantics. The
+[runtime and JavaScript boundary ledger](runtime-boundary.md) maps those
+semantics to boundary classes, implementation owners, runtime ABI, failure
+phase, and proof tests. The ledger and implementation may not add behavior that
+is absent from or contradicts this reference.
 
 ## 2. Files, comments, and blocks
 
@@ -73,6 +98,10 @@ attempts += 1
 
 - `const` cannot be reassigned.
 - `let` can be reassigned.
+- Binding mutability and value mutability are separate contracts. `const user`
+  fixes which value the name refers to but does not make a record or collection
+  read-only. Use a `readonly` type view when mutation through that reference
+  must be forbidden.
 - Both are lexically scoped.
 - A binding cannot be declared twice in the same scope.
 - Shadowing follows ordinary lexical lookup everywhere, including module
@@ -265,10 +294,13 @@ The built-in Core types are:
 - `List<T>`
 - `Set<T>`
 - `Map<K, V>`
+- `Record<T>`
 - `Promise<T>`
 - `T?`
 - small unions such as `string | number`
+- enum singleton types such as `Status.pending`
 - function types such as `(string, number) -> bool`
+- read-only data views such as `readonly User` and `readonly List<User>`
 - `unknown` for unvalidated dynamic input
 
 `any` is reserved for explicit unsafe JavaScript declarations. Ordinary
@@ -279,9 +311,83 @@ overload sets, declaration merging, or type assertions. Type parameters exist
 only on `def` functions; generic `type`, `class`, and `component` declarations
 are not part of the language.
 
+### Read-only data views
+
+`readonly T` is a compile-time view over typed data, not a second runtime
+collection family and not an implicit `Object.freeze`. The emitted JavaScript
+keeps the same object identity. Mutable data may flow into a read-only
+parameter or binding; a read-only view cannot flow back into a mutable
+contract because that would let the recipient mutate through the alias.
+
+```velar fragment
+type Profile:
+    readonly id: string
+    details: Details
+    tags: List<Tag>
+
+def display(profile: readonly Profile) -> string:
+    return profile.id + profile.details.label
+
+const owned: Profile = loadProfile()
+let selected: readonly Profile = owned
+selected = loadProfile()
+print(display(owned))
+```
+
+A `readonly` record view is transitive through reads: `profile.details`, list
+elements, Map keys and values, Set elements, Record values, destructuring, and
+shallow spreads retain read-only views of shared nested data. A new collection
+returned by `copy`, `slice`, `values`, or similar operations owns its outer
+container and may be changed, but any aliased elements obtained from the
+read-only source remain read-only. This prevents a shallow copy from becoming
+a mutation escape hatch. Read-only `List`, `Set`, `Map`, and `Record` views are
+covariant in their element, key, and value types because their checked surface
+cannot insert a wider value. Mutable collections remain invariant.
+
+`readonly` applies only to named record types, structural object data, `List`,
+`Set`, `Map`, and `Record`. Aliases, optionals, and unions preserve it when their
+contained values are data. Classes, functions, methods, getters, promises,
+host/capability objects, primitives, and unconstrained type parameters are
+deliberately outside the boundary. Those values have behavior or authority that
+a data qualifier cannot describe honestly.
+
+A field declaration such as `readonly details: Details` forbids replacing the
+field and projects nested data through the same transitive read-only view. This
+makes a readonly field and a field read through `readonly Profile` obey one rule.
+Optional and union wrappers preserve the capability relation: a `readonly User`
+may enter `readonly User?` or a union containing that view, but no wrapper permits
+it to enter a mutable `User` contract. A field write through a union is valid only
+when every possible variant exposes that field as writable; otherwise the owner
+must be narrowed first.
+
+The qualifier is compile-time only. It creates no wrapper, copy, proxy, freeze,
+runtime branch, or new identity. A mutable data value may be viewed as readonly;
+recovering mutable authority requires an explicit copy written by the program.
+There is no readonly class or readonly executable-member contract.
+
+Because read-only is part of the function type, helpers state their ownership
+contract directly:
+
+```velar fragment
+def inspect(profile: readonly Profile) -> string:
+    return profile.id
+
+def update(profile: Profile) -> null:
+    profile.details.label = "Updated"
+```
+
+Passing a component prop to `inspect` is valid; passing it to `update` is a
+compile-time error.
+
 ### Optional values
 
 `T?` means `T | null`.
+
+Nullability has one canonical type shape. A union such as `Left? | Right?`
+becomes `(Left | Right)?`, so presence checks, `?.`, `?.[...]`, optional calls,
+`??`, inference, and module interfaces cannot lose the possible `null` arm.
+Every optional access result normalizes JavaScript short-circuit `undefined`
+back to VelarScript `null`.
 
 ```velar fragment
 const user: User? = findUser(id)
@@ -319,12 +425,11 @@ return user.name
 ```
 
 Narrowing is flow-based and deliberately practical. A fact established by a
-check persists across ordinary calls, `await`, string interpolation, and other
-expressions. It is invalidated by exactly two things: an assignment to that
-location (including through destructuring or a compound target), and merging
-branches where an assignment can reach the same location. A member write counts
-as an assignment to that field and invalidates facts reached through every
-alias of the object.
+check persists across calls, getters, callbacks, `await`, and string
+interpolation. A known assignment to that location (including destructuring or
+a compound target), or a reachable branch merge containing such a write,
+invalidates it statically. A member write also invalidates facts reached through
+known aliases of the object; unrelated roots keep their facts.
 
 ```velar fragment
 if form:
@@ -332,12 +437,17 @@ if form:
     focusFirstError(form)
 ```
 
-This is the same trade TypeScript makes: a callee or another alias could in
-principle write `null` back into a checked location, and the compiler does not
-try to prove it cannot. VelarScript prefers one visible rule over a hidden
-alias analysis. Runtime guards — bounded collection helpers, record
-validators, and `undefined`-to-`null` normalization — do not depend on this
-analysis and stay active either way.
+Calls are intentionally not modeled with a whole-program write-effect system.
+Instead, every later read that relies on a still-active narrowing fact rechecks
+the available runtime evidence. Records and collections use deep validators,
+classes use nominal identity, primitives use their runtime kind, and erased
+generics or opaque capabilities can promise only presence. If an opaque call,
+getter, callback, host boundary, or suspended task made that evidence stale,
+the read throws `NarrowingError` with the source offset and expected type. This
+keeps ordinary source concise without silently leaking a JavaScript `TypeError`.
+Runtime narrowing guards are separate from `readonly`: the former validates a
+fact at a use site; the latter removes mutation capability from a data type at
+compile time.
 
 Two boundaries remain because they are visible in source:
 
@@ -378,7 +488,10 @@ export type UserId = string
 export type UserHandler = (User) -> null
 ```
 
-There is no parallel `schema`, `interface`, or `typedef` family.
+There is no parallel `schema`, `interface`, or `typedef` declaration family.
+Those words remain ordinary data names; when `schema Name:` or
+`interface Name:` appears in declaration position, diagnostics guide it to
+`type Name:` without reserving the identifier globally.
 
 Record types have a runtime validator:
 
@@ -390,7 +503,36 @@ if untrusted is User:
 ```
 
 `parse` returns a validated value or throws `ValidationError`. Runtime
-validation accepts only the declared data shape and observes bounded data rules.
+validation proves every declared field and observes bounded data rules; records
+remain structurally open to additional owned data fields as described below.
+
+Runtime validators are first-class through the compiler-known `Type<T>`
+carrier. This lets an ordinary VelarScript package write reusable decoding
+logic without a compiler intrinsic or a JavaScript bridge:
+
+```velar fragment
+def decode<T>(value: unknown, target: Type<T>) -> T:
+    return target.parse(value)
+
+def accepts<T>(value: unknown, target: Type<T>) -> bool:
+    return target.is(value)
+
+const user: User = decode(untrusted, User)
+```
+
+Record, alias, and enum declarations produce the only values assignable to
+`Type<T>`. A class or object that merely declares compatible `is` and `parse`
+members cannot forge that capability. Generic inference and module interfaces
+preserve `T` through named imports, renamed imports, namespace imports, and
+re-exports.
+
+`Type<T>` describes a runtime validator value; it is not itself a reified
+metatype. The target relationship is compile-time information, while the value
+is protected by the shared runtime-Type registry. Therefore `value is
+Type<User>` and a runtime-validated `type` field or alias containing `Type<T>`
+are rejected. Call the concrete validator's `is(value)` method instead, and
+keep validator values in functions, classes, or ordinary variables when they
+must be stored.
 
 Enums represent finite string-backed states:
 
@@ -405,6 +547,57 @@ const parsed = Status.parse("done")
 ```
 
 Open strings do not silently become enum members.
+When an external protocol already owns the wire spelling, a member may map its
+readable VelarScript name onto one explicit inline string:
+
+```velar
+enum ProviderEventKind:
+    textDelta = "response.output_text.delta"
+    completed = "response.completed"
+
+print(ProviderEventKind.textDelta) // response.output_text.delta
+```
+
+The member name remains the nominal type identity
+(`ProviderEventKind.textDelta`); the mapped string is its runtime value.
+Unmapped members continue to use their own name. Runtime values must be unique
+inside an enum, interpolation and layout strings are not enum declarations,
+and the generated validator uses strict equality without calling mutable
+collection helpers. This keeps third-party JSON/SSE tags precise without
+adding structural literal types or a second protocol declaration family.
+
+An enum member may also appear in type position. Combined with records and a
+small union, this models protocols whose payload depends on one finite tag
+without adding a second declaration family:
+
+```velar
+enum EventKind:
+    text
+    tool
+
+type TextEvent:
+    kind: EventKind.text
+    text: string
+
+type ToolEvent:
+    kind: EventKind.tool
+    toolId: string
+
+type Event = TextEvent | ToolEvent
+
+def describe(event: Event) -> string:
+    if event.kind == EventKind.text:
+        return event.text
+    return event.toolId
+```
+
+`EventKind.text` is a nominal singleton below `EventKind`, not an open string.
+Reading a field shared by every union member produces the union of its field
+types. Equality, inequality, `assert`, and `match` carry a singleton fact back
+to the owning record, so variant-only fields are available in the matching
+branch. A field whose variants require different types cannot be assigned
+through the un-narrowed union; narrow the owner first. This prevents changing a
+tag without constructing the payload required by the new variant.
 
 ## 7. Functions and calls
 
@@ -415,11 +608,20 @@ def formatUser(user: User, prefix: string = "@") -> string:
     return f"{prefix}{user.name}"
 ```
 
-Omitting a result annotation means `-> null`, not whole-body type inference.
-A function with a non-null result must declare it and return on every reachable
-path. Returning a non-null value from an unannotated function is reported at
-the return site itself, naming the `-> <type>` annotation to declare, so the
-missing contract never surfaces as null or unknown errors at distant use sites.
+A body-backed function, method, or Web action may omit its result annotation.
+The compiler infers the union of its reachable returned values and includes
+`null` when control can reach the end; a function with no value result therefore
+infers `-> null`, while a partial `T` return infers `-> T?`. An explicit `-> T`
+remains a checked contract and a non-null contract must return on every
+reachable path. An async declaration infers or annotates its resolved value,
+while its call type remains `Promise<T>`. Recursive result dependencies are
+solved to a fixed point; a recursive group whose result cannot converge must add
+an explicit annotation. Extern functions and abstract methods have no body to
+infer and therefore always declare their result. Components retain their
+dedicated render result, class constructors retain their non-returning
+construction contract, getters retain their explicit property result, and
+contextually typed arrows may infer their result from the surrounding function
+type.
 
 Calls support positional and named arguments:
 
@@ -433,6 +635,13 @@ users expect and JavaScript users can read immediately.
 
 - Positional arguments come first.
 - Names are checked against the declaration.
+- Parameter names label calls through that declaration or annotated function
+  type; they do not participate in structural function assignability. A
+  callback may use a local name such as `_request` while satisfying a
+  `(request: Request) -> Result` contract. The same rule applies to class and
+  extern overrides: the base declaration keeps its labels for base-typed
+  calls, while the implementation's parameter names remain local to calls
+  through that concrete declaration.
 - A name cannot appear twice.
 - Arguments evaluate from left to right.
 - The callee, including its receiver and any getter, evaluates before arguments.
@@ -469,6 +678,8 @@ String members are:
 | `slice(start=0, end=size)` | Code-point slice. |
 | `char(index)` | Code point or `null`; negative indexes count from the end. |
 | `has(text)`, `startsWith(text)`, `endsWith(text)` | Membership or boundary check. |
+| `index(text, start=0)` | First code-point position at or after `start`, or `null`; negative starts count from the end and out-of-range starts clamp. |
+| `count(text)` | Non-overlapping occurrence count; an empty search has `size + 1` positions. |
 | `split(separator)` | `List<string>`. |
 | `replace(from, to)`, `replaceAll(from, to)` | Replaced string. |
 | `padStart(size, fill=" ")`, `padEnd(size, fill=" ")` | Padded string. |
@@ -500,7 +711,22 @@ async def loadUser(id: string) -> User:
 
 Its call type is `Promise<User>`. Do not write `-> Promise<User>` on an async
 function. JavaScript Promise adoption and the JavaScript event loop remain the
-runtime behavior.
+runtime behavior. Because the JavaScript Promise representation reserves a
+resolved value's top-level `then` member, a checked Promise cannot resolve
+directly to a record or class with a callable `then` data member, or to a class
+with any `then` getter. The compiler reports that conflict on explicit Promise
+types, async declarations and arrows, generic instantiations, calls, awaits,
+typed async combinators, and each concrete async return expression. A value may
+have been widened to `unknown`, a base class, or a cross-module contract that no
+longer exposes its concrete member set, so generated async returns whose checked
+actual type can carry an object also inspect the top-level `then` data descriptor
+and prototype chain before native Promise adoption. Primitive and
+already-checked Promise returns keep the direct path. A callable data member or
+any getter fails closed without executing the getter. A non-callable data member
+such as `then: string` is valid,
+as is a nested value such as `Promise<List<Box>>`; Promise resolution does not
+inspect List elements. Rename a conflicting top-level member or keep that value
+outside the resolved result.
 
 ### Type parameters
 
@@ -610,9 +836,43 @@ forms reject accessors, sparse or malformed Lists, symbol fields, and
 overridable collection iterators at their runtime boundary. Empty `Set()` and
 `Map()` keep their existing contextual and first-mutation inference.
 
+### Dynamic Record
+
+`Record<T>` is the JSON-shaped counterpart to `Map<K, V>`: it is a plain data
+record with arbitrary string keys whose values all satisfy `T`. It is intended
+for JSON objects, schema property tables, headers encoded as data, and other
+wire formats where object keys are not known in advance.
+
+```velar fragment
+const properties: Record<Property> = {
+    path: {type: "string", description: "Relative path"},
+}
+properties["limit"] = {type: "integer", description: "Result limit"}
+const selected = properties["path"]
+```
+
+Bracket reads return `T?` because a dynamic key may be absent. Keys are strings;
+bracket assignment and `set` validate the value contract. Members are `size`,
+`get`, `set`, `remove`, `has`, `clear`, `copy`, `keys`, `values`, and `entries`.
+A one-slot `for` visits keys, while `for key, value in record` visits both in
+own-field order. Runtime operations accept only plain records with own
+ordinary mutable enumerable data fields, reject symbols, accessors, frozen or
+sealed fields, and remain bounded to 1,000,000 fields. Runtime `Type<Record<T>>`
+validation proves that complete mutable shape up front, so a value cannot gain
+`set`, `remove`, and `clear` statically only to fail because its host properties
+were read-only or non-configurable.
+
+`Record<T>` is not a spelling for `Map<string, T>`. A Map retains native key
+identity and insertion semantics and is deliberately rejected by strict JSON;
+a Record retains JSON object representation and only has string keys.
+Because a mutable Record may overwrite any existing key, assigning a structural
+object to `Record<T>` requires every existing field to be invariant with `T`
+and rejects read-only fields. A `readonly Record<T>` has no mutation surface,
+so the same structural conversion may safely widen field values covariantly.
+
 Every method signature in the tables is also its named-argument vocabulary.
 For example, `slice(end=5, start=1)`, `Map.set(value=user, key=user.id)`, and
-`Set.add(value="web")` are checked exactly like calls to user-defined
+`Set.add(value="web")` and `properties.set(key="path", value=property)` are checked exactly like calls to user-defined
 functions. Source expressions still evaluate from left to right even when the
 named values are reordered for the runtime call.
 Checked value and collection methods are first-class bound values. `const add = tags.add` keeps
@@ -624,7 +884,7 @@ either that bound callable or `null`.
 All collection growth is bounded. Every language collection operation validates
 its JavaScript boundary and calls compiler-owned helpers rather than an
 instance's overridable collection methods. A `for` loop visits string
-characters, List and Set values, or Map keys in order. String iteration follows
+characters, List and Set values, or Map/Record keys in order. String iteration follows
 JavaScript Unicode code points, so a surrogate pair is one character. Native Map and Set brands are checked
 through their internal slots, so legitimate values from another browser realm
 work without trusting an overridable `instanceof`, `size`, iterator, or method.
@@ -702,6 +962,16 @@ match response:
         print("Unsupported response")
 ```
 
+Enum singleton fields make the same record pattern a discriminating pattern:
+
+```velar fragment
+match event:
+    case {kind: EventKind.text}:
+        print(event.text)
+    case {kind: EventKind.tool}:
+        run(event.toolId)
+```
+
 `[first, second]` matches a List of exactly two items. `[first, ...rest]`
 matches one or more items and creates a new List for `rest`; `[]` matches only
 an empty List. Object patterns require each named field to be a present own data
@@ -742,6 +1012,9 @@ for user, index in users:
 for id, {name} in usersById:
     print(f"{id}: {name}")
 
+async for chunk, index in reply:
+    print(f"{index}: {chunk}")
+
 while attempts < 3:
     attempts += 1
 ```
@@ -753,6 +1026,23 @@ Sets, and strings (the string index counts code points), and key/value for Maps.
 Both slots accept the complete binding-pattern grammar. Brackets continue to
 mean destructuring one item, so `for [left, right] in pairs` is not a two-slot
 loop; three slots are rejected.
+
+`async for value in source` consumes one explicit Velar pull contract:
+`source.next()` must have the checked type `() -> Promise<T?>`. The source and
+its own data-valued `next` method are captured once. Each pull must return an
+actual Promise; a resolved `null` ends the loop, a resolved `T` enters the body,
+and rejection leaves the loop unchanged. The optional second slot is a
+zero-based pull index. It advances before the body, so `continue` cannot repeat
+an index. `break` performs no further pull.
+
+The loop does not invent resource ownership. It never calls `close`, `return`,
+or another cleanup hook when it exhausts, breaks, throws, or is cancelled.
+Sources that own files, sockets, processes, or request cancellation expose and
+document an explicit operation; the caller remains responsible for it, normally
+with `try`/`finally`. `async for` is a small checked pull protocol, not the
+JavaScript `Symbol.asyncIterator` protocol and not an implicit generator model.
+The JavaScript spelling `for await` is rejected with guidance to put the async
+marker before the Velar loop.
 
 `range(end)`, `range(start, end)`, and `range(start, end, step)` from
 `velar/collections` produce a stop-exclusive bounded `List<number>` for loops
@@ -782,7 +1072,11 @@ a loop that can `break` may exit while its condition still holds, so the
 condition's negated facts do not persist past it. Writes after an unconditional
 `return`, `throw`, `break`, or `continue` do not affect reachable flow facts. If
 a loop body can only return or throw, its writes cannot escape to the skipped
-path after the loop.
+path after the loop. A literal `while true` with no reachable `break` owned by
+that loop cannot fall through, so it satisfies an explicit non-null function
+result even when some iterations continue forever. A `break` in a nested loop
+does not make the outer loop fall through; a reachable break owned by the outer
+loop does.
 
 ## 10. Classes
 
@@ -800,7 +1094,7 @@ class Session:
     get label() -> string:
         return self.active ? self.id : f"{self.id} (closed)"
 
-    def close():
+    def close() -> null:
         self.active = false
 ```
 
@@ -868,6 +1162,9 @@ JavaScript boundary failures are normalized to `Error` before entering a catch
 binding. Primitive thrown values retain a readable message. Objects and
 functions receive a stable generic message and remain available as the
 JavaScript `cause`; normalization never calls their conversion hooks.
+The generated module captures native Error identity/construction and primitive
+String conversion when it initializes; replacing those ambient operations
+later cannot change which value reaches the checked catch binding.
 
 The `try` body and `catch` body are separate execution paths. A mutation in a
 catch that returns cannot erase a fact used only by the normal try continuation,
@@ -938,12 +1235,22 @@ export {renderMarkdown, highlightFence as highlight} from "./markdown.vel"
 Different modules may use the same record display name; their field metadata is
 kept separate until ordinary structural assignability is checked.
 
+Enum singleton identities follow the declaring enum through named imports,
+renamed imports, re-exports, and aliases. Renaming `EventKind` to `Kind` changes
+the local display spelling to `Kind.text`; it does not turn the member into a
+different state or an ordinary string. An explicit external string mapping is
+owned by the declaration and crosses the runtime module boundary with that
+member; consumers still refer to the nominal member name.
+
 Every runtime `Type.is(value)` and `Type.parse(value)` record check requires its
 non-optional fields to be present own enumerable data properties. Optional
 fields may be absent; when present they must follow the same owned-data rule.
 Inherited fields and accessors do not satisfy a record contract, and validation
 never invokes a getter. This is the same owned-record invariant used by
 structural `match`.
+Records remain structurally open: additional own data fields are permitted, so
+decoders can accept forward-compatible protocol metadata, but every declared
+singleton field must equal its exact enum member.
 
 Validation proves the shape a value has at that operation; it does not
 constrain what an unchecked Proxy may do on later reads.
@@ -988,6 +1295,17 @@ The source package then exposes the following language extension:
 
 This keeps the compiler independently usable for Core libraries while making
 the official Web stack feel like one language.
+
+Official Web modules own the browser operations they expose. They capture the
+relevant host objects, constructors, prototype operations, timers, observers,
+URL machinery, navigation functions, and storage/database operations when the
+module initializes. Later
+replacement of ambient globals or instance methods cannot silently change an
+official API's semantics. Native platform values are read through their
+captured branded getters; explicit data-only host doubles remain available to
+the test boundary. Every value is still checked before it becomes typed
+VelarScript data, and a genuine native operation error is preserved rather
+than retried through a replaceable fallback.
 
 ## 14. Components and JSX
 
@@ -1071,7 +1389,7 @@ export component Profile(userId: string):
     action save() -> User:
         return await saveUser(profile.value)
 
-    def toggleExpanded():
+    def toggleExpanded() -> null:
         expanded = not expanded
 
     return <section>
@@ -1089,7 +1407,7 @@ through ordinary functions; helpers can mutate the owned value directly.
 tasks.append(task)
 tasks[0].done = true
 
-def retitle(task: Task, title: string):
+def retitle(task: Task, title: string) -> null:
     task.title = title
 
 retitle(tasks[0], "Ready")
@@ -1106,10 +1424,13 @@ framework contracts owned by the Web API document.
 
 Reactive imports keep the same split as ordinary imports: assigning an imported
 binding is forbidden, while mutating the value inside an imported state binding
-is legal and publishes to every consumer. Component props remain read-only in
-the child. A child may call a callback supplied by its parent to request a
-mutation, but it may not assign a prop record field or invoke a mutating
-collection method on a prop.
+is legal and publishes to every consumer. Component record and collection props
+enter the child through the same transitive Core `readonly` views used by
+ordinary functions and module interfaces. A helper that only reads a prop must
+declare a `readonly` parameter; a helper that requires a mutable parameter
+cannot receive the prop. A child may call a callback supplied by its parent to
+request a mutation, but it may not assign through the prop or invoke a mutating
+collection method on it.
 
 A resource exposes `value`, `loading`, `ready`, `error`, and `reload`. It owns
 stale-result and component-destruction handling.
@@ -1164,6 +1485,8 @@ property names, VelarScript expressions, typed unit values, composition, conditi
 element states, and explicit pseudo-element targets.
 
 ```velar
+import {alpha, border, rgb, spacing} from "velar/look"
+
 const colors = {
     text: rgb(24, 31, 46),
     surface: rgb(248, 250, 255),
@@ -1211,7 +1534,12 @@ undefined color or spacing token instead of guessing that it was a CSS word.
 
 ### Builders
 
-Look provides a small checked builder set:
+Look builders are ordinary named exports from `velar/look`, not magic names
+that appear only inside a `look:` block. Import only the functions a module
+uses; the functions may be aliased, passed to another function, returned, and
+called outside Look like any other VelarScript value.
+
+The module provides a small checked builder set:
 
 - colors: `color`, `rgb`, `rgba`, `hsl`, `alpha`, `lighten`, `darken`
 - visuals: `border`, `shadow`, `linearGradient`, `asset`
@@ -1221,6 +1549,8 @@ Look provides a small checked builder set:
 Named arguments work normally:
 
 ```velar
+import {rgba, shadow} from "velar/look"
+
 const raised = shadow(0px, 12px, 32px, rgba(0, 0, 0, 0.16), spread=0px, inset=false)
 ```
 
@@ -1231,12 +1561,77 @@ Functions, records, classes, non-finite numbers, and objects with conversion
 hooks never become CSS text. A dynamic property value of `null` removes that
 controlled value instead of emitting the text `"null"`.
 
+### Unit values and calculations
+
+Unit suffixes belong to the language and need no import. `px`, `rem`, `em`,
+`vw`, `vh`, `vmin`, and `vmax` produce `Length`; `%` produces `Percentage`;
+`fr` produces `TrackFraction`; `ms` and `s` produce `Duration`; `deg` and
+`turn` produce `Angle`. They are ordinary reusable values outside Look:
+
+```velar
+const gutter: Length = 16px
+const content: Percentage = 75%
+const fluid: LengthPercentage = content - gutter * 2
+const wide: Length = 25vw + 2rem
+const motion: Duration = 1s + 200ms
+const rotation: Angle = 0.5turn + 90deg
+```
+
+Addition and subtraction require the same visual dimension; mixing Length and
+Percentage yields `LengthPercentage`. A visual value may be multiplied or
+divided by a finite number, and a number may multiply a visual value. Compatible
+same-unit expressions fold to one value; mixed length units and
+length-percentage expressions lower to CSS `calc(...)`. Unit-by-unit
+multiplication, division by a unit value, color arithmetic, and arithmetic on
+composite values such as `Spacing` are rejected.
+
+### JSX Look directives
+
+Simple one-off base properties may be written as JSX directives. They use the
+same camelCase property names and property types as a full Look:
+
+```velar
+import {rgb, spacing} from "velar/look"
+
+const paper = rgb(251, 250, 247)
+const primary = rgb(45, 79, 190)
+
+const controlLook = look:
+    display = "inline-flex"
+    color = paper
+
+export component Example:
+    return <div>
+        <div
+            look:display="grid"
+            look:gap={12px}
+            look:padding={spacing(16px, 20px)}
+            look:borderRadius={14px}
+        >Content</div>
+        <button
+            look={controlLook}
+            look:color={paper}
+            look:background={primary}
+        >Save</button>
+    </div>
+```
+
+`look={value}` composes an existing Look. All `look:property` directives on the
+same element form one anonymous base Look applied after that composed value, so
+the directives override it regardless of attribute order. Duplicate directives
+are errors and `null` removes the corresponding property. Conditions, `@` state
+hooks, media queries, pseudo-elements, spreads, and other structural Look
+features remain in an extracted `look:` value; directive names never encode a
+second copy of that language.
+
 ### Composition
 
 Look values are ordinary exportable values and may be composed once at their
 outer level:
 
 ```velar
+import {rgb, spacing} from "velar/look"
+
 export const controlLook = look:
     padding = spacing(10px, 14px)
     borderRadius = 10px
@@ -1259,20 +1654,27 @@ Element-owned states are prefixed with `@`:
 `@checked`, `@invalid`, and `@open`.
 
 Media condition subjects lower to CSS media queries instead of runtime checks:
-`viewport.width` and `viewport.height` compare against typed lengths, and the
+`viewport.width` and `viewport.height` compare against compile-time `px`, `rem`,
+or `em` values. The threshold may be a local or imported `const` unit token,
+including a field of a const token record. Dynamic function results are rejected
+because media rules must be extracted before the program runs. The
 color-scheme subjects `scheme.dark` and `scheme.light` lower to
 `prefers-color-scheme`. The two schemes are complementary, so `not scheme.dark`
 is the same condition as `scheme.light`. Media subjects compose with element
 states and each other:
 
 ```velar
+import {rgb} from "velar/look"
+
+const compact = 720px
+
 const panelLook = look:
     background = rgb(255, 255, 255)
 
     if scheme.dark:
         background = rgb(29, 32, 41)
 
-    if scheme.dark and viewport.width <= 720px:
+    if scheme.dark and viewport.width <= compact:
         padding = 12px
 ```
 
@@ -1342,8 +1744,9 @@ The following are not part of VelarScript:
 - class-header constructor fields
 - `init:` constructor blocks
 - TypeScript-style interfaces, assertions, overloads, or type programming
-- generators, `yield`, or `for await`; incremental sources expose explicit
-  Promise-returning pull methods or producer callbacks
+- generators, `yield`, or the JavaScript `Symbol.asyncIterator` protocol;
+  incremental sources use checked `async for` pull contracts or producer
+  callbacks, and JavaScript `for await` is guided to `async for`
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
 - magical JSX control-flow attributes

@@ -1,0 +1,40 @@
+{
+  "name": "@velarscript/node",
+  "version": "0.10.0",
+  "description": "The official VelarScript Node.js module contract and runtime.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node ../../scripts/clean-package-dist.mjs",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
+    "directory": "packages/node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@velarscript/compiler": "0.10.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler.d.ts",
+      "default": "./dist/compiler.js"
+    }
+  }
+}

@@ -6,6 +6,7 @@ import {currentRoute} from "velar/web"
 import {onError} from "velar/app"
 import {publicConfig} from "velar/config"
 import {logger, useSink} from "velar/log"
+import {border, rgb, spacing} from "velar/look"
 import {formBody, http} from "velar/http"
 import {eventStream, socket} from "velar/realtime"
 import {matches} from "velar/text"
@@ -73,22 +74,22 @@ component RealtimeProbe(socketUrl: string, eventsUrl: string):
     state socketLabel = "connecting"
     state eventLabel = "connecting"
 
-    def socketOpened():
+    def socketOpened() -> null:
         socketLabel = "open"
 
-    def socketMessage(value: string):
+    def socketMessage(value: string) -> null:
         socketLabel = value
 
-    def socketFailed(message: string):
+    def socketFailed(message: string) -> null:
         socketLabel = f"error:{message}"
 
-    def eventOpened():
+    def eventOpened() -> null:
         eventLabel = "open"
 
-    def eventMessage(value: string, id: string):
+    def eventMessage(value: string, id: string) -> null:
         eventLabel = f"{id}:{value}"
 
-    def eventFailed(message: string):
+    def eventFailed(message: string) -> null:
         eventLabel = f"error:{message}"
 
     const channel = socket(socketUrl, {
@@ -147,37 +148,37 @@ export component WebCapabilities:
     state realtimeEnabled = false
     let panel: Element? = null
 
-    def onlineChanged(value: bool):
+    def onlineChanged(value: bool) -> null:
         online = value
 
-    def visibilityChanged(value: bool):
+    def visibilityChanged(value: bool) -> null:
         visible = value
 
-    def mediaChanged(value: bool):
+    def mediaChanged(value: bool) -> null:
         darkScheme = value
 
-    def sessionChanged(value: CapabilityStatus?, previous: CapabilityStatus?):
+    def sessionChanged(value: CapabilityStatus?, previous: CapabilityStatus?) -> null:
         sessionLabel = value?.label ?? "missing"
 
-    def captureRuntimeError(phase: string, message: string):
+    def captureRuntimeError(phase: string, message: string) -> null:
         runtimeErrorLabel = f"{phase}:{message}"
 
-    def captureLog(message: string):
+    def captureLog(message: string) -> null:
         logLabel = message
 
-    def captureKey(event: KeyboardEvent):
+    def captureKey(event: KeyboardEvent) -> null:
         keyboardLabel = event.key
 
-    def captureInput(event: InputEvent):
+    def captureInput(event: InputEvent) -> null:
         inputLabel = event.inputType
 
-    def capturePointer(event: PointerEvent):
+    def capturePointer(event: PointerEvent) -> null:
         pointerLabel = event.pointerType
 
-    def timerReady():
+    def timerReady() -> null:
         timerLabel = "after-ready"
 
-    def timerTick():
+    def timerTick() -> null:
         timerTicks += 1
 
     def renderStatus() -> string:
@@ -186,13 +187,13 @@ export component WebCapabilities:
         else:
             return "render-stable"
 
-    def failRender():
+    def failRender() -> null:
         renderFails = true
 
-    async def failEvent():
+    async def failEvent() -> null:
         throw CapabilityError("Event recovery ready")
 
-    action recoverAction():
+    action recoverAction() -> null:
         actionAttempts += 1
         if actionAttempts == 1:
             throw CapabilityError("Action recovery ready")
@@ -209,7 +210,7 @@ export component WebCapabilities:
     const stopErrors = onError(report => captureRuntimeError(report.phase, report.error.message))
     const stopLog = useSink(record => captureLog(record.message))
 
-    async def loadCapabilities():
+    async def loadCapabilities() -> null:
         session.set("capability", {label: "session-ready"})
         await cache.set("capability", {label: "database-ready"})
         const stored = await cache.get("capability", CapabilityStatus)
@@ -219,7 +220,7 @@ export component WebCapabilities:
         if panel:
             layoutWidth = measure(panel).width
 
-    async def verifyRecovery():
+    async def verifyRecovery() -> null:
         try:
             throw CapabilityError("VelarScript recovery ready")
         catch error:
@@ -227,7 +228,7 @@ export component WebCapabilities:
         finally:
             recoveryLabel = "finalized"
 
-    action chooseFile():
+    action chooseFile() -> null:
         const selected = await pick({accept: ".txt", multiple: false})
         const file = selected.get(0)
         if file != null:
@@ -239,14 +240,14 @@ export component WebCapabilities:
             const uploaded = await http.post(f"{config.apiBase}/upload", {body: body}).parse(UploadResponse)
             uploadLabel = f"{uploaded.label}:{uploaded.fileName}:{uploaded.size}"
 
-    action copyStatus():
+    action copyStatus() -> null:
         await copyText("VelarScript Web API 0.10")
         clipboardLabel = "Copied"
 
-    def saveStatus():
+    def saveStatus() -> null:
         download("velar-status.txt", f"{sessionLabel}/{databaseLabel}")
 
-    def connectRealtime():
+    def connectRealtime() -> null:
         realtimeEnabled = true
 
     mounted:

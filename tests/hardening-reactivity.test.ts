@@ -40,14 +40,14 @@ component Child(row: Row):
     harmless(row)
     return <span>{row.title}</span>
 
-def overwrite(row: Row):
+def overwrite(row: Row) -> null:
     row.title = "helper"
 
-def harmless(row: Row):
-    def nested(row: Row):
+def harmless(row: readonly Row) -> null:
+    def nested(row: Row) -> null:
         row.title = "nested-only"
 
-def mutateThroughArrow(items: List<string>):
+def mutateThroughArrow(items: List<string>) -> null:
     [0].map(_ => items.append("captured"))
 
 component ListChild(items: List<string>):
@@ -59,7 +59,7 @@ component ListChild(items: List<string>):
   );
 
   const readonly = ownership.diagnostics.filter(
-    (diagnostic) => diagnostic.code === "VEL5051",
+    (diagnostic) => diagnostic.code === "VEL3002" || diagnostic.code === "VEL4001",
   );
   assert.equal(
     readonly.length,
@@ -68,27 +68,27 @@ component ListChild(items: List<string>):
   );
   assert.ok(
     readonly.some((diagnostic) =>
-      /prop 'row'.*read-only/u.test(diagnostic.message),
+      /through readonly Row/u.test(diagnostic.message),
     ),
   );
   assert.ok(
     readonly.some((diagnostic) =>
-      /helper 'overwrite' mutates/u.test(diagnostic.message),
+      /Cannot assign readonly Row to Row/u.test(diagnostic.message),
     ),
   );
   assert.ok(
     !readonly.some((diagnostic) =>
-      /helper 'harmless'/u.test(diagnostic.message),
+      /Cannot assign readonly Row to readonly Row/u.test(diagnostic.message),
     ),
   );
   assert.ok(
     readonly.some((diagnostic) =>
-      /prop 'items'.*mutating collection method/u.test(diagnostic.message),
+      /mutating method 'append' through readonly List<string>/u.test(diagnostic.message),
     ),
   );
   assert.ok(
     readonly.some((diagnostic) =>
-      /helper 'mutateThroughArrow' mutates/u.test(diagnostic.message),
+      /Cannot assign readonly List<string> to List<string>/u.test(diagnostic.message),
     ),
   );
 
@@ -101,13 +101,13 @@ type NestedRow:
     title: string
     inner: Inner
 
-def mutateTransitively(value: NestedRow):
+def mutateTransitively(value: NestedRow) -> null:
     mutateDirectly(value)
 
-def mutateDirectly(value: NestedRow):
+def mutateDirectly(value: NestedRow) -> null:
     value.title = "helper"
 
-def identity(value: NestedRow) -> NestedRow:
+def identity(value: readonly NestedRow) -> readonly NestedRow:
     return value
 
 component TransitiveChild(row: NestedRow):
@@ -149,7 +149,7 @@ component OwnedCopyControl(row: NestedRow):
 `.trimStart(),
   );
   const derivedReadonly = derivedOwnership.diagnostics.filter(
-    (diagnostic) => diagnostic.code === "VEL5051",
+    (diagnostic) => diagnostic.code === "VEL3002" || diagnostic.code === "VEL4001",
   );
   assert.equal(
     derivedReadonly.length,
@@ -180,6 +180,63 @@ mount(<App />, "#app")
     /const trackedValue = __velarReactive\(rawValue\);/u,
   );
   assert.doesNotMatch(keyed.code, /__velarReactive\(value, source\)/u);
+});
+
+test("component readonly data stops at class and Promise capability boundaries", () => {
+  const result = compile(`
+type User:
+    name: string
+
+class Box:
+    let title: string
+
+    constructor(title: string):
+        self.title = title
+
+    def retitle() -> null:
+        self.title = "method"
+
+    def label() -> string:
+        return self.title
+
+def retitle(box: Box) -> null:
+    box.title = "helper"
+
+component ClassChild(box: Box, boxes: List<Box>, pending: Promise<User>):
+    box.title = "direct"
+    boxes[0].title = "nested"
+    retitle(box)
+    boxes.append(box)
+    box.retitle()
+    const selected = boxes.get(0)
+    if selected:
+        selected.title = "method result"
+    action change() -> null:
+        const user = await pending
+        user.name = "resolved"
+    return <span>{box.label()}</span>
+`.trimStart());
+
+  assert.equal(result.diagnostics.length, 1, result.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "VEL3002").length, 0);
+  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "VEL4001").length, 1);
+  assert.ok(result.diagnostics.some((diagnostic) => /mutating method 'append' through readonly List<Box>/u.test(diagnostic.message)));
+
+  const hostAnnotation = compile(`
+def inspect(element: readonly CanvasElement) -> null:
+    return null
+`.trimStart());
+  assert.ok(hostAnnotation.diagnostics.some((diagnostic) => /CanvasElement is outside that boundary/u.test(diagnostic.message)));
+
+  const nestedHost = compile(`
+type CanvasHolder:
+    canvas: CanvasElement
+
+component CanvasChild(holder: CanvasHolder):
+    holder.canvas.width = 320
+    return <canvas></canvas>
+`.trimStart());
+  assert.deepEqual(nestedHost.diagnostics, []);
 });
 
 test(
@@ -255,7 +312,7 @@ type Key:
 
 state renderError = ""
 
-def captureRenderError(phase: string, message: string):
+def captureRenderError(phase: string, message: string) -> null:
     renderError = phase + ":" + message
 
 onError(report => captureRenderError(report.phase, report.error.message))
@@ -328,46 +385,46 @@ component App:
     state revision = 0
     let held: Row? = null
 
-    def addEmpty():
+    def addEmpty() -> null:
         emptyList.append("L")
         emptySet.add("S")
         emptyMap.set("M", "1")
 
-    def addPair():
+    def addPair() -> null:
         pairs.set("b", "2")
 
-    def clearPairs():
+    def clearPairs() -> null:
         pairs.clear()
 
-    def editObjectKey():
+    def editObjectKey() -> null:
         for key, value in objectKeys:
             key.name = "changed"
 
-    def flipPatterns():
+    def flipPatterns() -> null:
         box.done = true
 
-    def updateJson():
+    def updateJson() -> null:
         root.inner.done = true
         jsonItems.append("b")
 
-    def addArrival():
+    def addArrival() -> null:
         arriving.append("first")
 
-    def takeRow():
+    def takeRow() -> null:
         held = rows.pop()
         const taken = held
         if taken != null:
             rows.append(taken)
 
-    def editHeld():
+    def editHeld() -> null:
         const taken = held
         if taken != null:
             taken.title = "EDITED"
 
-    def churn():
+    def churn() -> null:
         revision += 1
 
-    def editRow():
+    def editRow() -> null:
         rows[0].title = "BOUND"
 
     return <main>
@@ -407,14 +464,14 @@ import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 import {range} from "velar/collections"
 
-async def test_empty_collection_iteration():
+async def test_empty_collection_iteration() -> null:
     await browser.open("/")
     await browser.click("[data-add-empty]")
     expect(await browser.text("[data-empty-list]")).toBe("L")
     expect(await browser.text("[data-empty-set]")).toBe("S")
     expect(await browser.text("[data-empty-map]")).toBe("M=1;")
 
-async def test_two_slot_map_tracks_add_and_clear():
+async def test_two_slot_map_tracks_add_and_clear() -> null:
     await browser.open("/")
     await browser.click("[data-add-pair]")
     expect(await browser.text("[data-pairs]")).toBe("a=1;b=2;")
@@ -423,7 +480,7 @@ async def test_two_slot_map_tracks_add_and_clear():
     await browser.click("[data-edit-object-key]")
     expect(await browser.text("[data-object-keys]")).toBe("changed=1;")
 
-async def test_descriptor_based_deep_reads():
+async def test_descriptor_based_deep_reads() -> null:
     await browser.open("/")
     await browser.click("[data-flip]")
     expect(await browser.text("[data-destructure]")).toBe("done")
@@ -431,31 +488,31 @@ async def test_descriptor_based_deep_reads():
     expect(await browser.text("[data-match-list]")).toBe("done")
     expect(await browser.text("[data-spread]")).toBe("done")
 
-async def test_json_tracks_nested_records_and_lists():
+async def test_json_tracks_nested_records_and_lists() -> null:
     await browser.open("/")
     await browser.click("[data-json]")
     expect(await browser.text("[data-json-root]")).toBe('{"inner":{"done":true}}')
     expect(await browser.text("[data-json-list]")).toBe('["a","b"]')
 
-async def test_out_of_range_list_get_tracks_arrival():
+async def test_out_of_range_list_get_tracks_arrival() -> null:
     await browser.open("/")
     await browser.click("[data-arrive]")
     expect(await browser.text("[data-arriving]")).toBe("first")
 
-async def test_pop_keeps_record_reactive():
+async def test_pop_keeps_record_reactive() -> null:
     await browser.open("/")
     await browser.click("[data-take]")
     await browser.click("[data-edit-held]")
     expect(await browser.text("li")).toBe("EDITED")
 
-async def test_keyed_churn_keeps_current_row_reactive():
+async def test_keyed_churn_keeps_current_row_reactive() -> null:
     await browser.open("/")
     for index in range(50):
         await browser.click("[data-churn]")
     await browser.click("[data-edit-row]")
     expect(await browser.text("li")).toBe("BOUND")
 
-async def test_render_self_invalidation_is_bounded_and_reported():
+async def test_render_self_invalidation_is_bounded_and_reported() -> null:
     await browser.open("/")
     await browser.waitForText("[data-render-error]", "render:A reactive render cannot invalidate itself more than 100 times")
     expect(await browser.text("[data-loop]")).toBe("102")
@@ -485,7 +542,7 @@ async function run(
       else
         rejectPromise(
           new Error(output || `Command exited with ${String(code)}`),
-        );
-    });
+  );
+});
   });
 }

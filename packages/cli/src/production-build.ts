@@ -12,7 +12,7 @@ import { VELAR_VERSION } from "./version.ts";
 import type { StaticDeploymentSummary } from "./static-deployment.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { hostErrorMessage } from "./host-error.ts";
-import { isLocalPlatformModule, localPlatformModuleDiagnostic } from "./local-platform-modules.ts";
+import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -245,7 +245,10 @@ function velarModules(project: ProjectResult): Plugin {
       });
       context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
       context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
-        if (isLocalPlatformModule(arguments_.path)) return { errors: [{ text: localPlatformModuleDiagnostic(arguments_.path) }] };
+        if (isNodeOnlyModule(arguments_.path)
+          && !project.compilerExtensions.some((extension) => extension.id !== "@velarscript/node" && extension.modules?.interfaces.has(arguments_.path))) {
+          return { errors: [{ text: nodeModuleDiagnostic(arguments_.path) }] };
+        }
         const contents = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
         return contents ? { contents, loader: "js" } : { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] };
       });

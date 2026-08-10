@@ -1,4 +1,5 @@
 import {http} from "velar/http"
+import {border, color, rgb, spacing} from "velar/look"
 
 type ActivityPayload:
     message: string
@@ -22,7 +23,7 @@ const buttonLook = look:
 export component ActivityFeed:
     state message = "Activity has not been refreshed"
 
-    action refresh():
+    action refresh() -> null:
         const activity = await http.get("data/activity.json").parse(ActivityPayload)
         message = activity.message
 

@@ -1,3 +1,4 @@
+import {border, rgb, spacing} from "velar/look"
 import {Link} from "velar/web"
 import {format} from "velar/time"
 import {Ticket, TicketPriority, TicketStatus} from "../domain.vel"

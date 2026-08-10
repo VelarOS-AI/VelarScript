@@ -94,6 +94,7 @@ export async function runBrowserTests(
                 runtimeFailures.push(`${message.type()}: ${message.text()}`);
               }
             });
+            await installFrameworkRuntime(page, contract.initScript?.(config.framework.config));
             installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
             try {
               if (typeof test !== "function") throw new Error(`Test function '${name}' was not emitted`);
@@ -122,6 +123,14 @@ export async function runBrowserTests(
   }
   process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
   return failed === 0 ? 0 : 1;
+}
+
+async function installFrameworkRuntime(page: Page, source: string | undefined): Promise<void> {
+  if (source === undefined) return;
+  if (typeof source !== "string" || source.length === 0 || Buffer.byteLength(source, "utf8") > 1024 * 1024) {
+    throw new Error("Framework browser-test init script must contain 1 byte through 1 MiB of text");
+  }
+  await page.addInitScript({ content: source });
 }
 
 async function compileBrowserTest(
@@ -158,6 +167,12 @@ async function compileBrowserTest(
 
 function installBrowserRuntime(page: Page, origin: string, base: string, runtimeKey: symbol): void {
   const locator = (selector: unknown) => page.locator(String(selector));
+  const storageArea = (area: unknown): "local" | "session" => {
+    const value = String(area);
+    if (value !== "local" && value !== "session") throw new Error("Browser test storage area must be local or session");
+    return value;
+  };
+  const mockedRoutes = new Set<string>();
   const runtime = Object.freeze({
     async open(path = "/") {
       const value = String(path);
@@ -202,6 +217,78 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
       }
       await page.setViewportSize(next);
       return null;
+    },
+    async storageGet(area: unknown, key: unknown) {
+      const input = { area: storageArea(area), key: String(key) };
+      return page.evaluate(({ area: name, key: itemKey }) => {
+        const target = name === "local" ? globalThis.localStorage : globalThis.sessionStorage;
+        return target.getItem(itemKey);
+      }, input);
+    },
+    async storageSet(area: unknown, key: unknown, value: unknown) {
+      const input = { area: storageArea(area), key: String(key), value: String(value) };
+      await page.evaluate(({ area: name, key: itemKey, value: itemValue }) => {
+        const target = name === "local" ? globalThis.localStorage : globalThis.sessionStorage;
+        target.setItem(itemKey, itemValue);
+      }, input);
+      return null;
+    },
+    async storageRemove(area: unknown, key: unknown) {
+      const input = { area: storageArea(area), key: String(key) };
+      await page.evaluate(({ area: name, key: itemKey }) => {
+        const target = name === "local" ? globalThis.localStorage : globalThis.sessionStorage;
+        target.removeItem(itemKey);
+      }, input);
+      return null;
+    },
+    async storageClear(area: unknown) {
+      const name = storageArea(area);
+      await page.evaluate((storageName) => {
+        const target = storageName === "local" ? globalThis.localStorage : globalThis.sessionStorage;
+        target.clear();
+      }, name);
+      return null;
+    },
+    async networkRespond(path: unknown, body: unknown, status: unknown, contentType: unknown, delayMs: unknown) {
+      const pathname = String(path);
+      const responseBody = String(body);
+      const responseStatus = Number(status);
+      const responseType = String(contentType);
+      const delay = Number(delayMs);
+      if (!pathname.startsWith("/") || pathname.includes("\0")) throw new Error("network.respond path must be application-relative and start with '/'");
+      if (responseBody.length > 16 * 1024 * 1024) throw new Error("network.respond body cannot exceed 16 MiB");
+      if (!Number.isInteger(responseStatus) || responseStatus < 100 || responseStatus > 599) throw new Error("network.respond status must be an HTTP status integer");
+      if (!responseType || responseType.length > 1024 || /[\r\n]/u.test(responseType)) throw new Error("network.respond contentType must be bounded single-line text");
+      if (!Number.isInteger(delay) || delay < 0 || delay > 30000) throw new Error("network.respond delayMs must be an integer from 0 through 30000");
+      const target = new URL(base === "/" ? pathname : `${base.slice(0, -1)}${pathname}`, origin).href;
+      if (mockedRoutes.has(target)) await page.unroute(target);
+      mockedRoutes.add(target);
+      await page.route(target, async (route) => {
+        if (delay > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
+        await route.fulfill({ status: responseStatus, contentType: responseType, body: responseBody });
+      });
+      return null;
+    },
+    async networkClear() {
+      for (const target of mockedRoutes) await page.unroute(target);
+      mockedRoutes.clear();
+      return null;
+    },
+    async frameworkInvoke(capability: unknown, operation: unknown, args: unknown, timeout: unknown) {
+      const input = { capability: String(capability), operation: String(operation), args, timeout: Number(timeout) };
+      if (!input.capability || input.capability.length > 128 || !input.operation || input.operation.length > 128 || !Array.isArray(input.args)) {
+        throw new TypeError("Framework test invoke requires bounded capability, operation, and argument values");
+      }
+      if (!Number.isSafeInteger(input.timeout) || input.timeout < 0 || input.timeout > 600000) {
+        throw new RangeError("Framework test invoke timeout is outside its supported bounds");
+      }
+      return page.evaluate(async (request) => {
+        const bridge = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.desktop.bridge.v1"))?.value as {
+          invoke?: (capability: string, operation: string, args: unknown[], timeout: number) => Promise<unknown>;
+        } | undefined;
+        if (!bridge || typeof bridge.invoke !== "function") throw new Error("Desktop application test bridge is unavailable");
+        return bridge.invoke(request.capability, request.operation, request.args as unknown[], request.timeout);
+      }, input);
     },
   });
   (globalThis as unknown as { [key: symbol]: unknown })[runtimeKey] = runtime;

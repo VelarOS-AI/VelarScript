@@ -33,6 +33,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   let compiling: Promise<void> | null = null;
   let revision = 0;
   let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+  let closing = false;
   let forceFullRebuild = false;
   let dirtyRevision = 0;
   const dirtyPaths = new Set<string>();
@@ -43,6 +44,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   const npmPackageRoots = new Set<string>();
   const staleNpmRoots = new Set<string>();
   const scheduleRebuild = (): void => {
+    if (closing) return;
     if (rebuildTimer) clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(() => void rebuild(), 40);
   };
@@ -79,7 +81,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     const previous = forceFullRebuild ? null : snapshot.project;
     const rebuildRevision = dirtyRevision;
     compiling = compileSnapshot(config, previous, dirtyPaths, staleNpmRoots).then((next) => {
-      syncPackageWatchers(next.project, next.npmPackages);
+      if (!closing) syncPackageWatchers(next.project, next.npmPackages);
       snapshot = next.errors.length > 0 && snapshot.artifacts
         ? { ...snapshot, errors: next.errors, notices: next.notices, compilation: next.project.stats }
         : next;
@@ -104,7 +106,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       process.stdout.write("VelarScript app has 1 error\n");
     }).finally(() => {
       compiling = null;
-      if (dirtyRevision !== rebuildRevision) scheduleRebuild();
+      if (!closing && dirtyRevision !== rebuildRevision) scheduleRebuild();
     });
     return compiling;
   };
@@ -219,6 +221,11 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   if (snapshot.errors.length > 0) process.stdout.write(`${snapshot.errors.join("\n\n")}\n`);
 
   const close = (): void => {
+    closing = true;
+    if (rebuildTimer) {
+      clearTimeout(rebuildTimer);
+      rebuildTimer = null;
+    }
     watcher.close();
     for (const packageWatcher of packageWatchers.values()) packageWatcher.close();
     packageWatchers.clear();

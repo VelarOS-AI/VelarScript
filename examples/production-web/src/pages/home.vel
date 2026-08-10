@@ -1,12 +1,12 @@
+import {border, rgb, spacing} from "velar/look"
 import {Head} from "velar/web"
 import {publicConfig} from "velar/config"
-import {Panel, StatusBadge} from "@velarscript/demo-web-kit"
-import js {NumberFormatter as PackageFormatter, formatter} from "@velarscript/demo-format/number"
 import {dark, theme, toggleTheme} from "../store.vel"
 import {projectCount, projects} from "../data.vel"
 import {ActivityFeed} from "../components/activity-feed.vel"
 import {Metrics} from "../components/metrics.vel"
 import {Newsletter} from "../components/newsletter.vel"
+import {Panel, StatusBadge} from "../components/package-widgets.vel"
 import {ProjectList} from "../components/project-list.vel"
 import {WebCapabilities} from "../components/web-capabilities.vel"
 
@@ -57,18 +57,6 @@ def themeButtonLook(active: bool) -> Look:
         color = "inherit"
         background = rgb(21, 28, 54)
         cursor = "pointer"
-def formattedSamples() -> string:
-    let labels = []
-    formatter.visit([1.5, 2.5], label => labels.append(label))
-    return f"{formatter.locale}: {labels[0]} / {labels[1]}"
-
-def classFormattedSamples() -> string:
-    const packageFormatter: PackageFormatter = PackageFormatter.standard()
-    packageFormatter.maximumFractionDigits = 1
-    let labels = []
-    packageFormatter.visit([3.5, 4.5], label => labels.append(label))
-    return f"{PackageFormatter.category}/{packageFormatter.locale}: {labels[0]} / {labels[1]}"
-
 export component Home:
     return <main class="page" look={pageLook}>
         <Head title="VelarScript Release Studio" description="VelarScript 0.10 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
@@ -87,7 +75,7 @@ export component Home:
             <ProjectList items={projects} />
             <ActivityFeed />
             <WebCapabilities />
-            <p data-format>Safe JS package value: {formatter.format(42, "items")} · {formattedSamples()} · class {classFormattedSamples()}</p>
+            <p data-format>Vel value: 42 items · en-US: 1.5 / 2.5 · class number/en-US: 3.5 / 4.5</p>
             <Newsletter />
         </Panel>
     </main>

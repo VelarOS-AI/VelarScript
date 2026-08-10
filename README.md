@@ -2,15 +2,23 @@
 
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
-VelarScript is a Web-first language that compiles to modern JavaScript. It
-keeps the JavaScript runtime model—objects, references, garbage collection,
-Promises, the event loop, and the prototype chain—but replaces JavaScript's
-source surface with a smaller, checked Python/JavaScript blend.
+VelarScript is an extensible high-level language for AI-era application and
+tool development that compiles to modern JavaScript. Core stays target-neutral;
+official Node, Web, and Desktop packages compose explicit capabilities without
+splitting the source language. It keeps the JavaScript runtime model—objects,
+references, garbage collection, Promises, the event loop, and the prototype
+chain—but replaces JavaScript's source surface with a smaller, checked
+Python/JavaScript blend.
 
 The Web framework is an extension package, not hidden compiler behavior:
 
 - `@velarscript/compiler` owns the Core language.
+- `@velarscript/node` adds bounded filesystem, path, process, terminal, server, and HTTP
+  capabilities for local applications without exposing the Node.js ABI.
 - `@velarscript/web` adds components, JSX, reactivity, lifecycle, and Look.
+- `@velarscript/desktop` uses the same Web source model for one native-style
+  project, while a thin system-WebView host provides permission-scoped files,
+  paths, processes, HTTP, and environment capabilities.
 - `@velarscript/cli` owns projects, builds, tests, the development server, and
   the language server.
 - `create-velar` creates applications, documentation sites, libraries, and
@@ -51,6 +59,7 @@ velar update
 ## A small example
 
 ```velar
+import {border, color, rgb, spacing} from "velar/look"
 import {Head} from "velar/web"
 
 type Task:
@@ -83,7 +92,7 @@ export component App:
 
     computed remaining = tasks.filter(task => not task.done).size
 
-    def addTask():
+    def addTask() -> null:
         if draft == "":
             return
         tasks = [
@@ -114,6 +123,14 @@ the explicit `@velarscript/web` package.
 - Empty values use the Web-native spelling `null`.
 - Records and aliases share one `type` keyword.
 - Optional values use `T?`; small unions use `A | B`.
+- `readonly T` creates a transitive compile-time view of records and collection
+  data without changing runtime identity; `readonly field: T` also protects the
+  field's nested data. Classes, functions, promises, and host objects stay
+  outside this qualifier.
+- Enum members such as `Status.pending` are singleton types and can discriminate
+  record unions across `if`, `assert`, and `match`; an external wire protocol
+  may use `textDelta = "response.output_text.delta"` without losing that nominal
+  member identity.
 - Functions use `def`, and named arguments use `name=value`.
 - `def` functions can declare type parameters, such as `def first<T>(items: List<T>) -> T?`,
   inferred at each call site and erased at runtime.
@@ -124,9 +141,13 @@ the explicit `@velarscript/web` package.
 - Classes use body fields and an explicit `constructor(...)`.
 - Public collections are `List`, `Set`, and `Map` with direct APIs such as
   `append`, `add`, `set`, `remove`, `some`, and `every`.
+- `Record<T>` models JSON objects whose string keys are dynamic, without
+  weakening `Map<K, V>` into a lossy wire-format alias.
 - JSX, components, state, actions, resources, lifecycle, and Look belong to the
   Web extension.
 - Native JavaScript and native CSS are explicit `unsafe` boundaries.
+- Desktop applications remain one VelarScript project; renderer/main, local
+  ports, and IPC are internal framework boundaries rather than source concepts.
 
 ```velar fragment
 match response:
@@ -141,6 +162,18 @@ match response:
         print("No response")
 ```
 
+```velar fragment
+type TextEvent:
+    kind: EventKind.text
+    text: string
+
+type ToolEvent:
+    kind: EventKind.tool
+    toolId: string
+
+type Event = TextEvent | ToolEvent
+```
+
 ```velar
 class Session:
     const id: string
@@ -150,7 +183,7 @@ class Session:
         self.id = id
         self.active = true
 
-    def close():
+    def close() -> null:
         self.active = false
 ```
 
@@ -181,6 +214,7 @@ velar lsp
 - [Standard library](docs/standard-library.md)
 - [Web framework API](docs/web-api.md)
 - [JavaScript boundary](docs/javascript-bridge.md)
+- [Runtime and JavaScript boundary ledger](docs/runtime-boundary.md)
 - [Project lifecycle](docs/project-lifecycle.md)
 - [Compiler architecture](docs/compiler-architecture.md)
 - [Workbench integration](docs/workbench-integration.md)

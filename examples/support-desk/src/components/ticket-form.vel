@@ -1,3 +1,4 @@
+import {border, color, rgb, rgba, shadow, spacing, tracks} from "velar/look"
 import {announce} from "velar/web"
 import {clearErrors, errors, focusFirstError, read, reset, setError} from "velar/forms"
 import {isBlank} from "velar/text"
@@ -59,7 +60,7 @@ const submitLook = look:
 export component TicketForm:
     let form: Element? = null
 
-    def submit():
+    def submit() -> null:
         if form:
             const currentForm = form
             clearErrors(currentForm)

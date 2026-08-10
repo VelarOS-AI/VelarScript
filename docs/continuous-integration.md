@@ -9,7 +9,7 @@ The repository defines three GitHub Actions workflows:
   Chromium, Firefox, and WebKit dependencies and runs both development-server
   and CSP-enabled production browser matrices, the project-owned
   `.browser.test.vel` suite in all engines, and the same generated browser test
-  through packed installed compiler/Web/creator/CLI tarballs. Browser-project execution
+  through packed installed compiler/Node/Web/Desktop/creator/CLI tarballs. Browser-project execution
   first verifies the exact production asset inventory and uses the public
   preview server.
 - The check gate extracts every `velar` fence from README, package guides, and
@@ -23,7 +23,7 @@ The repository defines three GitHub Actions workflows:
   Chromium, Firefox, and WebKit, and releases both resources through component
   cleanup. Host-side tests do not bypass that source contract by importing the
   generated realtime JavaScript module directly.
-- Packed-browser acceptance independently creates an application from the four
+- Packed-browser acceptance independently creates an application from the six
   installed tarballs. Its application graph imports all nine browser
   application modules before mounting, while its generated browser test loads
   the tenth module, `velar/web-test`; the installed CLI then checks, tests,

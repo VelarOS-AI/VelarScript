@@ -102,7 +102,7 @@ export def createTicket(draft: TicketDraft) -> Ticket:
         updatedAt: now(),
     }
 
-export def resolveTicket(tickets: List<Ticket>, id: string):
+export def resolveTicket(tickets: List<Ticket>, id: string) -> null:
     const timestamp = now()
     const ticket = findTicket(tickets, id)
     if ticket:

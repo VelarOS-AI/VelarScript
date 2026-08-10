@@ -14,7 +14,7 @@ interface InlineToken {
 }
 
 const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%="] as const;
-const genericNames = new Set(["List", "Set", "Map", "Promise"]);
+const genericNames = new Set(["List", "Set", "Map", "Promise", "Type"]);
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
 const expressionStatementWords = new Set(["return", "throw", "assert"]);
@@ -159,8 +159,12 @@ function reindentLayoutLiteral(value: string, originalIndent: string, formattedI
     if (index === lines.length - 1) {
       if (text.startsWith(originalIndent)) text = `${formattedIndent}${text.slice(originalIndent.length)}`;
     } else if (index > 0 && originalMargin !== null) {
-      if (text.startsWith(originalMargin)) text = `${formattedMargin}${text.slice(originalMargin.length)}`;
-      else if (text.trim().length === 0) text = formattedMargin;
+      // Blank layout-string lines participate in the literal without needing
+      // an indentation payload. Reintroducing the content margin here writes
+      // trailing spaces into otherwise canonical source and makes a formatter
+      // result fail `git diff --check`.
+      if (text.trim().length === 0) text = "";
+      else if (text.startsWith(originalMargin)) text = `${formattedMargin}${text.slice(originalMargin.length)}`;
     }
     return `${text}${line.newline}`;
   }).join("");

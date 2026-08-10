@@ -2,9 +2,9 @@
 
 Status: VelarScript 0.10.0 release candidate; registry publication deferred
 
-VelarScript builds the compiler, official Web framework, project creator, and CLI into four
+VelarScript ships the compiler, official Node runtime, official Web and Desktop frameworks, project creator, and CLI as six
 independently installable npm packages, but treats them as one version-locked
-release set. Web pins the exact compiler version; CLI pins compiler and creator
+release set. Node, Web, and Desktop pin their exact toolchain dependencies; CLI pins compiler, Node, and creator
 while loading Web only when a project explicitly declares `@velarscript/web`.
 
 ## Rehearsal
@@ -14,9 +14,9 @@ npm run release:rehearse
 npm run release:verify -- release/rehearsal
 ```
 
-A rehearsal runs `npm pack` for all four workspaces and writes:
+A rehearsal runs `npm pack` for all six release workspaces and writes:
 
-- the four package tarballs;
+- the six package tarballs;
 - `SHA256SUMS`;
 - `velar-toolchain-release.json` containing package name, version, filename,
   byte size, SHA-256, npm integrity, source-tree identity, and publication
@@ -39,8 +39,8 @@ Candidate mode fails unless all of these are true:
 - Git has a committed, clean `HEAD`;
 - `HEAD` has exactly the `v<version>` tag;
 - `origin` matches package repository metadata;
-- all four packages have an explicit publishable license;
-- compiler, Web, creator, and CLI versions/dependencies match exactly.
+- all six packages have an explicit publishable license;
+- compiler, Node, Web, Desktop, creator, and CLI versions/dependencies match exactly.
 
 The GitHub rehearsal workflow adds an OIDC artifact attestation to the packed
 tarballs and uploads them as workflow artifacts. It deliberately contains no

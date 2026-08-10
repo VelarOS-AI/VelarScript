@@ -4,8 +4,11 @@ Compiler, formatter, diagnostics, semantic index, Core JavaScript lowering, and
 the explicit compiler-extension host for VelarScript. It includes checked
 static and dynamic `.vel` modules,
 typed rest parameters, native Set collections, strict `match` blocks, the lightweight runtime type
-model, synchronous and asynchronous expression arrows, multiline trailing commas,
+model with first-class compiler-known `Type<T>` validator carriers, JSON-safe dynamic `Record<T>`, mapped string-backed enum singleton
+types and discriminated record-union narrowing, synchronous and asynchronous expression arrows, multiline trailing commas,
 uniform resolved-value contracts for asynchronous declarations,
+static and runtime guards against JavaScript's callable-`then` Promise trap,
+checked `async for` over explicit `next() -> Promise<T?>` pull sources,
 unambiguous object-returning arrows and checked power precedence,
 single-evaluation strict comparison chains,
 bounded `///` declaration documentation in the semantic index,
@@ -22,6 +25,15 @@ project graph and semantic callbacks; an extension owns syntax-specific
 completion contexts and protected-rename rules. The package requires Node.js 24 or later and ships
 JavaScript plus TypeScript declarations; it does not depend on VelarOS
 Workbench.
+
+The compiler also owns the global identities for the optional reactive runtime
+and the separate cross-extension runtime `Type` registry. Official extensions
+import those ABI constants from `@velarscript/compiler/extension`; mutable,
+accessor-backed, or structurally invalid pre-existing registries fail closed.
+VelarScript packages can accept `Type<T>` and call `target.is(value)` or
+`target.parse(value)` with generic result inference; the carrier survives module
+aliases and namespace imports, while structurally forged validators and runtime
+reflection of `Type<T>` itself are rejected.
 
 The `@velarscript/compiler/framework-host` subpath defines the small, versioned
 tooling ABI shared by framework packages and application hosts. It is a neutral

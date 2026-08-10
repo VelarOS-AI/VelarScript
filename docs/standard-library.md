@@ -38,6 +38,38 @@ standard library.
 - Map and Set boundaries use native internal-slot checks and prototype
   operations. Cross-realm native collections are accepted, while subclass
   overrides cannot replace size, iteration, membership, or lookup semantics.
+  Collection brands and runtime `Type` traversal capture their Array/Map/Set,
+  reflection, size, iterator-factory, and iterator-step operations when the
+  generated module initializes, so later global or prototype replacement
+  cannot change a checked `is List/Set/Map/Record` result.
+  Direct List construction, indexing, iteration, snapshots, transforms,
+  ordering, and mutation likewise use an initialization-captured List host ABI.
+  Dense reflection and numeric bounds use explicit wrappers; value traversal is
+  indexed and native join/sort/reverse operations are captured once. Set/Map/
+  Record operation hosts are separate runtime layers rather than aliases of
+  this List contract.
+  Set and Map construction and receiver operations also have their own captured
+  host layer: native size, membership, lookup, mutation, keys/values/entries,
+  iterator steps, copy, and clear are fixed when the generated module starts.
+  Subclass overrides and later prototype or iterator replacement therefore
+  cannot redirect ordinary Set/Map behavior. Record operations remain a
+  separate data-object boundary.
+  Record validation and receiver operations capture their own field discovery,
+  descriptors, definition, deletion, identity, freezing, Reflect, and errors.
+  Bracket access, one-slot/pair iteration, copy, mutation, and field snapshots
+  use explicit indexed loops, independently of Array iterator or `.map`
+  behavior. Record literal/spread and Record/List binding remain compiler
+  lowering rather than receiver-method shortcuts, but reuse the same captured
+  reflection, definition, allocation, and Error operations. Their generated
+  part, field, and rest traversal is explicitly indexed, so later ambient
+  replacement cannot redirect construction or destructuring.
+- Compiler-known runtime `Type` values use two adjacent owned runtimes. One
+  immutable registry proves that a `Type<T>` value was compiler-created; the
+  other captures WeakMap/Set recursion state, descriptor reads, Array/Promise/class
+  identity, freezing, Reflect, and ValidationError behavior. `Type.is` and
+  `Type.parse` therefore remain cycle-bounded, getter-free, and stable after
+  ambient constructor/prototype or class `Symbol.hasInstance` replacement without conflating validation
+  execution with registry identity.
 - Core conversion is deliberately asymmetric and small: `str(value)` performs
   explicit display conversion, while `number(text) -> number?` strictly parses
   one complete finite decimal. JavaScript `Boolean`, `Number`, and `String`
@@ -45,7 +77,8 @@ standard library.
   parsing, and `NaN` do not re-enter through ambient coercion.
 - Core Node builds copy only imported official modules beside the generated
   output. Portable modules also bundle and tree-shake in Web builds. Local
-  platform modules (`velar/serve`, `velar/fs`, `velar/env`, `velar/host`) are
+  platform modules (`velar/serve`, `velar/fs`, `velar/env`, `velar/host`,
+  `velar/terminal`) are
   compile-time rejected for Web targets with platform-specific guidance.
 - Resource-producing APIs are bounded contracts, not best-effort host calls.
   A List contains at most 1,000,000 items; text and encoded JSON are limited to
@@ -117,19 +150,29 @@ checked before comparison, and equal-key input order is retained even for
 descending sorts. `find`, `partition`, `some`, and `every` require an
 actual `bool` result at dynamic boundaries.
 
+The Array/Map/Set constructors and required operations, numeric predicates and
+bounds, identity/freeze operations, Reflect invocation, and error constructors
+are captured when `velar/collections` initializes. Replacing globals or
+prototypes afterward cannot redirect traversal, grouping, sorting, joining, or
+allocation. Imported helpers use explicit index loops over the one checked List
+copy; stable sort remains the host's standards-defined stable Array sort through
+the captured operation.
+
 ## `velar/text`
 
 Common string operations are checked members: `size`, `trim`, `upper`, `lower`,
-`slice`, `char`, `has`, `startsWith`, `endsWith`, `split`, `replace`,
+`slice`, `char`, `has`, `index`, `count`, `startsWith`, `endsWith`, `split`, `replace`,
 `replaceAll`, `repeat`, `padStart`, and `padEnd`. The compiler lowers them to
 bounded helpers rather than trusting JavaScript prototype methods. They support
 named arguments and first-class binding exactly like collection methods.
 
-`size`, `char(index)`, and `slice(start=0, end=size)` use Unicode code points,
+`size`, `char(index)`, `slice(start=0, end=size)`, and the positions returned by
+`index(text, start=0)` use Unicode code points,
 matching string iteration rather than JavaScript UTF-16 units. Negative
 positions count from the end, out-of-range `char` returns `null`, and slice
-positions clamp. `text.has(part)` and `part in text` are the method and operator
-forms of the same substring test. Direct string indexing stays absent.
+positions clamp. `index` also clamps its start and returns `null` when no match
+exists. `text.has(part)` and `part in text` are the method and operator forms of
+the same substring test. Direct string indexing stays absent.
 
 The `velar/text` module keeps transformations that are not simple receiver
 operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `words`,
@@ -148,7 +191,9 @@ captured intrinsic implementation, not a replaceable ambient `RegExp` global.
 Each operation creates a fresh pattern; source code never receives `RegExp` or
 its mutable `lastIndex`. Options are copied from one typed data record containing only optional
 `ignoreCase`, `multiline`, and `dotAll` booleans. `findMatch` returns
-`{value, index, groups}` or `null`; `findMatches` returns all such records and
+`{value, index, groups}` or `null`; `index` is a Unicode code-point position, so
+it can be passed directly to `char` or `slice` without leaking JavaScript UTF-16
+offsets. `findMatches` returns all such records and
 normalizes an unmatched capture to `null`. `replaceMatches` replaces every
 match with one literal string, and `splitPattern` omits capture groups from the
 result. Invalid patterns throw `TypeError` at the VelarScript boundary.
@@ -169,6 +214,13 @@ Dynamic pattern options must be plain enumerable data fields, so getters,
 symbols, and class instances are rejected without hidden evaluation. Text
 composition such as `.replace`, `.replaceAll`, `escapeHtml`, and `indent` checks
 its complete output budget before allocating the final string.
+
+The compiler-owned String runtime and `velar/text` capture their string, array,
+numeric, reflection, RegExp, iterator-independent Unicode, and Error operations
+when the module initializes. Pattern replacement and splitting are driven by the
+captured native `exec` operation instead of mutable RegExp symbol hooks. Later
+changes to JavaScript globals, prototypes, or string/array iterators therefore
+cannot redirect a checked text operation.
 
 ```velar
 import {findMatch, matches, splitPattern} from "velar/text"
@@ -199,12 +251,20 @@ or another dynamic JavaScript value into a VelarScript number.
 The receiver-shaped operations are number members: `.abs()`, `.round()`,
 `.floor()`, `.ceil()`, and `.toFixed(digits)`. `round` returns a number at the
 nearest integer; `toFixed` returns decimal text with 0 through 100 digits.
+These members use a compiler-owned Number runtime that captures their Math,
+Number, reflection, and Error operations when the generated module initializes;
+later replacement of JavaScript globals or prototypes cannot redirect them.
 `randomInt` uses an inclusive lower and exclusive upper safe-integer
 bound; with one argument its lower bound is zero. `gcd` and `lcm` likewise own
 safe integers, and `lcm` rejects an inexact result. Randomness is the host
 JavaScript runtime's `Math.random` and is not cryptographically secure. Its
 result is checked as a finite number in the native `[0, 1)` range before either
-random API returns a value.
+random API returns a value. The numeric constants, mathematical operations,
+random source, numeric predicates, Reflect invocation, and error constructors
+are captured when `velar/math` initializes. Replacing `Math`, `Number`, their
+methods, or the ambient error constructors afterward cannot redirect an
+already initialized module; a host that supplies a missing/accessor-backed
+operation or an invalid random result fails explicitly.
 
 ## `velar/json`
 
@@ -217,6 +277,16 @@ random API returns a value.
 | `clone` | Strictly JSON-clones a value and optionally validates the result with a VelarScript `type`. |
 | `isSerializable` | Reports whether a value is losslessly representable as JSON data. |
 | `deepEqual` | Recursively compares VelarScript records and Lists, Map values with native key identity, and Sets with native membership; non-data objects keep reference identity and distinct cycles safely compare false. |
+
+Strict JSON is a compiler-owned runtime shared by Core and platform consumers.
+It captures parsing/serialization, Array/Set traversal, reflection and data
+descriptors, numeric/text/path operations, allocation, Reflect invocation, and
+error constructors when the generated module initializes. `stableStringify`
+uses that same captured sort operation, while `deepEqual` captures its Map/Set/
+WeakSet graph operations. Replacing ambient globals or prototypes afterward
+cannot redirect validation, snapshots, cloning, ordering, or equality. The
+versioned reactive registry remains the one explicit dynamic seam used to
+unwrap tracked values before JSON inspection.
 
 ```velar fragment
 import {deepEqual, parse as parseJson} from "velar/json"
@@ -237,8 +307,9 @@ check that identity before parsing or cloning and never inspect an arbitrary
 object's `is` or `parse` fields as permission to skip validation.
 
 JSON data is deliberately narrower than arbitrary JavaScript values: it
-contains finite numbers, strings, booleans, `null`, dense Lists, and plain
-records recursively. Map, Set, class instances, functions, sparse Lists,
+contains finite numbers, strings, booleans, `null`, dense Lists, fixed records,
+and `Record<T>` dynamic string-key records recursively. Map, Set, class
+instances, functions, sparse Lists,
 accessor/symbol fields, non-finite numbers, and cyclic graphs are rejected
 instead of inheriting `JSON.stringify`'s silent field omission or `{}` / `null`
 substitution. Known unsupported VelarScript types fail checking; `unknown` and unsafe
@@ -271,7 +342,10 @@ Promise, or replace the JavaScript event loop. Their List arguments use the
 same dense List validation as collection helpers; concurrency counts are
 positive safe integers. `all`, `race`, and `timeout` require actual Promises at
 runtime, including across JavaScript realms; arbitrary thenables are rejected
-without probing a `then` accessor. Retry attempts are positive safe integers and timeout
+without probing a `then` accessor. The module snapshots the Promise, timer,
+numeric-validation, reflection, and dense-List operations it needs when the
+module initializes. Later ambient replacement and List subclass overrides
+cannot redirect its work. Retry attempts are positive safe integers and timeout
 messages remain real strings at dynamic boundaries. `all` and `race` may start
 at most 10,000 operations at once, `map` concurrency is at most 1,024, retry is
 at most 10,000 attempts, and timer durations stay within the signed 32-bit host
@@ -283,7 +357,13 @@ example `await map(urls, async url => await load(url))`. Its inferred result is
 remain available for expression and block bodies respectively. All async forms
 share native Promise adoption: a named async worker declared `-> T` may return
 either `T` or another `Promise<T>` without adding `return await` merely to
-satisfy the checker.
+satisfy the checker. JavaScript reserves a resolved value's top-level `then`
+member, so `retry` cannot return a record/class with callable `then` or a class
+with a `then` getter; the compiler rejects known cases and the runtime fails
+closed at a dynamic callback. `map` and `series` may still collect those values
+as ordinary List elements because their Promise resolves to the containing
+List, not to an individual element, and their sync callback path never probes
+the element's `then` member.
 
 ## `velar/url`
 
@@ -310,6 +390,15 @@ length before allocation. Normalization and query/hash replacement likewise
 budget every native URL fragment before concatenating the returned relative or
 protocol-relative text. Parsed names/values share the same text budget, and
 query maps contain at most 100,000 fields.
+
+The URL and URLSearchParams constructors and prototype operations, Map
+brand/iterator operations, component codecs, numeric/text/reflection helpers,
+error constructors, and browser location object plus its href reader are
+captured when `velar/url` initializes. Replacing globals or prototypes afterward
+cannot redirect an initialized module. A real captured browser Location still
+reports later navigation changes; the contract fixes the capability source, not
+the page URL value. Hostile URL text and query iterator results continue to fail
+closed without invoking conversion hooks.
 
 ## `velar/time`
 
@@ -343,6 +432,14 @@ API. A time-zone parts List has one bounded length snapshot, so a changing host
 collection cannot extend validation midway. Formatted output is limited to
 65,536 characters.
 
+The wall and monotonic clocks, Date constructor and prototype operations,
+internationalization constructor and formatting operations, numeric/text
+helpers, result freezing, Reflect invocation, and error constructors are
+captured when `velar/time` initializes. Replacing those globals or prototypes
+afterward cannot redirect an initialized module. Invalid host clock and Intl
+results are still checked at the operation boundary; locale and time-zone data
+continue to come from the host rather than being snapshotted or reimplemented.
+
 ```velar
 import {iso, now, parts, utc} from "velar/time"
 
@@ -367,8 +464,11 @@ existing JavaScript host's `crypto.randomUUID()` and fails explicitly when that
 capability is unavailable or returns a non-canonical result; it never falls
 back to timestamps or `Math.random`. The capability must be a data method rather
 than an accessor, and non-`Error` host failures are wrapped without invoking
-conversion hooks. `isUuid(value)` checks canonical UUID text without changing
-it and rejects non-36-character input before pattern matching.
+conversion hooks. The crypto object, data method, matching operation, and error
+identity are captured when `velar/id` initializes; replacing globals or
+prototypes afterward cannot redirect generation or validation. `isUuid(value)`
+checks canonical UUID text without changing it and rejects non-36-character
+input before pattern matching.
 
 ```velar
 import {isUuid, uuid} from "velar/id"
@@ -426,6 +526,10 @@ component BuildStatus:
 - Without a custom sink, the runtime writes through the host console internally.
   VelarScript source still receives no `console` global. Sink failures fall back to
   the internal host logger and cannot recursively invoke the failing sink.
+- The clock, collection operations, Promise rejection observer, string
+  normalization, error identity, and fallback console writers are captured when
+  `velar/log` initializes. Ambient replacement afterward cannot redirect log
+  delivery; `setLevel` and `useSink` are the explicit customization points.
 - VelarScript never uploads logs or telemetry automatically.
 
 ## Local platform modules
@@ -434,23 +538,51 @@ Standard API 0.5 adds a small first-party surface for local applications and
 servers. Node is the current internal engine, but Node classes, callbacks,
 events, buffers, and overloads are not part of the VelarScript contract. These
 modules work under `velar run`, Core tests, and Core builds. A Web project that
-imports one fails during project compilation; `velar/serve` points Web code to
-the application dev server and `velar/http`.
+imports a Node-only module fails during project compilation; `velar/serve`
+points Web code to the application dev server and the browser target of
+`velar/http`. Their contracts and implementations are owned by the
+independently reusable `@velarscript/node` package; the CLI only composes that
+extension for local programs.
 
 ### `velar/serve`
 
 `serve(handler, port, host="127.0.0.1")` binds an HTTP server and resolves to a
 `Server` record containing the actual `port` and an idempotent async `stop()`.
 The handler receives a `ServeRequest` with method, decoded URL path, first-value
-query and normalized header Maps, plus cached async `text()` and `json()` body
-readers. Request bodies are valid UTF-8 and cannot exceed 16 MiB.
+query and normalized header Maps, plus cached async
+`text(maxBytes=16777216)` and `json(maxBytes=16777216)` body readers. The first
+read enforces its byte budget while the request arrives, before accumulating a
+larger body; a later read may impose a smaller budget on the cached body.
+`parse(Type, maxBytes=16777216)` applies `json()` and then validates the result
+with a compiler-known VelarScript runtime Type, returning `Promise<T>` with the
+same inference and callable-`then` rejection as `velar/http`. The Type identity
+is checked before any body read, so an invalid or forged Type cannot consume the
+request stream.
+Budgets are positive integers up to the 16 MiB hard ceiling. Exceeding the
+application budget throws `RequestBodyTooLargeError`, whose read-only
+`maxBytes` field lets a handler return 413 without matching error text. Request
+text must be valid UTF-8. `json()` then applies the same finite, bounded,
+accessor-free JSON contract as `velar/json` and every `velar/http` target;
+native `JSON.parse` values such as an overflowed `1e400` never enter Vel as
+`Infinity`.
 
 ```velar fragment
-import {ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
+import {RequestBodyTooLargeError, ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
+
+type MessageInput:
+    text: string
 
 async def handle(request: ServeRequest) -> ServeResponse:
     if request.path == "/api/health":
         return {status: 200, json: {ok: true}}
+    if request.path == "/api/message":
+        try:
+            const input = await request.parse(MessageInput, maxBytes=65536)
+            return {status: 200, text: input.text}
+        catch error:
+            if error is RequestBodyTooLargeError:
+                return {status: 413, json: {error: "Request body is too large"}}
+            throw error
     return fileResponse(root="dist", path=request.path, fallback="index.html")
 
 const server = await serve(handle, port=8787)
@@ -462,7 +594,29 @@ A response is one checked plain record body:
   without invoking getters or `toJSON` hooks;
 - `{status, text, contentType?, headers?}` sends at most 16 MiB of UTF-8 text;
 - `{status, stream, headers?}` runs an async producer whose awaited `write`
-  accepts at most 1 MiB per chunk and 64 MiB in total.
+  accepts at most 1 MiB per chunk and 64 MiB in total. `write` follows transport
+  backpressure and rejects if the client connection closes, so a producer can
+  release its upstream request in `finally` instead of remaining suspended.
+
+The exported `ServeRequest`, `ServeResponse`, and `Server` runtime types inspect
+only enumerable own data fields. Type checks and response dispatch never invoke
+getters, symbol hooks, `toJSON`, overridden collection methods, or sparse List
+entries. Server JSON responses reuse the compiler-owned strict JSON snapshot
+instead of maintaining a weaker serializer beside it.
+
+The application-facing module never owns a Node HTTP server or request stream.
+It exchanges bounded request/response commands with the same private isolated
+Node host used by `velar/fs`; only that Worker imports `node:http`,
+`node:fs/promises`, and Node stream machinery. Its port is unreferenced while
+idle and referenced while an operation is pending or a server is active. Live
+server and request identities are bounded and collision-free across handle
+wraparound. Per-value limits do not multiply without bound under concurrency:
+the Worker has one 128 MiB aggregate budget for cached request bodies, static
+files, buffered text/JSON responses, and in-flight stream chunks. Completion
+and disconnect return stable request ownership only after concurrent host
+operations settle; a stream write owns a separate temporary reservation until
+its flush or failure. This private compiler dependency is materialized
+transitively and cannot be imported as a Standard API module.
 
 Transport-owned headers cannot be overridden. Handler failures are reported to
 stderr and return an opaque `500 Internal server error`; no development stack
@@ -475,14 +629,255 @@ fallback goes through the identical containment and size checks.
 
 | Export | Behavior |
 | --- | --- |
-| `readText(path)` | Reads one valid UTF-8 file up to 16 MiB. |
+| `readText(path, maxBytes=16777216)` | Reads one valid UTF-8 regular file under an explicit byte budget. |
+| `createText(path, text)` | Atomically creates one new UTF-8 file and refuses every existing entry, including symbolic links. |
 | `writeText(path, text)` | Writes at most 16 MiB of UTF-8 text. |
+| `appendText(path, text)` | Appends at most 16 MiB of UTF-8 text. |
 | `exists(path)` | Resolves to `false` only for a missing path; permission and host failures remain errors. |
-| `list(path)` | Returns a sorted List of at most 100,000 names and 2 MiB of name text. |
-| `readBlob(path)` | Returns an opaque, non-constructible `Blob` for a regular file up to 16 MiB. |
+| `list(path, maxItems=100000)` | Returns a sorted, caller-bounded List with at most 2 MiB of name text. |
+| `info(path)` | Returns bounded `{name, kind, size, modifiedAt}` metadata, or `null` when absent. |
+| `canonical(path)` | Resolves the host real path for containment and identity checks. |
+| `makeDirectory(path)` | Creates the requested directory and missing parents. |
+| `copyFile(source, target, replace=false)` | Copies one regular file; replacement is explicit. |
+| `move(source, target, replace=false)` | Moves one path; replacement is explicit. |
+| `removeFile(path)` | Removes one file and never recursively removes a directory. |
+| `readBlob(path, maxBytes=16777216)` | Returns an opaque, non-constructible `Blob` under an explicit byte budget. |
 
-Paths are non-empty, NUL-free strings of at most 4,096 code units. V1 has no
-synchronous forms, directory mutation, byte inspection, or public streams.
+Paths are non-empty, NUL-free strings of at most 4,096 code units. The module
+has no synchronous forms, recursive deletion, byte inspection, watchers, or
+public filesystem streams.
+`createText` is the no-clobber primitive for generated files, approvals, and
+other check-then-create workflows. Its exclusive-create decision and file
+creation are one host operation; callers must not emulate it with
+`exists`/`info` followed by `writeText`, because another actor can occupy the
+entry between those calls.
+Node initializes the module's path, number, UTF-8 encoder/decoder, typed-byte,
+Promise, reflection, and immutable-result operations once. It validates and
+assembles only Velar values in the application Realm, then delegates filesystem
+effects to the private isolated Node host shared with `velar/serve`. Only that
+Worker imports `node:fs/promises`; later replacement of application-Realm
+filesystem modules, `Promise.prototype.then`, typed-array sizing, or captured
+validation operations cannot redirect the public API.
+
+Desktop applies two distinct symlink rules. Content operations such as read,
+write, append, copy, list, and canonicalization follow the target only after
+its real path remains inside a granted root. Entry operations such as `info`,
+`move`, and `removeFile` operate on the final directory entry itself, so
+removing or moving an in-root symlink never mutates its target. A dangling
+symlink cannot be reclassified as an absent write target. Recursive
+`makeDirectory` authorizes the nearest existing ancestor, permits only
+in-root intermediate links, and refuses a final symlink target.
+
+### `velar/path`
+
+`resolve(parts=[])`, `join(parts=[])`, `normalize`, `relative`, `dirname`,
+`basename`, `extension`, and `isAbsolute` expose checked host-path operations;
+multi-part operations take a dense `List<string>` of enumerable data values.
+Every input path and every public path result is limited to 4,096 code units;
+many individually valid parts cannot manufacture an oversized result.
+On the current macOS Desktop target these operations use the same POSIX lexical
+semantics as the Node target on macOS. In particular, `dirname`, `basename`, and
+`extension` inspect the supplied path rather than normalizing `.` or `..` away
+first, while `normalize`, `join`, `resolve`, and `relative` perform their named
+normalization steps. The two targets are kept aligned by a differential corpus
+covering duplicate separators, dot segments, hidden names, trailing separators,
+absolute paths, and relative pairs.
+`contains(root, target)` performs a
+lexical containment check suitable for the first gate of a workspace policy;
+code that crosses symbolic-link authority also checks `velar/fs.canonical`
+before granting access.
+
+### `velar/process`
+
+`start(command, args=[], options={}) -> Promise<Process>` and
+`run(command, args=[], options={}) -> Promise<ProcessResult>` execute one
+program directly, without a shell. Options may set `cwd`, an explicit `env`,
+UTF-8 `stdin`, `timeout`, and `maxOutputBytes`. A child receives only the
+runtime's small safe environment baseline plus the explicit map; the parent
+environment is not copied wholesale, so unrelated API keys cannot leak by
+default. `Process` exposes read-only `pid`, pull-based `next()`, idempotent
+`wait()`, and `stop()`. Each successful pull returns
+`{channel: ProcessOutputChannel, text: string}`; the official enum has
+`stdout` and `stderr` members. A process therefore uses the language's normal
+asynchronous iteration protocol rather than a callback or JavaScript iterator:
+
+```vel
+import {ProcessOutputChannel, start} from "velar/process"
+
+const child = await start("git", ["status", "--short"])
+async for output in child:
+    if output.channel == ProcessOutputChannel.stdout:
+        print(output.text)
+const result = await child.wait()
+```
+
+Chunks preserve the order in which stdout and stderr data is observed by the
+host. Each channel has its own incremental UTF-8 decoder, so a code point split
+across native chunks is never exposed as replacement fragments. Only one
+`next()` pull may be active. Incremental output must be drained before
+`wait()` starts; calling `wait()` directly remains the explicit aggregate-only
+path. After `stop()`, callers obtain the terminal capture through `wait()`
+rather than starting a new output read.
+Process acquisition is asynchronous on every target so the same source
+contract works for an in-process Node host and a capability-isolated Desktop
+host.
+Process option records are snapshotted only from enumerable own data fields;
+accessors, symbols, inherited state, and unknown fields are rejected before a
+child can start. Arguments and explicit environment data each have a 1 MiB
+aggregate text ceiling in addition to their item-count limits.
+The Node and Desktop targets initialize one shared process host ABI before
+accepting application or bridge values. It captures the validation, reflection,
+Map iteration, Promise, timer, and immutable-result operations used by this
+contract, while both targets compose the compiler-owned captured UTF-8 sizing
+runtime. Replacing those JavaScript globals or prototypes after module
+initialization therefore cannot change process validation or result assembly.
+Node child-process events and the Desktop worker transport remain target-owned
+implementation boundaries rather than public VelarScript values.
+The Node target initializes a dedicated process Worker before the official
+module becomes available. That Worker loads only compiler-owned source and
+Node built-ins, so application dependencies never share the Realm in which
+`child_process`, streams, decoders, or Buffers execute. Its captured
+MessagePort proxy is referenced only while a request is pending or a child is
+running: importing `velar/process` alone does not keep a CLI alive, while an
+unobserved active child still owns its lifecycle until it settles. At most 128
+unreleased process handles may exist; callers release a settled handle through
+`wait()` or `stop()`.
+Standard output and error share a bounded capture budget, timeouts terminate
+the child, and no command-string parsing or shell expansion is performed. A
+started process owns its descendant process tree by default: `stop`, timeout,
+output overflow, and an exiting root terminate descendants as one lifecycle so
+inherited pipes and background children cannot silently outlive the handle.
+
+### Node `velar/http`
+
+Local programs use the same `http.request/get/post/put/patch/delete/head`
+vocabulary as Web code. Requests expose `response`, `json`, `text`,
+`streamText(consume)`, `parse(Type)`, and `cancel`; responses expose checked
+metadata and the same body readers including `parse(Type)`. Typed parsing uses
+the compiler-known runtime Type registry and returns `Promise<T>` without a
+second schema system. A result Type with a callable top-level `then` is rejected
+statically because native Promise resolution would assimilate it. Options
+include headers, body, timeout, and `maxBytes`.
+`secretHeaders` accepts up to 16 descriptors created by
+`secretHeader(name, environment, prefix="")`. The descriptor contains only the
+environment-variable name; the official Node runtime or Desktop capability host
+resolves the value when the request starts and never returns it to application
+code. The Node value is sent only across the private host transport. Creating
+the lazy request validates and snapshots descriptors but does not read their
+environment variables. A rotation made before the first response/body reader is
+therefore observed, while a missing value rejects that first effect before any
+network operation begins.
+The Web module captures its in-process HTTP host operations when it initializes.
+Node does not treat a captured Fetch or Headers wrapper as isolation, because
+Node's transport can consult public application-Realm prototypes internally.
+Its application-facing module captures validation, collection, URL, timer, and
+result operations, while the private `velar/node-host-v1` dependency owns
+`node:http`, `node:https`, redirects, sockets, response streams, fatal
+incremental UTF-8 decoding, and cancellation in an isolated Worker. Desktop
+performs the corresponding privileged effects in its capability worker.
+
+Buffered response readers have one cross-target lifecycle: concurrent
+`text()`, `json()`, and `parse(Type)` calls share the same pending body read and
+successful text is cached for later readers. Web `blob()` shares its byte cache
+with those readers. `streamText()` remains deliberately exclusive while it is
+active, because replaying or duplicating an incremental stream would hide
+buffering and backpressure. Before the first buffered or streaming body read,
+all targets reject and cancel a present body whose valid `Content-Length`
+already exceeds `maxBytes`; the running byte bound still protects absent or
+incorrect declarations. A HEAD or other bodyless response does not fail merely
+because its representation metadata carries a larger length. Decimal length
+parsing uses compiler-captured transport intrinsics rather than mutable
+application regex, number, or string methods; Node inbound request preflight
+uses the same parser before `ServeRequest` starts accumulating a body.
+
+```velar fragment
+import {http, secretHeader} from "velar/http"
+
+const request = http.post("https://api.example.com/v1/run", {
+    headers: Map([["content-type", "application/json"]]),
+    secretHeaders: [secretHeader("authorization", "PROVIDER_API_KEY", prefix="Bearer ")],
+    body: {input: "hello"},
+})
+```
+
+Secret header names cannot claim transport-controlled or ambient credential
+headers, cannot conflict with ordinary headers, and their combined header
+budget remains 64 KiB. Node and Desktop both follow at most 20 redirects and
+remove every secret-derived header when a redirect crosses origins.
+Only HTTP(S) URLs without embedded credentials are accepted. Header, request,
+and response sizes are bounded, JSON stays on the lossless VelarScript data
+boundary, and cancellation or timeout remains active until a streamed body has
+finished rather than ending when response headers arrive. Desktop additionally
+rechecks the manifest's exact-origin grant before every hop, so a redirect
+cannot escape the declared network capability. Node and Desktop validate and
+normalize the method and absolute URL when the request object is created; the
+Desktop worker independently repeats that validation before any network effect.
+Every target defaults HTTP timeout to 120,000 milliseconds, accepts only integer
+values from 0 through 600,000, and reserves `0` as the explicit no-timeout mode.
+Cancellation clears the owned deadline immediately, while every success or
+failure path finalizes it before propagating a result; an aborted request cannot
+leave a process alive through a forgotten default timer.
+
+HTTP failures have three stable categories on every target. A non-2xx response
+throws `HttpError`; explicit cancellation or deadline expiry throws
+`HttpAbortError`; DNS, connection, socket, or native body-stream failure throws
+`HttpTransportError`. Its `phase` is the typed
+`HttpTransportPhase.request` or `HttpTransportPhase.response` value. A response
+phase failure may occur after `streamText` has already delivered text, so a
+caller must not blindly replay it. Protocol validation, malformed UTF-8, body
+bounds, and consumer callback failures keep their own errors and are never
+misclassified as network transport. Retry count, delay, status classification,
+idempotency, and whether already-visible output may be replayed remain
+application/provider policy rather than hidden behavior in `velar/http`.
+
+Node and Desktop also share the exact strict JSON validator used by Web.
+Request option records are snapshotted from enumerable data descriptors before
+any network effect; accessors and unknown fields are rejected without being
+invoked. Non-text bodies are validated and serialized before dispatch, so Map,
+Set, class values, sparse Lists, cycles, non-finite numbers, and oversized data
+cannot be silently converted by host `JSON.stringify`. Response `json()` reads
+reject the same lossy values, including a JSON exponent that JavaScript would
+otherwise parse as `Infinity`. Desktop sends the already validated body text
+across its bridge, and the isolated worker refuses structural bodies or unknown
+wire options instead of becoming a second permissive serializer.
+
+Across Web, Node, and Desktop, the 16 MiB request-body ceiling measures encoded
+UTF-8 transport bytes rather than JavaScript code units. The compiler owns one
+platform-neutral byte counter, so multibyte text, surrogate pairs, and unpaired
+surrogates cannot receive different budgets from `TextEncoder` and `Buffer`.
+JSON bodies are serialized and snapshotted when the lazy request is created;
+later mutation cannot change what is dispatched. An automatically generated
+`content-type: application/json` header is counted inside the same combined
+100-field/64-KiB header ceiling, never appended after validation.
+
+The compiler-owned JSON runtime captures the host parser and serializer when a
+standard module initializes. `velar/json`, Web/Node/Desktop HTTP, Node serve,
+browser storage, and IndexedDB all call those same captured intrinsics and the
+same strict snapshot. Later JavaScript mutation of ambient `JSON.parse` or
+`JSON.stringify` therefore cannot silently change official-module semantics.
+
+Response metadata is also snapshotted once at the host boundary. Node accepts
+only native `Response`, `Headers`, byte-stream, and byte-chunk values; Desktop
+validates the worker's exact response and chunk records again in the renderer.
+Every target requires an integer status from 100 through 599 and requires `ok`
+to equal the 200-through-299 classification. Status zero and contradictory
+metadata are rejected at the host boundary before `HttpError` construction or
+body processing. Headers are limited to 100 fields and 64 KiB, status text to
+64 KiB, and the response URL to 2 MiB. Every target uses that final response
+URL for a non-2xx `HttpError`, so diagnostics identify
+the endpoint that actually failed after redirects. Only a synthetic host
+response with an empty URL falls back to the initial request URL. In addition
+to `maxBytes`, all targets
+stop after at most 1,000,000 source chunks, so an infinite stream of empty
+chunks cannot keep a request alive without consuming its byte budget. A
+response with no body releases its Node or Desktop request lifecycle as soon
+as metadata arrives.
+All text and JSON readers, including Web `text()` after a buffered `bytes()`
+read, require valid UTF-8; malformed bytes are never repaired with replacement
+characters. Metadata rejection, malformed chunks, byte/chunk overflow, decoder
+failure, transport failure, cancellation, and timeout all release or cancel the owned response
+stream. Request header names must be HTTP tokens and values must be single-line
+text on every target, with validation occurring before browser or host fetch.
 
 ### `velar/env`
 
@@ -490,14 +885,90 @@ synchronous forms, directory mutation, byte inspection, or public streams.
 -> string` throws a VelarScript error naming an absent variable. Names use the
 portable `[A-Za-z_][A-Za-z0-9_]*` shape and at most 256 characters; there is no
 process-wide environment dump.
+On Node, the official module captures the original `process.env` object and its
+name-validation/descriptor operations when the module initializes. Replacing
+the global environment object or RegExp/Object/Reflect operations afterwards
+cannot redirect a read, and accessor-backed environment values are rejected
+without execution.
+
+In Desktop, the manifest must grant readable values as individual uppercase
+`environment` names. Host-only `secrets` are a separate permission list and
+cannot overlap the readable list. A secret may be consumed only through a
+`velar/http.secretHeader` descriptor; `velar/env` and the WebView bridge never
+receive its value.
+The native host captures only those values once at application startup, with
+at most 64 variables, 64 KiB per value, and 1 MiB across names plus values.
+The renderer independently snapshots only enumerable own string data fields
+without invoking getters. Desktop home, app-data, and project APIs accept only
+host-returned absolute paths of at most 4,096 code units. Desktop filesystem
+calls are confined to declared app-data or
+project roots, process launches to exact executable names, and HTTP to exact
+HTTPS or loopback origins. A process-only application does not need to grant
+`velar/fs`: its omitted `cwd` is the application launch directory. An explicit
+Desktop process `cwd` must be an existing directory inside a granted file root,
+and Desktop does not allow an option map to replace `PATH`.
+
+An executable grant is authority to run that native program and its descendant
+tree as the current operating-system user. It prevents shell parsing and
+accidental command substitution; it is not an operating-system sandbox for the
+program's own filesystem or network effects. Approval policy, argument policy,
+and stronger sandboxing for untrusted tools belong to the consuming product,
+not to `@velarscript/desktop` or the language standard library.
+
+Desktop HTTP bodies are pulled across the bridge in bounded
+chunks rather than buffered into one transport message. The versioned native
+bridge also chunks and reassembles large requests and results under explicit
+aggregate bounds, so the documented 16 MiB filesystem, process-input, and HTTP
+request contracts do not silently collapse to a smaller transport limit.
 
 ### `velar/host`
 
 `exit(code=0)` accepts integer exit codes from 0 through 255.
 `onShutdown(cleanup)` registers an async `() -> Promise<null>` cleanup for
-SIGINT/SIGTERM. Cleanups run in registration order and the process exits after
-all settle; a cleanup failure is reported and selects exit 1. A second signal
-force-quits immediately.
+SIGINT/SIGTERM, with at most 1,024 registered callbacks. Cleanups run in
+registration order under one 30-second graceful-shutdown deadline. Successful
+shutdown exits with conventional status 130 or 143; a rejection, invalid
+result, or expired deadline is reported and selects exit 1 instead of leaving
+the process alive forever. A second signal force-quits immediately.
+Signal registration, exit, clocks, timers, Promise observation, cleanup-list
+mutation, and synchronous diagnostics are captured during module
+initialization. Async cleanup results are observed through the captured native
+Promise operation rather than assimilated through a later replacement of
+`Promise.prototype.then`.
+
+### `velar/terminal`
+
+```velar fragment
+import {terminal} from "velar/terminal"
+
+await terminal.write(terminal.args().join(" ") + "\n")
+const answer = await terminal.readLine("Continue? [y/N] ")
+await terminal.writeError(answer == "y" ? "continuing\n" : "stopped\n")
+terminal.close()
+```
+
+`terminal.args()` returns a fresh `List<string>` containing only program
+arguments after `velar run ... --`. `isInteractive()` reports whether both
+input and output are attached to a terminal. `readLine(prompt="")` resolves to
+one line without its newline, or `null` at EOF. `write` and `writeError` await
+stdout/stderr backpressure instead of silently accumulating streamed output.
+Each argument list, line, prompt, write, and queued-input window has an explicit
+bound. Input that arrives between `readLine` calls is paused and delivered
+through the next Promise; an oversized line rejects that Promise rather than
+escaping from a Node event callback. `close()` is permanent and idempotent even
+before the first read, so a later `readLine()` returns `null` instead of opening
+stdin again. Node streams, readline events, raw-mode state, and process globals
+are not part of the language API.
+Node does not implement this contract by constructing `readline` in the
+application Realm. An eagerly initialized compiler-owned Worker owns stdin
+decoding and fd 1/2 writes in an isolated Realm, while a captured MessagePort proxy
+revalidates every line, completion, and error. On POSIX, stdin is read through
+an owned duplicate descriptor so a pending read can be cancelled without
+closing the process-wide fd 0. Idle imports are unreferenced; pending operations
+retain the process, and `close()` waits for the host to release its read before
+terminating the Worker. The Worker's stdin stream itself is initialized only by
+the first `readLine`; importing `velar/terminal` or writing output does not
+leave an open reader that can keep a CLI alive.
 
 ## `velar/test`
 
@@ -507,7 +978,7 @@ introducing a second testing language.
 ```velar fragment
 import {expect} from "velar/test"
 
-def test_profile_name():
+def test_profile_name() -> null:
     const profile = {name: "Ada", tags: ["compiler", "web"]}
     expect(profile.name).toBe("Ada")
     expect(profile.tags).toContain("web")
@@ -525,12 +996,22 @@ def test_profile_name():
 - `toThrow` requires a synchronous function. `toReject` requires an actual
   Promise or a function returning one; arbitrary thenables are rejected without
   reading a `then` accessor.
+- Matchers and failure display capture their collection, text, JSON quoting,
+  numeric, RegExp, Promise, reflection, and Error operations when `velar/test`
+  initializes. Replacing JavaScript globals or prototypes later cannot change a
+  pass/fail result or redirect diagnostic formatting.
+- Failure display is deliberately bounded to 1,000 visited nodes, 16 levels,
+  50 collection items, and 256 string code units. It reads only accepted dense
+  List and data-record fields; assertion diagnostics never become an unbounded
+  object inspector.
 
 ## Deliberate omissions
 
-Standard API 0.5 deliberately keeps subprocesses, sockets below the checked
-server abstraction, filesystem streams/watchers/mutation, byte inspection,
+Standard API 0.5 deliberately keeps shells, sockets below the checked server
+abstraction, filesystem streams/watchers, recursive deletion, byte inspection,
 reflection, pickle, dynamic import machinery, and JavaScript's legacy prototype
-surface out of Core. Browser capabilities remain in independently versioned
-Web modules. Canvas and game development remain a later `velar/game` package
-built on the Web platform, not part of the language runtime.
+surface out of Core. Process execution and filesystem mutation live in
+explicit Node or Desktop target extensions rather than ambient Core globals.
+Browser capabilities remain in independently versioned Web modules. Canvas and game development
+remain a later `velar/game` package built on the Web platform, not part of the
+language runtime.

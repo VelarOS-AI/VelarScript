@@ -33,6 +33,63 @@ or missing names instead of guessing. Callback parameter names remain local to
 the callback; only the function that receives the callback defines the public
 call contract.
 
+## `velar/look`
+
+Visual unit suffixes are language syntax and require no import. `px`, `rem`,
+`em`, `vw`, `vh`, `vmin`, and `vmax` are `Length` values; `%` is Percentage;
+`fr` is TrackFraction; `ms` and `s` are Duration; `deg` and `turn` are Angle.
+They can be bound, exported, imported, and calculated outside a `look:` block.
+
+The constructors are ordinary named module functions:
+
+```velar
+import {border, clamp, rgb, spacing} from "velar/look"
+
+export const compact = 40rem
+const accent = rgb(45, 79, 190)
+const fluidWidth: LengthPercentage = 100% - 32px
+
+export const panelLook = look:
+    width = fluidWidth
+    padding = spacing(24px, 16px)
+    border = border(1px, accent)
+    fontSize = clamp(16px, 3vw, 24px)
+
+    if viewport.width <= compact:
+        padding = 12px
+```
+
+Available named functions are `color`, `rgb`, `rgba`, `hsl`, `alpha`,
+`lighten`, `darken`, `border`, `shadow`, `linearGradient`, `asset`, `minmax`,
+`repeat`, `tracks`, `transition`, `spacing`, `min`, `max`, and `clamp`. Because
+they are module values, aliases and higher-order use retain the same checked
+signature. There are no implicit Look builder globals.
+
+Visual addition and subtraction require compatible dimensions. Length mixed
+with Percentage produces LengthPercentage; mixed units lower to `calc(...)`.
+Multiplication and division accept a unit value and a finite scalar. Unit by
+unit multiplication, division by a unit, and arithmetic over colors or
+composite builders are rejected. Viewport thresholds must resolve at compile
+time to a local or imported const `px`, `rem`, or `em` token.
+
+For one-off base properties, native elements and component hosts accept
+`look:property="text"` or `look:property={expression}`. The directives use the
+same checked camelCase property table as `look:` and form one anonymous Look
+after any `look={value}` composition. Duplicate directives fail checking and a
+`null` expression removes the composed property. Hooks, media conditions,
+pseudo-elements, and spreads remain exclusive to a named or local full Look;
+forms such as `look:hover:color` do not exist.
+
+Official Web modules validate option records as own enumerable data fields and
+copy dense Lists before using them. Router, Forms, HTTP, Storage, Files, and
+Realtime share those guards rather than maintaining target-specific object
+walkers. The guards capture their Object, Array, Set, Symbol, and Reflect
+operations when each generated module initializes, so JavaScript loaded later
+cannot replace a constructor or prototype method to bypass unknown-field,
+accessor, sparse-List, or reactive-List handling. This is a runtime ownership
+rule, not a new source-level collection type: ordinary VelarScript records and
+Lists keep their documented identities.
+
 ## Performance contracts
 
 The language exposes no memoization or batching API. Repeated-computation
@@ -52,7 +109,7 @@ synchronous, so state never tears — and the burst may span ordinary function
 calls; the synchronous extent is what counts.
 
 ```velar fragment
-def commitSend(userMessage: Message, reply: Message):
+def commitSend(userMessage: Message, reply: Message) -> null:
     messages = [...messages, userMessage]
     messages = [...messages, reply]
     streamingMessageId = reply.id
@@ -74,6 +131,13 @@ records, and non-extensible records are never wrapped. The proxy cache and
 dependency graph have one versioned owner on `globalThis`, so application
 modules and lazy chunks share one raw/proxy identity.
 
+The graph does not rediscover JavaScript collection methods while the app is
+running. A generated reactive module captures the Set, Map, WeakSet, WeakMap,
+Array, Object, Proxy, and Reflect operations used by its cells, observers,
+queues, and deep-record proxies when that module initializes. Replacing an
+ambient constructor, static helper, or collection prototype later cannot
+redirect subscriptions, cleanup, batching, deep mutation, or watch equality.
+
 A reactive observer subscribes to the property or collection key it reads.
 Nested mutations bubble a version change to owning state for deep watches, but
 unrelated property and `Map`-key consumers remain clean. Keyed JSX rows receive
@@ -84,7 +148,7 @@ descriptors.
 state messagesById: Map<string, Message> = Map()
 state latestBySession: Map<string, Message> = Map()
 
-def appendChunk(replyId: string, chunk: string):
+def appendChunk(replyId: string, chunk: string) -> null:
     const reply = messagesById.get(replyId)
     if reply:
         reply.text += chunk
@@ -110,12 +174,12 @@ import {onError, reportError} from "velar/app"
 component RuntimeStatus:
     state message = "ready"
 
-    def capture(phase: string, detail: string):
+    def capture(phase: string, detail: string) -> null:
         message = phase + ":" + detail
 
     const stopErrors = onError(report => capture(report.phase, report.error.message))
 
-    def failDeliberately():
+    def failDeliberately() -> null:
         reportError(Error("Manual failure"), "manual", "diagnostic action")
 
     cleanup:
@@ -132,7 +196,13 @@ component RuntimeStatus:
 - Error metadata is controlled text, never an implicitly converted object.
   Reports cap `phase`, `detail`, and `component` lengths, reject accessors and
   unknown fields at dynamic boundaries, and reuse one versioned runtime owner
-  across application modules and lazy chunks.
+  across application modules and lazy chunks. Error timestamps and every
+  framework microtask use the Date/queue operations captured with that runtime;
+  later ambient replacement cannot stall reactivity or falsify a report. Error
+  identity, report freezing, metadata discovery, timestamp validation, handler
+  registration, and native Promise rejection observation are captured at module
+  initialization too, so post-load changes to Error/Object/Number/Promise/Set
+  cannot redirect either manual reports or managed asynchronous failures.
 - The compiler reports failures from initial `mount`, reactive `render` and
   synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
   and `cleanup`.
@@ -156,6 +226,14 @@ component RuntimeStatus:
   scope. Ordinary and keyed JSX Lists both read one checked dense List snapshot;
   mutation during rendering and JavaScript iterator overrides cannot change the
   values participating in that update.
+- Emitted JSX and runtime-implemented `velar/web` components use the same small
+  DOM host ABI. A generated module captures Document/Node identity, node
+  factories, mount/removal operations, bounded child collections, and the
+  Array/Set/number/string operations needed by DOM rendering when it initializes.
+  Code loaded later cannot replace `document`, `Node`, or their prototype
+  methods to redirect element/text/fragment creation, mount, destroy, Router,
+  Lazy, or dense JSX List expansion. Explicit non-browser test hosts are
+  data-only seams; accessor-backed substitutes are not invoked.
 - Root construction passed to `mount` is synchronous so the runtime can own its
   failure transaction. Await module-level preload work into a binding before
   calling `mount`; component data continues to use `resource`.
@@ -277,7 +355,10 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   runtime also validates a target returned through an unsafe JavaScript adapter
   before commit; an invalid target follows the same retained-page failure path.
 - `Link` preserves native anchor behavior and intercepts only an unmodified
-  primary click on an internal application path.
+  primary click on an internal application path. Click metadata and
+  `preventDefault` come from captured native Event/MouseEvent operations; a
+  synthetic accessor-backed click is reported through `velar/app` and cannot
+  execute an override before navigation.
 - `NavLink(to, exact=false, replace=false)` retains the same native click
   behavior for internal application paths and owns `aria-current="page"` while
   its target is active. Non-exact links match descendant paths except that `/`
@@ -288,7 +369,10 @@ const Reports = lazy(() => import("./pages/reports.vel"), "Reports", PageLoading
   `reload` expose intentional history operations. `currentRoute()` returns a
   typed snapshot of the current application-relative route. Navigation options
   are a data-only record with boolean `replace`/`scroll` fields and are fully
-  validated before history or scrolling changes.
+  validated before history or scrolling changes. Location getters, History
+  methods, URL parsing, PopStateEvent dispatch, animation frames, scrolling,
+  and route listeners use the host ABI captured when `velar/web` initializes;
+  later global replacement or instance shadowing cannot redirect navigation.
 - `Head` owns `title`, `description`, `canonical`, `robots`, `image`,
   `themeColor`, and the document `language` tag for its component lifetime and
   restores prior values on cleanup.
@@ -331,10 +415,20 @@ fallback contract.
 ## `velar/http`
 
 ```velar fragment
-import {HttpAbortError, HttpError, http} from "velar/http"
+import {HttpAbortError, HttpError, HttpTransportError, HttpTransportPhase, http} from "velar/http"
 
 const request = http.get("/api/profile", {timeout: 5000})
 const profile = await request.parse(Profile)
+```
+
+Incremental text bodies do not require buffering the whole response:
+
+```velar fragment
+const request = http.get("/api/events", {timeout: 120000})
+async def consumeEventChunk(chunk: string) -> null:
+    print(chunk)
+    return null
+await request.streamText(consumeEventChunk)
 ```
 
 Multipart uploads use an explicit body builder and opaque file records:
@@ -353,36 +447,70 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
 - `request`, `get`, `post`, `put`, `patch`, `delete`, and `head` create lazy
   requests. Options include string `Map` headers, body, timeout, `maxBytes`,
   credentials, and cache mode. `maxBytes` defaults to 16 MiB and may be an
-  integer up to 64 MiB.
+  integer up to 64 MiB. Timeout defaults to 120,000 milliseconds on every HTTP
+  target; it must be an integer from 0 through 600,000, and `0` explicitly
+  disables the deadline.
 - Options are plain data records with only documented fields. Accessors,
   symbols, class instances, unknown fields, non-string headers, invalid Fetch
   methods, and forbidden `CONNECT`/`TRACE`/`TRACK` fail at request creation.
   Credentials are `omit`, `same-origin`, or `include`; cache is `default`,
   `no-store`, `reload`, `no-cache`, or `force-cache`.
-- Requests expose `response`, `json`, `text`, `blob`, `parse(Type)`, and
-  `cancel`. Responses expose typed status, URL, and header fields plus the same
-  body readers. `blob()` returns an opaque checked `Blob`, not `any`; it may be
+- Requests expose `response`, `json`, `text`, `streamText`, `blob`,
+  `parse(Type)`, and `cancel`. Responses expose typed status, URL, and header
+  fields plus the same body readers. `streamText` incrementally decodes valid
+  UTF-8 chunks and awaits each consumer before pulling the next chunk. `blob()`
+  returns an opaque checked `Blob`, not `any`; it may be
   passed back as an HTTP body but does not expose the native browser object or
   arbitrary fields.
 - Fetch results are snapshotted and validated once before they enter the typed
   response object. Status/`ok`, status text, canonical URL, native headers, and
   body ownership cannot change between validation and use; response headers
-  share the 100-field/64-KiB bound and returned URLs the 2-MiB URL bound.
+  share the 100-field/64-KiB bound and returned URLs the 2-MiB URL bound. A
+  response status must be an integer from 100 through 599, and `ok` must be
+  exactly equivalent to the 200-through-299 range. Opaque or synthetic
+  status-zero responses are rejected as invalid host metadata rather than
+  entering `HttpError` or body processing.
+- The HTTP module captures Fetch, Headers, native Response accessors, abort and
+  timer operations, FormData, Blob, TextDecoder, and byte-array construction
+  when it initializes. Later JavaScript replacement cannot redirect requests,
+  intercept body assembly, or install response getters inside the typed
+  snapshot path. Own accessors placed on a native Response are ignored in
+  favor of the captured host prototype contract.
 - Response bodies are consumed through captured native stream operations and
   accept only real `Uint8Array` chunks. Each accepted chunk is copied after its
   size passes the running budget, and a pathological stream cannot exceed one
   million chunks. A declared or streamed body over `maxBytes` is cancelled
   before it can be materialized; successful bytes are cached so repeated
-  `text`/`json`/`blob` reads are stable. JSON remains subject to the separate
-  strict 16 MiB JSON contract even when a larger text/blob budget was requested.
+  `text`/`json`/`blob` reads are stable, and concurrent buffered readers coalesce
+  onto that one body read. `streamText` remains an exclusive incremental reader;
+  it does not silently duplicate an active stream. JSON remains subject to the
+  separate strict 16 MiB JSON contract even when a larger text/blob budget was
+  requested. A `Content-Length` attached to a response with no actual body,
+  such as HEAD metadata, describes a representation and does not create a
+  false size failure. Declared-length parsing is captured when the module is
+  initialized, so later mutation of application string, regex, or reflection
+  operations cannot disable the preflight.
 - Cancellation is idempotent and owns the whole lazy request. Cancelling before
   the first body reader prevents `fetch` from starting; cancelling an active
-  request aborts it. Cancellation and timeout reject with `HttpAbortError`,
+  request aborts it and immediately releases its owned deadline timer. Timeout
+  ownership continues through `streamText` and all
+  buffered body reads; it is not cleared merely because response headers have
+  arrived. Cancellation and timeout reject with `HttpAbortError`,
   whose `reason` is `"cancelled"` or `"timeout"`, so application recovery does
   not depend on browser-specific abort errors.
-- Object bodies are JSON encoded and receive an `application/json` content type
-  unless one was supplied. Non-2xx responses throw `HttpError` with `status`,
-  `url`, and an `unknown` body.
+- Native request or response-stream failures reject with
+  `HttpTransportError`. Its typed `phase` is `HttpTransportPhase.request` or
+  `.response`; the response phase may follow already-delivered `streamText`
+  chunks. Fetch/protocol validation, UTF-8, bounds, and consumer failures are
+  not relabelled as transport failures. `velar/http` does not retry implicitly;
+  status policy, backoff, idempotency, and replay safety belong to the caller.
+- Object bodies are snapshotted and JSON encoded when the lazy request object is
+  created, not later when a body reader starts Fetch. They receive an
+  `application/json` content type unless one was supplied. The generated header
+  is included in the same 100-field/64-KiB request-header budget. Non-2xx
+  responses throw `HttpError` with `status`, `url`, and an `unknown` body. Its
+  URL is the final response URL after redirects; only a synthetic response
+  without a URL falls back to the initial request URL.
 - JSON request bodies use the same strict lossless data boundary as
   `velar/json`: records, dense Lists, finite primitives, and `null` are accepted;
   Map, Set, class/function values, cycles, sparse Lists, and non-finite numbers
@@ -398,9 +526,12 @@ const result = await http.post("/api/images", {body: body}).parse(UploadResult)
   owns the multipart boundary. Supplying a `content-type` header
   with a form body is rejected rather than risking an invalid boundary. Native
   `File` and `FormData` are not source-level APIs.
-- Headers are capped at 100 fields/64 KiB, text and form values at 16 MiB, and
-  multipart bodies at 100,000 fields. Timeout uses the host timer range; these
-  limits are checked before Fetch or FormData mutation.
+- Headers are capped at 100 fields/64 KiB after generated headers, text and form
+  values at 16 MiB of encoded UTF-8 transport bytes, and multipart bodies at
+  100,000 fields. JSON first follows its lossless structural/code-unit contract,
+  then its serialized text follows the same UTF-8 transport-byte ceiling as a
+  plain text body. Timeout uses the host timer range; these limits are checked
+  before Fetch or FormData mutation.
 - `parse(Type)` uses the existing VelarScript `type` runtime validator; there is no
   second schema system. The browser still performs cancellation underneath,
   while VelarScript normalizes the observable failure contract. A dynamic invalid
@@ -420,7 +551,7 @@ component PreferencesPanel:
     const settings = preferences.get("settings", Settings, {theme: "system"})
     const cache = database("release-studio")
 
-    async def save():
+    async def save() -> null:
         preferences.set("settings", settings)
         await cache.set("settings", settings)
 
@@ -435,6 +566,10 @@ component PreferencesPanel:
 
 - `storage` and `session` wrap local and session storage. Both provide typed
   `get`, JSON `set`, `has`, `keys`, `remove`, `clear`, and `watch`.
+- Local/session storage areas, their native getters and methods, same-page
+  event dispatch, and global storage-event listeners are captured when the
+  module initializes. Later replacement of a storage global, prototype
+  mutation, or instance shadow cannot redirect an official storage operation.
 - Read/watch validators must be actual compiler-known VelarScript runtime types even
   when invoked through a dynamic JavaScript boundary; an arbitrary object
   cannot silently disable validation or register a delayed invalid watch.
@@ -447,14 +582,23 @@ component PreferencesPanel:
 - `watch` observes same-page writes and browser storage events and returns an
   explicit cleanup function. A throwing callback or rejected callback promise
   is reported through `velar/app` with storage ownership; cleanup still removes
-  the listener normally.
+  the listener normally. Event payloads are read only through captured native
+  browser getters or enumerable own data fields; a synthetic accessor-backed
+  event is ignored without executing its getters.
 - `database(name)` provides asynchronous IndexedDB `get`, `set`, `has`,
   `keys`, `remove`, and `clear`. Values are JSON-serializable and typed reads
   use the same VelarScript `type` validator and fallback rules.
+- The IndexedDB factory, request getters, database/transaction/object-store
+  methods, key-list checks, and event listeners use the same captured host ABI.
+  JavaScript may still expose an explicit data-only test double, but ambient or
+  instance accessors are never treated as trusted database fields.
 - IndexedDB operations resolve only when their transaction commits, not merely
   when the individual request reports success. A later transaction abort is
-  observable as rejection. Failed/blocked opens reset the cached connection so
-  a later operation may retry, and version changes close stale handles.
+  observable as the original host rejection. Failed/blocked opens reset the cached connection so
+  a later operation may retry, and version changes or unexpected connection
+  closes discard stale handles. A transaction-creation failure also resets the
+  cached handle so the next operation can reconnect instead of remaining bound
+  to a dead database object.
 - Storage, scope, database, and key names remain actual strings. Scoped browser
   keys have one bounded 4096-character path, and a key listing snapshots the
   host length once, validates every result, caps its aggregate text, and returns
@@ -464,7 +608,10 @@ component PreferencesPanel:
 - Every write uses the strict `velar/json` data contract. Unsupported or lossy
   values that are visible to the compiler fail during checking; dynamic values
   are validated again at runtime before local/session storage or IndexedDB is
-  mutated.
+  mutated. IndexedDB reads cross the same JSON snapshot before Type validation,
+  so a `Date`, `Map`, accessor record, or other foreign structured-clone value
+  written by JavaScript cannot enter Vel through a permissive runtime Type; the
+  read returns its declared fallback instead.
 
 ## `velar/forms`
 
@@ -492,6 +639,13 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
   contracts before `FormData` is constructed. Decoder Lists cannot be sparse or
   accessor-backed; names, kinds, fallbacks, and error messages are real strings,
   and invalid dynamic arguments cannot read or mutate the form first.
+- The module captures native form identity, FormData construction and reads,
+  repeated-field Map operations, and strict decimal-parsing intrinsics when it
+  initializes. JavaScript loaded afterwards cannot replace `HTMLFormElement`,
+  `FormData`, their relevant prototype operations, or constructor
+  `Symbol.hasInstance` to reject an already-owned form or intercept submitted
+  values. This capture covers value extraction; error-node, focus, reset, and
+  pending-state DOM mutations retain their separately documented lifecycle.
 - Submitted/decoder/error field names are limited to 1,024 characters, error
   messages and owned accessibility metadata to 64 KiB, and textual fallbacks
   to 16 MiB. Values returned from native form/error nodes are checked before
@@ -500,8 +654,10 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
   Required text, trimming, minimums, custom messages, and submission behavior
   remain application code and ordinary HTML attributes.
 - `setError`, `clearError`, and `clearErrors` own field alerts while preserving
-  unrelated `aria-describedby` tokens. `errors(form)` returns current messages
-  and `focusFirstError(form)` focuses the first invalid field.
+  unrelated `aria-describedby` tokens. Duplicate owned nodes for one field are
+  cleared together so stale alerts and IDs cannot survive recovery.
+  `errors(form)` returns current messages and `focusFirstError(form)` focuses
+  the first invalid field.
 - `setPending(form, bool)` owns `aria-busy` and temporarily disables fields,
   restoring their previous disabled state afterward. It validates every
   control's native `disabled` value as bool before mutating the form. Live
@@ -510,11 +666,21 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
   cannot alter the validated operation midway.
 - `reset(form)` restores pending/error ownership and then performs the native
   form reset.
+- Error nodes, attributes, text, focus, form/control properties, live DOM
+  collections, the pending-state WeakMap, and native reset all use operations
+  captured when the Forms module initializes. Branded browser objects are read
+  only through native prototype contracts; an explicit data-only test host may
+  provide enumerable own fields and methods, but accessor shadows are rejected
+  without execution. Later JavaScript replacement cannot redirect an owned
+  error, focus, pending restore, or reset operation.
 - Helpers require a real form element. Submission remains explicit through
   ordinary VelarScript event directives.
 - Event directives pass native browser events. Contextual `KeyboardEvent`,
   `PointerEvent`, and `InputEvent` parameters expose bounded stable fields;
   zero-parameter handlers remain valid and no synthetic event runtime is added.
+  Framework-owned `self`, `prevent`, and `stop` modifier work uses captured
+  native Event getters and methods, so an own accessor or instance override
+  cannot run before the application handler.
 
 ## `velar/browser`
 
@@ -543,7 +709,9 @@ positive duration. Repeating work schedules its next turn only after the
 current synchronous or asynchronous callback settles, so slow polling cannot
 overlap itself. Stopping cannot abort a callback that has already started, but
 prevents every later turn. Callback failures are normalized through
-`velar/app` with phase `timer` and detail `after` or `every`.
+`velar/app` with phase `timer` and detail `after` or `every`. Timer and
+microtask functions are captured at module initialization, so later ambient
+replacement cannot steal scheduling or cancellation.
 
 Timer handles are explicit component resources: start them during component
 setup or `mounted`, retain the returned stop function, and release it from the
@@ -553,7 +721,9 @@ React-style effect API.
 - `location()` and `environment()` return typed snapshots rather than exposing
   mutable browser globals. Host strings and booleans must already have the
   declared type; malformed values are rejected rather than implicitly
-  converted.
+  converted. Location, Navigator, Document, MediaQueryList, DOMRect, and dialog
+  values are read through captured native prototype getters; own accessors and
+  instance shadows are ignored rather than executed.
 - Snapshot language lists are application-owned mutable copies limited to 1,000
   entries of at most 256 characters and cannot contain sparse or accessor
   elements; the containing environment record remains read-only. Navigator,
@@ -564,7 +734,12 @@ React-style effect API.
   back into VelarScript source.
 - `media`, `watchMedia`, `watchOnline`, and `watchVisibility` expose common
   environment state. Every watcher returns a cleanup function, and callback
-  failures are owned by the application error channel.
+  failures are owned by the application error channel. Media change metadata is
+  read through the captured native browser getter or a data-only test-host
+  field; a synthetic accessor event is rejected without invoking the getter.
+  `matchMedia` and EventTarget add/remove operations are captured as one host
+  ABI, so watcher cleanup remains paired even after ambient or instance
+  poisoning.
 - `copyText` and `readClipboardText` require a secure context and may reject
   when browser permission or user-gesture policy denies access. Each operation
   snapshots the secure-context and native clipboard host once, then uses the
@@ -669,12 +844,19 @@ component LiveStatus:
   to 64 KiB on the same checked return path.
 - Resolved native connection URLs are validated again before becoming public
   fields. Inbound message text, event IDs, and WebSocket close codes/reasons are
-  each snapshotted once before the typed callback runs; malformed host metadata
-  is reported through `velar/app` without implicit conversion.
+  each snapshotted once through captured native getters before the typed
+  callback runs; malformed or accessor-backed host metadata is reported through
+  `velar/app` without implicit conversion or getter execution. Constructors,
+  listeners, state getters, send, and close operations likewise use the host ABI
+  captured when the module initializes rather than replaceable instance methods.
 - WebSocket close codes are `1000` or application codes `3000`–`4999`; reasons
   are strings no longer than 123 UTF-8 bytes. A reason above 123 code units is
-  rejected before allocating an encoded copy. Invalid messages, JSON payloads,
-  codes, and reasons fail before native `send` or `close` effects.
+  rejected before calculating its encoded size; the runtime owns the bounded
+  UTF-8 byte count instead of consulting mutable `TextEncoder`. Invalid
+  messages, JSON payloads, codes, and reasons fail before native `send` or
+  `close` effects. `sendJson` validates and serializes its argument before
+  observing connection state, matching the ordinary `send` argument-first
+  contract even on a closed channel.
 - Connections are ordinary owned resources. Applications close them explicitly
   from sibling component `cleanup`; the API does not introduce React-style
   effects or hidden lifecycle behavior.
@@ -705,7 +887,7 @@ only through `velar test --browser`:
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_home_page():
+async def test_home_page() -> null:
     await browser.open("/")
     await browser.waitForText("h1", "My VelarScript App")
     expect(await browser.currentPath()).toBe("/")
@@ -722,6 +904,20 @@ selected explicitly. `namespace(selector)` requires one matched node and
 returns its platform namespace URI so SVG/HTML lowering can be asserted without
 arbitrary page evaluation. Browser binaries remain an explicit Playwright
 install.
+
+`localStorage` and `sessionStorage` from `velar/web-test` expose raw string
+`get`, `set`, `remove`, and `clear` operations after `browser.open`. They exist
+so recovery paths can plant malformed or legacy storage bytes without shipping
+a query parameter, debug button, or script escape in the product. Each browser
+test already owns a fresh context, so these controls cannot leak state between
+tests and are unavailable outside `velar test --browser`.
+
+`network.respond(path, body, status=200, contentType="text/plain; charset=utf-8",
+delayMs=0)` installs a bounded response for one application-relative path, and
+`network.clear()` removes the test's routes. This lets a real browser test drive
+HTTP and streaming UI behavior without shipping a fake-provider branch in the
+application. Routes are confined to the isolated test origin and remain
+unavailable outside `velar test --browser`.
 
 ## Deliberate boundaries
 

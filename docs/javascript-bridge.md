@@ -2,6 +2,11 @@
 
 Status: deliberately limited in VelarScript 0.10
 
+This bridge is the checked and unsafe foreign-code portion of the
+[runtime and JavaScript boundary ledger](runtime-boundary.md). The language
+charter owns observable semantics; this document defines the deliberately
+limited declaration shapes and adaptations that implement that boundary.
+
 Platform builtins are first-party standard modules; `extern module` and
 `import js` are for third-party packages, not for reaching Node's filesystem,
 HTTP server, environment, process signals, or shutdown lifecycle.
@@ -31,10 +36,11 @@ to VelarScript's lightweight type system:
   `null`, `void`, or a standalone returned `undefined` become `null`, while
   `T | undefined` flowing out of JavaScript becomes `T?`;
 - simple unions;
-- mutable arrays, mutable Set, and Promise. A readonly collection used only as
-  an input parameter may accept the corresponding mutable VelarScript
-  collection safely; final array-typed rest parameters may likewise use
-  TypeScript's conventional `readonly T[]` spelling;
+- mutable arrays, mutable Set, Promise, and read-only array/Set views. A
+  read-only input accepts the corresponding mutable VelarScript collection,
+  while a read-only result keeps its non-mutating checked surface; final
+  array-typed rest parameters may use TypeScript's conventional
+  `readonly T[]` spelling;
 - object/interface fields, simple method signatures, simple non-generic
   interface inheritance, and simple aliases;
 - non-generic callback function types, including callbacks nested in exported
@@ -66,13 +72,16 @@ shows it as `T = default`: omission is allowed, but an explicit VelarScript
 result, while an input position never pretends that VelarScript `null` is the
 same JavaScript argument as `undefined` or TypeScript `void`.
 
-`readonly T[]`, `ReadonlyArray<T>`, `ReadonlySet<T>`, and other readonly
-collection values that flow from JavaScript into VelarScript degrade to
-`unknown`: VelarScript deliberately has no hidden readonly collection family,
-so the bridge does not pretend a returned value supports `append`, `add`, or
-other mutation. The bridge tracks direction through callbacks, methods, and
-Promises rather than treating every nested occurrence as an input. Readonly
-object/interface fields remain readable but cannot be assignment targets.
+`readonly T[]`, `ReadonlyArray<T>`, `ReadonlySet<T>`, and
+`ReadonlyMap<K, V>` map to VelarScript's compile-time read-only collection views
+in parameters, results, callbacks, methods, and Promises. Mutable `Array`,
+`Set`, and `Map` declarations map to their mutable VelarScript counterparts.
+They keep the native JavaScript value and identity, while mutating members such
+as `append`, `add`, and `set` are absent from the checked read-only surface.
+Mutable VelarScript collections may be supplied to these read-only inputs; a
+value returned as read-only cannot be passed to a mutable collection parameter.
+Readonly object/interface fields are shallow: the field cannot be assigned,
+while an object stored in that field keeps its own declared mutability.
 
 TypeScript `Record<K, V>` also degrades to `unknown`. A Record is a plain
 JavaScript object, not a native `Map`; mapping it to `Map<K, V>` would create a
@@ -101,6 +110,7 @@ extern module "text-tools":
         let precision: number
         constructor(prefix: string, precision: number = 1)
         static const version: string
+        get label() -> string
         def format(value: number) -> string
         static def create(prefix: string) -> Formatter
 ```
@@ -109,6 +119,11 @@ extern module "text-tools":
 VelarScript initializer. Functions use the same checked parameter/result syntax as
 ordinary VelarScript functions. `export class` provides a complete
 constructor/instance/static contract directly.
+
+`readonly` does not apply to extern classes, methods, or getters. A manual
+adapter describes their callable shape, but it does not make a purity or
+receiver-mutation promise. Narrowed data read after such a call is revalidated
+at runtime like data read after any other opaque call.
 
 Each manual export, constructor, or method has exactly one declared signature.
 An extern default parameter controls call arity only: omitting it sends no
@@ -172,6 +187,22 @@ constructability) and the class shape when the default export is genuinely
 constructed with `new`.
 Calls lower to native JavaScript `new`, including namespace imports, while
 VelarScript keeps the declared class nominal and enforces read-only members.
+Before a generated JavaScript call crosses the host boundary, reactive record
+arguments are converted to their raw identity through the optional shared Web
+runtime. That lookup is a compiler-owned, late-binding ABI rather than a live
+`globalThis[Symbol.for(...)]` probe on every call: the generated module captures
+the global object and reflection operations at initialization, retries only
+while the provider is genuinely absent, then caches the first valid immutable
+provider operation. A present accessor-backed, mutable, extensible, or otherwise
+incompatible registry fails closed without running its hooks. This adaptation
+does not make `import js unsafe` checked; it only prevents a framework proxy from
+being mistaken for the application value the host API was given.
+Direct `compile()` results inline this bridge and remain independently
+executable. A project compile instead reports a compiler-internal runtime-module
+requirement and imports that one shared implementation from every module that
+crosses the boundary. Dev, test, run, and production adapters materialize the
+same compiler-owned source; it has no public `ModuleInterface` and is not a
+user-importable JavaScript bridge or Standard API package.
 After a statically `null` call or `await` is evaluated, its observable result is
 normalized to `null`. Every checked expression typed as optional, `null`, or
 `unknown` translates JavaScript `undefined` to `null`. The decision follows the
@@ -191,7 +222,16 @@ imported through any supported module form, or passed through `velar/async`
 before awaiting. A
 JavaScript export declared as `Promise<T>` must return an actual native Promise
 (including one from another realm); arbitrary thenables are rejected without
-reading a `then` accessor.
+reading a `then` accessor. Native Promise resolution itself reserves the
+top-level `then` property, so a checked resolved `T` cannot expose a callable
+`then` data member or any `then` getter. The compiler rejects known bridge
+contracts with that shape. A non-callable data `then` field and nested
+then-shaped values inside a List or record remain ordinary data. VelarScript
+async functions additionally guard their concrete return value before native
+adoption, because a checked `unknown`, base-class, or cross-module contract can
+hide a more specific JavaScript shape. This return guard reads descriptors
+rather than the `then` property and therefore rejects an accessor without
+executing it.
 
 An exported constant whose interface contains ordinary methods remains a plain
 checked object boundary. For example, `request(path: string): Promise<string>`

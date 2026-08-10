@@ -79,6 +79,28 @@ component Probe:
   assert.match(result.code ?? "", /layout title/u);
 });
 
+test("nested JSX keeps diagnostics and semantic expressions on absolute source spans", () => {
+  const source = `
+type Message:
+    text: string
+
+def preview(message: Message?) -> string:
+    return message?.text ?? ""
+
+component Probe(messages: Map<string, Message>):
+    return <main>{[1].map(item => <p>{preview(messages.get("id"))}</p>)}</main>
+`.trimStart();
+  const result = compile(source);
+  const argument = 'messages.get("id")';
+  const start = source.indexOf(argument);
+  const diagnostic = result.diagnostics.find((item) => item.message === "Cannot assign readonly Message? to Message?");
+
+  assert.deepEqual(diagnostic?.span, { start, end: start + argument.length });
+  assert.ok(result.semanticIndex.expressions.some((expression) => expression.span.start === start
+    && expression.span.end === start + argument.length
+    && expression.type === "readonly Message?"));
+});
+
 test("Web syntax hardening regressions render in Chromium", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-hardening-web-syntax-"));
   try {
@@ -138,24 +160,24 @@ const browserTests = String.raw`
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_jsx_child_layout_string():
+async def test_jsx_child_layout_string() -> null:
     await browser.open("/")
     expect(await browser.text("[data-child]")).toBe("plain content")
 
-async def test_jsx_child_layout_string_with_quote_content():
+async def test_jsx_child_layout_string_with_quote_content() -> null:
     await browser.open("/")
     expect(await browser.text("[data-quoted]")).toBe('3" of rain')
 
-async def test_jsx_attribute_layout_string():
+async def test_jsx_attribute_layout_string() -> null:
     await browser.open("/")
     expect(await browser.attribute("[data-title]", "data-title")).toBe("layout title")
 
-async def test_static_attribute_backslashes():
+async def test_static_attribute_backslashes() -> null:
     await browser.open("/")
     expect(await browser.attribute("[data-static]", "pattern")).toBe("\\d{3}")
     expect(await browser.attribute("[data-static]", "data-path")).toBe("C:\\Users\\foo")
 
-async def test_look_layout_string():
+async def test_look_layout_string() -> null:
     await browser.open("/")
     expect(await browser.attribute("[data-look]", "style")).toBe("--velar-look-base-grid-template-areas: head head\nbody body;")
     expect(await browser.text("[data-look]")).toBe("grid")

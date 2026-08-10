@@ -10,6 +10,7 @@ const directory = await mkdtemp(join(tmpdir(), "velar-installed-browser-"));
 
 try {
   const compiler = await pack("@velarscript/compiler");
+  const node = await pack("@velarscript/node");
   const web = await pack("@velarscript/web");
   const create = await pack("create-velar");
   const cli = await pack("@velarscript/cli");
@@ -20,6 +21,7 @@ try {
     "--no-audit",
     "--no-fund",
     join(directory, compiler),
+    join(directory, node),
     join(directory, web),
     join(directory, create),
     join(directory, cli),
@@ -34,6 +36,7 @@ try {
     "--no-audit",
     "--no-fund",
     join(directory, compiler),
+    join(directory, node),
     join(directory, web),
     join(directory, create),
     join(directory, cli),
@@ -90,6 +93,7 @@ mount(<App />, "#app")
     "--no-audit",
     "--no-fund",
     join(directory, compiler),
+    join(directory, node),
     join(directory, web),
     join(directory, create),
     join(directory, cli),
@@ -112,6 +116,7 @@ mount(<App />, "#app")
     "--no-audit",
     "--no-fund",
     join(directory, compiler),
+    join(directory, node),
     join(directory, web),
     join(directory, create),
     join(directory, cli),

@@ -1,3 +1,5 @@
+import {border, color, rgb, spacing} from "velar/look"
+
 def counterLook(active: bool) -> Look:
     return look:
         padding = spacing(10px, 14px)
@@ -11,7 +13,7 @@ export component Counter(start: number = 0):
     state count = start
     computed doubled = count * 2
 
-    def increment():
+    def increment() -> null:
         count += 1
 
     watch count as current, previous:

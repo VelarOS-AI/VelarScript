@@ -102,11 +102,12 @@ export class VelarWebParser extends Parser {
 
   protected override parseExtensionExpression(token: Token): Expression | undefined {
     if (token.kind === "extensionToken" && token.value === WEB_JSX_TOKEN) {
-      const syntax = token.payload as WebJsxElementSyntax | undefined;
-      if (!syntax || syntax.kind !== "WebJsxElementSyntax") {
+      const payload = token.payload as WebJsxElementSyntax | undefined;
+      if (!payload || payload.kind !== "WebJsxElementSyntax") {
         this.diagnostics.push(diagnostic("VEL5001", "The Web JSX token is missing its structured syntax", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       }
+      const syntax = shiftJsxSyntax(payload, token.span.start - payload.span.start);
       return jsxExpression(syntax, (source) => this.parseJsxEmbedded(source), (item) => this.diagnostics.push(item));
     }
     if (token.kind !== "extensionKeyword" || token.value !== "look") return undefined;
@@ -115,10 +116,13 @@ export class VelarWebParser extends Parser {
     this.consumeNewlines();
     this.expect("indent", "Expected an indented Look block");
     const block = this.expect("extensionToken", "Expected Look entries");
-    const syntax = block.value === WEB_LOOK_TOKEN ? block.payload as WebLookBlockSyntax | undefined : undefined;
-    if (!syntax || syntax.kind !== "WebLookBlockSyntax") {
+    const payload = block.value === WEB_LOOK_TOKEN ? block.payload as WebLookBlockSyntax | undefined : undefined;
+    if (!payload || payload.kind !== "WebLookBlockSyntax") {
       this.diagnostics.push(diagnostic("VEL5038", "The Look block is missing its structured syntax", block.span));
     }
+    const syntax = payload?.kind === "WebLookBlockSyntax"
+      ? shiftLookSyntax(payload, block.span.start - payload.span.start)
+      : undefined;
     this.consumeNewlines();
     this.expect("dedent", "Expected the end of the Look block");
     const entries = new LookSourceParser(
@@ -187,10 +191,20 @@ export class VelarWebParser extends Parser {
   private parseActionDeclaration(start: number, exported: boolean): ActionDeclaration {
     const name = this.expect("identifier", "Expected an action name");
     const parameters = this.parseParameters();
+    const parameterListEnd = this.previous().span.end;
     const returnType = this.match("arrow") ? this.parseTypeReference() : null;
     const body = this.parseBlock();
     const end = body.at(-1)?.span.end ?? returnType?.span.end ?? name.span.end;
-    return { kind: "ActionDeclaration", exported, name: name.value, parameters, returnType, body, span: span(start, end) };
+    return {
+      kind: "ActionDeclaration",
+      exported,
+      name: name.value,
+      parameters,
+      returnType,
+      signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
+      body,
+      span: span(start, end),
+    };
   }
 
   private parseWatchDeclaration(start: number): WatchDeclaration {
@@ -262,6 +276,53 @@ export class VelarWebParser extends Parser {
     const close = this.expect("dedent", "Expected the end of component body");
     return { kind: "ComponentDeclaration", exported, name: name.value, parameters, body, span: span(start, body.at(-1)?.span.end ?? close.span.end) };
   }
+}
+
+function shiftSourceSpan(sourceSpan: Span, offset: number): Span {
+  return offset === 0 ? sourceSpan : span(sourceSpan.start + offset, sourceSpan.end + offset);
+}
+
+function shiftExpressionSource(source: WebExpressionSource, offset: number): WebExpressionSource {
+  return offset === 0 ? source : { ...source, span: shiftSourceSpan(source.span, offset) };
+}
+
+function shiftJsxSyntax(syntax: WebJsxElementSyntax, offset: number): WebJsxElementSyntax {
+  if (offset === 0) return syntax;
+  return {
+    ...syntax,
+    span: shiftSourceSpan(syntax.span, offset),
+    attributes: syntax.attributes.map((attribute) => ({
+      ...attribute,
+      span: shiftSourceSpan(attribute.span, offset),
+      value: typeof attribute.value === "object" && attribute.value !== null
+        ? shiftExpressionSource(attribute.value, offset)
+        : attribute.value,
+    })),
+    children: syntax.children.map((child) => {
+      if (child.kind === "WebJsxElementSyntax") return shiftJsxSyntax(child, offset);
+      if (child.kind === "WebJsxExpressionSyntax") {
+        return {
+          ...child,
+          span: shiftSourceSpan(child.span, offset),
+          expression: shiftExpressionSource(child.expression, offset),
+        };
+      }
+      return { ...child, span: shiftSourceSpan(child.span, offset) };
+    }),
+  };
+}
+
+function shiftLookSyntax(syntax: WebLookBlockSyntax, offset: number): WebLookBlockSyntax {
+  if (offset === 0) return syntax;
+  return {
+    ...syntax,
+    span: shiftSourceSpan(syntax.span, offset),
+    lines: syntax.lines.map((line) => ({
+      ...line,
+      start: line.start + offset,
+      end: line.end + offset,
+    })),
+  };
 }
 
 function jsxExpression(

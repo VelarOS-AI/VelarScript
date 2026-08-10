@@ -3,6 +3,7 @@ import { VELAR_WEB_API_VERSION } from "./compiler.ts";
 export { VELAR_WEB_API_VERSION } from "./compiler.ts";
 
 export const VELAR_WEB_MODULES = Object.freeze([
+  "velar/look",
   "velar/app",
   "velar/config",
   "velar/web",

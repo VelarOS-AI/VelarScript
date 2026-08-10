@@ -1,29 +1,15 @@
-import type {
-  CompilerDependencyContext,
-  CompilerInspectionExtension,
-  CompilerInterfaceContext,
-  Expression,
-  Statement,
-  ValueType,
-  Program,
+import {
+  type CompilerDependencyContext,
+  type CompilerInspectionExtension,
+  type CompilerInterfaceContext,
+  type Expression,
+  type Statement,
+  type ValueType,
+  type Program,
 } from "@velarscript/compiler/extension";
 import { optionalOf } from "@velarscript/compiler";
-
-const publicBuilderTypes = new Map<string, ValueType>([
-  ...["color", "rgb", "rgba", "hsl", "alpha", "lighten", "darken"].map((name) => [name, { kind: "named", name: "Color" } as ValueType] as const),
-  ["border", { kind: "named", name: "Border" }],
-  ["shadow", { kind: "named", name: "Shadow" }],
-  ["linearGradient", { kind: "named", name: "Image" }],
-  ["asset", { kind: "named", name: "Image" }],
-  ["minmax", { kind: "named", name: "Track" }],
-  ["repeat", { kind: "named", name: "TrackList" }],
-  ["tracks", { kind: "named", name: "TrackList" }],
-  ["transition", { kind: "named", name: "Transition" }],
-  ["spacing", { kind: "named", name: "Spacing" }],
-  ["min", { kind: "named", name: "Length" }],
-  ["max", { kind: "named", name: "Length" }],
-  ["clamp", { kind: "named", name: "Length" }],
-]);
+import { LOOK_UNIT_TYPES } from "./look.ts";
+import { exportedLookStaticValues, lookStaticIdentity } from "./look-static.ts";
 
 function visitDependencyExpression(expression: Expression, context: CompilerDependencyContext): boolean {
   if (expression.kind === "LookExpression") {
@@ -98,7 +84,7 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
         parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
         ...(rest ? { rest: context.resolve(rest.type) } : {}),
-        result: { kind: "promise", value: statement.returnType ? context.resolve(statement.returnType) : { kind: "null" } },
+        result: { kind: "promise", value: statement.returnType ? context.resolve(statement.returnType) : context.unresolvedInferredResult },
       },
     );
     return true;
@@ -136,6 +122,8 @@ export const velarWebInspectionExtension: CompilerInspectionExtension = Object.f
   visitDependencyExpression,
   visitDependencyStatement,
   contributeInterface,
+  exportAnnotations: exportedLookStaticValues,
+  interfaceExportIdentity: (_name: string, value: unknown) => lookStaticIdentity(value),
   resources(program: Program) {
     const resources: { source: string; kind: string }[] = [];
     for (const statement of program.body) {
@@ -149,13 +137,8 @@ export const velarWebInspectionExtension: CompilerInspectionExtension = Object.f
     if (expression.kind === "JSXElementExpression") return { kind: "node" };
     if (expression.kind === "LookExpression") return { kind: "named", name: "Look" };
     if (expression.kind === "UnitLiteralExpression") {
-      if (["ms", "s"].includes(expression.unit)) return { kind: "named", name: "Duration" };
-      if (["deg", "turn"].includes(expression.unit)) return { kind: "named", name: "Angle" };
-      if (expression.unit === "%") return { kind: "named", name: "Percentage" };
-      return { kind: "named", name: "Length" };
-    }
-    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
-      return publicBuilderTypes.get(expression.callee.name);
+      const name = LOOK_UNIT_TYPES.get(expression.unit);
+      return name ? { kind: "named", name } : undefined;
     }
     return undefined;
   },

@@ -125,7 +125,7 @@ test("external preview preparation emits a reproducible root Netlify build", asy
 });
 
 async function protectWorkspaceOutputs(label: string) {
-  const paths = ["compiler", "web", "create", "cli"].map((workspace) => join(root, "packages", workspace, "dist", `.workspace-${label}.sentinel`));
+  const paths = ["compiler", "node", "web", "create", "cli", "desktop"].map((workspace) => join(root, "packages", workspace, "dist", `.workspace-${label}.sentinel`));
   const sourcePaths = [
     join(root, "packages", "compiler", "src", "analyzer.ts"),
     join(root, "packages", "web", "src", "analyzer.ts"),

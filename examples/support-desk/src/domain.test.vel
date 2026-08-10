@@ -5,19 +5,19 @@ const sample = [
     {id: "two", title: "Export issue", requester: "Linus", summary: "Missing row", status: TicketStatus.resolved, priority: TicketPriority.low, urgent: false, estimate: 15, updatedAt: 10},
 ]
 
-def test_ticket_selection_and_pagination():
+def test_ticket_selection_and_pagination() -> null:
     const selected = selectTickets(sample, "ada", TicketFilter.all, TicketSort.recent)
     if selected.size != 1:
         throw Error("expected one requester match")
     if pageTickets(sample, 2, 1)[0].id != "two":
         throw Error("expected second page")
 
-def test_ticket_resolution_mutates_the_owned_ticket():
+def test_ticket_resolution_mutates_the_owned_ticket() -> null:
     resolveTicket(sample, "one")
     if sample[0].status != TicketStatus.resolved:
         throw Error("resolved status missing")
 
-def test_ticket_draft_crosses_the_domain_boundary():
+def test_ticket_draft_crosses_the_domain_boundary() -> null:
     const title = "  Checkout failure  "
     const requester = "  Grace  "
     const summary = "  Card declined  "

@@ -1,13 +1,25 @@
 import {range} from "velar/collections"
 import {expect} from "velar/test"
-import {browser} from "velar/web-test"
+import {browser, localStorage, sessionStorage} from "velar/web-test"
 
-async def test_release_studio_recovery():
+async def test_browser_storage_controls_raw_state_without_product_seams() -> null:
+    await browser.open("/")
+    await localStorage.set("velar-test:malformed", "{oops")
+    await sessionStorage.set("velar-test:draft", "half-written")
+    expect(await localStorage.get("velar-test:malformed")).toBe("{oops")
+    expect(await sessionStorage.get("velar-test:draft")).toBe("half-written")
+    await localStorage.remove("velar-test:malformed")
+    expect(await localStorage.get("velar-test:malformed")).toBe(null)
+    await sessionStorage.clear()
+    expect(await sessionStorage.get("velar-test:draft")).toBe(null)
+
+async def test_release_studio_recovery() -> null:
     await browser.open("/")
     expect(await browser.text("h1")).toBe("VelarScript Release Studio")
     expect(await browser.attribute('[data-release-primary] a[href="/app/"]', "aria-current")).toBe("page")
     expect(await browser.attribute('[data-release-primary] a[href="/app/about"]', "aria-current")).toBe(null)
     await browser.waitForText("[data-database]", "database-ready")
+    await browser.waitForText("[data-session]", "session-ready")
     expect(await browser.text("[data-config]")).toBe("/api:preview:recovery")
     expect(await browser.text("[data-set]")).toBe("4:set-ready")
     expect(await browser.text('[data-project="parser"] strong')).toBe("Parser")
@@ -29,7 +41,15 @@ async def test_release_studio_recovery():
     await browser.waitForText("[data-runtime-error]", "render:Render recovery ready")
     expect(await browser.text("[data-render-stable]")).toBe("render-stable")
 
-async def test_repeated_route_cleanup():
+async def test_native_event_fields_cross_the_real_browser_boundary() -> null:
+    await browser.open("/")
+    await browser.press("[data-event-input]", "K")
+    await browser.waitForText("[data-keyboard-event]", "K")
+    await browser.waitForText("[data-input-event]", "insertText")
+    await browser.click("[data-pointer-probe]")
+    await browser.waitForText("[data-pointer-event]", "mouse")
+
+async def test_repeated_route_cleanup() -> null:
     await browser.open("/")
     for index in range(8):
         await browser.click('[data-release-primary] a[href="/app/about"]')
@@ -42,7 +62,7 @@ async def test_repeated_route_cleanup():
         expect(await browser.currentPath()).toBe("/")
         expect(await browser.attribute('[data-release-primary] a[href="/app/"]', "aria-current")).toBe("page")
 
-async def test_lazy_route_failure_fallback_and_retry():
+async def test_lazy_route_failure_fallback_and_retry() -> null:
     await browser.open("/lazy-failure")
     await browser.waitForText("h1", "Page unavailable")
     expect(await browser.text('[role="alert"] p')).toBe("Lazy route failed")
@@ -52,7 +72,7 @@ async def test_lazy_route_failure_fallback_and_retry():
     await browser.waitForText("h1", "Page unavailable")
     expect(await browser.text('[role="alert"] p')).toBe("Lazy route failed")
 
-async def test_route_construction_failure_keeps_current_page():
+async def test_route_construction_failure_keeps_current_page() -> null:
     await browser.open("/")
     await browser.waitForText("h1", "VelarScript Release Studio")
     await browser.click('[data-release-primary] a[href="/app/construction-failure"]')
@@ -63,7 +83,7 @@ async def test_route_construction_failure_keeps_current_page():
     await browser.waitForText("h1", "VelarScript Release Studio")
     expect(await browser.currentPath()).toBe("/")
 
-async def test_unknown_route_renders_typed_fallback_and_recovers():
+async def test_unknown_route_renders_typed_fallback_and_recovers() -> null:
     await browser.open("/missing-release")
     await browser.waitForText("[data-route-not-found] h1", "Page not found")
     expect(await browser.text("[data-route-not-found] p")).toBe("No Release Studio page matches /missing-release.")
@@ -76,7 +96,7 @@ async def test_unknown_route_renders_typed_fallback_and_recovers():
     await browser.waitForText("h1", "VelarScript Release Studio")
     expect(await browser.currentPath()).toBe("/")
 
-async def test_reactive_props_update_children_in_place():
+async def test_reactive_props_update_children_in_place() -> null:
     await browser.open("/state-lab")
     // (a) A reactive bool prop flips while a half-typed draft sits in the
     // child; the child instance must survive with its state intact.
@@ -99,7 +119,7 @@ async def test_reactive_props_update_children_in_place():
     expect(await browser.text("[data-draft-panel='second'] [data-draft-busy]")).toBe("busy")
     expect(await browser.text("[data-draft-panel='second'] [data-draft-dark]")).toBe("dark")
 
-async def test_keyed_reorder_preserves_component_instances():
+async def test_keyed_reorder_preserves_component_instances() -> null:
     await browser.open("/state-lab")
     // (d) Per-key component state accumulates, then a reorder moves the
     // instances without resetting any of them.

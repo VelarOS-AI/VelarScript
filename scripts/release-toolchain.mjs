@@ -21,7 +21,7 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
 const manifestName = "velar-toolchain-release.json";
 const checksumName = "SHA256SUMS";
-const workspaces = ["@velarscript/compiler", "@velarscript/web", "create-velar", "@velarscript/cli"];
+const workspaces = ["@velarscript/compiler", "@velarscript/node", "@velarscript/web", "create-velar", "@velarscript/cli", "@velarscript/desktop"];
 const excludedTreeNames = new Set([".git", "node_modules", "dist", "release", "coverage"]);
 
 async function main(arguments_) {
@@ -198,10 +198,12 @@ export async function verifyToolchainRelease(outputDirectory) {
 async function readPackageManifests() {
   const rootManifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const compiler = JSON.parse(await readFile(join(root, "packages", "compiler", "package.json"), "utf8"));
+  const node = JSON.parse(await readFile(join(root, "packages", "node", "package.json"), "utf8"));
   const web = JSON.parse(await readFile(join(root, "packages", "web", "package.json"), "utf8"));
   const create = JSON.parse(await readFile(join(root, "packages", "create", "package.json"), "utf8"));
   const cli = JSON.parse(await readFile(join(root, "packages", "cli", "package.json"), "utf8"));
-  for (const package_ of [compiler, web, create, cli]) {
+  const desktop = JSON.parse(await readFile(join(root, "packages", "desktop", "package.json"), "utf8"));
+  for (const package_ of [compiler, node, web, create, cli, desktop]) {
     if (package_.version !== rootManifest.version) throw new Error(`${package_.name} version must exactly match ${rootManifest.version}`);
     if (package_.repository?.url !== rootManifest.repository?.url) throw new Error(`${package_.name} repository must match the workspace repository`);
   }
@@ -211,13 +213,24 @@ async function readPackageManifests() {
   if (web.dependencies?.["@velarscript/compiler"] !== rootManifest.version) {
     throw new Error("@velarscript/web must pin the exact compiler version");
   }
+  if (node.dependencies?.["@velarscript/compiler"] !== rootManifest.version) {
+    throw new Error("@velarscript/node must pin the exact compiler version");
+  }
+  if (cli.dependencies?.["@velarscript/node"] !== rootManifest.version) {
+    throw new Error("@velarscript/cli must pin the exact Node runtime version");
+  }
+  for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web", "@velarscript/cli"]) {
+    if (desktop.dependencies?.[dependency] !== rootManifest.version) {
+      throw new Error(`@velarscript/desktop must pin the exact ${dependency} version`);
+    }
+  }
   if (cli.dependencies?.["@velarscript/web"] || cli.peerDependencies?.["@velarscript/web"]) {
     throw new Error("@velarscript/cli must not install the optional Web framework");
   }
   if (cli.dependencies?.["create-velar"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact project creator version");
   }
-  return { root: rootManifest, compiler, web, create, cli };
+  return { root: rootManifest, compiler, node, web, create, cli, desktop };
 }
 
 function releaseBlockers(manifests, source) {
@@ -227,7 +240,7 @@ function releaseBlockers(manifests, source) {
   if (!source.clean) blockers.push("source working tree is not clean");
   if (source.tag !== `v${manifests.root.version}`) blockers.push(`HEAD is not exactly tagged v${manifests.root.version}`);
   if (!source.remoteMatches) blockers.push("origin does not match package repository metadata");
-  for (const package_ of [manifests.compiler, manifests.web, manifests.create, manifests.cli]) {
+  for (const package_ of [manifests.compiler, manifests.node, manifests.web, manifests.create, manifests.cli, manifests.desktop]) {
     if (!package_.license || package_.license === "UNLICENSED") blockers.push(`${package_.name} has no publishable license decision`);
   }
   return blockers;

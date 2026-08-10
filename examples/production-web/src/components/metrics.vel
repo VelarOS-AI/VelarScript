@@ -1,3 +1,5 @@
+import {border, minmax, repeat, rgb, tracks} from "velar/look"
+
 const metricLook = look:
     display = "grid"
     gap = 6px

@@ -1,0 +1,108 @@
+# @velarscript/desktop
+
+The optional single-project VelarScript Desktop framework. Application authors
+write one ordinary VelarScript source graph with the same components, JSX,
+Look, state, computed values, resources, and actions used by
+`@velarscript/web`. There is no user-facing renderer project, main project,
+local server, port, or IPC layer.
+
+Internally the package composes the Web compiler/runtime with a least-privilege
+Node capability host and a thin operating-system WebView shell. Privileged APIs
+remain asynchronous and are transported through a versioned bridge generated
+by the framework. That separation is an implementation and security boundary,
+not a second application programming model.
+
+Each official target module captures the bridge identity, its data-valued
+invoke operation, and any platform/environment snapshot fields when that module
+initializes. Replacing a global bridge later cannot reroute an official API.
+The system-WebView transport also captures its serializer, encoders, timers,
+collections, Promise constructor, and native message handler before application
+JavaScript executes, so ordinary dependency code cannot monkey-patch an active
+capability call into a different transport.
+`velar/desktop-test` is the intentional exception: the controller installs a
+fresh isolated browser Page for each test, so the helper resolves and validates
+one data-only controller snapshot per call instead of retaining authority from
+the previous test.
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "outDir": "dist/renderer",
+  "publicDir": "public",
+  "extensions": ["@velarscript/desktop"],
+  "desktop": {
+    "productName": "Example",
+    "identifier": "com.example.app",
+    "permissions": {
+      "files": ["project"],
+      "processes": ["git"],
+      "network": ["https://api.example.com"]
+    }
+  }
+}
+```
+
+The macOS host uses the system WKWebView and never bundles Chromium, Electron,
+or Tauri. Thin builds keep Node external and require Node.js 24 or newer. The
+host resolves an explicit absolute `VELAR_DESKTOP_NODE`, absolute entries from
+the launch environment's `PATH`, and trusted system package-manager locations
+without a shell, then verifies the runtime version. Build-machine executable
+paths and versions are not embedded in the application.
+A future standalone profile must report its runtime bytes separately instead
+of hiding them from the application size budget.
+
+Desktop owns `velar/desktop` and permission-scoped target implementations of
+`velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`.
+`velar/fs.createText` preserves Node's exclusive no-clobber contract inside the
+capability Worker; authorization and creation remain one bounded native effect
+rather than a renderer-side check followed by an overwriting write.
+Desktop preserves the shared HTTP failure model across its native bridge:
+non-2xx, cancellation/timeout, and request/response transport failures remain
+distinct typed errors instead of collapsing Worker failures into one string.
+`process.start` is async on Node and Desktop. Process-only applications may
+omit file grants and use the launch directory as the default working directory;
+an explicit working directory must be inside a granted file root. Exact
+executable grants prevent shell parsing but do not claim to OS-sandbox the
+native program's own effects—product approval and tool policy remain outside
+the language package. Process stdout/stderr crosses the worker bridge as
+enum-tagged pull chunks consumed by `async for`; incremental UTF-8 decoding,
+single-reader ownership, output bounds, and the consume-before-`wait` lifecycle
+match the Node target. The renderer reuses Node's internal process host ABI for
+value validation, Map snapshots, Promise operations, and result assembly, and
+composes the compiler-owned UTF-8 budget runtime. Desktop does not maintain a
+second semantic implementation and adds only its capability bridge and isolated
+worker. HTTP response bodies cross the
+bridge as bounded pull-based chunks, so timeout and cancellation remain active
+through body consumption. Redirects continue only while every exact origin is
+granted. `desktop.permissions.secrets` is disjoint from readable environment
+permissions; `velar/http.secretHeader` lets the worker inject those values
+without exposing them to the renderer, and cross-origin redirects strip every
+secret-derived header. Large filesystem, process-input, and HTTP-request values use a bounded
+bidirectional chunk transport instead of inheriting WebView message-size
+accidents.
+
+Filesystem content calls follow symlinks only when the canonical target stays
+inside a granted root. Metadata, move, and removal operate on the final entry
+instead; dangling links cannot be used as write targets. The renderer, native
+worker, and deterministic test host independently enforce the same path,
+file-size, list-count, list-text, result-shape, and replacement contracts.
+Desktop path composition rejects sparse/accessor-backed Lists and checks the
+combined result, not just each input. Native home, app-data, and project paths
+must remain absolute and bounded. Readable environment values are snapshotted
+from data descriptors under the same 64-variable, 64 KiB item, and 1 MiB total
+budgets enforced by the native host.
+
+```sh
+velar-desktop build .
+velar-desktop test .
+```
+
+`velar-desktop test` runs `.browser.test.vel` files without opening a window.
+It installs a deterministic, permission-aware in-memory Desktop filesystem and
+deterministic handles for manifest-granted processes; the native worker keeps
+a separate integration suite for real filesystem, process, and network
+enforcement. Test modules may import the restricted `velar/desktop-test`
+helpers to inspect app-data text through the page's actual capability bridge;
+ordinary `velar/fs` remains application-side and is not faked in the test
+controller process.

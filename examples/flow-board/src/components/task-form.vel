@@ -1,4 +1,5 @@
 import {isBlank} from "velar/text"
+import {border, color, minmax, rgb, rgba, shadow, spacing, tracks} from "velar/look"
 import {CreateTaskHandler, TaskPriority} from "../domain.vel"
 
 const composerLook = look:
@@ -45,7 +46,7 @@ export component TaskForm(onCreate: CreateTaskHandler):
     state priority: TaskPriority = TaskPriority.normal
     state error = ""
 
-    def submit():
+    def submit() -> null:
         if isBlank(title):
             error = "Give the task a clear title."
         else:

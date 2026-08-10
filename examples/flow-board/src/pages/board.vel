@@ -1,3 +1,4 @@
+import {border, clamp, minmax, repeat, rgb, spacing, tracks} from "velar/look"
 import {Head} from "velar/web"
 import {TaskFilter, TaskStatus} from "../domain.vel"
 import {addTask, advanceTask, changed, deleteTask, doingCount, doneCount, filter, query, resetBoard, tasks, todoCount, visibleTasks} from "../store.vel"

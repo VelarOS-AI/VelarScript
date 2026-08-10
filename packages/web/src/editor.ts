@@ -5,6 +5,7 @@ import type {
   CompilerProjectEditorExtension,
   CompilerProjectEditorRenameContext,
 } from "@velarscript/compiler/extension";
+import { LOOK_PROPERTIES } from "./look.ts";
 
 const nativeJsxTags = [
   "a", "article", "aside", "button", "canvas", "dialog", "div", "footer", "form", "h1", "h2", "h3",
@@ -22,6 +23,11 @@ const svgElementNames = new Set<string>(nativeSvgTags);
 
 const jsxControlCompletions: readonly CompilerProjectEditorCompletion[] = [
   { label: "key", detail: "stable JSX list key", kind: "field" },
+  ...[...LOOK_PROPERTIES].sort().map((property) => ({
+    label: `look:${property}`,
+    detail: "inline checked Look property",
+    kind: "field" as const,
+  })),
 ];
 
 const nativeJsxCompletions: readonly CompilerProjectEditorCompletion[] = [

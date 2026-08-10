@@ -142,7 +142,7 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/app/share.svg");
     assert.equal(await page.locator('meta[name="theme-color"]').getAttribute("content"), "#0b1020");
     assert.equal(await page.locator(".status-badge").textContent(), "Theme: system");
-    assert.equal(await page.locator("[data-format]").textContent(), "Safe JS package value: 42 items · en-US: 1.5 / 2.5 · class number/en-US: 3.5 / 4.5");
+    assert.equal(await page.locator("[data-format]").textContent(), "Vel value: 42 items · en-US: 1.5 / 2.5 · class number/en-US: 3.5 / 4.5");
     assert.equal(await page.getByRole("progressbar").count(), 8);
     assert.equal(await page.locator('[data-project="parser"] strong').textContent(), "Parser");
     assert.equal(await page.locator('[data-project="velar-integration"] strong').textContent(), "VelarScript Integration");

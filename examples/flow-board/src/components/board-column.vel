@@ -1,3 +1,4 @@
+import {border, rgb, spacing} from "velar/look"
 import {Task, TaskIdHandler, TaskStatus} from "../domain.vel"
 import {TaskCard} from "./task-card.vel"
 

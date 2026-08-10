@@ -11,7 +11,7 @@ class Player:
         self.name = name
         self.score = score
 
-    def addScore(points: number):
+    def addScore(points: number) -> null:
         self.score += points
 
     def label() -> string:

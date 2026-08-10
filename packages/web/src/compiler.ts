@@ -1,5 +1,5 @@
-import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
-import type { AnalysisContext, CompilerAnalysisExtension, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
+import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
+import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension } from "./editor.ts";
@@ -8,6 +8,7 @@ import { VelarWebParser } from "./parser.ts";
 import { scanWebToken } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
+import { LOOK_BUILDERS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
 
@@ -24,6 +25,8 @@ const dialogElementType: ValueType = { kind: "named", name: "DialogElement" };
 const blobType: ValueType = { kind: "named", name: "Blob" };
 const lengthType: ValueType = { kind: "named", name: "Length" };
 const percentageType: ValueType = { kind: "named", name: "Percentage" };
+const lengthPercentageType: ValueType = { kind: "named", name: "LengthPercentage" };
+const trackFractionType: ValueType = { kind: "named", name: "TrackFraction" };
 const colorType: ValueType = { kind: "named", name: "Color" };
 const colorInputType: ValueType = colorType;
 const borderType: ValueType = { kind: "named", name: "Border" };
@@ -36,8 +39,8 @@ const durationType: ValueType = { kind: "named", name: "Duration" };
 const angleType: ValueType = { kind: "named", name: "Angle" };
 const spacingType: ValueType = { kind: "named", name: "Spacing" };
 const mountTargetType: ValueType = { kind: "union", members: [stringType, elementType] };
-const lookScalarType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType] };
-const trackInputType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType, trackType, trackListType] };
+const lookScalarType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType, lengthPercentageType] };
+const trackInputType: ValueType = { kind: "union", members: [numberType, stringType, lengthType, percentageType, lengthPercentageType, trackFractionType, trackType, trackListType] };
 const repeatCountType: ValueType = { kind: "union", members: [numberType, stringType] };
 
 function namedFunction(parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
@@ -47,6 +50,10 @@ function namedFunction(parameterNames: readonly string[], parameters: readonly V
 const webGlobals = new Map<string, ValueType>([
   ["mount", namedFunction(["node", "target"], [nodeType, mountTargetType], nullType)],
   ["tick", namedFunction([], [], { kind: "promise", value: nullType })],
+]);
+
+const lookModuleExports = new Map<string, ValueType>([
+  ...LOOK_PUBLIC_TYPE_NAMES.map((name) => [name, { kind: "typeObject", name, value: { kind: "named", name } } as ValueType] as const),
   ["color", namedFunction(["value"], [stringType], colorType)],
   ["rgb", namedFunction(["red", "green", "blue"], [numberType, numberType, numberType], colorType)],
   ["rgba", namedFunction(["red", "green", "blue", "alpha"], [numberType, numberType, numberType, numberType], colorType)],
@@ -58,7 +65,7 @@ const webGlobals = new Map<string, ValueType>([
   ["shadow", namedFunction(["x", "y", "blur", "color", "spread", "inset"], [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType], shadowType, 4)],
   ["linearGradient", namedFunction(["angle", "start", "end"], [angleType, colorInputType, colorInputType], imageType)],
   ["asset", namedFunction(["path"], [stringType], imageType)],
-  ["minmax", namedFunction(["minimum", "maximum"], [lookScalarType, lookScalarType], trackType)],
+  ["minmax", namedFunction(["minimum", "maximum"], [trackInputType, trackInputType], trackType)],
   ["repeat", namedFunction(["count", "size"], [repeatCountType, trackInputType], trackListType)],
   ["tracks", { kind: "function", parameterNames: ["first"], parameters: [trackInputType], requiredParameters: 1, rest: trackInputType, result: trackListType }],
   ["transition", namedFunction(["property", "duration", "easing", "delay"], [stringType, durationType, stringType, durationType], transitionType, 2)],
@@ -100,6 +107,11 @@ const formBodyType = object({
   has: namedFunction(["name"], [stringType], boolType),
   names: namedFunction([], [], arrayString),
 });
+const httpChunkConsumerType = namedFunction(["chunk"], [stringType], promise(nullType));
+const httpTransportPhaseIdentity = "velar/http#enum:HttpTransportPhase";
+const httpTransportPhaseMembers = new Set(["request", "response"]);
+const httpTransportPhaseType: ValueType = { kind: "enum", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity };
+const httpTransportErrorIdentity = "velar/http#class:HttpTransportError";
 
 const httpResponseType = object({
   ok: boolType,
@@ -109,16 +121,18 @@ const httpResponseType = object({
   headers: mapString(stringType),
   json: namedFunction([], [], promise(unknownType)),
   text: namedFunction([], [], promise(stringType)),
+  streamText: namedFunction(["consume"], [httpChunkConsumerType], promise(nullType)),
   blob: namedFunction([], [], promise(blobType)),
-  parse: namedIntrinsic("http.parse", ["target"], [anyType], promise(anyType)),
+  parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
 });
 
 const requestType = object({
   response: namedFunction([], [], promise(httpResponseType)),
   json: namedFunction([], [], promise(unknownType)),
   text: namedFunction([], [], promise(stringType)),
+  streamText: namedFunction(["consume"], [httpChunkConsumerType], promise(nullType)),
   blob: namedFunction([], [], promise(blobType)),
-  parse: namedIntrinsic("http.parse", ["target"], [anyType], promise(anyType)),
+  parse: namedIntrinsic("runtime.parseAsync", ["target"], [anyType], promise(anyType)),
   cancel: namedFunction([], [], nullType),
 });
 
@@ -244,9 +258,20 @@ const browserTestControllerType = object({
   currentPath: namedFunction([], [], promise(stringType)),
   viewport: namedFunction(["width", "height"], [numberType, numberType], promise(nullType)),
 });
+const browserTestStorageControllerType = object({
+  get: namedFunction(["key"], [stringType], promise(optional(stringType))),
+  set: namedFunction(["key", "value"], [stringType, stringType], promise(nullType)),
+  remove: namedFunction(["key"], [stringType], promise(nullType)),
+  clear: namedFunction([], [], promise(nullType)),
+});
+const browserTestNetworkControllerType = object({
+  respond: namedFunction(["path", "body", "status", "contentType", "delayMs"], [stringType, stringType, numberType, stringType, numberType], promise(nullType), 2),
+  clear: namedFunction([], [], promise(nullType)),
+});
 
 
 export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
+  ["velar/look", moduleInterface(lookModuleExports)],
   ["velar/app", moduleInterface(new Map([
     ["onError", namedFunction(["handler"], [functionType([appErrorType], unknownType)], cleanupType)],
     ["reportError", namedFunction(["error", "phase", "detail"], [errorType, stringType, stringType], nullType, 1)],
@@ -281,8 +306,10 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
   ["velar/http", moduleInterface(new Map([
     ["http", httpType],
     ["formBody", namedFunction([], [], formBodyType)],
+    ["HttpTransportPhase", { kind: "enumObject", name: "HttpTransportPhase", identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers }],
     ["HttpAbortError", { kind: "classConstructor", name: "HttpAbortError" }],
     ["HttpError", { kind: "classConstructor", name: "HttpError" }],
+    ["HttpTransportError", { kind: "classConstructor", name: "HttpTransportError", identity: httpTransportErrorIdentity }],
   ]), new Map([
     ["HttpAbortError", {
       parameters: [stringType],
@@ -318,7 +345,23 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
       staticGetters: new Set(),
       staticMethods: new Map(),
     }],
-  ]))],
+    ["HttpTransportError", {
+      identity: httpTransportErrorIdentity,
+      parameters: [stringType, httpTransportPhaseType],
+      parameterNames: ["message", "phase"],
+      requiredParameters: 2,
+      base: "Error",
+      abstract: false,
+      fields: new Map([["phase", { mutable: false, type: httpTransportPhaseType }]]),
+      getters: new Set(),
+      abstractGetters: new Set(),
+      methods: new Map(),
+      abstractMethods: new Set(),
+      staticFields: new Map(),
+      staticGetters: new Set(),
+      staticMethods: new Map(),
+    }],
+  ]), new Map(), new Map(), new Map([["HttpTransportPhase", { identity: httpTransportPhaseIdentity, members: httpTransportPhaseMembers }]]))],
   ["velar/storage", moduleInterface(new Map([
     ["storage", storageType],
     ["session", storageType],
@@ -374,6 +417,9 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
   ]))],
   ["velar/web-test", moduleInterface(new Map([
     ["browser", browserTestControllerType],
+    ["localStorage", browserTestStorageControllerType],
+    ["sessionStorage", browserTestStorageControllerType],
+    ["network", browserTestNetworkControllerType],
   ]))],
 ]);
 
@@ -382,12 +428,14 @@ function moduleInterface(
   classes: ReadonlyMap<string, ClassInfo> = new Map(),
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
   namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
+  enums: ReadonlyMap<string, EnumInfo> = new Map(),
 ): ModuleInterface {
-  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
+  return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums, classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({
   id: "@velarscript/web",
+  contract: Object.freeze({ protocolVersion: 1, apiVersion: VELAR_WEB_API_VERSION, kind: "application", extends: Object.freeze({}) }),
   capabilities: Object.freeze(["web"]),
   lexical: Object.freeze({
     keywords: Object.freeze({
@@ -408,7 +456,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       onMounted: "Use the Web extension's component-level 'mounted:' block",
       on_mount: "Use the Web extension's component-level 'mounted:' block",
     }),
-    numericSuffixes: new Set(["px", "rem", "em", "%", "vw", "vh", "vmin", "vmax", "fr", "ms", "s", "deg", "turn"]),
+    numericSuffixes: new Set(LOOK_UNIT_TYPES.keys()),
     scan: scanWebToken,
   }),
   parser: Object.freeze({
@@ -424,7 +472,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "Look", "Length", "Percentage", "Color", "Duration", "Angle", "Opacity", "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing"]),
+    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
     primitiveParents: new Map([
       ["InputElement", new Set(["Element"])],
       ["CanvasElement", new Set(["Element"])],
@@ -440,6 +488,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     globals: webGlobals,
     reservedBindings: new Set(["mount", "tick"]),
     globalGuidance: new Map([
+      ...[...LOOK_BUILDERS].map((name) => [name, `Import '${name}' by name from \"velar/look\"`] as const),
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
       ["window", "Use velar/browser or an explicit JavaScript boundary instead of the untyped window global"],
       ["navigator", "Use velar/browser instead of the navigator global"],
@@ -485,6 +534,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "look={value}", kind: 10, detail: "Apply a typed Look value" },
       { label: "import css unsafe", kind: 14, detail: "Import native CSS before Look output" },
       { label: "after look", kind: 14, detail: "Place an unsafe CSS import after Look output" },
+      { label: "velar/look", kind: 9, detail: "Named visual builders and visual value Type objects" },
       { label: "velar/app", kind: 9, detail: "Application error reports and explicit handler ownership" },
       { label: "velar/config", kind: 9, detail: "Validated manifest-declared public application configuration" },
       { label: "velar/web", kind: 9, detail: "Typed routing, navigation, metadata, and announcements" },
@@ -510,8 +560,9 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     forcedFunctionExports: ReadonlySet<string>,
     resourceContents: ReadonlyMap<string, string>,
     extensionImports: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+    options: CompilerEmitterOptions,
   ) {
-    return new WebJavaScriptEmitter(hints, forcedFunctionExports, resourceContents, extensionImports);
+    return new WebJavaScriptEmitter(hints, forcedFunctionExports, resourceContents, extensionImports, options);
   },
 });
 

@@ -7,13 +7,13 @@ state busy = false
 state showFirst = true
 state labRows: List<LabRow> = [{id: "alpha"}, {id: "beta"}, {id: "gamma"}]
 
-def toggleBusy():
+def toggleBusy() -> null:
     busy = not busy
 
-def swapBranch():
+def swapBranch() -> null:
     showFirst = not showFirst
 
-def reverseRows():
+def reverseRows() -> null:
     labRows = labRows.reversed()
 
 component Draft(label: string, busy: bool, dark: bool):
@@ -28,7 +28,7 @@ component Draft(label: string, busy: bool, dark: bool):
 component LabRowView(row: LabRow):
     state hits = 0
 
-    def recordHit():
+    def recordHit() -> null:
         hits += 1
 
     return <li data-lab-row={row.id}>

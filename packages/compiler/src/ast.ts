@@ -90,6 +90,7 @@ export interface ExternFunctionDeclaration {
   readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
+  readonly signatureSpan: Span;
   readonly span: Span;
 }
 
@@ -104,6 +105,7 @@ export interface ExternClassDeclaration {
   readonly parameters: readonly ClassParameter[];
   readonly base: string | null;
   readonly fields: readonly ExternClassFieldDeclaration[];
+  readonly getters: readonly ExternClassGetterDeclaration[];
   readonly methods: readonly ExternClassMethodDeclaration[];
   readonly span: Span;
 }
@@ -118,6 +120,13 @@ export interface ExternClassFieldDeclaration {
 
 export interface ExternClassMethodDeclaration extends ExternFunctionDeclaration {
   readonly static: boolean;
+}
+
+export interface ExternClassGetterDeclaration {
+  readonly static: boolean;
+  readonly name: string;
+  readonly type: TypeReference;
+  readonly span: Span;
 }
 
 export interface AssertStatement {
@@ -179,6 +188,7 @@ export interface ActionDeclaration {
   readonly name: string;
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
+  readonly signatureSpan: Span;
   readonly body: readonly Statement[];
   readonly span: Span;
 }
@@ -221,6 +231,7 @@ export interface TypeAliasDeclaration {
 }
 
 export interface TypeField {
+  readonly readonly: boolean;
   readonly name: string;
   readonly type: TypeReference;
   readonly span: Span;
@@ -236,6 +247,9 @@ export interface EnumDeclaration {
 
 export interface EnumMember {
   readonly name: string;
+  /** Runtime string value. Defaults to `name` when no explicit value is written. */
+  readonly value: string;
+  readonly valueSpan?: Span;
   readonly span: Span;
 }
 
@@ -341,6 +355,7 @@ export interface FunctionDeclaration {
   readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
+  readonly signatureSpan: Span;
   readonly body: readonly Statement[];
   readonly span: Span;
 }
@@ -363,11 +378,20 @@ export interface TypeReference {
   readonly span: Span;
 }
 
-export type TypeSyntax = NamedTypeSyntax | GenericTypeSyntax | OptionalTypeSyntax | UnionTypeSyntax | FunctionTypeSyntax;
+export type TypeSyntax = NamedTypeSyntax | EnumMemberTypeSyntax | GenericTypeSyntax | ReadonlyTypeSyntax | OptionalTypeSyntax | UnionTypeSyntax | FunctionTypeSyntax;
 
 export interface NamedTypeSyntax {
   readonly kind: "NamedTypeSyntax";
   readonly name: string;
+  readonly span: Span;
+}
+
+export interface EnumMemberTypeSyntax {
+  readonly kind: "EnumMemberTypeSyntax";
+  readonly enumName: string;
+  readonly enumNameSpan: Span;
+  readonly member: string;
+  readonly memberSpan: Span;
   readonly span: Span;
 }
 
@@ -376,6 +400,12 @@ export interface GenericTypeSyntax {
   readonly name: string;
   readonly nameSpan: Span;
   readonly arguments: readonly TypeSyntax[];
+  readonly span: Span;
+}
+
+export interface ReadonlyTypeSyntax {
+  readonly kind: "ReadonlyTypeSyntax";
+  readonly inner: TypeSyntax;
   readonly span: Span;
 }
 
@@ -508,6 +538,7 @@ export type MatchValue = LiteralExpression | MemberExpression;
 
 export interface ForStatement {
   readonly kind: "ForStatement";
+  readonly asynchronous: boolean;
   readonly pattern: BindingPattern;
   readonly secondPattern: BindingPattern | null;
   readonly iterable: Expression;

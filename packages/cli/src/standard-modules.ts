@@ -1,6 +1,32 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
-import { VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_STRICT_JSON_RUNTIME, VELAR_TEXT_METHOD_RUNTIME } from "@velarscript/compiler/extension";
-import { localPlatformModuleInterfaces, localPlatformModuleSources } from "./local-platform-modules.ts";
+import {
+  VELAR_CLASS_FIELD_MODULE,
+  VELAR_CLASS_FIELD_MODULE_SOURCE,
+  VELAR_COLLECTION_HOST_MODULE,
+  VELAR_COLLECTION_HOST_MODULE_SOURCE,
+  VELAR_COLLECTION_LOWERING_DEPENDENCIES,
+  VELAR_COLLECTION_LOWERING_MODULE,
+  VELAR_COLLECTION_LOWERING_MODULE_SOURCE,
+  VELAR_ERROR_NORMALIZATION_MODULE,
+  VELAR_ERROR_NORMALIZATION_MODULE_SOURCE,
+  VELAR_ERROR_NORMALIZATION_RUNTIME,
+  VELAR_NARROWING_MODULE,
+  VELAR_NARROWING_MODULE_SOURCE,
+  VELAR_PRIMITIVE_METHOD_MODULE,
+  VELAR_PRIMITIVE_METHOD_MODULE_SOURCE,
+  VELAR_PROMISE_NORMALIZATION_MODULE,
+  VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE,
+  VELAR_REACTIVE_BRIDGE_MODULE,
+  VELAR_REACTIVE_BRIDGE_MODULE_SOURCE,
+  VELAR_RUNTIME_REGISTRY_KEY,
+  VELAR_RUNTIME_SCHEMA_VERSION,
+  VELAR_STRICT_JSON_RUNTIME,
+  VELAR_TEXT_METHOD_RUNTIME,
+  VELAR_TYPE_REGISTRY_RUNTIME,
+  VELAR_TYPE_VALIDATION_MODULE,
+  VELAR_TYPE_VALIDATION_MODULE_SOURCE,
+} from "@velarscript/compiler/extension";
+import { velarNodeCompilerExtension } from "@velarscript/node/compiler";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
 
 const anyType: ValueType = { kind: "any" };
@@ -219,7 +245,6 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["setLevel", apiFunction(["value"], [stringType], nullType)],
     ["useSink", apiFunction(["sink"], [functionType([logRecordType], unknownType)], cleanupType)],
   ]))],
-  ...localPlatformModuleInterfaces,
   ["velar/test", moduleInterface(new Map([
     ["expect", apiIntrinsic("test.expect", ["actual"], [anyType], anyType)],
   ]))],
@@ -234,9 +259,10 @@ function moduleInterface(
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {
+  const activeExtensions = standardExtensions(extensions);
   return new Map([
     ...coreModuleInterfaces,
-    ...extensions.flatMap((extension) => extension.modules ? [...extension.modules.interfaces] : []),
+    ...combinedExtensionModules<ModuleInterface>(activeExtensions, "interfaces"),
   ]);
 }
 
@@ -245,7 +271,7 @@ export function isStandardModule(source: string, extensions: readonly CompilerEx
 }
 
 export function standardModuleInterface(source: string, extensions: readonly CompilerExtension[] = []): ModuleInterface | null {
-  for (const extension of extensions) {
+  for (const extension of standardExtensions(extensions)) {
     const interface_ = extension.modules?.interfaces.get(source);
     if (interface_) return interface_;
   }
@@ -253,51 +279,86 @@ export function standardModuleInterface(source: string, extensions: readonly Com
 }
 
 const deepEqualRuntime = String.raw`
+const __velarDeepNativeArray = globalThis.Array;
+const __velarDeepNativeMap = globalThis.Map;
+const __velarDeepNativeSet = globalThis.Set;
+const __velarDeepNativeWeakSet = globalThis.WeakSet;
+const __velarDeepNativeObject = globalThis.Object;
+const __velarDeepGetOwnPropertyDescriptor = __velarDeepNativeObject.getOwnPropertyDescriptor;
+const __velarDeepGetOwnPropertyNames = __velarDeepNativeObject.getOwnPropertyNames;
+const __velarDeepGetOwnPropertySymbols = __velarDeepNativeObject.getOwnPropertySymbols;
+const __velarDeepGetPrototypeOf = __velarDeepNativeObject.getPrototypeOf;
+const __velarDeepObjectPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeObject, "prototype")?.value;
+const __velarDeepArrayIsArray = __velarDeepNativeArray.isArray;
+const __velarDeepSymbolFor = globalThis.Symbol.for;
+const __velarDeepApply = __velarDeepGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+const __velarDeepArrayPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeArray, "prototype")?.value;
+const __velarDeepMapPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeMap, "prototype")?.value;
+const __velarDeepSetPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeSet, "prototype")?.value;
+const __velarDeepWeakSetPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeWeakSet, "prototype")?.value;
+const __velarDeepArraySort = __velarDeepGetOwnPropertyDescriptor(__velarDeepArrayPrototype, "sort")?.value;
+const __velarDeepMapSize = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "size")?.get;
+const __velarDeepMapEntries = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "entries")?.value;
+const __velarDeepMapHas = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "has")?.value;
+const __velarDeepMapGet = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "get")?.value;
+const __velarDeepSetSize = __velarDeepGetOwnPropertyDescriptor(__velarDeepSetPrototype, "size")?.get;
+const __velarDeepSetValues = __velarDeepGetOwnPropertyDescriptor(__velarDeepSetPrototype, "values")?.value;
+const __velarDeepSetHas = __velarDeepGetOwnPropertyDescriptor(__velarDeepSetPrototype, "has")?.value;
+const __velarDeepWeakSetHas = __velarDeepGetOwnPropertyDescriptor(__velarDeepWeakSetPrototype, "has")?.value;
+const __velarDeepWeakSetAdd = __velarDeepGetOwnPropertyDescriptor(__velarDeepWeakSetPrototype, "add")?.value;
+const __velarDeepWeakSetDelete = __velarDeepGetOwnPropertyDescriptor(__velarDeepWeakSetPrototype, "delete")?.value;
+const __velarDeepMapIterator = __velarDeepApply(__velarDeepMapEntries, new __velarDeepNativeMap(), []);
+const __velarDeepMapIteratorNext = __velarDeepGetOwnPropertyDescriptor(__velarDeepGetPrototypeOf(__velarDeepMapIterator), "next")?.value;
+const __velarDeepSetIterator = __velarDeepApply(__velarDeepSetValues, new __velarDeepNativeSet(), []);
+const __velarDeepSetIteratorNext = __velarDeepGetOwnPropertyDescriptor(__velarDeepGetPrototypeOf(__velarDeepSetIterator), "next")?.value;
+function __velarDeepCall(operation, receiver, arguments_) { return __velarDeepApply(operation, receiver, arguments_); }
 function __velarDeepEqualRaw(value) {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1"));
+  const descriptor = __velarDeepGetOwnPropertyDescriptor(globalThis, __velarDeepCall(__velarDeepSymbolFor, undefined, [${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}]));
   const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
-  return runtime && runtime.version === "0.11" && typeof runtime.toRaw === "function" ? runtime.toRaw(value) : value;
+  return runtime && runtime.version === ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} && typeof runtime.toRaw === "function" ? runtime.toRaw(value) : value;
 }
-function __velarPlainRecord(value) { const prototype = Object.getPrototypeOf(value); return prototype === Object.prototype || prototype === null; }
+function __velarPlainRecord(value) { const prototype = __velarDeepGetPrototypeOf(value); return prototype === __velarDeepObjectPrototype || prototype === null; }
 function __velarDenseList(value) {
-  if (!Array.isArray(value) || value.length > 1000000
-    || Object.getOwnPropertySymbols(value).length !== 0
-    || Object.getOwnPropertyNames(value).length !== value.length + 1) return false;
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [value]) || value.length > 1000000
+    || __velarDeepGetOwnPropertySymbols(value).length !== 0
+    || __velarDeepGetOwnPropertyNames(value).length !== value.length + 1) return false;
+  const lengthDescriptor = __velarDeepGetOwnPropertyDescriptor(value, "length");
   if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable
     || lengthDescriptor.configurable || !("value" in lengthDescriptor)) return false;
   for (let index = 0; index < value.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    const descriptor = __velarDeepGetOwnPropertyDescriptor(value, index);
     if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) return false;
   }
   return true;
 }
-function __velarMapSize(value) { try { return Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value); } catch { return null; } }
-function __velarSetSize(value) { try { return Reflect.getOwnPropertyDescriptor(Set.prototype, "size").get.call(value); } catch { return null; } }
+function __velarMapSize(value) { try { return __velarDeepCall(__velarDeepMapSize, value, []); } catch { return null; } }
+function __velarSetSize(value) { try { return __velarDeepCall(__velarDeepSetSize, value, []); } catch { return null; } }
 function __velarDataRecordKeys(value) {
-  if (!__velarPlainRecord(value) || Object.getOwnPropertySymbols(value).length > 0) return null;
-  const keys = Object.getOwnPropertyNames(value);
-  for (const key of keys) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!__velarPlainRecord(value) || __velarDeepGetOwnPropertySymbols(value).length > 0) return null;
+  const keys = __velarDeepGetOwnPropertyNames(value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const descriptor = __velarDeepGetOwnPropertyDescriptor(value, keys[index]);
     if (!descriptor?.enumerable || !("value" in descriptor)) return null;
   }
-  return keys.sort();
+  __velarDeepCall(__velarDeepArraySort, keys, []);
+  return keys;
 }
+function __velarDeepIteratorValue(iterator, next) { const step = __velarDeepCall(next, iterator, []); const done = __velarDeepGetOwnPropertyDescriptor(step, "done"); if (!done || !("value" in done) || typeof done.value !== "boolean") return { invalid: true }; if (done.value) return null; const value = __velarDeepGetOwnPropertyDescriptor(step, "value"); return !value || !("value" in value) ? { invalid: true } : { invalid: false, value: value.value }; }
 function __velarEqualValue(left, right, leftActive, rightActive, depth = 0) {
-  const reactive = (() => { const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1")); return descriptor && "value" in descriptor ? descriptor.value : null; })();
-  if (reactive && reactive.version === "0.11" && typeof reactive.trackDeep === "function") { reactive.trackDeep(left); reactive.trackDeep(right); }
+  const reactive = (() => { const descriptor = __velarDeepGetOwnPropertyDescriptor(globalThis, __velarDeepCall(__velarDeepSymbolFor, undefined, [${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}])); return descriptor && "value" in descriptor ? descriptor.value : null; })();
+  if (reactive && reactive.version === ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} && typeof reactive.trackDeep === "function") { reactive.trackDeep(left); reactive.trackDeep(right); }
   left = __velarDeepEqualRaw(left); right = __velarDeepEqualRaw(right);
   if (left === right) return true;
   if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
   if (depth >= 512) return false;
-  if (leftActive.has(left) || rightActive.has(right)) return false;
-  leftActive.add(left); rightActive.add(right);
+  if (__velarDeepCall(__velarDeepWeakSetHas, leftActive, [left]) || __velarDeepCall(__velarDeepWeakSetHas, rightActive, [right])) return false;
+  __velarDeepCall(__velarDeepWeakSetAdd, leftActive, [left]); __velarDeepCall(__velarDeepWeakSetAdd, rightActive, [right]);
   try {
-    if (Array.isArray(left) || Array.isArray(right)) {
+    if (__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [left]) || __velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [right])) {
       if (!__velarDenseList(left) || !__velarDenseList(right) || left.length !== right.length) return false;
       for (let index = 0; index < left.length; index += 1) {
-        const leftValue = Object.getOwnPropertyDescriptor(left, index).value;
-        const rightValue = Object.getOwnPropertyDescriptor(right, index).value;
+        const leftValue = __velarDeepGetOwnPropertyDescriptor(left, index).value;
+        const rightValue = __velarDeepGetOwnPropertyDescriptor(right, index).value;
         if (!__velarEqualValue(leftValue, rightValue, leftActive, rightActive, depth + 1)) return false;
       }
       return true;
@@ -306,9 +367,15 @@ function __velarEqualValue(left, right, leftActive, rightActive, depth = 0) {
     const rightMapSize = __velarMapSize(right);
     if (leftMapSize !== null || rightMapSize !== null) {
       if (leftMapSize === null || rightMapSize === null || leftMapSize !== rightMapSize) return false;
-      for (const [key, value] of Map.prototype.entries.call(left)) {
-        if (!Map.prototype.has.call(right, key)
-          || !__velarEqualValue(value, Map.prototype.get.call(right, key), leftActive, rightActive, depth + 1)) return false;
+      const iterator = __velarDeepCall(__velarDeepMapEntries, left, []);
+      while (true) {
+        const item = __velarDeepIteratorValue(iterator, __velarDeepMapIteratorNext);
+        if (item === null) break;
+        if (item.invalid || !__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [item.value]) || item.value.length !== 2) return false;
+        const key = __velarDeepGetOwnPropertyDescriptor(item.value, 0)?.value;
+        const value = __velarDeepGetOwnPropertyDescriptor(item.value, 1)?.value;
+        if (!__velarDeepCall(__velarDeepMapHas, right, [key])
+          || !__velarEqualValue(value, __velarDeepCall(__velarDeepMapGet, right, [key]), leftActive, rightActive, depth + 1)) return false;
       }
       return true;
     }
@@ -316,135 +383,156 @@ function __velarEqualValue(left, right, leftActive, rightActive, depth = 0) {
     const rightSetSize = __velarSetSize(right);
     if (leftSetSize !== null || rightSetSize !== null) {
       if (leftSetSize === null || rightSetSize === null || leftSetSize !== rightSetSize) return false;
-      for (const value of Set.prototype.values.call(left)) if (!Set.prototype.has.call(right, value)) return false;
+      const iterator = __velarDeepCall(__velarDeepSetValues, left, []);
+      while (true) { const item = __velarDeepIteratorValue(iterator, __velarDeepSetIteratorNext); if (item === null) break; if (item.invalid || !__velarDeepCall(__velarDeepSetHas, right, [item.value])) return false; }
       return true;
     }
     const leftKeys = __velarDataRecordKeys(left);
     const rightKeys = __velarDataRecordKeys(right);
     if (!leftKeys || !rightKeys) return false;
-    return leftKeys.length === rightKeys.length
-      && leftKeys.every((key, index) => key === rightKeys[index]
-        && __velarEqualValue(Object.getOwnPropertyDescriptor(left, key).value, Object.getOwnPropertyDescriptor(right, key).value, leftActive, rightActive, depth + 1));
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (let index = 0; index < leftKeys.length; index += 1) { const key = leftKeys[index]; if (key !== rightKeys[index] || !__velarEqualValue(__velarDeepGetOwnPropertyDescriptor(left, key).value, __velarDeepGetOwnPropertyDescriptor(right, key).value, leftActive, rightActive, depth + 1)) return false; }
+    return true;
   } finally {
-    leftActive.delete(left); rightActive.delete(right);
+    __velarDeepCall(__velarDeepWeakSetDelete, leftActive, [left]); __velarDeepCall(__velarDeepWeakSetDelete, rightActive, [right]);
   }
 }
-function __velarDeepEqual(left, right) { return __velarEqualValue(left, right, new WeakSet(), new WeakSet()); }
+function __velarDeepEqual(left, right) { return __velarEqualValue(left, right, new __velarDeepNativeWeakSet(), new __velarDeepNativeWeakSet()); }
 `.trimStart();
 
 const listRuntime = String.raw`
 const __velarMaxListItems = 1000000;
+const __velarListArray = Array;
+const __velarListArrayIsArray = Array.isArray;
+const __velarListGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const __velarListGetOwnPropertyNames = Object.getOwnPropertyNames;
+const __velarListGetOwnPropertySymbols = Object.getOwnPropertySymbols;
+const __velarListSymbolFor = Symbol.for;
+const __velarListTypeError = TypeError;
+const __velarListRangeError = RangeError;
 function __velarListReactiveRuntime() {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("velar.runtime.v1"));
+  const descriptor = __velarListGetOwnPropertyDescriptor(globalThis, __velarListSymbolFor(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}));
   const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
-  return runtime && runtime.version === "0.11" && typeof runtime.toRaw === "function"
+  return runtime && runtime.version === ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} && typeof runtime.toRaw === "function"
     && typeof runtime.collectionRead === "function" ? runtime : null;
 }
 function __velarRequireList(value, name) {
   const reactive = __velarListReactiveRuntime();
   if (reactive) value = reactive.toRaw(value);
-  if (!Array.isArray(value)) throw new TypeError(name + " requires a List");
-  if (value.length > __velarMaxListItems) throw new RangeError(name + " cannot exceed " + __velarMaxListItems + " items");
-  if (Object.getOwnPropertySymbols(value).length > 0
-    || Object.getOwnPropertyNames(value).length !== value.length + 1) {
-    throw new TypeError(name + " requires a dense List without extra fields");
+  if (!__velarListArrayIsArray(value)) throw new __velarListTypeError(name + " requires a List");
+  if (value.length > __velarMaxListItems) throw new __velarListRangeError(name + " cannot exceed " + __velarMaxListItems + " items");
+  if (__velarListGetOwnPropertySymbols(value).length > 0
+    || __velarListGetOwnPropertyNames(value).length !== value.length + 1) {
+    throw new __velarListTypeError(name + " requires a dense List without extra fields");
   }
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  const lengthDescriptor = __velarListGetOwnPropertyDescriptor(value, "length");
   if (!lengthDescriptor || !lengthDescriptor.writable || lengthDescriptor.enumerable
     || lengthDescriptor.configurable || !("value" in lengthDescriptor)) {
-    throw new TypeError(name + " requires an ordinary mutable List length");
+    throw new __velarListTypeError(name + " requires an ordinary mutable List length");
   }
-  const output = new Array(value.length);
+  const output = new __velarListArray(value.length);
   for (let index = 0; index < value.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    const descriptor = __velarListGetOwnPropertyDescriptor(value, index);
     if (!descriptor?.enumerable || !descriptor.configurable || !descriptor.writable || !("value" in descriptor)) {
-      throw new TypeError(name + " requires ordinary mutable List elements");
+      throw new __velarListTypeError(name + " requires ordinary mutable List elements");
     }
-    output[index] = reactive ? reactive.collectionRead(value, Symbol.for("velar.reactive.iterate.v1"), descriptor.value) : descriptor.value;
+    output[index] = reactive ? reactive.collectionRead(value, __velarListSymbolFor("velar.reactive.iterate.v1"), descriptor.value) : descriptor.value;
   }
   return output;
 }
 `.trimStart();
 
-const runtimeTypeRuntime = String.raw`
-const __velarRuntimeTypeRegistryKey = Symbol.for("velar.type.registry.v1");
-const __velarRuntimeTypeRegistry = (() => {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, __velarRuntimeTypeRegistryKey);
-  if (descriptor) {
-    if (!("value" in descriptor)) throw new TypeError("VelarScript runtime type registry cannot be an accessor");
-    try { WeakSet.prototype.has.call(descriptor.value, descriptor.value); }
-    catch { throw new TypeError("VelarScript runtime type registry is invalid"); }
-    return descriptor.value;
-  }
-  const registry = new WeakSet();
-  Object.defineProperty(globalThis, __velarRuntimeTypeRegistryKey, {
-    value: registry,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-  return registry;
-})();
-function __velarRegisterRuntimeType(value) { __velarRuntimeTypeRegistry.add(value); return value; }
-function __velarRequireRuntimeType(value, name, optional = false) {
-  if (optional && value == null) return null;
-  if (!value || typeof value !== "object" || !WeakSet.prototype.has.call(__velarRuntimeTypeRegistry, value)) {
-    throw new TypeError(name + " requires a compiler-known VelarScript runtime type");
-  }
-  return value;
-}
-`.trimStart();
+const runtimeTypeRuntime = VELAR_TYPE_REGISTRY_RUNTIME;
 
 const coreModuleSources: ReadonlyMap<string, string> = new Map([
-  ...localPlatformModuleSources,
+  [VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE],
+  [VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_HOST_MODULE_SOURCE],
+  [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_MODULE_SOURCE],
+  [VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE],
+  [VELAR_NARROWING_MODULE, VELAR_NARROWING_MODULE_SOURCE],
+  [VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PRIMITIVE_METHOD_MODULE_SOURCE],
+  [VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE],
+  [VELAR_REACTIVE_BRIDGE_MODULE, VELAR_REACTIVE_BRIDGE_MODULE_SOURCE],
+  [VELAR_TYPE_VALIDATION_MODULE, VELAR_TYPE_VALIDATION_MODULE_SOURCE],
   ["velar/collections", String.raw`
 ${listRuntime}
 const maxCollectionTextCodeUnits = 16 * 1024 * 1024;
-const nativeListJoin = Object.getOwnPropertyDescriptor(Array.prototype, "join").value;
+const __velarCollectionsNativeArray = globalThis.Array;
+const __velarCollectionsNativeMap = globalThis.Map;
+const __velarCollectionsNativeSet = globalThis.Set;
+const __velarCollectionsNativeObject = globalThis.Object;
+const __velarCollectionsNativeNumber = globalThis.Number;
+const __velarCollectionsNativeMath = globalThis.Math;
+const __velarCollectionsNativeTypeError = globalThis.TypeError;
+const __velarCollectionsNativeRangeError = globalThis.RangeError;
+const __velarCollectionsGetOwnPropertyDescriptor = __velarCollectionsNativeObject.getOwnPropertyDescriptor;
+const __velarCollectionsApply = __velarCollectionsGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+const __velarCollectionsArrayPrototype = __velarCollectionsGetOwnPropertyDescriptor(__velarCollectionsNativeArray, "prototype")?.value;
+const __velarCollectionsMapPrototype = __velarCollectionsGetOwnPropertyDescriptor(__velarCollectionsNativeMap, "prototype")?.value;
+const __velarCollectionsSetPrototype = __velarCollectionsGetOwnPropertyDescriptor(__velarCollectionsNativeSet, "prototype")?.value;
+function __velarCollectionsHostOperation(owner, key) { const descriptor = __velarCollectionsGetOwnPropertyDescriptor(owner, key); if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "function") throw new __velarCollectionsNativeTypeError("The JavaScript " + key + " collection API is unavailable"); return descriptor.value; }
+const __velarCollectionsArrayJoin = __velarCollectionsHostOperation(__velarCollectionsArrayPrototype, "join");
+const __velarCollectionsArraySort = __velarCollectionsHostOperation(__velarCollectionsArrayPrototype, "sort");
+const __velarCollectionsMapGet = __velarCollectionsHostOperation(__velarCollectionsMapPrototype, "get");
+const __velarCollectionsMapSet = __velarCollectionsHostOperation(__velarCollectionsMapPrototype, "set");
+const __velarCollectionsSetHas = __velarCollectionsHostOperation(__velarCollectionsSetPrototype, "has");
+const __velarCollectionsSetAdd = __velarCollectionsHostOperation(__velarCollectionsSetPrototype, "add");
+const __velarCollectionsObjectFreeze = __velarCollectionsHostOperation(__velarCollectionsNativeObject, "freeze");
+const __velarCollectionsObjectIs = __velarCollectionsHostOperation(__velarCollectionsNativeObject, "is");
+const __velarCollectionsNumberIsFinite = __velarCollectionsHostOperation(__velarCollectionsNativeNumber, "isFinite");
+const __velarCollectionsNumberIsNaN = __velarCollectionsHostOperation(__velarCollectionsNativeNumber, "isNaN");
+const __velarCollectionsNumberIsSafeInteger = __velarCollectionsHostOperation(__velarCollectionsNativeNumber, "isSafeInteger");
+const __velarCollectionsMathMin = __velarCollectionsHostOperation(__velarCollectionsNativeMath, "min");
+const __velarCollectionsMathMax = __velarCollectionsHostOperation(__velarCollectionsNativeMath, "max");
+const __velarCollectionsMathFloor = __velarCollectionsHostOperation(__velarCollectionsNativeMath, "floor");
+if (typeof __velarCollectionsApply !== "function") throw new __velarCollectionsNativeTypeError("The JavaScript Reflect.apply collection API is unavailable");
+function __velarCollectionsCall(operation, receiver, arguments_) { return __velarCollectionsApply(operation, receiver, arguments_); }
+function __velarCollectionsFreeze(value) { return __velarCollectionsCall(__velarCollectionsObjectFreeze, __velarCollectionsNativeObject, [value]); }
+function __velarCollectionsSame(left, right) { return left === right || __velarCollectionsCall(__velarCollectionsObjectIs, __velarCollectionsNativeObject, [left, right]); }
 function requireList(value, name) {
   return __velarRequireList(value, name);
 }
 
 function requireCount(value, name, positive = false) {
-  if (!Number.isSafeInteger(value) || (positive ? value <= 0 : value < 0)) {
-    throw new RangeError(name + " requires " + (positive ? "a positive" : "a non-negative") + " integer");
+  if (!__velarCollectionsCall(__velarCollectionsNumberIsSafeInteger, __velarCollectionsNativeNumber, [value]) || (positive ? value <= 0 : value < 0)) {
+    throw new __velarCollectionsNativeRangeError(name + " requires " + (positive ? "a positive" : "a non-negative") + " integer");
   }
   return value;
 }
 
 function requireCallback(value, name) {
-  if (typeof value !== "function") throw new TypeError(name + " requires a function");
+  if (typeof value !== "function") throw new __velarCollectionsNativeTypeError(name + " requires a function");
   return value;
 }
 
 function predicate(callback, value, name) {
   const result = requireCallback(callback, name)(value);
-  if (typeof result !== "boolean") throw new TypeError(name + " predicate must return bool");
+  if (typeof result !== "boolean") throw new __velarCollectionsNativeTypeError(name + " predicate must return bool");
   return result;
 }
 
 function comparable(value, name, expected = null) {
   const type = typeof value;
-  if ((type !== "string" && type !== "number") || (type === "number" && Number.isNaN(value))) {
-    throw new TypeError(name + " key must be a string or non-NaN number");
+  if ((type !== "string" && type !== "number") || (type === "number" && __velarCollectionsCall(__velarCollectionsNumberIsNaN, __velarCollectionsNativeNumber, [value]))) {
+    throw new __velarCollectionsNativeTypeError(name + " key must be a string or non-NaN number");
   }
-  if (expected !== null && type !== expected) throw new TypeError(name + " keys must all have the same type");
+  if (expected !== null && type !== expected) throw new __velarCollectionsNativeTypeError(name + " keys must all have the same type");
   return type;
 }
 
 export function range(start, stop = null, step = 1) {
   if (stop === null) { stop = start; start = 0; }
-  if (![start, stop, step].every(Number.isFinite) || step === 0) throw new RangeError("range requires finite numbers and a non-zero step");
-  const output = [];
+  if (!__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [start]) || !__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [stop]) || !__velarCollectionsCall(__velarCollectionsNumberIsFinite, __velarCollectionsNativeNumber, [step]) || step === 0) throw new __velarCollectionsNativeRangeError("range requires finite numbers and a non-zero step");
+  const output = new __velarCollectionsNativeArray();
   if (step > 0) for (let value = start; value < stop;) {
-    if (output.length >= __velarMaxListItems) throw new RangeError("range cannot produce more than " + __velarMaxListItems + " items");
-    output.push(value); const next = value + step;
-    if (next === value) throw new RangeError("range step is too small to advance at this magnitude");
+    if (output.length >= __velarMaxListItems) throw new __velarCollectionsNativeRangeError("range cannot produce more than " + __velarMaxListItems + " items");
+    output[output.length] = value; const next = value + step;
+    if (next === value) throw new __velarCollectionsNativeRangeError("range step is too small to advance at this magnitude");
     value = next;
   } else for (let value = start; value > stop;) {
-    if (output.length >= __velarMaxListItems) throw new RangeError("range cannot produce more than " + __velarMaxListItems + " items");
-    output.push(value); const next = value + step;
-    if (next === value) throw new RangeError("range step is too small to advance at this magnitude");
+    if (output.length >= __velarMaxListItems) throw new __velarCollectionsNativeRangeError("range cannot produce more than " + __velarMaxListItems + " items");
+    output[output.length] = value; const next = value + step;
+    if (next === value) throw new __velarCollectionsNativeRangeError("range step is too small to advance at this magnitude");
     value = next;
   }
   return output;
@@ -452,64 +540,68 @@ export function range(start, stop = null, step = 1) {
 
 export function enumerate(values, start = 0) {
   values = requireList(values, "enumerate");
-  if (!Number.isSafeInteger(start) || (values.length > 0 && !Number.isSafeInteger(start + values.length - 1))) throw new RangeError("enumerate indexes must be safe integers");
-  return values.map((value, index) => Object.freeze({ index: start + index, value }));
+  if (!__velarCollectionsCall(__velarCollectionsNumberIsSafeInteger, __velarCollectionsNativeNumber, [start]) || (values.length > 0 && !__velarCollectionsCall(__velarCollectionsNumberIsSafeInteger, __velarCollectionsNativeNumber, [start + values.length - 1]))) throw new __velarCollectionsNativeRangeError("enumerate indexes must be safe integers");
+  const output = new __velarCollectionsNativeArray(values.length);
+  for (let index = 0; index < values.length; index += 1) output[index] = __velarCollectionsFreeze({ index: start + index, value: values[index] });
+  return output;
 }
 
 export function zip(left, right) {
   left = requireList(left, "zip"); right = requireList(right, "zip");
-  const length = Math.min(left.length, right.length);
-  return Array.from({ length }, (_, index) => Object.freeze({ first: left[index], second: right[index] }));
+  const length = __velarCollectionsCall(__velarCollectionsMathMin, __velarCollectionsNativeMath, [left.length, right.length]);
+  const output = new __velarCollectionsNativeArray(length);
+  for (let index = 0; index < length; index += 1) output[index] = __velarCollectionsFreeze({ first: left[index], second: right[index] });
+  return output;
 }
 
-export function unique(values) { return [...new Set(requireList(values, "unique"))]; }
+export function unique(values) { values = requireList(values, "unique"); const seen = new __velarCollectionsNativeSet(); const output = new __velarCollectionsNativeArray(); for (let index = 0; index < values.length; index += 1) { const value = values[index]; if (__velarCollectionsCall(__velarCollectionsSetHas, seen, [value])) continue; __velarCollectionsCall(__velarCollectionsSetAdd, seen, [value]); output[output.length] = value; } return output; }
 
 export function chunk(values, size) {
   values = requireList(values, "chunk"); requireCount(size, "chunk size", true);
-  const output = [];
-  for (let index = 0; index < values.length; index += size) output.push(values.slice(index, index + size));
+  const output = new __velarCollectionsNativeArray();
+  for (let index = 0; index < values.length; index += size) { const length = __velarCollectionsCall(__velarCollectionsMathMin, __velarCollectionsNativeMath, [size, values.length - index]); const part = new __velarCollectionsNativeArray(length); for (let offset = 0; offset < length; offset += 1) part[offset] = values[index + offset]; output[output.length] = part; }
   return output;
 }
 
 export function flatten(values) {
   values = requireList(values, "flatten");
-  const output = [];
-  for (const value of values) {
-    const nested = requireList(value, "flatten");
-    if (output.length + nested.length > __velarMaxListItems) throw new RangeError("flatten cannot produce more than " + __velarMaxListItems + " items");
-    for (const item of nested) output.push(item);
+  const output = new __velarCollectionsNativeArray();
+  for (let outer = 0; outer < values.length; outer += 1) {
+    const nested = requireList(values[outer], "flatten");
+    if (output.length + nested.length > __velarMaxListItems) throw new __velarCollectionsNativeRangeError("flatten cannot produce more than " + __velarMaxListItems + " items");
+    for (let inner = 0; inner < nested.length; inner += 1) output[output.length] = nested[inner];
   }
   return output;
 }
 
-export function compact(values) { return requireList(values, "compact").filter((value) => value != null); }
-export function reversed(values) { return requireList(values, "reversed").slice().reverse(); }
-export function take(values, count) { return requireList(values, "take").slice(0, requireCount(count, "take count")); }
-export function drop(values, count) { return requireList(values, "drop").slice(requireCount(count, "drop count")); }
+export function compact(values) { values = requireList(values, "compact"); const output = new __velarCollectionsNativeArray(); for (let index = 0; index < values.length; index += 1) if (values[index] != null) output[output.length] = values[index]; return output; }
+export function reversed(values) { values = requireList(values, "reversed"); const output = new __velarCollectionsNativeArray(values.length); for (let index = 0; index < values.length; index += 1) output[index] = values[values.length - index - 1]; return output; }
+export function take(values, count) { values = requireList(values, "take"); count = __velarCollectionsCall(__velarCollectionsMathMin, __velarCollectionsNativeMath, [values.length, requireCount(count, "take count")]); const output = new __velarCollectionsNativeArray(count); for (let index = 0; index < count; index += 1) output[index] = values[index]; return output; }
+export function drop(values, count) { values = requireList(values, "drop"); count = __velarCollectionsCall(__velarCollectionsMathMin, __velarCollectionsNativeMath, [values.length, requireCount(count, "drop count")]); const output = new __velarCollectionsNativeArray(values.length - count); for (let index = count; index < values.length; index += 1) output[index - count] = values[index]; return output; }
 export function first(values) { values = requireList(values, "first"); return values.length ? values[0] : null; }
 export function last(values) { values = requireList(values, "last"); return values.length ? values[values.length - 1] : null; }
-export function find(values, callback) { return requireList(values, "find").find((value) => predicate(callback, value, "find")) ?? null; }
-export function index(values, item) { const position = requireList(values, "index").findIndex((value) => value === item || Object.is(value, item)); return position < 0 ? null : position; }
-export function has(values, value) { return requireList(values, "has").some((item) => item === value || Object.is(item, value)); }
-export function count(values, value) { return requireList(values, "count").reduce((total, item) => total + (item === value || Object.is(item, value) ? 1 : 0), 0); }
-export function some(values, callback) { return requireList(values, "some").some((value) => predicate(callback, value, "some")); }
-export function every(values, callback) { return requireList(values, "every").every((value) => predicate(callback, value, "every")); }
+export function find(values, callback) { values = requireList(values, "find"); for (let index = 0; index < values.length; index += 1) if (predicate(callback, values[index], "find")) return values[index]; return null; }
+export function index(values, item) { values = requireList(values, "index"); for (let index = 0; index < values.length; index += 1) if (__velarCollectionsSame(values[index], item)) return index; return null; }
+export function has(values, value) { return index(values, value) !== null; }
+export function count(values, value) { values = requireList(values, "count"); let total = 0; for (let index = 0; index < values.length; index += 1) if (__velarCollectionsSame(values[index], value)) total += 1; return total; }
+export function some(values, callback) { values = requireList(values, "some"); for (let index = 0; index < values.length; index += 1) if (predicate(callback, values[index], "some")) return true; return false; }
+export function every(values, callback) { values = requireList(values, "every"); for (let index = 0; index < values.length; index += 1) if (!predicate(callback, values[index], "every")) return false; return true; }
 
 export function partition(values, callback) {
   values = requireList(values, "partition");
-  const matches = [], rest = [];
-  for (const value of values) (predicate(callback, value, "partition") ? matches : rest).push(value);
-  return Object.freeze({ matches, rest });
+  const matches = new __velarCollectionsNativeArray(), rest = new __velarCollectionsNativeArray();
+  for (let index = 0; index < values.length; index += 1) { const output = predicate(callback, values[index], "partition") ? matches : rest; output[output.length] = values[index]; }
+  return __velarCollectionsFreeze({ matches, rest });
 }
 
 export function groupBy(values, key) {
   values = requireList(values, "groupBy");
   requireCallback(key, "groupBy");
-  const output = new Map();
-  for (const value of values) {
-    const name = key(value) ?? null;
-    const group = output.get(name);
-    if (group) group.push(value); else output.set(name, [value]);
+  const output = new __velarCollectionsNativeMap();
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index], name = key(value) ?? null;
+    const group = __velarCollectionsCall(__velarCollectionsMapGet, output, [name]);
+    if (group) group[group.length] = value; else __velarCollectionsCall(__velarCollectionsMapSet, output, [name, [value]]);
   }
   return output;
 }
@@ -517,30 +609,38 @@ export function groupBy(values, key) {
 export function keyBy(values, key) {
   values = requireList(values, "keyBy");
   requireCallback(key, "keyBy");
-  return new Map(values.map((value) => [key(value) ?? null, value]));
+  const output = new __velarCollectionsNativeMap();
+  for (let index = 0; index < values.length; index += 1) __velarCollectionsCall(__velarCollectionsMapSet, output, [key(values[index]) ?? null, values[index]]);
+  return output;
 }
 
 export function countBy(values, key) {
   values = requireList(values, "countBy");
   requireCallback(key, "countBy");
-  const output = new Map();
-  for (const value of values) { const name = key(value) ?? null; output.set(name, (output.get(name) || 0) + 1); }
+  const output = new __velarCollectionsNativeMap();
+  for (let index = 0; index < values.length; index += 1) { const name = key(values[index]) ?? null; __velarCollectionsCall(__velarCollectionsMapSet, output, [name, (__velarCollectionsCall(__velarCollectionsMapGet, output, [name]) || 0) + 1]); }
   return output;
 }
 
 export function sortBy(values, key, descending = false) {
   values = requireList(values, "sortBy"); requireCallback(key, "sortBy");
-  if (typeof descending !== "boolean") throw new TypeError("sortBy descending must be bool");
+  if (typeof descending !== "boolean") throw new __velarCollectionsNativeTypeError("sortBy descending must be bool");
   let keyType = null;
-  return values.map((value, index) => {
+  const decorated = new __velarCollectionsNativeArray(values.length);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     const result = key(value);
     const type = comparable(result, "sortBy", keyType);
     if (keyType === null) keyType = type;
-    return { value, index, key: result };
-  }).sort((left, right) => {
+    decorated[index] = { value, index, key: result };
+  }
+  __velarCollectionsCall(__velarCollectionsArraySort, decorated, [(left, right) => {
     const order = left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
     return order === 0 ? left.index - right.index : descending ? -order : order;
-  }).map((item) => item.value);
+  }]);
+  const output = new __velarCollectionsNativeArray(decorated.length);
+  for (let index = 0; index < decorated.length; index += 1) output[index] = decorated[index].value;
+  return output;
 }
 
 function extremeBy(values, key, direction, name) {
@@ -559,35 +659,93 @@ function extremeBy(values, key, direction, name) {
 
 export function minBy(values, key) { return extremeBy(values, key, -1, "minBy"); }
 export function maxBy(values, key) { return extremeBy(values, key, 1, "maxBy"); }
-export function sum(values) { return requireList(values, "sum").reduce((total, value) => { if (typeof value !== "number") throw new TypeError("sum requires numbers"); return total + value; }, 0); }
+export function sum(values) { values = requireList(values, "sum"); let total = 0; for (let index = 0; index < values.length; index += 1) { if (typeof values[index] !== "number") throw new __velarCollectionsNativeTypeError("sum requires numbers"); total += values[index]; } return total; }
 export function join(values, separator = "") {
-  if (typeof separator !== "string") throw new TypeError("join separator must be a string");
+  if (typeof separator !== "string") throw new __velarCollectionsNativeTypeError("join separator must be a string");
   values = requireList(values, "join");
   let outputCodeUnits = 0;
-  for (const value of values) {
-    if (typeof value !== "string") throw new TypeError("join requires strings");
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (typeof value !== "string") throw new __velarCollectionsNativeTypeError("join requires strings");
     if (value.length > maxCollectionTextCodeUnits - outputCodeUnits) {
-      throw new RangeError("join output cannot exceed 16 MiB");
+      throw new __velarCollectionsNativeRangeError("join output cannot exceed 16 MiB");
     }
     outputCodeUnits += value.length;
   }
-  const separatorCount = Math.max(0, values.length - 1);
+  const separatorCount = __velarCollectionsCall(__velarCollectionsMathMax, __velarCollectionsNativeMath, [0, values.length - 1]);
   if (separatorCount > 0
-    && separator.length > Math.floor((maxCollectionTextCodeUnits - outputCodeUnits) / separatorCount)) {
-    throw new RangeError("join output cannot exceed 16 MiB");
+    && separator.length > __velarCollectionsCall(__velarCollectionsMathFloor, __velarCollectionsNativeMath, [(maxCollectionTextCodeUnits - outputCodeUnits) / separatorCount])) {
+    throw new __velarCollectionsNativeRangeError("join output cannot exceed 16 MiB");
   }
-  return nativeListJoin.call(values, separator);
+  return __velarCollectionsCall(__velarCollectionsArrayJoin, values, [separator]);
 }
-export function repeat(value, count) { count = requireCount(count, "repeat count"); if (count > __velarMaxListItems) throw new RangeError("repeat cannot produce more than " + __velarMaxListItems + " items"); return Array.from({ length: count }, () => value); }
+export function repeat(value, count) { count = requireCount(count, "repeat count"); if (count > __velarMaxListItems) throw new __velarCollectionsNativeRangeError("repeat cannot produce more than " + __velarMaxListItems + " items"); const output = new __velarCollectionsNativeArray(count); for (let index = 0; index < count; index += 1) output[index] = value; return output; }
 `.trimStart()],
   ["velar/text", String.raw`
 ${VELAR_TEXT_METHOD_RUNTIME}
 const maxTextCodeUnits = __velarMaxTextCodeUnits;
 const maxTextItems = __velarMaxTextItems;
-const nativeRegExpPrototype = Object.getPrototypeOf(/(?:)/u);
-const NativeRegExp = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "constructor").value;
-const nativeRegExpExec = Object.getOwnPropertyDescriptor(nativeRegExpPrototype, "exec").value;
+const __velarTextGetOwnPropertyNames = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getOwnPropertyNames")?.value;
+const __velarTextGetOwnPropertySymbols = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getOwnPropertySymbols")?.value;
+const __velarTextGetPrototypeOf = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getPrototypeOf")?.value;
+const __velarTextObjectPrototype = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "prototype")?.value;
+const __velarTextObjectCreate = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "create")?.value;
+const __velarTextObjectFreeze = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "freeze")?.value;
+const __velarTextArrayPrototype = __velarTextGetOwnPropertyDescriptor(__velarTextNativeArray, "prototype")?.value;
+const __velarTextArrayJoin = __velarTextGetOwnPropertyDescriptor(__velarTextArrayPrototype, "join")?.value;
+const __velarTextStringTrimStart = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "trimStart")?.value;
+const __velarTextStringTrimEnd = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "trimEnd")?.value;
+const __velarTextStringNormalize = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "normalize")?.value;
+const nativeRegExpPrototype = __velarTextGetPrototypeOf(/(?:)/u);
+const NativeRegExp = __velarTextGetOwnPropertyDescriptor(nativeRegExpPrototype, "constructor")?.value;
+const nativeRegExpExec = __velarTextGetOwnPropertyDescriptor(nativeRegExpPrototype, "exec")?.value;
 const nativeStringReplaceAll = __velarNativeStringReplaceAll;
+const __velarTextTitleSeparators = /[_\-/]+/gu;
+const __velarTextTitleWords = /(^|\s)([\p{L}\p{N}])/gu;
+const __velarTextLines = /\r?\n/gu;
+const __velarTextWords = /\s+/gu;
+const __velarTextMarks = /\p{M}/gu;
+const __velarTextSlugSeparators = /[^\p{L}\p{N}]+/gu;
+const __velarTextSlugEdges = /^-+|-+$/gu;
+const __velarTextWhitespace = /\s+/gu;
+function __velarTextAppend(values, value) { values[values.length] = value; }
+function __velarTextJoin(values, separator) { return __velarTextCall(__velarTextArrayJoin, values, [separator]); }
+function __velarTextRegexReplace(value, pattern, replacement) {
+  pattern.lastIndex = 0;
+  const output = []; let end = 0, units = 0;
+  while (true) {
+    const raw = __velarTextCall(nativeRegExpExec, pattern, [value]);
+    if (raw === null) break;
+    const match = checkedMatchValue(raw, value);
+    const before = __velarTextCall(__velarNativeStringSlice, value, [end, match.unitIndex]);
+    const next = typeof replacement === "function" ? replacement(match) : replacement;
+    if (typeof next !== "string") throw new __velarTextNativeTypeError("Text replacement must produce a string");
+    units += before.length + next.length;
+    if (units > maxTextCodeUnits) throw new __velarTextNativeRangeError("Text replacement output cannot exceed 16 MiB");
+    __velarTextAppend(output, before); __velarTextAppend(output, next);
+    end = match.unitIndex + match.value.length;
+    if (match.value === "") pattern.lastIndex = nextTextIndex(value, pattern.lastIndex);
+  }
+  const tail = __velarTextCall(__velarNativeStringSlice, value, [end]);
+  if (units + tail.length > maxTextCodeUnits) throw new __velarTextNativeRangeError("Text replacement output cannot exceed 16 MiB");
+  __velarTextAppend(output, tail); pattern.lastIndex = 0;
+  return __velarTextJoin(output, "");
+}
+function __velarTextRegexSplit(value, pattern, limit) {
+  pattern.lastIndex = 0;
+  const output = []; let end = 0;
+  while (output.length + 1 < limit) {
+    const raw = __velarTextCall(nativeRegExpExec, pattern, [value]);
+    if (raw === null) break;
+    const match = checkedMatchValue(raw, value);
+    __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [end, match.unitIndex]));
+    end = match.unitIndex + match.value.length;
+    if (match.value === "") pattern.lastIndex = nextTextIndex(value, pattern.lastIndex);
+  }
+  if (output.length < limit) __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [end]));
+  pattern.lastIndex = 0;
+  return output;
+}
 function valueOf(value) { return __velarTextArgument(value, "velar/text value"); }
 function textOutput(value, name) { return __velarTextOutput(value, name); }
 function textCount(value, name) { return __velarTextCount(value, name); }
@@ -607,181 +765,232 @@ const codePointLength = __velarTextCodePointLength;
 const codePointPrefix = __velarTextCodePointPrefix;
 function patternOptions(value) {
   if (value == null) return {};
-  if (typeof value !== "object" || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) throw new TypeError("text pattern options must be a record");
-  if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError("text pattern options cannot contain symbol fields");
-  const allowed = new Set(["ignoreCase", "multiline", "dotAll"]);
-  const output = Object.create(null);
-  for (const name of Object.getOwnPropertyNames(value)) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Text pattern option '" + name + "' must be an enumerable data field");
-    if (!allowed.has(name)) throw new TypeError("Unknown text pattern option '" + name + "'");
+  const prototype = typeof value === "object" && value !== null ? __velarTextGetPrototypeOf(value) : undefined;
+  if (typeof value !== "object" || value === null || __velarTextCall(__velarTextArrayIsArray, __velarTextNativeArray, [value]) || (prototype !== __velarTextObjectPrototype && prototype !== null)) throw new __velarTextNativeTypeError("text pattern options must be a record");
+  if (__velarTextGetOwnPropertySymbols(value).length > 0) throw new __velarTextNativeTypeError("text pattern options cannot contain symbol fields");
+  const output = __velarTextCall(__velarTextObjectCreate, __velarTextNativeObject, [null]);
+  const names = __velarTextGetOwnPropertyNames(value);
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    const descriptor = __velarTextGetOwnPropertyDescriptor(value, name);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new __velarTextNativeTypeError("Text pattern option '" + name + "' must be an enumerable data field");
+    if (name !== "ignoreCase" && name !== "multiline" && name !== "dotAll") throw new __velarTextNativeTypeError("Unknown text pattern option '" + name + "'");
     const option = descriptor.value;
-    if (option != null && typeof option !== "boolean") throw new TypeError("Text pattern option '" + name + "' must be bool");
+    if (option != null && typeof option !== "boolean") throw new __velarTextNativeTypeError("Text pattern option '" + name + "' must be bool");
     output[name] = option;
   }
   return output;
 }
 function patternOf(expression, options, global = false) {
   expression = valueOf(expression); options = patternOptions(options);
-  if (expression.length > 4096) throw new RangeError("text patterns cannot exceed 4096 code units");
+  if (expression.length > 4096) throw new __velarTextNativeRangeError("text patterns cannot exceed 4096 code units");
   let flags = "u";
   if (global) flags += "g";
   if (options.ignoreCase === true) flags += "i";
   if (options.multiline === true) flags += "m";
   if (options.dotAll === true) flags += "s";
   try { return new NativeRegExp(expression, flags); }
-  catch { throw new TypeError("Invalid text pattern"); }
+  catch { throw new __velarTextNativeTypeError("Invalid text pattern"); }
 }
-function matchValue(match, input) {
-  if (!Array.isArray(match) || match.length < 1 || match.length > 4097) throw new TypeError("The regular expression engine returned an invalid match");
-  const groups = new Array(match.length - 1);
+function checkedMatchValue(match, input) {
+  if (!__velarTextCall(__velarTextArrayIsArray, __velarTextNativeArray, [match]) || match.length < 1 || match.length > 4097) throw new __velarTextNativeTypeError("The regular expression engine returned an invalid match");
+  const groups = new __velarTextNativeArray(match.length - 1);
   for (let index = 0; index < match.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(match, index);
-    if (!descriptor || !("value" in descriptor)) throw new TypeError("Regular expression matches must contain data values");
+    const descriptor = __velarTextGetOwnPropertyDescriptor(match, index);
+    if (!descriptor || !("value" in descriptor)) throw new __velarTextNativeTypeError("Regular expression matches must contain data values");
     const value = descriptor.value;
-    if (value !== undefined && typeof value !== "string") throw new TypeError("Regular expression match values must be strings");
+    if (value !== undefined && typeof value !== "string") throw new __velarTextNativeTypeError("Regular expression match values must be strings");
     if (index === 0) {
-      if (typeof value !== "string") throw new TypeError("A regular expression match requires full text");
+      if (typeof value !== "string") throw new __velarTextNativeTypeError("A regular expression match requires full text");
     } else groups[index - 1] = value === undefined ? null : value;
   }
-  const indexDescriptor = Object.getOwnPropertyDescriptor(match, "index");
-  if (!indexDescriptor || !("value" in indexDescriptor) || !Number.isSafeInteger(indexDescriptor.value) || indexDescriptor.value < 0 || indexDescriptor.value > input.length) throw new TypeError("A regular expression match requires a valid index");
-  return Object.freeze({ value: Object.getOwnPropertyDescriptor(match, 0).value, index: indexDescriptor.value, groups });
+  const indexDescriptor = __velarTextGetOwnPropertyDescriptor(match, "index");
+  if (!indexDescriptor || !("value" in indexDescriptor) || !__velarTextCall(__velarTextNumberIsSafeInteger, __velarTextNativeNumber, [indexDescriptor.value]) || indexDescriptor.value < 0 || indexDescriptor.value > input.length) throw new __velarTextNativeTypeError("A regular expression match requires a valid index");
+  return { value: __velarTextGetOwnPropertyDescriptor(match, 0).value, groups, unitIndex: indexDescriptor.value };
+}
+function publicMatchValue(checked, input, index = null) {
+  if (index === null) index = __velarTextCodePointIndex(input, checked.unitIndex);
+  if (index === null) throw new __velarTextNativeTypeError("A regular expression match must begin at a Unicode code-point boundary");
+  return __velarTextCall(__velarTextObjectFreeze, __velarTextNativeObject, [{ value: checked.value, index, groups: checked.groups }]);
 }
 function nextTextIndex(value, index) {
-  if (index >= value.length) return index + 1;
-  const first = value.charCodeAt(index);
-  if (first < 0xD800 || first > 0xDBFF || index + 1 >= value.length) return index + 1;
-  const second = value.charCodeAt(index + 1);
-  return second >= 0xDC00 && second <= 0xDFFF ? index + 2 : index + 1;
+  return index >= value.length ? index + 1 : __velarTextNextCodePointOffset(value, index);
 }
 function eachMatch(value, pattern, visit) {
-  let count = 0, units = 0;
+  let count = 0, units = 0, previousUnitIndex = 0, previousCodePointIndex = 0;
   while (true) {
-    const raw = nativeRegExpExec.call(pattern, value);
+    const raw = __velarTextCall(nativeRegExpExec, pattern, [value]);
     if (raw === null) return;
-    if (count >= maxTextItems) throw new RangeError("Text patterns cannot produce more than " + maxTextItems + " matches");
+    if (count >= maxTextItems) throw new __velarTextNativeRangeError("Text patterns cannot produce more than " + maxTextItems + " matches");
     count += 1;
-    const match = matchValue(raw, value);
+    const checked = checkedMatchValue(raw, value);
+    const distance = __velarTextCodePointDistance(value, previousUnitIndex, checked.unitIndex);
+    if (distance === null) throw new __velarTextNativeTypeError("A regular expression match must begin at a Unicode code-point boundary");
+    const match = publicMatchValue(checked, value, previousCodePointIndex + distance);
+    previousUnitIndex = checked.unitIndex;
+    previousCodePointIndex = match.index;
     units += match.value.length;
-    for (const group of match.groups) if (group !== null) units += group.length;
-    if (units > maxTextCodeUnits) throw new RangeError("Text pattern results cannot exceed 16 MiB");
-    visit(match);
+    for (let index = 0; index < match.groups.length; index += 1) { const group = match.groups[index]; if (group !== null) units += group.length; }
+    if (units > maxTextCodeUnits) throw new __velarTextNativeRangeError("Text pattern results cannot exceed 16 MiB");
+    visit(match, checked.unitIndex);
     if (match.value === "") pattern.lastIndex = nextTextIndex(value, pattern.lastIndex);
   }
 }
-export function trimStart(value) { return valueOf(value).trimStart(); }
-export function trimEnd(value) { return valueOf(value).trimEnd(); }
-export function capitalize(value) { value = valueOf(value); if (!value) return ""; const first = String.fromCodePoint(value.codePointAt(0)); return textOutput(first.toUpperCase() + value.slice(first.length).toLowerCase(), "capitalize"); }
-export function title(value) { return textOutput(valueOf(value).toLowerCase().replace(/[_\-/]+/gu, " ").replace(/(^|\s)([\p{L}\p{N}])/gu, (_, before, char) => before + char.toUpperCase()), "title"); }
-export function lines(value) { return textList(valueOf(value).split(/\r?\n/u, maxTextItems + 1), "lines"); }
-export function words(value) { const cleaned = valueOf(value).trim(); return cleaned ? textList(cleaned.split(/\s+/u, maxTextItems + 1), "words") : []; }
-export function slug(value) { return textOutput(valueOf(value).normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/gu, ""), "slug"); }
+export function trimStart(value) { return __velarTextCall(__velarTextStringTrimStart, valueOf(value), []); }
+export function trimEnd(value) { return __velarTextCall(__velarTextStringTrimEnd, valueOf(value), []); }
+export function capitalize(value) { value = valueOf(value); if (!value) return ""; const end = __velarTextNextCodePointOffset(value, 0); const first = __velarTextCall(__velarNativeStringSlice, value, [0, end]); const tail = __velarTextCall(__velarNativeStringSlice, value, [end]); return textOutput(__velarTextCall(__velarNativeStringUpper, first, []) + __velarTextCall(__velarNativeStringLower, tail, []), "capitalize"); }
+export function title(value) { let output = __velarTextCall(__velarNativeStringLower, valueOf(value), []); output = __velarTextRegexReplace(output, __velarTextTitleSeparators, " "); output = __velarTextRegexReplace(output, __velarTextTitleWords, match => match.groups[0] + __velarTextCall(__velarNativeStringUpper, match.groups[1], [])); return textOutput(output, "title"); }
+export function lines(value) { return textList(__velarTextRegexSplit(valueOf(value), __velarTextLines, maxTextItems + 1), "lines"); }
+export function words(value) { const cleaned = __velarTextCall(__velarNativeStringTrim, valueOf(value), []); return cleaned ? textList(__velarTextRegexSplit(cleaned, __velarTextWords, maxTextItems + 1), "words") : []; }
+export function slug(value) { let output = __velarTextCall(__velarTextStringNormalize, valueOf(value), ["NFKD"]); output = __velarTextRegexReplace(output, __velarTextMarks, ""); output = __velarTextCall(__velarNativeStringLower, output, []); output = __velarTextCall(__velarNativeStringTrim, output, []); output = __velarTextRegexReplace(output, __velarTextSlugSeparators, "-"); output = __velarTextRegexReplace(output, __velarTextSlugEdges, ""); return textOutput(output, "slug"); }
 export function truncate(value, length, suffix = "…") { value = valueOf(value); suffix = valueOf(suffix); length = textCount(length, "truncate length"); const valueLength = codePointLength(value); if (valueLength <= length) return value; const suffixLength = codePointLength(suffix); if (suffixLength >= length) return codePointPrefix(suffix, length); return codePointPrefix(value, length - suffixLength) + suffix; }
 export function indent(value, prefix = "    ") {
   const rows = lines(valueOf(value)); prefix = valueOf(prefix);
-  let units = Math.max(0, rows.length - 1);
-  const output = new Array(rows.length);
+  let units = __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [0, rows.length - 1]);
+  const output = new __velarTextNativeArray(rows.length);
   for (let index = 0; index < rows.length; index += 1) {
     units += prefix.length + rows[index].length;
-    if (units > maxTextCodeUnits) throw new RangeError("indent output cannot exceed 16 MiB");
+    if (units > maxTextCodeUnits) throw new __velarTextNativeRangeError("indent output cannot exceed 16 MiB");
     output[index] = prefix + rows[index];
   }
-  return output.join("\n");
+  return __velarTextJoin(output, "\n");
 }
-export function dedent(value) { const rows = lines(valueOf(value)); let width = null; for (const line of rows) if (line.trim()) { const current = line.match(/^[ \t]*/u)[0].length; width = width === null ? current : Math.min(width, current); } return rows.map((line) => line.slice(width ?? 0)).join("\n"); }
-export function normalizeWhitespace(value) { return valueOf(value).trim().replace(/\s+/gu, " "); }
-export function isBlank(value) { return valueOf(value).trim().length === 0; }
+export function dedent(value) { const rows = lines(valueOf(value)); let width = null; for (let index = 0; index < rows.length; index += 1) { const line = rows[index]; if (__velarTextCall(__velarNativeStringTrim, line, [])) { let current = 0; while (current < line.length && (line[current] === " " || line[current] === "\t")) current += 1; width = width === null ? current : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [width, current]); } } const output = new __velarTextNativeArray(rows.length); for (let index = 0; index < rows.length; index += 1) output[index] = __velarTextCall(__velarNativeStringSlice, rows[index], [width ?? 0]); return __velarTextJoin(output, "\n"); }
+export function normalizeWhitespace(value) { return __velarTextRegexReplace(__velarTextCall(__velarNativeStringTrim, valueOf(value), []), __velarTextWhitespace, " "); }
+export function isBlank(value) { return __velarTextCall(__velarNativeStringTrim, valueOf(value), []).length === 0; }
 export function escapeHtml(value) {
   value = valueOf(value);
-  if (htmlOutputUnits(value) > maxTextCodeUnits) throw new RangeError("escapeHtml output cannot exceed 16 MiB");
-  for (const [character, escaped] of [["&", "&amp;"], ["<", "&lt;"], [">", "&gt;"], ['"', "&quot;"], ["'", "&#39;"]]) {
-    value = nativeStringReplaceAll.call(value, character, escaped);
+  if (htmlOutputUnits(value) > maxTextCodeUnits) throw new __velarTextNativeRangeError("escapeHtml output cannot exceed 16 MiB");
+  const replacements = [["&", "&amp;"], ["<", "&lt;"], [">", "&gt;"], ['"', "&quot;"], ["'", "&#39;"]];
+  for (let index = 0; index < replacements.length; index += 1) {
+    const pair = replacements[index];
+    value = __velarTextCall(nativeStringReplaceAll, value, [pair[0], pair[1]]);
   }
   return value;
 }
-export function matches(value, expression, options = {}) { value = valueOf(value); return nativeRegExpExec.call(patternOf(expression, options), value) !== null; }
-export function findMatch(value, expression, options = {}) { value = valueOf(value); const match = nativeRegExpExec.call(patternOf(expression, options), value); return match === null ? null : matchValue(match, value); }
-export function findMatches(value, expression, options = {}) { value = valueOf(value); const output = []; eachMatch(value, patternOf(expression, options, true), match => output.push(match)); return output; }
+export function matches(value, expression, options = {}) { value = valueOf(value); return __velarTextCall(nativeRegExpExec, patternOf(expression, options), [value]) !== null; }
+export function findMatch(value, expression, options = {}) { value = valueOf(value); const match = __velarTextCall(nativeRegExpExec, patternOf(expression, options), [value]); return match === null ? null : publicMatchValue(checkedMatchValue(match, value), value); }
+export function findMatches(value, expression, options = {}) { value = valueOf(value); const output = []; eachMatch(value, patternOf(expression, options, true), match => __velarTextAppend(output, match)); return output; }
 export function replaceMatches(value, expression, replacement, options = {}) {
   value = valueOf(value); replacement = valueOf(replacement);
   const output = []; let end = 0, units = 0;
-  eachMatch(value, patternOf(expression, options, true), match => {
-    const before = value.slice(end, match.index);
+  eachMatch(value, patternOf(expression, options, true), (match, unitIndex) => {
+    const before = __velarTextCall(__velarNativeStringSlice, value, [end, unitIndex]);
     units += before.length + replacement.length;
-    if (units > maxTextCodeUnits) throw new RangeError("replaceMatches output cannot exceed 16 MiB");
-    output.push(before, replacement);
-    end = match.index + match.value.length;
+    if (units > maxTextCodeUnits) throw new __velarTextNativeRangeError("replaceMatches output cannot exceed 16 MiB");
+    __velarTextAppend(output, before); __velarTextAppend(output, replacement);
+    end = unitIndex + match.value.length;
   });
-  const tail = value.slice(end);
-  if (units + tail.length > maxTextCodeUnits) throw new RangeError("replaceMatches output cannot exceed 16 MiB");
-  output.push(tail);
-  return output.join("");
+  const tail = __velarTextCall(__velarNativeStringSlice, value, [end]);
+  if (units + tail.length > maxTextCodeUnits) throw new __velarTextNativeRangeError("replaceMatches output cannot exceed 16 MiB");
+  __velarTextAppend(output, tail);
+  return __velarTextJoin(output, "");
 }
 export function splitPattern(value, expression, options = {}) {
   value = valueOf(value); const output = []; let end = 0;
-  eachMatch(value, patternOf(expression, options, true), match => { if (output.length >= maxTextItems) throw new RangeError("splitPattern cannot produce more than " + maxTextItems + " items"); output.push(value.slice(end, match.index)); end = match.index + match.value.length; });
-  output.push(value.slice(end)); return output;
+  eachMatch(value, patternOf(expression, options, true), (match, unitIndex) => { if (output.length >= maxTextItems) throw new __velarTextNativeRangeError("splitPattern cannot produce more than " + maxTextItems + " items"); __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [end, unitIndex])); end = unitIndex + match.value.length; });
+  __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [end])); return output;
 }
 `.trimStart()],
   ["velar/math", String.raw`
-function requireNumber(value, name) { if (typeof value !== "number") throw new TypeError(name + " requires numbers"); return value; }
-function unary(value, operation, name) { return operation(requireNumber(value, name)); }
-function binary(left, right, operation, name) { return operation(requireNumber(left, name), requireNumber(right, name)); }
-export const pi = Math.PI;
-export const e = Math.E;
-export const tau = Math.PI * 2;
-export const infinity = Number.POSITIVE_INFINITY;
-export function min(...values) { if (!values.length) throw new RangeError("min requires at least one number"); let result = requireNumber(values[0], "min"); for (let index = 1; index < values.length; index += 1) result = Math.min(result, requireNumber(values[index], "min")); return result; }
-export function max(...values) { if (!values.length) throw new RangeError("max requires at least one number"); let result = requireNumber(values[0], "max"); for (let index = 1; index < values.length; index += 1) result = Math.max(result, requireNumber(values[index], "max")); return result; }
-export function clamp(value, minimum, maximum) { value = requireNumber(value, "clamp"); minimum = requireNumber(minimum, "clamp"); maximum = requireNumber(maximum, "clamp"); if (minimum > maximum) throw new RangeError("clamp minimum cannot exceed maximum"); return Math.min(maximum, Math.max(minimum, value)); }
-export function sign(value) { return unary(value, Math.sign, "sign"); }
-export function trunc(value) { return unary(value, Math.trunc, "trunc"); }
-export function sqrt(value) { return unary(value, Math.sqrt, "sqrt"); }
-export function cbrt(value) { return unary(value, Math.cbrt, "cbrt"); }
-export function pow(left, right) { return binary(left, right, Math.pow, "pow"); }
-export function exp(value) { return unary(value, Math.exp, "exp"); }
-export function log(value, base = Math.E) { return Math.log(requireNumber(value, "log")) / Math.log(requireNumber(base, "log")); }
-export function log2(value) { return unary(value, Math.log2, "log2"); }
-export function log10(value) { return unary(value, Math.log10, "log10"); }
-export function sin(value) { return unary(value, Math.sin, "sin"); }
-export function cos(value) { return unary(value, Math.cos, "cos"); }
-export function tan(value) { return unary(value, Math.tan, "tan"); }
-export function asin(value) { return unary(value, Math.asin, "asin"); }
-export function acos(value) { return unary(value, Math.acos, "acos"); }
-export function atan(value) { return unary(value, Math.atan, "atan"); }
-export function atan2(left, right) { return binary(left, right, Math.atan2, "atan2"); }
-export function degrees(value) { return requireNumber(value, "degrees") * 180 / Math.PI; }
-export function radians(value) { return requireNumber(value, "radians") * Math.PI / 180; }
-export function hypot(left, right) { return binary(left, right, Math.hypot, "hypot"); }
-export function random() { const value = Math.random(); if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("The host random source must return a finite number"); if (value < 0 || value >= 1) throw new RangeError("The host random source must return a number from 0 up to but excluding 1"); return value; }
-export function randomInt(minimum, maximum = null) { if (maximum === null) { maximum = minimum; minimum = 0; } const width = maximum - minimum; if (!Number.isSafeInteger(minimum) || !Number.isSafeInteger(maximum) || !Number.isSafeInteger(width) || width <= 0) throw new RangeError("randomInt requires an increasing safe-integer range"); return Math.floor(random() * width) + minimum; }
-export const isFinite = Number.isFinite;
-export const isInteger = Number.isInteger;
-export function gcd(left, right) { if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right)) throw new TypeError("gcd requires safe integers"); left = Math.abs(left); right = Math.abs(right); while (right) [left, right] = [right, left % right]; return left; }
-export function lcm(left, right) { if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right)) throw new TypeError("lcm requires safe integers"); if (left === 0 || right === 0) return 0; const result = Math.abs((left / gcd(left, right)) * right); if (!Number.isSafeInteger(result)) throw new RangeError("lcm result is outside the safe-integer range"); return result; }
+const __velarMathNativeMath = globalThis.Math;
+const __velarMathNativeNumber = globalThis.Number;
+const __velarMathNativeTypeError = globalThis.TypeError;
+const __velarMathNativeRangeError = globalThis.RangeError;
+const __velarMathGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const __velarMathApply = __velarMathGetOwnPropertyDescriptor(Reflect, "apply")?.value;
+function __velarMathHostData(owner, key, kind) {
+  const descriptor = __velarMathGetOwnPropertyDescriptor(owner, key);
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== kind) throw new __velarMathNativeTypeError("The JavaScript " + key + " math API is unavailable");
+  return descriptor.value;
+}
+function __velarMathHostOperation(owner, key) { return __velarMathHostData(owner, key, "function"); }
+const __velarMathMin = __velarMathHostOperation(__velarMathNativeMath, "min");
+const __velarMathMax = __velarMathHostOperation(__velarMathNativeMath, "max");
+const __velarMathSign = __velarMathHostOperation(__velarMathNativeMath, "sign");
+const __velarMathTrunc = __velarMathHostOperation(__velarMathNativeMath, "trunc");
+const __velarMathSqrt = __velarMathHostOperation(__velarMathNativeMath, "sqrt");
+const __velarMathCbrt = __velarMathHostOperation(__velarMathNativeMath, "cbrt");
+const __velarMathPow = __velarMathHostOperation(__velarMathNativeMath, "pow");
+const __velarMathExp = __velarMathHostOperation(__velarMathNativeMath, "exp");
+const __velarMathLog = __velarMathHostOperation(__velarMathNativeMath, "log");
+const __velarMathLog2 = __velarMathHostOperation(__velarMathNativeMath, "log2");
+const __velarMathLog10 = __velarMathHostOperation(__velarMathNativeMath, "log10");
+const __velarMathSin = __velarMathHostOperation(__velarMathNativeMath, "sin");
+const __velarMathCos = __velarMathHostOperation(__velarMathNativeMath, "cos");
+const __velarMathTan = __velarMathHostOperation(__velarMathNativeMath, "tan");
+const __velarMathAsin = __velarMathHostOperation(__velarMathNativeMath, "asin");
+const __velarMathAcos = __velarMathHostOperation(__velarMathNativeMath, "acos");
+const __velarMathAtan = __velarMathHostOperation(__velarMathNativeMath, "atan");
+const __velarMathAtan2 = __velarMathHostOperation(__velarMathNativeMath, "atan2");
+const __velarMathHypot = __velarMathHostOperation(__velarMathNativeMath, "hypot");
+const __velarMathRandom = __velarMathHostOperation(__velarMathNativeMath, "random");
+const __velarMathFloor = __velarMathHostOperation(__velarMathNativeMath, "floor");
+const __velarMathAbs = __velarMathHostOperation(__velarMathNativeMath, "abs");
+const __velarMathNumberIsFinite = __velarMathHostOperation(__velarMathNativeNumber, "isFinite");
+const __velarMathNumberIsInteger = __velarMathHostOperation(__velarMathNativeNumber, "isInteger");
+const __velarMathNumberIsSafeInteger = __velarMathHostOperation(__velarMathNativeNumber, "isSafeInteger");
+if (typeof __velarMathApply !== "function") throw new __velarMathNativeTypeError("The JavaScript Reflect.apply math API is unavailable");
+function __velarMathCall(operation, arguments_) { return __velarMathApply(operation, undefined, arguments_); }
+function requireNumber(value, name) { if (typeof value !== "number") throw new __velarMathNativeTypeError(name + " requires numbers"); return value; }
+function unary(value, operation, name) { return __velarMathCall(operation, [requireNumber(value, name)]); }
+function binary(left, right, operation, name) { return __velarMathCall(operation, [requireNumber(left, name), requireNumber(right, name)]); }
+export const pi = __velarMathHostData(__velarMathNativeMath, "PI", "number");
+export const e = __velarMathHostData(__velarMathNativeMath, "E", "number");
+export const tau = pi * 2;
+export const infinity = __velarMathHostData(__velarMathNativeNumber, "POSITIVE_INFINITY", "number");
+export function min(...values) { if (!values.length) throw new __velarMathNativeRangeError("min requires at least one number"); let result = requireNumber(values[0], "min"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMin, [result, requireNumber(values[index], "min")]); return result; }
+export function max(...values) { if (!values.length) throw new __velarMathNativeRangeError("max requires at least one number"); let result = requireNumber(values[0], "max"); for (let index = 1; index < values.length; index += 1) result = __velarMathCall(__velarMathMax, [result, requireNumber(values[index], "max")]); return result; }
+export function clamp(value, minimum, maximum) { value = requireNumber(value, "clamp"); minimum = requireNumber(minimum, "clamp"); maximum = requireNumber(maximum, "clamp"); if (minimum > maximum) throw new __velarMathNativeRangeError("clamp minimum cannot exceed maximum"); return __velarMathCall(__velarMathMin, [maximum, __velarMathCall(__velarMathMax, [minimum, value])]); }
+export function sign(value) { return unary(value, __velarMathSign, "sign"); }
+export function trunc(value) { return unary(value, __velarMathTrunc, "trunc"); }
+export function sqrt(value) { return unary(value, __velarMathSqrt, "sqrt"); }
+export function cbrt(value) { return unary(value, __velarMathCbrt, "cbrt"); }
+export function pow(left, right) { return binary(left, right, __velarMathPow, "pow"); }
+export function exp(value) { return unary(value, __velarMathExp, "exp"); }
+export function log(value, base = e) { return unary(value, __velarMathLog, "log") / unary(base, __velarMathLog, "log"); }
+export function log2(value) { return unary(value, __velarMathLog2, "log2"); }
+export function log10(value) { return unary(value, __velarMathLog10, "log10"); }
+export function sin(value) { return unary(value, __velarMathSin, "sin"); }
+export function cos(value) { return unary(value, __velarMathCos, "cos"); }
+export function tan(value) { return unary(value, __velarMathTan, "tan"); }
+export function asin(value) { return unary(value, __velarMathAsin, "asin"); }
+export function acos(value) { return unary(value, __velarMathAcos, "acos"); }
+export function atan(value) { return unary(value, __velarMathAtan, "atan"); }
+export function atan2(left, right) { return binary(left, right, __velarMathAtan2, "atan2"); }
+export function degrees(value) { return requireNumber(value, "degrees") * 180 / pi; }
+export function radians(value) { return requireNumber(value, "radians") * pi / 180; }
+export function hypot(left, right) { return binary(left, right, __velarMathHypot, "hypot"); }
+export function random() { const value = __velarMathCall(__velarMathRandom, []); if (typeof value !== "number" || !__velarMathCall(__velarMathNumberIsFinite, [value])) throw new __velarMathNativeTypeError("The host random source must return a finite number"); if (value < 0 || value >= 1) throw new __velarMathNativeRangeError("The host random source must return a number from 0 up to but excluding 1"); return value; }
+export function randomInt(minimum, maximum = null) { if (maximum === null) { maximum = minimum; minimum = 0; } const width = maximum - minimum; if (!__velarMathCall(__velarMathNumberIsSafeInteger, [minimum]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [maximum]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [width]) || width <= 0) throw new __velarMathNativeRangeError("randomInt requires an increasing safe-integer range"); return __velarMathCall(__velarMathFloor, [random() * width]) + minimum; }
+export const isFinite = __velarMathNumberIsFinite;
+export const isInteger = __velarMathNumberIsInteger;
+export function gcd(left, right) { if (!__velarMathCall(__velarMathNumberIsSafeInteger, [left]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [right])) throw new __velarMathNativeTypeError("gcd requires safe integers"); left = __velarMathCall(__velarMathAbs, [left]); right = __velarMathCall(__velarMathAbs, [right]); while (right) [left, right] = [right, left % right]; return left; }
+export function lcm(left, right) { if (!__velarMathCall(__velarMathNumberIsSafeInteger, [left]) || !__velarMathCall(__velarMathNumberIsSafeInteger, [right])) throw new __velarMathNativeTypeError("lcm requires safe integers"); if (left === 0 || right === 0) return 0; const result = __velarMathCall(__velarMathAbs, [(left / gcd(left, right)) * right]); if (!__velarMathCall(__velarMathNumberIsSafeInteger, [result])) throw new __velarMathNativeRangeError("lcm result is outside the safe-integer range"); return result; }
 `.trimStart()],
   ["velar/json", String.raw`
 ${VELAR_STRICT_JSON_RUNTIME}
 ${deepEqualRuntime}
 ${runtimeTypeRuntime}
 function runtimeType(Type) { return __velarRequireRuntimeType(Type, "JSON validation", true); }
-export function parse(text, Type = null) { if (typeof text !== "string") throw new TypeError("json.parse requires a string"); Type = runtimeType(Type); if (text.length > __velarMaxJsonCodeUnits) throw new RangeError("JSON text cannot exceed 16 MiB"); const value = __velarJsonSnapshot(JSON.parse(text)).value; return Type ? Type.parse(value) : value; }
+export function parse(text, Type = null) { if (typeof text !== "string") throw new __velarJsonNativeTypeError("json.parse requires a string"); Type = runtimeType(Type); const value = __velarJsonParse(text); return Type ? Type.parse(value) : value; }
 export function tryParse(text, Type = null, fallback = null) { Type = runtimeType(Type); try { return parse(text, Type); } catch { return fallback; } }
 export function stringify(value, pretty = false) { return __velarJsonStringify(value, pretty); }
 function sorted(value) {
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) {
-    const output = new Array(value.length);
-    for (let index = 0; index < value.length; index += 1) output[index] = sorted(Object.getOwnPropertyDescriptor(value, index).value);
+  if (__velarJsonApply(__velarJsonArrayIsArray, __velarJsonNativeArray, [value], "Array.isArray")) {
+    const output = new __velarJsonNativeArray(value.length);
+    for (let index = 0; index < value.length; index += 1) output[index] = sorted(__velarJsonGetOwnPropertyDescriptor(value, index).value);
     return output;
   }
-  const result = Object.create(null);
-  for (const key of Object.getOwnPropertyNames(value).sort()) Object.defineProperty(result, key, { value: sorted(Object.getOwnPropertyDescriptor(value, key).value), enumerable: true, configurable: true, writable: true });
+  const result = __velarJsonApply(__velarJsonCreate, __velarJsonNativeObject, [null], "Object.create");
+  const keys = __velarJsonGetOwnPropertyNames(value);
+  __velarJsonApply(__velarJsonArraySort, keys, [], "Array.sort");
+  for (let index = 0; index < keys.length; index += 1) { const key = keys[index]; __velarJsonApply(__velarJsonDefineProperty, __velarJsonNativeObject, [result, key, { value: sorted(__velarJsonGetOwnPropertyDescriptor(value, key).value), enumerable: true, configurable: true, writable: true }], "Object.defineProperty"); }
   return result;
 }
 export function stableStringify(value, pretty = false) { return __velarJsonStringify(sorted(__velarJsonSnapshot(value).value), pretty); }
-export function clone(value, Type = null) { Type = runtimeType(Type); const cloned = __velarJsonSnapshot(JSON.parse(__velarJsonStringify(value))).value; return Type ? Type.parse(cloned) : cloned; }
+export function clone(value, Type = null) { Type = runtimeType(Type); const cloned = __velarJsonClone(value); return Type ? Type.parse(cloned) : cloned; }
 export function isSerializable(value) { try { __velarAssertJson(value); return true; } catch { return false; } }
 export function deepEqual(left, right) { return __velarDeepEqual(left, right); }
 `.trimStart()],
@@ -789,545 +998,965 @@ export function deepEqual(left, right) { return __velarDeepEqual(left, right); }
 ${listRuntime}
 const __velarMaxTimerMilliseconds = 2147483647;
 const __velarMaxAsyncFanout = 10000;
-function asyncFanout(values, name) { values = __velarRequireList(values, name); if (values.length > __velarMaxAsyncFanout) throw new RangeError(name + " cannot start more than 10000 operations at once"); return values; }
-export function sleep(milliseconds) { if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("sleep requires milliseconds from 0 through 2147483647"); return new Promise((resolve) => setTimeout(() => resolve(null), milliseconds)); }
+const __velarAsyncGlobal = globalThis;
+const __velarAsyncApply = Reflect.apply;
+const __velarAsyncPromise = Promise;
+const __velarAsyncPromiseThen = Promise.prototype.then;
+const __velarAsyncSetTimeout = globalThis.setTimeout;
+const __velarAsyncClearTimeout = globalThis.clearTimeout;
+const __velarAsyncNumberIsFinite = Number.isFinite;
+const __velarAsyncNumberIsSafeInteger = Number.isSafeInteger;
+const __velarAsyncGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const __velarAsyncGetPrototypeOf = Object.getPrototypeOf;
+const __velarAsyncTypeError = TypeError;
+const __velarAsyncRangeError = RangeError;
+const __velarAsyncError = Error;
+function asyncFanout(values, name) { values = __velarRequireList(values, name); if (values.length > __velarMaxAsyncFanout) throw new __velarAsyncRangeError(name + " cannot start more than 10000 operations at once"); return values; }
+function requireTimer(milliseconds, name) { if (!__velarAsyncNumberIsFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new __velarAsyncRangeError(name + " requires milliseconds from 0 through 2147483647"); }
+export function sleep(milliseconds) { requireTimer(milliseconds, "sleep"); return new __velarAsyncPromise((resolve) => __velarAsyncApply(__velarAsyncSetTimeout, __velarAsyncGlobal, [() => resolve(null), milliseconds])); }
 function normalize(value) { return value === undefined ? null : value; }
-function actualPromise(value, name) { try { return Promise.prototype.then.call(value, normalize); } catch { throw new TypeError(name + " requires actual Promises"); } }
-export async function all(values) { values = asyncFanout(values, "async.all"); return Promise.all(values.map((value) => actualPromise(value, "async.all"))); }
-export async function race(values) { values = asyncFanout(values, "async.race"); return Promise.race(values.map((value) => actualPromise(value, "async.race"))); }
-export async function timeout(value, milliseconds, message = "Operation timed out") { value = actualPromise(value, "async.timeout"); if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > __velarMaxTimerMilliseconds) throw new RangeError("timeout requires milliseconds from 0 through 2147483647"); if (typeof message !== "string") throw new TypeError("timeout message must be a string"); if (message.length > 65536) throw new RangeError("timeout messages cannot exceed 64 KiB"); let timer; try { return normalize(await Promise.race([value, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); })])); } finally { clearTimeout(timer); } }
-export async function retry(task, attempts = 3) { if (typeof task !== "function") throw new TypeError("retry requires a function"); if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10000) throw new RangeError("retry attempts must be an integer from 1 through 10000"); let last; for (let attempt = 0; attempt < attempts; attempt += 1) { try { return normalize(await task()); } catch (error) { last = error; } } throw last; }
-export async function map(values, worker, concurrency = 4) { values = __velarRequireList(values, "async.map"); if (typeof worker !== "function") throw new TypeError("async.map requires a worker"); if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 1024) throw new RangeError("async.map concurrency must be an integer from 1 through 1024"); const output = new Array(values.length); let cursor = 0; async function run() { while (true) { const index = cursor++; if (index >= values.length) return; output[index] = normalize(await worker(values[index])); } } await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, run)); return output; }
-export async function series(tasks) { tasks = __velarRequireList(tasks, "async.series"); if (tasks.some((task) => typeof task !== "function")) throw new TypeError("series requires a List of functions"); const output = []; for (const task of tasks) output.push(normalize(await task())); return output; }
+function actualPromise(value, name) { try { return __velarAsyncApply(__velarAsyncPromiseThen, value, [normalize]); } catch { throw new __velarAsyncTypeError(name + " requires actual Promises"); } }
+function optionalActualPromise(value) { try { return __velarAsyncApply(__velarAsyncPromiseThen, value, [normalize]); } catch { return null; } }
+function promiseList(values, name) { const output = new __velarListArray(values.length); for (let index = 0; index < values.length; index += 1) output[index] = actualPromise(values[index], name); return output; }
+function promiseAll(values) {
+  return new __velarAsyncPromise((resolve, reject) => {
+    const output = new __velarListArray(values.length);
+    if (values.length === 0) { resolve(output); return; }
+    let remaining = values.length;
+    for (let index = 0; index < values.length; index += 1) {
+      try {
+        __velarAsyncApply(__velarAsyncPromiseThen, values[index], [
+          (value) => { output[index] = value; remaining -= 1; if (remaining === 0) resolve(output); },
+          reject,
+        ]);
+      } catch (error) { reject(error); }
+    }
+  });
+}
+function promiseRace(values) {
+  return new __velarAsyncPromise((resolve, reject) => {
+    for (let index = 0; index < values.length; index += 1) {
+      try { __velarAsyncApply(__velarAsyncPromiseThen, values[index], [resolve, reject]); }
+      catch (error) { reject(error); }
+    }
+  });
+}
+function requireSafePromiseResult(value, name) {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return value;
+  let owner = value;
+  for (let depth = 0; owner !== null && depth < 128; depth += 1) {
+    let descriptor;
+    try { descriptor = __velarAsyncGetOwnPropertyDescriptor(owner, "then"); }
+    catch { throw new __velarAsyncTypeError(name + " result must not expose a callable 'then' or a 'then' getter"); }
+    if (descriptor) {
+      if (!("value" in descriptor) || typeof descriptor.value === "function") throw new __velarAsyncTypeError(name + " result must not expose a callable 'then' or a 'then' getter");
+      return value;
+    }
+    try { owner = __velarAsyncGetPrototypeOf(owner); }
+    catch { throw new __velarAsyncTypeError(name + " result must have an inspectable prototype chain"); }
+  }
+  if (owner !== null) throw new __velarAsyncTypeError(name + " result prototype chain is too deep");
+  return value;
+}
+export async function all(values) { values = asyncFanout(values, "async.all"); return promiseAll(promiseList(values, "async.all")); }
+export async function race(values) { values = asyncFanout(values, "async.race"); return promiseRace(promiseList(values, "async.race")); }
+export async function timeout(value, milliseconds, message = "Operation timed out") { value = actualPromise(value, "async.timeout"); requireTimer(milliseconds, "timeout"); if (typeof message !== "string") throw new __velarAsyncTypeError("timeout message must be a string"); if (message.length > 65536) throw new __velarAsyncRangeError("timeout messages cannot exceed 64 KiB"); let timer; const timeoutPromise = new __velarAsyncPromise((_, reject) => { timer = __velarAsyncApply(__velarAsyncSetTimeout, __velarAsyncGlobal, [() => reject(new __velarAsyncError(message)), milliseconds]); }); try { return normalize(await promiseRace([value, timeoutPromise])); } finally { if (timer !== undefined) __velarAsyncApply(__velarAsyncClearTimeout, __velarAsyncGlobal, [timer]); } }
+export async function retry(task, attempts = 3) { if (typeof task !== "function") throw new __velarAsyncTypeError("retry requires a function"); if (!__velarAsyncNumberIsSafeInteger(attempts) || attempts < 1 || attempts > 10000) throw new __velarAsyncRangeError("retry attempts must be an integer from 1 through 10000"); let last; for (let attempt = 0; attempt < attempts; attempt += 1) { try { const candidate = normalize(__velarAsyncApply(task, undefined, [])); const pending = optionalActualPromise(candidate); return pending ? await pending : requireSafePromiseResult(candidate, "async.retry"); } catch (error) { last = error; } } throw last; }
+export async function map(values, worker, concurrency = 4) { values = __velarRequireList(values, "async.map"); if (typeof worker !== "function") throw new __velarAsyncTypeError("async.map requires a worker"); if (!__velarAsyncNumberIsSafeInteger(concurrency) || concurrency < 1 || concurrency > 1024) throw new __velarAsyncRangeError("async.map concurrency must be an integer from 1 through 1024"); const output = new __velarListArray(values.length); let cursor = 0; async function run() { while (true) { const index = cursor++; if (index >= values.length) return null; const candidate = normalize(__velarAsyncApply(worker, undefined, [values[index]])); const pending = optionalActualPromise(candidate); output[index] = pending ? await pending : candidate; } } const workerCount = concurrency < values.length ? concurrency : values.length; const workers = new __velarListArray(workerCount); for (let index = 0; index < workerCount; index += 1) workers[index] = run(); await promiseAll(workers); return output; }
+export async function series(tasks) { tasks = __velarRequireList(tasks, "async.series"); const output = new __velarListArray(tasks.length); for (let index = 0; index < tasks.length; index += 1) { const task = tasks[index]; if (typeof task !== "function") throw new __velarAsyncTypeError("series requires a List of functions"); const candidate = normalize(__velarAsyncApply(task, undefined, [])); const pending = optionalActualPromise(candidate); output[index] = pending ? await pending : candidate; } return output; }
 `.trimStart()],
   ["velar/url", String.raw`
 ${listRuntime}
 const fallbackBase = "https://velar.invalid/";
 const maxUrlCodeUnits = 2 * 1024 * 1024;
-const nativeEncodeURIComponent = globalThis.encodeURIComponent;
-const nativeDecodeURIComponent = globalThis.decodeURIComponent;
-function urlText(value, name = "velar/url") { if (typeof value !== "string") throw new TypeError(name + " requires a string"); if (value.length > maxUrlCodeUnits) throw new RangeError(name + " cannot exceed 2 MiB"); return value; }
+const __velarUrlNativeObject = globalThis.Object;
+const __velarUrlNativeMap = globalThis.Map;
+const __velarUrlNativeNumber = globalThis.Number;
+const __velarUrlNativeString = globalThis.String;
+const __velarUrlNativeUrl = globalThis.URL;
+const __velarUrlNativeSearchParams = globalThis.URLSearchParams;
+const __velarUrlNativeTypeError = globalThis.TypeError;
+const __velarUrlNativeRangeError = globalThis.RangeError;
+const __velarUrlNativeUriError = globalThis.URIError;
+const __velarUrlGetOwnPropertyDescriptor = __velarUrlNativeObject.getOwnPropertyDescriptor;
+const __velarUrlGetOwnPropertyNames = __velarUrlNativeObject.getOwnPropertyNames;
+const __velarUrlGetOwnPropertySymbols = __velarUrlNativeObject.getOwnPropertySymbols;
+const __velarUrlGetPrototypeOf = __velarUrlNativeObject.getPrototypeOf;
+const __velarUrlApply = __velarUrlGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+function __velarUrlHostData(owner, key, kind) {
+  const descriptor = __velarUrlGetOwnPropertyDescriptor(owner, key);
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== kind) throw new __velarUrlNativeTypeError("The JavaScript " + key + " URL API is unavailable");
+  return descriptor.value;
+}
+function __velarUrlHostOperation(owner, key) { return __velarUrlHostData(owner, key, "function"); }
+function __velarUrlHostAccessor(owner, key, setter = false) {
+  for (let depth = 0; owner !== null && depth < 32; depth += 1) {
+    const descriptor = __velarUrlGetOwnPropertyDescriptor(owner, key);
+    if (descriptor) {
+      const operation = descriptor[setter ? "set" : "get"];
+      if (typeof operation !== "function") throw new __velarUrlNativeTypeError("The JavaScript " + key + " URL API must be an accessor");
+      return operation;
+    }
+    owner = __velarUrlGetPrototypeOf(owner);
+  }
+  throw new __velarUrlNativeTypeError("The JavaScript " + key + " URL API is unavailable");
+}
+function __velarUrlInheritedDescriptor(owner, key) {
+  for (let depth = 0; owner !== null && depth < 32; depth += 1) {
+    const descriptor = __velarUrlGetOwnPropertyDescriptor(owner, key);
+    if (descriptor) return descriptor;
+    owner = __velarUrlGetPrototypeOf(owner);
+  }
+  return null;
+}
+function __velarUrlInheritedOperation(owner, key) {
+  const descriptor = __velarUrlInheritedDescriptor(owner, key);
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "function") throw new __velarUrlNativeTypeError("The JavaScript " + key + " URL API must be a data function");
+  return descriptor.value;
+}
+const __velarUrlObjectPrototype = __velarUrlHostData(__velarUrlNativeObject, "prototype", "object");
+const __velarUrlStringPrototype = __velarUrlHostData(__velarUrlNativeString, "prototype", "object");
+const __velarUrlUrlPrototype = __velarUrlHostData(__velarUrlNativeUrl, "prototype", "object");
+const __velarUrlSearchParamsPrototype = __velarUrlHostData(__velarUrlNativeSearchParams, "prototype", "object");
+const __velarUrlMapPrototype = __velarUrlHostData(__velarUrlNativeMap, "prototype", "object");
+const __velarUrlEncodeURIComponent = globalThis.encodeURIComponent;
+const __velarUrlDecodeURIComponent = globalThis.decodeURIComponent;
+const __velarUrlNumberIsFinite = __velarUrlHostOperation(__velarUrlNativeNumber, "isFinite");
+const __velarUrlObjectFreeze = __velarUrlHostOperation(__velarUrlNativeObject, "freeze");
+const __velarUrlStringCharCodeAt = __velarUrlHostOperation(__velarUrlStringPrototype, "charCodeAt");
+const __velarUrlStringEndsWith = __velarUrlHostOperation(__velarUrlStringPrototype, "endsWith");
+const __velarUrlStringSlice = __velarUrlHostOperation(__velarUrlStringPrototype, "slice");
+const __velarUrlStringStartsWith = __velarUrlHostOperation(__velarUrlStringPrototype, "startsWith");
+const __velarUrlRegExpPattern = /^[a-z][a-z\d+.-]*:/iu;
+const __velarUrlHttpPattern = /^https?:$/u;
+const __velarUrlRegExpTest = __velarUrlInheritedOperation(__velarUrlRegExpPattern, "test");
+const __velarUrlSearchParamsAppend = __velarUrlHostOperation(__velarUrlSearchParamsPrototype, "append");
+const __velarUrlSearchParamsEntries = __velarUrlHostOperation(__velarUrlSearchParamsPrototype, "entries");
+const __velarUrlSearchParamsToString = __velarUrlHostOperation(__velarUrlSearchParamsPrototype, "toString");
+const __velarUrlMapEntries = __velarUrlHostOperation(__velarUrlMapPrototype, "entries");
+const __velarUrlMapSet = __velarUrlHostOperation(__velarUrlMapPrototype, "set");
+const __velarUrlMapSize = __velarUrlHostAccessor(__velarUrlMapPrototype, "size");
+const __velarUrlHref = __velarUrlHostAccessor(__velarUrlUrlPrototype, "href");
+const __velarUrlProtocol = __velarUrlHostAccessor(__velarUrlUrlPrototype, "protocol");
+const __velarUrlHost = __velarUrlHostAccessor(__velarUrlUrlPrototype, "host");
+const __velarUrlHostname = __velarUrlHostAccessor(__velarUrlUrlPrototype, "hostname");
+const __velarUrlPort = __velarUrlHostAccessor(__velarUrlUrlPrototype, "port");
+const __velarUrlPathname = __velarUrlHostAccessor(__velarUrlUrlPrototype, "pathname");
+const __velarUrlSearch = __velarUrlHostAccessor(__velarUrlUrlPrototype, "search");
+const __velarUrlSetSearch = __velarUrlHostAccessor(__velarUrlUrlPrototype, "search", true);
+const __velarUrlHash = __velarUrlHostAccessor(__velarUrlUrlPrototype, "hash");
+const __velarUrlSetHash = __velarUrlHostAccessor(__velarUrlUrlPrototype, "hash", true);
+const __velarUrlOrigin = __velarUrlHostAccessor(__velarUrlUrlPrototype, "origin");
+const __velarUrlSearchIterator = __velarUrlApply(__velarUrlSearchParamsEntries, new __velarUrlNativeSearchParams(), []);
+const __velarUrlSearchIteratorNext = __velarUrlInheritedOperation(__velarUrlSearchIterator, "next");
+const __velarUrlMapIterator = __velarUrlApply(__velarUrlMapEntries, new __velarUrlNativeMap(), []);
+const __velarUrlMapIteratorNext = __velarUrlInheritedOperation(__velarUrlMapIterator, "next");
+const __velarUrlLocation = globalThis.location;
+const __velarUrlLocationHrefDescriptor = __velarUrlLocation && (typeof __velarUrlLocation === "object" || typeof __velarUrlLocation === "function") ? __velarUrlInheritedDescriptor(__velarUrlLocation, "href") : null;
+const __velarUrlLocationHrefGetter = __velarUrlLocationHrefDescriptor && typeof __velarUrlLocationHrefDescriptor.get === "function" ? __velarUrlLocationHrefDescriptor.get : null;
+const __velarUrlLocationHrefData = __velarUrlLocationHrefDescriptor && "value" in __velarUrlLocationHrefDescriptor ? __velarUrlLocationHrefDescriptor.value : null;
+if (typeof __velarUrlApply !== "function" || typeof __velarUrlEncodeURIComponent !== "function" || typeof __velarUrlDecodeURIComponent !== "function") throw new __velarUrlNativeTypeError("The JavaScript URL host API is unavailable");
+function __velarUrlCall(operation, receiver, arguments_) { return __velarUrlApply(operation, receiver, arguments_); }
+function urlText(value, name = "velar/url") { if (typeof value !== "string") throw new __velarUrlNativeTypeError(name + " requires a string"); if (value.length > maxUrlCodeUnits) throw new __velarUrlNativeRangeError(name + " cannot exceed 2 MiB"); return value; }
+function ownData(container, key, name) { if (container === null || typeof container !== "object") throw new __velarUrlNativeTypeError(name + " must belong to an object"); const descriptor = __velarUrlGetOwnPropertyDescriptor(container, key); if (!descriptor || !("value" in descriptor)) throw new __velarUrlNativeTypeError(name + " must be an own data field"); return descriptor.value; }
 function encodedComponentUnits(value) {
   let units = 0;
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = __velarUrlCall(__velarUrlStringCharCodeAt, value, [index]);
     if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57)
       || code === 45 || code === 95 || code === 46 || code === 33 || code === 126
       || code === 42 || code === 39 || code === 40 || code === 41) units += 1;
     else if (code < 0x80) units += 3;
     else if (code < 0x800) units += 6;
     else if (code >= 0xD800 && code <= 0xDBFF) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xDC00 || next > 0xDFFF) throw new URIError("URI malformed");
+      const next = __velarUrlCall(__velarUrlStringCharCodeAt, value, [index + 1]);
+      if (next < 0xDC00 || next > 0xDFFF) throw new __velarUrlNativeUriError("URI malformed");
       units += 12;
       index += 1;
-    } else if (code >= 0xDC00 && code <= 0xDFFF) throw new URIError("URI malformed");
+    } else if (code >= 0xDC00 && code <= 0xDFFF) throw new __velarUrlNativeUriError("URI malformed");
     else units += 9;
     if (units > maxUrlCodeUnits) return units;
   }
   return units;
 }
-function baseOf(base) { return base !== "" ? urlText(base, "URL base") : (typeof location !== "undefined" ? urlText(location.href, "Browser URL base") : fallbackBase); }
-function urlOf(value, base = "") { return new URL(urlText(value), baseOf(base)); }
+function baseOf(base) { if (base !== "") return urlText(base, "URL base"); if (!__velarUrlLocationHrefDescriptor) return fallbackBase; const href = __velarUrlLocationHrefGetter ? __velarUrlCall(__velarUrlLocationHrefGetter, __velarUrlLocation, []) : __velarUrlLocationHrefData; return urlText(href, "Browser URL base"); }
+function urlOf(value, base = "") { return new __velarUrlNativeUrl(urlText(value), baseOf(base)); }
+function urlField(url, operation, name) { return urlText(__velarUrlCall(operation, url, []), name); }
 function urlSnapshot(url) {
-  const search = urlText(url.search, "URL query");
-  return Object.freeze({
-    href: urlText(url.href, "URL href"), protocol: urlText(url.protocol, "URL protocol"), host: urlText(url.host, "URL host"),
-    hostname: urlText(url.hostname, "URL hostname"), port: urlText(url.port, "URL port"), path: urlText(url.pathname, "URL path"),
-    query: queryMap(search, "URL query"), hash: urlText(url.hash, "URL hash"), origin: urlText(url.origin, "URL origin"),
-  });
+  const search = urlField(url, __velarUrlSearch, "URL query");
+  return __velarUrlCall(__velarUrlObjectFreeze, __velarUrlNativeObject, [{
+    href: urlField(url, __velarUrlHref, "URL href"), protocol: urlField(url, __velarUrlProtocol, "URL protocol"), host: urlField(url, __velarUrlHost, "URL host"),
+    hostname: urlField(url, __velarUrlHostname, "URL hostname"), port: urlField(url, __velarUrlPort, "URL port"), path: urlField(url, __velarUrlPathname, "URL path"),
+    query: queryMap(search, "URL query"), hash: urlField(url, __velarUrlHash, "URL hash"), origin: urlField(url, __velarUrlOrigin, "URL origin"),
+  }]);
 }
 function joinedUrlOutput(parts) {
   let units = 0;
-  for (const part of parts) {
-    if (part.length > maxUrlCodeUnits - units) throw new RangeError("URL output cannot exceed 2 MiB");
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part.length > maxUrlCodeUnits - units) throw new __velarUrlNativeRangeError("URL output cannot exceed 2 MiB");
     units += part.length;
   }
   let output = "";
-  for (const part of parts) output += part;
+  for (let index = 0; index < parts.length; index += 1) output += parts[index];
   return output;
 }
 function restore(original, url) {
-  const href = urlText(url.href, "URL href"), host = urlText(url.host, "URL host"), path = urlText(url.pathname, "URL path");
-  const search = urlText(url.search, "URL query"), hash = urlText(url.hash, "URL hash");
-  if (/^[a-z][a-z\d+.-]*:/iu.test(original)) return href;
-  return original.startsWith("//") ? joinedUrlOutput(["//", host, path, search, hash]) : joinedUrlOutput([path, search, hash]);
+  const href = urlField(url, __velarUrlHref, "URL href"), host = urlField(url, __velarUrlHost, "URL host"), path = urlField(url, __velarUrlPathname, "URL path");
+  const search = urlField(url, __velarUrlSearch, "URL query"), hash = urlField(url, __velarUrlHash, "URL hash");
+  if (__velarUrlCall(__velarUrlRegExpTest, __velarUrlRegExpPattern, [original])) return href;
+  return __velarUrlCall(__velarUrlStringStartsWith, original, ["//"]) ? joinedUrlOutput(["//", host, path, search, hash]) : joinedUrlOutput([path, search, hash]);
 }
+function nextEntry(iterator, operation, name) { const step = __velarUrlCall(operation, iterator, []); const done = ownData(step, "done", name + " iterator result"); if (typeof done !== "boolean") throw new __velarUrlNativeTypeError(name + " iterator must return a boolean done field"); if (done) return null; const pair = ownData(step, "value", name + " iterator result"); if (!__velarUrlCall(__velarListArrayIsArray, __velarListArray, [pair]) || pair.length !== 2) throw new __velarUrlNativeTypeError(name + " iterator must return key/value pairs"); return [ownData(pair, 0, name + " key"), ownData(pair, 1, name + " value")]; }
 function queryMap(search, name) {
   search = urlText(search, name);
-  const output = new Map();
+  const output = new __velarUrlNativeMap();
+  const iterator = __velarUrlCall(__velarUrlSearchParamsEntries, new __velarUrlNativeSearchParams(search), []);
   let count = 0;
   let codeUnits = 0;
-  for (const [key, value] of new URLSearchParams(search)) {
+  while (true) {
+    const entry = nextEntry(iterator, __velarUrlSearchIteratorNext, name);
+    if (entry === null) break;
+    const key = entry[0], value = entry[1];
     count += 1;
-    if (count > 100000) throw new RangeError(name + " cannot exceed 100000 fields");
-    if (typeof key !== "string" || typeof value !== "string") throw new TypeError(name + " must contain string fields");
+    if (count > 100000) throw new __velarUrlNativeRangeError(name + " cannot exceed 100000 fields");
+    if (typeof key !== "string" || typeof value !== "string") throw new __velarUrlNativeTypeError(name + " must contain string fields");
     codeUnits += key.length + value.length;
-    if (codeUnits > 2 * 1024 * 1024) throw new RangeError(name + " cannot exceed 2 MiB");
-    output.set(key, value);
+    if (codeUnits > 2 * 1024 * 1024) throw new __velarUrlNativeRangeError(name + " cannot exceed 2 MiB");
+    __velarUrlCall(__velarUrlMapSet, output, [key, value]);
   }
   return output;
 }
 function appendQueryValue(output, name, value, budget) {
   if (value == null) return;
-  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") throw new TypeError("URL query value '" + name + "' must be a string, number, bool, null, or List of those values");
-  if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError("URL query numbers must be finite");
-  const text = String(value);
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") throw new __velarUrlNativeTypeError("URL query value '" + name + "' must be a string, number, bool, null, or List of those values");
+  if (typeof value === "number" && !__velarUrlCall(__velarUrlNumberIsFinite, __velarUrlNativeNumber, [value])) throw new __velarUrlNativeTypeError("URL query numbers must be finite");
+  const text = __velarUrlCall(__velarUrlNativeString, undefined, [value]);
   budget.units += (name.length + text.length) * 9 + 2;
-  if (budget.units > 2 * 1024 * 1024) throw new RangeError("URL query output cannot exceed 2 MiB");
-  output.append(name, text);
+  if (budget.units > 2 * 1024 * 1024) throw new __velarUrlNativeRangeError("URL query output cannot exceed 2 MiB");
+  __velarUrlCall(__velarUrlSearchParamsAppend, output, [name, text]);
 }
+function appendNamedValue(output, name, value, budget) { if (typeof name !== "string") throw new __velarUrlNativeTypeError("URL query names must be strings"); if (__velarUrlCall(__velarListArrayIsArray, __velarListArray, [value])) { const values = __velarRequireList(value, "URL query list"); for (let index = 0; index < values.length; index += 1) appendQueryValue(output, name, values[index], budget); } else appendQueryValue(output, name, value, budget); }
 function appendParams(params, output) {
-  let entries;
-  let entryCount;
   let mapSize = null;
-  try { mapSize = Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(params); } catch {}
-  if (mapSize !== null) {
-    entryCount = mapSize;
-    entries = Map.prototype.entries.call(params);
-  } else if (params && typeof params === "object" && !Array.isArray(params)
-    && (Object.getPrototypeOf(params) === Object.prototype || Object.getPrototypeOf(params) === null)
-    && Object.getOwnPropertySymbols(params).length === 0) {
-    const names = Object.getOwnPropertyNames(params);
-    const values = [];
-    for (const name of names) {
-      const descriptor = Object.getOwnPropertyDescriptor(params, name);
-      if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("URL query record fields must be enumerable data values");
-      values.push([name, descriptor.value]);
-    }
-    entryCount = values.length;
-    entries = values;
-  } else throw new TypeError("URL query values require a Map or record");
-  if (entryCount > 100000) throw new RangeError("URL query values cannot exceed 100000 fields");
+  try { mapSize = __velarUrlCall(__velarUrlMapSize, params, []); } catch {}
   const budget = { units: 0 };
-  for (const [name, value] of entries) {
-    if (typeof name !== "string") throw new TypeError("URL query names must be strings");
-    if (Array.isArray(value)) for (const item of __velarRequireList(value, "URL query list")) appendQueryValue(output, name, item, budget);
-    else appendQueryValue(output, name, value, budget);
-  }
+  if (mapSize !== null) {
+    if (mapSize > 100000) throw new __velarUrlNativeRangeError("URL query values cannot exceed 100000 fields");
+    const iterator = __velarUrlCall(__velarUrlMapEntries, params, []);
+    for (let index = 0; index < mapSize; index += 1) {
+      const entry = nextEntry(iterator, __velarUrlMapIteratorNext, "URL query Map");
+      if (entry === null) throw new __velarUrlNativeTypeError("URL query Map ended before its size");
+      appendNamedValue(output, entry[0], entry[1], budget);
+    }
+    if (nextEntry(iterator, __velarUrlMapIteratorNext, "URL query Map") !== null) throw new __velarUrlNativeTypeError("URL query Map exceeded its size");
+  } else if (params && typeof params === "object" && !__velarUrlCall(__velarListArrayIsArray, __velarListArray, [params])
+    && (__velarUrlGetPrototypeOf(params) === __velarUrlObjectPrototype || __velarUrlGetPrototypeOf(params) === null)
+    && __velarUrlGetOwnPropertySymbols(params).length === 0) {
+    const names = __velarUrlGetOwnPropertyNames(params);
+    if (names.length > 100000) throw new __velarUrlNativeRangeError("URL query values cannot exceed 100000 fields");
+    for (let index = 0; index < names.length; index += 1) {
+      const name = names[index];
+      const descriptor = __velarUrlGetOwnPropertyDescriptor(params, name);
+      if (!descriptor?.enumerable || !("value" in descriptor)) throw new __velarUrlNativeTypeError("URL query record fields must be enumerable data values");
+      appendNamedValue(output, name, descriptor.value, budget);
+    }
+  } else throw new __velarUrlNativeTypeError("URL query values require a Map or record");
 }
 export function parse(value, base = "") { return urlSnapshot(urlOf(value, base)); }
 export function join(...parts) {
-  if (!parts.length) throw new RangeError("url.join requires at least one part");
+  if (!parts.length) throw new __velarUrlNativeRangeError("url.join requires at least one part");
   let output = urlText(parts[0], "url.join");
-  for (const part of parts.slice(1)) {
-    const value = urlText(part, "url.join");
+  for (let index = 1; index < parts.length; index += 1) {
+    const value = urlText(parts[index], "url.join");
     if (!value) continue;
-    const segment = value.replace(/^\/+|\/+$/gu, "");
-    const scheme = output.endsWith("://");
-    const prefix = scheme ? output : output.replace(/\/+$/u, "");
+    let start = 0, end = value.length;
+    while (start < end && value[start] === "/") start += 1;
+    while (end > start && value[end - 1] === "/") end -= 1;
+    const segment = __velarUrlCall(__velarUrlStringSlice, value, [start, end]);
+    const scheme = __velarUrlCall(__velarUrlStringEndsWith, output, ["://"]);
+    let prefixEnd = output.length;
+    while (!scheme && prefixEnd > 0 && output[prefixEnd - 1] === "/") prefixEnd -= 1;
+    const prefix = scheme ? output : __velarUrlCall(__velarUrlStringSlice, output, [0, prefixEnd]);
     const separator = scheme ? "" : "/";
     if (separator.length + segment.length > maxUrlCodeUnits - prefix.length) {
-      throw new RangeError("url.join output cannot exceed 2 MiB");
+      throw new __velarUrlNativeRangeError("url.join output cannot exceed 2 MiB");
     }
     output = prefix + separator + segment;
   }
   return output;
 }
-export function query(params) { const output = new URLSearchParams(); appendParams(params, output); return urlText(output.toString(), "URL query output"); }
-export function parseQuery(value) { return queryMap(urlText(value, "parseQuery").replace(/^\?/u, ""), "URL query"); }
-export function withQuery(value, params) { const url = urlOf(value); url.search = ""; appendParams(params, url.searchParams); return restore(value, url); }
-export function withHash(value, hash) { const url = urlOf(value); hash = urlText(hash, "withHash"); url.hash = hash ? "#" + hash.replace(/^#/u, "") : ""; return restore(value, url); }
-export function isExternal(value, base = "") { value = urlText(value, "isExternal"); if (base) urlText(base, "URL base"); try { const url = urlOf(value, base); const origin = urlText(new URL(baseOf(base)).origin, "URL origin"); return urlText(url.origin, "URL origin") !== origin || !/^https?:$/u.test(urlText(url.protocol, "URL protocol")); } catch { return true; } }
-export function encode(value) { value = urlText(value, "encode"); if (encodedComponentUnits(value) > maxUrlCodeUnits) throw new RangeError("encode output cannot exceed 2 MiB"); return urlText(nativeEncodeURIComponent(value), "encode output"); }
-export function decode(value) { return urlText(nativeDecodeURIComponent(urlText(value, "decode")), "decode output"); }
+export function query(params) { const output = new __velarUrlNativeSearchParams(); appendParams(params, output); return urlText(__velarUrlCall(__velarUrlSearchParamsToString, output, []), "URL query output"); }
+export function parseQuery(value) { value = urlText(value, "parseQuery"); if (value[0] === "?") value = __velarUrlCall(__velarUrlStringSlice, value, [1]); return queryMap(value, "URL query"); }
+export function withQuery(value, params) { const url = urlOf(value); const searchParams = new __velarUrlNativeSearchParams(); appendParams(params, searchParams); const search = urlText(__velarUrlCall(__velarUrlSearchParamsToString, searchParams, []), "URL query output"); __velarUrlCall(__velarUrlSetSearch, url, [search ? "?" + search : ""]); return restore(value, url); }
+export function withHash(value, hash) { const url = urlOf(value); hash = urlText(hash, "withHash"); if (hash[0] === "#") hash = __velarUrlCall(__velarUrlStringSlice, hash, [1]); __velarUrlCall(__velarUrlSetHash, url, [hash ? "#" + hash : ""]); return restore(value, url); }
+export function isExternal(value, base = "") { value = urlText(value, "isExternal"); if (base) urlText(base, "URL base"); try { const url = urlOf(value, base); const baseUrl = new __velarUrlNativeUrl(baseOf(base)); const origin = urlField(baseUrl, __velarUrlOrigin, "URL origin"); return urlField(url, __velarUrlOrigin, "URL origin") !== origin || !__velarUrlCall(__velarUrlRegExpTest, __velarUrlHttpPattern, [urlField(url, __velarUrlProtocol, "URL protocol")]); } catch { return true; } }
+export function encode(value) { value = urlText(value, "encode"); if (encodedComponentUnits(value) > maxUrlCodeUnits) throw new __velarUrlNativeRangeError("encode output cannot exceed 2 MiB"); return urlText(__velarUrlCall(__velarUrlEncodeURIComponent, globalThis, [value]), "encode output"); }
+export function decode(value) { return urlText(__velarUrlCall(__velarUrlDecodeURIComponent, globalThis, [urlText(value, "decode")]), "decode output"); }
 export function normalize(value, base = "") { const url = urlOf(value, base); return restore(value, url); }
 `.trimStart()],
   ["velar/time", String.raw`
 const maximumDateMilliseconds = 8_640_000_000_000_000;
-const weekdays = new Map([["Sun", 0], ["Mon", 1], ["Tue", 2], ["Wed", 3], ["Thu", 4], ["Fri", 5], ["Sat", 6]]);
-function finiteNumber(value, name) { if (!Number.isFinite(value)) throw new TypeError(name + " must be a finite number"); return value; }
-function valid(value) { finiteNumber(value, "velar/time timestamp"); if (Math.abs(value) > maximumDateMilliseconds) throw new RangeError("velar/time timestamp is outside the JavaScript date range"); return value; }
-function timeText(value, name) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > 1024) throw new RangeError(name + " cannot exceed 1024 characters"); return value; }
-function timeResultText(value, name, maximum = 65536) { if (typeof value !== "string") throw new TypeError(name + " must return a string"); if (value.length > maximum) throw new RangeError(name + " returned too much text"); return value; }
+const __velarTimeNativeObject = globalThis.Object;
+const __velarTimeNativeArray = globalThis.Array;
+const __velarTimeNativeNumber = globalThis.Number;
+const __velarTimeNativeString = globalThis.String;
+const __velarTimeNativeMath = globalThis.Math;
+const __velarTimeNativeDate = globalThis.Date;
+const __velarTimeNativeTypeError = globalThis.TypeError;
+const __velarTimeNativeRangeError = globalThis.RangeError;
+const __velarTimeGetOwnPropertyDescriptor = __velarTimeNativeObject.getOwnPropertyDescriptor;
+const __velarTimeGetPrototypeOf = __velarTimeNativeObject.getPrototypeOf;
+const __velarTimeApply = __velarTimeGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+function __velarTimeHostData(owner, key, kind) {
+  const descriptor = __velarTimeGetOwnPropertyDescriptor(owner, key);
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== kind) throw new __velarTimeNativeTypeError("The JavaScript " + key + " time API is unavailable");
+  return descriptor.value;
+}
+function __velarTimeHostOperation(owner, key) { return __velarTimeHostData(owner, key, "function"); }
+function __velarTimeHostGetter(owner, key) {
+  const descriptor = __velarTimeGetOwnPropertyDescriptor(owner, key);
+  if (!descriptor || typeof descriptor.get !== "function") throw new __velarTimeNativeTypeError("The JavaScript " + key + " time API is unavailable");
+  return descriptor.get;
+}
+function __velarTimeInheritedOperation(owner, key) {
+  for (let depth = 0; owner !== null && depth < 32; depth += 1) {
+    const descriptor = __velarTimeGetOwnPropertyDescriptor(owner, key);
+    if (descriptor) {
+      if (!("value" in descriptor) || typeof descriptor.value !== "function") throw new __velarTimeNativeTypeError("The JavaScript " + key + " time API must be a data function");
+      return descriptor.value;
+    }
+    owner = __velarTimeGetPrototypeOf(owner);
+  }
+  throw new __velarTimeNativeTypeError("The JavaScript " + key + " time API is unavailable");
+}
+const __velarTimeDatePrototype = __velarTimeHostData(__velarTimeNativeDate, "prototype", "object");
+const __velarTimeIntl = __velarTimeHostData(globalThis, "Intl", "object");
+const __velarTimeDateTimeFormat = __velarTimeHostOperation(__velarTimeIntl, "DateTimeFormat");
+const __velarTimeDateTimeFormatPrototype = __velarTimeHostData(__velarTimeDateTimeFormat, "prototype", "object");
+const __velarTimeRegExpPattern = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2}))?$/u;
+const __velarTimeDigitsPattern = /^\d{1,6}$/u;
+const __velarTimeRegExpPrototype = __velarTimeGetPrototypeOf(__velarTimeRegExpPattern);
+const __velarTimeDateNow = __velarTimeHostOperation(__velarTimeNativeDate, "now");
+const __velarTimeMathAbs = __velarTimeHostOperation(__velarTimeNativeMath, "abs");
+const __velarTimeNumberIsFinite = __velarTimeHostOperation(__velarTimeNativeNumber, "isFinite");
+const __velarTimeNumberIsInteger = __velarTimeHostOperation(__velarTimeNativeNumber, "isInteger");
+const __velarTimeNumberIsSafeInteger = __velarTimeHostOperation(__velarTimeNativeNumber, "isSafeInteger");
+const __velarTimeArrayIsArray = __velarTimeHostOperation(__velarTimeNativeArray, "isArray");
+const __velarTimeObjectFreeze = __velarTimeHostOperation(__velarTimeNativeObject, "freeze");
+const __velarTimeStringPadEnd = __velarTimeHostOperation(__velarTimeHostData(__velarTimeNativeString, "prototype", "object"), "padEnd");
+const __velarTimeStringSlice = __velarTimeHostOperation(__velarTimeHostData(__velarTimeNativeString, "prototype", "object"), "slice");
+const __velarTimeRegExpExec = __velarTimeHostOperation(__velarTimeRegExpPrototype, "exec");
+const __velarTimeFormatGetter = __velarTimeHostGetter(__velarTimeDateTimeFormatPrototype, "format");
+const __velarTimeFormatToParts = __velarTimeHostOperation(__velarTimeDateTimeFormatPrototype, "formatToParts");
+const __velarTimeSetUTCFullYear = __velarTimeHostOperation(__velarTimeDatePrototype, "setUTCFullYear");
+const __velarTimeSetUTCHours = __velarTimeHostOperation(__velarTimeDatePrototype, "setUTCHours");
+const __velarTimeSetFullYear = __velarTimeHostOperation(__velarTimeDatePrototype, "setFullYear");
+const __velarTimeSetHours = __velarTimeHostOperation(__velarTimeDatePrototype, "setHours");
+const __velarTimeGetUTCFullYear = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCFullYear");
+const __velarTimeGetUTCMonth = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCMonth");
+const __velarTimeGetUTCDate = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCDate");
+const __velarTimeGetUTCHours = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCHours");
+const __velarTimeGetUTCMinutes = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCMinutes");
+const __velarTimeGetUTCSeconds = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCSeconds");
+const __velarTimeGetUTCMilliseconds = __velarTimeHostOperation(__velarTimeDatePrototype, "getUTCMilliseconds");
+const __velarTimeGetFullYear = __velarTimeHostOperation(__velarTimeDatePrototype, "getFullYear");
+const __velarTimeGetMonth = __velarTimeHostOperation(__velarTimeDatePrototype, "getMonth");
+const __velarTimeGetDate = __velarTimeHostOperation(__velarTimeDatePrototype, "getDate");
+const __velarTimeGetDay = __velarTimeHostOperation(__velarTimeDatePrototype, "getDay");
+const __velarTimeGetHours = __velarTimeHostOperation(__velarTimeDatePrototype, "getHours");
+const __velarTimeGetMinutes = __velarTimeHostOperation(__velarTimeDatePrototype, "getMinutes");
+const __velarTimeGetSeconds = __velarTimeHostOperation(__velarTimeDatePrototype, "getSeconds");
+const __velarTimeGetMilliseconds = __velarTimeHostOperation(__velarTimeDatePrototype, "getMilliseconds");
+const __velarTimeGetTime = __velarTimeHostOperation(__velarTimeDatePrototype, "getTime");
+const __velarTimeToISOString = __velarTimeHostOperation(__velarTimeDatePrototype, "toISOString");
+const __velarTimePerformanceCandidate = globalThis.performance;
+const __velarTimePerformance = typeof __velarTimePerformanceCandidate === "object" && __velarTimePerformanceCandidate !== null ? __velarTimePerformanceCandidate : null;
+const __velarTimePerformanceNow = __velarTimePerformance === null ? null : __velarTimeInheritedOperation(__velarTimePerformance, "now");
+if (typeof __velarTimeApply !== "function") throw new __velarTimeNativeTypeError("The JavaScript Reflect.apply time API is unavailable");
+function __velarTimeCall(operation, receiver, arguments_) { return __velarTimeApply(operation, receiver, arguments_); }
+function __velarTimeNumber(value) { return __velarTimeCall(__velarTimeNativeNumber, undefined, [value]); }
+function __velarTimeFreeze(value) { return __velarTimeCall(__velarTimeObjectFreeze, __velarTimeNativeObject, [value]); }
+function weekdayOf(value) {
+  if (value === "Sun") return 0;
+  if (value === "Mon") return 1;
+  if (value === "Tue") return 2;
+  if (value === "Wed") return 3;
+  if (value === "Thu") return 4;
+  if (value === "Fri") return 5;
+  if (value === "Sat") return 6;
+  return null;
+}
+function finiteNumber(value, name) { if (!__velarTimeCall(__velarTimeNumberIsFinite, __velarTimeNativeNumber, [value])) throw new __velarTimeNativeTypeError(name + " must be a finite number"); return value; }
+function valid(value) { finiteNumber(value, "velar/time timestamp"); if (__velarTimeCall(__velarTimeMathAbs, __velarTimeNativeMath, [value]) > maximumDateMilliseconds) throw new __velarTimeNativeRangeError("velar/time timestamp is outside the JavaScript date range"); return value; }
+function timeText(value, name) { if (typeof value !== "string") throw new __velarTimeNativeTypeError(name + " must be a string"); if (value.length > 1024) throw new __velarTimeNativeRangeError(name + " cannot exceed 1024 characters"); return value; }
+function timeResultText(value, name, maximum = 65536) { if (typeof value !== "string") throw new __velarTimeNativeTypeError(name + " must return a string"); if (value.length > maximum) throw new __velarTimeNativeRangeError(name + " returned too much text"); return value; }
 function ownData(container, key, name) {
-  if (container === null || typeof container !== "object") throw new TypeError(name + " must belong to an object");
-  const descriptor = Object.getOwnPropertyDescriptor(container, key);
-  if (!descriptor || !("value" in descriptor)) throw new TypeError(name + " must be an own data field");
+  if (container === null || typeof container !== "object") throw new __velarTimeNativeTypeError(name + " must belong to an object");
+  const descriptor = __velarTimeGetOwnPropertyDescriptor(container, key);
+  if (!descriptor || !("value" in descriptor)) throw new __velarTimeNativeTypeError(name + " must be an own data field");
   return descriptor.value;
 }
 function boundedInteger(value, name, minimum, maximum) {
-  if (!Number.isInteger(value)) throw new TypeError(name + " must be an integer");
-  if (value < minimum || value > maximum) throw new RangeError(name + " is out of range");
+  if (!__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [value])) throw new __velarTimeNativeTypeError(name + " must be an integer");
+  if (value < minimum || value > maximum) throw new __velarTimeNativeRangeError(name + " is out of range");
   return value;
 }
 function partInteger(value, name, minimum, maximum) {
-  if (typeof value !== "string" || !/^\d{1,6}$/u.test(value)) throw new TypeError("Time " + name + " part must be decimal text");
-  return boundedInteger(Number(value), "Time " + name + " part", minimum, maximum);
+  if (typeof value !== "string" || !__velarTimeCall(__velarTimeRegExpExec, __velarTimeDigitsPattern, [value])) throw new __velarTimeNativeTypeError("Time " + name + " part must be decimal text");
+  return boundedInteger(__velarTimeNumber(value), "Time " + name + " part", minimum, maximum);
 }
 function daysInMonth(year, month) {
   if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
   return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 function zonedParts(date, timeZone) {
-  const formatter = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "numeric", day: "numeric", weekday: "short", hour: "numeric", minute: "numeric", second: "numeric", era: "short", hourCycle: "h23" });
-  const parts = formatter.formatToParts(date);
-  if (!Array.isArray(parts)) throw new TypeError("Intl.DateTimeFormat.formatToParts must return a List");
+  const formatter = new __velarTimeDateTimeFormat("en-CA", { timeZone, year: "numeric", month: "numeric", day: "numeric", weekday: "short", hour: "numeric", minute: "numeric", second: "numeric", era: "short", hourCycle: "h23" });
+  const parts = __velarTimeCall(__velarTimeFormatToParts, formatter, [date]);
+  if (!__velarTimeCall(__velarTimeArrayIsArray, __velarTimeNativeArray, [parts])) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat.formatToParts must return a List");
   const partCount = parts.length;
-  if (!Number.isSafeInteger(partCount) || partCount < 0) throw new TypeError("Intl.DateTimeFormat returned an invalid time part count");
-  if (partCount > 32) throw new RangeError("Intl.DateTimeFormat returned too many time parts");
-  const entries = new Map();
-  const required = new Set(["year", "month", "day", "weekday", "hour", "minute", "second", "era"]);
+  if (!__velarTimeCall(__velarTimeNumberIsSafeInteger, __velarTimeNativeNumber, [partCount]) || partCount < 0) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned an invalid time part count");
+  if (partCount > 32) throw new __velarTimeNativeRangeError("Intl.DateTimeFormat returned too many time parts");
+  let yearText = null, monthText = null, dayText = null, weekdayText = null;
+  let hourText = null, minuteText = null, secondText = null, era = null;
   for (let index = 0; index < partCount; index += 1) {
-    const part = ownData(parts, String(index), "Intl time part");
+    const part = ownData(parts, index, "Intl time part");
     const type = ownData(part, "type", "Intl time part type");
     const value = ownData(part, "value", "Intl time part value");
     timeResultText(type, "Intl time part type", 32);
     timeResultText(value, "Intl time part value", 64);
     if (type === "literal") continue;
-    if (!required.has(type)) throw new TypeError("Intl.DateTimeFormat returned an unsupported time part");
-    if (entries.has(type)) throw new TypeError("Intl.DateTimeFormat returned a duplicate " + type + " part");
-    entries.set(type, value);
+    if (type === "year") { if (yearText !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate year part"); yearText = value; }
+    else if (type === "month") { if (monthText !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate month part"); monthText = value; }
+    else if (type === "day") { if (dayText !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate day part"); dayText = value; }
+    else if (type === "weekday") { if (weekdayText !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate weekday part"); weekdayText = value; }
+    else if (type === "hour") { if (hourText !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate hour part"); hourText = value; }
+    else if (type === "minute") { if (minuteText !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate minute part"); minuteText = value; }
+    else if (type === "second") { if (secondText !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate second part"); secondText = value; }
+    else if (type === "era") { if (era !== null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned a duplicate era part"); era = value; }
+    else throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned an unsupported time part");
   }
-  for (const name of required) if (!entries.has(name)) throw new TypeError("Intl.DateTimeFormat omitted the " + name + " part");
-  const era = entries.get("era");
-  if (era !== "AD" && era !== "BC") throw new TypeError("Intl.DateTimeFormat returned an unsupported era");
-  const displayedYear = partInteger(entries.get("year"), "year", 1, 999999);
+  if (yearText === null || monthText === null || dayText === null || weekdayText === null || hourText === null || minuteText === null || secondText === null || era === null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat omitted a required time part");
+  if (era !== "AD" && era !== "BC") throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned an unsupported era");
+  const displayedYear = partInteger(yearText, "year", 1, 999999);
   const year = era === "BC" ? 1 - displayedYear : displayedYear;
-  const month = partInteger(entries.get("month"), "month", 1, 12);
-  const day = partInteger(entries.get("day"), "day", 1, 31);
-  if (day > daysInMonth(year, month)) throw new RangeError("Intl.DateTimeFormat returned an impossible calendar date");
-  const weekday = weekdays.get(entries.get("weekday"));
-  if (weekday === undefined) throw new TypeError("Intl.DateTimeFormat returned an unsupported weekday");
-  return Object.freeze({
+  const month = partInteger(monthText, "month", 1, 12);
+  const day = partInteger(dayText, "day", 1, 31);
+  if (day > daysInMonth(year, month)) throw new __velarTimeNativeRangeError("Intl.DateTimeFormat returned an impossible calendar date");
+  const weekday = weekdayOf(weekdayText);
+  if (weekday === null) throw new __velarTimeNativeTypeError("Intl.DateTimeFormat returned an unsupported weekday");
+  return __velarTimeFreeze({
     year,
     month,
     day,
     weekday,
-    hour: partInteger(entries.get("hour"), "hour", 0, 23),
-    minute: partInteger(entries.get("minute"), "minute", 0, 59),
-    second: partInteger(entries.get("second"), "second", 0, 59),
-    millisecond: boundedInteger(date.getUTCMilliseconds(), "Time millisecond part", 0, 999),
+    hour: partInteger(hourText, "hour", 0, 23),
+    minute: partInteger(minuteText, "minute", 0, 59),
+    second: partInteger(secondText, "second", 0, 59),
+    millisecond: boundedInteger(__velarTimeCall(__velarTimeGetUTCMilliseconds, date, []), "Time millisecond part", 0, 999),
   });
 }
 function calendarParts(year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0) {
-  for (const value of [year, month, day, hour, minute, second, millisecond]) if (!Number.isInteger(value)) throw new TypeError("velar/time date parts must be integers");
-  if (year < 0 || year > 9999) throw new RangeError("velar/time year must be from 0 through 9999");
-  if (month < 1 || month > 12) throw new RangeError("velar/time month must be from 1 through 12");
-  if (day < 1 || day > 31) throw new RangeError("velar/time day is outside the selected month");
-  if (hour < 0 || hour > 23) throw new RangeError("velar/time hour must be from 0 through 23");
-  if (minute < 0 || minute > 59 || second < 0 || second > 59) throw new RangeError("velar/time minute and second must be from 0 through 59");
-  if (millisecond < 0 || millisecond > 999) throw new RangeError("velar/time millisecond must be from 0 through 999");
+  if (!__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [year])
+    || !__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [month])
+    || !__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [day])
+    || !__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [hour])
+    || !__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [minute])
+    || !__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [second])
+    || !__velarTimeCall(__velarTimeNumberIsInteger, __velarTimeNativeNumber, [millisecond])) throw new __velarTimeNativeTypeError("velar/time date parts must be integers");
+  if (year < 0 || year > 9999) throw new __velarTimeNativeRangeError("velar/time year must be from 0 through 9999");
+  if (month < 1 || month > 12) throw new __velarTimeNativeRangeError("velar/time month must be from 1 through 12");
+  if (day < 1 || day > 31) throw new __velarTimeNativeRangeError("velar/time day is outside the selected month");
+  if (hour < 0 || hour > 23) throw new __velarTimeNativeRangeError("velar/time hour must be from 0 through 23");
+  if (minute < 0 || minute > 59 || second < 0 || second > 59) throw new __velarTimeNativeRangeError("velar/time minute and second must be from 0 through 59");
+  if (millisecond < 0 || millisecond > 999) throw new __velarTimeNativeRangeError("velar/time millisecond must be from 0 through 999");
   return [year, month, day, hour, minute, second, millisecond];
 }
 function build(utc, year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0) {
   calendarParts(year, month, day, hour, minute, second, millisecond);
-  const value = new Date(0);
+  const value = new __velarTimeNativeDate(0);
   if (utc) {
-    value.setUTCFullYear(year, month - 1, day);
-    value.setUTCHours(hour, minute, second, millisecond);
-    if (value.getUTCFullYear() !== year || value.getUTCMonth() !== month - 1 || value.getUTCDate() !== day
-      || value.getUTCHours() !== hour || value.getUTCMinutes() !== minute || value.getUTCSeconds() !== second || value.getUTCMilliseconds() !== millisecond) {
-      throw new RangeError("velar/time date parts do not form a real UTC date");
+    __velarTimeCall(__velarTimeSetUTCFullYear, value, [year, month - 1, day]);
+    __velarTimeCall(__velarTimeSetUTCHours, value, [hour, minute, second, millisecond]);
+    if (__velarTimeCall(__velarTimeGetUTCFullYear, value, []) !== year || __velarTimeCall(__velarTimeGetUTCMonth, value, []) !== month - 1 || __velarTimeCall(__velarTimeGetUTCDate, value, []) !== day
+      || __velarTimeCall(__velarTimeGetUTCHours, value, []) !== hour || __velarTimeCall(__velarTimeGetUTCMinutes, value, []) !== minute || __velarTimeCall(__velarTimeGetUTCSeconds, value, []) !== second || __velarTimeCall(__velarTimeGetUTCMilliseconds, value, []) !== millisecond) {
+      throw new __velarTimeNativeRangeError("velar/time date parts do not form a real UTC date");
     }
   } else {
-    value.setFullYear(year, month - 1, day);
-    value.setHours(hour, minute, second, millisecond);
-    if (value.getFullYear() !== year || value.getMonth() !== month - 1 || value.getDate() !== day
-      || value.getHours() !== hour || value.getMinutes() !== minute || value.getSeconds() !== second || value.getMilliseconds() !== millisecond) {
-      throw new RangeError("velar/time date parts do not form a real local date");
+    __velarTimeCall(__velarTimeSetFullYear, value, [year, month - 1, day]);
+    __velarTimeCall(__velarTimeSetHours, value, [hour, minute, second, millisecond]);
+    if (__velarTimeCall(__velarTimeGetFullYear, value, []) !== year || __velarTimeCall(__velarTimeGetMonth, value, []) !== month - 1 || __velarTimeCall(__velarTimeGetDate, value, []) !== day
+      || __velarTimeCall(__velarTimeGetHours, value, []) !== hour || __velarTimeCall(__velarTimeGetMinutes, value, []) !== minute || __velarTimeCall(__velarTimeGetSeconds, value, []) !== second || __velarTimeCall(__velarTimeGetMilliseconds, value, []) !== millisecond) {
+      throw new __velarTimeNativeRangeError("velar/time date parts do not form a real local date");
     }
   }
-  return valid(value.getTime());
+  return valid(__velarTimeCall(__velarTimeGetTime, value, []));
 }
-export function now() { return valid(Date.now()); }
-export function monotonic() { return typeof performance === "undefined" ? now() : finiteNumber(performance.now(), "velar/time monotonic clock"); }
+export function now() { return valid(__velarTimeCall(__velarTimeDateNow, __velarTimeNativeDate, [])); }
+export function monotonic() { return __velarTimePerformance === null ? now() : finiteNumber(__velarTimeCall(__velarTimePerformanceNow, __velarTimePerformance, []), "velar/time monotonic clock"); }
 export function parse(value) {
-  if (typeof value !== "string") throw new TypeError("velar/time parse requires an ISO string");
+  if (typeof value !== "string") throw new __velarTimeNativeTypeError("velar/time parse requires an ISO string");
   if (value.length > 64) return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2}))?$/u.exec(value);
+  const match = __velarTimeCall(__velarTimeRegExpExec, __velarTimeRegExpPattern, [value]);
   if (!match) return null;
   try {
-    const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+    const year = __velarTimeNumber(match[1]), month = __velarTimeNumber(match[2]), day = __velarTimeNumber(match[3]);
     if (!match[4]) return build(true, year, month, day);
-    const hour = Number(match[4]), minute = Number(match[5]), second = Number(match[6] ?? 0);
-    const millisecond = Number((match[7] ?? "").padEnd(3, "0") || 0);
+    const hour = __velarTimeNumber(match[4]), minute = __velarTimeNumber(match[5]), second = __velarTimeNumber(match[6] ?? 0);
+    const millisecond = __velarTimeNumber(__velarTimeCall(__velarTimeStringPadEnd, match[7] ?? "", [3, "0"]) || 0);
     const zone = match[8];
     let offset = 0;
     if (zone !== "Z") {
       const sign = zone[0] === "+" ? 1 : -1;
-      const offsetHour = Number(zone.slice(1, 3)), offsetMinute = Number(zone.slice(4, 6));
+      const offsetHour = __velarTimeNumber(__velarTimeCall(__velarTimeStringSlice, zone, [1, 3]));
+      const offsetMinute = __velarTimeNumber(__velarTimeCall(__velarTimeStringSlice, zone, [4, 6]));
       if (offsetHour > 23 || offsetMinute > 59) return null;
       offset = sign * (offsetHour * 60 + offsetMinute);
     }
     return valid(build(true, year, month, day, hour, minute, second, millisecond) - offset * 60_000);
   } catch { return null; }
 }
-export function iso(value = now()) { return timeResultText(new Date(valid(value)).toISOString(), "Date.toISOString", 64); }
-export function format(value, locale = "", timeZone = "") { locale = timeText(locale, "Time locale"); timeZone = timeText(timeZone, "Time zone"); const output = new Intl.DateTimeFormat(locale || undefined, timeZone ? { dateStyle: "medium", timeStyle: "medium", timeZone } : { dateStyle: "medium", timeStyle: "medium" }).format(new Date(valid(value))); return timeResultText(output, "Intl.DateTimeFormat.format"); }
+export function iso(value = now()) { const date = new __velarTimeNativeDate(valid(value)); return timeResultText(__velarTimeCall(__velarTimeToISOString, date, []), "Date.toISOString", 64); }
+export function format(value, locale = "", timeZone = "") { locale = timeText(locale, "Time locale"); timeZone = timeText(timeZone, "Time zone"); const formatter = new __velarTimeDateTimeFormat(locale || undefined, timeZone ? { dateStyle: "medium", timeStyle: "medium", timeZone } : { dateStyle: "medium", timeStyle: "medium" }); const boundFormat = __velarTimeCall(__velarTimeFormatGetter, formatter, []); if (typeof boundFormat !== "function") throw new __velarTimeNativeTypeError("Intl.DateTimeFormat.format must be a function"); const output = __velarTimeCall(boundFormat, undefined, [new __velarTimeNativeDate(valid(value))]); return timeResultText(output, "Intl.DateTimeFormat.format"); }
 export function date(year, month, day, hour = 0, minute = 0, second = 0) { return build(false, year, month, day, hour, minute, second); }
 export function utc(year, month, day, hour = 0, minute = 0, second = 0) { return build(true, year, month, day, hour, minute, second); }
 export function parts(value, timeZone = "") {
-  const date = new Date(valid(value));
+  const date = new __velarTimeNativeDate(valid(value));
   timeZone = timeText(timeZone, "Time zone");
-  if (!timeZone) return Object.freeze({
-    year: boundedInteger(date.getFullYear(), "Time year part", -271821, 275760),
-    month: boundedInteger(date.getMonth() + 1, "Time month part", 1, 12),
-    day: boundedInteger(date.getDate(), "Time day part", 1, 31),
-    weekday: boundedInteger(date.getDay(), "Time weekday part", 0, 6),
-    hour: boundedInteger(date.getHours(), "Time hour part", 0, 23),
-    minute: boundedInteger(date.getMinutes(), "Time minute part", 0, 59),
-    second: boundedInteger(date.getSeconds(), "Time second part", 0, 59),
-    millisecond: boundedInteger(date.getMilliseconds(), "Time millisecond part", 0, 999),
+  if (!timeZone) return __velarTimeFreeze({
+    year: boundedInteger(__velarTimeCall(__velarTimeGetFullYear, date, []), "Time year part", -271821, 275760),
+    month: boundedInteger(__velarTimeCall(__velarTimeGetMonth, date, []) + 1, "Time month part", 1, 12),
+    day: boundedInteger(__velarTimeCall(__velarTimeGetDate, date, []), "Time day part", 1, 31),
+    weekday: boundedInteger(__velarTimeCall(__velarTimeGetDay, date, []), "Time weekday part", 0, 6),
+    hour: boundedInteger(__velarTimeCall(__velarTimeGetHours, date, []), "Time hour part", 0, 23),
+    minute: boundedInteger(__velarTimeCall(__velarTimeGetMinutes, date, []), "Time minute part", 0, 59),
+    second: boundedInteger(__velarTimeCall(__velarTimeGetSeconds, date, []), "Time second part", 0, 59),
+    millisecond: boundedInteger(__velarTimeCall(__velarTimeGetMilliseconds, date, []), "Time millisecond part", 0, 999),
   });
   return zonedParts(date, timeZone);
 }
 `.trimStart()],
   ["velar/id", String.raw`
+${VELAR_ERROR_NORMALIZATION_RUNTIME}
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const __velarIdNativeTypeError = globalThis.TypeError;
+const __velarIdGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const __velarIdGetPrototypeOf = Object.getPrototypeOf;
+const __velarIdRegExpPrototype = __velarIdGetPrototypeOf(uuidPattern);
+const __velarIdRegExpTest = __velarIdGetOwnPropertyDescriptor(__velarIdRegExpPrototype, "test")?.value;
+const __velarIdCrypto = globalThis.crypto;
+let __velarIdRandomUuid = null;
+let __velarIdCapabilityFailure = null;
 
-export function uuid() {
-  const source = globalThis.crypto;
-  if (!source || typeof source !== "object") throw new Error("Secure UUID generation is unavailable in this JavaScript host");
-  let owner = source;
-  let method = null;
+if (!__velarIdCrypto || typeof __velarIdCrypto !== "object") {
+  __velarIdCapabilityFailure = new __velarErrorNativeError("Secure UUID generation is unavailable in this JavaScript host");
+} else {
+  let owner = __velarIdCrypto;
   for (let depth = 0; owner !== null && depth < 32; depth += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(owner, "randomUUID");
+    const descriptor = __velarIdGetOwnPropertyDescriptor(owner, "randomUUID");
     if (descriptor) {
-      if (!("value" in descriptor) || typeof descriptor.value !== "function") throw new TypeError("crypto.randomUUID must be a data function");
-      method = descriptor.value;
+      if (!("value" in descriptor) || typeof descriptor.value !== "function") {
+        __velarIdCapabilityFailure = new __velarIdNativeTypeError("crypto.randomUUID must be a data function");
+      } else __velarIdRandomUuid = descriptor.value;
       break;
     }
-    owner = Object.getPrototypeOf(owner);
+    owner = __velarIdGetPrototypeOf(owner);
   }
-  if (!method) throw new Error("Secure UUID generation is unavailable in this JavaScript host");
+  if (!__velarIdRandomUuid && !__velarIdCapabilityFailure) {
+    __velarIdCapabilityFailure = new __velarErrorNativeError("Secure UUID generation is unavailable in this JavaScript host");
+  }
+}
+
+export function uuid() {
+  if (__velarIdCapabilityFailure) throw __velarIdCapabilityFailure;
   let value;
-  try { value = method.call(source); }
-  catch (failure) { if (Error.isError(failure)) throw failure; throw new Error("Secure UUID generation failed", { cause: failure }); }
-  if (!isUuid(value)) throw new Error("Secure UUID generation returned an invalid UUID");
+  try { value = __velarErrorApply(__velarIdRandomUuid, __velarIdCrypto, [], "crypto.randomUUID"); }
+  catch (failure) { if (__velarIsError(failure)) throw failure; throw new __velarErrorNativeError("Secure UUID generation failed", { cause: failure }); }
+  if (!isUuid(value)) throw new __velarErrorNativeError("Secure UUID generation returned an invalid UUID");
   return value;
 }
 
 export function isUuid(value) {
-  return typeof value === "string" && value.length === 36 && uuidPattern.test(value);
+  return typeof value === "string" && value.length === 36
+    && __velarErrorApply(__velarIdRegExpTest, uuidPattern, [value], "RegExp.test");
 }
   `.trimStart()],
   ["velar/log", String.raw`
 ${VELAR_ERROR_NORMALIZATION_RUNTIME}
-const ranks = new Map([["debug", 10], ["info", 20], ["warn", 30], ["error", 40], ["silent", 100]]);
+const __velarLogNativeMap = globalThis.Map;
+const __velarLogNativeSet = globalThis.Set;
+const __velarLogNativeObject = globalThis.Object;
+const __velarLogNativeDate = globalThis.Date;
+const __velarLogNativeNumber = globalThis.Number;
+const __velarLogNativeMath = globalThis.Math;
+const __velarLogNativeTypeError = globalThis.TypeError;
+const __velarLogNativeRangeError = globalThis.RangeError;
+const __velarLogGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const __velarLogGetPrototypeOf = Object.getPrototypeOf;
+const __velarLogDefineProperty = Object.defineProperty;
+const __velarLogCreateObject = Object.create;
+const __velarLogObjectPrototype = Object.prototype;
+const __velarLogFreeze = __velarLogGetOwnPropertyDescriptor(Object, "freeze")?.value;
+const __velarLogDateNow = __velarLogGetOwnPropertyDescriptor(Date, "now")?.value;
+const __velarLogNumberIsFinite = __velarLogGetOwnPropertyDescriptor(Number, "isFinite")?.value;
+const __velarLogMathAbs = __velarLogGetOwnPropertyDescriptor(Math, "abs")?.value;
+const __velarLogStringTrim = __velarLogGetOwnPropertyDescriptor(String.prototype, "trim")?.value;
+const __velarLogStringToLowerCase = __velarLogGetOwnPropertyDescriptor(String.prototype, "toLowerCase")?.value;
+const __velarLogPromiseThen = __velarLogGetOwnPropertyDescriptor(Promise.prototype, "then")?.value;
+const __velarLogMapSize = __velarLogGetOwnPropertyDescriptor(__velarLogNativeMap.prototype, "size")?.get;
+const __velarLogMapEntries = __velarLogGetOwnPropertyDescriptor(__velarLogNativeMap.prototype, "entries")?.value;
+const __velarLogMapHas = __velarLogGetOwnPropertyDescriptor(__velarLogNativeMap.prototype, "has")?.value;
+const __velarLogMapSet = __velarLogGetOwnPropertyDescriptor(__velarLogNativeMap.prototype, "set")?.value;
+const __velarLogSetSize = __velarLogGetOwnPropertyDescriptor(__velarLogNativeSet.prototype, "size")?.get;
+const __velarLogSetValues = __velarLogGetOwnPropertyDescriptor(__velarLogNativeSet.prototype, "values")?.value;
+const __velarLogSetHas = __velarLogGetOwnPropertyDescriptor(__velarLogNativeSet.prototype, "has")?.value;
+const __velarLogSetAdd = __velarLogGetOwnPropertyDescriptor(__velarLogNativeSet.prototype, "add")?.value;
+const __velarLogSetDelete = __velarLogGetOwnPropertyDescriptor(__velarLogNativeSet.prototype, "delete")?.value;
+const __velarLogMapIteratorNext = __velarLogGetOwnPropertyDescriptor(__velarLogGetPrototypeOf(__velarErrorApply(__velarLogMapEntries, new __velarLogNativeMap(), [], "Map.entries")), "next")?.value;
+const __velarLogSetIteratorNext = __velarLogGetOwnPropertyDescriptor(__velarLogGetPrototypeOf(__velarErrorApply(__velarLogSetValues, new __velarLogNativeSet(), [], "Set.values")), "next")?.value;
+const __velarLogConsoleDescriptor = __velarLogGetOwnPropertyDescriptor(globalThis, "console");
+const __velarLogConsoleTarget = __velarLogConsoleDescriptor && "value" in __velarLogConsoleDescriptor
+  && __velarLogConsoleDescriptor.value !== null && typeof __velarLogConsoleDescriptor.value === "object"
+  ? __velarLogConsoleDescriptor.value : null;
+const __velarLogConsoleMethods = __velarLogConsoleTarget === null ? null : __velarLogFreezeValue({
+  debug: __velarLogHostMethod(__velarLogConsoleTarget, "debug"),
+  info: __velarLogHostMethod(__velarLogConsoleTarget, "info"),
+  warn: __velarLogHostMethod(__velarLogConsoleTarget, "warn"),
+  error: __velarLogHostMethod(__velarLogConsoleTarget, "error"),
+  log: __velarLogHostMethod(__velarLogConsoleTarget, "log"),
+});
 let threshold = "info";
-const sinks = new Set();
+const sinks = new __velarLogNativeSet();
 const maxLogFields = 1000;
 const maxLogSinks = 1000;
 const maximumLogTimestamp = 8_640_000_000_000_000;
 
-function logText(value, name, maximum = 65536) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > maximum) throw new RangeError(name + " is too long"); return value; }
-function logTimestamp() {
-  const value = Date.now();
-  if (!Number.isFinite(value)) throw new TypeError("The host clock must return a finite timestamp");
-  if (Math.abs(value) > maximumLogTimestamp) throw new RangeError("The host clock returned a timestamp outside the JavaScript date range");
-  return value;
+function __velarLogApply(operation, receiver, arguments_, label) { return __velarErrorApply(operation, receiver, arguments_, label); }
+function __velarLogFreezeValue(value) { return __velarLogApply(__velarLogFreeze, __velarLogNativeObject, [value], "Object.freeze"); }
+function __velarLogMapValue(map, operation, arguments_, label) { return __velarLogApply(operation, map, arguments_, label); }
+function __velarLogSetValue(set, operation, arguments_, label) { return __velarLogApply(operation, set, arguments_, label); }
+function __velarLogCreateMap() { return new __velarLogNativeMap(); }
+function __velarLogMapCount(map) { return __velarLogMapValue(map, __velarLogMapSize, [], "Map.size"); }
+function __velarLogMapItems(map) {
+  const iterator = __velarLogMapValue(map, __velarLogMapEntries, [], "Map.entries");
+  const output = [];
+  while (true) {
+    const step = __velarLogApply(__velarLogMapIteratorNext, iterator, [], "Map iterator next");
+    if (step.done) return output;
+    output[output.length] = step.value;
+  }
 }
-function hostMethod(target, name) {
+function __velarLogSetItems(set) {
+  const iterator = __velarLogSetValue(set, __velarLogSetValues, [], "Set.values");
+  const output = [];
+  while (true) {
+    const step = __velarLogApply(__velarLogSetIteratorNext, iterator, [], "Set iterator next");
+    if (step.done) return output;
+    output[output.length] = step.value;
+  }
+}
+function __velarLogCloneMap(value) {
+  const output = __velarLogCreateMap();
+  const items = __velarLogMapItems(value);
+  for (let index = 0; index < items.length; index += 1) {
+    const pair = items[index];
+    __velarLogMapValue(output, __velarLogMapSet, [pair[0], pair[1]], "Map.set");
+  }
+  return output;
+}
+function __velarLogHostMethod(target, name) {
   let owner = target;
   for (let depth = 0; owner !== null && depth < 32; depth += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    const descriptor = __velarLogGetOwnPropertyDescriptor(owner, name);
     if (descriptor) {
-      if (!("value" in descriptor) || typeof descriptor.value !== "function") throw new TypeError("Host console method " + name + " must be a data function");
+      if (!("value" in descriptor) || typeof descriptor.value !== "function") throw new __velarLogNativeTypeError("Host console method " + name + " must be a data function");
       return descriptor.value;
     }
-    owner = Object.getPrototypeOf(owner);
+    owner = __velarLogGetPrototypeOf(owner);
   }
   return null;
 }
+function __velarLogFieldsObject(fields) {
+  const output = __velarLogApply(__velarLogCreateObject, __velarLogNativeObject, [__velarLogObjectPrototype], "Object.create");
+  const items = __velarLogMapItems(fields);
+  for (let index = 0; index < items.length; index += 1) {
+    const pair = items[index];
+    __velarLogApply(__velarLogDefineProperty, __velarLogNativeObject, [output, pair[0], { value: pair[1], enumerable: true, configurable: true, writable: true }], "Object.defineProperty");
+  }
+  return output;
+}
+function logText(value, name, maximum = 65536) { if (typeof value !== "string") throw new __velarLogNativeTypeError(name + " must be a string"); if (value.length > maximum) throw new __velarLogNativeRangeError(name + " is too long"); return value; }
+function logTimestamp() {
+  const value = __velarLogApply(__velarLogDateNow, __velarLogNativeDate, [], "Date.now");
+  if (!__velarLogApply(__velarLogNumberIsFinite, __velarLogNativeNumber, [value], "Number.isFinite")) throw new __velarLogNativeTypeError("The host clock must return a finite timestamp");
+  if (__velarLogApply(__velarLogMathAbs, __velarLogNativeMath, [value], "Math.abs") > maximumLogTimestamp) throw new __velarLogNativeRangeError("The host clock returned a timestamp outside the JavaScript date range");
+  return value;
+}
 
 function fieldsOf(value) {
-  if (value == null) return new Map();
+  if (value == null) return __velarLogCreateMap();
   let size;
-  try { size = Reflect.getOwnPropertyDescriptor(Map.prototype, "size").get.call(value); }
-  catch { throw new TypeError("VelarScript log fields must be a Map"); }
-  if (size > maxLogFields) throw new RangeError("VelarScript log fields cannot exceed 1000 entries");
-  const fields = new Map();
-  for (const [key, field] of Map.prototype.entries.call(value)) {
-    if (typeof key !== "string") throw new TypeError("VelarScript log field names must be strings");
-    if (key.length > 1024) throw new RangeError("VelarScript log field names cannot exceed 1024 characters");
-    fields.set(key, field);
+  try { size = __velarLogMapCount(value); }
+  catch { throw new __velarLogNativeTypeError("VelarScript log fields must be a Map"); }
+  if (size > maxLogFields) throw new __velarLogNativeRangeError("VelarScript log fields cannot exceed 1000 entries");
+  const fields = __velarLogCreateMap();
+  const items = __velarLogMapItems(value);
+  for (let index = 0; index < items.length; index += 1) {
+    const pair = items[index];
+    const key = pair[0];
+    if (typeof key !== "string") throw new __velarLogNativeTypeError("VelarScript log field names must be strings");
+    if (key.length > 1024) throw new __velarLogNativeRangeError("VelarScript log field names cannot exceed 1024 characters");
+    __velarLogMapValue(fields, __velarLogMapSet, [key, pair[1]], "Map.set");
   }
   return fields;
 }
 
 function defaultSink(record) {
-  const consoleDescriptor = Object.getOwnPropertyDescriptor(globalThis, "console");
-  if (!consoleDescriptor) return;
-  if (!("value" in consoleDescriptor) || consoleDescriptor.value === null || typeof consoleDescriptor.value !== "object") throw new TypeError("Host console must be an own data object");
-  const target = consoleDescriptor.value;
-  const write = hostMethod(target, record.level) ?? hostMethod(target, "log");
-  if (!write) throw new TypeError("Host console must provide a callable log method");
-  write.call(target, record.scope ? "[" + record.scope + "] " + record.message : record.message, Object.fromEntries(record.fields), record.error ?? "");
+  if (!__velarLogConsoleDescriptor) return;
+  if (__velarLogConsoleTarget === null) throw new __velarLogNativeTypeError("Host console must be an own data object");
+  const write = __velarLogConsoleMethods[record.level] ?? __velarLogConsoleMethods.log;
+  if (!write) throw new __velarLogNativeTypeError("Host console must provide a callable log method");
+  __velarLogApply(write, __velarLogConsoleTarget, [record.scope ? "[" + record.scope + "] " + record.message : record.message, __velarLogFieldsObject(record.fields), record.error ?? ""], "console writer");
 }
 
 function sinkFailure(value) {
   const error = __velarNormalizeError(value);
-  defaultSink(Object.freeze({ timestamp: logTimestamp(), level: "error", scope: "velar/log", message: "Log sink failed", fields: new Map(), error }));
+  defaultSink(__velarLogFreezeValue({ timestamp: logTimestamp(), level: "error", scope: "velar/log", message: "Log sink failed", fields: __velarLogCreateMap(), error }));
 }
 function observeSinkResult(value) {
-  try { Promise.prototype.then.call(value, undefined, sinkFailure); }
+  try { __velarLogApply(__velarLogPromiseThen, value, [undefined, sinkFailure], "Promise.then"); }
   catch { /* Non-Promise sink results are intentionally ignored. */ }
 }
 
 function emit(scope, level, message, fields, error = null) {
   message = logText(message, "Log message");
   fields = fieldsOf(fields);
-  if (error != null && !Error.isError(error)) throw new TypeError("Logger error must be an Error");
-  if ((ranks.get(level) ?? 100) < (ranks.get(threshold) ?? 20)) return null;
-  const record = Object.freeze({ timestamp: logTimestamp(), level, scope, message, fields, error });
-  if (!sinks.size) defaultSink(record);
-  else for (const sink of sinks) {
+  if (error != null && !__velarIsError(error)) throw new __velarLogNativeTypeError("Logger error must be an Error");
+  if (__velarLogRank(level) < __velarLogRank(threshold)) return null;
+  const record = __velarLogFreezeValue({ timestamp: logTimestamp(), level, scope, message, fields, error });
+  if (__velarLogSetValue(sinks, __velarLogSetSize, [], "Set.size") === 0) defaultSink(record);
+  else {
+    const activeSinks = __velarLogSetItems(sinks);
+    for (let index = 0; index < activeSinks.length; index += 1) {
+      const sink = activeSinks[index];
     try {
-      const delivered = Object.freeze({ ...record, fields: new Map(record.fields) });
+      const delivered = __velarLogFreezeValue({ timestamp: record.timestamp, level: record.level, scope: record.scope, message: record.message, fields: __velarLogCloneMap(record.fields), error: record.error });
       const result = sink(delivered);
       observeSinkResult(result);
     } catch (failure) { sinkFailure(failure); }
+    }
   }
   return null;
 }
 
-function createLogger(scope, base = new Map()) {
+function __velarLogRank(value) {
+  if (value === "debug") return 10;
+  if (value === "info") return 20;
+  if (value === "warn") return 30;
+  if (value === "error") return 40;
+  if (value === "silent") return 100;
+  return 100;
+}
+function createLogger(scope, base = null) {
   const context = fieldsOf(base);
   const merged = (fields) => {
-    const output = new Map(context);
-    for (const [key, value] of fieldsOf(fields)) {
-      if (!output.has(key) && output.size >= maxLogFields) throw new RangeError("Merged log fields cannot exceed 1000 entries");
-      output.set(key, value);
+    const output = __velarLogCloneMap(context);
+    const items = __velarLogMapItems(fieldsOf(fields));
+    for (let index = 0; index < items.length; index += 1) {
+      const pair = items[index];
+      const key = pair[0];
+      if (!__velarLogMapValue(output, __velarLogMapHas, [key], "Map.has") && __velarLogMapCount(output) >= maxLogFields) throw new __velarLogNativeRangeError("Merged log fields cannot exceed 1000 entries");
+      __velarLogMapValue(output, __velarLogMapSet, [key, pair[1]], "Map.set");
     }
     return output;
   };
-  return Object.freeze({
-    debug(message, fields = new Map()) { return emit(scope, "debug", message, merged(fields)); },
-    info(message, fields = new Map()) { return emit(scope, "info", message, merged(fields)); },
-    warn(message, fields = new Map()) { return emit(scope, "warn", message, merged(fields)); },
-    error(message, error = null, fields = new Map()) { return emit(scope, "error", message, merged(fields), error); },
+  return __velarLogFreezeValue({
+    debug(message, fields = null) { return emit(scope, "debug", message, merged(fields)); },
+    info(message, fields = null) { return emit(scope, "info", message, merged(fields)); },
+    warn(message, fields = null) { return emit(scope, "warn", message, merged(fields)); },
+    error(message, error = null, fields = null) { return emit(scope, "error", message, merged(fields), error); },
   });
 }
 
 export const log = createLogger("");
-export function logger(scope, fields = new Map()) {
-  const name = logText(scope, "Logger scope", 1024).trim();
-  if (!name) throw new TypeError("A VelarScript logger requires a non-empty scope");
+export function logger(scope, fields = null) {
+  const name = __velarLogApply(__velarLogStringTrim, logText(scope, "Logger scope", 1024), [], "String.trim");
+  if (!name) throw new __velarLogNativeTypeError("A VelarScript logger requires a non-empty scope");
   return createLogger(name, fields);
 }
 export function level() { return threshold; }
 export function setLevel(value) {
-  const next = logText(value, "Log level").toLowerCase();
-  if (!ranks.has(next)) throw new TypeError("Log level must be debug, info, warn, error, or silent");
+  const next = __velarLogApply(__velarLogStringToLowerCase, logText(value, "Log level"), [], "String.toLowerCase");
+  if (next !== "debug" && next !== "info" && next !== "warn" && next !== "error" && next !== "silent") throw new __velarLogNativeTypeError("Log level must be debug, info, warn, error, or silent");
   threshold = next;
   return null;
 }
 export function useSink(sink) {
-  if (typeof sink !== "function") throw new TypeError("A VelarScript log sink must be callable");
-  if (!sinks.has(sink) && sinks.size >= maxLogSinks) throw new RangeError("VelarScript logging cannot install more than 1000 sinks");
-  sinks.add(sink);
-  return () => { sinks.delete(sink); return null; };
+  if (typeof sink !== "function") throw new __velarLogNativeTypeError("A VelarScript log sink must be callable");
+  if (!__velarLogSetValue(sinks, __velarLogSetHas, [sink], "Set.has") && __velarLogSetValue(sinks, __velarLogSetSize, [], "Set.size") >= maxLogSinks) throw new __velarLogNativeRangeError("VelarScript logging cannot install more than 1000 sinks");
+  __velarLogSetValue(sinks, __velarLogSetAdd, [sink], "Set.add");
+  return () => { __velarLogSetValue(sinks, __velarLogSetDelete, [sink], "Set.delete"); return null; };
 }
 `.trimStart()],
   ["velar/test", String.raw`
 ${deepEqualRuntime}
-const nativeTestRegExpPrototype = Object.getPrototypeOf(/(?:)/u);
-const NativeTestRegExp = Object.getOwnPropertyDescriptor(nativeTestRegExpPrototype, "constructor").value;
-const nativeTestRegExpExec = Object.getOwnPropertyDescriptor(nativeTestRegExpPrototype, "exec").value;
+const __velarTestNativeString = globalThis.String;
+const __velarTestNativeNumber = globalThis.Number;
+const __velarTestNativePromise = globalThis.Promise;
+const __velarTestNativeJSON = globalThis.JSON;
+const __velarTestNativeMath = globalThis.Math;
+const __velarTestNativeError = globalThis.Error;
+const __velarTestNativeTypeError = globalThis.TypeError;
+const __velarTestNativeRangeError = globalThis.RangeError;
+const __velarTestFreeze = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeObject, "freeze")?.value;
+const __velarTestStringPrototype = __velarDeepGetOwnPropertyDescriptor(__velarTestNativeString, "prototype")?.value;
+const __velarTestStringSlice = __velarDeepGetOwnPropertyDescriptor(__velarTestStringPrototype, "slice")?.value;
+const __velarTestStringIncludes = __velarDeepGetOwnPropertyDescriptor(__velarTestStringPrototype, "includes")?.value;
+const __velarTestArrayJoin = __velarDeepGetOwnPropertyDescriptor(__velarDeepArrayPrototype, "join")?.value;
+const __velarTestNumberIsSafeInteger = __velarDeepGetOwnPropertyDescriptor(__velarTestNativeNumber, "isSafeInteger")?.value;
+const __velarTestJsonStringify = __velarDeepGetOwnPropertyDescriptor(__velarTestNativeJSON, "stringify")?.value;
+const __velarTestMathMin = __velarDeepGetOwnPropertyDescriptor(__velarTestNativeMath, "min")?.value;
+const __velarTestPromisePrototype = __velarDeepGetOwnPropertyDescriptor(__velarTestNativePromise, "prototype")?.value;
+const __velarTestPromiseThen = __velarDeepGetOwnPropertyDescriptor(__velarTestPromisePrototype, "then")?.value;
+const __velarTestRegExpPrototype = __velarDeepGetPrototypeOf(/(?:)/u);
+const __velarTestNativeRegExp = __velarDeepGetOwnPropertyDescriptor(__velarTestRegExpPrototype, "constructor")?.value;
+const __velarTestRegExpExec = __velarDeepGetOwnPropertyDescriptor(__velarTestRegExpPrototype, "exec")?.value;
+function __velarTestAppend(items, value) { items[items.length] = value; }
+function __velarTestJoin(items) { return __velarDeepCall(__velarTestArrayJoin, items, [", "]); }
+function __velarTestString(value) { return __velarDeepCall(__velarTestNativeString, undefined, [value]); }
 function display(value, state = null) {
-  state ??= { active: new WeakSet(), nodes: 0, depth: 0 };
+  state ??= { active: new __velarDeepNativeWeakSet(), nodes: 0, depth: 0 };
   state.nodes += 1;
   if (state.nodes > 1000) return "…";
   if (value === null) return "null";
-  if (typeof value === "string") return JSON.stringify(value.length > 256 ? value.slice(0, 256) + "…" : value);
+  if (typeof value === "string") return __velarDeepCall(__velarTestJsonStringify, __velarTestNativeJSON, [value.length > 256 ? __velarDeepCall(__velarTestStringSlice, value, [0, 256]) + "…" : value]);
   if (typeof value === "function") return "[function]";
   if (typeof value === "undefined") return "undefined";
   if (typeof value === "symbol") return "[symbol]";
-  if (typeof value !== "object") return String(value);
-  if (state.active.has(value)) return "[cycle]";
+  if (typeof value !== "object") return __velarTestString(value);
+  if (__velarDeepCall(__velarDeepWeakSetHas, state.active, [value])) return "[cycle]";
   if (state.depth >= 16) return "[depth]";
-  state.active.add(value);
+  __velarDeepCall(__velarDeepWeakSetAdd, state.active, [value]);
   state.depth += 1;
   try {
-    if (Array.isArray(value)) {
+    if (__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [value])) {
       if (!__velarDenseList(value)) return "[invalid List]";
       const items = [];
-      const limit = Math.min(value.length, 50);
-      for (let index = 0; index < limit; index += 1) items.push(display(Object.getOwnPropertyDescriptor(value, index).value, state));
-      if (value.length > limit) items.push("…");
-      return "[" + items.join(", ") + "]";
+      const limit = __velarDeepCall(__velarTestMathMin, __velarTestNativeMath, [value.length, 50]);
+      for (let index = 0; index < limit; index += 1) __velarTestAppend(items, display(__velarDeepGetOwnPropertyDescriptor(value, index).value, state));
+      if (value.length > limit) __velarTestAppend(items, "…");
+      return "[" + __velarTestJoin(items) + "]";
     }
     if (__velarMapSize(value) !== null) {
       const items = [];
-      for (const [key, item] of Map.prototype.entries.call(value)) { if (items.length >= 50) { items.push("…"); break; } items.push(display(key, state) + " => " + display(item, state)); }
-      return "Map(" + items.join(", ") + ")";
+      const iterator = __velarDeepCall(__velarDeepMapEntries, value, []);
+      while (true) {
+        const entry = __velarDeepIteratorValue(iterator, __velarDeepMapIteratorNext);
+        if (entry === null) break;
+        if (entry.invalid || !__velarDenseList(entry.value) || entry.value.length !== 2) return "[invalid Map]";
+        if (items.length >= 50) { __velarTestAppend(items, "…"); break; }
+        __velarTestAppend(items, display(__velarDeepGetOwnPropertyDescriptor(entry.value, 0).value, state) + " => " + display(__velarDeepGetOwnPropertyDescriptor(entry.value, 1).value, state));
+      }
+      return "Map(" + __velarTestJoin(items) + ")";
     }
     if (__velarSetSize(value) !== null) {
       const items = [];
-      for (const item of Set.prototype.values.call(value)) { if (items.length >= 50) { items.push("…"); break; } items.push(display(item, state)); }
-      return "Set(" + items.join(", ") + ")";
+      const iterator = __velarDeepCall(__velarDeepSetValues, value, []);
+      while (true) {
+        const item = __velarDeepIteratorValue(iterator, __velarDeepSetIteratorNext);
+        if (item === null) break;
+        if (item.invalid) return "[invalid Set]";
+        if (items.length >= 50) { __velarTestAppend(items, "…"); break; }
+        __velarTestAppend(items, display(item.value, state));
+      }
+      return "Set(" + __velarTestJoin(items) + ")";
     }
     const keys = __velarDataRecordKeys(value);
     if (keys) {
-      const displayed = keys.slice(0, 50).map((key) => JSON.stringify(key) + ": " + display(Object.getOwnPropertyDescriptor(value, key).value, state));
-      if (keys.length > 50) displayed.push("…");
-      return "{" + displayed.join(", ") + "}";
+      const displayed = [];
+      const limit = __velarDeepCall(__velarTestMathMin, __velarTestNativeMath, [keys.length, 50]);
+      for (let index = 0; index < limit; index += 1) {
+        const key = __velarDeepGetOwnPropertyDescriptor(keys, index).value;
+        __velarTestAppend(displayed, __velarDeepCall(__velarTestJsonStringify, __velarTestNativeJSON, [key]) + ": " + display(__velarDeepGetOwnPropertyDescriptor(value, key).value, state));
+      }
+      if (keys.length > 50) __velarTestAppend(displayed, "…");
+      return "{" + __velarTestJoin(displayed) + "}";
     }
-    const prototype = Object.getPrototypeOf(value);
-    const constructor = prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
-    const name = typeof constructor === "function" ? Object.getOwnPropertyDescriptor(constructor, "name")?.value : null;
+    const prototype = __velarDeepGetPrototypeOf(value);
+    const constructor = prototype && __velarDeepGetOwnPropertyDescriptor(prototype, "constructor")?.value;
+    const name = typeof constructor === "function" ? __velarDeepGetOwnPropertyDescriptor(constructor, "name")?.value : null;
     return "[" + (typeof name === "string" && name ? name : "object") + "]";
   } finally {
     state.depth -= 1;
-    state.active.delete(value);
+    __velarDeepCall(__velarDeepWeakSetDelete, state.active, [value]);
   }
 }
 export function expect(actual) {
-  return Object.freeze({
-    toBe(expected) { if (actual !== expected) throw new Error("Expected " + display(actual) + " to be " + display(expected)); },
-    toEqual(expected) { if (!__velarDeepEqual(actual, expected)) throw new Error("Expected " + display(actual) + " to deeply equal " + display(expected)); },
-    toBeTruthy() { if (actual !== true) throw new Error("Expected bool true but received " + display(actual)); },
-    toBeFalsy() { if (actual !== false) throw new Error("Expected bool false but received " + display(actual)); },
+  return __velarDeepCall(__velarTestFreeze, __velarDeepNativeObject, [{
+    toBe(expected) { if (actual !== expected) throw new __velarTestNativeError("Expected " + display(actual) + " to be " + display(expected)); },
+    toEqual(expected) { if (!__velarDeepEqual(actual, expected)) throw new __velarTestNativeError("Expected " + display(actual) + " to deeply equal " + display(expected)); },
+    toBeTruthy() { if (actual !== true) throw new __velarTestNativeError("Expected bool true but received " + display(actual)); },
+    toBeFalsy() { if (actual !== false) throw new __velarTestNativeError("Expected bool false but received " + display(actual)); },
     toContain(expected) {
-      let contains = typeof actual === "string" && typeof expected === "string" && actual.includes(expected);
-      if (Array.isArray(actual) && __velarDenseList(actual)) {
+      let contains = typeof actual === "string" && typeof expected === "string" && __velarDeepCall(__velarTestStringIncludes, actual, [expected]);
+      if (__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [actual]) && __velarDenseList(actual)) {
         contains = false;
         for (let index = 0; index < actual.length; index += 1) {
-          if (Object.getOwnPropertyDescriptor(actual, index).value === expected) { contains = true; break; }
+          if (__velarDeepGetOwnPropertyDescriptor(actual, index).value === expected) { contains = true; break; }
         }
       }
-      if (!contains) throw new Error("Expected " + display(actual) + " to contain " + display(expected));
+      if (!contains) throw new __velarTestNativeError("Expected " + display(actual) + " to contain " + display(expected));
     },
     toMatch(expected) {
-      if (typeof actual !== "string" || typeof expected !== "string") throw new TypeError("toMatch requires text and a string pattern");
-      if (expected.length > 4096) throw new RangeError("toMatch patterns cannot exceed 4096 code units");
+      if (typeof actual !== "string" || typeof expected !== "string") throw new __velarTestNativeTypeError("toMatch requires text and a string pattern");
+      if (expected.length > 4096) throw new __velarTestNativeRangeError("toMatch patterns cannot exceed 4096 code units");
       let pattern;
-      try { pattern = new NativeTestRegExp(expected, "u"); } catch { throw new TypeError("Invalid toMatch pattern"); }
-      if (nativeTestRegExpExec.call(pattern, actual) === null) throw new Error("Expected " + display(actual) + " to match " + display(expected));
+      try { pattern = new __velarTestNativeRegExp(expected, "u"); } catch { throw new __velarTestNativeTypeError("Invalid toMatch pattern"); }
+      if (__velarDeepCall(__velarTestRegExpExec, pattern, [actual]) === null) throw new __velarTestNativeError("Expected " + display(actual) + " to match " + display(expected));
     },
     toHaveLength(expected) {
-      if (!Number.isSafeInteger(expected) || expected < 0) throw new RangeError("Expected length must be a non-negative safe integer");
-      const length = typeof actual === "string" ? actual.length : Array.isArray(actual) && __velarDenseList(actual) ? actual.length : null;
-      if (length === null) throw new TypeError("toHaveLength requires text or a dense List");
-      if (length !== expected) throw new Error("Expected length " + expected + " but received " + length);
+      if (!__velarDeepCall(__velarTestNumberIsSafeInteger, __velarTestNativeNumber, [expected]) || expected < 0) throw new __velarTestNativeRangeError("Expected length must be a non-negative safe integer");
+      const length = typeof actual === "string" ? actual.length : __velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [actual]) && __velarDenseList(actual) ? actual.length : null;
+      if (length === null) throw new __velarTestNativeTypeError("toHaveLength requires text or a dense List");
+      if (length !== expected) throw new __velarTestNativeError("Expected length " + expected + " but received " + length);
     },
     toThrow() {
-      if (typeof actual !== "function") throw new TypeError("toThrow requires a function");
+      if (typeof actual !== "function") throw new __velarTestNativeTypeError("toThrow requires a function");
       let threw = false; try { actual(); } catch { threw = true; }
-      if (!threw) throw new Error("Expected function to throw");
+      if (!threw) throw new __velarTestNativeError("Expected function to throw");
     },
     async toReject() {
       let result;
       if (typeof actual === "function") {
         try { result = actual(); }
-        catch (error) { throw new Error("Expected function to return a rejecting Promise, but it threw synchronously: " + display(error)); }
+        catch (error) { throw new __velarTestNativeError("Expected function to return a rejecting Promise, but it threw synchronously: " + display(error)); }
       } else result = actual;
       let promise;
-      try { promise = Promise.prototype.then.call(result, value => value); }
-      catch { throw new TypeError("toReject requires a Promise or a function returning one"); }
+      try { promise = __velarDeepCall(__velarTestPromiseThen, result, [value => value]); }
+      catch { throw new __velarTestNativeTypeError("toReject requires a Promise or a function returning one"); }
       try { await promise; } catch { return null; }
-      throw new Error("Expected Promise to reject");
+      throw new __velarTestNativeError("Expected Promise to reject");
     },
-  });
+  }]);
 }
 `.trimStart()],
 ]);
 
+/**
+ * Implementation-only edges between compiler-owned JavaScript modules.
+ * Public ModuleInterface dependencies remain source-level VelarScript imports;
+ * this graph only guarantees that unbundled targets materialize every hidden
+ * runtime module needed by a generated module.
+ */
+const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
+  [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
+]);
+
 export function standardModuleSources(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, string> {
+  const activeExtensions = standardExtensions(extensions);
   return new Map([
     ...coreModuleSources,
-    ...extensions.flatMap((extension) => extension.modules ? [...extension.modules.sources] : []),
+    ...combinedExtensionModules<string>(activeExtensions, "sources"),
   ]);
 }
 
@@ -1342,10 +1971,11 @@ export interface StandardModuleApi {
 }
 
 export function standardModuleApi(extensions: readonly CompilerExtension[] = []): StandardModuleApi {
-  const interfaces = standardModuleInterfaces(extensions);
+  const activeExtensions = standardExtensions(extensions);
+  const interfaces = standardModuleInterfaces(activeExtensions);
   return {
     standardVersion: VELAR_STANDARD_API_VERSION,
-    extensions: Object.fromEntries(extensions.map((extension) => [extension.id, extension.modules?.apiVersion ?? "unknown"])),
+    extensions: Object.fromEntries(activeExtensions.map((extension) => [extension.id, extension.modules?.apiVersion ?? "unknown"])),
     modules: Object.fromEntries([...interfaces].map(([source, interface_]) => [source, [...interface_.exports.keys()].sort()])),
   };
 }
@@ -1355,18 +1985,74 @@ export function standardModuleSource(
   projectConfig: unknown = { base: "/" },
   extensions: readonly CompilerExtension[] = [],
 ): string | null {
-  for (const extension of extensions) {
+  for (const extension of standardExtensions(extensions)) {
     const extensionConfig = projectConfig instanceof Map ? projectConfig.get(extension.id) : projectConfig;
     const framework = extension.modules?.source?.(source, extensionConfig) ?? extension.modules?.sources.get(source) ?? null;
     if (framework !== null) return framework;
   }
   return coreModuleSources.get(source) ?? null;
 }
+
+export function standardModuleDependencies(
+  source: string,
+  projectConfig: unknown = { base: "/" },
+  extensions: readonly CompilerExtension[] = [],
+): readonly string[] | null {
+  for (const extension of standardExtensions(extensions)) {
+    const extensionConfig = projectConfig instanceof Map ? projectConfig.get(extension.id) : projectConfig;
+    const moduleSource = extension.modules?.source?.(source, extensionConfig) ?? extension.modules?.sources.get(source) ?? null;
+    if (moduleSource !== null) return extension.modules?.dependencies?.get(source) ?? [];
+  }
+  return coreModuleSources.has(source) ? coreModuleDependencies.get(source) ?? [] : null;
+}
+
+export function standardModuleClosure(
+  roots: Iterable<string>,
+  projectConfig: unknown = { base: "/" },
+  extensions: readonly CompilerExtension[] = [],
+): ReadonlySet<string> {
+  const modules = new Set<string>();
+  const visit = (source: string, owner: string | null): void => {
+    if (modules.has(source)) return;
+    const dependencies = standardModuleDependencies(source, projectConfig, extensions);
+    if (dependencies === null) {
+      throw new Error(owner === null
+        ? `Unknown VelarScript standard module '${source}'`
+        : `VelarScript standard module '${owner}' depends on unknown module '${source}'`);
+    }
+    modules.add(source);
+    for (const dependency of dependencies) visit(dependency, source);
+  };
+  for (const root of roots) visit(root, null);
+  return modules;
+}
+
+function standardExtensions(extensions: readonly CompilerExtension[]): readonly CompilerExtension[] {
+  return [...extensions.filter((extension) => extension.id !== velarNodeCompilerExtension.id), velarNodeCompilerExtension];
+}
+
+function combinedExtensionModules<T>(
+  extensions: readonly CompilerExtension[],
+  field: "interfaces" | "sources",
+): ReadonlyMap<string, T> {
+  const combined = new Map<string, T>();
+  for (const extension of [...extensions].reverse()) {
+    const modules = extension.modules?.[field] as ReadonlyMap<string, T> | undefined;
+    if (!modules) continue;
+    for (const [source, value] of modules) {
+      // A higher-priority, explicitly selected target owns both the contract
+      // and source when two platforms intentionally share a module name.
+      combined.delete(source);
+      combined.set(source, value);
+    }
+  }
+  return combined;
+}
 export function standardModuleAsset(
   pathname: string,
   projectConfig: unknown = { base: "/" },
   extensions: readonly CompilerExtension[] = [],
 ): string | null {
-  const match = /^\/@velar\/([a-z-]+)\.js$/u.exec(pathname);
+  const match = /^\/@velar\/([a-z0-9-]+)\.js$/u.exec(pathname);
   return match ? standardModuleSource(`velar/${match[1]}`, projectConfig, extensions) : null;
 }

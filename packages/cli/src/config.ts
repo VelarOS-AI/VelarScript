@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { lstat, readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +8,18 @@ import {
   VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
-import { hostErrorCode, hostErrorMessage } from "./host-error.ts";
+import { hostErrorCode, hostErrorMessage, isHostErrorCode } from "./host-error.ts";
+import {
+  resolveExtensionPackages,
+  validateLoadedExtension,
+  type ResolvedExtensionPackage,
+} from "./extension-metadata.ts";
+import {
+  CORE_PROJECT_MANIFEST_FIELDS,
+  CURRENT_PROJECT_FORMAT_VERSION,
+} from "./project-format.ts";
+
+export { CURRENT_PROJECT_FORMAT_VERSION } from "./project-format.ts";
 
 export interface ResolvedFrameworkHost {
   readonly host: FrameworkHostExtension;
@@ -24,6 +35,7 @@ export interface VelarProjectConfig {
   readonly outDir: string;
   readonly publicDir: string;
   readonly extensions: readonly string[];
+  readonly extensionGraph: readonly ResolvedExtensionPackage[];
   readonly compilerExtensions: readonly CompilerExtension[];
   readonly extensionConfig: ReadonlyMap<string, unknown>;
   readonly framework: ResolvedFrameworkHost | null;
@@ -36,6 +48,7 @@ interface ProjectExtension {
 }
 
 interface LoadedExtensions {
+  readonly packages: readonly ResolvedExtensionPackage[];
   readonly compiler: readonly CompilerExtension[];
   readonly project: readonly ProjectExtension[];
   readonly hosts: readonly FrameworkHostExtension[];
@@ -48,8 +61,6 @@ interface ManifestShape {
   readonly publicDir?: unknown;
   readonly extensions?: unknown;
 }
-
-export const CURRENT_PROJECT_FORMAT_VERSION = 2;
 
 export async function resolveVelarProject(input: string | null, cwd = process.cwd()): Promise<VelarProjectConfig> {
   const explicit = input ? resolve(cwd, input) : null;
@@ -64,7 +75,7 @@ export async function resolveVelarProject(input: string | null, cwd = process.cw
   const manifestPath = explicit
     ? kind === "directory" ? join(explicit, "velar.json") : explicit
     : await findManifest(resolve(cwd));
-  if (!manifestPath || await pathKind(manifestPath) !== "file") {
+  if (!manifestPath || !await ordinaryManifestFile(manifestPath)) {
     throw new Error(input
       ? `'${input}' is neither a .vel file nor a directory containing velar.json`
       : "velar.json was not found; run this command in a VelarScript project or pass an entry .vel file");
@@ -82,7 +93,8 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   let manifest: ManifestShape;
   let manifestIdentity: string;
   try {
-    const metadata = await stat(manifestPath);
+    if (!await ordinaryManifestFile(manifestPath)) throw new Error("project manifest does not exist");
+    const metadata = await lstat(manifestPath);
     if (metadata.size > 1024 * 1024) throw new RangeError("project manifest exceeds 1 MiB");
     const source = await readFile(manifestPath, "utf8");
     if (Buffer.byteLength(source, "utf8") > 1024 * 1024) throw new RangeError("project manifest exceeds 1 MiB");
@@ -106,7 +118,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   const loadedExtensions = await loadExtensions(root, extensions, manifestPath);
   knownFields(
     manifest as Record<string, unknown>,
-    new Set(["formatVersion", "entry", "outDir", "publicDir", "extensions", ...loadedExtensions.project.map((extension) => extension.manifestKey)]),
+    new Set([...CORE_PROJECT_MANIFEST_FIELDS, ...loadedExtensions.project.map((extension) => extension.manifestKey)]),
     "project",
     manifestPath,
   );
@@ -125,6 +137,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     outDir,
     publicDir,
     extensions,
+    extensionGraph: loadedExtensions.packages,
     compilerExtensions: loadedExtensions.compiler,
     extensionConfig,
     framework,
@@ -142,6 +155,7 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
     outDir: join(root, "dist"),
     publicDir: join(root, "public"),
     extensions: [],
+    extensionGraph: [],
     compilerExtensions: [],
     extensionConfig: new Map(),
     framework: null,
@@ -165,27 +179,28 @@ function extensionList(value: unknown, manifestPath: string): readonly string[] 
 
 async function loadExtensions(root: string, names: readonly string[], manifestPath: string): Promise<LoadedExtensions> {
   const require = createRequire(join(root, "package.json"));
+  const packages = await resolveExtensionPackages(root, names);
   const compiler: CompilerExtension[] = [];
   const project: ProjectExtension[] = [];
   const hosts: FrameworkHostExtension[] = [];
-  for (const name of names) {
+  for (const package_ of packages) {
+    const name = package_.name;
     try {
       const entry = require.resolve(`${name}/compiler`);
       const namespace = await import(pathToFileURL(entry).href) as { readonly velarCompilerExtension?: unknown; readonly velarProjectExtension?: unknown };
-      const extension = namespace.velarCompilerExtension as Partial<CompilerExtension> | undefined;
-      if (!extension || extension.id !== name || (extension.createEmitter !== undefined && typeof extension.createEmitter !== "function")) {
-        throw new Error(`'${name}/compiler' does not export a matching velarCompilerExtension`);
-      }
-      compiler.push(extension as CompilerExtension);
-      if (namespace.velarProjectExtension !== undefined) {
+      const extension = validateLoadedExtension(package_, namespace.velarCompilerExtension as Partial<CompilerExtension> | undefined);
+      compiler.push(extension);
+      if (package_.manifestKey !== null) {
         const projectExtension = namespace.velarProjectExtension as Partial<ProjectExtension>;
-        if (projectExtension.id !== name || typeof projectExtension.manifestKey !== "string" || typeof projectExtension.parse !== "function") {
+        if (!projectExtension || projectExtension.id !== name || projectExtension.manifestKey !== package_.manifestKey || typeof projectExtension.parse !== "function") {
           throw new Error(`'${name}/compiler' exports an invalid velarProjectExtension`);
         }
         project.push(projectExtension as ProjectExtension);
+      } else if (namespace.velarProjectExtension !== undefined) {
+        throw new Error(`'${name}/compiler' exports velarProjectExtension without declaring manifestKey metadata`);
       }
       const host = await loadFrameworkHost(require, name);
-      if (host) hosts.push(validateFrameworkHost(host, extension as CompilerExtension, name));
+      if (host) hosts.push(validateFrameworkHost(host, extension, name));
     } catch (error) {
       throw new Error(`${manifestPath}: cannot load compiler extension '${name}': ${hostErrorMessage(error)}`);
     }
@@ -193,7 +208,25 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
   if (new Set(project.map((extension) => extension.manifestKey)).size !== project.length) {
     throw new Error(`${manifestPath}: compiler extensions define conflicting project manifest fields`);
   }
-  return { compiler: Object.freeze(compiler), project: Object.freeze(project), hosts: Object.freeze(hosts) };
+  validateModuleOwnership(compiler, manifestPath);
+  return { packages, compiler: Object.freeze(compiler), project: Object.freeze(project), hosts: Object.freeze(hosts) };
+}
+
+function validateModuleOwnership(extensions: readonly CompilerExtension[], manifestPath: string): void {
+  const owners = new Map<string, string>();
+  for (const extension of extensions) {
+    const specifiers = new Set([
+      ...(extension.modules?.interfaces.keys() ?? []),
+      ...(extension.modules?.sources.keys() ?? []),
+    ]);
+    for (const specifier of specifiers) {
+      const owner = owners.get(specifier);
+      if (owner && owner !== extension.id) {
+        throw new Error(`${manifestPath}: Velar module '${specifier}' has more than one extension owner (${owner}, ${extension.id})`);
+      }
+      owners.set(specifier, extension.id);
+    }
+  }
 }
 
 async function loadFrameworkHost(require: NodeJS.Require, name: string): Promise<unknown | null> {
@@ -227,14 +260,16 @@ function validateFrameworkHost(value: unknown, compiler: CompilerExtension, name
     || typeof host.artifactKind !== "string" || !/^[a-z][a-z0-9-]*$/u.test(host.artifactKind)
     || typeof host.base !== "function" || typeof host.sourceMaps !== "function"
     || typeof host.createArtifacts !== "function" || typeof host.createErrorDocument !== "function"
-    || typeof host.staticDeployment !== "function") {
+    || typeof host.staticDeployment !== "function"
+    || (host.validateProject !== undefined && typeof host.validateProject !== "function")) {
     throw new Error(`'${name}/host' exports an invalid framework host contract`);
   }
   if (compiler.modules?.apiVersion && compiler.modules.apiVersion !== host.apiVersion) {
     throw new Error(`'${name}/host' API version does not match its compiler extension`);
   }
   if (host.browserTests && (typeof host.browserTests.runtimeKey !== "string" || !host.browserTests.runtimeKey
-    || typeof host.browserTests.sourceSuffix !== "string" || !host.browserTests.sourceSuffix.endsWith(".test.vel"))) {
+    || typeof host.browserTests.sourceSuffix !== "string" || !host.browserTests.sourceSuffix.endsWith(".test.vel")
+    || (host.browserTests.initScript !== undefined && typeof host.browserTests.initScript !== "function"))) {
     throw new Error(`'${name}/host' exports an invalid browser-test contract`);
   }
   return Object.freeze(host as FrameworkHostExtension);
@@ -302,7 +337,7 @@ async function findManifest(start: string): Promise<string | null> {
   let directory = resolve(start);
   while (true) {
     const candidate = join(directory, "velar.json");
-    if (await pathKind(candidate) === "file") return candidate;
+    if (await ordinaryManifestFile(candidate)) return candidate;
     const parent = dirname(directory);
     if (parent === directory) return null;
     directory = parent;
@@ -313,7 +348,21 @@ async function pathKind(path: string): Promise<"file" | "directory" | "missing">
   try {
     const information = await stat(path);
     return information.isDirectory() ? "directory" : "file";
-  } catch {
-    return "missing";
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR")) return "missing";
+    throw error;
+  }
+}
+
+async function ordinaryManifestFile(path: string): Promise<boolean> {
+  try {
+    const information = await lstat(path);
+    if (!information.isFile() || information.isSymbolicLink()) {
+      throw new Error(`${path}: project manifest must be an ordinary file`);
+    }
+    return true;
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR")) return false;
+    throw error;
   }
 }

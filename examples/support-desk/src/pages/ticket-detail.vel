@@ -1,3 +1,4 @@
+import {border, color, rgb, rgba, shadow, spacing} from "velar/look"
 import {Head, Link, RouteContext, announce} from "velar/web"
 import {closeDialog, dialogResult, focus, frame, showDialog} from "velar/browser"
 import {loadTickets, resolveTicket, ticketById} from "../store.vel"
@@ -84,17 +85,17 @@ export component TicketDetail(route: RouteContext):
     computed ticket = ticketById(id)
     computed loadFailure = catalog.error
 
-    def askResolve():
+    def askResolve() -> null:
         if confirmDialog:
             showDialog(confirmDialog)
 
-    def cancelResolve():
+    def cancelResolve() -> null:
         if confirmDialog:
             closeDialog(confirmDialog, "cancelled")
         if resolveButton:
             focus(resolveButton, true)
 
-    async def confirmResolve():
+    async def confirmResolve() -> null:
         resolveTicket(id)
         if confirmDialog:
             const currentDialog = confirmDialog

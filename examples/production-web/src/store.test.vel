@@ -1,7 +1,7 @@
 import {expect} from "velar/test"
 import {dark, setTheme, theme} from "./store.vel"
 
-def test_theme_store():
+def test_theme_store() -> null:
     setTheme("dark")
     expect(theme).toBe("dark")
     expect(dark).toBe(true)

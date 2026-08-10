@@ -2,12 +2,20 @@
 
 Status: stable package contract for VelarScript 0.10; publication separately authorized
 
-The toolchain is distributed as four independent npm packages:
+The toolchain is distributed as six independent npm packages:
 
 - `@velarscript/compiler`: compiler, formatter, diagnostics, semantic index,
   Core lowering APIs, compiler-extension ABI, and neutral framework-host ABI.
+- `@velarscript/node`: Node module contracts and zero-runtime-dependency
+  implementations for local filesystem, paths, shell-free processes,
+  environment, lifecycle, bounded terminal I/O, HTTP serving, and HTTP clients. It can be composed
+  independently of the CLI.
 - `@velarscript/web`: the official Web framework's versioned module contract
   and browser runtime, plus independent compiler and framework-host entries.
+- `@velarscript/desktop`: the optional single-project Desktop framework. It
+  composes Web source semantics, permission-scoped Node capabilities, a thin
+  system-WebView host, deterministic headless tests, and auditable small-bundle
+  packaging without exposing renderer/main or IPC concepts to source code.
 - `create-velar`: the lightweight, transactional `npm create velar` entry and
   the single authority for `web`, `docs`, `library`, and reusable Web
   `component` templates.
@@ -15,9 +23,12 @@ The toolchain is distributed as four independent npm packages:
   runners, npm-backed dependency workflow, production builder/local and remote
   verifiers/preview server, and LSP server.
 
-All four packages require Node.js 24 or later, publish JavaScript and `.d.ts`
-artifacts from `dist`, and contain no Workbench code. Web pins the exact
-matching compiler version. CLI pins compiler and creator but has no Web
+All six packages require Node.js 24 or later and contain no Workbench code.
+Compiler, Node, Web, Desktop, creator, and CLI publish JavaScript and `.d.ts`
+artifacts from `dist`. Web pins the exact
+matching compiler version. Node pins compiler. Desktop pins compiler, Node,
+Web, CLI, and its build dependency so one installed framework cannot combine
+incompatible host/runtime generations. CLI pins compiler, Node, and creator but has no Web
 dependency: it resolves every compiler/project extension declared by the
 application's format-v2 manifest from that project, then discovers and
 validates an optional protocol-v1 `/host` entry from the same package.
@@ -48,9 +59,12 @@ extension declares `velar.extension`:
 
 ```json
 {
-  "velar": {
-    "extension": { "manifestKey": "web" }
-  }
+  "velar": { "extension": {
+    "kind": "application",
+    "apiVersion": "0.10",
+    "manifestKey": "web",
+    "extends": {}
+  } }
 }
 ```
 
@@ -60,6 +74,67 @@ manifest field. The compiler and optional framework-host exports remain the
 runtime authority; metadata only controls project activation and never bypasses
 protocol validation.
 
+An extension may give one of its JavaScript module sources an explicit
+implementation-only dependency list. This list is not a package dependency and
+does not create a public VelarScript module contract: npm still installs the
+extension package, while the CLI uses the list only to materialize the complete
+standard/runtime-module closure in unbundled output. Dependencies are resolved
+from the same extension owner as the selected source, are replaced together
+with a higher-priority source override, and fail closed when a named module is
+unknown. Source-level imports still require a `ModuleInterface`; hidden runtime
+dependencies deliberately do not.
+
+`extends` describes semantic extension inheritance, not package installation.
+Every declared parent must also be an exact peer dependency. The CLI resolves
+the installed graph parent-first, requires matching major/minor API contracts,
+rejects cycles, duplicate module ownership, and multiple application
+frameworks, and records direct versus inherited nodes in the project config.
+npm and `package-lock.json` remain the only version/integrity graph; VelarScript
+adds no second lockfile.
+Extension package versions follow SemVer 2.0, including build metadata; API
+versions use canonical non-zero-padded `major.minor` components. npm remains
+the authority for evaluating dependency and peer ranges.
+Extension lookup follows Node's nearest `node_modules` search order but never
+falls through an existing malformed, symbolic, or unreadable package manifest
+to an ancestor package with the same name. Only a genuinely missing candidate
+continues the search.
+Project discovery follows the same nearest-owner rule. An existing local
+`velar.json` must be an ordinary file; directories, symbolic links, and read
+errors cannot silently select an ancestor project, and package commands use the
+same identity as checking, building, testing, and the language server.
+
+Removing a direct extension recomputes reachability from the remaining direct
+extensions over that semantic graph. Project fields owned by the removed node
+and by inherited parents that are no longer reachable are removed atomically
+from `velar.json`; a parent still shared by another direct child and its
+configuration remain intact. This keeps package removal aligned with the same
+parent-first graph used by checking, building, testing, and the language
+server, instead of leaving an orphan field that makes the project unreadable
+after npm has already changed its dependency tree.
+
+Removal uses a staged project declaration. The CLI first verifies the current
+project, writes and resolves the candidate `velar.json` while every installed
+extension is still available, and only then asks npm to uninstall packages. An
+npm failure restores the exact original declaration. After npm succeeds, a
+remaining installed-graph failure is reported without rolling the manifest
+back to names that npm has already removed. Addition keeps the complementary
+rule: npm installs first, and an invalid new extension remains an ordinary npm
+dependency but is not activated in `velar.json`.
+Every staged write and restoration is guarded by the exact source text the
+command previously read. If an editor or another process changes `velar.json`
+while npm is running, that newer declaration is preserved and the dependency
+command reports the conflict instead of overwriting user work.
+The CLI also measures the final formatted declaration in UTF-8 before staging;
+formatting cannot turn a valid compact manifest into an oversized broken file.
+
+Package commands and project compilation share the same extension metadata
+reader. Optional empty `extends` metadata therefore has one meaning everywhere,
+and a successful npm subprocess cannot be reported as a successful `velar add`
+unless the requested package is actually resolvable from the project.
+Extension-owned manifest keys cannot claim Core fields such as `entry` or
+`extensions`, nor host-object keys such as `constructor`; project-format
+ownership is checked before any extension code or configuration parser runs.
+
 The `library` creator template publishes a Core-only source entry. The
 `component` template uses the same `velar.entry` mechanism for a Web component,
 declares `@velarscript/web` as its peer contract, and keeps its demo application
@@ -68,10 +143,10 @@ remain ordinary source libraries rather than hidden framework extensions.
 The complete layering, accessibility, and versioning rules are documented in
 [`component-packages.md`](component-packages.md).
 
-`npm run test:packages` is the release boundary. It builds all four packages,
+`npm run test:packages` is the release boundary. It builds the compiled packages,
 runs `npm pack`, checks the tarball contents, installs the complete set into a clean
 temporary consumer, invokes the installed CLI, builds and runs a VelarScript file
-that imports the Core Standard API, and imports the public compiler API. The
+that imports the Core Standard API and imports the public compiler API. The
 browser package gate additionally creates a project through packed tarballs,
 builds and verifies its production output, and runs its browser test. A
 successful source build without this consumer test is not considered
@@ -83,7 +158,7 @@ installed `@velarscript/web` tarball, and the generated browser test imports
 `velar/web-test`. The installed CLI must check, test, build, integrity-verify,
 and run the resulting project before the release set is accepted.
 
-`npm run release:rehearse` adds the release-set boundary: all four tarballs,
+`npm run release:rehearse` adds the release-set boundary: all six tarballs,
 deterministic SHA-256 values, source identity, npm integrity, and explicit
 publication blockers. Candidate mode fails closed unless Git/version/remote
 and license requirements are satisfied. CI may attest and upload these
@@ -95,12 +170,18 @@ cannot race with compiler, editor, or application tests.
 
 Release output replacement refuses repository roots/ancestors, symbolic links,
 and non-release directories. Verification accepts exactly the sorted compiler,
-Web, creator, and CLI package identities, canonical tarball names, matching versions/sizes/
+Node, Web, Desktop, creator, and CLI package identities, canonical tarball names, matching versions/sizes/
 hashes/npm integrity, the declared checksum file, and no undeclared files.
 Workbench independently checks the same package set and tarball SHA-256 values
 before installing them; it does not import this repository's verifier.
 
-The workspace, compiler, Web framework, creator, and CLI use Apache-2.0. Every npm tarball contains the
+Agent orchestration, canonical `namespace:tool` identity, provider transports,
+approval, and execution policy belong to VelarOS ecosystem packages rather
+than the language toolchain. Such packages may be authored in VelarScript and
+consume this package system, but they are not part of the VelarScript release
+set or Standard API.
+
+The workspace, compiler, Node runtime, Web, Desktop, creator, and CLI use Apache-2.0. Every npm tarball contains the
 complete license text, and package acceptance verifies the installed metadata
 and file rather than trusting the source manifest alone. The current rehearsal
 is always marked non-publishable because rehearsal mode is evidence only. A

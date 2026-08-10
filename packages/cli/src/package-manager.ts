@@ -1,15 +1,18 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { dirname, join, parse, resolve } from "node:path";
 import { CURRENT_PROJECT_FORMAT_VERSION, resolveVelarProject } from "./config.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
+import {
+  resolveExtensionPackages,
+  resolveInstalledExtensionPackage,
+  type ResolvedExtensionPackage,
+} from "./extension-metadata.ts";
 
 const MAX_PACKAGE_ARGUMENTS = 32;
 const MAX_JSON_BYTES = 1024 * 1024;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
-const MANIFEST_KEY = /^[a-z][a-z0-9-]*$/u;
 
 export type DependencyAction = "install" | "add" | "remove" | "update";
 
@@ -82,49 +85,101 @@ export async function runDependencyCommand(
   const project = await locatePackageProject(options.cwd ?? process.cwd());
   await validatePackageManager(project.packagePath);
   const executeNpm = options.executeNpm ?? executeNpmCommand;
-  const metadata = action === "remove"
-    ? await extensionMetadata(project.root, parsed.packageNames)
-    : [];
+  const declaredBefore = extensionNames(project.manifest);
+  let extensionGraphBefore: readonly ResolvedExtensionPackage[] = [];
+  let removedExtensions: readonly string[] = [];
+  let stagedRemovalSource: string | null = null;
   if (action === "remove") {
-    const declared = extensionNames(project.manifest);
-    const described = new Set(metadata.map((item) => item.name));
-    const unavailable = parsed.packageNames.filter((name) => declared.includes(name) && !described.has(name));
-    if (unavailable.length > 0) {
-      throw new Error(`Cannot remove declared extension metadata for ${unavailable.join(", ")}; reinstall the package before removing it`);
+    const graph = await resolveExtensionPackages(project.root, declaredBefore);
+    extensionGraphBefore = graph;
+    const removing = new Set(parsed.packageNames);
+    for (const extension of graph) {
+      if (removing.has(extension.name)) continue;
+      const removedParent = Object.keys(extension.extends).find((parent) => removing.has(parent));
+      if (removedParent) {
+        throw new Error(`Cannot remove '${removedParent}'; installed extension '${extension.name}' requires its API ${extension.extends[removedParent]}`);
+      }
+    }
+    await resolveVelarProject(project.root);
+    removedExtensions = Object.freeze(declaredBefore.filter((name) => removing.has(name)));
+    const removedMetadata = orphanedExtensionMetadata(extensionGraphBefore, declaredBefore, new Set(removedExtensions));
+    const next = dependencyManifest(project.manifest, "remove", removedMetadata);
+    if (JSON.stringify(next) !== JSON.stringify(project.manifest)) {
+      let nextSource: string;
+      try {
+        nextSource = jsonSource(next);
+        await replaceSourceIfCurrent(project.manifestPath, project.manifestSource, nextSource);
+      } catch (error) {
+        throw new Error(`Dependency was not removed because its project declaration changed before staging: ${hostErrorMessage(error)}`);
+      }
+      try {
+        await resolveVelarProject(project.root);
+      } catch (error) {
+        try {
+          await replaceSourceIfCurrent(project.manifestPath, nextSource, project.manifestSource);
+        } catch (restoreError) {
+          throw new Error(`Dependency was not removed because its staged project declaration is invalid: ${hostErrorMessage(error)}; the declaration changed again and was not overwritten: ${hostErrorMessage(restoreError)}`);
+        }
+        throw new Error(`Dependency was not removed because its staged project declaration is invalid: ${hostErrorMessage(error)}`);
+      }
+      stagedRemovalSource = nextSource;
     }
   }
 
   const npmArguments = npmArgumentsFor(action, parsed);
-  await executeNpm(npmArguments, project.root);
+  try {
+    await executeNpm(npmArguments, project.root);
+  } catch (error) {
+    if (stagedRemovalSource) {
+      try {
+        await replaceSourceIfCurrent(project.manifestPath, stagedRemovalSource, project.manifestSource);
+      } catch (restoreError) {
+        throw new Error(`Dependency removal failed: ${hostErrorMessage(error)}; the staged project declaration changed concurrently and was not overwritten: ${hostErrorMessage(restoreError)}`);
+      }
+    }
+    throw error;
+  }
 
   let addedMetadata: readonly VelarPackageMetadata[] = [];
   if (action === "add") {
     try {
-      addedMetadata = await extensionMetadata(project.root, parsed.packageNames);
+      const installed = await Promise.all(parsed.packageNames.map((name) => resolveInstalledExtensionPackage(project.root, name)));
+      addedMetadata = Object.freeze(installed
+        .filter((item): item is ResolvedExtensionPackage => item !== null)
+        .map((item) => ({ name: item.name, manifestKey: item.manifestKey })));
     } catch (error) {
       throw new Error(`Dependency was installed but its VelarScript metadata is invalid: ${hostErrorMessage(error)}`);
     }
   }
-  const declaredBefore = extensionNames(project.manifest);
   const activatedExtensions = addedMetadata.map((item) => item.name).filter((name) => !declaredBefore.includes(name));
-  const removedExtensions = action === "remove"
-    ? metadata.map((item) => item.name).filter((name) => declaredBefore.includes(name))
-    : [];
-  if (action === "add" || action === "remove") {
-    const next = dependencyManifest(project.manifest, action, action === "add"
-      ? addedMetadata
-      : metadata);
+  if (action === "add") {
+    const next = dependencyManifest(project.manifest, "add", addedMetadata);
     if (JSON.stringify(next) !== JSON.stringify(project.manifest)) {
-      await writeJsonAtomically(project.manifestPath, next);
+      let nextSource: string;
+      try {
+        nextSource = jsonSource(next);
+        await replaceSourceIfCurrent(project.manifestPath, project.manifestSource, nextSource);
+      } catch (error) {
+        throw new Error(`Dependency was installed but its project declaration changed while npm was running and was not overwritten: ${hostErrorMessage(error)}`);
+      }
       try {
         await resolveVelarProject(project.root);
       } catch (error) {
-        await writeSourceAtomically(project.manifestPath, project.manifestSource);
-        const verb = action === "add" ? "installed but could not be activated" : "removed but its project declaration could not be updated";
-        throw new Error(`Dependency was ${verb}: ${hostErrorMessage(error)}`);
+        try {
+          await replaceSourceIfCurrent(project.manifestPath, nextSource, project.manifestSource);
+        } catch (restoreError) {
+          throw new Error(`Dependency was installed but could not be activated: ${hostErrorMessage(error)}; the project declaration changed again and was not overwritten: ${hostErrorMessage(restoreError)}`);
+        }
+        throw new Error(`Dependency was installed but could not be activated: ${hostErrorMessage(error)}`);
       }
     } else {
       await resolveVelarProject(project.root);
+    }
+  } else if (action === "remove") {
+    try {
+      await resolveVelarProject(project.root);
+    } catch (error) {
+      throw new Error(`Dependency was removed and its project declaration was updated, but the remaining installed extension graph is invalid: ${hostErrorMessage(error)}`);
     }
   } else {
     await resolveVelarProject(project.root);
@@ -137,6 +192,26 @@ export async function runDependencyCommand(
     activatedExtensions: Object.freeze(activatedExtensions),
     removedExtensions: Object.freeze(removedExtensions),
   };
+}
+
+function orphanedExtensionMetadata(
+  graph: readonly ResolvedExtensionPackage[],
+  directBefore: readonly string[],
+  removedDirect: ReadonlySet<string>,
+): readonly VelarPackageMetadata[] {
+  const byName = new Map(graph.map((item) => [item.name, item]));
+  const retained = new Set<string>();
+  const retain = (name: string): void => {
+    if (retained.has(name)) return;
+    const package_ = byName.get(name);
+    if (!package_) return;
+    retained.add(name);
+    for (const parent of Object.keys(package_.extends)) retain(parent);
+  };
+  for (const name of directBefore) if (!removedDirect.has(name)) retain(name);
+  return Object.freeze(graph
+    .filter((item) => !retained.has(item.name))
+    .map((item) => ({ name: item.name, manifestKey: item.manifestKey })));
 }
 
 function npmArgumentsFor(action: DependencyAction, parsed: DependencyCommandArguments): readonly string[] {
@@ -187,43 +262,6 @@ async function validatePackageManager(packagePath: string): Promise<void> {
   if (packageManager !== undefined && (typeof packageManager !== "string" || !/^npm@[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?$/u.test(packageManager))) {
     throw new Error(`${packagePath}: VelarScript package commands use npm, but packageManager is '${String(packageManager)}'`);
   }
-}
-
-async function extensionMetadata(root: string, names: readonly string[]): Promise<readonly VelarPackageMetadata[]> {
-  const output: VelarPackageMetadata[] = [];
-  for (const name of names) {
-    const path = await installedPackageManifest(root, name);
-    if (!path) continue;
-    const { value } = await readJsonObject(path, `installed package '${name}'`);
-    if (value.name !== name) throw new Error(`${path}: installed package identity does not match '${name}'`);
-    const velar = value.velar;
-    if (velar === undefined) continue;
-    if (!velar || typeof velar !== "object" || Array.isArray(velar)) {
-      throw new Error(`${path}: 'velar' must be an object`);
-    }
-    const extension = (velar as Record<string, unknown>).extension;
-    if (extension === undefined) continue;
-    if (!extension || typeof extension !== "object" || Array.isArray(extension)) {
-      throw new Error(`${path}: 'velar.extension' must be an object`);
-    }
-    const fields = Object.keys(extension as Record<string, unknown>);
-    if (fields.some((field) => field !== "manifestKey")) throw new Error(`${path}: 'velar.extension' contains an unknown field`);
-    const manifestKey = (extension as Record<string, unknown>).manifestKey;
-    if (manifestKey !== undefined && (typeof manifestKey !== "string" || !MANIFEST_KEY.test(manifestKey))) {
-      throw new Error(`${path}: 'velar.extension.manifestKey' must be a lowercase project field name`);
-    }
-    output.push({ name, manifestKey: (manifestKey as string | undefined) ?? null });
-  }
-  return Object.freeze(output);
-}
-
-async function installedPackageManifest(root: string, name: string): Promise<string | null> {
-  const require = createRequire(join(root, "package.json"));
-  for (const directory of require.resolve.paths(name) ?? []) {
-    const path = join(directory, ...name.split("/"), "package.json");
-    if (await ordinaryFile(path)) return path;
-  }
-  return null;
 }
 
 function dependencyManifest(
@@ -280,18 +318,40 @@ async function readJsonObject(path: string, label: string): Promise<{ readonly s
 async function ordinaryFile(path: string): Promise<boolean> {
   try {
     const information = await lstat(path);
-    return information.isFile() && !information.isSymbolicLink();
+    if (!information.isFile() || information.isSymbolicLink()) {
+      throw new Error(`${path} must be an ordinary file`);
+    }
+    return true;
   } catch (error) {
-    if (isHostErrorCode(error, "ENOENT")) return false;
+    if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR")) return false;
     throw error;
   }
 }
 
-async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
-  await writeSourceAtomically(path, `${JSON.stringify(value, null, 2)}\n`);
+function jsonSource(value: unknown): string {
+  const source = `${JSON.stringify(value, null, 2)}\n`;
+  if (Buffer.byteLength(source, "utf8") > MAX_JSON_BYTES) {
+    throw new RangeError("serialized project declaration exceeds 1 MiB");
+  }
+  return source;
+}
+
+async function replaceSourceIfCurrent(path: string, expected: string, source: string): Promise<void> {
+  const information = await stat(path);
+  if (!information.isFile() || information.size > MAX_JSON_BYTES) {
+    throw new Error(`${path} is no longer the bounded project manifest that this command read`);
+  }
+  const current = await readFile(path, "utf8");
+  if (Buffer.byteLength(current, "utf8") > MAX_JSON_BYTES || current !== expected) {
+    throw new Error(`${path} changed while the dependency command was running`);
+  }
+  await writeSourceAtomically(path, source);
 }
 
 async function writeSourceAtomically(path: string, source: string): Promise<void> {
+  if (Buffer.byteLength(source, "utf8") > MAX_JSON_BYTES) {
+    throw new RangeError(`${path}: project declaration exceeds 1 MiB`);
+  }
   const information = await stat(path);
   const temporary = join(dirname(path), `.velar-${randomUUID()}.json`);
   try {

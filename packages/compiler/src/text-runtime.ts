@@ -1,48 +1,95 @@
 export const VELAR_TEXT_METHOD_RUNTIME = String.raw`
 const __velarMaxTextCodeUnits = 16 * 1024 * 1024;
 const __velarMaxTextItems = 1000000;
-const __velarNativeStringIndexOf = Object.getOwnPropertyDescriptor(String.prototype, "indexOf").value;
-const __velarNativeStringTrim = Object.getOwnPropertyDescriptor(String.prototype, "trim").value;
-const __velarNativeStringUpper = Object.getOwnPropertyDescriptor(String.prototype, "toUpperCase").value;
-const __velarNativeStringLower = Object.getOwnPropertyDescriptor(String.prototype, "toLowerCase").value;
-const __velarNativeStringSplit = Object.getOwnPropertyDescriptor(String.prototype, "split").value;
-const __velarNativeStringReplace = Object.getOwnPropertyDescriptor(String.prototype, "replace").value;
-const __velarNativeStringReplaceAll = Object.getOwnPropertyDescriptor(String.prototype, "replaceAll").value;
-const __velarNativeStringRepeat = Object.getOwnPropertyDescriptor(String.prototype, "repeat").value;
+const __velarTextNativeArray = globalThis.Array;
+const __velarTextNativeString = globalThis.String;
+const __velarTextNativeNumber = globalThis.Number;
+const __velarTextNativeMath = globalThis.Math;
+const __velarTextNativeObject = globalThis.Object;
+const __velarTextNativeTypeError = globalThis.TypeError;
+const __velarTextNativeRangeError = globalThis.RangeError;
+const __velarTextGetOwnPropertyDescriptor = __velarTextNativeObject.getOwnPropertyDescriptor;
+const __velarTextReflectApply = __velarTextGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
+const __velarTextStringPrototype = __velarTextGetOwnPropertyDescriptor(__velarTextNativeString, "prototype")?.value;
+const __velarTextArrayIsArray = __velarTextGetOwnPropertyDescriptor(__velarTextNativeArray, "isArray")?.value;
+const __velarTextNumberIsSafeInteger = __velarTextGetOwnPropertyDescriptor(__velarTextNativeNumber, "isSafeInteger")?.value;
+const __velarTextNumberIsInteger = __velarTextGetOwnPropertyDescriptor(__velarTextNativeNumber, "isInteger")?.value;
+const __velarTextMathFloor = __velarTextGetOwnPropertyDescriptor(__velarTextNativeMath, "floor")?.value;
+const __velarTextMathMax = __velarTextGetOwnPropertyDescriptor(__velarTextNativeMath, "max")?.value;
+const __velarTextMathMin = __velarTextGetOwnPropertyDescriptor(__velarTextNativeMath, "min")?.value;
+const __velarNativeStringIndexOf = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "indexOf")?.value;
+const __velarNativeStringSlice = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "slice")?.value;
+const __velarNativeStringCharCodeAt = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "charCodeAt")?.value;
+const __velarNativeStringTrim = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "trim")?.value;
+const __velarNativeStringUpper = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "toUpperCase")?.value;
+const __velarNativeStringLower = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "toLowerCase")?.value;
+const __velarNativeStringSplit = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "split")?.value;
+const __velarNativeStringReplace = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "replace")?.value;
+const __velarNativeStringReplaceAll = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "replaceAll")?.value;
+const __velarNativeStringRepeat = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "repeat")?.value;
+function __velarTextCall(operation, receiver, arguments_) {
+  if (typeof operation !== "function" || typeof __velarTextReflectApply !== "function") throw new __velarTextNativeTypeError("The JavaScript text runtime is unavailable");
+  return __velarTextReflectApply(operation, receiver, arguments_);
+}
 
 function __velarTextValue(value) {
-  if (typeof value !== "string") throw new TypeError("String methods require a string receiver");
-  if (value.length > __velarMaxTextCodeUnits) throw new RangeError("Strings cannot exceed 16 MiB");
+  if (typeof value !== "string") throw new __velarTextNativeTypeError("String methods require a string receiver");
+  if (value.length > __velarMaxTextCodeUnits) throw new __velarTextNativeRangeError("Strings cannot exceed 16 MiB");
   return value;
 }
 function __velarTextArgument(value, name) {
-  if (typeof value !== "string") throw new TypeError(name + " must be a string");
-  if (value.length > __velarMaxTextCodeUnits) throw new RangeError(name + " cannot exceed 16 MiB");
+  if (typeof value !== "string") throw new __velarTextNativeTypeError(name + " must be a string");
+  if (value.length > __velarMaxTextCodeUnits) throw new __velarTextNativeRangeError(name + " cannot exceed 16 MiB");
   return value;
 }
 function __velarTextOutput(value, name) {
-  if (value.length > __velarMaxTextCodeUnits) throw new RangeError(name + " output cannot exceed 16 MiB");
+  if (value.length > __velarMaxTextCodeUnits) throw new __velarTextNativeRangeError(name + " output cannot exceed 16 MiB");
   return value;
 }
 function __velarTextCount(value, name) {
-  if (!Number.isSafeInteger(value) || value < 0 || value > __velarMaxTextCodeUnits) {
-    throw new RangeError(name + " must be an integer from 0 through " + __velarMaxTextCodeUnits);
+  if (!__velarTextCall(__velarTextNumberIsSafeInteger, __velarTextNativeNumber, [value]) || value < 0 || value > __velarMaxTextCodeUnits) {
+    throw new __velarTextNativeRangeError(name + " must be an integer from 0 through " + __velarMaxTextCodeUnits);
   }
   return value;
 }
 function __velarTextList(values, name) {
-  if (values.length > __velarMaxTextItems) throw new RangeError(name + " cannot produce more than " + __velarMaxTextItems + " items");
+  if (values.length > __velarMaxTextItems) throw new __velarTextNativeRangeError(name + " cannot produce more than " + __velarMaxTextItems + " items");
   return values;
 }
-function __velarTextCodePointLength(value) { let length = 0; for (const _ of value) length += 1; return length; }
-function __velarTextCodePointPrefix(value, count) { let output = "", length = 0; for (const character of value) { if (length >= count) break; output += character; length += 1; } return output; }
+function __velarTextNextCodePointOffset(value, offset) {
+  const first = __velarTextCall(__velarNativeStringCharCodeAt, value, [offset]);
+  if (first < 0xD800 || first > 0xDBFF || offset + 1 >= value.length) return offset + 1;
+  const second = __velarTextCall(__velarNativeStringCharCodeAt, value, [offset + 1]);
+  return second >= 0xDC00 && second <= 0xDFFF ? offset + 2 : offset + 1;
+}
+function __velarTextCodePointLength(value) {
+  let length = 0, offset = 0;
+  while (offset < value.length) { offset = __velarTextNextCodePointOffset(value, offset); length += 1; }
+  return length;
+}
+function __velarTextCodePointPrefix(value, count) { return __velarTextCall(__velarNativeStringSlice, value, [0, __velarTextCodeUnitOffset(value, count)]); }
+function __velarTextCodeUnitOffset(value, position) {
+  let offset = 0, current = 0;
+  while (offset < value.length && current < position) { offset = __velarTextNextCodePointOffset(value, offset); current += 1; }
+  return offset;
+}
+function __velarTextCodePointIndex(value, unitOffset) {
+  let offset = 0, position = 0;
+  while (offset < unitOffset && offset < value.length) { offset = __velarTextNextCodePointOffset(value, offset); position += 1; }
+  return offset === unitOffset ? position : null;
+}
+function __velarTextCodePointDistance(value, start, end) {
+  let offset = start, distance = 0;
+  while (offset < end) { offset = __velarTextNextCodePointOffset(value, offset); distance += 1; }
+  return offset === end ? distance : null;
+}
 function __velarTextReplacementOutputUnits(value, search, replacement, all) {
   let matches = 0;
   if (search === "") matches = all ? __velarTextCodePointLength(value) + 1 : 1;
   else {
     let cursor = 0;
     while (true) {
-      const index = __velarNativeStringIndexOf.call(value, search, cursor);
+      const index = __velarTextCall(__velarNativeStringIndexOf, value, [search, cursor]);
       if (index < 0) break;
       matches += 1;
       if (!all) break;
@@ -51,72 +98,102 @@ function __velarTextReplacementOutputUnits(value, search, replacement, all) {
   }
   if (replacement.length <= search.length || matches === 0) return value.length;
   const growth = replacement.length - search.length;
-  if (matches > Math.floor((__velarMaxTextCodeUnits - value.length) / growth)) return __velarMaxTextCodeUnits + 1;
+  if (matches > __velarTextCall(__velarTextMathFloor, __velarTextNativeMath, [(__velarMaxTextCodeUnits - value.length) / growth])) return __velarMaxTextCodeUnits + 1;
   return value.length + matches * growth;
 }
 
 function __velarStringSize(value) { return __velarTextCodePointLength(__velarTextValue(value)); }
-function __velarStringTrim(value) { return __velarNativeStringTrim.call(__velarTextValue(value)); }
-function __velarStringUpper(value) { return __velarTextOutput(__velarNativeStringUpper.call(__velarTextValue(value)), "String.upper"); }
-function __velarStringLower(value) { return __velarTextOutput(__velarNativeStringLower.call(__velarTextValue(value)), "String.lower"); }
+function __velarStringTrim(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []); }
+function __velarStringUpper(value) { return __velarTextOutput(__velarTextCall(__velarNativeStringUpper, __velarTextValue(value), []), "String.upper"); }
+function __velarStringLower(value) { return __velarTextOutput(__velarTextCall(__velarNativeStringLower, __velarTextValue(value), []), "String.lower"); }
 function __velarStringSlice(value, start = 0, end = null) {
   value = __velarTextValue(value);
   const total = __velarTextCodePointLength(value);
   if (end === null) end = total;
-  if (!Number.isInteger(start) || !Number.isInteger(end)) throw new TypeError("String.slice positions must be integers");
-  const first = start < 0 ? Math.max(total + start, 0) : Math.min(start, total);
-  const last = end < 0 ? Math.max(total + end, 0) : Math.min(end, total);
-  let output = "";
-  let position = 0;
-  for (const character of value) {
-    if (position >= last) break;
-    if (position >= first) output += character;
-    position += 1;
-  }
-  return output;
+  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start]) || !__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [end])) throw new __velarTextNativeTypeError("String.slice positions must be integers");
+  const first = start < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + start, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [start, total]);
+  const last = end < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + end, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [end, total]);
+  return __velarTextCall(__velarNativeStringSlice, value, [__velarTextCodeUnitOffset(value, first), __velarTextCodeUnitOffset(value, last)]);
 }
 function __velarStringChar(value, index) {
   value = __velarTextValue(value);
-  if (!Number.isInteger(index)) return null;
-  if (index < 0) index += __velarTextCodePointLength(value);
+  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [index])) return null;
+  const total = __velarTextCodePointLength(value);
+  if (index < 0) index += total;
   if (index < 0) return null;
-  let position = 0;
-  for (const character of value) { if (position === index) return character; position += 1; }
+  if (index >= total) return null;
+  const start = __velarTextCodeUnitOffset(value, index);
+  return __velarTextCall(__velarNativeStringSlice, value, [start, __velarTextNextCodePointOffset(value, start)]);
+}
+function __velarStringHas(value, text) { return __velarTextCall(__velarNativeStringIndexOf, __velarTextValue(value), [__velarTextArgument(text, "String.has text")]) >= 0; }
+function __velarStringIndex(value, text, start = 0) {
+  value = __velarTextValue(value); text = __velarTextArgument(text, "String.index text");
+  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start])) throw new __velarTextNativeTypeError("String.index start must be an integer");
+  const total = __velarTextCodePointLength(value);
+  const first = start < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + start, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [start, total]);
+  let cursor = __velarTextCodeUnitOffset(value, first);
+  if (text === "") return first;
+  while (cursor <= value.length) {
+    const found = __velarTextCall(__velarNativeStringIndexOf, value, [text, cursor]);
+    if (found < 0) return null;
+    const position = __velarTextCodePointIndex(value, found);
+    if (position !== null && __velarTextCodePointIndex(value, found + text.length) !== null) return position;
+    cursor = found + 1;
+  }
   return null;
 }
-function __velarStringHas(value, text) { return __velarNativeStringIndexOf.call(__velarTextValue(value), __velarTextArgument(text, "String.has text")) >= 0; }
+function __velarStringCount(value, text) {
+  value = __velarTextValue(value); text = __velarTextArgument(text, "String.count text");
+  if (text === "") return __velarTextCodePointLength(value) + 1;
+  let count = 0;
+  let cursor = 0;
+  while (true) {
+    const index = __velarTextCall(__velarNativeStringIndexOf, value, [text, cursor]);
+    if (index < 0) return count;
+    count += 1;
+    cursor = index + text.length;
+  }
+}
 function __velarStringStartsWith(value, text) {
   value = __velarTextValue(value); text = __velarTextArgument(text, "String.startsWith text");
-  return __velarNativeStringIndexOf.call(value, text, 0) === 0;
+  return __velarTextCall(__velarNativeStringIndexOf, value, [text, 0]) === 0;
 }
 function __velarStringEndsWith(value, text) {
   value = __velarTextValue(value); text = __velarTextArgument(text, "String.endsWith text");
   const start = value.length - text.length;
-  return start >= 0 && __velarNativeStringIndexOf.call(value, text, start) === start;
+  return start >= 0 && __velarTextCall(__velarNativeStringIndexOf, value, [text, start]) === start;
 }
 function __velarStringSplit(value, separator) {
   value = __velarTextValue(value); separator = __velarTextArgument(separator, "String.split separator");
   if (separator === "") {
     const count = __velarTextCodePointLength(value);
-    if (count > __velarMaxTextItems) throw new RangeError("String.split cannot produce more than " + __velarMaxTextItems + " items");
-    return Array.from(value);
+    if (count > __velarMaxTextItems) throw new __velarTextNativeRangeError("String.split cannot produce more than " + __velarMaxTextItems + " items");
+    const output = new __velarTextNativeArray(count);
+    let offset = 0;
+    for (let index = 0; index < count; index += 1) {
+      const next = __velarTextNextCodePointOffset(value, offset);
+      output[index] = __velarTextCall(__velarNativeStringSlice, value, [offset, next]);
+      offset = next;
+    }
+    return output;
   }
-  return __velarTextList(__velarNativeStringSplit.call(value, separator, __velarMaxTextItems + 1), "String.split");
+  return __velarTextList(__velarTextCall(__velarNativeStringSplit, value, [separator, __velarMaxTextItems + 1]), "String.split");
 }
 function __velarStringReplace(value, from, to) {
   value = __velarTextValue(value); from = __velarTextArgument(from, "String.replace from"); to = __velarTextArgument(to, "String.replace to");
-  if (__velarTextReplacementOutputUnits(value, from, to, false) > __velarMaxTextCodeUnits) throw new RangeError("String.replace output cannot exceed 16 MiB");
-  return __velarNativeStringReplace.call(value, from, () => to);
+  if (__velarTextReplacementOutputUnits(value, from, to, false) > __velarMaxTextCodeUnits) throw new __velarTextNativeRangeError("String.replace output cannot exceed 16 MiB");
+  return __velarTextCall(__velarNativeStringReplace, value, [from, () => to]);
 }
 function __velarStringReplaceAll(value, from, to) {
   value = __velarTextValue(value); from = __velarTextArgument(from, "String.replaceAll from"); to = __velarTextArgument(to, "String.replaceAll to");
-  if (__velarTextReplacementOutputUnits(value, from, to, true) > __velarMaxTextCodeUnits) throw new RangeError("String.replaceAll output cannot exceed 16 MiB");
+  if (__velarTextReplacementOutputUnits(value, from, to, true) > __velarMaxTextCodeUnits) throw new __velarTextNativeRangeError("String.replaceAll output cannot exceed 16 MiB");
   if (from === "") {
     let output = to;
-    for (const character of value) output += character + to;
+    let offset = 0;
+    while (offset < value.length) { const next = __velarTextNextCodePointOffset(value, offset); output += __velarTextCall(__velarNativeStringSlice, value, [offset, next]) + to; offset = next; }
     return output;
   }
-  return __velarNativeStringReplaceAll.call(value, from, () => to);
+  return __velarTextCall(__velarNativeStringReplaceAll, value, [from, () => to]);
 }
 function __velarStringPad(value, size, fill, start) {
   const name = start ? "String.padStart" : "String.padEnd";
@@ -124,23 +201,16 @@ function __velarStringPad(value, size, fill, start) {
   const needed = size - __velarTextCodePointLength(value);
   if (needed <= 0 || fill.length === 0) return value;
   let outputUnits = value.length;
-  let counted = 0;
-  while (counted < needed) {
-    for (const character of fill) {
-      if (counted >= needed) break;
-      outputUnits += character.length;
-      if (outputUnits > __velarMaxTextCodeUnits) throw new RangeError(name + " output cannot exceed 16 MiB");
-      counted += 1;
-    }
-  }
   let padding = "";
-  counted = 0;
+  let counted = 0, fillOffset = 0;
   while (counted < needed) {
-    for (const character of fill) {
-      if (counted >= needed) break;
-      padding += character;
-      counted += 1;
-    }
+    const next = __velarTextNextCodePointOffset(fill, fillOffset);
+    const character = __velarTextCall(__velarNativeStringSlice, fill, [fillOffset, next]);
+    outputUnits += character.length;
+    if (outputUnits > __velarMaxTextCodeUnits) throw new __velarTextNativeRangeError(name + " output cannot exceed 16 MiB");
+    padding += character;
+    counted += 1;
+    fillOffset = next === fill.length ? 0 : next;
   }
   return start ? padding + value : value + padding;
 }
@@ -148,7 +218,7 @@ function __velarStringPadStart(value, size, fill = " ") { return __velarStringPa
 function __velarStringPadEnd(value, size, fill = " ") { return __velarStringPad(value, size, fill, false); }
 function __velarStringRepeat(value, count) {
   value = __velarTextValue(value); count = __velarTextCount(count, "String.repeat count");
-  if (value.length > 0 && count > Math.floor(__velarMaxTextCodeUnits / value.length)) throw new RangeError("String.repeat output cannot exceed 16 MiB");
-  return __velarNativeStringRepeat.call(value, count);
+  if (value.length > 0 && count > __velarTextCall(__velarTextMathFloor, __velarTextNativeMath, [__velarMaxTextCodeUnits / value.length])) throw new __velarTextNativeRangeError("String.repeat output cannot exceed 16 MiB");
+  return __velarTextCall(__velarNativeStringRepeat, value, [count]);
 }
 `.trimStart();

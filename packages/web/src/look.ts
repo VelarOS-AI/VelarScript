@@ -1,3 +1,31 @@
+export type LookUnitTypeName = "Length" | "Percentage" | "TrackFraction" | "Duration" | "Angle";
+
+/**
+ * One source of truth for every suffix owned by the Web visual language.
+ * The lexer, analyzer, public-interface inference, and editor all consume this
+ * table so a unit cannot silently mean different things at different stages.
+ */
+export const LOOK_UNIT_TYPES: ReadonlyMap<string, LookUnitTypeName> = new Map([
+  ...["px", "rem", "em", "vw", "vh", "vmin", "vmax"].map((unit) => [unit, "Length"] as const),
+  ["%", "Percentage"],
+  ["fr", "TrackFraction"],
+  ...["ms", "s"].map((unit) => [unit, "Duration"] as const),
+  ...["deg", "turn"].map((unit) => [unit, "Angle"] as const),
+]);
+
+export const LOOK_MEDIA_LENGTH_UNITS = new Set(["px", "rem", "em"]);
+
+export const LOOK_ARITHMETIC_HINT = "@velarscript/web:look-arithmetic";
+
+export const LOOK_NUMERIC_TYPE_NAMES = new Set([
+  "Length", "Percentage", "LengthPercentage", "TrackFraction", "Duration", "Angle", "Opacity",
+]);
+
+export const LOOK_PUBLIC_TYPE_NAMES = Object.freeze([
+  "Look", "Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle", "Opacity",
+  "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing",
+] as const);
+
 export const LOOK_HOOKS = new Set([
   "hover", "focus", "focusVisible", "active", "current", "disabled", "checked", "invalid", "open",
 ]);

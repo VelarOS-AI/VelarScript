@@ -1,7 +1,7 @@
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_dashboard_loads_typed_data_and_real_svg():
+async def test_dashboard_loads_typed_data_and_real_svg() -> null:
     await browser.open("/")
     await browser.waitForText("[data-dashboard]", "Visitors")
     expect(await browser.count("[data-metric]")).toBe(3)
@@ -11,7 +11,7 @@ async def test_dashboard_loads_typed_data_and_real_svg():
     expect(await browser.visible('[data-chart-bar="mon"] rect')).toBe(true)
     expect(await browser.attribute("[data-trend-chart]", "aria-labelledby")).toBe("traffic-chart-title traffic-chart-description")
 
-async def test_dashboard_resource_reloads_without_replacing_the_chart_contract():
+async def test_dashboard_resource_reloads_without_replacing_the_chart_contract() -> null:
     await browser.open("/")
     await browser.waitFor("[data-trend-chart]")
     await browser.click("[data-refresh]")

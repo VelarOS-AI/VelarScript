@@ -23,36 +23,22 @@ import {
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
-import { LOOK_BUILDERS, LOOK_HOOKS, LOOK_PROPERTIES, LOOK_TARGETS } from "./look.ts";
+import {
+  LOOK_ARITHMETIC_HINT,
+  LOOK_HOOKS,
+  LOOK_MEDIA_LENGTH_UNITS,
+  LOOK_NUMERIC_TYPE_NAMES,
+  LOOK_PROPERTIES,
+  LOOK_TARGETS,
+  LOOK_UNIT_TYPES,
+} from "./look.ts";
+import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, type LookStaticValue } from "./look-static.ts";
 import { dynamicChildLeaves } from "./emitter.ts";
 type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
 type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
 type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
 type JSXAttribute = JSXElementExpression["attributes"][number];
-type FunctionDeclaration = Extract<Statement, { kind: "FunctionDeclaration" }>;
-type BindingPattern = Extract<Statement, { kind: "VariableDeclaration" }>["pattern"];
-interface AnalyzerBindingIdentity {
-  readonly span: Span;
-  readonly storageBinding?: AnalyzerBindingIdentity;
-}
-interface MutatingFunctionParameters {
-  readonly parameters: readonly string[];
-  readonly mutated: ReadonlySet<string>;
-  readonly returned: ReadonlySet<string>;
-}
-interface DirectPropOwnership {
-  readonly kind: "direct";
-  readonly name: string;
-  readonly type: ValueType;
-}
-interface ContainerPropOwnership {
-  readonly kind: "container";
-  readonly fields: ReadonlyMap<string, PropOwnership>;
-  readonly element: PropOwnership | null;
-  readonly spread: readonly DirectPropOwnership[];
-}
-type PropOwnership = DirectPropOwnership | ContainerPropOwnership;
 
 // The canonical nominal identity of the Web RouteContext record. Route checks
 // probe with this identity so they succeed in modules that use route() without
@@ -69,13 +55,14 @@ const nativeDomEventNames = new Set([
   "dragstart", "dragend", "dragover", "dragenter", "dragleave", "drop", "drag",
   "copy", "cut", "paste", "load", "error", "transitionend", "animationend", "play", "pause", "ended",
 ]);
-const textualWebPrimitiveNames = new Set(["Length", "Percentage", "Color", "Duration", "Angle", "Opacity"]);
+const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle", "Opacity"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
 const LOOK_CONDITION_TERM_LIMIT = 32;
 
 const lookLength: ValueType = { kind: "named", name: "Length" };
 const lookPercentage: ValueType = { kind: "named", name: "Percentage" };
-const lookMetric: ValueType = { kind: "union", members: [numberType, lookLength, lookPercentage] };
+const lookLengthPercentage: ValueType = { kind: "named", name: "LengthPercentage" };
+const lookMetric: ValueType = { kind: "union", members: [numberType, lookLength, lookPercentage, lookLengthPercentage] };
 const lookColor: ValueType = { kind: "named", name: "Color" };
 const lookImage: ValueType = { kind: "named", name: "Image" };
 const lookBorder: ValueType = { kind: "named", name: "Border" };
@@ -170,9 +157,6 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       }
       return exported;
     }
-    case "http.parse":
-      arity(1, 1);
-      return { kind: "promise", value: runtimeTypeAt(0) };
     case "http.request": {
       arity();
       let options: ValueType | null = null;
@@ -320,11 +304,11 @@ function lookShorthandStringGuidance(name: string, value: Expression): string | 
   return null;
 }
 
-function isViewportCondition(expression: Expression): boolean {
+function isViewportComparison(expression: Expression): boolean {
   if (expression.kind !== "BinaryExpression" || !["<", "<=", ">", ">="].includes(expression.operator)) return false;
   if (expression.left.kind !== "MemberExpression" || expression.left.object.kind !== "IdentifierExpression" || expression.left.object.name !== "viewport") return false;
   if (expression.left.property !== "width" && expression.left.property !== "height") return false;
-  return expression.right.kind === "UnitLiteralExpression" && ["px", "rem", "em"].includes(expression.right.unit);
+  return true;
 }
 
 // 'scheme.dark' and 'scheme.light' are Look condition subjects that lower to
@@ -358,13 +342,16 @@ function firstRelativeCssUrl(source: string): string | null {
 }
 
 function isLookNumericType(type: ValueType): boolean {
-  return type.kind === "named" && ["Length", "Percentage", "Duration", "Angle", "Opacity"].includes(type.name);
+  return type.kind === "named" && LOOK_NUMERIC_TYPE_NAMES.has(type.name);
 }
 
-function isLookMetricPair(left: ValueType, right: ValueType): boolean {
-  return left.kind === "named" && right.kind === "named"
-    && ["Length", "Percentage"].includes(left.name)
-    && ["Length", "Percentage"].includes(right.name);
+function lookAdditiveType(left: ValueType, right: ValueType): ValueType | null {
+  if (!isLookNumericType(left) || !isLookNumericType(right)) return null;
+  if (semanticTypeIdentity(left) === semanticTypeIdentity(right)) return left;
+  const lengthPercentageNames = new Set(["Length", "Percentage", "LengthPercentage"]);
+  if (left.kind === "named" && right.kind === "named"
+    && lengthPercentageNames.has(left.name) && lengthPercentageNames.has(right.name)) return lookLengthPercentage;
+  return null;
 }
 
 function containsCssImport(source: string): boolean {
@@ -433,6 +420,7 @@ function containsPromise(type: ValueType): boolean {
   if (type.kind === "optional") return containsPromise(type.inner);
   if (type.kind === "list" || type.kind === "set") return containsPromise(type.element);
   if (type.kind === "map") return containsPromise(type.key) || containsPromise(type.value);
+  if (type.kind === "record") return containsPromise(type.value);
   if (type.kind === "union") return type.members.some(containsPromise);
   return false;
 }
@@ -460,154 +448,8 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
     && child.tag === "title" && hasAccessibleJsxContent(child));
 }
 
-function canonicalBinding(binding: AnalyzerBindingIdentity): AnalyzerBindingIdentity {
-  let current = binding;
-  const visited = new Set<AnalyzerBindingIdentity>();
-  while (current.storageBinding && !visited.has(current)) {
-    visited.add(current);
-    current = current.storageBinding;
-  }
-  return current;
-}
-
-function callArgument(
-  call: Extract<Expression, { kind: "CallExpression" }>,
-  effect: MutatingFunctionParameters,
-  parameter: string,
-): Expression | null {
-  const named = call.argumentNames?.findIndex((name) => name === parameter) ?? -1;
-  if (named >= 0) return call.arguments[named] ?? null;
-  const position = effect.parameters.indexOf(parameter);
-  return position >= 0 ? call.arguments[position] ?? null : null;
-}
-
-function functionParameterEffects(
-  statement: FunctionDeclaration,
-  effectsByName: ReadonlyMap<string, readonly MutatingFunctionParameters[]>,
-): MutatingFunctionParameters {
-  const parameters = statement.parameters.map((parameter) => parameter.name);
-  const parameterSet = new Set(parameters);
-  const mutated = new Set<string>();
-  const returned = new Set<string>();
-  const sources = (expression: Expression, shadowed: ReadonlySet<string>): ReadonlySet<string> => {
-    if (expression.kind === "IdentifierExpression") {
-      return parameterSet.has(expression.name) && !shadowed.has(expression.name)
-        ? new Set([expression.name])
-        : new Set();
-    }
-    if (expression.kind === "MemberExpression" || expression.kind === "IndexExpression") return sources(expression.object, shadowed);
-    if (expression.kind === "ConditionalExpression") {
-      return new Set([...sources(expression.thenValue, shadowed), ...sources(expression.elseValue, shadowed)]);
-    }
-    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
-      const result = new Set<string>();
-      for (const effect of effectsByName.get(expression.callee.name) ?? []) {
-        for (const parameter of effect.returned) {
-          const argument = callArgument(expression, effect, parameter);
-          if (argument) sources(argument, shadowed).forEach((source) => result.add(source));
-        }
-      }
-      return result;
-    }
-    return new Set();
-  };
-  const visit = (value: unknown, shadowed: ReadonlySet<string> = new Set()): void => {
-    if (!value || typeof value !== "object") return;
-    const record = value as Record<string, unknown>;
-    if (record.kind === "FunctionDeclaration" || record.kind === "ClassDeclaration") return;
-    if (record.kind === "ArrowFunctionExpression") {
-      const arrow = record as unknown as Extract<Expression, { kind: "ArrowFunctionExpression" }>;
-      const arrowShadowed = new Set(shadowed);
-      for (const parameter of arrow.parameters) {
-        if (parameterSet.has(parameter.name)) arrowShadowed.add(parameter.name);
-      }
-      for (const parameter of arrow.parameters) visit(parameter.defaultValue, arrowShadowed);
-      visit(arrow.body, arrowShadowed);
-      return;
-    }
-    if (record.kind === "AssignmentStatement") {
-      const target = (record as unknown as Extract<Statement, { kind: "AssignmentStatement" }>).target;
-      if (target.kind !== "IdentifierExpression") sources(target, shadowed).forEach((source) => mutated.add(source));
-    } else if (record.kind === "CallExpression") {
-      const call = record as unknown as Extract<Expression, { kind: "CallExpression" }>;
-      if (call.callee.kind === "MemberExpression"
-        && ["append", "extend", "insert", "pop", "add", "set", "update", "remove", "clear"].includes(call.callee.property)) {
-        sources(call.callee.object, shadowed).forEach((source) => mutated.add(source));
-      } else if (call.callee.kind === "IdentifierExpression") {
-        for (const effect of effectsByName.get(call.callee.name) ?? []) {
-          for (const parameter of effect.mutated) {
-            const argument = callArgument(call, effect, parameter);
-            if (argument) sources(argument, shadowed).forEach((source) => mutated.add(source));
-          }
-        }
-      }
-    } else if (record.kind === "ReturnStatement") {
-      const value = (record as unknown as Extract<Statement, { kind: "ReturnStatement" }>).value;
-      if (value) sources(value, shadowed).forEach((source) => returned.add(source));
-    }
-    for (const child of Object.values(record)) {
-      if (Array.isArray(child)) child.forEach((item) => visit(item, shadowed));
-      else visit(child, shadowed);
-    }
-  };
-  statement.body.forEach((child) => visit(child));
-  return { parameters, mutated, returned };
-}
-
-function collectFunctionParameterEffects(program: Program): Map<string, MutatingFunctionParameters> {
-  const declarations: FunctionDeclaration[] = [];
-  const collect = (value: unknown): void => {
-    if (!value || typeof value !== "object") return;
-    const record = value as Record<string, unknown>;
-    if (record.kind === "FunctionDeclaration") declarations.push(record as unknown as FunctionDeclaration);
-    for (const child of Object.values(record)) {
-      if (Array.isArray(child)) child.forEach(collect);
-      else collect(child);
-    }
-  };
-  collect(program);
-  const effects = new Map<string, MutatingFunctionParameters>();
-  for (const declaration of declarations) {
-    effects.set(spanIdentity(declaration.span), {
-      parameters: declaration.parameters.map((parameter) => parameter.name),
-      mutated: new Set(),
-      returned: new Set(),
-    });
-  }
-  const byName = (): Map<string, readonly MutatingFunctionParameters[]> => {
-    const grouped = new Map<string, MutatingFunctionParameters[]>();
-    for (const declaration of declarations) {
-      const effect = effects.get(spanIdentity(declaration.span));
-      if (!effect) continue;
-      const group = grouped.get(declaration.name) ?? [];
-      group.push(effect);
-      grouped.set(declaration.name, group);
-    }
-    return grouped;
-  };
-  let changed = true;
-  while (changed) {
-    changed = false;
-    const grouped = byName();
-    for (const declaration of declarations) {
-      const key = spanIdentity(declaration.span);
-      const previous = effects.get(key)!;
-      const next = functionParameterEffects(declaration, grouped);
-      if ([...next.mutated].some((name) => !previous.mutated.has(name))
-        || [...next.returned].some((name) => !previous.returned.has(name))) changed = true;
-      effects.set(key, {
-        parameters: next.parameters,
-        mutated: new Set([...previous.mutated, ...next.mutated]),
-        returned: new Set([...previous.returned, ...next.returned]),
-      });
-    }
-  }
-  return effects;
-}
-
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
-  private componentProps: Set<string> | null = null;
   private componentReactiveNames: Set<string> | null = null;
   private mountedDepth = 0;
   private synchronousReactiveDepth = 0;
@@ -615,19 +457,20 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly resources: ReadonlyMap<string, string>;
   private readonly unsafeCssImports = new Set<string>();
   private readonly probedOperandTypes = new Map<string, ValueType>();
-  private readonly propOwnershipByBinding = new WeakMap<object, PropOwnership>();
-  private readonly mutatingFunctionParameters = new Map<string, MutatingFunctionParameters>();
-  private readonly reportedPropMutationCalls = new Set<string>();
+  private readonly importedLookStaticValues: ReadonlyMap<string, LookStaticValue>;
+  private lookStaticValues: ReadonlyMap<string, LookStaticValue> = new Map();
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
     this.resources = context.resources ?? new Map();
+    this.importedLookStaticValues = new Map(
+      [...(context.extensionImports?.get("@velarscript/web") ?? [])]
+        .filter((entry): entry is [string, LookStaticValue] => isLookStaticValue(entry[1])),
+    );
   }
 
   override analyze(program: Program): readonly Diagnostic[] {
-    this.mutatingFunctionParameters.clear();
-    this.reportedPropMutationCalls.clear();
-    collectFunctionParameterEffects(program).forEach((effect, key) => this.mutatingFunctionParameters.set(key, effect));
+    this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     return super.analyze(program);
   }
 
@@ -702,20 +545,6 @@ export class VelarWebAnalyzer extends Analyzer {
         return false;
       case "ReturnStatement":
         return false;
-      case "AssignmentStatement": {
-        const target = statement.target;
-        const prop = target.kind === "MemberExpression" || target.kind === "IndexExpression"
-          ? this.propReference(target.object)?.name ?? null
-          : null;
-        if (prop) {
-          this.diagnostics.push(diagnostic(
-            "VEL5051",
-            `Component prop '${prop}' is read-only; ask the parent to update it instead of mutating a nested value`,
-            target.span,
-          ));
-        }
-        return false;
-      }
       case "UnsafeCssImportDeclaration": {
         if (this.unsafeCssImports.has(statement.source)) {
           this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' is imported more than once; each stylesheet must have one explicit order position`, statement.span));
@@ -736,34 +565,7 @@ export class VelarWebAnalyzer extends Analyzer {
     }
   }
 
-  protected override analyzeStatement(statement: Statement): void {
-    super.analyzeStatement(statement);
-    if (statement.kind !== "VariableDeclaration") return;
-    const source = this.propOwnership(statement.initializer);
-    if (source) this.bindPropOwnership(statement.pattern, source);
-  }
-
   protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
-    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
-      const calleeName = expression.callee.name;
-      const binding = this.lookup(calleeName);
-      const declaration = binding ? canonicalBinding(binding) : null;
-      const effect = declaration ? this.mutatingFunctionParameters.get(spanIdentity(declaration.span)) : null;
-      if (effect) {
-        effect.mutated.forEach((parameterName) => {
-          const argument = callArgument(expression, effect, parameterName);
-          const prop = argument ? this.propReference(argument) : null;
-          const reportKey = `${expression.span.start}:${parameterName}`;
-          if (!argument || !prop || this.reportedPropMutationCalls.has(reportKey)) return;
-          this.reportedPropMutationCalls.add(reportKey);
-          this.diagnostics.push(diagnostic(
-            "VEL5051",
-            `Component prop '${prop.name}' is read-only; helper '${calleeName}' mutates the parameter receiving it`,
-            argument.span,
-          ));
-        });
-      }
-    }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && expression.callee.name === "mount") {
       const namedNode = expression.argumentNames?.findIndex((name) => name === "node") ?? -1;
@@ -776,23 +578,12 @@ export class VelarWebAnalyzer extends Analyzer {
         ));
       }
     }
-    if (expression.kind === "CallExpression" && expression.callee.kind === "MemberExpression"
-      && this.propReference(expression.callee.object)
-      && ["append", "extend", "insert", "pop", "add", "set", "update", "remove", "clear"].includes(expression.callee.property)) {
-      const prop = this.propReference(expression.callee.object)!.name;
-      this.diagnostics.push(diagnostic(
-        "VEL5051",
-        `Component prop '${prop}' is read-only; ask the parent to update it instead of calling a mutating collection method`,
-        expression.span,
-      ));
-    }
-    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
-      && LOOK_BUILDERS.has(expression.callee.name) && !this.lookup(expression.callee.name)) {
-      this.extensionCalls.set(spanIdentity(expression.span), expression.callee.name);
-    }
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {
       const operand = this.inferExpression(expression.operand);
-      if (isLookNumericType(operand)) return operand;
+      if (isLookNumericType(operand)) {
+        this.extensionCalls.set(spanIdentity(expression.span), LOOK_ARITHMETIC_HINT);
+        return operand;
+      }
       this.probedOperandTypes.set(spanIdentity(expression.operand.span), operand);
     }
     if (expression.kind === "BinaryExpression" && ["+", "-", "*", "/"].includes(expression.operator)) {
@@ -802,10 +593,14 @@ export class VelarWebAnalyzer extends Analyzer {
         this.probedOperandTypes.set(spanIdentity(expression.left.span), left);
         this.probedOperandTypes.set(spanIdentity(expression.right.span), right);
       } else {
-        if ((expression.operator === "+" || expression.operator === "-") && semanticTypeIdentity(left) === semanticTypeIdentity(right)) return left;
-        if ((expression.operator === "+" || expression.operator === "-") && isLookMetricPair(left, right)) return lookLength;
-        if ((expression.operator === "*" || expression.operator === "/") && isLookNumericType(left) && right.kind === "number") return left;
-        if (expression.operator === "*" && left.kind === "number" && isLookNumericType(right)) return right;
+        const additive = expression.operator === "+" || expression.operator === "-" ? lookAdditiveType(left, right) : null;
+        const result = additive
+          ?? ((expression.operator === "*" || expression.operator === "/") && isLookNumericType(left) && right.kind === "number" ? left : null)
+          ?? (expression.operator === "*" && left.kind === "number" && isLookNumericType(right) ? right : null);
+        if (result) {
+          this.extensionCalls.set(spanIdentity(expression.span), LOOK_ARITHMETIC_HINT);
+          return result;
+        }
         this.diagnostics.push(diagnostic("VEL5042", `Look unit arithmetic cannot apply '${expression.operator}' to ${describeType(left)} and ${describeType(right)}`, expression.span));
         return unknownType;
       }
@@ -820,10 +615,8 @@ export class VelarWebAnalyzer extends Analyzer {
       return boolType;
     }
     if (expression.kind === "UnitLiteralExpression") {
-      if (["px", "rem", "em", "vw", "vh", "vmin", "vmax", "fr"].includes(expression.unit)) return { kind: "named", name: "Length" };
-      if (expression.unit === "%") return { kind: "named", name: "Percentage" };
-      if (["ms", "s"].includes(expression.unit)) return { kind: "named", name: "Duration" };
-      if (["deg", "turn"].includes(expression.unit)) return { kind: "named", name: "Angle" };
+      const type = LOOK_UNIT_TYPES.get(expression.unit);
+      if (type) return { kind: "named", name: type };
       return unknownType;
     }
     return undefined;
@@ -864,136 +657,6 @@ export class VelarWebAnalyzer extends Analyzer {
     return this.componentStates?.has(name) === true || this.reactiveBindings.get(name) === "state";
   }
 
-  private propReference(expression: Expression): { readonly name: string; readonly type: ValueType } | null {
-    const ownership = this.propOwnership(expression);
-    return ownership?.kind === "direct" ? ownership : null;
-  }
-
-  private propOwnership(expression: Expression): PropOwnership | null {
-    if (expression.kind === "IdentifierExpression") {
-      const binding = this.lookup(expression.name);
-      const alias = binding ? this.propOwnershipByBinding.get(canonicalBinding(binding)) : null;
-      if (alias) return alias;
-      return this.componentProps?.has(expression.name) === true && !this.lookup(expression.name)?.reactiveShadow
-        ? { kind: "direct", name: expression.name, type: this.lookup(expression.name)?.type ?? unknownType }
-        : null;
-    }
-    if (expression.kind === "MemberExpression") {
-      const parent = this.propOwnership(expression.object);
-      if (!parent) return null;
-      return this.memberPropOwnership(parent, expression.property);
-    }
-    if (expression.kind === "IndexExpression") {
-      const parent = this.propOwnership(expression.object);
-      if (!parent) return null;
-      if (parent.kind === "container") return parent.element;
-      const owner = nonOptional(this.expandAliases(parent.type));
-      return {
-        kind: "direct",
-        name: parent.name,
-        type: owner.kind === "list" ? owner.element : owner.kind === "map" ? owner.value : unknownType,
-      };
-    }
-    if (expression.kind === "ConditionalExpression") {
-      return this.propOwnership(expression.thenValue) ?? this.propOwnership(expression.elseValue);
-    }
-    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
-      const binding = this.lookup(expression.callee.name);
-      const declaration = binding ? canonicalBinding(binding) : null;
-      const effect = declaration ? this.mutatingFunctionParameters.get(spanIdentity(declaration.span)) : null;
-      if (effect) {
-        for (const parameter of effect.returned) {
-          const argument = callArgument(expression, effect, parameter);
-          const ownership = argument ? this.propOwnership(argument) : null;
-          if (ownership) return ownership;
-        }
-      }
-    }
-    if (expression.kind === "ListExpression") {
-      for (const value of expression.elements) {
-        const ownership = value.kind === "SpreadExpression"
-          ? this.listElementPropOwnership(this.propOwnership(value.value))
-          : this.propOwnership(value);
-        if (ownership) return { kind: "container", fields: new Map(), element: ownership, spread: [] };
-      }
-      return null;
-    }
-    if (expression.kind === "ObjectExpression") {
-      const fields = new Map<string, PropOwnership>();
-      const spread: DirectPropOwnership[] = [];
-      for (const property of expression.properties) {
-        const ownership = this.propOwnership(property.value);
-        if (!ownership) continue;
-        if (property.kind === "ObjectProperty") fields.set(property.name, ownership);
-        else if (ownership.kind === "direct") spread.push(ownership);
-        else {
-          ownership.fields.forEach((value, name) => fields.set(name, value));
-          spread.push(...ownership.spread);
-        }
-      }
-      return fields.size > 0 || spread.length > 0
-        ? { kind: "container", fields, element: null, spread }
-        : null;
-    }
-    return null;
-  }
-
-  private memberPropOwnership(ownership: PropOwnership, property: string): PropOwnership | null {
-    if (ownership.kind === "container") {
-      const field = ownership.fields.get(property);
-      if (field) return field;
-      const spread = ownership.spread[0];
-      return spread ? this.memberPropOwnership(spread, property) : null;
-    }
-    const owner = nonOptional(this.expandAliases(ownership.type));
-    return {
-      kind: "direct",
-      name: ownership.name,
-      type: this.semanticMembersOf(owner).get(property) ?? unknownType,
-    };
-  }
-
-  private listElementPropOwnership(ownership: PropOwnership | null): PropOwnership | null {
-    if (!ownership) return null;
-    if (ownership.kind === "container") return ownership.element;
-    const owner = nonOptional(this.expandAliases(ownership.type));
-    return {
-      kind: "direct",
-      name: ownership.name,
-      type: owner.kind === "list" ? owner.element : owner.kind === "set" ? owner.element : unknownType,
-    };
-  }
-
-  private bindPropOwnership(pattern: BindingPattern, ownership: PropOwnership): void {
-    if (pattern.kind === "NameBindingPattern") {
-      const binding = this.lookup(pattern.name);
-      if (binding) this.propOwnershipByBinding.set(canonicalBinding(binding), ownership);
-      return;
-    }
-    if (pattern.kind === "ObjectBindingPattern") {
-      for (const entry of pattern.entries) {
-        const field = this.memberPropOwnership(ownership, entry.property);
-        if (field) this.bindPropOwnership(entry.pattern, field);
-      }
-      if (pattern.rest) {
-        const rest: PropOwnership = ownership.kind === "direct"
-          ? { kind: "container", fields: new Map(), element: null, spread: [ownership] }
-          : ownership;
-        this.bindPropOwnership(pattern.rest, rest);
-      }
-      return;
-    }
-    pattern.elements.forEach((element) => {
-      if (!element) return;
-      const item = this.listElementPropOwnership(ownership);
-      if (item) this.bindPropOwnership(element, item);
-    });
-    if (pattern.rest) {
-      const item = this.listElementPropOwnership(ownership);
-      if (item) this.bindPropOwnership(pattern.rest, { kind: "container", fields: new Map(), element: item, spread: [] });
-    }
-  }
-
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
     return webTypeFields(name);
   }
@@ -1010,7 +673,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private componentType(statement: ComponentDeclaration): ValueType {
-    const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.resolveValidatedAnnotation(parameter.type)]));
+    const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.readonlyPropType(this.resolveValidatedAnnotation(parameter.type))]));
     if (!props.has("class")) props.set("class", optionalOf(stringType));
     if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
     return {
@@ -1047,7 +710,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private actionType(statement: ActionDeclaration): ValueType {
-    const declaredResult = this.resolvedAsyncResult(this.resolveValidatedResult(statement.returnType));
+    const declaredResult = this.resolvedAsyncResult(this.inferredFunctionResult(statement));
     const rest = statement.parameters.find((parameter) => parameter.rest);
     return {
       kind: "action",
@@ -1070,10 +733,8 @@ export class VelarWebAnalyzer extends Analyzer {
     this.enterScope();
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
-    const previousProps = this.componentProps;
     const previousReactiveNames = this.componentReactiveNames;
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
-    this.componentProps = new Set(statement.parameters.map((parameter) => parameter.name));
     // Props lower reactively like component state and computed values, so a
     // local binding that reuses a prop name must suppress reactive lowering
     // for its own references exactly like a state-name shadow does.
@@ -1093,7 +754,7 @@ export class VelarWebAnalyzer extends Analyzer {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-      this.declareBinding(parameter.name, false, valid ? type : this.resolveValidatedAnnotation(parameter.type), parameter.span);
+      this.declareBinding(parameter.name, false, this.readonlyPropType(valid ? type : this.resolveValidatedAnnotation(parameter.type)), parameter.span);
       this.markDeclaredBindingReactive(parameter.name);
     }
     this.constructorDepth = 0;
@@ -1163,11 +824,14 @@ export class VelarWebAnalyzer extends Analyzer {
     if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
     if (renderValue?.kind === "JSXElementExpression") this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
-    this.componentProps = previousProps;
     this.componentReactiveNames = previousReactiveNames;
     this.flowFrameDepth -= 1;
     this.exitScope();
     this.constructorDepth = outerConstructorDepth;
+  }
+
+  private readonlyPropType(type: ValueType): ValueType {
+    return this.readonlyDataViewOf(type);
   }
 
   private validateComponentHost(render: JSXElementExpression, component: ComponentDeclaration): void {
@@ -1257,7 +921,21 @@ export class VelarWebAnalyzer extends Analyzer {
       this.requireCondition(right, expression.right);
       return boolType;
     }
-    if (isViewportCondition(expression)) return boolType;
+    if (isViewportComparison(expression)) {
+      const comparison = expression as Extract<Expression, { kind: "BinaryExpression" }>;
+      this.inferExpression(comparison.right, lookLength);
+      const threshold = evaluateLookStaticExpression(comparison.right, this.lookStaticValues);
+      if (threshold?.kind !== "unit") {
+        this.diagnostics.push(diagnostic(
+          "VEL5052",
+          "A viewport breakpoint must resolve at compile time to a px, rem, or em value; use a const unit token or an imported const unit token",
+          comparison.right.span,
+        ));
+      } else if (!LOOK_MEDIA_LENGTH_UNITS.has(threshold.unit)) {
+        this.diagnostics.push(diagnostic("VEL5052", `Viewport breakpoints do not support '${threshold.unit}'; use px, rem, or em`, comparison.right.span));
+      }
+      return boolType;
+    }
     if (isSchemeCondition(expression)) return boolType;
     const type = this.inferExpression(expression);
     this.requireCondition(type, expression);
@@ -1366,13 +1044,20 @@ export class VelarWebAnalyzer extends Analyzer {
       if (removedJsxControlAttributes.has(attribute.name)) continue;
       if (attribute.name === "key") {
         const key = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-        if (!isInvalidType(key) && key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
+        if (!isInvalidType(key) && key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "enumMember" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
         continue;
       }
       const expected = binding.type.props.get(attribute.name);
       if (attribute.name === "look") {
         const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-        if (!this.isLookInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(actual)}`, attribute.span));
+        if (attribute.value && typeof attribute.value !== "string" && attribute.value.kind === "LookExpression") {
+          this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
+        } else if (!this.isLookInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(actual)}`, attribute.span));
+        continue;
+      }
+      if (attribute.name.startsWith("look:")) {
+        const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
+        this.analyzeInlineLookAttribute(attribute, actual);
         continue;
       }
       if (attribute.name === "class") {
@@ -1415,7 +1100,10 @@ export class VelarWebAnalyzer extends Analyzer {
       this.diagnostics.push(diagnostic("VEL5041", "Controlled VelarScript components do not expose inline style; use a Look or an unsafe CSS import", attribute.span));
     } else if (attribute.name === "look") {
       if (!value || typeof value === "string") this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
+      else if (value.kind === "LookExpression") this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
       else if (!this.isLookInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(inferred)}`, attribute.span));
+    } else if (attribute.name.startsWith("look:")) {
+      this.analyzeInlineLookAttribute(attribute, inferred);
     } else if (attribute.name === "class") {
       if (!this.isClassInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX class requires string, string?, or a list of strings; received ${describeType(inferred)}`, attribute.span));
     } else if (attribute.name === "unsafe:html") {
@@ -1474,7 +1162,7 @@ export class VelarWebAnalyzer extends Analyzer {
       }
     } else if (attribute.name.startsWith("class:")) {
       this.requireAssignable(inferred, boolType, attribute.span);
-    } else if (attribute.name === "key" && !isInvalidType(inferred) && inferred.kind !== "string" && inferred.kind !== "number" && inferred.kind !== "enum" && inferred.kind !== "any") {
+    } else if (attribute.name === "key" && !isInvalidType(inferred) && inferred.kind !== "string" && inferred.kind !== "number" && inferred.kind !== "enum" && inferred.kind !== "enumMember" && inferred.kind !== "any") {
       this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
     } else if (!isInvalidType(inferred) && !this.isJsxAttributeValue(inferred)) {
       this.diagnostics.push(diagnostic("VEL5047", `Native JSX attributes require text, finite numbers, bool, enums, or null; received ${describeType(inferred)}`, attribute.span));
@@ -1520,7 +1208,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private isJsxRenderable(type: ValueType): boolean {
     const expanded = this.expandAliases(type);
     if (expanded.kind === "any" || expanded.kind === "null" || expanded.kind === "string" || expanded.kind === "number"
-      || expanded.kind === "bool" || expanded.kind === "enum" || expanded.kind === "node") return true;
+      || expanded.kind === "bool" || expanded.kind === "enum" || expanded.kind === "enumMember" || expanded.kind === "node") return true;
     if (expanded.kind === "named") return textualWebPrimitiveNames.has(expanded.name);
     if (expanded.kind === "optional") return this.isJsxRenderable(expanded.inner);
     if (expanded.kind === "list") return this.isJsxRenderable(expanded.element);
@@ -1531,7 +1219,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private isJsxAttributeValue(type: ValueType): boolean {
     const expanded = this.expandAliases(type);
     if (expanded.kind === "any" || expanded.kind === "null" || expanded.kind === "string" || expanded.kind === "number"
-      || expanded.kind === "bool" || expanded.kind === "enum") return true;
+      || expanded.kind === "bool" || expanded.kind === "enum" || expanded.kind === "enumMember") return true;
     if (expanded.kind === "named") return textualWebPrimitiveNames.has(expanded.name);
     if (expanded.kind === "optional") return this.isJsxAttributeValue(expanded.inner);
     if (expanded.kind === "union") return expanded.members.every((member) => this.isJsxAttributeValue(member));
@@ -1556,6 +1244,30 @@ export class VelarWebAnalyzer extends Analyzer {
     if (unsupported.length > 0) this.typeError(`${subject} component cannot require props other than route: ${unsupported.join(", ")}`, sourceSpan);
     const routeProp = type.props.get("route");
     if (routeProp && !isAssignable({ kind: "named", name: "RouteContext", identity: routeContextIdentity }, routeProp, this)) this.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
+  }
+
+  private analyzeInlineLookAttribute(attribute: JSXAttribute, actual: ValueType): void {
+    const property = attribute.name.slice("look:".length);
+    if (!property || !LOOK_PROPERTIES.has(property)) {
+      this.diagnostics.push(diagnostic("VEL5038", property
+        ? `Unknown inline Look property '${property}'; look:* uses the same camelCase property names as a Look block`
+        : "A look: directive requires a camelCase Look property name", attribute.span));
+      return;
+    }
+    if (attribute.value === null) {
+      this.diagnostics.push(diagnostic("VEL5040", `JSX look:${property} requires a string or expression value`, attribute.span));
+      return;
+    }
+    const expression = typeof attribute.value === "string"
+      ? { kind: "LiteralExpression", value: attribute.value, raw: JSON.stringify(attribute.value), span: attribute.span } as const
+      : attribute.value;
+    const shorthandGuidance = lookShorthandStringGuidance(property, expression);
+    if (shorthandGuidance) {
+      this.diagnostics.push(diagnostic("VEL5038", shorthandGuidance, expression.span));
+      return;
+    }
+    const expected = LOOK_PROPERTY_TYPES.get(property) ?? stringType;
+    if (expected.kind !== "unknown") this.requireAssignable(actual, optionalOf(expected), expression.span);
   }
 }
 

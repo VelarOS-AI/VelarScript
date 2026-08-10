@@ -30,6 +30,16 @@ export interface FrameworkStaticDeployment {
 export interface FrameworkBrowserTestContract {
   readonly sourceSuffix: string;
   readonly runtimeKey: string;
+  /** Deterministic target runtime installed before the test document starts. */
+  readonly initScript?: (config: unknown) => string;
+}
+
+export interface FrameworkHostProjectValidationInput {
+  readonly config: unknown;
+  readonly modules: readonly {
+    readonly path: string;
+    readonly imports: readonly string[];
+  }[];
 }
 
 /**
@@ -52,4 +62,5 @@ export interface FrameworkHostExtension {
   readonly createErrorDocument: (input: FrameworkHostErrorDocumentInput) => string;
   readonly staticDeployment: (config: unknown) => FrameworkStaticDeployment;
   readonly browserTests?: FrameworkBrowserTestContract;
+  readonly validateProject?: (input: FrameworkHostProjectValidationInput) => readonly string[];
 }

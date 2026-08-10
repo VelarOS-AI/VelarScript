@@ -23,7 +23,7 @@ const sourceTypeGuidance = new Map<string, SourceTypeGuidance>([
   ["Number", typeReplacement("Use 'number'; JavaScript wrapper-object types are not exposed", "number", "Use the VelarScript number type")],
   ["boolean", typeReplacement("Use 'bool' for boolean values", "bool", "Use the VelarScript bool type")],
   ["Boolean", typeReplacement("Use 'bool'; JavaScript wrapper-object types are not exposed", "bool", "Use the VelarScript bool type")],
-  ["void", typeReplacement("Use 'null' for an explicit no-result type, or omit a function result annotation", "null", "Use the VelarScript null type")],
+  ["void", typeReplacement("Use 'null' for an explicit no-result type; omitted body-backed results are inferred", "null", "Use the VelarScript null type")],
   ["object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary")],
   ["Object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary")],
   ["Function", typeGuidance("Write an explicit function type such as '(value: string) -> bool'")],
@@ -90,6 +90,7 @@ const declarationKeywordGuidanceEntries = new Map<string, DeclarationKeywordGuid
   ["record", typeKeywordGuidance],
   ["struct", typeKeywordGuidance],
   ["interface", typeKeywordGuidance],
+  ["schema", typeKeywordGuidance],
 ]);
 
 const stringMemberGuidanceEntries = new Map<string, string>([
@@ -98,6 +99,7 @@ const stringMemberGuidanceEntries = new Map<string, string>([
   ["substr", "Use '.slice(start, end)'; VelarScript has one string slicing method"],
   ["charAt", "Use '.char(index)'; string positions count Unicode code points"],
   ["at", "Use '.char(index)'; string positions count Unicode code points"],
+  ["indexOf", "Use '.index(text, start)'; missing text returns null and string positions count Unicode code points"],
   ["trimStart", "Use trimStart(value) from 'velar/text'; string operations are functions"],
   ["trimEnd", "Use trimEnd(value) from 'velar/text'; string operations are functions"],
   ["toUpperCase", "Use '.upper()'; VelarScript exposes one string uppercase spelling"],
@@ -116,6 +118,7 @@ const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<strin
     ["startsWith", "Use 'value.startsWith(text)'; string prefix checks are checked members"],
     ["endsWith", "Use 'value.endsWith(text)'; string suffix checks are checked members"],
     ["includes", "Use 'value.has(text)'; strings and collections share one membership method"],
+    ["indexOf", "Use 'value.index(text, start)'; missing text returns null and string positions count Unicode code points"],
     ["split", "Use 'value.split(separator)'; string splitting is a checked member"],
     ["replace", "Use 'value.replace(from, to)'; string replacement is a checked member"],
     ["replaceAll", "Use 'value.replaceAll(from, to)'; string replacement is a checked member"],

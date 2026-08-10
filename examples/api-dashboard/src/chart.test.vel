@@ -1,25 +1,25 @@
 import {expect} from "velar/test"
 import {ChartScale, barHeight, barY} from "./chart.vel"
 
-def test_chart_coordinates_are_bounded():
+def test_chart_coordinates_are_bounded() -> null:
     expect(barHeight(0, 100)).toBe(0)
     expect(barHeight(50, 100)).toBe(60)
     expect(barHeight(160, 100)).toBe(120)
     expect(barY(50, 100)).toBe(90)
 
-def test_chart_scale_owns_derived_internal_state():
+def test_chart_scale_owns_derived_internal_state() -> null:
     const scale = ChartScale(200, 100, 130)
     expect(ChartScale.defaultHeight).toBe(120)
     expect(scale.top).toBe(30)
     expect(scale.heightFor(50)).toBe(25)
     expect(scale.yFor(50)).toBe(105)
 
-def construct_invalid_scale():
+def construct_invalid_scale() -> null:
     ChartScale(0)
 
-def construct_oversized_scale():
+def construct_oversized_scale() -> null:
     ChartScale(1000001)
 
-def test_chart_scale_constructor_rejects_invalid_values():
+def test_chart_scale_constructor_rejects_invalid_values() -> null:
     expect(construct_invalid_scale).toThrow()
     expect(construct_oversized_scale).toThrow()

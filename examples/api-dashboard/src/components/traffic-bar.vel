@@ -1,3 +1,4 @@
+import {rgb} from "velar/look"
 import {ChartScale, TrafficPoint} from "../chart.vel"
 
 const barLook = look:

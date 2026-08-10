@@ -34,8 +34,6 @@ const forbiddenSourceIdentifiers = new Map<string, ForbiddenIdentifierRule>([
   ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [])],
   ["eval", forbidden("VelarScript does not expose 'eval'", null)],
   ["with", forbidden("Use a record spread such as '{...value, field: next}' to build an updated record; VelarScript does not expose 'with'", null)],
-  ["arguments", forbidden("Use named parameters; VelarScript does not expose 'arguments'", null)],
-  ["schema", forbidden("Use 'type'; VelarScript has no separate schema declaration", [{ kind: "type", value: "type" }])],
 ]);
 
 const forbiddenPrototypeMembers = new Set(["prototype", "__proto__"]);

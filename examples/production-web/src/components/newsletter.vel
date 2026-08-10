@@ -1,5 +1,6 @@
 import {clearError, focusFirstError, setError} from "velar/forms"
 import {frame} from "velar/browser"
+import {border, rgb, spacing, tracks} from "velar/look"
 import {findMatch} from "velar/text"
 import {announce} from "velar/web"
 
@@ -27,7 +28,7 @@ export component Newsletter:
     state email = ""
     let form: Element? = null
 
-    action submit():
+    action submit() -> null:
         if form:
             const currentForm = form
             const domain = findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups?.[0]

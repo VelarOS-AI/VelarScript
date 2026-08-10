@@ -1,7 +1,7 @@
-import js {formatValue} from "@velarscript/demo-format"
 import {map as mapAsync} from "velar/async"
 import {flatten} from "velar/collections"
 import {http} from "velar/http"
+import {border, color, minmax, repeat, rgb, rgba, shadow, spacing, tracks} from "velar/look"
 import {lazy} from "velar/web"
 import {ChartScale, TrafficPoint} from "./chart.vel"
 
@@ -13,6 +13,9 @@ const rule = rgb(219, 228, 240)
 const primary = rgb(35, 87, 217)
 const success = rgb(22, 134, 95)
 const danger = rgb(192, 61, 83)
+
+def formatValue(value: number) -> string:
+    return str(value)
 
 const TrafficBar = lazy(() => import("./components/traffic-bar.vel"), "TrafficBar")
 

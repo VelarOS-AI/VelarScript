@@ -1,3 +1,4 @@
+import {border, linearGradient, rgb, rgba, spacing} from "velar/look"
 import {Link, Router, lazy, route} from "velar/web"
 import {Board} from "./pages/board.vel"
 

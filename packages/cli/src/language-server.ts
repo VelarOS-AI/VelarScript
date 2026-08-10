@@ -73,6 +73,7 @@ const keywordDocumentation = new Map<string, string>([
   ["case", "Declares a match pattern; object and List patterns may destructure values with ...rest and as bindings."],
   ["const", "Declares an initialized binding that cannot be rebound."],
   ["let", "Declares an initialized binding that can be rebound."],
+  ["readonly", "Creates a transitive compile-time view over data records and collections without changing runtime identity."],
   ["null", "The only empty value in ordinary VelarScript source; undefined is not exposed."],
 ]);
 
@@ -83,12 +84,13 @@ const builtinTypeDocumentation = new Map<string, string>([
   ["unknown", "An unchecked boundary value that must be validated before ordinary use."],
   ["List", "An ordered collection with one checked element type."],
   ["Map", "An insertion-ordered JavaScript Map with checked key and value types."],
+  ["Record", "A JSON-safe plain record with dynamic string keys and one checked value type."],
   ["Set", "An insertion-ordered JavaScript Set with one checked element type."],
   ["Promise", "A JavaScript Promise with one checked resolved-value type."],
 ]);
 
 const coreCompletionItems = [
-  ...["const", "let", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
+  ...["const", "let", "readonly", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
   { label: "str", kind: 3, detail: "str(value) -> string" },
   { label: "print", kind: 3, detail: "print(value) -> null" },

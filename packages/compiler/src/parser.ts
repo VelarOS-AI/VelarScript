@@ -14,6 +14,7 @@ import type {
   Expression,
   ExternClassDeclaration,
   ExternClassFieldDeclaration,
+  ExternClassGetterDeclaration,
   ExternClassMethodDeclaration,
   ExternConstantDeclaration,
   ExternFunctionDeclaration,
@@ -226,8 +227,14 @@ export class Parser {
       return this.parseFunction(start, exported, asynchronous);
     }
 
+    if (asynchronous && this.match("for")) {
+      if (exported) this.diagnostics.push(diagnostic("VEL2001", "An async for loop cannot be exported", this.previous().span));
+      if (abstract) this.diagnostics.push(diagnostic("VEL2001", "'abstract' cannot prefix an async for loop", this.previous().span));
+      return this.parseForStatement(start, true);
+    }
+
     if (asynchronous) {
-      this.diagnostics.push(diagnostic("VEL2001", "'async' must be followed by 'def'", this.previous().span));
+      this.diagnostics.push(diagnostic("VEL2001", "'async' must be followed by 'def' or 'for'", this.previous().span));
       return null;
     }
 
@@ -346,20 +353,16 @@ export class Parser {
     }
 
     if (this.match("for")) {
-      const pattern = this.parseBindingPattern();
-      const secondPattern = this.match("comma") ? this.parseBindingPattern() : null;
-      if (secondPattern && this.match("comma")) {
-        const third = this.parseBindingPattern();
-        this.diagnostics.push(diagnostic(
+      let asynchronousLoop = false;
+      if (this.match("await")) {
+        asynchronousLoop = true;
+        this.diagnostics.push(recoveredDiagnostic(
           "VEL2017",
-          "A for loop accepts one binding or two slots; use 'for [a, b] in ...' to destructure one item",
-          third.span,
+          "Use 'async for value in source'; the async marker precedes the loop",
+          this.previous().span,
         ));
       }
-      this.expect("in", "Expected 'in' after loop binding");
-      const iterable = this.parseExpression();
-      const body = this.parseBlock();
-      return { kind: "ForStatement", pattern, secondPattern, iterable, body, span: span(start, body.at(-1)?.span.end ?? iterable.span.end) };
+      return this.parseForStatement(start, asynchronousLoop);
     }
 
     if (this.match("while")) {
@@ -407,6 +410,23 @@ export class Parser {
     }
 
     return { kind: "ExpressionStatement", expression, span: expression.span };
+  }
+
+  private parseForStatement(start: number, asynchronous: boolean): Statement {
+    const pattern = this.parseBindingPattern();
+    const secondPattern = this.match("comma") ? this.parseBindingPattern() : null;
+    if (secondPattern && this.match("comma")) {
+      const third = this.parseBindingPattern();
+      this.diagnostics.push(diagnostic(
+        "VEL2017",
+        "A for loop accepts one binding or two slots; use 'for [a, b] in ...' to destructure one item",
+        third.span,
+      ));
+    }
+    this.expect("in", "Expected 'in' after loop binding");
+    const iterable = this.parseExpression();
+    const body = this.parseBlock();
+    return { kind: "ForStatement", asynchronous, pattern, secondPattern, iterable, body, span: span(start, body.at(-1)?.span.end ?? iterable.span.end) };
   }
 
   private parseImport(start: number): ImportDeclaration {
@@ -512,6 +532,7 @@ export class Parser {
       const name = this.expect("identifier", "Expected an extern function name");
       const typeParameters = this.parseTypeParameters();
       const parameters = this.parseParameters();
+      const parameterListEnd = this.previous().span.end;
       const returnType = this.match("arrow") ? this.parseTypeReference() : null;
       functions.push({
         asynchronous,
@@ -519,6 +540,7 @@ export class Parser {
         ...(typeParameters ? { typeParameters } : {}),
         parameters,
         returnType,
+        signatureSpan: span(declarationStart, returnType?.span.end ?? parameterListEnd),
         span: span(declarationStart, returnType?.span.end ?? this.previous().span.end),
       });
       this.expectStatementEnd();
@@ -548,6 +570,7 @@ export class Parser {
     this.consumeNewlines();
     this.expect("indent", "Expected an indented extern class body");
     const fields: ExternClassFieldDeclaration[] = [];
+    const getters: ExternClassGetterDeclaration[] = [];
     const methods: ExternClassMethodDeclaration[] = [];
     let constructorSeen = false;
     this.consumeNewlines();
@@ -572,8 +595,17 @@ export class Parser {
         this.consumeNewlines();
         continue;
       }
-      const static_ = this.match("static");
-      const asynchronous = this.match("async");
+      let static_ = false;
+      let asynchronous = false;
+      let scanningModifiers = true;
+      while (scanningModifiers) {
+        if (this.match("static")) static_ = true;
+        else if (this.match("async")) asynchronous = true;
+        else if (this.check("identifier") && this.current().value === "readonly") {
+          const modifier = this.advance();
+          this.diagnostics.push(diagnostic("VEL2010", "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field", modifier.span));
+        } else scanningModifiers = false;
+      }
       const mutable = this.match("let");
       const readonly = !mutable && this.match("const");
       if (mutable || readonly) {
@@ -586,10 +618,33 @@ export class Parser {
         this.consumeNewlines();
         continue;
       }
+      if (this.check("identifier") && this.current().value === "get") {
+        this.advance();
+        const getterName = this.expectMemberName("Expected an extern class getter name");
+        this.expect("leftParen", "Expected '(' after an extern getter name");
+        if (!this.check("rightParen")) {
+          this.diagnostics.push(diagnostic("VEL2023", "An extern getter cannot accept parameters", this.current().span));
+          while (!this.check("rightParen") && !this.check("newline") && !this.check("eof")) this.advance();
+        }
+        this.expect("rightParen", "Expected ')' after an extern getter name");
+        let type: TypeReference;
+        if (this.match("arrow")) {
+          type = this.parseTypeReference();
+        } else {
+          this.diagnostics.push(diagnostic("VEL4023", `Extern getter '${getterName.value}' requires an explicit result annotation`, getterName.span));
+          type = { syntax: { kind: "NamedTypeSyntax", name: "unknown", span: getterName.span }, span: getterName.span };
+        }
+        if (asynchronous) this.diagnostics.push(diagnostic("VEL2023", "An extern getter cannot be async; expose an ordinary async method instead", span(memberStart, type.span.end)));
+        getters.push({ static: static_, name: getterName.value, type, span: span(memberStart, type.span.end) });
+        this.expectStatementEnd();
+        this.consumeNewlines();
+        continue;
+      }
       if (this.match("def")) {
         const methodName = this.expectMemberName("Expected an extern class method name");
         const typeParameters = this.parseTypeParameters();
         const methodParameters = this.parseParameters();
+        const parameterListEnd = this.previous().span.end;
         const returnType = this.match("arrow") ? this.parseTypeReference() : null;
         methods.push({
           static: static_,
@@ -598,18 +653,19 @@ export class Parser {
           ...(typeParameters ? { typeParameters } : {}),
           parameters: methodParameters,
           returnType,
+          signatureSpan: span(memberStart, returnType?.span.end ?? parameterListEnd),
           span: span(memberStart, returnType?.span.end ?? this.previous().span.end),
         });
         this.expectStatementEnd();
         this.consumeNewlines();
         continue;
       }
-      this.diagnostics.push(diagnostic("VEL2010", "Extern class bodies declare fields with const/let, one constructor signature, methods with def, or 'pass'", this.current().span));
+      this.diagnostics.push(diagnostic("VEL2010", "Extern class bodies declare fields with const/let, one constructor signature, getters with get, methods with def, or 'pass'", this.current().span));
       this.synchronize();
       this.consumeNewlines();
     }
     const close = this.expect("dedent", "Expected the end of an extern class body");
-    return { name: name.value, parameters, base, fields, methods, span: span(start, Math.max(fields.at(-1)?.span.end ?? start, methods.at(-1)?.span.end ?? start, close.span.end)) };
+    return { name: name.value, parameters, base, fields, getters, methods, span: span(start, Math.max(fields.at(-1)?.span.end ?? start, getters.at(-1)?.span.end ?? start, methods.at(-1)?.span.end ?? start, close.span.end)) };
   }
 
   protected parseExtensionStatement(
@@ -710,6 +766,7 @@ export class Parser {
     const name = this.expect("identifier", "Expected a function name");
     const typeParameters = this.parseTypeParameters();
     const parameters = this.parseParameters();
+    const parameterListEnd = this.previous().span.end;
     const returnType = this.match("arrow") ? this.parseTypeReference() : null;
     const body = this.parseBlock();
     const end = body.at(-1)?.span.end ?? returnType?.span.end ?? name.span.end;
@@ -722,6 +779,7 @@ export class Parser {
       ...(typeParameters ? { typeParameters } : {}),
       parameters,
       returnType,
+      signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
       body,
       span: span(start, end),
     };
@@ -824,10 +882,12 @@ export class Parser {
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
+      const readonly = this.check("identifier") && this.current().value === "readonly";
+      const fieldStart = readonly ? this.advance().span.start : this.current().span.start;
       const fieldName = this.expectMemberName("Expected a field name");
       this.expect("colon", "Expected ':' after field name");
       const type = this.parseTypeReference();
-      fields.push({ name: fieldName.value, type, span: span(fieldName.span.start, type.span.end) });
+      fields.push({ readonly, name: fieldName.value, type, span: span(fieldStart, type.span.end) });
       this.expectStatementEnd();
       this.consumeNewlines();
     }
@@ -846,7 +906,31 @@ export class Parser {
 
     while (!this.check("dedent") && !this.check("eof")) {
       const member = this.expectMemberName("Expected an enum member name");
-      if (member.value) members.push({ name: member.value, span: member.span });
+      let value = member.value;
+      let valueSpan: Span | undefined;
+      if (this.match("assign")) {
+        if (this.check("string")) {
+          const serialized = this.advance();
+          const payload = serialized.payload as StringTokenPayload | undefined;
+          if (payload?.layout) {
+            this.diagnostics.push(diagnostic("VEL2017", "An enum member value must be an inline string", serialized.span));
+          }
+          value = serialized.value;
+          valueSpan = serialized.span;
+        } else if (this.check("fstring")) {
+          const serialized = this.advance();
+          this.diagnostics.push(diagnostic(
+            "VEL2017",
+            "An enum member value is static; use an inline quoted string without interpolation",
+            serialized.span,
+          ));
+          valueSpan = serialized.span;
+        } else {
+          this.diagnostics.push(diagnostic("VEL2001", "Expected an inline string value after '=' in an enum member", this.current().span));
+          this.synchronize();
+        }
+      }
+      if (member.value) members.push({ name: member.value, value, ...(valueSpan ? { valueSpan } : {}), span: member.span });
       this.expectStatementEnd();
       this.consumeNewlines();
     }
@@ -854,7 +938,8 @@ export class Parser {
     if (members.length === 0) {
       this.diagnostics.push(diagnostic("VEL2017", `Enum '${name.value}' requires at least one member`, span(start, close.span.end)));
     }
-    return { kind: "EnumDeclaration", exported, name: name.value, members, span: span(start, members.at(-1)?.span.end ?? close.span.end) };
+    const last = members.at(-1);
+    return { kind: "EnumDeclaration", exported, name: name.value, members, span: span(start, last?.valueSpan?.end ?? last?.span.end ?? close.span.end) };
   }
 
   private parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration {
@@ -934,6 +1019,10 @@ export class Parser {
         else if (this.match("override")) methodOverride = true;
         else if (this.match("static")) methodStatic = true;
         else if (this.match("private")) methodPrivate = true;
+        else if (this.check("identifier") && this.current().value === "readonly") {
+          const modifier = this.advance();
+          this.diagnostics.push(diagnostic("VEL2021", "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field", modifier.span));
+        }
         else if (this.match("async")) asynchronous = true;
         else scanningModifiers = false;
       }
@@ -965,7 +1054,7 @@ export class Parser {
       if (this.check("const") || this.check("let")) {
         const binding = this.advance().kind as "const" | "let";
         if (methodAbstract || methodOverride || asynchronous) {
-          this.diagnostics.push(diagnostic("VEL2021", "Class fields support only the 'private' and 'static' modifiers", this.previous().span));
+          this.diagnostics.push(diagnostic("VEL2021", "Class fields support only the 'private' and 'static' modifiers; use 'const' for a read-only field", this.previous().span));
         }
         const fieldName = this.expectMemberName("Expected a class field name");
         let type: TypeReference;
@@ -1086,6 +1175,7 @@ export class Parser {
         name: name.value,
         parameters: [],
         returnType,
+        signatureSpan: span(start, returnType.span.end),
         body: [],
         span: span(start, returnType.span.end),
       };
@@ -1103,6 +1193,7 @@ export class Parser {
       name: name.value,
       parameters: [],
       returnType,
+      signatureSpan: span(start, returnType.span.end),
       body,
       span: span(start, body.at(-1)?.span.end ?? returnType.span.end),
     };
@@ -1119,6 +1210,7 @@ export class Parser {
     const name = this.expectMemberName("Expected a method name");
     const typeParameters = this.parseTypeParameters();
     const parameters = this.parseParameters();
+    const parameterListEnd = this.previous().span.end;
     const returnType = this.match("arrow") ? this.parseTypeReference() : null;
     if (abstract) {
       this.expectStatementEnd();
@@ -1134,6 +1226,7 @@ export class Parser {
         ...(typeParameters ? { typeParameters } : {}),
         parameters,
         returnType,
+        signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
         body: [],
         span: span(start, returnType?.span.end ?? name.span.end),
       };
@@ -1151,6 +1244,7 @@ export class Parser {
       ...(typeParameters ? { typeParameters } : {}),
       parameters,
       returnType,
+      signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
       body,
       span: span(start, body.at(-1)?.span.end ?? returnType?.span.end ?? name.span.end),
     };
@@ -1424,6 +1518,11 @@ export class Parser {
   }
 
   private parseSingleTypeReference(allowTrailingOptional = true): TypeSyntax {
+    if (this.check("identifier") && this.current().value === "readonly") {
+      const keyword = this.advance();
+      const inner = this.parseSingleTypeReference(allowTrailingOptional);
+      return { kind: "ReadonlyTypeSyntax", inner, span: span(keyword.span.start, inner.span.end) };
+    }
     if (this.check("leftParen") && !this.isFunctionTypeParenthesis()) {
       const open = this.advance();
       const grouped = this.parseTypeReference();
@@ -1462,6 +1561,18 @@ export class Parser {
         : diagnostic("VEL2012", nameGuidance.message, name.span));
     }
     const typeName = nameGuidance?.replacement ?? name.value;
+    if (this.match("dot")) {
+      const member = this.expect("identifier", "Expected an enum member after '.' in a singleton type");
+      const syntax: TypeSyntax = {
+        kind: "EnumMemberTypeSyntax",
+        enumName: typeName,
+        enumNameSpan: name.span,
+        member: member.value,
+        memberSpan: member.span,
+        span: span(name.span.start, member.span.end),
+      };
+      return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
+    }
     let syntax: TypeSyntax = { kind: "NamedTypeSyntax", name: typeName, span: name.span };
     const angleArguments = this.match("less");
     const squareArguments = !angleArguments && this.match("leftBracket");
@@ -1494,7 +1605,7 @@ export class Parser {
       if (squareArguments) {
         this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
       }
-      const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Promise" ? 1 : null;
+      const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
       if (expectedArguments !== null && arguments_.length !== expectedArguments) {
         this.diagnostics.push(diagnostic("VEL2012", `Type '${typeName}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
       }
