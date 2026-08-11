@@ -6,6 +6,8 @@ import { VELAR_DESKTOP_API_VERSION, velarProjectExtension, type VelarDesktopConf
 
 const stringType: ValueType = { kind: "string" };
 const boolType: ValueType = { kind: "bool" };
+const nullType: ValueType = { kind: "null" };
+const optionalStringType: ValueType = { kind: "union", members: [stringType, nullType] };
 
 function functionType(parameters: readonly ValueType[], result: ValueType): ValueType {
   return { kind: "function", parameters, requiredParameters: parameters.length, result };
@@ -59,11 +61,16 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["homeDirectory", functionType([], { kind: "promise", value: stringType })],
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
   ["projectDirectory", functionType([], { kind: "promise", value: stringType })],
+  ["selectedProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
+  ["selectProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
 ]));
 
 const desktopTestModuleInterface = moduleInterface(new Map([
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
+  ["projectDirectory", functionType([], { kind: "promise", value: stringType })],
+  ["makeDirectory", functionType([stringType], { kind: "promise", value: nullType })],
   ["readText", functionType([stringType, { kind: "number" }], { kind: "promise", value: stringType })],
+  ["writeText", functionType([stringType, stringType], { kind: "promise", value: nullType })],
 ]));
 
 const nodeProcessInterface = nodeModuleInterfaces.get("velar/process")!;
@@ -88,9 +95,17 @@ async function path(operation) {
   if (typeof value !== "string" || !value.startsWith("/") || value.length > 4096 || value.includes("\0")) throw new TypeError("Desktop host returned an invalid absolute path");
   return value;
 }
+async function optionalPath(operation, timeout = 30000) {
+  const value = await __velarDesktopHostCall("desktop", operation, [], timeout);
+  if (value === null) return null;
+  if (typeof value !== "string" || !value.startsWith("/") || value.length > 4096 || value.includes("\0")) throw new TypeError("Desktop host returned an invalid optional project path");
+  return value;
+}
 export async function homeDirectory() { return path("homeDirectory"); }
 export async function appDataDirectory() { return path("appDataDirectory"); }
 export async function projectDirectory() { return path("projectDirectory"); }
+export async function selectedProjectDirectory() { return optionalPath("selectedProjectDirectory"); }
+export async function selectProjectDirectory() { return optionalPath("selectProjectDirectory", 0); }
 `.trimStart();
 
 const DESKTOP_TEST_SOURCE = String.raw`
@@ -117,12 +132,30 @@ export async function appDataDirectory() {
   if (typeof value !== "string" || !value.startsWith("/") || value.length > 4096 || value.includes("\0")) throw new TypeError("Desktop test host returned an invalid absolute app-data path");
   return value;
 }
+export async function projectDirectory() {
+  const value = await invoke("desktop", "projectDirectory", [], 30000);
+  if (typeof value !== "string" || !value.startsWith("/") || value.length > 4096 || value.includes("\0")) throw new TypeError("Desktop test host returned an invalid absolute project path");
+  return value;
+}
+export async function makeDirectory(path) {
+  if (typeof path !== "string" || path.length === 0 || path.length > 4096 || path.includes("\0")) throw new TypeError("Desktop test makeDirectory requires a bounded path");
+  const value = await invoke("fs", "makeDirectory", [path], 30000);
+  if (value !== null) throw new TypeError("Desktop test host returned an invalid directory result");
+  return null;
+}
 export async function readText(path, maxBytes) {
   if (typeof path !== "string" || path.length === 0 || path.length > 4096 || path.includes("\0")) throw new TypeError("Desktop test readText requires a bounded path");
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16 * 1024 * 1024) throw new RangeError("Desktop test readText maxBytes is outside its supported bounds");
   const value = await invoke("fs", "readText", [path, maxBytes], 30000);
   if (typeof value !== "string") throw new TypeError("Desktop test host returned invalid file text");
   return value;
+}
+export async function writeText(path, text) {
+  if (typeof path !== "string" || path.length === 0 || path.length > 4096 || path.includes("\0")) throw new TypeError("Desktop test writeText requires a bounded path");
+  if (typeof text !== "string") throw new TypeError("Desktop test writeText requires text");
+  const value = await invoke("fs", "writeText", [path, text], 30000);
+  if (value !== null) throw new TypeError("Desktop test host returned an invalid write result");
+  return null;
 }
 `.trimStart();
 
@@ -135,7 +168,7 @@ const pathArrayJoin = Array.prototype.join;
 const pathGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const pathStringIndexOf = String.prototype.indexOf;
 const pathStringSlice = String.prototype.slice;
-const desktopProjectDirectory = __velarDesktopHostField("projectDirectory");
+const desktopProjectDirectoryValue = __velarDesktopHostField("projectDirectoryValue");
 function stringIndexOf(value, search) { return pathApply(pathStringIndexOf, value, [search]); }
 function stringSlice(value, start, end) { return pathApply(pathStringSlice, value, end === undefined ? [start] : [start, end]); }
 function arrayJoin(value, separator) { return pathApply(pathArrayJoin, value, [separator]); }
@@ -243,7 +276,8 @@ function parts(value, operation) {
   return output;
 }
 function projectDirectory() {
-  const value = checked(desktopProjectDirectory, "resolve");
+  if (typeof desktopProjectDirectoryValue !== "function") throw new TypeError("Desktop project directory provider must be a function data value");
+  const value = checked(pathApply(desktopProjectDirectoryValue, undefined, []), "resolve");
   if (!value.startsWith("/")) throw new TypeError("Desktop project directory must be absolute");
   return value;
 }

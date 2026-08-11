@@ -1720,6 +1720,14 @@ for (const phrase of [
   }
 }
 for (const phrase of [
+  'export async function selectProjectDirectory() { return optionalPath("selectProjectDirectory", 0); }',
+  'const desktopProjectDirectoryValue = __velarDesktopHostField("projectDirectoryValue")',
+]) {
+  if (!desktopCompilerSource.includes(phrase)) {
+    failures.push(`packages/desktop/src/compiler.ts: missing dynamic project grant operation '${phrase}'`);
+  }
+}
+for (const phrase of [
   'const generationBytes = new hostUint8Array(16)',
   'const complete = (owner, message) =>',
   'private var pending: [Int: PendingRequest] = [:]',
@@ -1737,6 +1745,13 @@ for (const phrase of [
   '"hostCommand": "request-cancel"',
   'const activeRequests = new Map()',
   'function cancelActivity(activity)',
+  'let hostProjectDirectory = __VELAR_PROJECT_DIRECTORY__',
+  'private final class ProjectDirectoryGrant',
+  'let panel = NSOpenPanel()',
+  'project-directory.bookmark',
+  '"hostCommand": "project-root-set"',
+  'async function replaceProjectRoot(path)',
+  'rebuildFileRoots()',
 ]) {
   if (!(desktopNativeHostSource + "\n" + desktopWorkerSource).includes(phrase)) {
     failures.push(`Desktop document generations do not preserve '${phrase}'`);

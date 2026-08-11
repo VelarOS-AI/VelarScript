@@ -14,6 +14,7 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
   const protocol = Symbol.for("velar.desktop.bridge.v1");
   const projectRoot = "/velar-test/project";
   const appDataRoot = "/velar-test/app-data";
+  let selectedProjectRoot = null;
   const grants = new Set(${files});
   const processGrants = new Set(${processes});
   // A permission is not a value. Tests start with an absent environment so a
@@ -87,6 +88,8 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
   if (grants.has("project")) {
     makeDirectories(projectRoot);
     file(projectRoot + "/README.md", "# Velar Desktop test project\n");
+    makeDirectories(projectRoot + "/src");
+    file(projectRoot + "/src/main.vel", "import {App} from \"./app.vel\"\n\nmount(<App />, \"#app\")\n");
   }
   if (grants.has("app-data")) makeDirectories(appDataRoot);
 
@@ -230,6 +233,7 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
     platform: "test",
     packaged: false,
     projectDirectory: projectRoot,
+    projectDirectoryValue() { return projectRoot; },
     environment,
     async invoke(capability, operation, args) {
       if (!Array.isArray(args)) throw new TypeError("Desktop test bridge args must be a list");
@@ -237,6 +241,12 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
         if (operation === "homeDirectory") return "/velar-test/home";
         if (operation === "appDataDirectory") return appDataRoot;
         if (operation === "projectDirectory") return projectRoot;
+        if (operation === "selectedProjectDirectory") return selectedProjectRoot;
+        if (operation === "selectProjectDirectory") {
+          if (!grants.has("project")) throw new Error("Desktop test application has no project file grant");
+          selectedProjectRoot = projectRoot;
+          return selectedProjectRoot;
+        }
       }
       if (capability === "fs") return fs(operation, args);
       if (capability === "process") return processCapability(operation, args);

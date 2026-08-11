@@ -58,6 +58,22 @@ of hiding them from the application size budget.
 
 Desktop owns `velar/desktop` and permission-scoped target implementations of
 `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`.
+Applications with the `project` file grant may call
+`selectProjectDirectory()` to open the native directory chooser. A successful
+choice atomically replaces the single project grant for subsequent relative
+`velar/fs`, `velar/path`, and default process-working-directory operations;
+cancel returns `null`. `selectedProjectDirectory()` reports only a user-picked
+or restored grant, while `projectDirectory()` continues to report the current
+effective root, including the private app-data fallback before any selection.
+The macOS host persists the user's explicit choice as a bounded bookmark and
+restores it before renderer startup. Project selection has no arbitrary timeout
+while the native chooser is open. Replacing the grant cancels unpublished
+capability work and releases project-owned processes; filesystem effects that
+already reached the operating system may still settle, with their retired
+results discarded. The capability Worker revalidates the replacement directory
+and keeps the independent `app-data` grant unchanged. This is one dynamic
+single-project authority, not a renderer-owned allowlist and not a second file
+API.
 `velar/fs.createText` preserves Node's exclusive no-clobber contract inside the
 capability Worker; authorization and creation remain one bounded native effect
 rather than a renderer-side check followed by an overwriting write.
@@ -131,6 +147,8 @@ It installs a deterministic, permission-aware in-memory Desktop filesystem and
 deterministic handles for manifest-granted processes; the native worker keeps
 a separate integration suite for real filesystem, process, and network
 enforcement. Test modules may import the restricted `velar/desktop-test`
-helpers to inspect app-data text through the page's actual capability bridge;
+helpers to inspect app-data/project text, seed an external edit or recovery
+journal, and create a bounded test directory through the page's actual
+capability bridge;
 ordinary `velar/fs` remains application-side and is not faked in the test
 controller process.

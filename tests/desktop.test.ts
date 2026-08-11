@@ -39,7 +39,7 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
       },
     }, null, 2), "utf8");
     await writeFile(join(projectRoot, "src", "main.vel"), `
-import {appDataDirectory, platform, projectDirectory} from "velar/desktop"
+import {appDataDirectory, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory} from "velar/desktop"
 import {createText, exists, readText, writeText} from "velar/fs"
 import {get} from "velar/env"
 import {ProcessOutputChannel, run, start} from "velar/process"
@@ -70,6 +70,9 @@ component App:
     state detail = platform()
 
     action inspectHost() -> null:
+        const selected = await selectedProjectDirectory()
+        if selected == "":
+            await selectProjectDirectory()
         const root = await appDataDirectory()
         const probe = root + "/probe.txt"
         await writeText(probe, "ready")

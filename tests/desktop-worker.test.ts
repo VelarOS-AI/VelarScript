@@ -123,6 +123,31 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     const appDataFile = join(appData, "data", "audit.ndjson");
     assert.equal(await client.call("fs", "writeText", [appDataFile, "{}\n"]), null);
     assert.equal(await client.call("fs", "readText", [appDataFile, 1024]), "{}\n");
+    const replacementProject = join(directory, "replacement-project");
+    await mkdir(replacementProject);
+    await writeFile(join(replacementProject, "replacement.txt"), "replacement", "utf8");
+    const replacedProjectProcess = await client.call("process", "start", [
+      basename(process.execPath),
+      ["-e", "setInterval(() => {}, 1000)"],
+      { timeout: 0, maxOutputBytes: 65536 },
+    ]) as { handle: number; pid: number };
+    await client.setProjectRoot(replacementProject);
+    let replacedProjectProcessExists = true;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { process.kill(replacedProjectProcess.pid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+      catch { replacedProjectProcessExists = false; break; }
+    }
+    assert.equal(replacedProjectProcessExists, false, "replacing a project grant must release project-owned processes");
+    await assert.rejects(client.call("process", "wait", [replacedProjectProcess.handle]), /unknown or already released/u);
+    assert.equal(await client.call("fs", "readText", ["replacement.txt", 1024]), "replacement");
+    await assert.rejects(client.call("fs", "readText", [join(project, "note.txt"), 1024]), /outside granted Desktop file roots/u);
+    assert.equal(await client.call("fs", "readText", [appDataFile, 1024]), "{}\n");
+    const replacementCwd = await client.call("process", "run", [
+      basename(process.execPath),
+      ["-e", "process.stdout.write(process.cwd())"],
+      { timeout: 5000, maxOutputBytes: 65536 },
+    ]) as { stdout: string };
+    assert.equal(replacementCwd.stdout, await realpath(replacementProject));
     const largeText = `large:${"界".repeat(400_000)}`;
     assert.equal(await client.call("fs", "writeText", ["large.txt", largeText]), null);
     assert.equal(await client.call("fs", "readText", ["large.txt", 2 * 1024 * 1024]), largeText);
@@ -583,7 +608,9 @@ function terminateProcessGroup(pid: number): void {
 
 class WorkerClient {
   private nextId = 1;
+  private nextProjectRootCommandID = 1;
   private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  private readonly projectRootUpdates = new Map<number, { resolve(): void; reject(error: Error): void }>();
   private readonly lifecycleEvents: Array<{ hostEvent: string; owner: string; handle: number; pid?: number }> = [];
   private readonly child: ChildProcessWithoutNullStreams;
   private owner = "00000000000000000000000000000001";
@@ -593,7 +620,15 @@ class WorkerClient {
     this.writeHostCommand("owner-activate", this.owner);
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on("line", (line) => {
-      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown }; hostEvent?: string; owner?: string; handle?: number; pid?: number };
+      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown }; hostEvent?: string; owner?: string; handle?: number; pid?: number; commandID?: number };
+      if (message.hostEvent === "project-root-settled" && Number.isSafeInteger(message.commandID)) {
+        const update = this.projectRootUpdates.get(message.commandID as number);
+        if (!update) return;
+        this.projectRootUpdates.delete(message.commandID as number);
+        if (message.ok) update.resolve();
+        else update.reject(new Error(typeof message.error === "string" ? message.error : "Desktop project-root update failed"));
+        return;
+      }
       if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled") && Number.isSafeInteger(message.handle) && typeof message.owner === "string") {
         this.lifecycleEvents.push({ hostEvent: message.hostEvent, owner: message.owner, handle: message.handle as number, ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}) });
         return;
@@ -615,6 +650,8 @@ class WorkerClient {
     child.once("exit", () => {
       for (const request of this.pending.values()) request.reject(new Error("Desktop worker exited"));
       this.pending.clear();
+      for (const update of this.projectRootUpdates.values()) update.reject(new Error("Desktop worker exited"));
+      this.projectRootUpdates.clear();
     });
   }
 
@@ -631,6 +668,13 @@ class WorkerClient {
 
   cancelRequest(requestID: number): void {
     this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, hostCommand: "request-cancel", owner: this.owner, requestID })}\n`);
+  }
+
+  setProjectRoot(path: string): Promise<void> {
+    const commandID = this.nextProjectRootCommandID++;
+    const result = new Promise<void>((resolveUpdate, rejectUpdate) => this.projectRootUpdates.set(commandID, { resolve: resolveUpdate, reject: rejectUpdate }));
+    this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, hostCommand: "project-root-set", owner: this.owner, commandID, path })}\n`);
+    return result;
   }
 
   useOwner(owner: string): void {

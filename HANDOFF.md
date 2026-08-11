@@ -2604,6 +2604,75 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   编辑、任务运行和 native cold-start/RSS/正式性能阈值均未完成。Lite 的既有 11 文件并行 WIP 未修改，
   Workbench 未修改；未推送、未发布、未提升版本。
 
+- W-130 用 Editor 的真实滚动、跨窗编辑、IME/clipboard 与 2,000 次 1 MiB 中部编辑关闭了文本模型和
+  Web 生命周期的正式 owner 缺陷。`velar/text-buffer` 从会持续退化的 piece table 重写为纯
+  VelarScript immutable AVL rope，节点缓存 code-point、UTF-8、换行、高度和 leaf 摘要并自动合并；
+  新增原子有序 transaction、inverse change、CRLF 稳定位置映射、viewport line slice，以及有 entries/
+  bytes 双界限并携带 selection/composition group 的 `TextHistory`。`velar/text.chunks` 提供一次有界
+  code-point 扫描。没有公开 `compact`，也没有把树实现或维护策略泄漏给 Editor。
+
+  Web owner 补齐 element scroll、pointer capture、`CompositionEvent`、`ClipboardEvent` 和受控 clipboard
+  data。一次真实 lowering 回归证明 Web host primitive 的 `is` 不能生成不存在的 `.is`，compiler 现有
+  extension-owned direct predicate seam；Core `User.is(raw)` 保持不变。另一真实滚动场景证明 child
+  `mounted` 读取错误订阅了外层 conditional root，Web event/mounted/cleanup callback 现在都是明确的
+  non-tracking boundary。`velar/web-test` 允许受控编辑器用第一个 `beforeinput` 或 `input` 事件测量输入，
+  不要求产品先发生错误的 native mutation。
+
+  diagnostics/codegen/执行证据覆盖错误 arrow statement block 的 `VEL2030`、transaction 类型/范围/重叠、
+  stale history、private rope storage、native Web event identity 与 Core data Type lowering。真实执行覆盖
+  Unicode/CRLF、差分 transaction、history 分组/取消、hostile prototype、lifecycle non-tracking 和受控
+  input timing；1 MiB/2,000 次中部编辑约 0.63 秒，永久门禁小于 8 秒。Editor 删除固定 65,536 code-point
+  textarea window 与产品层 selection 转换，只通过公开 rope/history/Web 能力完成虚拟滚动、跨窗编辑、
+  undo/redo、IME、clipboard、pointer selection，1 MiB 场景的渲染行数保持小于 200。
+
+  完整证据为 `npm run check`（52 formatted sources、107 docs examples、70 runtime boundaries）、589/589、
+  四示例、packed consumer/rehearsal、完整三引擎与 installed browser consumer。Editor 独立通过 format、
+  2-module check、1 Core test、12/12 三浏览器、contract、production build/package/native smoke；`.app`
+  613,155 bytes，renderer 145,649 bytes，JS+CSS 140,671 bytes，SHA-256
+  `90902f6c0cf1c5a079cb50a1ab0cc58a03c02144be9714a1a3a64452db406fed`。未推送、未发布、未提升版本。
+
+- W-131 用真实文件夹选择、多文件切换、乐观保存、外部冲突和页面重启恢复关闭了 Desktop 动态授权
+  与生命周期缺口。Core 无需变化；Node 既有 `replaceTextIfMatches` 已完整拥有同目录原子替换与
+  compare-and-swap 保存，不增加文件 API。Desktop 新增公开 `selectedProjectDirectory() ->
+  Promise<string?>`、`selectProjectDirectory() -> Promise<string?>`，保留 `projectDirectory()` 作为当前
+  effective root。selector 是用户决策且 timeout 为 `0`，不会因固定时限取消 native modal。
+
+  macOS host 现在拥有 `NSOpenPanel`、私有 app-support 下的 bounded security-scoped bookmark、renderer/
+  Worker 启动前恢复、manifest project grant 撤销时删除、canonical absolute directory 校验与
+  security-scope 生命周期。bridge 只持有私有 mutable root cell，并给 `velar/path` 一个 data-valued
+  read-only provider，因此后续相对路径解析动态跟随新 grant。native 通过 generation-qualified
+  `project-root-set` 命令等待 Worker ack 后才完成 selector Promise；Worker 独立 canonicalize，保留
+  app-data root，只替换 project root，取消未发布请求、收敛 process/HTTP owner，并把新 project root
+  作为默认 cwd。已提交的文件系统效果不伪装成可回滚，也没有公开 cancellation API。
+
+  Desktop browser-test 的 restricted seam 增加 project directory、make directory、write/read text，测试
+  host 固定提供 README 与 `src/main.vel`。永久 owner 证据覆盖 optional return、selector timeout 0、
+  dynamic path provider、hostile descriptor、native picker/bookmark source 与 root command/ack；真实 Worker
+  执行切换目录、拒绝旧 absolute root、保留 app-data、更换 cwd 并终止已有 process，Swift host 直接
+  `-Osize` 编译、fixture generation/package 与 native smoke 全通过。Editor 开发中的非语言
+  `RangeError` 得到 `VEL3001`+`VEL4001`，unkeyed JSX list root 得到 `VEL5017`，均在调用点按公开语义修正。
+
+  Editor 删除 seed-only workspace 和尝试过的 sessionStorage 恢复路径，改为 bounded recursive real file
+  tree。每次文档切换创建新的 rope/history generation；保存只用 `replaceTextIfMatches`，外部改动保持
+  原样并冻结旧本地 journal。app-data journal 通过 `createText`/`replaceTextIfMatches` 原子保存 current、
+  baseline 与 typed metadata，只在 baseline 与 disk 相等时恢复，并用公开 frame/sleep 合并到输入关键帧
+  之外。Editor 没有 filesystem shim、bookmark store、JavaScript bridge、npm dependency 或手写实现文件。
+
+  完整证据为 `npm run check`（52 formatted sources、107 docs examples、71 runtime boundaries）、589/589、
+  四示例、六包 packed consumer、publication rehearsal、Dev/Production/External Preview、27+6+15+6
+  三引擎与 installed browser consumer。Editor format 6 files、3-module check、1 Core test、21/21
+  三浏览器、contract check/run、production build/package/native smoke 全绿。最终 FCP median/p95 与输入帧
+  median/p95 分别为 Chromium 12/52 与 0/2.9 ms、Firefox 25/180 与 1.86/7.52 ms、WebKit 18/24 与
+  9/15 ms；1 MiB load/input next-frame 为 45.798/6.066、190.18/1、208/28 ms，仍只是证据不是阈值。
+  `.app` 674,808 bytes（659.0 KiB），renderer 172,196 bytes，JS+CSS 167,218 bytes，build SHA-256
+  `8c248e3b22ce7267d4ec82a2970c0797d88eabc185bf0a3b2f5969287e034239`。
+
+  安装态验证还发现 W-128 clean break 后两个消费者仍调用已删除的 Desktop 私有 CLI：Workbench verifier
+  与 Lite scripts 已迁移到公开 `velar package`/`velar test --browser`，没有恢复兼容入口。Workbench
+  rehearsal acceptance 通过；Lite 保留其既有 11 文件 WIP并通过 10/22/21/29 module check、40+42 tests、
+  server/package acceptance、18 Chromium、54/54 三引擎及 production CLI/Desktop build。未推送、未发布、
+  未提升版本。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
@@ -2611,12 +2680,12 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
    Web、Node、Desktop、Game
    继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
    host/product policy 放回 Core。
-2. 下一波先用 Editor 的滚动窗口、跨窗选区与 undo/redo 场景审计 TextBuffer piece 查找复杂度、
-   compaction/transaction owner 及 Web selection/lifecycle；先给 owner 永久执行和性能证据，再让 Editor
-   消费。若需要新语法，按提案流程暂停确认。
-3. 随后用真实文件打开、保存、冲突恢复和 workspace 生命周期审计 Node/Desktop grants、资源所有权、
-   LSP/formatter/semantic index 的公开增量契约；Editor 只保留项目/标签/命令/索引编排与 UX，不复制
-   filesystem、text、language-service 或 host policy。
+2. 下一波先用 Editor 的真实外部文件变化、目录增删和大 workspace 场景审计 Node/Desktop watcher、
+   资源所有权、背压与增量 tree contract；先在正确 owner 给永久执行和性能证据，再让 Editor 消费。
+   若需要新语法，按提案流程暂停确认。
+3. 随后接通现有 semantic index、LSP 与 formatter 的公开 project-session 增量契约，验证 VelarScript、
+   JavaScript 和 TypeScript 的 diagnostics/navigation/formatting；Editor 只保留项目、标签、命令、索引
+   编排与 UX，不复制 filesystem、text、language-service 或 host policy。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
 5. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release

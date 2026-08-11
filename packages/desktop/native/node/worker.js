@@ -38,7 +38,11 @@ let fatalDrainStarted = false;
 let activeOwner = null;
 const roots = [];
 const lexicalRoots = [];
+let appDataCanonicalRoot = null;
+let appDataLexicalRoot = null;
 let projectRoot = null;
+let projectLexicalRoot = null;
+let projectRootUpdate = Promise.resolve();
 
 class HttpTransportFailure extends Error {
   constructor(phase) {
@@ -51,14 +55,14 @@ const launchDirectory = await realpath(launchRoot);
 if (fileScopes.has("app-data")) {
   const dataRoot = resolve(appDataRoot, "data");
   await mkdir(dataRoot, { recursive: true });
-  lexicalRoots.push(dataRoot);
-  roots.push(await realpath(dataRoot));
+  appDataLexicalRoot = dataRoot;
+  appDataCanonicalRoot = await realpath(dataRoot);
 }
 if (fileScopes.has("project")) {
-  lexicalRoots.push(resolve(launchRoot));
+  projectLexicalRoot = resolve(launchRoot);
   projectRoot = launchDirectory;
-  roots.push(projectRoot);
 }
+rebuildFileRoots();
 
 const reader = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
 reader.once("close", () => {
@@ -72,7 +76,7 @@ reader.on("line", async (line) => {
     if (Buffer.byteLength(line, "utf8") > MAX_MESSAGE_BYTES) throw new RangeError("Desktop request exceeds its 128 MiB transport bound");
     const request = JSON.parse(line);
     if (request?.hostCommand !== undefined) {
-      handleHostCommand(request);
+      await handleHostCommand(request);
       return;
     }
     id = request.id;
@@ -95,7 +99,7 @@ reader.on("line", async (line) => {
   }
 });
 
-function handleHostCommand(request) {
+async function handleHostCommand(request) {
   if (request.protocolVersion !== 1 || !validOwner(request.owner)) {
     throw new TypeError("Invalid Desktop host command");
   }
@@ -117,6 +121,23 @@ function handleHostCommand(request) {
     if (activity && activity.owner === request.owner) cancelActivity(activity);
     return;
   }
+  if (request.hostCommand === "project-root-set") {
+    if (Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner", "commandID", "path"].includes(key))
+      || request.owner !== activeOwner || !Number.isSafeInteger(request.commandID) || request.commandID < 1
+      || typeof request.path !== "string" || !isAbsolute(request.path) || request.path.length === 0
+      || request.path.length > MAX_PATH_UNITS || request.path.includes("\0") || !fileScopes.has("project")) {
+      throw new TypeError("Invalid Desktop project-root command");
+    }
+    const update = projectRootUpdate.then(() => replaceProjectRoot(request.path));
+    projectRootUpdate = update.catch(() => {});
+    try {
+      await update;
+      respond({ protocolVersion: 1, hostEvent: "project-root-settled", owner: request.owner, commandID: request.commandID, ok: true });
+    } catch (error) {
+      respond({ protocolVersion: 1, hostEvent: "project-root-settled", owner: request.owner, commandID: request.commandID, ok: false, error: safeError(error) });
+    }
+    return;
+  }
   throw new TypeError("Unknown Desktop host command");
 }
 
@@ -131,6 +152,7 @@ function validOwner(value) {
 }
 
 async function dispatch(capability, operation, args, owner, activity) {
+  await projectRootUpdate;
   if (capability === "fs") return fsOperation(operation, args);
   if (capability === "process") {
     if (operation === "run") return processRun(args, owner, activity);
@@ -145,6 +167,35 @@ async function dispatch(capability, operation, args, owner, activity) {
     if (operation === "cancel") return httpCancel(args, owner);
   }
   throw new Error(`Unknown Desktop capability '${capability}.${operation}'`);
+}
+
+function rebuildFileRoots() {
+  roots.length = 0;
+  lexicalRoots.length = 0;
+  if (appDataCanonicalRoot !== null && appDataLexicalRoot !== null) {
+    roots.push(appDataCanonicalRoot);
+    lexicalRoots.push(appDataLexicalRoot);
+  }
+  if (projectRoot !== null && projectLexicalRoot !== null) {
+    roots.push(projectRoot);
+    lexicalRoots.push(projectLexicalRoot);
+  }
+}
+
+async function replaceProjectRoot(path) {
+  const canonical = await realpath(path);
+  const metadata = await stat(canonical);
+  if (!metadata.isDirectory()) throw new TypeError("Desktop project grant must identify a directory");
+  for (const activity of activeRequests.values()) cancelActivity(activity);
+  for (const [handle, task] of processHandles) retainRetiredProcess(handle, task);
+  for (const [handle, request] of httpHandles) {
+    request.controller.abort(new Error("Desktop project grant changed"));
+    void request.reader?.cancel().catch(() => {});
+    finishHttp(handle, request);
+  }
+  projectLexicalRoot = resolve(path);
+  projectRoot = canonical;
+  rebuildFileRoots();
 }
 
 async function fsOperation(operation, args) {
@@ -609,7 +660,7 @@ async function launchProcess(args, settled) {
   for (const key of Object.keys(options)) if (!allowedOptionFields.has(key)) throw new TypeError(`Process options has unknown field '${key}'`);
   const timeout = integer(options.timeout ?? 120000, 0, 600000, "Process timeout");
   const maxOutputBytes = integer(options.maxOutputBytes ?? 4 * 1024 * 1024, 1, 16 * 1024 * 1024, "Process maxOutputBytes");
-  const cwd = options.cwd == null ? launchDirectory : await authorizedExisting(options.cwd);
+  const cwd = options.cwd == null ? projectRoot ?? launchDirectory : await authorizedExisting(options.cwd);
   const stdin = options.stdin ?? "";
   textValue(stdin, "Process stdin", 16 * 1024 * 1024);
   const environment = Object.create(null);

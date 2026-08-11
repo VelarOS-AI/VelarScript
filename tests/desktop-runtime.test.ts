@@ -37,6 +37,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   let terminalProcessWaits = 0;
   let retainedRunStops = 0;
   let invalidProcessWaits = 0;
+  let currentProjectDirectory = directory;
+  let selectedProjectDirectory: string | null = null;
   const transportFailure = (phase: "request" | "response"): Error => {
     const error = new Error(phase === "request" ? "HTTP request transport failed" : "HTTP response transport failed");
     Object.defineProperty(error, "name", { value: "VelarDesktopHttpTransportError" });
@@ -47,13 +49,20 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     platform: "test",
     packaged: false,
     projectDirectory: directory,
+    projectDirectoryValue() { return currentProjectDirectory; },
     environment: Object.freeze({ LANG: "en_US.UTF-8" }),
     async invoke(capability: string, operation: string, args: readonly unknown[], timeout = 30000): Promise<unknown> {
       calls.push({ capability, operation, args, timeout });
       if (capability === "desktop") {
         if (operation === "homeDirectory") return "/home/test";
         if (operation === "appDataDirectory") return "/app-data/test";
-        if (operation === "projectDirectory") return directory;
+        if (operation === "projectDirectory") return currentProjectDirectory;
+        if (operation === "selectedProjectDirectory") return selectedProjectDirectory;
+        if (operation === "selectProjectDirectory") {
+          selectedProjectDirectory = join(directory, "selected");
+          currentProjectDirectory = selectedProjectDirectory;
+          return selectedProjectDirectory;
+        }
       }
       if (capability === "process" && operation === "start") {
         if (args[0] === "hostile-start") {
@@ -571,12 +580,20 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       packaged(): boolean;
       platform(): string;
       projectDirectory(): Promise<string>;
+      selectedProjectDirectory(): Promise<string | null>;
+      selectProjectDirectory(): Promise<string | null>;
     }>(directory, "desktop", "velar/desktop");
     assert.equal(desktopRuntime.platform(), "test");
     assert.equal(desktopRuntime.packaged(), false);
     assert.equal(await desktopRuntime.homeDirectory(), "/home/test");
     assert.equal(await desktopRuntime.appDataDirectory(), "/app-data/test");
     assert.equal(await desktopRuntime.projectDirectory(), directory);
+    assert.equal(await desktopRuntime.selectedProjectDirectory(), null);
+    assert.equal(await desktopRuntime.selectProjectDirectory(), join(directory, "selected"));
+    assert.equal(calls.find((call) => call.capability === "desktop" && call.operation === "selectProjectDirectory")?.timeout, 0);
+    assert.equal(await desktopRuntime.selectedProjectDirectory(), join(directory, "selected"));
+    assert.equal(await desktopRuntime.projectDirectory(), join(directory, "selected"));
+    assert.equal(pathRuntime.resolve(["dynamic.vel"]), join(directory, "selected", "dynamic.vel"));
 
     const environment = await runtime<{ get(name: string): string | null; require(name: string): string }>(directory, "env", "velar/env");
     assert.equal(environment.get("LANG"), "en_US.UTF-8");
@@ -717,8 +734,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     });
     Object.defineProperty(globalThis, bridgeKey, { value: poisonedBridge, configurable: true });
     assert.equal(desktopRuntime.platform(), "test");
-    assert.equal(await desktopRuntime.projectDirectory(), directory);
-    assert.equal(pathRuntime.resolve(["captured"]), `${directory}/captured`);
+    assert.equal(await desktopRuntime.projectDirectory(), join(directory, "selected"));
+    assert.equal(pathRuntime.resolve(["captured"]), join(directory, "selected", "captured"));
     assert.equal(environment.get("LANG"), "en_US.UTF-8");
     assert.equal(await fsRuntime.readText("captured.txt", 16), "value");
     assert.equal((await processRuntime.run("node")).stdout, "ready");
@@ -734,9 +751,9 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       environment: Object.freeze({}),
       invoke: bridge.invoke,
     };
-    Object.defineProperty(hostilePathBridge, "projectDirectory", {
+    Object.defineProperty(hostilePathBridge, "projectDirectoryValue", {
       enumerable: true,
-      get() { projectDirectoryReads += 1; return directory; },
+      get() { projectDirectoryReads += 1; return () => directory; },
     });
     Object.defineProperty(globalThis, bridgeKey, { value: hostilePathBridge, configurable: true });
     await assert.rejects(runtime(directory, "path-hostile", "velar/path"), /data value/u);
@@ -825,6 +842,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     Object.defineProperty(globalThis, bridgeKey, { value: invalidDesktopBridge, configurable: true });
     const invalidDesktopRuntime = await runtime<{ projectDirectory(): Promise<string> }>(directory, "desktop-hostile", "velar/desktop");
     await assert.rejects(invalidDesktopRuntime.projectDirectory(), /invalid absolute path/u);
+    const invalidOptionalDesktopRuntime = invalidDesktopRuntime as unknown as { selectProjectDirectory(): Promise<string | null> };
+    await assert.rejects(invalidOptionalDesktopRuntime.selectProjectDirectory(), /invalid optional project path/u);
 
     let invokeReads = 0;
     const accessorInvokeBridge = {

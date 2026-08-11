@@ -42,6 +42,7 @@ private let bridgeScript = #"""
   const hostUint8ArraySubarray = Uint8Array.prototype.subarray
   const hostMessageHandler = webkit.messageHandlers.velarDesktop
   const hostPostMessage = hostMessageHandler.postMessage
+  let hostProjectDirectory = __VELAR_PROJECT_DIRECTORY__
   const mapDelete = (map, key) => hostApply(hostMapDelete, map, [key])
   const mapGet = (map, key) => hostApply(hostMapGet, map, [key])
   const mapHas = (map, key) => hostApply(hostMapHas, map, [key])
@@ -83,7 +84,12 @@ private let bridgeScript = #"""
     pendingRequestBytes -= request.bytes
     dropResponseChunks(message.id)
     if (request.timer !== null) hostClearTimeout(request.timer)
-    if (message.ok === true) request.resolve(message.value)
+    if (message.ok === true) {
+      if (request.capability === "desktop" && request.operation === "selectProjectDirectory"
+        && typeof message.value === "string" && message.value.startsWith("/")
+        && message.value.length <= 4096 && !message.value.includes("\0")) hostProjectDirectory = message.value
+      request.resolve(message.value)
+    }
     else if (message.error && typeof message.error === "object"
       && message.error.kind === "http-transport"
       && (message.error.phase === "request" || message.error.phase === "response")
@@ -145,7 +151,8 @@ private let bridgeScript = #"""
 const bridge = Object.freeze({
     platform: "macos",
     packaged: true,
-    projectDirectory: __VELAR_PROJECT_DIRECTORY__,
+    projectDirectory: hostProjectDirectory,
+    projectDirectoryValue: () => hostProjectDirectory,
     environment: Object.freeze(__VELAR_ENVIRONMENT__),
     invoke(capability, operation, args, timeoutMs = 30000) {
       if (typeof capability !== "string" || typeof operation !== "string" || !hostArrayIsArray(args)) {
@@ -157,7 +164,7 @@ const bridge = Object.freeze({
       if (mapSize(pending) >= 1024) return hostPromise.reject(new hostRangeError("Too many pending Desktop requests"))
       const id = allocateId()
       return new hostPromise((resolve, reject) => {
-        const requestState = {resolve, reject, timer: null, bytes: 0}
+        const requestState = {resolve, reject, timer: null, bytes: 0, capability, operation}
         const timer = timeoutMs === 0 ? null : hostSetTimeout(() => {
           const current = mapGet(pending, id)
           if (current !== requestState) return
@@ -220,6 +227,7 @@ private struct HostConfiguration: Decodable {
 }
 
 private struct PermissionConfiguration: Decodable {
+    let files: [String]
     let environment: [String]
     let secrets: [String]
 }
@@ -364,6 +372,89 @@ private func resolveProjectDirectory(_ fallback: URL) throws -> String {
     return directory.path
 }
 
+private final class ProjectDirectoryGrant {
+    private let bookmark: URL
+    private var scopedURL: URL?
+    private(set) var directory: String
+    private(set) var selection: String?
+
+    init(defaultDirectory: URL, appData: URL, projectFilesGranted: Bool) throws {
+        bookmark = appData.appendingPathComponent("project-directory.bookmark", isDirectory: false)
+        directory = try resolveProjectDirectory(defaultDirectory)
+        selection = projectFilesGranted && ProcessInfo.processInfo.environment["VELAR_DESKTOP_PROJECT_ROOT"] != nil ? directory : nil
+        guard projectFilesGranted else {
+            try? FileManager.default.removeItem(at: bookmark)
+            return
+        }
+        guard selection == nil, FileManager.default.fileExists(atPath: bookmark.path) else { return }
+        do {
+            let data = try Data(contentsOf: bookmark)
+            guard data.count <= 1024 * 1024 else { throw NSError(domain: "VelarDesktop", code: 7, userInfo: [NSLocalizedDescriptionKey: "Desktop project bookmark exceeds 1 MiB"]) }
+            var stale = false
+            let restored = try URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            )
+            let validated = try Self.validated(restored)
+            if validated.startAccessingSecurityScopedResource() { scopedURL = validated }
+            directory = validated.path
+            selection = validated.path
+            if stale { try persist(validated) }
+        } catch {
+            scopedURL?.stopAccessingSecurityScopedResource()
+            scopedURL = nil
+            selection = nil
+            try? FileManager.default.removeItem(at: bookmark)
+        }
+    }
+
+    func select() throws -> String? {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a VelarScript project"
+        panel.prompt = "Open"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.resolvesAliases = true
+        panel.directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
+        guard panel.runModal() == .OK, let value = panel.url else { return nil }
+        let validated = try Self.validated(value)
+        try persist(validated)
+        let acquired = validated.startAccessingSecurityScopedResource()
+        scopedURL?.stopAccessingSecurityScopedResource()
+        scopedURL = acquired ? validated : nil
+        directory = validated.path
+        selection = validated.path
+        return validated.path
+    }
+
+    func release() {
+        scopedURL?.stopAccessingSecurityScopedResource()
+        scopedURL = nil
+    }
+
+    private func persist(_ value: URL) throws {
+        let data = try value.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        guard data.count <= 1024 * 1024 else { throw NSError(domain: "VelarDesktop", code: 7, userInfo: [NSLocalizedDescriptionKey: "Desktop project bookmark exceeds 1 MiB"]) }
+        try data.write(to: bookmark, options: .atomic)
+    }
+
+    private static func validated(_ value: URL) throws -> URL {
+        let directory = value.resolvingSymlinksInPath().standardizedFileURL
+        guard directory.isFileURL, directory.path.hasPrefix("/"), !directory.path.contains("\0"), directory.path.utf8.count <= 4096 else {
+            throw NSError(domain: "VelarDesktop", code: 7, userInfo: [NSLocalizedDescriptionKey: "Selected Desktop project must have a bounded absolute file path"])
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw NSError(domain: "VelarDesktop", code: 7, userInfo: [NSLocalizedDescriptionKey: "Selected Desktop project must identify an existing directory"])
+        }
+        return directory
+    }
+}
+
 private func nodeMajorVersion(_ executable: URL) -> Int? {
     let process = Process()
     let output = Pipe()
@@ -393,6 +484,11 @@ private final class NodeCapabilityHost {
         let generation: String
     }
 
+    private struct PendingProjectRoot {
+        let generation: String
+        let completion: (String?) -> Void
+    }
+
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
@@ -403,7 +499,9 @@ private final class NodeCapabilityHost {
     private var activeIdentities = Set<BridgeIdentity>()
     private var activeGeneration: String?
     private var nextWorkerRequestID = 1
+    private var nextProjectRootCommandID = 1
     private var processOwners: [Int: ProcessOwner] = [:]
+    private var pendingProjectRoots: [Int: PendingProjectRoot] = [:]
     private var failure: String?
     private var reaping = false
     private let queue = DispatchQueue(label: "velar.desktop.node-worker")
@@ -504,6 +602,41 @@ private final class NodeCapabilityHost {
         }
     }
 
+    func setProjectDirectory(_ path: String, generation: String, completion: @escaping (String?) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard self.failure == nil, self.process.isRunning else {
+                DispatchQueue.main.async { completion(self.failure ?? "Desktop Node capability host is not running") }
+                return
+            }
+            do {
+                try self.activate(generation: generation)
+                let commandID = self.nextProjectRootCommandID
+                self.nextProjectRootCommandID = self.nextProjectRootCommandID >= 9_007_199_254_740_991 ? 1 : self.nextProjectRootCommandID + 1
+                guard self.pendingProjectRoots[commandID] == nil else {
+                    DispatchQueue.main.async { completion("Desktop project-root command identity space is exhausted") }
+                    return
+                }
+                self.pendingProjectRoots[commandID] = PendingProjectRoot(generation: generation, completion: completion)
+                do {
+                    try self.write([
+                        "protocolVersion": 1,
+                        "hostCommand": "project-root-set",
+                        "owner": generation,
+                        "commandID": commandID,
+                        "path": path,
+                    ])
+                } catch {
+                    self.pendingProjectRoots.removeValue(forKey: commandID)
+                    throw error
+                }
+            } catch {
+                self.fail("Desktop Node capability host write failed: \(error.localizedDescription)")
+                DispatchQueue.main.async { completion(self.failure ?? error.localizedDescription) }
+            }
+        }
+    }
+
     func stop() {
         queue.async { [weak self] in self?.fail("Desktop Node capability host stopped") }
     }
@@ -520,7 +653,8 @@ private final class NodeCapabilityHost {
                 return
             }
             if let event = object["hostEvent"] as? String {
-                handle(event: event, object: object)
+                if event == "project-root-settled" { handleProjectRootSettled(object) }
+                else { handle(event: event, object: object) }
                 if failure != nil { return }
                 continue
             }
@@ -573,6 +707,33 @@ private final class NodeCapabilityHost {
         }
     }
 
+    private func handleProjectRootSettled(_ object: [String: Any]) {
+        guard object["protocolVersion"] as? Int == 1,
+              let commandID = object["commandID"] as? Int, commandID > 0,
+              let generation = validatedBridgeGeneration(object["owner"]),
+              let pending = pendingProjectRoots.removeValue(forKey: commandID),
+              pending.generation == generation,
+              let ok = object["ok"] as? Bool else {
+            fail("Desktop Node capability host returned an invalid project-root result")
+            return
+        }
+        let error: String?
+        if ok {
+            guard object.keys.allSatisfy({ ["protocolVersion", "hostEvent", "owner", "commandID", "ok"].contains($0) }) else {
+                fail("Desktop Node capability host returned an invalid project-root result")
+                return
+            }
+            error = nil
+        } else {
+            guard let message = object["error"] as? String, !message.isEmpty, message.utf8.count <= 65536 else {
+                fail("Desktop Node capability host returned an invalid project-root failure")
+                return
+            }
+            error = message
+        }
+        DispatchQueue.main.async { pending.completion(error) }
+    }
+
     private func fail(_ message: String) {
         guard failure == nil else { return }
         failure = message
@@ -581,11 +742,14 @@ private final class NodeCapabilityHost {
         try? input.fileHandleForWriting.close()
         if process.isRunning { process.terminate() }
         let requests = Array(pending.values)
+        let projectRoots = Array(pendingProjectRoots.values)
         pending.removeAll(keepingCapacity: false)
+        pendingProjectRoots.removeAll(keepingCapacity: false)
         pendingRequestBytes = 0
         activeIdentities.removeAll(keepingCapacity: false)
         activeGeneration = nil
         for request in requests where !request.retired { complete(identity: request.identity, error: message) }
+        for projectRoot in projectRoots { DispatchQueue.main.async { projectRoot.completion(message) } }
         reapProcessOwners()
     }
 
@@ -749,7 +913,8 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
         var data: Data
     }
     private let identifier: String
-    private let projectDirectory: String
+    private let projectGrant: ProjectDirectoryGrant
+    private let projectFilesGranted: Bool
     private let worker: NodeCapabilityHost
     private var incomingChunks: [BridgeIdentity: IncomingChunks] = [:]
     private var incomingBytes = 0
@@ -758,9 +923,10 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     private var retiredGenerationOrder: [String] = []
     weak var webView: WKWebView?
 
-    init(identifier: String, projectDirectory: String, worker: NodeCapabilityHost) {
+    init(identifier: String, projectGrant: ProjectDirectoryGrant, projectFilesGranted: Bool, worker: NodeCapabilityHost) {
         self.identifier = identifier
-        self.projectDirectory = projectDirectory
+        self.projectGrant = projectGrant
+        self.projectFilesGranted = projectFilesGranted
         self.worker = worker
     }
 
@@ -845,7 +1011,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
                 try worker.send(request, body: body)
                 return
             }
-            let value: String
+            let value: Any
             guard request.arguments.isEmpty else {
                 throw NSError(domain: "VelarDesktop", code: 400, userInfo: [NSLocalizedDescriptionKey: "Desktop path operations do not accept arguments"])
             }
@@ -858,7 +1024,21 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 value = directory.path
             case "projectDirectory":
-                value = projectDirectory
+                value = projectGrant.directory
+            case "selectedProjectDirectory":
+                value = projectGrant.selection ?? NSNull()
+            case "selectProjectDirectory":
+                guard projectFilesGranted else {
+                    throw NSError(domain: "VelarDesktop", code: 403, userInfo: [NSLocalizedDescriptionKey: "Desktop project selection requires the 'project' file grant"])
+                }
+                guard let selected = try projectGrant.select() else {
+                    complete(identity: BridgeIdentity(generation: request.generation, id: request.id), value: NSNull(), error: nil)
+                    return
+                }
+                worker.setProjectDirectory(selected, generation: request.generation) { [weak self] error in
+                    self?.complete(identity: BridgeIdentity(generation: request.generation, id: request.id), value: selected, error: error)
+                }
+                return
             default:
                 throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop operation '\(request.operation)'"])
             }
@@ -875,7 +1055,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
         return true
     }
 
-    private func complete(identity: BridgeIdentity, value: String?, error: String?) {
+    private func complete(identity: BridgeIdentity, value: Any?, error: String?) {
         var payload: [String: Any] = ["id": identity.id, "ok": error == nil]
         if let value { payload["value"] = value }
         if let error { payload["error"] = error }
@@ -914,6 +1094,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private var bridge: DesktopBridge?
     private var navigationPolicy: NavigationPolicy?
     private var nodeHost: NodeCapabilityHost?
+    private var projectGrant: ProjectDirectoryGrant?
 
     init(headless: Bool) {
         self.headless = headless
@@ -933,7 +1114,9 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
             let defaultProject = appData.appendingPathComponent("project", isDirectory: true)
             try FileManager.default.createDirectory(at: defaultProject, withIntermediateDirectories: true)
-            let launchDirectory = try resolveProjectDirectory(defaultProject)
+            let projectFilesGranted = host.permissions.files.contains("project")
+            let projectGrant = try ProjectDirectoryGrant(defaultDirectory: defaultProject, appData: appData, projectFilesGranted: projectFilesGranted)
+            let launchDirectory = projectGrant.directory
             let nodeRuntime = try resolveNodeRuntime(host)
             let nodeHost = try NodeCapabilityHost(
                 executable: nodeRuntime.path,
@@ -942,7 +1125,12 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 appData: appData,
                 launchDirectory: launchDirectory
             )
-            let bridge = DesktopBridge(identifier: host.identifier, projectDirectory: launchDirectory, worker: nodeHost)
+            let bridge = DesktopBridge(
+                identifier: host.identifier,
+                projectGrant: projectGrant,
+                projectFilesGranted: projectFilesGranted,
+                worker: nodeHost
+            )
             let navigationPolicy = NavigationPolicy(bridge: bridge)
             let webConfiguration = WKWebViewConfiguration()
             webConfiguration.setURLSchemeHandler(schemeHandler, forURLScheme: "velar-app")
@@ -992,6 +1180,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             self.bridge = bridge
             self.navigationPolicy = navigationPolicy
             self.nodeHost = nodeHost
+            self.projectGrant = projectGrant
         } catch {
             let alert = NSAlert(error: error)
             alert.messageText = "VelarScript Desktop could not start"
@@ -1001,7 +1190,10 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) { nodeHost?.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        projectGrant?.release()
+        nodeHost?.stop()
+    }
 }
 
 @main

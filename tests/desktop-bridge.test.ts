@@ -21,6 +21,9 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   assert.match(hostSource, /responseBytes > 128 \* 1024 \* 1024/u);
   assert.match(hostSource, /private struct BridgeTransportCancel/u);
   assert.match(hostSource, /"hostCommand": "request-cancel"/u);
+  assert.match(hostSource, /NSOpenPanel\(\)/u);
+  assert.match(hostSource, /project-directory\.bookmark/u);
+  assert.match(hostSource, /"hostCommand": "project-root-set"/u);
   const match = /private let bridgeScript = #"""\n([\s\S]*?)\n"""#/u.exec(hostSource);
   const bridgeSource = match?.[1];
   assert.ok(bridgeSource, "native host must contain the injected bridge script");
@@ -39,7 +42,7 @@ test("Desktop WebView bridge chunks large requests and responses without changin
     .replace("__VELAR_PROJECT_DIRECTORY__", JSON.stringify("/tmp/velar-project"))
     .replace("__VELAR_ENVIRONMENT__", JSON.stringify({ LANG: "en_US.UTF-8" }));
   vm.runInContext(`${source}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`, context);
-  const bridge = (context as { __bridgeUnderTest?: { invoke(capability: string, operation: string, args: unknown[], timeout?: number): Promise<unknown> } }).__bridgeUnderTest;
+  const bridge = (context as { __bridgeUnderTest?: { projectDirectoryValue(): string; invoke(capability: string, operation: string, args: unknown[], timeout?: number): Promise<unknown> } }).__bridgeUnderTest;
   assert.ok(bridge);
 
   vm.runInContext(`
@@ -100,6 +103,12 @@ test("Desktop WebView bridge chunks large requests and responses without changin
     receive(request.generation, request.id, index, total, response.subarray(index * chunkBytes, Math.min(response.byteLength, (index + 1) * chunkBytes)).toString("base64"));
   }
   assert.equal(await result, output);
+
+  const selection = bridge.invoke("desktop", "selectProjectDirectory", [], 0);
+  const selectionRequest = messages.at(-1) as { generation: string; id: number };
+  complete(selectionRequest.generation, { id: selectionRequest.id, ok: true, value: "/tmp/selected-project" });
+  assert.equal(await selection, "/tmp/selected-project");
+  assert.equal(bridge.projectDirectoryValue(), "/tmp/selected-project");
 
   const reloadedMessages: Array<Record<string, unknown>> = [];
   const reloadedContext = vm.createContext({
