@@ -2210,9 +2210,48 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍只有并行
   函数返回值推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-120 继续审计 W-118/W-119 的强所有权，发现 `Process.wait()` 过去把第一次拒绝永久缓存，而
+  Node/Desktop Worker 又在任何 wait 结束时删除 handle。终态进程错误、暂时 bridge failure 与尚未确认
+  的 termination 因而被压成同一种 Promise rejection：显式 owner 无法真正重试；`run()` 的临时
+  Process 更会在 rejection 后直接丢失。execution timeout/output-bound failure 也只发送 SIGKILL；若
+  host 永远不产生 `exit`/`close`，wait 仍可越过用户 deadline 永久悬挂。
+
+  Node 与 Desktop 现在通过内部 `{result,error,retained}` wait outcome 明确区分所有权。确认的 result
+  或 process failure 才释放 handle 并永久缓存；retained outcome、原始 bridge rejection 或 malformed
+  host outcome 只清除当前 in-flight Promise，同一 Process 的下一次 wait 会重发 SIGKILL 并重新进入
+  五秒确认窗口。并发 waits 仍合并成一个请求；Stop/Wait 竞态中，已经确认的 Stop outcome 会覆盖陈旧
+  wait cache，后续 wait 不会退化为 unknown handle。Stop 写入 terminal error 时同时建立内部 rejection
+  observer，调用方即使稍后才 wait 也不会产生宿主 unhandled rejection。
+
+  Worker 的 timeout、output overflow、spawn failure 与显式 Stop 现在共同唤醒正在等待的 wait，但保留
+  两种不同收敛语义：root 尚未确认退出时五秒后返回 retained；自动 failure 一旦观察到 root exit，就
+  转入 W-119 的 post-exit pipe convergence，不能被更早的 confirmation timer 抢跑。随后发生的显式
+  Stop 仍可切回强确认模式。`run()` 无法把临时 Process 暴露给调用方，因此共享 Node/Desktop runtime
+  会持有该 owner，并在非终态 rejection 后持续重试 Stop；Desktop worker 的直接 run operation 也先
+  取得受 128-handle ceiling 管理的 owner，再用同样的后台清理规则，Agent/provider policy 没有进入
+  语言包。
+
+  回归同时覆盖 renderer fake host 的 retained/transport/malformed/terminal wait、并发 coalescing、
+  Stop/Wait race 与 run cleanup；真实 Node/Desktop escaped descendant 让第一组并发 Stop/Wait 在五秒
+  内保留 owner，外部收敛后同一 wait 成功；真实 timeout + detached inherited pipes 保证两目标返回
+  原 timeout terminal，而不是被竞态误转为永久 retained。独立 Node Worker 故障注入只吞掉第一次
+  SIGKILL，证明第一次 wait 有界返回 retained、第二次 wait 真正重发信号并取得原 timeout terminal。
+
+  当前组合证据为 `npm run check`（51 个格式化源、98 个文档示例、61 项 runtime boundary）、
+  551/551 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对
+  本轮 rehearsal 六包的安装态验收，以及完整 Dev/Production/External Preview、27+6+15+6 三浏览器
+  和 installed browser project。Lite 四项目 check、40 shared + 42 server tests、真实 repeated-
+  disconnect/capacity-convergence server acceptance、package acceptance、54/54 Desktop 三浏览器与
+  CLI/Desktop production build 也全部通过。薄包为 810,637 bytes（791.6 KiB）：host 235,904、
+  renderer 530,946、capability host 42,394、metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `5bb1307c10f091d8102deb6c974c8dac58e762692222209b48534bc5948f2fd4`；相比 W-119 增加 4,534 bytes，
+  仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍只有并行
+  函数返回值推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-119 的 post-exit pipe convergence、显式 Stop 强所有权、Desktop terminal error parity 与完整
+1. W-120 的 retryable wait、run cleanup ownership、timeout/root-exit convergence 与完整
    compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从多会话长时间
    运行、失败重启和工具恢复审计可观测性、resource ownership 与 host backpressure；
    产品策略继续留在 Lite，只把通用语言、Node/Web/Desktop API 缺口修回官方包。

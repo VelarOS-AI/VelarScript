@@ -425,6 +425,7 @@ const processResultFields = new __velarProcessNativeSet(["code", "signal", "stdo
 const processOutputFields = new __velarProcessNativeSet(["channel", "text"]);
 const processErrorFields = new __velarProcessNativeSet(["name", "message"]);
 const processStopFields = new __velarProcessNativeSet(["result", "error"]);
+const processWaitFields = new __velarProcessNativeSet(["result", "error", "retained"]);
 export const ProcessOutputChannel = __velarRegisterRuntimeType(__velarProcessFreeze({
   stdout: "stdout",
   stderr: "stderr",
@@ -539,6 +540,24 @@ function stopValueOf(value, maxOutputBytes) {
     error: value.error === null ? null : processErrorOf(value.error),
   };
 }
+function waitValueOf(value, maxOutputBytes) {
+  value = recordOf(value, "Desktop process wait result", processWaitFields);
+  const resultDescriptor = __velarProcessOwnDescriptor(value, "result");
+  const errorDescriptor = __velarProcessOwnDescriptor(value, "error");
+  const retainedDescriptor = __velarProcessOwnDescriptor(value, "retained");
+  if (!resultDescriptor || !("value" in resultDescriptor) || !errorDescriptor || !("value" in errorDescriptor)
+    || !retainedDescriptor || !("value" in retainedDescriptor) || typeof value.retained !== "boolean"
+    || value.result !== null && value.error !== null
+    || value.retained && (value.result !== null || value.error === null)
+    || !value.retained && value.result === null && value.error === null) {
+    throw new __velarProcessNativeTypeError("Desktop process wait result is invalid or contradictory");
+  }
+  return {
+    result: value.result === null ? null : resultOf(value.result, maxOutputBytes),
+    error: value.error === null ? null : processErrorOf(value.error),
+    retained: value.retained,
+  };
+}
 function invoke(operation, args, timeout = 30000) {
   return __velarDesktopHostCall("process", operation, args, timeout);
 }
@@ -553,6 +572,7 @@ class ProcessHandle {
     this.result = null;
     this.stopping = null;
     this.stopRequested = false;
+    this.cleanup = null;
     this.reading = false;
     this.waitStarted = false;
     this.outputBytes = 0;
@@ -576,16 +596,34 @@ class ProcessHandle {
   wait() {
     if (this.reading) return __velarProcessReject(new __velarProcessNativeError("Process wait() cannot run while next() is pending"));
     this.waitStarted = true;
-    if (!this.result) this.result = __velarProcessThen(invoke("wait", [this.handle], 0), value => resultOf(value, this.maxOutputBytes));
+    if (!this.result) {
+      let result;
+      result = __velarProcessThen(invoke("wait", [this.handle], 0), value => {
+        let outcome;
+        try { outcome = waitValueOf(value, this.maxOutputBytes); }
+        catch (error) {
+          if (this.result === result) this.result = null;
+          throw error;
+        }
+        if (outcome.retained) {
+          if (this.result === result) this.result = null;
+          throw outcome.error;
+        }
+        if (outcome.error) throw outcome.error;
+        return outcome.result;
+      }, error => {
+        if (this.result === result) this.result = null;
+        throw error;
+      });
+      this.result = result;
+    }
     return this.result;
   }
   async stop() {
     return await __velarProcessRetryableStop(this, () => __velarProcessThen(invoke("stop", [this.handle], 10000), value => {
         const outcome = stopValueOf(value, this.maxOutputBytes);
-        if (!this.result) {
-          if (outcome.error) this.result = __velarProcessReject(outcome.error);
-          else if (outcome.result) this.result = __velarProcessResolve(outcome.result);
-        }
+        if (outcome.error) this.result = __velarProcessObservedReject(outcome.error);
+        else if (outcome.result) this.result = __velarProcessResolve(outcome.result);
         return null;
       }));
   }
@@ -599,7 +637,14 @@ export async function start(command, args = [], options = {}) {
   const value = startValueOf(await invoke("start", [boundedText(command, "Process command"), argumentsOf(args), wire]));
   return new ProcessHandle(processToken, value.handle, value.pid, wire.maxOutputBytes);
 }
-export async function run(command, args = [], options = {}) { return (await start(command, args, options)).wait(); }
+export async function run(command, args = [], options = {}) {
+  const owner = await start(command, args, options);
+  try { return await owner.wait(); }
+  catch (error) {
+    if (!owner.result) __velarProcessRetainRun(owner);
+    throw error;
+  }
+}
 `.trimStart();
 
 const DESKTOP_ENV_SOURCE = String.raw`

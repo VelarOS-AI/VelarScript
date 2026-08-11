@@ -26,11 +26,17 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   const httpResponseFailures = new Set<number>();
   const pendingRequests = new Map<number, { reject(error: Error): void }>();
   const pendingProcessRead = { resolve: null as ((value: unknown) => void) | null };
+  const stopWaitRace = { reject: null as ((error: Error) => void) | null };
   let pendingProcessReadDelivered = false;
   let hostileResponseReads = 0;
   let hostileProcessReads = 0;
   let hostileFilesystemReads = 0;
   let retriableProcessStops = 0;
+  let retriableProcessWaits = 0;
+  let transportProcessWaits = 0;
+  let terminalProcessWaits = 0;
+  let retainedRunStops = 0;
+  let invalidProcessWaits = 0;
   const transportFailure = (phase: "request" | "response"): Error => {
     const error = new Error(phase === "request" ? "HTTP request transport failed" : "HTTP response transport failed");
     Object.defineProperty(error, "name", { value: "VelarDesktopHttpTransportError" });
@@ -65,6 +71,12 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         if (args[0] === "pending-read") return { handle: 11, pid: 703 };
         if (args[0] === "retry-stop") return { handle: 12, pid: 704 };
         if (args[0] === "failed-stop") return { handle: 13, pid: 705 };
+        if (args[0] === "retry-wait") return { handle: 14, pid: 706 };
+        if (args[0] === "retry-run") return { handle: 15, pid: 707 };
+        if (args[0] === "transport-wait") return { handle: 16, pid: 708 };
+        if (args[0] === "terminal-wait") return { handle: 17, pid: 709 };
+        if (args[0] === "invalid-wait") return { handle: 18, pid: 710 };
+        if (args[0] === "stop-wait-race") return { handle: 19, pid: 711 };
         return { handle: 7, pid: 700 };
       }
       if (capability === "process" && operation === "read") {
@@ -85,17 +97,36 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       }
       if (capability === "process" && operation === "wait") {
         if (args[0] === 8) {
-          return Object.defineProperty({ code: 0, signal: null, stderr: "" }, "stdout", {
-            enumerable: true,
-            get() { hostileProcessReads += 1; return "unsafe"; },
-          });
+          return {
+            result: Object.defineProperty({ code: 0, signal: null, stderr: "" }, "stdout", {
+              enumerable: true,
+              get() { hostileProcessReads += 1; return "unsafe"; },
+            }),
+            error: null,
+            retained: false,
+          };
         }
-        if (args[0] === 9) return { code: 0, signal: null, stdout: "one", stderr: "two" };
-        return { code: 0, signal: null, stdout: "ready", stderr: "" };
+        if (args[0] === 9) return { result: { code: 0, signal: null, stdout: "one", stderr: "two" }, error: null, retained: false };
+        if (args[0] === 14 && retriableProcessWaits++ === 0) {
+          return { result: null, error: { name: "Error", message: "termination unconfirmed" }, retained: true };
+        }
+        if (args[0] === 15) return { result: null, error: { name: "Error", message: "run cleanup unconfirmed" }, retained: true };
+        if (args[0] === 16 && transportProcessWaits++ === 0) throw new Error("process wait transport failed");
+        if (args[0] === 17) {
+          terminalProcessWaits += 1;
+          return { result: null, error: { name: "Error", message: "terminal process failure" }, retained: false };
+        }
+        if (args[0] === 18 && invalidProcessWaits++ === 0) {
+          return { result: { code: 0, signal: null, stdout: "invalid", stderr: "" }, error: null, retained: true };
+        }
+        if (args[0] === 19) return new Promise((_resolve, reject) => { stopWaitRace.reject = reject; });
+        return { result: { code: 0, signal: null, stdout: "ready", stderr: "" }, error: null, retained: false };
       }
       if (capability === "process" && operation === "stop") {
         if (args[0] === 12 && retriableProcessStops++ === 0) throw new Error("termination unconfirmed");
         if (args[0] === 13) return { result: null, error: { name: "Error", message: "Process timed out before termination" } };
+        if (args[0] === 15) retainedRunStops += 1;
+        if (args[0] === 19) setImmediate(() => stopWaitRace.reject?.(new Error("process handle is unknown or already released")));
         return { result: { code: null, signal: "SIGTERM", stdout: "", stderr: "" }, error: null };
       }
       if (capability === "fs") {
@@ -214,7 +245,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       start(command: string, args?: readonly string[], options?: Record<PropertyKey, unknown>): Promise<{
         readonly pid: number;
         next(): Promise<Readonly<{ readonly channel: "stdout" | "stderr"; readonly text: string }> | null>;
-        wait(): Promise<{ readonly stdout: string; readonly stderr: string }>;
+        wait(): Promise<{ readonly signal: string | null; readonly stdout: string; readonly stderr: string }>;
         stop(): Promise<null>;
       }>;
       run(command: string): Promise<{ readonly stdout: string }>;
@@ -264,7 +295,42 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
 
     const failedStop = await processRuntime.start("failed-stop");
     await failedStop.stop();
+    await new Promise((resolve) => setImmediate(resolve));
     await assert.rejects(failedStop.wait(), /timed out before termination/u);
+
+    const retriableWait = await processRuntime.start("retry-wait");
+    const firstRetriableWait = retriableWait.wait();
+    assert.equal(retriableWait.wait(), firstRetriableWait);
+    await assert.rejects(firstRetriableWait, /termination unconfirmed/u);
+    assert.equal((await retriableWait.wait()).stdout, "ready");
+    assert.equal(retriableProcessWaits, 2);
+
+    const transportWait = await processRuntime.start("transport-wait");
+    await assert.rejects(transportWait.wait(), /process wait transport failed/u);
+    assert.equal((await transportWait.wait()).stdout, "ready");
+    assert.equal(transportProcessWaits, 2);
+
+    const terminalWait = await processRuntime.start("terminal-wait");
+    const firstTerminalWait = terminalWait.wait();
+    assert.equal(terminalWait.wait(), firstTerminalWait);
+    await assert.rejects(firstTerminalWait, /terminal process failure/u);
+    await assert.rejects(terminalWait.wait(), /terminal process failure/u);
+    assert.equal(terminalProcessWaits, 1);
+
+    const invalidWait = await processRuntime.start("invalid-wait");
+    await assert.rejects(invalidWait.wait(), /invalid or contradictory/u);
+    assert.equal((await invalidWait.wait()).stdout, "ready");
+    assert.equal(invalidProcessWaits, 2);
+
+    const stopWaitOwner = await processRuntime.start("stop-wait-race");
+    const losingWait = stopWaitOwner.wait();
+    await stopWaitOwner.stop();
+    await assert.rejects(losingWait, /unknown or already released/u);
+    assert.equal((await stopWaitOwner.wait()).signal, "SIGTERM");
+
+    await assert.rejects(processRuntime.run("retry-run"), /run cleanup unconfirmed/u);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(retainedRunStops, 1);
 
     const processStream = await processRuntime.start("stream");
     assert.deepEqual(await processStream.next(), { channel: "stdout", text: "one" });
@@ -822,7 +888,12 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     text: "[desktop-test] git --version\n",
   });
   assert.equal(await bridge.invoke("process", "read", [started.handle]), null);
-  const result = await bridge.invoke("process", "wait", [started.handle]) as { code: number; signal: string | null; stdout: string; stderr: string };
+  const wait = await bridge.invoke("process", "wait", [started.handle]) as {
+    result: { code: number; signal: string | null; stdout: string; stderr: string };
+    error: null;
+    retained: false;
+  };
+  const result = wait.result;
   assert.deepEqual({ code: result.code, signal: result.signal, stdout: result.stdout, stderr: result.stderr }, {
     code: 0,
     signal: null,

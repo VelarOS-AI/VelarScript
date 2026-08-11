@@ -707,8 +707,8 @@ program directly, without a shell. Options may set `cwd`, an explicit `env`,
 UTF-8 `stdin`, `timeout`, and `maxOutputBytes`. A child receives only the
 runtime's small safe environment baseline plus the explicit map; the parent
 environment is not copied wholesale, so unrelated API keys cannot leak by
-default. `Process` exposes read-only `pid`, pull-based `next()`, idempotent
-`wait()`, and `stop()`. Each successful pull returns
+default. `Process` exposes read-only `pid`, pull-based `next()`, terminally
+idempotent `wait()`, and `stop()`. Each successful pull returns
 `{channel: ProcessOutputChannel, text: string}`; the official enum has
 `stdout` and `stderr` members. A process therefore uses the language's normal
 asynchronous iteration protocol rather than a callback or JavaScript iterator:
@@ -738,6 +738,22 @@ two seconds, and rejects after a five-second confirmation deadline if inherited
 pipes or an escaped descendant still prevent `close`; a later `stop()` retries
 forced termination against the same owned handle. Desktop applies the same
 retry contract across its bounded capability bridge.
+`wait()` follows the same ownership distinction. A confirmed result or process
+failure is terminal, releases the host handle, and is cached for later calls.
+A bridge failure or a five-second failure to confirm termination leaves the
+handle owned, clears only that in-flight `wait()` Promise, and permits a later
+`wait()` or `stop()` to retry. A later wait after a retained outcome reissues
+forced termination before starting a new confirmation window. Concurrent waits still coalesce into one host
+request. The host uses a private `{result,error,retained}` envelope to preserve
+that distinction; it is not a VelarScript value. `run()` cannot return its
+temporary `Process` owner to application code, so a non-terminal wait failure
+transfers that owner to a runtime cleanup task which keeps retrying `stop()`
+until the host confirms release. A convenience call therefore cannot orphan a
+child merely because its bounded error was already reported to the caller.
+If `wait()` and `stop()` race, a confirmed Stop outcome replaces the stale
+in-flight wait cache. The original wait caller still observes its own Promise,
+while every later wait receives the confirmed terminal result instead of an
+unknown-handle transport artifact.
 If the root process exits without an explicit `stop()` but inherited output
 pipes remain open, the host owns a separate bounded drain phase. It terminates
 the original process group, escalates after two seconds, and allows five
@@ -772,11 +788,15 @@ running: importing `velar/process` alone does not keep a CLI alive, while an
 unobserved active child still owns its lifecycle until it settles. At most 128
 unreleased process handles may exist; callers release a settled handle through
 `wait()` or `stop()`.
-Standard output and error share a bounded capture budget, timeouts terminate
-the child, and no command-string parsing or shell expansion is performed. A
-started process owns its descendant process tree by default: `stop`, timeout,
-output overflow, and an exiting root terminate descendants as one lifecycle so
-inherited pipes and background children cannot silently outlive the handle.
+Standard output and error share a bounded capture budget, and no command-string
+parsing or shell expansion is performed. Timeouts and output-bound failures
+request termination and independently bound confirmation at five seconds even
+if the operating system never emits `exit` or `close`; an unconfirmed handle is
+retained rather than misreported as released. A started process controls its
+ordinary descendant process group by default. A deliberately detached process
+can escape that group, so an executable grant is not an OS sandbox; retained
+ownership and bounded host-pipe closure make that limitation explicit instead
+of silently losing the lifecycle.
 
 ### Node `velar/http`
 

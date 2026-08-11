@@ -142,7 +142,12 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     };
     assert.ok(started.handle > 0);
     assert.ok(started.pid > 0);
-    const waited = await client.call("process", "wait", [started.handle]) as { code: number; stdout: string };
+    const waitedOutcome = await client.call("process", "wait", [started.handle]) as {
+      result: { code: number; stdout: string };
+      error: null;
+      retained: false;
+    };
+    const waited = waitedOutcome.result;
     assert.equal(waited.code, 0);
     assert.equal(waited.stdout.trim(), process.version);
 
@@ -162,10 +167,9 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
       { channel: "stderr", text: "two" },
     ]);
     assert.deepEqual(await client.call("process", "wait", [streamedProcess.handle]), {
-      code: 0,
-      signal: null,
-      stdout: "界",
-      stderr: "two",
+      result: { code: 0, signal: null, stdout: "界", stderr: "two" },
+      error: null,
+      retained: false,
     });
     await assert.rejects(client.call("process", "read", [streamedProcess.handle]), /unknown or already released/u);
 
@@ -354,6 +358,35 @@ test("Desktop process grants work independently from filesystem grants and keep 
       /env cannot exceed 1 MiB/u,
     );
     if (process.platform !== "win32") {
+      const timeoutDirectory = await mkdtemp(join(tmpdir(), "velar-desktop-timeout-"));
+      try {
+        const pidFile = join(timeoutDirectory, "descendant.pid");
+        const timeoutStartedAt = Date.now();
+        await assert.rejects(client.call("process", "run", [
+          basename(process.execPath),
+          ["-e", `
+const {spawn} = require("node:child_process");
+const {writeFileSync} = require("node:fs");
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  detached: true,
+  stdio: ["ignore", "inherit", "inherit"],
+});
+descendant.unref();
+writeFileSync(process.env.PID_FILE, String(descendant.pid));
+setInterval(() => {}, 1000);
+          `],
+          { env: [["PID_FILE", pidFile]], timeout: 200, maxOutputBytes: 65536 },
+        ]), /timed out after 200 milliseconds/u);
+        assert.ok(Date.now() - timeoutStartedAt < 8_000, "Desktop process.run timeout must converge through post-exit pipes");
+        escapedPid = Number(await readFile(pidFile, "utf8"));
+        assert.equal(Number.isSafeInteger(escapedPid), true);
+        assert.doesNotThrow(() => process.kill(escapedPid as number, 0));
+        terminateProcessGroup(escapedPid);
+        escapedPid = null;
+      } finally {
+        await rm(timeoutDirectory, { recursive: true, force: true });
+      }
+
       const abandonedOutput = await client.call("process", "start", [
         basename(process.execPath),
         ["-e", `
@@ -382,10 +415,11 @@ process.stdout.write(String(descendant.pid) + "\\n");
         /output streams did not close within 5000 milliseconds after process exit/u,
       );
       assert.ok(Date.now() - outputDeadlineStartedAt < 8_000, "Desktop process output must reject within its post-exit pipe deadline");
-      await assert.rejects(
-        client.call("process", "wait", [abandonedOutput.handle]),
-        /output streams did not close within 5000 milliseconds after process exit/u,
-      );
+      assert.deepEqual(await client.call("process", "wait", [abandonedOutput.handle]), {
+        result: null,
+        error: { name: "Error", message: "Process output streams did not close within 5000 milliseconds after process exit" },
+        retained: false,
+      });
       assert.doesNotThrow(() => process.kill(abandonedPid, 0));
       terminateProcessGroup(abandonedPid);
       escapedPid = null;
@@ -411,16 +445,26 @@ setInterval(() => {}, 1000);
       }
       escapedPid = Number(escapedPidText.trim());
       assert.equal(Number.isSafeInteger(escapedPid), true);
+      const escapedWait = client.call("process", "wait", [escaped.handle]) as Promise<{
+        result: { signal: string | null } | null;
+        error: { name: string; message: string } | null;
+        retained: boolean;
+      }>;
       const stopStartedAt = Date.now();
       await assert.rejects(
         client.call("process", "stop", [escaped.handle]),
         /termination could not be confirmed within 5000 milliseconds/u,
       );
+      assert.deepEqual(await escapedWait, {
+        result: null,
+        error: { name: "Error", message: "Process termination could not be confirmed within 5000 milliseconds" },
+        retained: true,
+      });
       assert.ok(Date.now() - stopStartedAt < 8_000, "Desktop Process.stop must reject within its owned confirmation deadline");
       assert.doesNotThrow(() => process.kill(escapedPid as number, 0));
       terminateProcessGroup(escapedPid);
-      const stopped = await client.call("process", "stop", [escaped.handle]) as { result: { signal: string | null } | null };
-      assert.notEqual(stopped.result?.signal ?? null, null);
+      const waited = await client.call("process", "wait", [escaped.handle]) as { result: { signal: string | null } | null };
+      assert.notEqual(waited.result?.signal ?? null, null);
       escapedPid = null;
     }
   } finally {

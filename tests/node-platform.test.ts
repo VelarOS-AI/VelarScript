@@ -10,11 +10,12 @@ import { StringDecoder } from "node:string_decoder";
 import { Readable, Writable } from "node:stream";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { MessagePort, Worker } from "node:worker_threads";
+import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
 import { standardModuleApi, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
 import { nodeModuleDependencies, nodeModuleSources } from "../packages/node/src/compiler.ts";
+import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 async function runtime<T>(
@@ -1403,6 +1404,32 @@ test("Node process and HTTP runtimes preserve secret, cancellation, timeout, and
     assert.throws(() => process.kill(descendantPid, 0), (error: unknown) => error instanceof Error && "code" in error && error.code === "ESRCH");
 
     if (process.platform !== "win32") {
+      const timeoutDirectory = await mkdtemp(join(tmpdir(), "velar-process-timeout-"));
+      try {
+        const pidFile = join(timeoutDirectory, "descendant.pid");
+        const timeoutStartedAt = Date.now();
+        await assert.rejects(processRuntime.run(process.execPath, ["-e", `
+const {spawn} = require("node:child_process");
+const {writeFileSync} = require("node:fs");
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  detached: true,
+  stdio: ["ignore", "inherit", "inherit"],
+});
+descendant.unref();
+writeFileSync(process.env.PID_FILE, String(descendant.pid));
+setInterval(() => {}, 1000);
+        `], { env: new Map([["PID_FILE", pidFile]]), timeout: 200 }), /timed out after 200 milliseconds/u);
+        assert.ok(Date.now() - timeoutStartedAt < 8_000, "Process.run timeout must converge through post-exit pipes");
+        escapedPid = Number(await readFile(pidFile, "utf8"));
+        assert.equal(Number.isSafeInteger(escapedPid), true);
+        assert.doesNotThrow(() => process.kill(escapedPid as number, 0));
+        try { process.kill(-(escapedPid as number), "SIGKILL"); }
+        catch { try { process.kill(escapedPid as number, "SIGKILL"); } catch {} }
+        escapedPid = null;
+      } finally {
+        await rm(timeoutDirectory, { recursive: true, force: true });
+      }
+
       const abandonedOutput = await processRuntime.start(process.execPath, ["-e", `
 const {spawn} = require("node:child_process");
 const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
@@ -1448,13 +1475,14 @@ setInterval(() => {}, 1000);
       const parsedEscapedPid = Number(escapedPidText.trim());
       assert.equal(Number.isSafeInteger(parsedEscapedPid), true);
       escapedPid = parsedEscapedPid;
+      const escapedWait = escaped.wait();
       const stopStartedAt = Date.now();
       await assert.rejects(escaped.stop(), /termination could not be confirmed within 5000 milliseconds/u);
+      await assert.rejects(escapedWait, /termination could not be confirmed within 5000 milliseconds/u);
       assert.ok(Date.now() - stopStartedAt < 8_000, "Process.stop must reject within its owned confirmation deadline");
       assert.doesNotThrow(() => process.kill(parsedEscapedPid, 0));
       try { process.kill(-parsedEscapedPid, "SIGKILL"); }
       catch { try { process.kill(parsedEscapedPid, "SIGKILL"); } catch {} }
-      await escaped.stop();
       assert.notEqual((await escaped.wait()).signal, null);
       escapedPid = null;
     }
@@ -1658,6 +1686,97 @@ setInterval(() => {}, 1000);
       new Promise<void>((resolve) => server.close(() => resolve())),
       new Promise<void>((resolve) => redirectTarget.close(() => resolve())),
     ]);
+  }
+});
+
+test("Node process wait retains a timed-out handle until termination is confirmed", async () => {
+  if (process.platform === "win32") return;
+  const delayedSignalSource = VELAR_NODE_PROCESS_WORKER_SOURCE.replace(
+    "function signalTree(child, signal) {\n  if (!child.pid) return;",
+    "let suppressedProcessSignals = 1;\nfunction signalTree(child, signal) {\n  if (suppressedProcessSignals > 0) { suppressedProcessSignals -= 1; return; }\n  if (!child.pid) return;",
+  );
+  assert.notEqual(delayedSignalSource, VELAR_NODE_PROCESS_WORKER_SOURCE);
+  const channel = new MessageChannel();
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  let nextId = 1;
+  let readyResolve: (() => void) | null = null;
+  let readyReject: ((error: Error) => void) | null = null;
+  const ready = new Promise<void>((resolveReady, rejectReady) => {
+    readyResolve = resolveReady;
+    readyReject = rejectReady;
+  });
+  const worker = new Worker(delayedSignalSource, {
+    eval: true,
+    workerData: channel.port2,
+    transferList: [channel.port2],
+  });
+  channel.port1.on("message", (message: {
+    kind?: unknown;
+    id?: unknown;
+    ok?: unknown;
+    value?: unknown;
+    error?: { message?: unknown };
+  }) => {
+    if (message.kind === "ready") {
+      readyResolve?.();
+      return;
+    }
+    if (message.kind !== "response" || !Number.isSafeInteger(message.id)) return;
+    const request = pending.get(message.id as number);
+    if (!request) return;
+    pending.delete(message.id as number);
+    if (message.ok === true) request.resolve(message.value);
+    else request.reject(new Error(typeof message.error?.message === "string" ? message.error.message : "Process worker request failed"));
+  });
+  worker.once("error", (error) => {
+    const failure = error instanceof Error ? error : new Error("Process worker failed");
+    readyReject?.(failure);
+    for (const request of pending.values()) request.reject(failure);
+    pending.clear();
+  });
+  const call = (operation: string, args: readonly unknown[]): Promise<unknown> => {
+    const id = nextId++;
+    return new Promise((resolveCall, rejectCall) => {
+      pending.set(id, { resolve: resolveCall, reject: rejectCall });
+      channel.port1.postMessage({ id, operation, args });
+    });
+  };
+  let childPid: number | null = null;
+  try {
+    await ready;
+    const started = await call("start", [process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: undefined,
+      env: {},
+      stdin: "",
+      timeout: 10,
+      maxOutputBytes: 65536,
+    }]) as { handle: number; pid: number };
+    childPid = started.pid;
+    const waitStartedAt = Date.now();
+    assert.deepEqual(await call("wait", [started.handle]), {
+      result: null,
+      error: { name: "Error", message: "Process termination could not be confirmed within 5000 milliseconds" },
+      retained: true,
+    });
+    assert.ok(Date.now() - waitStartedAt < 8_000, "Process.wait must bound an unconfirmed execution timeout");
+    assert.doesNotThrow(() => process.kill(childPid as number, 0));
+    const terminal = await call("wait", [started.handle]) as {
+      result: unknown;
+      error: { name: string; message: string } | null;
+      retained: boolean;
+    };
+    assert.equal(terminal.result, null);
+    assert.equal(terminal.error?.message, "Process timed out after 10 milliseconds");
+    assert.equal(terminal.retained, false);
+    assert.throws(() => process.kill(childPid as number, 0), (error: unknown) => error instanceof Error && "code" in error && error.code === "ESRCH");
+    childPid = null;
+  } finally {
+    if (childPid !== null) {
+      try { process.kill(-childPid, "SIGKILL"); }
+      catch { try { process.kill(childPid, "SIGKILL"); } catch {} }
+    }
+    channel.port1.close();
+    await worker.terminate();
   }
 });
 

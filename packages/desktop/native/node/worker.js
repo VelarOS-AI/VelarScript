@@ -14,6 +14,9 @@ const MAX_HTTP_REDIRECTS = 20;
 const MAX_PATH_UNITS = 4096;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
+const processTerminationMarker = Object.freeze({});
+const processRootExitMarker = Object.freeze({});
+const processStopMarker = Object.freeze({});
 const transportCharCodeAt = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt")?.value;
 const transportReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 const [configPath, appDataRoot, launchRoot] = process.argv.slice(2);
@@ -345,8 +348,21 @@ async function commitTextReplacement(path, data, mode) {
 }
 
 async function processRun(args) {
-  const task = await launchProcess(args);
-  return task.result;
+  const started = await processStart(args);
+  const outcome = await processWait([started.handle]);
+  if (outcome.retained) {
+    retainRunHandle(started.handle);
+    throw processError(outcome.error);
+  }
+  if (outcome.error) throw processError(outcome.error);
+  return outcome.result;
+}
+
+function retainRunHandle(handle) {
+  const retry = () => {
+    processStop([handle]).catch(() => { setTimeout(retry, 1000); });
+  };
+  setTimeout(retry, 0);
 }
 
 async function processStart(args) {
@@ -366,8 +382,11 @@ async function processWait(args) {
   if (!task) throw new Error("Desktop process handle is unknown or already released");
   if (task.reading) throw new Error("Process wait() cannot run while next() is pending");
   task.waitStarted = true;
-  try { return await task.result; }
-  finally { processHandles.delete(handle); }
+  if (task.waitRetained && !task.settled) signalTree(task.child, "SIGKILL");
+  const outcome = await waitForTask(task);
+  task.waitRetained = outcome.retained;
+  if (!outcome.retained) processHandles.delete(handle);
+  return outcome;
 }
 
 async function processRead(args) {
@@ -382,28 +401,10 @@ async function processStop(args) {
   const task = processHandles.get(handle);
   if (!task) return { result: null, error: null };
   task.stop();
-  let result = null;
-  let error = null;
-  let timer = null;
-  const confirmationFailure = new Error(`Process termination could not be confirmed within ${PROCESS_STOP_CONFIRMATION_TIMEOUT_MS} milliseconds`);
-  try {
-    result = await Promise.race([
-      task.result,
-      new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(confirmationFailure),
-          PROCESS_STOP_CONFIRMATION_TIMEOUT_MS,
-        );
-      }),
-    ]);
-  } catch (failure) {
-    if (failure === confirmationFailure) throw failure;
-    error = processErrorRecord(failure);
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
+  const outcome = await waitForTask(task);
+  if (outcome.retained) throw processError(outcome.error);
   processHandles.delete(handle);
-  return { result, error };
+  return { result: outcome.result, error: outcome.error };
 }
 
 function processErrorRecord(error) {
@@ -412,6 +413,61 @@ function processErrorRecord(error) {
   if (typeof message !== "string" || message.length === 0) message = "Desktop process failed";
   if (message.length > 65536) message = message.slice(0, 65536);
   return { name, message };
+}
+
+function processError(value) {
+  if (value.name === "TypeError") return new TypeError(value.message);
+  if (value.name === "RangeError") return new RangeError(value.message);
+  return new Error(value.message);
+}
+
+function terminalProcessOutcome(task) {
+  return task.result.then(
+    (result) => ({ result, error: null, retained: false }),
+    (failure) => ({ result: null, error: processErrorRecord(failure), retained: false }),
+  );
+}
+
+async function processConfirmationOutcome(terminal) {
+  let timer = null;
+  const confirmationFailure = new Error(`Process termination could not be confirmed within ${PROCESS_STOP_CONFIRMATION_TIMEOUT_MS} milliseconds`);
+  try {
+    return await Promise.race([
+      terminal,
+      new Promise((resolveOutcome) => {
+        timer = setTimeout(
+          () => resolveOutcome({ result: null, error: processErrorRecord(confirmationFailure), retained: true }),
+          PROCESS_STOP_CONFIRMATION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+async function waitForTask(task) {
+  const terminal = terminalProcessOutcome(task);
+  if (!task.terminationRequested) {
+    const first = await Promise.race([terminal, task.termination.then(() => processTerminationMarker)]);
+    if (first !== processTerminationMarker) return first;
+  }
+  if (task.rootExited && !task.stopping) {
+    const afterExit = await Promise.race([terminal, task.stopRequest.then(() => processStopMarker)]);
+    if (afterExit !== processStopMarker) return afterExit;
+    return await processConfirmationOutcome(terminal);
+  }
+  const confirmation = processConfirmationOutcome(terminal);
+  const first = await Promise.race([
+    terminal,
+    confirmation,
+    task.stopping ? new Promise(() => {}) : task.rootExit.then(() => processRootExitMarker),
+  ]);
+  if (first !== processRootExitMarker) return first;
+  if (task.stopping) return await confirmation;
+  const afterExit = await Promise.race([terminal, task.stopRequest.then(() => processStopMarker)]);
+  if (afterExit !== processStopMarker) return afterExit;
+  return await processConfirmationOutcome(terminal);
 }
 
 function processHandle(value) {
@@ -458,11 +514,22 @@ async function launchProcess(args) {
     detached: process.platform !== "win32",
     stdio: ["pipe", "pipe", "pipe"],
   });
+  let resolveTermination;
+  const termination = new Promise((resolveTerminationRequest) => { resolveTermination = resolveTerminationRequest; });
+  let resolveRootExit;
+  const rootExit = new Promise((resolveRootExitRequest) => { resolveRootExit = resolveRootExitRequest; });
+  let resolveStopRequest;
+  const stopRequest = new Promise((resolveStopRequestValue) => { resolveStopRequest = resolveStopRequestValue; });
   const task = {
     child,
     pid: child.pid ?? 0,
     settled: false,
     stopping: false,
+    terminationRequested: false,
+    termination,
+    rootExited: false,
+    rootExit,
+    stopRequest,
     stdout: [],
     stderr: [],
     bytes: 0,
@@ -471,12 +538,26 @@ async function launchProcess(args) {
     outputWaiter: null,
     reading: false,
     waitStarted: false,
+    waitRetained: false,
     stdoutDecoder: new StringDecoder("utf8"),
     stderrDecoder: new StringDecoder("utf8"),
     failure: null,
     timer: null,
     exitTimer: null,
     result: null,
+    terminate(failure, signal) {
+      if (failure && !task.failure) task.failure = failure;
+      if (!task.terminationRequested) {
+        task.terminationRequested = true;
+        resolveTermination();
+      }
+      if (task.outputWaiter) {
+        const waiter = task.outputWaiter;
+        task.outputWaiter = null;
+        waiter.reject(task.failure ?? new Error("Process output is unavailable after stop()"));
+      }
+      signalTree(child, signal);
+    },
     stop() {
       if (task.settled) return;
       if (task.stopping) {
@@ -484,16 +565,18 @@ async function launchProcess(args) {
         return;
       }
       task.stopping = true;
+      resolveStopRequest();
       if (task.exitTimer) {
         clearTimeout(task.exitTimer);
         task.exitTimer = null;
       }
-      signalTree(child, "SIGTERM");
+      task.terminate(null, "SIGTERM");
       setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();
     },
     async next() {
       if (task.waitStarted) throw new Error("Process output must be consumed before wait()");
       if (task.stopping) throw new Error("Process output is unavailable after stop()");
+      if (task.terminationRequested) throw task.failure ?? new Error("Process output is unavailable after termination");
       if (task.reading) throw new Error("Process.next() allows only one active pull");
       task.reading = true;
       try {
@@ -513,8 +596,7 @@ async function launchProcess(args) {
       if (text.length === 0 || task.failure) return;
       task.outputChunks += 1;
       if (task.outputChunks > 1000000) {
-        task.failure = new RangeError("Process output cannot exceed 1000000 chunks");
-        signalTree(child, "SIGKILL");
+        task.terminate(new RangeError("Process output cannot exceed 1000000 chunks"), "SIGKILL");
         return;
       }
       const value = Object.freeze({ channel, text });
@@ -528,8 +610,7 @@ async function launchProcess(args) {
       if (task.failure) return;
       task.bytes += chunk.byteLength;
       if (task.bytes > maxOutputBytes) {
-        task.failure = new RangeError("Process output exceeded maxOutputBytes");
-        signalTree(child, "SIGKILL");
+        task.terminate(new RangeError("Process output exceeded maxOutputBytes"), "SIGKILL");
         return;
       }
       const copy = Buffer.from(chunk);
@@ -538,8 +619,10 @@ async function launchProcess(args) {
     };
     child.stdout.on("data", (chunk) => collect(task.stdout, task.stdoutDecoder, "stdout", chunk));
     child.stderr.on("data", (chunk) => collect(task.stderr, task.stderrDecoder, "stderr", chunk));
-    child.once("error", (error) => { task.failure = error; });
+    child.once("error", (error) => { task.terminate(error, "SIGKILL"); });
     child.once("exit", () => {
+      task.rootExited = true;
+      resolveRootExit();
       if (!task.stopping) {
         signalTree(child, "SIGTERM");
         setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();
@@ -571,8 +654,7 @@ async function launchProcess(args) {
   });
   task.timer = timeout === 0 ? null : setTimeout(() => {
     if (task.settled) return;
-    task.failure = new Error(`Process timed out after ${timeout} milliseconds`);
-    signalTree(child, "SIGKILL");
+    task.terminate(new Error(`Process timed out after ${timeout} milliseconds`), "SIGKILL");
   }, timeout);
   child.stdin.end(stdin);
   return task;

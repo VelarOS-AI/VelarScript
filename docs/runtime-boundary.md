@@ -136,6 +136,20 @@ holds the pipes. This bounds `next()`/`wait()`/`run()` without pretending that
 an exact executable grant is an OS sandbox. Desktop transports terminal stop
 errors as the same validated result/error envelope as Node.
 
+`wait()` and `run()` preserve that ownership rule rather than treating every
+Promise rejection as a terminal child result. The private Node/Desktop host
+protocol returns a validated result/error/retained outcome: terminal outcomes
+release and remain idempotently cached, while unconfirmed termination retains
+the handle and clears only the rejected in-flight wait. Raw bridge rejection is
+also retryable because it cannot prove resource release. A wait following a
+retained outcome reissues forced termination. Concurrent waits
+coalesce, while a confirmed Stop outcome supersedes a stale concurrent wait
+cache before the handle is released. Since `run()` does not expose its temporary Process value, the shared
+runtime retains it after a non-terminal failure and retries stop confirmation
+in the background. Timeout and output-bound termination wake an already active
+wait and start their own five-second confirmation window, so missing
+`exit`/`close` cannot turn an execution deadline into an unbounded wait.
+
 ## Required feature decision record
 
 Every new public language, standard-module, Web, Node, Desktop, or JavaScript-bridge

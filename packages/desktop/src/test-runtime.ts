@@ -217,7 +217,7 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
     if (operation === "wait") {
       if (!process) throw new Error("Desktop test process handle is unknown or already released");
       processHandles.delete(handle);
-      return process.result;
+      return {result: process.result, error: null, retained: false};
     }
     if (operation === "stop") {
       processHandles.delete(handle);

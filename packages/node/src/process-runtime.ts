@@ -86,6 +86,11 @@ function __velarProcessResolve(value) {
 function __velarProcessThen(value, fulfilled, rejected) {
   return __velarProcessCall(__velarProcessPromiseThen, value, [fulfilled, rejected]);
 }
+function __velarProcessObservedReject(error) {
+  const result = __velarProcessReject(error);
+  __velarProcessThen(result, undefined, () => null);
+  return result;
+}
 async function __velarProcessRetryableStop(owner, begin) {
   owner.stopRequested = true;
   let pending = owner.stopping;
@@ -99,6 +104,19 @@ async function __velarProcessRetryableStop(owner, begin) {
     throw error;
   }
   return null;
+}
+function __velarProcessRetainRun(owner) {
+  if (owner.cleanup !== null) return;
+  const retry = async () => {
+    try {
+      await owner.stop();
+      owner.cleanup = null;
+    } catch {
+      owner.cleanup = __velarProcessCall(__velarProcessSetTimeout, globalThis, [retry, 1000]);
+    }
+  };
+  owner.cleanup = true;
+  void retry();
 }
 function __velarProcessEnvironmentName(value) {
   return typeof value === "string" && __velarProcessCall(__velarProcessRegExpTest, __velarProcessEnvironmentPattern, [value]);

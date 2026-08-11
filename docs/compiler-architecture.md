@@ -534,7 +534,17 @@ initialization therefore cannot change which case is selected.
   the handle registered, while the shared Node/Desktop Process wrapper clears
   only the rejected in-flight stop Promise and retries the same owner. A stop
   request still permanently closes incremental reads, so retryability cannot
-  reopen output consumption. Natural root exit has a separate bounded output
+  reopen output consumption. `wait()` crosses a private terminal/retained
+  outcome envelope: only a confirmed result or error releases and populates
+  the wrapper cache; an unconfirmed termination or bridge rejection clears the
+  in-flight Promise so the same owner can retry. A retry after a retained wait
+  reissues forced termination before its next confirmation window. Concurrent waits remain one
+  host request, and a confirmed Stop outcome supersedes a concurrently stale
+  wait cache before the host handle disappears. Because `run()` hides its temporary Process value, the shared
+  runtime retains that value after a non-terminal wait failure and retries
+  cleanup instead of orphaning the handle. Execution timeout and output-bound
+  termination also enter the five-second confirmation race even when the host
+  never emits `exit` or `close`. Natural root exit has a separate bounded output
   drain: the Worker terminates the original process group, escalates after two
   seconds, and closes its own stdout/stderr read ends with a terminal process
   error if inherited pipes remain open after five seconds. Explicit `stop()`
