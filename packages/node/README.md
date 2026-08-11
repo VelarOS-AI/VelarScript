@@ -65,6 +65,13 @@ Filesystem creation uses one explicit no-clobber primitive: `createText(path,
 text)` reaches an OS exclusive-create operation in this Worker. It is never an
 existence check followed by `writeText`, so a concurrent creator or symbolic
 link cannot be overwritten between two host calls.
+Optimistic edits use `replaceTextIfMatches(path, expected, replacement)`. The
+Worker coordinates file mutations for one canonical target, compares exact
+UTF-8 bytes, and commits matching content with a same-directory rename. It
+returns `false` on a detected mismatch. This is atomic against cooperating
+operations inside the runtime host and never exposes a partial replacement,
+but it deliberately does not claim to lock unrelated processes that bypass the
+API.
 `velar/serve` keeps request and response JSON on the compiler-owned strict JSON
 boundary; its public runtime types and response dispatcher inspect own data
 descriptors without invoking getters or collection overrides.

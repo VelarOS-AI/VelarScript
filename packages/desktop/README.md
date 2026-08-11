@@ -57,6 +57,11 @@ Desktop owns `velar/desktop` and permission-scoped target implementations of
 `velar/fs.createText` preserves Node's exclusive no-clobber contract inside the
 capability Worker; authorization and creation remain one bounded native effect
 rather than a renderer-side check followed by an overwriting write.
+`replaceTextIfMatches` carries the same optimistic edit contract: file
+mutations for one canonical target are coordinated inside the capability
+Worker and a matching replacement commits by same-directory rename. External
+processes outside the bridge are not silently described as participants in
+that lock.
 Desktop preserves the shared HTTP failure model across its native bridge:
 non-2xx, cancellation/timeout, and request/response transport failures remain
 distinct typed errors instead of collapsing Worker failures into one string.

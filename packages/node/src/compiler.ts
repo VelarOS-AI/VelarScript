@@ -273,6 +273,7 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["Blob", { kind: "classConstructor", name: "Blob", identity: blobIdentity }],
       ["readText", functionType(["path", "maxBytes"], [stringType, numberType], promise(stringType), 1)],
       ["createText", functionType(["path", "text"], [stringType, stringType], promise(nullType))],
+      ["replaceTextIfMatches", functionType(["path", "expected", "replacement"], [stringType, stringType, stringType], promise(boolType))],
       ["writeText", functionType(["path", "text"], [stringType, stringType], promise(nullType))],
       ["appendText", functionType(["path", "text"], [stringType, stringType], promise(nullType))],
       ["exists", functionType(["path"], [stringType], promise(boolType))],

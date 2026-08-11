@@ -108,6 +108,15 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
       file(path, args[1]);
       return null;
     }
+    if (operation === "replaceTextIfMatches") {
+      const path = authorized(args[0]);
+      const current = nodes.get(path);
+      if (!current || current.kind !== "file") throw new Error("replaceTextIfMatches requires a file path");
+      if (typeof args[1] !== "string" || typeof args[2] !== "string") throw new TypeError("replaceTextIfMatches requires text");
+      if (current.body !== args[1]) return false;
+      file(path, args[2]);
+      return true;
+    }
     if (operation === "writeText") { file(args[0], args[1]); return null; }
     if (operation === "appendText") {
       const path = authorized(args[0]);

@@ -6,7 +6,7 @@ import { Buffer } from "node:buffer";
 import { appendFile, copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, request as createHttpRequest } from "node:http";
 import { request as createHttpsRequest } from "node:https";
-import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { URL as NodeURL } from "node:url";
 import { workerData } from "node:worker_threads";
 
@@ -27,7 +27,7 @@ const maxHttpRequests = 1024;
 const maxServers = 128;
 const maxRequests = 4096;
 const operations = new Set([
-  "fs.readFile", "fs.createFile", "fs.writeFile", "fs.appendFile", "fs.exists", "fs.list", "fs.info",
+  "fs.readFile", "fs.createFile", "fs.replaceFileIfMatches", "fs.writeFile", "fs.appendFile", "fs.exists", "fs.list", "fs.info",
   "fs.canonical", "fs.makeDirectory", "fs.copyFile", "fs.move", "fs.removeFile",
   "http.request", "http.read", "http.cancel", "http.close",
   "serve.start", "serve.stop", "serve.body", "serve.respond", "serve.respondFile",
@@ -36,8 +36,10 @@ const operations = new Set([
 const servers = new Map();
 const requests = new Map();
 const httpRequests = new Map();
+const fileMutationTails = new Map();
 let nextServerHandle = 1;
 let nextRequestHandle = 1;
+let nextTextReplacementIdentity = 1;
 let reservedServeBytes = 0;
 const contentTypes = Object.freeze({
   ".css": "text/css; charset=utf-8", ".gif": "image/gif", ".html": "text/html; charset=utf-8",
@@ -93,7 +95,7 @@ function releaseTransientServeBytes(bytes) {
 }
 
 function cleanupRequest(task) {
-  if (!task.transportDone || task.activeOperations !== 0 || !requests.delete(task.handle)) return;
+  if (!task.transportDone || !task.completed && !task.abandoned || task.activeOperations !== 0 || !requests.delete(task.handle)) return;
   releaseServeBytes(task);
 }
 
@@ -157,6 +159,63 @@ async function absent(path, operation) {
   try { await lstat(path); }
   catch (error) { if (missing(error)) return; throw error; }
   throw new Error(operation + " target already exists");
+}
+
+function equalBytes(left, right) {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+async function fileMutationIdentities(paths) {
+  const identities = new Set();
+  for (const path of paths) {
+    const lexical = resolve(path);
+    identities.add(lexical);
+    try { identities.add(await realpath(lexical)); }
+    catch (error) { if (!missing(error)) throw error; }
+  }
+  return [...identities].sort();
+}
+
+async function withFileMutations(paths, action) {
+  const identities = await fileMutationIdentities(paths);
+  const reservations = identities.map(identity => {
+    const previous = fileMutationTails.get(identity) ?? null;
+    let release;
+    const tail = new Promise(resolveTail => { release = resolveTail; });
+    fileMutationTails.set(identity, tail);
+    return {identity, previous, release, tail};
+  });
+  await Promise.all(reservations.map(reservation => reservation.previous));
+  try { return await action(); }
+  finally {
+    for (const reservation of reservations) {
+      reservation.release();
+      if (fileMutationTails.get(reservation.identity) === reservation.tail) fileMutationTails.delete(reservation.identity);
+    }
+  }
+}
+
+async function commitTextReplacement(path, data, mode) {
+  let temporary = null;
+  for (let attempts = 0; attempts < 1024; attempts += 1) {
+    const identity = nextTextReplacementIdentity;
+    nextTextReplacementIdentity = nextTextReplacementIdentity >= Number.MAX_SAFE_INTEGER ? 1 : nextTextReplacementIdentity + 1;
+    const candidate = resolve(dirname(path), ".velar-replace-" + identity + ".tmp");
+    try {
+      await writeFile(candidate, data, {flag: "wx", mode});
+      temporary = candidate;
+      break;
+    } catch (error) {
+      if (!error || typeof error !== "object" || error.code !== "EEXIST") throw error;
+    }
+  }
+  if (temporary === null) throw new Error("replaceTextIfMatches could not allocate a temporary file");
+  try { await rename(temporary, path); }
+  finally { await rm(temporary, {force: true, recursive: false}); }
 }
 
 function integer(value, minimum, maximum, name) {
@@ -416,7 +475,12 @@ function boundedHost(value) {
 function requestHandle(value) {
   const handle = integer(value, 1, Number.MAX_SAFE_INTEGER, "Node serve request handle");
   const request = requests.get(handle);
-  if (!request || request.completed || request.transportDone) throw new Error("Node serve request is unknown or already completed");
+  if (!request || request.completed) throw new Error("Node serve request is unknown or already completed");
+  if (request.transportDone) {
+    request.abandoned = true;
+    cleanupRequest(request);
+    throw new Error("Node serve client connection is closed");
+  }
   return request;
 }
 
@@ -559,7 +623,7 @@ function incomingRequest(server, request, response) {
   nextRequestHandle = advanceHandle(handle);
   const task = {
     handle, server: server.handle, request, response, body: null, streamBytes: 0, streaming: false,
-    reservedBytes: 0, completed: false, transportDone: false, activeOperations: 0,
+    reservedBytes: 0, completed: false, abandoned: false, transportDone: false, activeOperations: 0,
   };
   requests.set(handle, task);
   response.once("finish", () => closeRequest(task));
@@ -634,28 +698,49 @@ async function dispatch(operation, args) {
     if (args.length !== 2) throw new TypeError("fs.createFile arguments are invalid");
     const path = boundedPath(args[0], "createText");
     const data = byteArray(args[1], "createText");
-    try { await writeFile(path, data, {flag: "wx"}); }
-    catch (error) {
-      if (error && typeof error === "object" && error.code === "EEXIST") throw new Error("createText target already exists");
-      throw error;
-    }
-    return null;
+    return withFileMutations([path], async () => {
+      try { await writeFile(path, data, {flag: "wx"}); }
+      catch (error) {
+        if (error && typeof error === "object" && error.code === "EEXIST") throw new Error("createText target already exists");
+        throw error;
+      }
+      return null;
+    });
+  }
+  if (operation === "fs.replaceFileIfMatches") {
+    if (args.length !== 3) throw new TypeError("fs.replaceFileIfMatches arguments are invalid");
+    const requestedPath = boundedPath(args[0], "replaceTextIfMatches");
+    const expected = byteArray(args[1], "replaceTextIfMatches expected text");
+    const replacement = byteArray(args[2], "replaceTextIfMatches replacement text");
+    return withFileMutations([requestedPath], async () => {
+      const path = await realpath(requestedPath);
+      const metadata = await stat(path);
+      if (!metadata.isFile()) throw new TypeError("replaceTextIfMatches requires a file path");
+      if (metadata.size > maxFileBytes) throw new RangeError("replaceTextIfMatches file exceeds 16 MiB");
+      const current = await readFile(path);
+      if (current.byteLength > maxFileBytes) throw new RangeError("replaceTextIfMatches file exceeds 16 MiB");
+      if (!equalBytes(current, expected)) return false;
+      await commitTextReplacement(path, replacement, metadata.mode);
+      return true;
+    });
   }
   if (operation === "fs.writeFile" || operation === "fs.appendFile") {
     if (args.length !== 2) throw new TypeError(operation + " arguments are invalid");
     const name = operation === "fs.writeFile" ? "writeText" : "appendText";
     const path = boundedPath(args[0], name);
     const data = byteArray(args[1], name);
-    let metadata = null;
-    try { metadata = await stat(path); }
-    catch (error) { if (!missing(error)) throw error; }
-    if (metadata && !metadata.isFile()) throw new TypeError(name + " requires a file path");
-    if (operation === "fs.appendFile" && metadata && metadata.size > maxFileBytes - data.byteLength) {
-      throw new RangeError("appendText result cannot exceed 16 MiB");
-    }
-    if (operation === "fs.writeFile") await writeFile(path, data);
-    else await appendFile(path, data);
-    return null;
+    return withFileMutations([path], async () => {
+      let metadata = null;
+      try { metadata = await stat(path); }
+      catch (error) { if (!missing(error)) throw error; }
+      if (metadata && !metadata.isFile()) throw new TypeError(name + " requires a file path");
+      if (operation === "fs.appendFile" && metadata && metadata.size > maxFileBytes - data.byteLength) {
+        throw new RangeError("appendText result cannot exceed 16 MiB");
+      }
+      if (operation === "fs.writeFile") await writeFile(path, data);
+      else await appendFile(path, data);
+      return null;
+    });
   }
   if (operation === "fs.exists") {
     if (args.length !== 1) throw new TypeError("fs.exists arguments are invalid");
@@ -704,26 +789,32 @@ async function dispatch(operation, args) {
     const target = boundedPath(args[1], "copyFile");
     const replace = boolean(args[2], "copyFile");
     if (!(await stat(source)).isFile()) throw new TypeError("copyFile requires a regular file source");
-    if (!replace) await absent(target, "copyFile");
-    await copyFile(source, target);
-    return null;
+    return withFileMutations([target], async () => {
+      if (!replace) await absent(target, "copyFile");
+      await copyFile(source, target);
+      return null;
+    });
   }
   if (operation === "fs.move") {
     if (args.length !== 3) throw new TypeError("fs.move arguments are invalid");
     const source = boundedPath(args[0], "move");
     const target = boundedPath(args[1], "move");
     const replace = boolean(args[2], "move");
-    if (!replace) await absent(target, "move");
-    else await rm(target, {force: true, recursive: false});
-    await rename(source, target);
-    return null;
+    return withFileMutations([source, target], async () => {
+      if (!replace) await absent(target, "move");
+      else await rm(target, {force: true, recursive: false});
+      await rename(source, target);
+      return null;
+    });
   }
   if (operation === "fs.removeFile") {
     if (args.length !== 1) throw new TypeError("fs.removeFile arguments are invalid");
     const path = boundedPath(args[0], "removeFile");
-    if ((await lstat(path)).isDirectory()) throw new TypeError("removeFile refuses directories");
-    await rm(path, {force: false, recursive: false});
-    return null;
+    return withFileMutations([path], async () => {
+      if ((await lstat(path)).isDirectory()) throw new TypeError("removeFile refuses directories");
+      await rm(path, {force: false, recursive: false});
+      return null;
+    });
   }
   if (operation === "serve.start") return startServer(args);
   if (operation === "serve.stop") return stopServer(args);

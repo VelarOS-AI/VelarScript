@@ -76,6 +76,7 @@ test("Node path, filesystem, process, terminal, and HTTP modules expose typed Co
   assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "http", "secretHeader"]);
   assert.ok(api.modules["velar/fs"]?.includes("appendText"));
   assert.ok(api.modules["velar/fs"]?.includes("createText"));
+  assert.ok(api.modules["velar/fs"]?.includes("replaceTextIfMatches"));
   assert.ok(api.modules["velar/fs"]?.includes("removeFile"));
 
   const webApi = standardModuleApi([velarCompilerExtension]);
@@ -87,7 +88,7 @@ test("Node path, filesystem, process, terminal, and HTTP modules expose typed Co
   try {
     const entry = join(directory, "main.vel");
     await writeFile(entry, `
-import {appendText, canonical, copyFile, createText, info, makeDirectory, move, removeFile} from "velar/fs"
+import {appendText, canonical, copyFile, createText, info, makeDirectory, move, removeFile, replaceTextIfMatches} from "velar/fs"
 import {basename, contains, extension, join, resolve} from "velar/path"
 import {Process, ProcessOutputChannel, run, start} from "velar/process"
 import {terminal} from "velar/terminal"
@@ -978,6 +979,7 @@ test("Node filesystem and path runtimes keep destructive operations bounded and 
     makeDirectory(path: string): Promise<null>;
     move(source: string, target: string, replace?: boolean): Promise<null>;
     readText(path: string, maxBytes?: number): Promise<string>;
+    replaceTextIfMatches(path: string, expected: string, replacement: string): Promise<boolean>;
     removeFile(path: string): Promise<null>;
     writeText(path: string, text: string): Promise<null>;
   }>("velar/fs");
@@ -1002,6 +1004,35 @@ test("Node filesystem and path runtimes keep destructive operations bounded and 
     assert.equal(competingCreates.filter((item) => item.status === "rejected").length, 1);
     assert.match(String((competingCreates.find((item) => item.status === "rejected") as PromiseRejectedResult).reason), /createText target already exists/u);
     assert.ok(["first", "second"].includes(await fs.readText(exclusive)));
+    const optimistic = path.join([nested, "optimistic.txt"]);
+    await fs.writeText(optimistic, "base");
+    const competingReplacements = await Promise.all([
+      fs.replaceTextIfMatches(optimistic, "base", "first"),
+      fs.replaceTextIfMatches(optimistic, "base", "second"),
+    ]);
+    assert.deepEqual([...competingReplacements].sort(), [false, true]);
+    assert.ok(["first", "second"].includes(await fs.readText(optimistic)));
+    assert.equal(await fs.replaceTextIfMatches(optimistic, "stale", "lost"), false);
+    for (let iteration = 0; iteration < 16; iteration += 1) {
+      await fs.writeText(optimistic, "base");
+      await Promise.all([
+        fs.replaceTextIfMatches(optimistic, "base", "replacement"),
+        fs.writeText(optimistic, "writer"),
+      ]);
+      assert.equal(await fs.readText(optimistic), "writer");
+    }
+    await fs.writeText(optimistic, "base");
+    const [replaceBeforeAppend] = await Promise.all([
+      fs.replaceTextIfMatches(optimistic, "base", "replacement"),
+      fs.appendText(optimistic, "!"),
+    ]);
+    assert.equal(await fs.readText(optimistic), replaceBeforeAppend ? "replacement!" : "base!");
+    await fs.writeText(optimistic, "base");
+    await Promise.allSettled([
+      fs.replaceTextIfMatches(optimistic, "base", "replacement"),
+      fs.removeFile(optimistic),
+    ]);
+    assert.equal(await fs.info(optimistic), null);
     await assert.rejects(fs.writeText(nested, "not-a-file"), /requires a file path/u);
     await assert.rejects(fs.appendText(nested, "not-a-file"), /requires a file path/u);
     await assert.rejects(fs.copyFile(nested, path.join([directory, "directory-copy"])), /regular file source/u);

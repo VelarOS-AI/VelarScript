@@ -515,6 +515,7 @@ for (const phrase of [
   "function __velarFsBytes(value, operation)",
   'await __velarNodeHostInvoke("fs.readFile"',
   'await __velarNodeHostInvoke("fs.createFile"',
+  'await __velarNodeHostInvoke("fs.replaceFileIfMatches"',
 ]) {
   if (!nodeFilesystemRuntimeSource.includes(phrase)) {
     failures.push(`packages/node/src/filesystem-runtime.ts: captured filesystem ABI is missing '${phrase}'`);
@@ -542,8 +543,11 @@ for (const phrase of [
 for (const phrase of [
   'from "node:fs/promises"',
   'from "node:worker_threads"',
-  '"fs.readFile", "fs.createFile", "fs.writeFile", "fs.appendFile"',
+  '"fs.readFile", "fs.createFile", "fs.replaceFileIfMatches", "fs.writeFile", "fs.appendFile"',
   'await writeFile(path, data, {flag: "wx"})',
+  "async function fileMutationIdentities(paths)",
+  "async function withFileMutations(paths, action)",
+  "async function commitTextReplacement(path, data, mode)",
   '"serve.start", "serve.stop", "serve.body", "serve.respond", "serve.respondFile"',
   '"serve.streamStart", "serve.streamWrite", "serve.streamEnd", "serve.fail"',
   "function allocateHandle(values, next, maximum, name)",
@@ -551,7 +555,8 @@ for (const phrase of [
   "const maxServeAggregateBytes = 128 * 1024 * 1024",
   "function reserveServeBytes(task, bytes)",
   "function reserveTransientServeBytes(bytes)",
-  "task.transportDone || task.activeOperations !== 0",
+  "!task.completed && !task.abandoned",
+  'throw new Error("Node serve client connection is closed")',
   "async function withRequest(task, action)",
   "async function dispatch(operation, args)",
   'port.postMessage({kind: "ready"})',

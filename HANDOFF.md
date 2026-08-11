@@ -1991,11 +1991,43 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   相比 W-112 只增加 476 bytes。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数
   返回值推断相关的既有 5 文件变化；未提交、未推送、未发布。
 
+- W-114 继续用 Lite 的真实 `lite:replace` 工具审计文件更新语义。旧实现先 `readText`，在产品层比较
+  expected，再调用覆盖式 `writeText`；两个 Agent turn、普通写入或删除可以在比较与写入之间插入，
+  造成无提示 lost update。产品重复检查无法把两个 host effect 变成一个事务，因此没有在 Lite 增加
+  锁文件、版本文件或重试猜测。
+
+  `velar/fs` 现在跨 Node、Desktop renderer/capability Worker 与 deterministic Desktop test host 公开
+  `replaceTextIfMatches(path, expected, replacement) -> Promise<bool>`。它比较精确、受 16 MiB 限制的
+  UTF-8 bytes；不匹配返回 `false` 且不写入，匹配内容先写入同目录 `wx` 临时文件，再用 rename 作为
+  一个完整目录项提交。一个宿主内所有会影响相同 lexical/canonical file identity 的 create、write、
+  append、copy target、move source/target、remove 与 guarded replace 共用 mutation queue，所以产品
+  自己的普通文件操作不会穿过 compare/commit 边界。Node 标准层没有跨平台文件 CAS/lock，契约因此
+  明确不声称能锁住绕开 API 的外部进程；需要跨进程协调的应用仍必须拥有 repository transaction 或
+  共享锁。Lite 只消费公开 API，冲突时返回稳定的 concurrent-file-change 工具错误。
+
+  全量门禁同时抓到一个既有 `velar/serve` 终止态竞态：backpressured stream 的客户端若恰好在两次
+  `streamWrite` 之间断开，Worker 会先删除 request，下一次写得到 “unknown or already completed”，
+  丢失真正的 client-closed 原因。现在 transport close 在应用仍可能继续工作时保留受 4,096 request
+  ceiling 限制的任务；下一次 host operation 稳定报告 client connection closed，标记 abandoned 并经
+  唯一 cleanup gate 释放 bytes/handle。真实断连回归连续运行 20 次均通过，随后完整套件也通过。
+
+  当前最终组合证据为 `npm run check`（51 个格式化源、98 个文档示例、61 项 runtime boundary）、
+  548/548 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对本轮
+  rehearsal 六包的安装态验收，以及完整 dev/production/external-preview、27+6+15+6 三浏览器与
+  installed browser project，全部 exit 0。Lite 四项目 check、32 shared + 31 server tests、package
+  acceptance、17/17 Chromium、51/51 Desktop 三浏览器与 CLI/Desktop production build 也全部通过。
+  薄包为 785,037 bytes（766.6 KiB）：host 235,904、renderer 510,719、capability host 37,021、metadata
+  1,393，外置 Node.js >=24，SHA-256 为
+  `fd933a895cc3ccaf97986f9711c4ea8b37ac0c61db10d73086658487b607c046`；相比 W-113 增加 3,201
+  bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值
+  推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-113 的完整 compiler/runtime、六包安装/rehearsal、Workbench 安装态、三引擎 Web 与
-   独立 Lite 全门禁均已取得当前代码的明确 exit 0。下一波继续审计安全原子 replace、provider
-   多轮恢复和工具长期运行；provider policy 继续由 Lite 组合
+1. W-114 的完整 compiler/runtime、六包安装/rehearsal、Workbench 安装态、三引擎 Web 与
+   独立 Lite 全门禁均已取得当前代码的明确 exit 0。下一波继续审计 provider 多轮恢复、多个工具
+   call 的顺序/部分失败和工具长期运行；provider policy 继续由 Lite 组合
    `velar/async` 与 typed HTTP failures，不塞进通用 HTTP 包，也不重复证明已经封闭的 Node host
    ownership、cancel 与 aggregate quota。
 2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；

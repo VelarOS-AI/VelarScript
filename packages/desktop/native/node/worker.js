@@ -25,6 +25,8 @@ const allowedSecrets = new Set(config.permissions.secrets ?? []);
 const processHandles = new Map();
 let nextProcessHandle = 1;
 const httpHandles = new Map();
+const fileMutationTails = new Map();
+let nextTextReplacementIdentity = 1;
 const roots = [];
 const lexicalRoots = [];
 let projectRoot = null;
@@ -125,47 +127,72 @@ async function fsOperation(operation, args) {
   if (operation === "createText") {
     const path = await authorizedTarget(args[0]);
     const text = textValue(args[1], "createText text", MAX_FILE_BYTES);
-    try { await writeFile(path, text, {encoding: "utf8", flag: "wx"}); }
-    catch (error) {
-      if (error?.code === "EEXIST") throw new Error("createText target already exists");
-      throw error;
-    }
-    return null;
+    return withFileMutations([path], async () => {
+      try { await writeFile(path, text, {encoding: "utf8", flag: "wx"}); }
+      catch (error) {
+        if (error?.code === "EEXIST") throw new Error("createText target already exists");
+        throw error;
+      }
+      return null;
+    });
+  }
+  if (operation === "replaceTextIfMatches") {
+    const path = await authorizedExisting(args[0]);
+    const expected = Buffer.from(textValue(args[1], "replaceTextIfMatches expected text", MAX_FILE_BYTES), "utf8");
+    const replacement = Buffer.from(textValue(args[2], "replaceTextIfMatches replacement text", MAX_FILE_BYTES), "utf8");
+    return withFileMutations([path], async () => {
+      const metadata = await stat(path);
+      if (!metadata.isFile()) throw new TypeError("replaceTextIfMatches requires a file path");
+      if (metadata.size > MAX_FILE_BYTES) throw new RangeError("replaceTextIfMatches file exceeds 16 MiB");
+      const current = await readFile(path);
+      if (current.byteLength > MAX_FILE_BYTES) throw new RangeError("replaceTextIfMatches file exceeds 16 MiB");
+      if (!current.equals(expected)) return false;
+      await commitTextReplacement(path, replacement, metadata.mode);
+      return true;
+    });
   }
   if (operation === "writeText" || operation === "appendText") {
     const path = await authorizedTarget(args[0]);
     const text = textValue(args[1], `${operation} text`, MAX_FILE_BYTES);
-    const existing = await stat(path).catch((error) => error?.code === "ENOENT" ? null : Promise.reject(error));
-    if (existing && !existing.isFile()) throw new TypeError(`${operation} requires a file path`);
-    if (operation === "writeText") await writeFile(path, text, "utf8");
-    else {
-      if (existing && existing.size + Buffer.byteLength(text, "utf8") > MAX_FILE_BYTES) throw new RangeError("appendText result cannot exceed 16 MiB");
-      await appendFile(path, text, "utf8");
-    }
-    return null;
+    return withFileMutations([path], async () => {
+      const existing = await stat(path).catch((error) => error?.code === "ENOENT" ? null : Promise.reject(error));
+      if (existing && !existing.isFile()) throw new TypeError(`${operation} requires a file path`);
+      if (operation === "writeText") await writeFile(path, text, "utf8");
+      else {
+        if (existing && existing.size + Buffer.byteLength(text, "utf8") > MAX_FILE_BYTES) throw new RangeError("appendText result cannot exceed 16 MiB");
+        await appendFile(path, text, "utf8");
+      }
+      return null;
+    });
   }
   if (operation === "copyFile") {
     const source = await authorizedExisting(args[0]);
     if (!(await stat(source)).isFile()) throw new TypeError("copyFile requires a regular file source");
     const target = await authorizedTarget(args[1]);
-    if (args[2] !== true) await absent(target, "copyFile");
-    await copyNodeFile(source, target);
-    return null;
+    return withFileMutations([target], async () => {
+      if (args[2] !== true) await absent(target, "copyFile");
+      await copyNodeFile(source, target);
+      return null;
+    });
   }
   if (operation === "move") {
     const source = await authorizedEntry(args[0]);
     if (roots.includes(source)) throw new Error("move refuses a granted Desktop file root");
     const target = await authorizedEntry(args[1], true);
-    if (args[2] !== true) await absent(target, "move");
-    else await rm(target, { force: true, recursive: false });
-    await rename(source, target);
-    return null;
+    return withFileMutations([source, target], async () => {
+      if (args[2] !== true) await absent(target, "move");
+      else await rm(target, { force: true, recursive: false });
+      await rename(source, target);
+      return null;
+    });
   }
   if (operation === "removeFile") {
     const path = await authorizedEntry(args[0]);
-    if ((await lstat(path)).isDirectory()) throw new TypeError("removeFile refuses directories");
-    await rm(path, { recursive: false, force: false });
-    return null;
+    return withFileMutations([path], async () => {
+      if ((await lstat(path)).isDirectory()) throw new TypeError("removeFile refuses directories");
+      await rm(path, { recursive: false, force: false });
+      return null;
+    });
   }
   throw new Error(`Unknown filesystem operation '${operation}'`);
 }
@@ -275,6 +302,44 @@ async function absent(path, operation) {
   try { await lstat(path); }
   catch (error) { if (error?.code === "ENOENT") return; throw error; }
   throw new Error(`${operation} target already exists`);
+}
+
+async function withFileMutations(paths, action) {
+  const identities = [...new Set(paths.map(path => resolve(path)))].sort();
+  const reservations = identities.map(identity => {
+    const previous = fileMutationTails.get(identity) ?? null;
+    let release;
+    const tail = new Promise(resolveTail => { release = resolveTail; });
+    fileMutationTails.set(identity, tail);
+    return {identity, previous, release, tail};
+  });
+  await Promise.all(reservations.map(reservation => reservation.previous));
+  try { return await action(); }
+  finally {
+    for (const reservation of reservations) {
+      reservation.release();
+      if (fileMutationTails.get(reservation.identity) === reservation.tail) fileMutationTails.delete(reservation.identity);
+    }
+  }
+}
+
+async function commitTextReplacement(path, data, mode) {
+  let temporary = null;
+  for (let attempts = 0; attempts < 1024; attempts += 1) {
+    const identity = nextTextReplacementIdentity;
+    nextTextReplacementIdentity = nextTextReplacementIdentity >= Number.MAX_SAFE_INTEGER ? 1 : nextTextReplacementIdentity + 1;
+    const candidate = resolve(dirname(path), `.velar-replace-${identity}.tmp`);
+    try {
+      await writeFile(candidate, data, {flag: "wx", mode});
+      temporary = candidate;
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  }
+  if (temporary === null) throw new Error("replaceTextIfMatches could not allocate a temporary file");
+  try { await rename(temporary, path); }
+  finally { await rm(temporary, {force: true, recursive: false}); }
 }
 
 async function processRun(args) {

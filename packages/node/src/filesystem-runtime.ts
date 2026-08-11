@@ -138,6 +138,17 @@ export async function createText(path, text) {
   return __velarFsNull(await __velarNodeHostInvoke("fs.createFile", [path, __velarFsEncode(text)]), "createText");
 }
 
+export async function replaceTextIfMatches(path, expected, replacement) {
+  path = __velarFsPath(path, "replaceTextIfMatches");
+  if (typeof expected !== "string" || typeof replacement !== "string") throw new __velarFsNativeTypeError("replaceTextIfMatches requires expected and replacement text");
+  if (__velarUtf8ByteLength(expected) > __velarFsMaxFileBytes || __velarUtf8ByteLength(replacement) > __velarFsMaxFileBytes) {
+    throw new __velarFsNativeRangeError("replaceTextIfMatches text cannot exceed 16 MiB");
+  }
+  const value = await __velarNodeHostInvoke("fs.replaceFileIfMatches", [path, __velarFsEncode(expected), __velarFsEncode(replacement)]);
+  if (typeof value !== "boolean") throw new __velarFsNativeTypeError("replaceTextIfMatches host returned an invalid result");
+  return value;
+}
+
 export async function writeText(path, text) {
   path = __velarFsPath(path, "writeText");
   if (typeof text !== "string") throw new __velarFsNativeTypeError("writeText requires text");

@@ -631,6 +631,7 @@ fallback goes through the identical containment and size checks.
 | --- | --- |
 | `readText(path, maxBytes=16777216)` | Reads one valid UTF-8 regular file under an explicit byte budget. |
 | `createText(path, text)` | Atomically creates one new UTF-8 file and refuses every existing entry, including symbolic links. |
+| `replaceTextIfMatches(path, expected, replacement)` | Replaces a matching UTF-8 file as one complete directory-entry commit and reports a detected conflict as `false`. |
 | `writeText(path, text)` | Writes at most 16 MiB of UTF-8 text. |
 | `appendText(path, text)` | Appends at most 16 MiB of UTF-8 text. |
 | `exists(path)` | Resolves to `false` only for a missing path; permission and host failures remain errors. |
@@ -651,6 +652,15 @@ other check-then-create workflows. Its exclusive-create decision and file
 creation are one host operation; callers must not emulate it with
 `exists`/`info` followed by `writeText`, because another actor can occupy the
 entry between those calls.
+`replaceTextIfMatches` is the optimistic edit primitive. File mutations that
+address the same canonical target through one runtime host participate in one
+coordination queue. After an exact byte match, a same-directory temporary file
+is renamed over the target so readers observe the old or new complete contents,
+never a partial replacement. A mismatch returns `false` without writing. This
+contract does not pretend to be a portable operating-system CAS: an unrelated
+process that bypasses this API can still write between comparison and rename,
+and applications that coordinate such processes need their own shared lock or
+repository transaction.
 Node initializes the module's path, number, UTF-8 encoder/decoder, typed-byte,
 Promise, reflection, and immutable-result operations once. It validates and
 assembles only Velar values in the application Realm, then delegates filesystem

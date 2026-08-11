@@ -49,6 +49,34 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     assert.equal(competingCreates.filter((item) => item.status === "rejected").length, 1);
     assert.match(String((competingCreates.find((item) => item.status === "rejected") as PromiseRejectedResult).reason), /createText target already exists/u);
     assert.ok(["first", "second"].includes(await client.call("fs", "readText", ["exclusive.txt", 1024]) as string));
+    assert.equal(await client.call("fs", "writeText", ["optimistic.txt", "base"]), null);
+    const competingReplacements = await Promise.all([
+      client.call("fs", "replaceTextIfMatches", ["optimistic.txt", "base", "first"]),
+      client.call("fs", "replaceTextIfMatches", ["optimistic.txt", "base", "second"]),
+    ]);
+    assert.deepEqual([...competingReplacements].sort(), [false, true]);
+    assert.ok(["first", "second"].includes(await client.call("fs", "readText", ["optimistic.txt", 1024]) as string));
+    assert.equal(await client.call("fs", "replaceTextIfMatches", ["optimistic.txt", "stale", "lost"]), false);
+    for (let iteration = 0; iteration < 16; iteration += 1) {
+      await client.call("fs", "writeText", ["optimistic.txt", "base"]);
+      await Promise.all([
+        client.call("fs", "replaceTextIfMatches", ["optimistic.txt", "base", "replacement"]),
+        client.call("fs", "writeText", ["optimistic.txt", "writer"]),
+      ]);
+      assert.equal(await client.call("fs", "readText", ["optimistic.txt", 1024]), "writer");
+    }
+    await client.call("fs", "writeText", ["optimistic.txt", "base"]);
+    const [replaceBeforeAppend] = await Promise.all([
+      client.call("fs", "replaceTextIfMatches", ["optimistic.txt", "base", "replacement"]),
+      client.call("fs", "appendText", ["optimistic.txt", "!"]),
+    ]);
+    assert.equal(await client.call("fs", "readText", ["optimistic.txt", 1024]), replaceBeforeAppend ? "replacement!" : "base!");
+    await client.call("fs", "writeText", ["optimistic.txt", "base"]);
+    await Promise.allSettled([
+      client.call("fs", "replaceTextIfMatches", ["optimistic.txt", "base", "replacement"]),
+      client.call("fs", "removeFile", ["optimistic.txt"]),
+    ]);
+    assert.equal(await client.call("fs", "info", ["optimistic.txt"]), null);
     assert.equal(await client.call("fs", "writeText", ["note.txt", "Velar"]), null);
     assert.equal(await client.call("fs", "readText", ["note.txt", 1024]), "Velar");
     assert.deepEqual(await client.call("fs", "list", [".", 10]), ["exclusive.txt", "note.txt"]);

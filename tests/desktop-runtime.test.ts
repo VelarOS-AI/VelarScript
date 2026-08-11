@@ -94,6 +94,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       if (capability === "fs") {
         const path = args[0];
         if (operation === "readText") return path === "oversized.txt" ? "too large" : "value";
+        if (operation === "replaceTextIfMatches") return path === "invalid-replace" ? "yes" : true;
         if (operation === "exists") return path === "invalid-exists" ? "yes" : true;
         if (operation === "list") {
           if (path === "hostile-list") {
@@ -332,6 +333,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       Blob: new (...args: unknown[]) => unknown;
       readText(path: string, maxBytes?: number): Promise<string>;
       createText(path: string, text: string): Promise<null>;
+      replaceTextIfMatches(path: string, expected: string, replacement: string): Promise<boolean>;
       writeText(path: string, text: string): Promise<null>;
       exists(path: string): Promise<boolean>;
       list(path: string, maxItems?: number): Promise<string[]>;
@@ -341,6 +343,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     }>(directory, "fs", "velar/fs");
     assert.equal(await fsRuntime.readText("note.txt", 16), "value");
     assert.equal(await fsRuntime.createText("created.txt", "value"), null);
+    assert.equal(await fsRuntime.replaceTextIfMatches("note.txt", "value", "next"), true);
+    await assert.rejects(fsRuntime.replaceTextIfMatches("invalid-replace", "value", "next"), /invalid replaceTextIfMatches result/u);
     await assert.rejects(fsRuntime.readText("oversized.txt", 4), /exceeds maxBytes/u);
     const fsCallsBeforeValidation = calls.filter((call) => call.capability === "fs").length;
     await assert.rejects(fsRuntime.readText("", 16), /non-empty path/u);
@@ -779,6 +783,8 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
   assert.equal(await bridge.invoke("fs", "makeDirectory", ["nested/one/two"]), null);
   assert.equal(await bridge.invoke("fs", "createText", ["exclusive.txt", "first"]), null);
   await assert.rejects(bridge.invoke("fs", "createText", ["exclusive.txt", "second"]), /createText target already exists/u);
+  assert.equal(await bridge.invoke("fs", "replaceTextIfMatches", ["exclusive.txt", "first", "updated"]), true);
+  assert.equal(await bridge.invoke("fs", "replaceTextIfMatches", ["exclusive.txt", "first", "lost"]), false);
   assert.equal(await bridge.invoke("fs", "writeText", ["nested/one/two/value.txt", "value"]), null);
   assert.equal(await bridge.invoke("fs", "readText", ["nested/one/two/value.txt", 16]), "value");
   await assert.rejects(bridge.invoke("fs", "writeText", ["nested", "not-a-file"]), /requires a file path/u);
