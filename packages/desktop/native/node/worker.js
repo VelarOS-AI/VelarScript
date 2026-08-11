@@ -31,6 +31,7 @@ const allowedSecrets = new Set(config.permissions.secrets ?? []);
 const processHandles = new Map();
 let nextProcessHandle = 1;
 const httpHandles = new Map();
+const activeRequests = new Map();
 const fileMutationTails = new Map();
 let nextTextReplacementIdentity = 1;
 let fatalDrainStarted = false;
@@ -61,11 +62,12 @@ if (fileScopes.has("project")) {
 
 const reader = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
 reader.once("close", () => {
-  for (const task of processHandles.values()) task.stop();
-  for (const request of httpHandles.values()) request.controller.abort(new Error("Desktop capability host stopped"));
+  if (activeOwner !== null) retireOwner(activeOwner);
+  for (const activity of activeRequests.values()) cancelActivity(activity);
 });
 reader.on("line", async (line) => {
   let id = 0;
+  let activity = null;
   try {
     if (Buffer.byteLength(line, "utf8") > MAX_MESSAGE_BYTES) throw new RangeError("Desktop request exceeds its 128 MiB transport bound");
     const request = JSON.parse(line);
@@ -79,46 +81,66 @@ reader.on("line", async (line) => {
       || !validOwner(request.owner) || request.owner !== activeOwner) {
       throw new TypeError("Invalid Desktop worker request");
     }
-    const value = await dispatch(request.capability, request.operation, request.args, request.owner);
+    if (activeRequests.has(id)) throw new Error("Desktop worker request identity is already active");
+    activity = { owner: request.owner, cancelled: false, cancel: null };
+    activeRequests.set(id, activity);
+    const value = await dispatch(request.capability, request.operation, request.args, request.owner, activity);
+    if (activity.cancelled) throw new Error("Desktop host request was cancelled");
     if (request.owner !== activeOwner) throw new Error("Desktop document generation is no longer active");
     respond({ id, ok: true, value });
   } catch (error) {
     respond({ id, ok: false, error: safeError(error) });
+  } finally {
+    if (activity !== null && activeRequests.get(id) === activity) activeRequests.delete(id);
   }
 });
 
 function handleHostCommand(request) {
-  if (request.protocolVersion !== 1 || !validOwner(request.owner)
-    || Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner"].includes(key))) {
+  if (request.protocolVersion !== 1 || !validOwner(request.owner)) {
     throw new TypeError("Invalid Desktop host command");
   }
   if (request.hostCommand === "owner-activate") {
+    if (Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner"].includes(key))) throw new TypeError("Invalid Desktop host command");
     if (activeOwner !== null && activeOwner !== request.owner) retireOwner(activeOwner);
     activeOwner = request.owner;
     return;
   }
   if (request.hostCommand === "owner-retire") {
+    if (Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner"].includes(key))) throw new TypeError("Invalid Desktop host command");
     retireOwner(request.owner);
     return;
   }
+  if (request.hostCommand === "request-cancel") {
+    if (Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner", "requestID"].includes(key))
+      || !Number.isSafeInteger(request.requestID) || request.requestID < 1) throw new TypeError("Invalid Desktop host command");
+    const activity = activeRequests.get(request.requestID);
+    if (activity && activity.owner === request.owner) cancelActivity(activity);
+    return;
+  }
   throw new TypeError("Unknown Desktop host command");
+}
+
+function cancelActivity(activity) {
+  if (activity.cancelled) return;
+  activity.cancelled = true;
+  try { activity.cancel?.(); } catch {}
 }
 
 function validOwner(value) {
   return typeof value === "string" && /^[0-9a-f]{32}$/u.test(value);
 }
 
-async function dispatch(capability, operation, args, owner) {
+async function dispatch(capability, operation, args, owner, activity) {
   if (capability === "fs") return fsOperation(operation, args);
   if (capability === "process") {
-    if (operation === "run") return processRun(args, owner);
-    if (operation === "start") return processStart(args, owner);
+    if (operation === "run") return processRun(args, owner, activity);
+    if (operation === "start") return processStart(args, owner, activity);
     if (operation === "read") return processRead(args, owner);
     if (operation === "wait") return processWait(args, owner);
     if (operation === "stop") return processStop(args, owner);
   }
   if (capability === "http") {
-    if (operation === "request") return httpRequest(args, owner);
+    if (operation === "request") return httpRequest(args, owner, activity);
     if (operation === "read") return httpRead(args, owner);
     if (operation === "cancel") return httpCancel(args, owner);
   }
@@ -377,8 +399,8 @@ async function commitTextReplacement(path, data, mode) {
   finally { await rm(temporary, {force: true, recursive: false}); }
 }
 
-async function processRun(args, owner) {
-  const started = await processStart(args, owner);
+async function processRun(args, owner, activity) {
+  const started = await processStart(args, owner, activity);
   const outcome = await processWait([started.handle], owner);
   if (outcome.retained) {
     retainRunHandle(started.handle, owner);
@@ -395,10 +417,13 @@ function retainRunHandle(handle, owner) {
   setTimeout(retry, 0);
 }
 
-async function processStart(args, owner) {
+async function processStart(args, owner, activity) {
   if (processHandles.size >= 128) throw new RangeError("Desktop process handle limit reached");
+  if (activity.cancelled) throw new Error("Desktop host request was cancelled");
   const handle = nextProcessHandle++;
-  const task = await launchProcess(args, () => respond({ protocolVersion: 1, hostEvent: "process-settled", owner, handle }));
+  let task = null;
+  activity.cancel = () => { if (task !== null) retainRetiredProcess(handle, task); };
+  task = await launchProcess(args, () => respond({ protocolVersion: 1, hostEvent: "process-settled", owner, handle }));
   task.owner = owner;
   processHandles.set(handle, task);
   // The native shell becomes the crash-recovery owner before the renderer
@@ -407,7 +432,7 @@ async function processStart(args, owner) {
   // A caller may start before it waits. Keep rejection observed while the
   // explicit wait/stop operation still owns delivery and handle release.
   task.result.catch(() => {});
-  if (owner !== activeOwner) {
+  if (activity.cancelled || owner !== activeOwner) {
     retainRetiredProcess(handle, task);
     throw new Error("Desktop document generation is no longer active");
   }
@@ -451,6 +476,8 @@ function ownedProcess(value, owner) {
 }
 
 function retainRetiredProcess(handle, task) {
+  if (task.retirementStarted) return;
+  task.retirementStarted = true;
   task.stop();
   const retry = async () => {
     try {
@@ -466,6 +493,7 @@ function retainRetiredProcess(handle, task) {
 
 function retireOwner(owner) {
   if (activeOwner === owner) activeOwner = null;
+  for (const activity of activeRequests.values()) if (activity.owner === owner) cancelActivity(activity);
   for (const [handle, task] of processHandles) {
     if (task.owner === owner) retainRetiredProcess(handle, task);
   }
@@ -778,7 +806,8 @@ async function resolveExecutable(name, pathValue) {
   throw new Error(`Granted process '${name}' was not found on the trusted executable path`);
 }
 
-async function httpRequest(args, owner) {
+async function httpRequest(args, owner, activity) {
+  if (activity.cancelled) throw new Error("Desktop host request was cancelled");
   const [handleValue, methodValue, urlValue, options = {}] = args;
   const handle = httpHandle(handleValue);
   if (httpHandles.has(handle)) throw new Error("Desktop HTTP handle is already active");
@@ -808,6 +837,7 @@ async function httpRequest(args, owner) {
   if (body !== null && Buffer.byteLength(body, "utf8") > MAX_FILE_BYTES) throw new RangeError("HTTP body cannot exceed 16 MiB");
   if ((method === "GET" || method === "HEAD") && body !== null) throw new TypeError(`${method} requests cannot have a body`);
   const controller = new AbortController();
+  activity.cancel = () => controller.abort(new Error("Desktop host request was cancelled"));
   const request = {
     owner,
     controller,
@@ -820,6 +850,7 @@ async function httpRequest(args, owner) {
     timer: timeout === 0 ? null : setTimeout(() => controller.abort(new Error("HTTP request timed out")), timeout),
   };
   httpHandles.set(handle, request);
+  if (activity.cancelled) controller.abort(new Error("Desktop host request was cancelled"));
   let response = null;
   try {
     response = await fetchAuthorized(url, method, headers, secretHeaderNames, body, controller.signal);

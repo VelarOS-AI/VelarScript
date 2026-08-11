@@ -1658,6 +1658,13 @@ for (const phrase of [
   'if (task.owner !== owner)',
   'if (request.owner !== owner)',
   'finishHttp(handle, request)',
+  'pendingRequestBytes + bytes.byteLength > 128 * 1024 * 1024',
+  'responseBytes > 128 * 1024 * 1024',
+  'private struct BridgeTransportCancel',
+  'func cancel(identity: BridgeIdentity)',
+  '"hostCommand": "request-cancel"',
+  'const activeRequests = new Map()',
+  'function cancelActivity(activity)',
 ]) {
   if (!(desktopNativeHostSource + "\n" + desktopWorkerSource).includes(phrase)) {
     failures.push(`Desktop document generations do not preserve '${phrase}'`);

@@ -816,6 +816,18 @@ its obsolete result is never delivered into the new document. The completion
 hooks exposed for native response injection also require the private
 generation, preventing application code from completing an arbitrary pending
 bridge Promise by calling the hook directly.
+The page bridge and native request ledger each enforce a 128 MiB aggregate
+budget across pending serialized requests; response chunk assembly has the same
+aggregate ceiling in addition to its per-response bound. A finite bridge
+timeout sends a private cancellation for the exact generation/request pair
+before rejecting the page Promise. Native code retains the Worker identity
+until its terminal response, so a late response is discarded without becoming
+an unknown-protocol failure. The Worker tracks active dispatches: cancellation
+aborts an in-flight HTTP request and stops a hidden process owned by `run()` or
+an as-yet-unpublished `start()`. Filesystem syscalls are not falsely described
+as cancellable; their eventual result only releases the retained capacity and
+is discarded. Closing the host input applies the same cancellation path before
+any request that was awaiting process launch can publish a new child.
 Standard output and error share a bounded capture budget, and no command-string
 parsing or shell expansion is performed. Timeouts and output-bound failures
 request termination and independently bound confirmation at five seconds even

@@ -572,6 +572,14 @@ initialization therefore cannot change which case is selected.
   handle access and again after awaited host work, so an old asynchronous start
   cannot publish a resource into the new document. Filesystem effects may
   finish but cannot cross the response boundary.
+  The bridge also owns transport backpressure and finite-timeout cancellation.
+  Pending request bytes and response assembly bytes each have a 128 MiB
+  aggregate ceiling in both the page/native layers that own them. Timeout sends
+  a generation-qualified cancel record; native keeps the Worker request ID as
+  a retired tombstone until its response arrives, while the Worker aborts the
+  active HTTP controller or stops a process before it can become an orphan.
+  Non-cancellable filesystem work retains its reservation until completion
+  rather than admitting unbounded replacement work.
   Environment and graceful-shutdown modules have smaller canonical captured
   host fragments because their effects do not require a second Realm.
   Filesystem, inbound-server, and outbound Node HTTP effects share a separate compiler-owned Worker

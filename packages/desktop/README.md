@@ -97,6 +97,14 @@ requires the private generation as well, so application JavaScript cannot
 resolve a pending bridge request by invoking the transport hook with only a
 guessed numeric ID. Filesystem work that has already reached the OS may finish;
 its retired response is never routed into the replacement document.
+Pending serialized requests and assembled response chunks each share a 128 MiB
+aggregate bridge budget, so the 1,024-request count cannot multiply every
+per-request limit into unbounded transport memory. A finite bridge timeout
+sends a private generation-qualified cancellation before rejecting. Native
+code discards the later response without treating it as an unknown protocol
+message, and the Worker aborts an active HTTP request or stops a process that
+has not safely transferred its public handle. Filesystem effects remain
+non-cancellable and retain their bounded request reservation until they settle.
 
 Filesystem content calls follow symlinks only when the canonical target stays
 inside a granted root. Metadata, move, and removal operate on the final entry

@@ -336,6 +336,35 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     }
     assert.equal(retiredProcessExists, false, "activating a new document generation must reap the old document process");
     assert.ok(client.lifecycle().some((event) => event.hostEvent === "process-owned" && event.owner === retiredOwner && event.handle === retiredProcess.handle));
+
+    const cancelledHttp = client.beginCall("http", "request", [19, "GET", `${origin}/slow-headers`, { maxBytes: 1024, timeout: 0 }]);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    client.cancelRequest(cancelledHttp.id);
+    await assert.rejects(cancelledHttp.result, /request was cancelled/u);
+    await client.call("http", "request", [19, "GET", `${origin}/stream`, { maxBytes: 1024, timeout: 1000 }]);
+    assert.deepEqual(await client.call("http", "cancel", [19]), null);
+
+    const cancellationEvents = client.lifecycle().length;
+    const cancelledRun = client.beginCall("process", "run", [
+      basename(process.execPath),
+      ["-e", "setInterval(() => {}, 1000)"],
+      { timeout: 0, maxOutputBytes: 1024 },
+    ]);
+    let cancelledRunPid: number | null = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const event = client.lifecycle().slice(cancellationEvents).find((item) => item.hostEvent === "process-owned");
+      if (event?.pid) { cancelledRunPid = event.pid; break; }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    assert.ok(cancelledRunPid !== null);
+    client.cancelRequest(cancelledRun.id);
+    await assert.rejects(cancelledRun.result, /request was cancelled/u);
+    let cancelledRunExists = true;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { process.kill(cancelledRunPid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+      catch { cancelledRunExists = false; break; }
+    }
+    assert.equal(cancelledRunExists, false, "cancelling an in-flight process run must reap its hidden process owner");
   } finally {
     client.close();
     await Promise.all([server, redirectServer, ungrantedServer].map(closeServer));
@@ -590,10 +619,18 @@ class WorkerClient {
   }
 
   call(capability: string, operation: string, args: readonly unknown[]): Promise<unknown> {
+    return this.beginCall(capability, operation, args).result;
+  }
+
+  beginCall(capability: string, operation: string, args: readonly unknown[]): { id: number; result: Promise<unknown> } {
     const id = this.nextId++;
     const result = new Promise<unknown>((resolveCall, rejectCall) => this.pending.set(id, { resolve: resolveCall, reject: rejectCall }));
     this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, id, owner: this.owner, capability, operation, args })}\n`);
-    return result;
+    return { id, result };
+  }
+
+  cancelRequest(requestID: number): void {
+    this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, hostCommand: "request-cancel", owner: this.owner, requestID })}\n`);
   }
 
   useOwner(owner: string): void {
@@ -685,6 +722,10 @@ function localServer(
       response.flushHeaders();
       response.write("partial");
       setTimeout(() => response.socket?.destroy(), 10);
+      return;
+    }
+    if (request.url === "/slow-headers") {
+      setTimeout(() => { response.writeHead(200, { "content-type": "text/plain" }); response.end("late"); }, 10000).unref();
       return;
     }
     response.writeHead(200, { "content-type": "text/plain" });

@@ -2325,12 +2325,46 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍
   只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-123 收口 W-122 之后的 Desktop request ownership 与背压边界。审计确认 bridge 虽然限制同时
+  1024 个请求，却没有限制 pending request 或分块 response 的总字节；一个页面仍可用少量大请求
+  占满原生 Host 内存。页面的有限 timeout 也只删除本地 Promise，没有通知 native/Worker；超时后
+  才完成的 `process.start`/`process.run` 会成为无主进程，慢 HTTP 请求则会继续占用 handle。
+
+  现在页面与原生 Host 都对 pending serialized requests 实施 128 MiB 总预算，页面另对正在组装的
+  response chunks 实施 128 MiB 总预算；每一条成功、失败、timeout、navigation 与 transport-failure
+  路径都按 request identity 精确释放预算。有限 bridge timeout 会携带私有 document generation 和
+  page request id 发送 transport-only cancel；原生 Host 将其翻译为 Worker request id，把请求标为
+  retired 并保留 ledger tombstone 直到 terminal response 收敛，因此迟到响应只会被丢弃，不会误杀
+  Host 或命中新页面。
+
+  capability Worker 为每个 dispatch 保存 owner-qualified active activity。取消 HTTP 会 abort 当前
+  controller 并允许同号 handle 安全复用；取消尚未公开的 process start/run 会停止并 drain 隐藏
+  process，不能把成功结果或 PID 交回已经超时的页面。filesystem effect 一旦交给 OS 就不能虚假
+  回滚，所以它只取消响应所有权并继续占用 reservation，直到真实 operation settle。公开的
+  `velar/http`、`velar/process` 与 filesystem API 没有新增产品层 cancellation shim，协议仍是 Desktop
+  transport 私有实现。
+
+  真实回归用 1 ms page timeout 验证精确 cancel envelope；慢 headers HTTP 在 cancel 后拒绝并复用
+  同号 handle；隐藏的长驻 `process.run` 在 process-owned 后取消，PID 随后从系统消失。W-122 的真实
+  打包 macOS WKWebView reload/旧 PID 回收也继续通过。当前组合证据为 `npm run check`（51 个格式化
+  源、98 个文档示例、64 项 runtime boundary）、553/553 串行 compiler/runtime/CLI/Desktop/
+  hardening/publication rehearsal、四个生产示例 check 与 1+3+3+3 个纯 Vel tests、六包 packed
+  consumer acceptance、publication rehearsal、Workbench 安装态验收，以及完整 Dev/Production/
+  External Preview、27+6+15+6 三浏览器和 installed browser project。
+
+  Lite 独立通过 10/22/21/29 模块 check、40 shared + 42 server tests、真实 concurrent/disconnected
+  server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/Desktop production build。
+  薄包为 882,769 bytes（862.1 KiB）：host 301,792、renderer 530,946、capability host 48,638、
+  metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `a5fac97fce310cd1a948691e5fdc8bc0983047178ec141c93078d2fa479d7d97`；相比 W-122 增加 4,002
+  bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍
+  只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-122 的 document generation、native request ledger、navigation retirement 与完整
-   compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从多会话长时间
-   运行、host backpressure、request cancellation 和工具恢复审计可观测性与 resource ownership；
-   产品策略继续留在 Lite，只把通用语言、Node/Web/Desktop API 缺口修回官方包。
+1. W-123 的 document-qualified cancellation、request/response aggregate backpressure 与完整
+   compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。用户已要求本轮提交后暂停，
+   以便先重构响应式系统；不得自行开启 W-124 或继续修改 reactivity，等待用户明确恢复。
 2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；
    它只能像普通第三方一样消费公开的 `@velarscript/*` 包。继续扩展真实使用场景，但不得把产品
    Agent/provider/tool policy、workspace 或 approval UI 重新放回语言包。

@@ -57,7 +57,15 @@ private let bridgeScript = #"""
   for (const byte of generationBytes) generation += hex[byte >>> 4] + hex[byte & 15]
   const pending = new hostMap()
   const responseChunks = new hostMap()
+  let pendingRequestBytes = 0
+  let responseBytes = 0
   let nextId = 1
+  const dropResponseChunks = (id) => {
+    const state = mapGet(responseChunks, id)
+    if (!state) return
+    responseBytes -= state.bytes
+    mapDelete(responseChunks, id)
+  }
   const allocateId = () => {
     for (let attempt = 0; attempt <= 1024; attempt += 1) {
       const id = nextId
@@ -72,6 +80,8 @@ private let bridgeScript = #"""
     const request = mapGet(pending, message.id)
     if (!request) return
     mapDelete(pending, message.id)
+    pendingRequestBytes -= request.bytes
+    dropResponseChunks(message.id)
     if (request.timer !== null) hostClearTimeout(request.timer)
     if (message.ok === true) request.resolve(message.value)
     else if (message.error && typeof message.error === "object"
@@ -116,15 +126,16 @@ private let bridgeScript = #"""
       state.parts[index] = part
       state.count += 1
       state.bytes += part.byteLength
-      if (state.bytes > 65 * 1024 * 1024) throw new hostError("Desktop response exceeds its transport bound")
+      responseBytes += part.byteLength
+      if (state.bytes > 65 * 1024 * 1024 || responseBytes > 128 * 1024 * 1024) throw new hostError("Desktop response exceeds its transport bound")
       if (state.count !== state.total) return
       const bytes = new hostUint8Array(state.bytes)
       let offset = 0
       for (const item of state.parts) { hostApply(hostUint8ArraySet, bytes, [item, offset]); offset += item.byteLength }
-      mapDelete(responseChunks, id)
+      dropResponseChunks(id)
       complete(owner, hostApply(hostJsonParse, JSON, [hostApply(hostTextDecode, hostTextDecoder, [bytes])]))
     } catch (error) {
-      mapDelete(responseChunks, id)
+      dropResponseChunks(id)
       complete(owner, {id, ok: false, error: error instanceof hostError ? error.message : "Invalid Desktop response transport"})
     }
   }
@@ -146,16 +157,27 @@ const bridge = Object.freeze({
       if (mapSize(pending) >= 1024) return hostPromise.reject(new hostRangeError("Too many pending Desktop requests"))
       const id = allocateId()
       return new hostPromise((resolve, reject) => {
+        const requestState = {resolve, reject, timer: null, bytes: 0}
         const timer = timeoutMs === 0 ? null : hostSetTimeout(() => {
+          const current = mapGet(pending, id)
+          if (current !== requestState) return
           mapDelete(pending, id)
-          mapDelete(responseChunks, id)
+          pendingRequestBytes -= requestState.bytes
+          dropResponseChunks(id)
+          try {
+            hostApply(hostPostMessage, hostMessageHandler, [{protocolVersion: 1, transport: "cancel", generation, id}])
+          } catch {}
           reject(new hostError("Desktop host request timed out"))
         }, timeoutMs)
-        mapSet(pending, id, {resolve, reject, timer})
+        requestState.timer = timer
+        mapSet(pending, id, requestState)
         try {
           const request = {protocolVersion: 1, generation, id, capability, operation, args}
           const bytes = hostApply(hostTextEncode, hostTextEncoder, [hostApply(hostJsonStringify, JSON, [request])])
           if (bytes.byteLength > 128 * 1024 * 1024) throw new hostRangeError("Desktop request exceeds its transport bound")
+          if (pendingRequestBytes + bytes.byteLength > 128 * 1024 * 1024) throw new hostRangeError("Pending Desktop requests exceed their aggregate transport bound")
+          requestState.bytes = bytes.byteLength
+          pendingRequestBytes += bytes.byteLength
           if (bytes.byteLength <= 512 * 1024) {
             hostApply(hostPostMessage, hostMessageHandler, [request])
           } else {
@@ -170,6 +192,7 @@ const bridge = Object.freeze({
         } catch (error) {
           if (timer !== null) hostClearTimeout(timer)
           mapDelete(pending, id)
+          pendingRequestBytes -= requestState.bytes
           reject(error)
         }
       })
@@ -263,6 +286,19 @@ private struct BridgeTransportChunk {
     }
 }
 
+private struct BridgeTransportCancel {
+    let identity: BridgeIdentity
+
+    init?(_ body: [String: Any]) {
+        guard body.count <= 5,
+              body["protocolVersion"] as? Int == 1,
+              body["transport"] as? String == "cancel",
+              let generation = validatedBridgeGeneration(body["generation"]),
+              let id = body["id"] as? Int, id > 0 else { return nil }
+        self.identity = BridgeIdentity(generation: generation, id: id)
+    }
+}
+
 private func deliverBridgeResponse(_ data: Data, generation: String, to webView: WKWebView?) {
     guard validatedBridgeGeneration(generation) != nil else { return }
     guard let id = responseIdentifier(data) else { return }
@@ -348,6 +384,7 @@ private func nodeMajorVersion(_ executable: URL) -> Int? {
 private final class NodeCapabilityHost {
     private struct PendingRequest {
         let identity: BridgeIdentity
+        let requestBytes: Int
         var retired: Bool
     }
 
@@ -362,6 +399,7 @@ private final class NodeCapabilityHost {
     private let errors = Pipe()
     private var buffer = Data()
     private var pending: [Int: PendingRequest] = [:]
+    private var pendingRequestBytes = 0
     private var activeIdentities = Set<BridgeIdentity>()
     private var activeGeneration: String?
     private var nextWorkerRequestID = 1
@@ -417,6 +455,10 @@ private final class NodeCapabilityHost {
                 self.complete(identity: identity, error: "Too many pending Desktop capability requests")
                 return
             }
+            if self.pendingRequestBytes + data.count > 128 * 1024 * 1024 {
+                self.complete(identity: identity, error: "Pending Desktop capability requests exceed their aggregate transport bound")
+                return
+            }
             do {
                 try self.activate(generation: request.generation)
                 guard let workerID = self.allocateWorkerRequestID() else {
@@ -427,7 +469,8 @@ private final class NodeCapabilityHost {
                 forwarded.removeValue(forKey: "generation")
                 forwarded["id"] = workerID
                 forwarded["owner"] = request.generation
-                self.pending[workerID] = PendingRequest(identity: identity, retired: false)
+                self.pending[workerID] = PendingRequest(identity: identity, requestBytes: data.count, retired: false)
+                self.pendingRequestBytes += data.count
                 self.activeIdentities.insert(identity)
                 try self.write(forwarded)
             } catch {
@@ -438,6 +481,27 @@ private final class NodeCapabilityHost {
 
     func retire(generation: String) {
         queue.async { [weak self] in self?.retireGeneration(generation) }
+    }
+
+    func cancel(identity: BridgeIdentity) {
+        queue.async { [weak self] in
+            guard let self,
+                  let (workerID, request) = self.pending.first(where: { $0.value.identity == identity }),
+                  !request.retired else { return }
+            self.pending[workerID]?.retired = true
+            self.activeIdentities.remove(identity)
+            guard self.failure == nil, self.process.isRunning else { return }
+            do {
+                try self.write([
+                    "protocolVersion": 1,
+                    "hostCommand": "request-cancel",
+                    "owner": identity.generation,
+                    "requestID": workerID,
+                ])
+            } catch {
+                self.fail("Desktop Node capability host write failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     func stop() {
@@ -465,6 +529,7 @@ private final class NodeCapabilityHost {
                 fail("Desktop Node capability host returned an unknown response")
                 return
             }
+            pendingRequestBytes -= request.requestBytes
             activeIdentities.remove(request.identity)
             if request.retired { continue }
             var response = object
@@ -517,6 +582,7 @@ private final class NodeCapabilityHost {
         if process.isRunning { process.terminate() }
         let requests = Array(pending.values)
         pending.removeAll(keepingCapacity: false)
+        pendingRequestBytes = 0
         activeIdentities.removeAll(keepingCapacity: false)
         activeGeneration = nil
         for request in requests where !request.retired { complete(identity: request.identity, error: message) }
@@ -701,6 +767,10 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame,
               let body = message.body as? [String: Any] else { return }
+        if body["transport"] as? String == "cancel" {
+            receiveCancel(body)
+            return
+        }
         if body["transport"] as? String == "chunk" {
             receiveChunk(body)
             return
@@ -723,11 +793,20 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
             }
         }
         let discarded = incomingChunks.filter { $0.key.generation == generation }
-        for (identity, state) in discarded {
-            incomingBytes -= state.data.count
-            incomingChunks.removeValue(forKey: identity)
-        }
+        for (identity, _) in discarded { discardIncoming(identity: identity) }
         worker.retire(generation: generation)
+    }
+
+    private func receiveCancel(_ body: [String: Any]) {
+        guard let cancellation = BridgeTransportCancel(body),
+              activeGeneration == cancellation.identity.generation else { return }
+        discardIncoming(identity: cancellation.identity)
+        worker.cancel(identity: cancellation.identity)
+    }
+
+    private func discardIncoming(identity: BridgeIdentity) {
+        guard let state = incomingChunks.removeValue(forKey: identity) else { return }
+        incomingBytes -= state.data.count
     }
 
     private func receiveChunk(_ body: [String: Any]) {
@@ -737,8 +816,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
         var state = incomingChunks[identity] ?? IncomingChunks(total: chunk.total, nextIndex: 0, data: Data())
         guard state.total == chunk.total, state.nextIndex == chunk.index,
               incomingBytes + chunk.data.count <= 128 * 1024 * 1024 else {
-            incomingBytes -= state.data.count
-            incomingChunks.removeValue(forKey: identity)
+            discardIncoming(identity: identity)
             complete(identity: identity, value: nil, error: "Invalid Desktop request chunk sequence")
             return
         }

@@ -17,6 +17,10 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   assert.match(hostSource, /func webView\(_ webView: WKWebView, didCommit navigation:/u);
   assert.match(hostSource, /worker\.retire\(generation: generation\)/u);
   assert.match(hostSource, /response\["id"\] = request\.identity\.id/u);
+  assert.match(hostSource, /pendingRequestBytes \+ bytes\.byteLength > 128 \* 1024 \* 1024/u);
+  assert.match(hostSource, /responseBytes > 128 \* 1024 \* 1024/u);
+  assert.match(hostSource, /private struct BridgeTransportCancel/u);
+  assert.match(hostSource, /"hostCommand": "request-cancel"/u);
   const match = /private let bridgeScript = #"""\n([\s\S]*?)\n"""#/u.exec(hostSource);
   const bridgeSource = match?.[1];
   assert.ok(bridgeSource, "native host must contain the injected bridge script");
@@ -124,4 +128,16 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   assert.equal(reloadedSettled, false, "an old document response must not settle a reloaded document request with the same page ID");
   reloadedComplete(reloadedRequest.generation, { id: reloadedRequest.id, ok: true, value: "/tmp/velar-project" });
   assert.equal(await reloadedResult, "/tmp/velar-project");
+
+  const timedResult = reloadedBridge.invoke("fs", "readText", ["slow.txt", 1024], 1);
+  const timedRequest = reloadedMessages.at(-1) as { generation: string; id: number; transport?: string };
+  assert.equal(timedRequest.transport, undefined);
+  await assert.rejects(timedResult, /Desktop host request timed out/u);
+  const cancellation = reloadedMessages.at(-1) as Record<string, unknown>;
+  assert.deepEqual({ ...cancellation }, {
+    protocolVersion: 1,
+    transport: "cancel",
+    generation: timedRequest.generation,
+    id: timedRequest.id,
+  });
 });
