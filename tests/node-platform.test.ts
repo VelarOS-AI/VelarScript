@@ -1403,6 +1403,33 @@ test("Node process and HTTP runtimes preserve secret, cancellation, timeout, and
     assert.throws(() => process.kill(descendantPid, 0), (error: unknown) => error instanceof Error && "code" in error && error.code === "ESRCH");
 
     if (process.platform !== "win32") {
+      const abandonedOutput = await processRuntime.start(process.execPath, ["-e", `
+const {spawn} = require("node:child_process");
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  detached: true,
+  stdio: ["ignore", "inherit", "inherit"],
+});
+descendant.unref();
+process.stdout.write(String(descendant.pid) + "\\n");
+      `], { timeout: 0 });
+      let abandonedPidText = "";
+      while (!abandonedPidText.includes("\n")) {
+        const output = await abandonedOutput.next();
+        assert.ok(output);
+        abandonedPidText += output.text;
+      }
+      const abandonedPid = Number(abandonedPidText.trim());
+      assert.equal(Number.isSafeInteger(abandonedPid), true);
+      escapedPid = abandonedPid;
+      const outputDeadlineStartedAt = Date.now();
+      await assert.rejects(abandonedOutput.next(), /output streams did not close within 5000 milliseconds after process exit/u);
+      assert.ok(Date.now() - outputDeadlineStartedAt < 8_000, "Process output must reject within its post-exit pipe deadline");
+      await assert.rejects(abandonedOutput.wait(), /output streams did not close within 5000 milliseconds after process exit/u);
+      assert.doesNotThrow(() => process.kill(abandonedPid, 0));
+      try { process.kill(-abandonedPid, "SIGKILL"); }
+      catch { try { process.kill(abandonedPid, "SIGKILL"); } catch {} }
+      escapedPid = null;
+
       const escaped = await processRuntime.start(process.execPath, ["-e", `
 const {spawn} = require("node:child_process");
 const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {

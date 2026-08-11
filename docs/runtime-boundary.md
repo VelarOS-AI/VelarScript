@@ -126,6 +126,16 @@ focused and acceptance tests.
 | B-DESKTOP-PACKAGING | R | Thin system-WebView application bundle | The build records package identity, exact byte classes and tree hash, enforces a size budget, bundles no browser engine, and declares its external Node >=24 runtime instead of hiding those bytes. Runtime discovery is a launch-time contract: an explicit absolute override, absolute `PATH` entries, then trusted system package-manager locations. Build-machine executable paths and runtime versions never enter the application or build manifest. | Desktop source-build and packed-consumer acceptance plus native `--smoke`. |
 | B-RESOURCE-CEILINGS | L+R | Source, collection, graph, JSON, output, and host-resource limits | Compiler and runtime work is bounded and fails with explicit diagnostics or errors instead of unbounded traversal or coercion. | Compiler/CLI/Web/Node/Desktop owners; hardening and performance tests. |
 
+For B-NODE-HOST and B-DESKTOP-CAPABILITIES, process completion now has two
+deliberately different recovery modes. Explicit `stop()` retains an
+unconfirmed handle and remains retryable. Natural root exit instead owns a
+bounded output-drain phase: the isolated host terminates the original process
+group, escalates after two seconds, and after five seconds closes only its own
+stdout/stderr read ends with a terminal error if an escaped descendant still
+holds the pipes. This bounds `next()`/`wait()`/`run()` without pretending that
+an exact executable grant is an OS sandbox. Desktop transports terminal stop
+errors as the same validated result/error envelope as Node.
+
 ## Required feature decision record
 
 Every new public language, standard-module, Web, Node, Desktop, or JavaScript-bridge

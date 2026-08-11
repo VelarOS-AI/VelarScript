@@ -423,7 +423,8 @@ const processOptionFields = new __velarProcessNativeSet(["cwd", "env", "stdin", 
 const processStartFields = new __velarProcessNativeSet(["handle", "pid"]);
 const processResultFields = new __velarProcessNativeSet(["code", "signal", "stdout", "stderr"]);
 const processOutputFields = new __velarProcessNativeSet(["channel", "text"]);
-const processStopFields = new __velarProcessNativeSet(["result"]);
+const processErrorFields = new __velarProcessNativeSet(["name", "message"]);
+const processStopFields = new __velarProcessNativeSet(["result", "error"]);
 export const ProcessOutputChannel = __velarRegisterRuntimeType(__velarProcessFreeze({
   stdout: "stdout",
   stderr: "stderr",
@@ -505,6 +506,16 @@ function resultOf(value, maxOutputBytes) {
   }
   return __velarProcessFreeze({code: value.code, signal: value.signal, stdout: value.stdout, stderr: value.stderr});
 }
+function processErrorOf(value) {
+  value = recordOf(value, "Desktop process host error", processErrorFields);
+  if (typeof value.name !== "string" || value.name !== "Error" && value.name !== "RangeError" && value.name !== "TypeError"
+    || typeof value.message !== "string" || value.message.length === 0 || value.message.length > 65536) {
+    throw new __velarProcessNativeTypeError("Desktop process host returned an invalid error");
+  }
+  if (value.name === "RangeError") return new __velarProcessNativeRangeError(value.message);
+  if (value.name === "TypeError") return new __velarProcessNativeTypeError(value.message);
+  return new __velarProcessNativeError(value.message);
+}
 function outputOf(value, maxOutputBytes) {
   if (value === null) return null;
   value = recordOf(value, "Desktop process output", processOutputFields);
@@ -514,6 +525,19 @@ function outputOf(value, maxOutputBytes) {
   const bytes = __velarUtf8ByteLength(value.text);
   if (bytes > maxOutputBytes) throw new __velarProcessNativeRangeError("Desktop process output exceeded maxOutputBytes");
   return __velarProcessFreeze({channel: value.channel, text: value.text, bytes});
+}
+function stopValueOf(value, maxOutputBytes) {
+  value = recordOf(value, "Desktop process stop result", processStopFields);
+  const resultDescriptor = __velarProcessOwnDescriptor(value, "result");
+  const errorDescriptor = __velarProcessOwnDescriptor(value, "error");
+  if (!resultDescriptor || !("value" in resultDescriptor) || !errorDescriptor || !("value" in errorDescriptor)
+    || value.result !== null && value.error !== null) {
+    throw new __velarProcessNativeTypeError("Desktop process stop result is invalid or contradictory");
+  }
+  return {
+    result: value.result === null ? null : resultOf(value.result, maxOutputBytes),
+    error: value.error === null ? null : processErrorOf(value.error),
+  };
 }
 function invoke(operation, args, timeout = 30000) {
   return __velarDesktopHostCall("process", operation, args, timeout);
@@ -557,11 +581,11 @@ class ProcessHandle {
   }
   async stop() {
     return await __velarProcessRetryableStop(this, () => __velarProcessThen(invoke("stop", [this.handle], 10000), value => {
-        value = recordOf(value, "Desktop process stop result", processStopFields);
-        const resultDescriptor = __velarProcessOwnDescriptor(value, "result");
-        if (!resultDescriptor || !("value" in resultDescriptor)) throw new __velarProcessNativeTypeError("Desktop process stop result must contain result");
-        const result = value.result == null ? null : resultOf(value.result, this.maxOutputBytes);
-        if (!this.result && result) this.result = __velarProcessResolve(result);
+        const outcome = stopValueOf(value, this.maxOutputBytes);
+        if (!this.result) {
+          if (outcome.error) this.result = __velarProcessReject(outcome.error);
+          else if (outcome.result) this.result = __velarProcessResolve(outcome.result);
+        }
         return null;
       }));
   }

@@ -221,7 +221,7 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
     }
     if (operation === "stop") {
       processHandles.delete(handle);
-      return {result: process?.result ?? null};
+      return {result: process?.result ?? null, error: null};
     }
     throw new Error("Unsupported Desktop test process operation '" + operation + "'");
   }

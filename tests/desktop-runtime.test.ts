@@ -64,6 +64,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         if (args[0] === "hostile-read") return { handle: 10, pid: 702 };
         if (args[0] === "pending-read") return { handle: 11, pid: 703 };
         if (args[0] === "retry-stop") return { handle: 12, pid: 704 };
+        if (args[0] === "failed-stop") return { handle: 13, pid: 705 };
         return { handle: 7, pid: 700 };
       }
       if (capability === "process" && operation === "read") {
@@ -94,7 +95,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       }
       if (capability === "process" && operation === "stop") {
         if (args[0] === 12 && retriableProcessStops++ === 0) throw new Error("termination unconfirmed");
-        return { result: { code: null, signal: "SIGTERM", stdout: "", stderr: "" } };
+        if (args[0] === 13) return { result: null, error: { name: "Error", message: "Process timed out before termination" } };
+        return { result: { code: null, signal: "SIGTERM", stdout: "", stderr: "" }, error: null };
       }
       if (capability === "fs") {
         const path = args[0];
@@ -259,6 +261,10 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     await retriableStop.stop();
     assert.equal(retriableProcessStops, 2);
     assert.deepEqual(await retriableStop.wait(), { code: null, signal: "SIGTERM", stdout: "", stderr: "" });
+
+    const failedStop = await processRuntime.start("failed-stop");
+    await failedStop.stop();
+    await assert.rejects(failedStop.wait(), /timed out before termination/u);
 
     const processStream = await processRuntime.start("stream");
     assert.deepEqual(await processStream.next(), { channel: "stdout", text: "one" });

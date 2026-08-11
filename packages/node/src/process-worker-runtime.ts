@@ -13,6 +13,7 @@ const maxTextBytes = 16 * 1024 * 1024;
 const maxProcessHandles = 128;
 const maxOutputChunks = 1000000;
 const stopConfirmationTimeoutMs = 5000;
+const exitPipeConfirmationTimeoutMs = 5000;
 const requestFields = new Set(["id", "operation", "args"]);
 const optionFields = new Set(["cwd", "env", "stdin", "timeout", "maxOutputBytes"]);
 const processHandles = new Map();
@@ -152,6 +153,7 @@ function launchProcess(command, commandArgs, options, settled) {
     stderrDecoder: new StringDecoder("utf8"),
     failure: null,
     timer: null,
+    exitTimer: null,
     result: null,
     stop() {
       if (task.settled) return;
@@ -160,6 +162,10 @@ function launchProcess(command, commandArgs, options, settled) {
         return;
       }
       task.stopping = true;
+      if (task.exitTimer) {
+        clearTimeout(task.exitTimer);
+        task.exitTimer = null;
+      }
       signalTree(child, "SIGTERM");
       setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();
     },
@@ -211,10 +217,23 @@ function launchProcess(command, commandArgs, options, settled) {
     child.stdout.on("data", (chunk) => collect(task.stdout, task.stdoutDecoder, "stdout", chunk));
     child.stderr.on("data", (chunk) => collect(task.stderr, task.stderrDecoder, "stderr", chunk));
     child.once("error", (error) => { task.failure = error; });
-    child.once("exit", () => { if (!task.stopping) signalTree(child, "SIGTERM"); });
+    child.once("exit", () => {
+      if (!task.stopping) {
+        signalTree(child, "SIGTERM");
+        setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();
+        task.exitTimer = setTimeout(() => {
+          if (task.settled) return;
+          if (!task.failure) task.failure = new Error("Process output streams did not close within " + exitPipeConfirmationTimeoutMs + " milliseconds after process exit");
+          child.stdout.destroy();
+          child.stderr.destroy();
+        }, exitPipeConfirmationTimeoutMs);
+        task.exitTimer.unref();
+      }
+    });
     child.once("close", (code, signal) => {
       task.settled = true;
       if (task.timer) clearTimeout(task.timer);
+      if (task.exitTimer) clearTimeout(task.exitTimer);
       deliver("stdout", task.stdoutDecoder.end());
       deliver("stderr", task.stderrDecoder.end());
       if (task.outputWaiter) {

@@ -2180,9 +2180,39 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值推断相关
   的既有 5 文件变化；未推送、未发布。
 
+- W-119 沿 W-118 的进程所有权继续审计，发现同一个逃逸后代不只会让 `stop()` 卡住：如果根进程自然
+  退出或命中 timeout，而 detached 后代继承 stdout/stderr，`next()`、`wait()` 与 `run()` 仍会等待
+  Node `close` 事件直到永久悬挂。这里不能把所有路径都改成“5 秒后当作 stop 成功”，因为显式 Stop
+  必须保留调用方可重试的强 owner；也不能无限等待一个已经退出的根进程留下的外部管道。
+
+  Node process Worker 与 Desktop capability Worker 现在区分两种模式。显式 `stop()` 会取消自动管道
+  放弃计时，继续保留 handle、2 秒升级 SIGKILL、5 秒未确认则拒绝，供调用方以后真正重试。没有被
+  Stop 接管的自然根退出则由 host 清理原进程组，2 秒升级，并给 stdout/stderr 5 秒独立收敛窗口；
+  仍被逃逸后代占用时只关闭 host 自己的读端，以 terminal process error 结束 pull、aggregate wait 与
+  `run()`，不再让应用或 Worker 永久挂住，也不谎称逃逸进程已被沙箱消灭。真实 Node/Desktop 回归让
+  根进程输出 detached 后代 PID 后立即退出，要求第二次 pull 和随后 wait 在边界内失败，同时证明后代
+  当时仍存活；另一组回归继续证明显式 Stop 第一次未确认、外部清理后第二次成功。
+
+  同族审查还发现 Desktop Worker 过去会吞掉已经 settled 的 process failure，只返回 `{result:null}`，
+  renderer 因而可能把 timeout/output failure 当作 Stop 成功。Desktop 现在和 Node 共用严格的
+  `{result,error}` terminal envelope，验证 Error/TypeError/RangeError 名称、消息与互斥 shape；Stop
+  成功确认后，后续 `wait()` 仍得到原 terminal error，而不是 unknown handle 或伪成功。
+
+  当前组合证据为 `npm run check`（51 个格式化源、98 个文档示例、61 项 runtime boundary）、
+  550/550 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对本轮
+  rehearsal 六包的安装态验收，以及完整 Dev/Production/External Preview、27+6+15+6 三浏览器和
+  installed browser project。Lite 四项目 check、40 shared + 42 server tests、真实 repeated-disconnect/
+  capacity-convergence server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/Desktop
+  production build 也全部通过。薄包为 806,103 bytes（787.2 KiB）：host 235,904、renderer 529,877、
+  capability host 38,929、metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `347afed3810e514cd15380ff7a92838161d46e798ceccb422fd9347ab2889a8e`；相比 W-118 增加 1,918 bytes，
+  仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍只有并行
+  函数返回值推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-118 的 retained cleanup owner、retryable Process.stop、Node/Desktop 有界终止确认与完整
+1. W-119 的 post-exit pipe convergence、显式 Stop 强所有权、Desktop terminal error parity 与完整
    compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从多会话长时间
    运行、失败重启和工具恢复审计可观测性、resource ownership 与 host backpressure；
    产品策略继续留在 Lite，只把通用语言、Node/Web/Desktop API 缺口修回官方包。

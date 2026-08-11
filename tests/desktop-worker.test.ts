@@ -187,7 +187,9 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     };
     assert.deepEqual(await client.call("process", "stop", [longRunning.handle]), {
       result: { code: null, signal: "SIGTERM", stdout: "", stderr: "" },
+      error: null,
     });
+    assert.deepEqual(await client.call("process", "stop", [longRunning.handle]), { result: null, error: null });
     await assert.rejects(client.call("process", "run", ["sh", ["-c", "echo unsafe"], {}]), /not granted/u);
     await assert.rejects(client.call("process", "run", [basename(process.execPath), ["--version"], { env: [["PATH", project]] }]), /cannot replace PATH/u);
     const largeStdin = "x".repeat(1200 * 1024);
@@ -352,6 +354,42 @@ test("Desktop process grants work independently from filesystem grants and keep 
       /env cannot exceed 1 MiB/u,
     );
     if (process.platform !== "win32") {
+      const abandonedOutput = await client.call("process", "start", [
+        basename(process.execPath),
+        ["-e", `
+const {spawn} = require("node:child_process");
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  detached: true,
+  stdio: ["ignore", "inherit", "inherit"],
+});
+descendant.unref();
+process.stdout.write(String(descendant.pid) + "\\n");
+        `],
+        { timeout: 0, maxOutputBytes: 65536 },
+      ]) as { handle: number };
+      let abandonedPidText = "";
+      while (!abandonedPidText.includes("\n")) {
+        const output = await client.call("process", "read", [abandonedOutput.handle]) as { text: string } | null;
+        assert.ok(output);
+        abandonedPidText += output.text;
+      }
+      const abandonedPid = Number(abandonedPidText.trim());
+      assert.equal(Number.isSafeInteger(abandonedPid), true);
+      escapedPid = abandonedPid;
+      const outputDeadlineStartedAt = Date.now();
+      await assert.rejects(
+        client.call("process", "read", [abandonedOutput.handle]),
+        /output streams did not close within 5000 milliseconds after process exit/u,
+      );
+      assert.ok(Date.now() - outputDeadlineStartedAt < 8_000, "Desktop process output must reject within its post-exit pipe deadline");
+      await assert.rejects(
+        client.call("process", "wait", [abandonedOutput.handle]),
+        /output streams did not close within 5000 milliseconds after process exit/u,
+      );
+      assert.doesNotThrow(() => process.kill(abandonedPid, 0));
+      terminateProcessGroup(abandonedPid);
+      escapedPid = null;
+
       const escaped = await client.call("process", "start", [
         basename(process.execPath),
         ["-e", `

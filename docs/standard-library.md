@@ -738,6 +738,16 @@ two seconds, and rejects after a five-second confirmation deadline if inherited
 pipes or an escaped descendant still prevent `close`; a later `stop()` retries
 forced termination against the same owned handle. Desktop applies the same
 retry contract across its bounded capability bridge.
+If the root process exits without an explicit `stop()` but inherited output
+pipes remain open, the host owns a separate bounded drain phase. It terminates
+the original process group, escalates after two seconds, and allows five
+seconds for stdout/stderr to close. A pipe still held by an escaped descendant
+is then closed at the host read end and becomes one terminal process error;
+`next()`, `wait()`, and the `run()` convenience therefore cannot hang forever
+after the root has already exited. An explicit `stop()` cancels that automatic
+pipe-abandonment path and retains the stronger retryable-owner contract above.
+Node and Desktop preserve the same terminal process error through `stop()` and
+the following `wait()` instead of treating a failed process as successful.
 Process acquisition is asynchronous on every target so the same source
 contract works for an in-process Node host and a capability-isolated Desktop
 host.

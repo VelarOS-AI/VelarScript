@@ -534,7 +534,11 @@ initialization therefore cannot change which case is selected.
   the handle registered, while the shared Node/Desktop Process wrapper clears
   only the rejected in-flight stop Promise and retries the same owner. A stop
   request still permanently closes incremental reads, so retryability cannot
-  reopen output consumption.
+  reopen output consumption. Natural root exit has a separate bounded output
+  drain: the Worker terminates the original process group, escalates after two
+  seconds, and closes its own stdout/stderr read ends with a terminal process
+  error if inherited pipes remain open after five seconds. Explicit `stop()`
+  cancels that abandonment timer and keeps the handle retryable instead.
   Environment and graceful-shutdown modules have smaller canonical captured
   host fragments because their effects do not require a second Realm.
   Filesystem, inbound-server, and outbound Node HTTP effects share a separate compiler-owned Worker

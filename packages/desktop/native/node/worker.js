@@ -13,6 +13,7 @@ const MAX_HTTP_CHUNKS = 1000000;
 const MAX_HTTP_REDIRECTS = 20;
 const MAX_PATH_UNITS = 4096;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
+const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
 const transportCharCodeAt = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt")?.value;
 const transportReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 const [configPath, appDataRoot, launchRoot] = process.argv.slice(2);
@@ -379,9 +380,10 @@ async function processRead(args) {
 async function processStop(args) {
   const handle = processHandle(args[0]);
   const task = processHandles.get(handle);
-  if (!task) return { result: null };
+  if (!task) return { result: null, error: null };
   task.stop();
   let result = null;
+  let error = null;
   let timer = null;
   const confirmationFailure = new Error(`Process termination could not be confirmed within ${PROCESS_STOP_CONFIRMATION_TIMEOUT_MS} milliseconds`);
   try {
@@ -394,13 +396,22 @@ async function processStop(args) {
         );
       }),
     ]);
-  } catch (error) {
-    if (error === confirmationFailure) throw error;
+  } catch (failure) {
+    if (failure === confirmationFailure) throw failure;
+    error = processErrorRecord(failure);
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
   processHandles.delete(handle);
-  return { result };
+  return { result, error };
+}
+
+function processErrorRecord(error) {
+  const name = error instanceof TypeError ? "TypeError" : error instanceof RangeError ? "RangeError" : "Error";
+  let message = error instanceof Error ? error.message : "Desktop process failed";
+  if (typeof message !== "string" || message.length === 0) message = "Desktop process failed";
+  if (message.length > 65536) message = message.slice(0, 65536);
+  return { name, message };
 }
 
 function processHandle(value) {
@@ -464,6 +475,7 @@ async function launchProcess(args) {
     stderrDecoder: new StringDecoder("utf8"),
     failure: null,
     timer: null,
+    exitTimer: null,
     result: null,
     stop() {
       if (task.settled) return;
@@ -472,6 +484,10 @@ async function launchProcess(args) {
         return;
       }
       task.stopping = true;
+      if (task.exitTimer) {
+        clearTimeout(task.exitTimer);
+        task.exitTimer = null;
+      }
       signalTree(child, "SIGTERM");
       setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();
     },
@@ -523,10 +539,23 @@ async function launchProcess(args) {
     child.stdout.on("data", (chunk) => collect(task.stdout, task.stdoutDecoder, "stdout", chunk));
     child.stderr.on("data", (chunk) => collect(task.stderr, task.stderrDecoder, "stderr", chunk));
     child.once("error", (error) => { task.failure = error; });
-    child.once("exit", () => { if (!task.stopping) signalTree(child, "SIGTERM"); });
+    child.once("exit", () => {
+      if (!task.stopping) {
+        signalTree(child, "SIGTERM");
+        setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();
+        task.exitTimer = setTimeout(() => {
+          if (task.settled) return;
+          if (!task.failure) task.failure = new Error(`Process output streams did not close within ${PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS} milliseconds after process exit`);
+          child.stdout.destroy();
+          child.stderr.destroy();
+        }, PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS);
+        task.exitTimer.unref();
+      }
+    });
     child.once("close", (code, signal) => {
       task.settled = true;
       if (task.timer) clearTimeout(task.timer);
+      if (task.exitTimer) clearTimeout(task.exitTimer);
       deliver("stdout", task.stdoutDecoder.end());
       deliver("stderr", task.stderrDecoder.end());
       if (task.outputWaiter) {
