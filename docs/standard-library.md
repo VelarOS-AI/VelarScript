@@ -730,6 +730,14 @@ across native chunks is never exposed as replacement fragments. Only one
 `wait()` starts; calling `wait()` directly remains the explicit aggregate-only
 path. After `stop()`, callers obtain the terminal capture through `wait()`
 rather than starting a new output read.
+`stop()` is idempotent after confirmation and retryable after rejection. A stop
+request permanently closes incremental output for that handle, but a transport
+failure or an unconfirmed termination does not discard the handle or cache one
+rejected stop Promise. The Node host sends SIGTERM, escalates to SIGKILL after
+two seconds, and rejects after a five-second confirmation deadline if inherited
+pipes or an escaped descendant still prevent `close`; a later `stop()` retries
+forced termination against the same owned handle. Desktop applies the same
+retry contract across its bounded capability bridge.
 Process acquisition is asynchronous on every target so the same source
 contract works for an in-process Node host and a capability-isolated Desktop
 host.

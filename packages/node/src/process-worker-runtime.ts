@@ -12,6 +12,7 @@ const port = workerData;
 const maxTextBytes = 16 * 1024 * 1024;
 const maxProcessHandles = 128;
 const maxOutputChunks = 1000000;
+const stopConfirmationTimeoutMs = 5000;
 const requestFields = new Set(["id", "operation", "args"]);
 const optionFields = new Set(["cwd", "env", "stdin", "timeout", "maxOutputBytes"]);
 const processHandles = new Map();
@@ -153,7 +154,11 @@ function launchProcess(command, commandArgs, options, settled) {
     timer: null,
     result: null,
     stop() {
-      if (task.settled || task.stopping) return;
+      if (task.settled) return;
+      if (task.stopping) {
+        signalTree(child, "SIGKILL");
+        return;
+      }
       task.stopping = true;
       signalTree(child, "SIGTERM");
       setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();
@@ -273,8 +278,24 @@ async function processStop(args) {
   task.stop();
   let result = null;
   let error = null;
-  try { result = await task.result; }
-  catch (failure) { error = errorRecord(failure); }
+  let timer = null;
+  const confirmationFailure = new Error("Process termination could not be confirmed within " + stopConfirmationTimeoutMs + " milliseconds");
+  try {
+    result = await Promise.race([
+      task.result,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(confirmationFailure),
+          stopConfirmationTimeoutMs,
+        );
+      }),
+    ]);
+  } catch (failure) {
+    if (failure === confirmationFailure) throw failure;
+    error = errorRecord(failure);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
   processHandles.delete(handle);
   return {result, error};
 }

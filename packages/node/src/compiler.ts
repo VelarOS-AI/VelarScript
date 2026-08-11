@@ -676,9 +676,10 @@ class ProcessHandle {
     this.waitStarted = false;
     this.result = null;
     this.stopping = null;
+    this.stopRequested = false;
     this.next = async () => {
       if (this.waitStarted) throw new __velarProcessNativeError("Process output must be consumed before wait()");
-      if (this.stopping) throw new __velarProcessNativeError("Process output is unavailable after stop()");
+      if (this.stopRequested) throw new __velarProcessNativeError("Process output is unavailable after stop()");
       if (this.outputReading) throw new __velarProcessNativeError("Process.next() allows only one active pull");
       this.outputReading = true;
       try {
@@ -700,18 +701,14 @@ class ProcessHandle {
     return this.result;
   }
   async stop() {
-    if (!this.stopping) {
-      this.stopping = __velarProcessThen(invoke("stop", [this.handle]), value => {
+    return await __velarProcessRetryableStop(this, () => __velarProcessThen(invoke("stop", [this.handle]), value => {
         const outcome = stopValueOf(value, this.maxOutputBytes);
         if (!this.result) {
           if (outcome.error) this.result = __velarProcessReject(outcome.error);
           else if (outcome.result) this.result = __velarProcessResolve(outcome.result);
         }
         return null;
-      });
-    }
-    await this.stopping;
-    return null;
+      }));
   }
 }
 

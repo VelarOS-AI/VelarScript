@@ -529,7 +529,12 @@ initialization therefore cannot change which case is selected.
   before module evaluation finishes. Application code sees only a captured,
   bounded MessagePort request protocol; the Worker imports static `node:`
   built-ins only, caps unreleased handles at 128, and is ref-counted so idle
-  imports exit while running children retain the process lifecycle.
+  imports exit while running children retain the process lifecycle. Process
+  stop confirmation is bounded inside that Worker: an unconfirmed close keeps
+  the handle registered, while the shared Node/Desktop Process wrapper clears
+  only the rejected in-flight stop Promise and retries the same owner. A stop
+  request still permanently closes incremental reads, so retryability cannot
+  reopen output consumption.
   Environment and graceful-shutdown modules have smaller canonical captured
   host fragments because their effects do not require a second Realm.
   Filesystem, inbound-server, and outbound Node HTTP effects share a separate compiler-owned Worker

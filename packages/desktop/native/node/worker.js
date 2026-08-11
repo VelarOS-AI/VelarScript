@@ -12,6 +12,7 @@ const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_HTTP_CHUNKS = 1000000;
 const MAX_HTTP_REDIRECTS = 20;
 const MAX_PATH_UNITS = 4096;
+const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const transportCharCodeAt = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt")?.value;
 const transportReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 const [configPath, appDataRoot, launchRoot] = process.argv.slice(2);
@@ -381,7 +382,23 @@ async function processStop(args) {
   if (!task) return { result: null };
   task.stop();
   let result = null;
-  try { result = await task.result; } catch {}
+  let timer = null;
+  const confirmationFailure = new Error(`Process termination could not be confirmed within ${PROCESS_STOP_CONFIRMATION_TIMEOUT_MS} milliseconds`);
+  try {
+    result = await Promise.race([
+      task.result,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(confirmationFailure),
+          PROCESS_STOP_CONFIRMATION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (error) {
+    if (error === confirmationFailure) throw error;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
   processHandles.delete(handle);
   return { result };
 }
@@ -449,7 +466,11 @@ async function launchProcess(args) {
     timer: null,
     result: null,
     stop() {
-      if (task.settled || task.stopping) return;
+      if (task.settled) return;
+      if (task.stopping) {
+        signalTree(child, "SIGKILL");
+        return;
+      }
       task.stopping = true;
       signalTree(child, "SIGTERM");
       setTimeout(() => { if (!task.settled) signalTree(child, "SIGKILL"); }, 2000).unref();

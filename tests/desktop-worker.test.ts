@@ -325,6 +325,7 @@ test("Desktop process grants work independently from filesystem grants and keep 
   }), "utf8");
   const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
   const client = new WorkerClient(worker);
+  let escapedPid: number | null = null;
   try {
     const execution = await client.call("process", "run", [
       basename(process.execPath),
@@ -350,11 +351,51 @@ test("Desktop process grants work independently from filesystem grants and keep 
       client.call("process", "run", [basename(process.execPath), ["--version"], { env: [["FIRST", "x".repeat(600_000)], ["SECOND", "y".repeat(600_000)]] }]),
       /env cannot exceed 1 MiB/u,
     );
+    if (process.platform !== "win32") {
+      const escaped = await client.call("process", "start", [
+        basename(process.execPath),
+        ["-e", `
+const {spawn} = require("node:child_process");
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  detached: true,
+  stdio: ["ignore", "inherit", "inherit"],
+});
+process.stdout.write(String(descendant.pid) + "\\n");
+setInterval(() => {}, 1000);
+        `],
+        { timeout: 0, maxOutputBytes: 65536 },
+      ]) as { handle: number };
+      let escapedPidText = "";
+      while (!escapedPidText.includes("\n")) {
+        const output = await client.call("process", "read", [escaped.handle]) as { text: string } | null;
+        assert.ok(output);
+        escapedPidText += output.text;
+      }
+      escapedPid = Number(escapedPidText.trim());
+      assert.equal(Number.isSafeInteger(escapedPid), true);
+      const stopStartedAt = Date.now();
+      await assert.rejects(
+        client.call("process", "stop", [escaped.handle]),
+        /termination could not be confirmed within 5000 milliseconds/u,
+      );
+      assert.ok(Date.now() - stopStartedAt < 8_000, "Desktop Process.stop must reject within its owned confirmation deadline");
+      assert.doesNotThrow(() => process.kill(escapedPid as number, 0));
+      terminateProcessGroup(escapedPid);
+      const stopped = await client.call("process", "stop", [escaped.handle]) as { result: { signal: string | null } | null };
+      assert.notEqual(stopped.result?.signal ?? null, null);
+      escapedPid = null;
+    }
   } finally {
+    if (escapedPid !== null) terminateProcessGroup(escapedPid);
     client.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+function terminateProcessGroup(pid: number): void {
+  try { process.kill(-pid, "SIGKILL"); }
+  catch { try { process.kill(pid, "SIGKILL"); } catch {} }
+}
 
 class WorkerClient {
   private nextId = 1;

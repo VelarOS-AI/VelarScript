@@ -2149,11 +2149,42 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值
   推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-118 把“逻辑已结束”和“资源已确认释放”彻底分开。W-117 的 `TurnGate` 虽然保证先 cleanup 再
+  leave，但 cleanup 抛错后 `finally` 仍会释放容量，产品实际上会在旧 owner 未确认结束时接收新 turn。
+  Gate 现在直接拥有有界 cleanup closure：只有 cleanup 成功才释放 slot；失败 owner 保留在 gate 中，
+  并发重试共享同一个 Promise，进行中的确认仍计入 retained 可观测数量；新请求会先串行重试 retained
+  cleanup，容量仍满时明确拒绝。真实 server acceptance 连续四次在首 event
+  后断开，再通过收敛轮询而非固定 sleep 证明四个 slot 全部恢复。App 与 CLI 同样只在 `cancelAgent`
+  成功后清空 active owner；失败会保持 Stop 能力并拒绝新 turn。ToolRun 也不再把 `Process.stop()` 失败
+  包装成普通 tool output 或提前清空 process handle，AgentCore 因而能继续持有并重试真正的资源 owner。
+
+  这轮 Lite 压测继续暴露出官方 `velar/process` 的通用契约缺陷。Node 与 Desktop renderer 都把第一次
+  rejected stop Promise 永久缓存，调用方表面上重试，实际上不会再次向 host 发 stop；Node process
+  Worker 和 Desktop capability Worker 又会在发送 SIGTERM/SIGKILL 后无限等待 `close`。当一个 detached
+  后代逃逸原进程组却继承 stdout/stderr pipe 时，根进程已经退出但 `close` 永不到达，owner、handle 与
+  shutdown 可以永久悬挂。共享 Node/Desktop wrapper 现在用独立 `stopRequested` 永久关闭后续读取，
+  只缓存已确认成功或仍在进行的 stop，并在 rejection 后清掉 pending Promise，供下一次真实重试。
+  两个 Worker 都在 2 秒升级 SIGKILL、5 秒仍无法确认时拒绝但保留 handle；再次 stop 会重新升级，只有
+  `close` 或可观察的 terminal result 才删除 handle。永久回归真实启动逃逸后代，要求第一次 stop 在
+  5 秒边界拒绝、后代仍存活、清除后代后第二次 stop 成功，同时证明 stop intent 不会重新开放 output。
+
+  当前组合证据为 `npm run check`（51 个格式化源、98 个文档示例、61 项 runtime boundary）、
+  550/550 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对本轮
+  rehearsal 六包的安装态验收，以及完整 Dev/Production/External Preview、27+6+15+6 三浏览器和
+  installed browser project。Lite 四项目 check、40 shared + 42 server tests、真实 repeated-disconnect/
+  capacity-convergence server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/Desktop
+  production build 也全部通过。薄包为 804,185 bytes（785.3 KiB）：host 235,904、renderer 529,243、
+  capability host 37,645、metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `10031f99d46dfd0c96161e86a4e70a1c58a8547eabab29a4768f41649888204b`；相比 W-117 增加 1,021 bytes，
+  仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值推断相关
+  的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-117 的 crash consistency、concurrent turn exclusion、server/client disconnect、启动器信号
-   所有权与完整 compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从
-   多会话长时间运行、失败重启和工具恢复审计可观测性、resource ownership 与 host backpressure；
+1. W-118 的 retained cleanup owner、retryable Process.stop、Node/Desktop 有界终止确认与完整
+   compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从多会话长时间
+   运行、失败重启和工具恢复审计可观测性、resource ownership 与 host backpressure；
    产品策略继续留在 Lite，只把通用语言、Node/Web/Desktop API 缺口修回官方包。
 2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；
    它只能像普通第三方一样消费公开的 `@velarscript/*` 包。继续扩展真实使用场景，但不得把产品

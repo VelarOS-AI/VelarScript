@@ -86,6 +86,20 @@ function __velarProcessResolve(value) {
 function __velarProcessThen(value, fulfilled, rejected) {
   return __velarProcessCall(__velarProcessPromiseThen, value, [fulfilled, rejected]);
 }
+async function __velarProcessRetryableStop(owner, begin) {
+  owner.stopRequested = true;
+  let pending = owner.stopping;
+  if (!pending) {
+    pending = begin();
+    owner.stopping = pending;
+  }
+  try { await pending; }
+  catch (error) {
+    if (owner.stopping === pending) owner.stopping = null;
+    throw error;
+  }
+  return null;
+}
 function __velarProcessEnvironmentName(value) {
   return typeof value === "string" && __velarProcessCall(__velarProcessRegExpTest, __velarProcessEnvironmentPattern, [value]);
 }

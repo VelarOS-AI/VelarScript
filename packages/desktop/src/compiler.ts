@@ -528,12 +528,13 @@ class ProcessHandle {
     this.maxOutputBytes = maxOutputBytes;
     this.result = null;
     this.stopping = null;
+    this.stopRequested = false;
     this.reading = false;
     this.waitStarted = false;
     this.outputBytes = 0;
     this.next = async () => {
       if (this.waitStarted) throw new __velarProcessNativeError("Process output must be consumed before wait()");
-      if (this.stopping) throw new __velarProcessNativeError("Process output is unavailable after stop()");
+      if (this.stopRequested) throw new __velarProcessNativeError("Process output is unavailable after stop()");
       if (this.reading) throw new __velarProcessNativeError("Process.next() allows only one active pull");
       this.reading = true;
       try {
@@ -555,18 +556,14 @@ class ProcessHandle {
     return this.result;
   }
   async stop() {
-    if (!this.stopping) {
-      this.stopping = __velarProcessThen(invoke("stop", [this.handle], 10000), value => {
+    return await __velarProcessRetryableStop(this, () => __velarProcessThen(invoke("stop", [this.handle], 10000), value => {
         value = recordOf(value, "Desktop process stop result", processStopFields);
         const resultDescriptor = __velarProcessOwnDescriptor(value, "result");
         if (!resultDescriptor || !("value" in resultDescriptor)) throw new __velarProcessNativeTypeError("Desktop process stop result must contain result");
         const result = value.result == null ? null : resultOf(value.result, this.maxOutputBytes);
         if (!this.result && result) this.result = __velarProcessResolve(result);
         return null;
-      });
-    }
-    await this.stopping;
-    return null;
+      }));
   }
 }
 export const Process = __velarProcessFreeze({

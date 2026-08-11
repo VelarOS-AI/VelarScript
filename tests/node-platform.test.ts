@@ -1212,6 +1212,7 @@ test("Node process and HTTP runtimes preserve secret, cancellation, timeout, and
     { stdout: "stdout", stderr: "stderr" },
   );
   const secretName = `VELAR_NODE_SECRET_${process.pid}`;
+  let escapedPid: number | null = null;
   process.env[secretName] = "must-not-leak";
   try {
     const hidden = await processRuntime.run(process.execPath, ["-e", `process.stdout.write(process.env.${secretName} ?? "hidden")`]);
@@ -1400,7 +1401,41 @@ test("Node process and HTTP runtimes preserve secret, cancellation, timeout, and
     const descendantPid = Number(treeResult.stdout);
     assert.equal(Number.isSafeInteger(descendantPid), true);
     assert.throws(() => process.kill(descendantPid, 0), (error: unknown) => error instanceof Error && "code" in error && error.code === "ESRCH");
+
+    if (process.platform !== "win32") {
+      const escaped = await processRuntime.start(process.execPath, ["-e", `
+const {spawn} = require("node:child_process");
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  detached: true,
+  stdio: ["ignore", "inherit", "inherit"],
+});
+process.stdout.write(String(descendant.pid) + "\\n");
+setInterval(() => {}, 1000);
+      `], { timeout: 0 });
+      let escapedPidText = "";
+      while (!escapedPidText.includes("\n")) {
+        const output = await escaped.next();
+        assert.ok(output);
+        escapedPidText += output.text;
+      }
+      const parsedEscapedPid = Number(escapedPidText.trim());
+      assert.equal(Number.isSafeInteger(parsedEscapedPid), true);
+      escapedPid = parsedEscapedPid;
+      const stopStartedAt = Date.now();
+      await assert.rejects(escaped.stop(), /termination could not be confirmed within 5000 milliseconds/u);
+      assert.ok(Date.now() - stopStartedAt < 8_000, "Process.stop must reject within its owned confirmation deadline");
+      assert.doesNotThrow(() => process.kill(parsedEscapedPid, 0));
+      try { process.kill(-parsedEscapedPid, "SIGKILL"); }
+      catch { try { process.kill(parsedEscapedPid, "SIGKILL"); } catch {} }
+      await escaped.stop();
+      assert.notEqual((await escaped.wait()).signal, null);
+      escapedPid = null;
+    }
   } finally {
+    if (escapedPid !== null) {
+      try { process.kill(-escapedPid, "SIGKILL"); }
+      catch { try { process.kill(escapedPid, "SIGKILL"); } catch {} }
+    }
     delete process.env[secretName];
   }
 

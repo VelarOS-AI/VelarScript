@@ -30,6 +30,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   let hostileResponseReads = 0;
   let hostileProcessReads = 0;
   let hostileFilesystemReads = 0;
+  let retriableProcessStops = 0;
   const transportFailure = (phase: "request" | "response"): Error => {
     const error = new Error(phase === "request" ? "HTTP request transport failed" : "HTTP response transport failed");
     Object.defineProperty(error, "name", { value: "VelarDesktopHttpTransportError" });
@@ -62,6 +63,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         }
         if (args[0] === "hostile-read") return { handle: 10, pid: 702 };
         if (args[0] === "pending-read") return { handle: 11, pid: 703 };
+        if (args[0] === "retry-stop") return { handle: 12, pid: 704 };
         return { handle: 7, pid: 700 };
       }
       if (capability === "process" && operation === "read") {
@@ -90,7 +92,10 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         if (args[0] === 9) return { code: 0, signal: null, stdout: "one", stderr: "two" };
         return { code: 0, signal: null, stdout: "ready", stderr: "" };
       }
-      if (capability === "process" && operation === "stop") return { result: { code: null, signal: "SIGTERM", stdout: "", stderr: "" } };
+      if (capability === "process" && operation === "stop") {
+        if (args[0] === 12 && retriableProcessStops++ === 0) throw new Error("termination unconfirmed");
+        return { result: { code: null, signal: "SIGTERM", stdout: "", stderr: "" } };
+      }
       if (capability === "fs") {
         const path = args[0];
         if (operation === "readText") return path === "oversized.txt" ? "too large" : "value";
@@ -247,6 +252,13 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     const hostileWait = await processRuntime.start("hostile-wait");
     await assert.rejects(hostileWait.wait(), /enumerable data values/u);
     assert.equal(hostileProcessReads, 0);
+
+    const retriableStop = await processRuntime.start("retry-stop");
+    await assert.rejects(retriableStop.stop(), /termination unconfirmed/u);
+    await assert.rejects(retriableStop.next(), /unavailable after stop/u);
+    await retriableStop.stop();
+    assert.equal(retriableProcessStops, 2);
+    assert.deepEqual(await retriableStop.wait(), { code: null, signal: "SIGTERM", stdout: "", stderr: "" });
 
     const processStream = await processRuntime.start("stream");
     assert.deepEqual(await processStream.next(), { channel: "stdout", text: "one" });
