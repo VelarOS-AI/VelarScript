@@ -584,7 +584,12 @@ initialization therefore cannot change which case is selected.
   single-file build synchronizes only a synthetic `node_modules/velar` package
   carrying the CLI ownership marker, refuses to overwrite a foreign package,
   and removes an obsolete generated stylesheet when the current result has no
-  CSS. For every
+  CSS. The `velar run` adapter owns its spawned program through termination:
+  it forwards the first SIGINT/SIGTERM, escalates a second signal or its bounded
+  launcher deadline, waits for inherited stdio to close, and maps a
+  signal-terminated child to the conventional command status. This orchestration
+  stays outside the Node extension; `velar/host` owns only the cleanup semantics
+  inside the compiled program. For every
   declared extension it may load an optional `/host` export,
   validates framework-host protocol version 1 and matching compiler capability,
   and composes at most one application host. CLI source neither identifies the

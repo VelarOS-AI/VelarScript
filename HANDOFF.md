@@ -2112,12 +2112,49 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   增加 6,511 bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行
   函数返回值推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-117 用 Lite 的 crash consistency、并发 turn 和真实断连继续审计长期运行所有权。旧浏览器历史
+  分成 `sessions` 与 `messages` 两个 localStorage key；即使每个 key 都有类型和字节预算，崩溃仍可
+  让下一次启动看到来自两个不同 revision 的会话与消息。Lite 没有要求语言虚构 localStorage
+  transaction，而是把产品状态改成一个 typed `StoredChat`，以单次同步 `storage.set` 作为提交点。
+  最多 64 个 session、512 条 message 和完整 4 MiB 快照一起保留；淘汰时保住 active session、过滤
+  dangling message，并用 binary search 选择能放入整个 snapshot 的最新 message suffix。旧 split keys
+  无法证明同 revision，因此 clean-break 删除而不迁移。首条 user message、自动标题和 assistant
+  placeholder 也在一次持久化前完成，不再暴露半次 send；活动 turn 期间产品同时拒绝创建新 session。
+
+  Server 侧新增纯 Vel `TurnGate(4)`。同步 `tryEnter` 在任何 `await` 之前完成 check-and-increment；第五个
+  stream 得到一个有界 failed terminal，所有进入的 turn 都在嵌套 `finally` 中先执行 Agent cleanup、再
+  释放容量。真实无依赖 Node harness 启动编译后的纯 Vel server，永久验证 5 个并发请求严格为 4
+  completed + 1 failed、随后容量可复用、首 event 后断开客户端，以及断连收敛后 4 个并发请求全部
+  completed。AgentCore 在 tool escape 后若 cleanup 未确认会保留 active owner；terminal Agent 的
+  `cancel` 仍可重试，Lite 的 product composition 对 provider/tool 的幂等 cleanup 做一次立即重试，
+  Desktop、CLI 和 server 共用这一产品策略，未把 Agent API 放进语言包。
+
+  这条真实 server acceptance 同时暴露出独立的工具链缺陷：向 `velar run` 启动器发送 SIGINT/SIGTERM
+  只会杀死 CLI，编译后的 Vel 程序会成为 PPID 1 的孤儿并继续持有端口与继承的输出 pipe。没有在
+  Lite 用进程组脚本兜底；`@velarscript/cli` 现在保留 spawned program 所有权，首个信号转发给子进程
+  以触发 `velar/host.onShutdown`，第二个信号或有界外层 deadline 才强杀。外层窗口明确大于 Node
+  标准库公开的 30 秒 cleanup deadline，CLI 等到 inherited stdio 关闭并保留 130/143 conventional
+  status。永久回归只 signal launcher PID，同时要求 `ready`、`stopping`、close event、143 和完整
+  process group 消失，从而覆盖之前被普通 exit 断言漏掉的 orphan/pipe 生命周期。
+
+  当前组合证据为 `npm run check`（51 个格式化源、98 个文档示例、61 项 runtime boundary）、
+  550/550 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对本轮
+  rehearsal 六包的安装态验收，以及完整 Dev/Production/External Preview、27+6+15+6 三浏览器和
+  installed browser project。Lite 四项目 check、40 shared + 41 server tests、真实 concurrent/
+  disconnect server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/Desktop production
+  build 也全部通过。薄包为 803,164 bytes（784.3 KiB）：host 235,904、renderer 528,846、capability
+  host 37,021、metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `ad8012702095b36170b59bd750b4112a94c8510b9eba9f41239474c2131d1d63`；相比 W-116 只增加 370
+  bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值
+  推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-116 的完整 compiler/runtime、六包安装/rehearsal、Workbench 安装态、三引擎 Web 与独立
-   Lite 全门禁均已取得当前代码的明确 exit 0。下一波从真实长会话继续审计 crash consistency、
-   concurrent turn exclusion、server/client disconnect 与恢复语义；产品策略继续留在 Lite，只把重新
-   出现的通用语言、Node/Web/Desktop API 缺口修回官方包。
+1. W-117 的 crash consistency、concurrent turn exclusion、server/client disconnect、启动器信号
+   所有权与完整 compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从
+   多会话长时间运行、失败重启和工具恢复审计可观测性、resource ownership 与 host backpressure；
+   产品策略继续留在 Lite，只把通用语言、Node/Web/Desktop API 缺口修回官方包。
 2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；
    它只能像普通第三方一样消费公开的 `@velarscript/*` 包。继续扩展真实使用场景，但不得把产品
    Agent/provider/tool policy、workspace 或 approval UI 重新放回语言包。

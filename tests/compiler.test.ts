@@ -5007,6 +5007,65 @@ print(iso(0))
   assert.match(help.stdout, /Usage: velar run \[entry\.vel \| project-directory\] \[-- <program-arguments>\.\.\.\]/u);
 });
 
+test("CLI run forwards termination to the compiled program and closes inherited streams", { skip: process.platform === "win32" }, async () => {
+  const cli = resolve("packages/cli/src/cli.ts");
+  const directory = await mkdtemp(join(tmpdir(), "velar-run-signal-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+import {sleep} from "velar/async"
+import {onShutdown} from "velar/host"
+
+async def shutdown() -> null:
+    print("stopping")
+
+onShutdown(shutdown)
+print("ready")
+while true:
+    await sleep(1000)
+`.trimStart(), "utf8");
+
+  const child = spawn(process.execPath, [cli, "run", entry], {
+    cwd: process.cwd(),
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => { output += chunk; });
+  child.stderr.on("data", (chunk: string) => { output += chunk; });
+  await new Promise<void>((resolveReady, rejectReady) => {
+    const timeout = setTimeout(() => rejectReady(new Error(`velar run did not become ready: ${output}`)), 10_000);
+    const inspect = (): void => {
+      if (!output.includes("ready\n")) return;
+      clearTimeout(timeout);
+      child.stdout.off("data", inspect);
+      resolveReady();
+    };
+    child.stdout.on("data", inspect);
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      rejectReady(new Error(`velar run exited ${String(code)} before readiness: ${output}`));
+    });
+    inspect();
+  });
+
+  child.kill("SIGTERM");
+  const close = new Promise<number | null>((resolveClose) => child.once("close", resolveClose));
+  let timeoutHandle: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, rejectTimeout) => {
+    timeoutHandle = setTimeout(() => {
+      try { process.kill(-child.pid!, "SIGKILL"); } catch {}
+      rejectTimeout(new Error(`velar run left its compiled program or inherited streams alive: ${output}`));
+    }, 5_000);
+  });
+  const code = await Promise.race([close, timeout]);
+  clearTimeout(timeoutHandle!);
+  assert.equal(code, 143, output);
+  assert.match(output, /ready\nstopping\n/u);
+  assert.throws(() => process.kill(-child.pid!, 0), (error: NodeJS.ErrnoException) => error.code === "ESRCH");
+});
+
 test("CLI run rejects web framework projects and points to dev and build", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-run-web-"));
   const projectRoot = join(directory, "web-app");

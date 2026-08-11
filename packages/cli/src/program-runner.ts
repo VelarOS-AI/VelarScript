@@ -5,6 +5,11 @@ import { compileProject } from "./project.ts";
 import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { prepareStandardModules } from "./test-runner.ts";
 
+// velar/host owns a 30-second in-program graceful-shutdown window. The outer
+// launcher must not truncate that public contract; this margin only catches a
+// child that ignored the signal or failed to exit after its own deadline.
+const runShutdownDeadlineMs = 35_000;
+
 export async function runProgram(config: VelarProjectConfig, programArguments: readonly string[]): Promise<number> {
   const project = await compileProject(config.entryPath, new Map(), {
     sourceRoot: config.root,
@@ -42,7 +47,37 @@ export async function runProgram(config: VelarProjectConfig, programArguments: r
 function executeNodeProgram(entryPath: string, programArguments: readonly string[]): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--enable-source-maps", entryPath, ...programArguments], { stdio: "inherit" });
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code ?? 1));
+    let forwardedSignal: "SIGINT" | "SIGTERM" | null = null;
+    let shutdownDeadline: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = (): void => {
+      process.off("SIGINT", onInterrupt);
+      process.off("SIGTERM", onTerminate);
+      if (shutdownDeadline) clearTimeout(shutdownDeadline);
+    };
+    const forward = (signal: "SIGINT" | "SIGTERM"): void => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (forwardedSignal !== null) {
+        child.kill("SIGKILL");
+        return;
+      }
+      forwardedSignal = signal;
+      child.kill(signal);
+      shutdownDeadline = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, runShutdownDeadlineMs);
+      shutdownDeadline.unref();
+    };
+    const onInterrupt = (): void => forward("SIGINT");
+    const onTerminate = (): void => forward("SIGTERM");
+    process.on("SIGINT", onInterrupt);
+    process.on("SIGTERM", onTerminate);
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      cleanup();
+      resolve(code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1));
+    });
   });
 }

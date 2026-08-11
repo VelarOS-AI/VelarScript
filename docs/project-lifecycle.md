@@ -92,6 +92,15 @@ stack traces map back to `.vel` sources. Entry resolution mirrors
 `velar check`. Projects that enable a web application framework are rejected
 and belong to `velar dev` and `velar build`.
 
+The command remains the lifecycle owner of that compiled child. Its first
+SIGINT or SIGTERM is forwarded so `velar/host.onShutdown` can finish the
+program's registered cleanup; the launcher's deadline exceeds the public
+30-second cleanup window. A second signal, or an expired launcher deadline,
+force-terminates the child. The CLI waits for the child's inherited
+stdio to close and reports conventional status 130 or 143 when the child exits
+from the forwarded signal, so terminating the command cannot leave a detached
+VelarScript program holding files, ports, or output streams.
+
 `velar test` and `velar run` compile into a short-lived sandbox inside the
 project — `.velar/test-*` and `.velar/run-*` — rather than the system
 temporary directory. Keeping the compiled tree inside the project preserves
