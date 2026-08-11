@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { basename, join, resolve } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { velarDesktopFramework } from "../packages/desktop/src/index.ts";
@@ -32,18 +32,40 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
         identifier: "dev.velarscript.fixture",
         permissions: {
           files: ["project"],
-          processes: ["git"],
+          processes: ["git", basename(process.execPath)],
           network: ["https://api.example.com"],
-          environment: ["LANG"],
+          environment: ["LANG", "VELAR_DESKTOP_GENERATION_SMOKE"],
           secrets: ["OPENAI_API_KEY"],
         },
       },
     }, null, 2), "utf8");
     await writeFile(join(projectRoot, "src", "main.vel"), `
-import {appDataDirectory, platform} from "velar/desktop"
-import {readText, writeText} from "velar/fs"
+import {appDataDirectory, platform, projectDirectory} from "velar/desktop"
+import {createText, exists, readText, writeText} from "velar/fs"
 import {get} from "velar/env"
 import {ProcessOutputChannel, run, start} from "velar/process"
+import {reload} from "velar/web"
+
+component GenerationProbe:
+    mounted:
+        if get("VELAR_DESKTOP_GENERATION_SMOKE") == "1":
+            const root = await projectDirectory()
+            const marker = root + "/generation-marker.txt"
+            if await exists(marker):
+                await writeText(root + "/generation-success.txt", "ready")
+            else:
+                await createText(marker, "first")
+                const child = await start("${basename(process.execPath)}", [
+                    "-e",
+                    "const fs=require('node:fs');fs.writeFileSync(process.argv[1],String(process.pid));process.stdout.write('ready');setInterval(()=>{},1000)",
+                    root + "/generation-child.pid",
+                ], {timeout: 0, maxOutputBytes: 1024})
+                const output = await child.next()
+                if output == null or output.text != "ready":
+                    throw Error("Generation smoke child did not start")
+                reload()
+
+    return <span data-generation-probe></span>
 
 component App:
     state detail = platform()
@@ -62,6 +84,7 @@ component App:
         detail = await readText(probe) + ":" + (get("LANG") ?? "") + streamed + git.stdout + second.stdout
 
     return <main>
+        <GenerationProbe />
         <h1>VelarScript Desktop</h1>
         <button on:click={inspectHost}>Inspect host</button>
         <p>{detail}</p>
@@ -140,6 +163,34 @@ mount(<App />, "#app")
     });
     assert.equal(invalidRootSmoke.status, 1);
     assert.match(invalidRootSmoke.stderr, /must be an absolute path/u);
+
+    const generationHost = spawn(join(application, "Contents", "MacOS", "VelarDesktopHost"), [], {
+      env: {
+        ...smokeEnvironment,
+        VELAR_DESKTOP_GENERATION_SMOKE: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let generationHostError = "";
+    generationHost.stderr.setEncoding("utf8");
+    generationHost.stderr.on("data", (chunk: string) => { generationHostError += chunk; });
+    let generationChildPid: number | null = null;
+    try {
+      const pidText = await waitForText(join(projectRoot, "generation-child.pid"), 15_000, () => generationHostError);
+      generationChildPid = Number(pidText);
+      assert.ok(Number.isSafeInteger(generationChildPid) && generationChildPid > 0, pidText);
+      assert.equal(await waitForText(join(projectRoot, "generation-success.txt"), 15_000, () => generationHostError), "ready");
+      await waitForProcessExit(generationChildPid, 5_000);
+      generationChildPid = null;
+      assert.equal(generationHost.exitCode, null, generationHostError);
+    } finally {
+      if (generationChildPid !== null) terminateProcessGroup(generationChildPid);
+      if (generationHost.exitCode === null) generationHost.kill("SIGTERM");
+      await new Promise<void>((resolveExit) => {
+        if (generationHost.exitCode !== null) resolveExit();
+        else generationHost.once("exit", () => resolveExit());
+      });
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -182,6 +233,30 @@ async function linkDesktopExtension(projectRoot: string): Promise<void> {
   const scope = join(projectRoot, "node_modules", "@velarscript");
   await mkdir(scope, { recursive: true });
   await symlink(resolve("packages/desktop"), join(scope, "desktop"), "dir");
+}
+
+async function waitForText(path: string, timeoutMs: number, diagnostic: () => string): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try { return await readFile(path, "utf8"); }
+    catch { await new Promise((resolveWait) => setTimeout(resolveWait, 25)); }
+  }
+  throw new Error(`Timed out waiting for ${path}${diagnostic() ? `: ${diagnostic()}` : ""}`);
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); }
+    catch { return; }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Desktop reload left generation-owned process ${pid} alive`);
+}
+
+function terminateProcessGroup(pid: number): void {
+  try { process.kill(-pid, "SIGKILL"); }
+  catch { try { process.kill(pid, "SIGKILL"); } catch {} }
 }
 
 function manifestEntry(source: string): string {

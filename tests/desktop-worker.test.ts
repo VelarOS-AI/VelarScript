@@ -307,6 +307,35 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
         && (error as Error & { kind?: unknown }).kind === "http-transport"
         && (error as Error & { phase?: unknown }).phase === "response",
     );
+
+    const retiredOwner = "00000000000000000000000000000001";
+    const replacementOwner = "00000000000000000000000000000002";
+    const retiredProcess = await client.call("process", "start", [
+      basename(process.execPath),
+      ["-e", "setInterval(() => {}, 1000)"],
+      { timeout: 0, maxOutputBytes: 65536 },
+    ]) as { handle: number; pid: number };
+    await client.call("http", "request", [18, "GET", `${origin}/slow`, { maxBytes: 1024, timeout: 0 }]);
+    client.useOwner(replacementOwner);
+    await client.call("http", "request", [18, "GET", `${origin}/stream`, { maxBytes: 1024, timeout: 1000 }]);
+    let replacementText = "";
+    while (true) {
+      const chunk = await client.call("http", "read", [18]) as { done: boolean; text: string };
+      replacementText += chunk.text;
+      if (chunk.done) break;
+    }
+    assert.equal(replacementText, "desktop-ready");
+    await assert.rejects(
+      client.call("process", "wait", [retiredProcess.handle]),
+      /belongs to another document generation|unknown or already released/u,
+    );
+    let retiredProcessExists = true;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { process.kill(retiredProcess.pid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+      catch { retiredProcessExists = false; break; }
+    }
+    assert.equal(retiredProcessExists, false, "activating a new document generation must reap the old document process");
+    assert.ok(client.lifecycle().some((event) => event.hostEvent === "process-owned" && event.owner === retiredOwner && event.handle === retiredProcess.handle));
   } finally {
     client.close();
     await Promise.all([server, redirectServer, ungrantedServer].map(closeServer));
@@ -489,8 +518,8 @@ test("Desktop capability host drains transferred process ownership before a fata
   }), "utf8");
   const source = await readFile(workerPath, "utf8");
   const crashingSource = source.replace(
-    'respond({ protocolVersion: 1, hostEvent: "process-owned", handle, pid: task.pid });',
-    'respond({ protocolVersion: 1, hostEvent: "process-owned", handle, pid: task.pid }); setTimeout(() => { throw new Error("injected Desktop worker crash"); }, 100); await new Promise(() => {});',
+    'respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });',
+    'respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid }); setTimeout(() => { throw new Error("injected Desktop worker crash"); }, 100); await new Promise(() => {});',
   );
   assert.notEqual(crashingSource, source);
   const crashingWorker = join(directory, "worker.mjs");
@@ -526,16 +555,18 @@ function terminateProcessGroup(pid: number): void {
 class WorkerClient {
   private nextId = 1;
   private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
-  private readonly lifecycleEvents: Array<{ hostEvent: string; handle: number; pid?: number }> = [];
+  private readonly lifecycleEvents: Array<{ hostEvent: string; owner: string; handle: number; pid?: number }> = [];
   private readonly child: ChildProcessWithoutNullStreams;
+  private owner = "00000000000000000000000000000001";
 
   constructor(child: ChildProcessWithoutNullStreams) {
     this.child = child;
+    this.writeHostCommand("owner-activate", this.owner);
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on("line", (line) => {
-      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown }; hostEvent?: string; handle?: number; pid?: number };
-      if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled") && Number.isSafeInteger(message.handle)) {
-        this.lifecycleEvents.push({ hostEvent: message.hostEvent, handle: message.handle as number, ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}) });
+      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown }; hostEvent?: string; owner?: string; handle?: number; pid?: number };
+      if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled") && Number.isSafeInteger(message.handle) && typeof message.owner === "string") {
+        this.lifecycleEvents.push({ hostEvent: message.hostEvent, owner: message.owner, handle: message.handle as number, ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}) });
         return;
       }
       const request = this.pending.get(message.id);
@@ -561,12 +592,25 @@ class WorkerClient {
   call(capability: string, operation: string, args: readonly unknown[]): Promise<unknown> {
     const id = this.nextId++;
     const result = new Promise<unknown>((resolveCall, rejectCall) => this.pending.set(id, { resolve: resolveCall, reject: rejectCall }));
-    this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, id, capability, operation, args })}\n`);
+    this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, id, owner: this.owner, capability, operation, args })}\n`);
     return result;
   }
 
-  lifecycle(): readonly { hostEvent: string; handle: number; pid?: number }[] {
+  useOwner(owner: string): void {
+    this.writeHostCommand("owner-activate", owner);
+    this.owner = owner;
+  }
+
+  retireOwner(): void {
+    this.writeHostCommand("owner-retire", this.owner);
+  }
+
+  lifecycle(): readonly { hostEvent: string; owner: string; handle: number; pid?: number }[] {
     return this.lifecycleEvents;
+  }
+
+  private writeHostCommand(hostCommand: string, owner: string): void {
+    this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, hostCommand, owner })}\n`);
   }
 
   close(): void {

@@ -11,6 +11,8 @@ private let bridgeScript = #"""
   const hostAtob = atob
   const hostBtoa = btoa
   const hostClearTimeout = clearTimeout
+  const hostCrypto = globalThis.crypto
+  const hostCryptoGetRandomValues = hostCrypto?.getRandomValues
   const hostError = Error
   const hostJsonParse = JSON.parse
   const hostJsonStringify = JSON.stringify
@@ -23,6 +25,7 @@ private let bridgeScript = #"""
   const hostMathCeil = Math.ceil
   const hostMathMin = Math.min
   const hostNumberIsSafeInteger = Number.isSafeInteger
+  const hostNumberMaxSafeInteger = Number.MAX_SAFE_INTEGER
   const hostObjectDefineProperty = Object.defineProperty
   const hostPromise = Promise
   const hostRangeError = RangeError
@@ -46,10 +49,25 @@ private let bridgeScript = #"""
   const mapSize = (map) => hostApply(hostMapSize, map, [])
   const key = Symbol.for("velar.desktop.bridge.v1")
   if (Object.getOwnPropertyDescriptor(globalThis, key)) throw new Error("VelarScript Desktop bridge already exists")
+  if (typeof hostCryptoGetRandomValues !== "function") throw new Error("VelarScript Desktop requires Web Crypto")
+  const generationBytes = new hostUint8Array(16)
+  hostApply(hostCryptoGetRandomValues, hostCrypto, [generationBytes])
+  const hex = "0123456789abcdef"
+  let generation = ""
+  for (const byte of generationBytes) generation += hex[byte >>> 4] + hex[byte & 15]
   const pending = new hostMap()
   const responseChunks = new hostMap()
   let nextId = 1
-  const complete = (message) => {
+  const allocateId = () => {
+    for (let attempt = 0; attempt <= 1024; attempt += 1) {
+      const id = nextId
+      nextId = nextId >= hostNumberMaxSafeInteger ? 1 : nextId + 1
+      if (!mapHas(pending, id)) return id
+    }
+    throw new hostRangeError("Desktop request identity space is exhausted")
+  }
+  const complete = (owner, message) => {
+    if (owner !== generation) return
     if (!message || typeof message !== "object" || !hostNumberIsSafeInteger(message.id)) return
     const request = mapGet(pending, message.id)
     if (!request) return
@@ -82,7 +100,8 @@ private let bridgeScript = #"""
     }
     return hostApply(hostBtoa, globalThis, [binary])
   }
-  const receiveChunk = (id, index, total, encoded) => {
+  const receiveChunk = (owner, id, index, total, encoded) => {
+    if (owner !== generation) return
     if (!hostNumberIsSafeInteger(id) || !mapHas(pending, id) || !hostNumberIsSafeInteger(index) || index < 0
       || !hostNumberIsSafeInteger(total) || total < 1 || total > 1024 || index >= total
       || typeof encoded !== "string" || encoded.length > 262144) return
@@ -103,10 +122,10 @@ private let bridgeScript = #"""
       let offset = 0
       for (const item of state.parts) { hostApply(hostUint8ArraySet, bytes, [item, offset]); offset += item.byteLength }
       mapDelete(responseChunks, id)
-      complete(hostApply(hostJsonParse, JSON, [hostApply(hostTextDecode, hostTextDecoder, [bytes])]))
+      complete(owner, hostApply(hostJsonParse, JSON, [hostApply(hostTextDecode, hostTextDecoder, [bytes])]))
     } catch (error) {
       mapDelete(responseChunks, id)
-      complete({id, ok: false, error: error instanceof hostError ? error.message : "Invalid Desktop response transport"})
+      complete(owner, {id, ok: false, error: error instanceof hostError ? error.message : "Invalid Desktop response transport"})
     }
   }
   Object.defineProperty(globalThis, "__velarDesktopTransportChunk", {
@@ -125,7 +144,7 @@ const bridge = Object.freeze({
         return hostPromise.reject(new hostRangeError("Invalid Desktop bridge timeout"))
       }
       if (mapSize(pending) >= 1024) return hostPromise.reject(new hostRangeError("Too many pending Desktop requests"))
-      const id = nextId++
+      const id = allocateId()
       return new hostPromise((resolve, reject) => {
         const timer = timeoutMs === 0 ? null : hostSetTimeout(() => {
           mapDelete(pending, id)
@@ -134,7 +153,7 @@ const bridge = Object.freeze({
         }, timeoutMs)
         mapSet(pending, id, {resolve, reject, timer})
         try {
-          const request = {protocolVersion: 1, id, capability, operation, args}
+          const request = {protocolVersion: 1, generation, id, capability, operation, args}
           const bytes = hostApply(hostTextEncode, hostTextEncoder, [hostApply(hostJsonStringify, JSON, [request])])
           if (bytes.byteLength > 128 * 1024 * 1024) throw new hostRangeError("Desktop request exceeds its transport bound")
           if (bytes.byteLength <= 512 * 1024) {
@@ -145,7 +164,7 @@ const bridge = Object.freeze({
             if (total > 1024) throw new hostRangeError("Desktop request has too many transport chunks")
             for (let index = 0; index < total; index += 1) {
               const part = hostApply(hostUint8ArraySubarray, bytes, [index * chunkBytes, hostMathMin(bytes.byteLength, (index + 1) * chunkBytes)])
-              hostApply(hostPostMessage, hostMessageHandler, [{protocolVersion: 1, transport: "chunk", id, index, total, base64: encodeBase64(part)}])
+              hostApply(hostPostMessage, hostMessageHandler, [{protocolVersion: 1, transport: "chunk", generation, id, index, total, base64: encodeBase64(part)}])
             }
           }
         } catch (error) {
@@ -182,7 +201,19 @@ private struct PermissionConfiguration: Decodable {
     let secrets: [String]
 }
 
+private struct BridgeIdentity: Hashable {
+    let generation: String
+    let id: Int
+}
+
+private func validatedBridgeGeneration(_ value: Any?) -> String? {
+    guard let value = value as? String, value.utf8.count == 32,
+          value.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) }) else { return nil }
+    return value
+}
+
 private struct BridgeRequest {
+    let generation: String
     let id: Int
     let capability: String
     let operation: String
@@ -191,6 +222,7 @@ private struct BridgeRequest {
     init?(_ body: [String: Any]) {
         guard body.count <= 6,
               body["protocolVersion"] as? Int == 1,
+              let generation = validatedBridgeGeneration(body["generation"]),
               let id = body["id"] as? Int, id > 0,
               let capability = body["capability"] as? String, !capability.isEmpty, capability.count <= 128,
               let operation = body["operation"] as? String, !operation.isEmpty, operation.count <= 128,
@@ -198,6 +230,7 @@ private struct BridgeRequest {
               let encoded = try? JSONSerialization.data(withJSONObject: body), encoded.count <= 128 * 1024 * 1024 else {
             return nil
         }
+        self.generation = generation
         self.id = id
         self.capability = capability
         self.operation = operation
@@ -206,20 +239,23 @@ private struct BridgeRequest {
 }
 
 private struct BridgeTransportChunk {
+    let generation: String
     let id: Int
     let index: Int
     let total: Int
     let data: Data
 
     init?(_ body: [String: Any]) {
-        guard body.count <= 7,
+        guard body.count <= 8,
               body["protocolVersion"] as? Int == 1,
               body["transport"] as? String == "chunk",
+              let generation = validatedBridgeGeneration(body["generation"]),
               let id = body["id"] as? Int, id > 0,
               let index = body["index"] as? Int, index >= 0,
               let total = body["total"] as? Int, total >= 1, total <= 1024, index < total,
               let base64 = body["base64"] as? String, base64.count <= 262144,
               let data = Data(base64Encoded: base64), data.count <= 192 * 1024 else { return nil }
+        self.generation = generation
         self.id = id
         self.index = index
         self.total = total
@@ -227,7 +263,8 @@ private struct BridgeTransportChunk {
     }
 }
 
-private func deliverBridgeResponse(_ data: Data, to webView: WKWebView?) {
+private func deliverBridgeResponse(_ data: Data, generation: String, to webView: WKWebView?) {
+    guard validatedBridgeGeneration(generation) != nil else { return }
     guard let id = responseIdentifier(data) else { return }
     let chunkBytes = 192 * 1024
     let total = max(1, (data.count + chunkBytes - 1) / chunkBytes)
@@ -236,7 +273,7 @@ private func deliverBridgeResponse(_ data: Data, to webView: WKWebView?) {
         let lower = index * chunkBytes
         let upper = min(data.count, lower + chunkBytes)
         let encoded = data.subdata(in: lower..<upper).base64EncodedString()
-        webView?.evaluateJavaScript("globalThis.__velarDesktopTransportChunk(\(id),\(index),\(total),\"\(encoded)\")")
+        webView?.evaluateJavaScript("globalThis.__velarDesktopTransportChunk(\"\(generation)\",\(id),\(index),\(total),\"\(encoded)\")")
     }
 }
 
@@ -309,13 +346,26 @@ private func nodeMajorVersion(_ executable: URL) -> Int? {
 }
 
 private final class NodeCapabilityHost {
+    private struct PendingRequest {
+        let identity: BridgeIdentity
+        var retired: Bool
+    }
+
+    private struct ProcessOwner {
+        let pid: pid_t
+        let generation: String
+    }
+
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
     private let errors = Pipe()
     private var buffer = Data()
-    private var pending = Set<Int>()
-    private var processOwners: [Int: pid_t] = [:]
+    private var pending: [Int: PendingRequest] = [:]
+    private var activeIdentities = Set<BridgeIdentity>()
+    private var activeGeneration: String?
+    private var nextWorkerRequestID = 1
+    private var processOwners: [Int: ProcessOwner] = [:]
     private var failure: String?
     private var reaping = false
     private let queue = DispatchQueue(label: "velar.desktop.node-worker")
@@ -349,27 +399,45 @@ private final class NodeCapabilityHost {
         guard data.count <= 128 * 1024 * 1024 else { throw NSError(domain: "VelarDesktop", code: 413, userInfo: [NSLocalizedDescriptionKey: "Desktop request exceeds its transport bound"]) }
         queue.async { [weak self] in
             guard let self else { return }
-            if self.pending.contains(request.id) {
-                self.complete(id: request.id, error: "Desktop request identity is already pending")
+            let identity = BridgeIdentity(generation: request.generation, id: request.id)
+            if self.activeIdentities.contains(identity) {
+                self.complete(identity: identity, error: "Desktop request identity is already pending")
                 return
             }
-            self.pending.insert(request.id)
             if let failure = self.failure {
-                self.pending.remove(request.id)
-                self.complete(id: request.id, error: failure)
+                self.complete(identity: identity, error: failure)
                 return
             }
             guard self.process.isRunning else {
                 self.fail("Desktop Node capability host is not running")
+                self.complete(identity: identity, error: self.failure ?? "Desktop Node capability host is not running")
+                return
+            }
+            if self.pending.count >= 1024 {
+                self.complete(identity: identity, error: "Too many pending Desktop capability requests")
                 return
             }
             do {
-                try self.input.fileHandleForWriting.write(contentsOf: data)
-                try self.input.fileHandleForWriting.write(contentsOf: Data([0x0A]))
+                try self.activate(generation: request.generation)
+                guard let workerID = self.allocateWorkerRequestID() else {
+                    self.complete(identity: identity, error: "Desktop capability request identity space is exhausted")
+                    return
+                }
+                var forwarded = body
+                forwarded.removeValue(forKey: "generation")
+                forwarded["id"] = workerID
+                forwarded["owner"] = request.generation
+                self.pending[workerID] = PendingRequest(identity: identity, retired: false)
+                self.activeIdentities.insert(identity)
+                try self.write(forwarded)
             } catch {
                 self.fail("Desktop Node capability host write failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    func retire(generation: String) {
+        queue.async { [weak self] in self?.retireGeneration(generation) }
     }
 
     func stop() {
@@ -392,13 +460,22 @@ private final class NodeCapabilityHost {
                 if failure != nil { return }
                 continue
             }
-            guard let id = object["id"] as? Int, id > 0, pending.remove(id) != nil else {
+            guard let id = object["id"] as? Int, id > 0,
+                  let request = pending.removeValue(forKey: id) else {
                 fail("Desktop Node capability host returned an unknown response")
                 return
             }
-            let encoded = Data(line)
+            activeIdentities.remove(request.identity)
+            if request.retired { continue }
+            var response = object
+            response["id"] = request.identity.id
+            guard let encoded = try? JSONSerialization.data(withJSONObject: response),
+                  encoded.count <= 65 * 1024 * 1024 else {
+                fail("Desktop Node capability host returned an invalid response")
+                return
+            }
             DispatchQueue.main.async { [weak self] in
-                deliverBridgeResponse(encoded, to: self?.webView)
+                deliverBridgeResponse(encoded, generation: request.identity.generation, to: self?.webView)
             }
         }
         if buffer.count > 65 * 1024 * 1024 { fail("Desktop Node capability host response exceeded its transport bound") }
@@ -406,22 +483,26 @@ private final class NodeCapabilityHost {
 
     private func handle(event: String, object: [String: Any]) {
         guard object["protocolVersion"] as? Int == 1,
-              let handle = object["handle"] as? Int, handle > 0 else {
+              let handle = object["handle"] as? Int, handle > 0,
+              let generation = validatedBridgeGeneration(object["owner"]) else {
             fail("Desktop Node capability host returned an invalid lifecycle event")
             return
         }
         switch event {
         case "process-owned":
-            guard let pid = object["pid"] as? Int, pid > 0, pid <= Int(Int32.max), processOwners[handle] == nil else {
+            guard let pid = object["pid"] as? Int, pid > 0, pid <= Int(Int32.max),
+                  processOwners[handle] == nil,
+                  generation == activeGeneration || pending.values.contains(where: { $0.identity.generation == generation }) else {
                 fail("Desktop Node capability host returned an invalid process owner")
                 return
             }
-            processOwners[handle] = pid_t(pid)
+            processOwners[handle] = ProcessOwner(pid: pid_t(pid), generation: generation)
         case "process-settled":
-            guard processOwners.removeValue(forKey: handle) != nil else {
+            guard let owner = processOwners[handle], owner.generation == generation else {
                 fail("Desktop Node capability host settled an unknown process owner")
                 return
             }
+            processOwners.removeValue(forKey: handle)
         default:
             fail("Desktop Node capability host returned an unknown lifecycle event")
         }
@@ -434,15 +515,60 @@ private final class NodeCapabilityHost {
         errors.fileHandleForReading.readabilityHandler = nil
         try? input.fileHandleForWriting.close()
         if process.isRunning { process.terminate() }
-        let ids = Array(pending)
+        let requests = Array(pending.values)
         pending.removeAll(keepingCapacity: false)
-        for id in ids { complete(id: id, error: message) }
+        activeIdentities.removeAll(keepingCapacity: false)
+        activeGeneration = nil
+        for request in requests where !request.retired { complete(identity: request.identity, error: message) }
         reapProcessOwners()
     }
 
-    private func complete(id: Int, error: String) {
-        guard let data = try? JSONSerialization.data(withJSONObject: ["id": id, "ok": false, "error": error]) else { return }
-        DispatchQueue.main.async { [weak self] in deliverBridgeResponse(data, to: self?.webView) }
+    private func complete(identity: BridgeIdentity, error: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["id": identity.id, "ok": false, "error": error]) else { return }
+        DispatchQueue.main.async { [weak self] in
+            deliverBridgeResponse(data, generation: identity.generation, to: self?.webView)
+        }
+    }
+
+    private func allocateWorkerRequestID() -> Int? {
+        for _ in 0...1024 {
+            let candidate = nextWorkerRequestID
+            nextWorkerRequestID = nextWorkerRequestID >= 9_007_199_254_740_991 ? 1 : nextWorkerRequestID + 1
+            if pending[candidate] == nil { return candidate }
+        }
+        return nil
+    }
+
+    private func write(_ object: [String: Any]) throws {
+        var data = try JSONSerialization.data(withJSONObject: object)
+        guard data.count <= 128 * 1024 * 1024 else {
+            throw NSError(domain: "VelarDesktop", code: 413, userInfo: [NSLocalizedDescriptionKey: "Desktop request exceeds its transport bound"])
+        }
+        data.append(0x0A)
+        try input.fileHandleForWriting.write(contentsOf: data)
+    }
+
+    private func activate(generation: String) throws {
+        if activeGeneration == generation { return }
+        if let previous = activeGeneration { retireGeneration(previous) }
+        guard failure == nil else { throw NSError(domain: "VelarDesktop", code: 500, userInfo: [NSLocalizedDescriptionKey: failure!]) }
+        try write(["protocolVersion": 1, "hostCommand": "owner-activate", "owner": generation])
+        activeGeneration = generation
+    }
+
+    private func retireGeneration(_ generation: String) {
+        for (id, request) in pending where request.identity.generation == generation {
+            pending[id]?.retired = true
+            activeIdentities.remove(request.identity)
+        }
+        if activeGeneration == generation { activeGeneration = nil }
+        for owner in processOwners.values where owner.generation == generation { _ = Darwin.kill(-owner.pid, SIGKILL) }
+        guard failure == nil, process.isRunning else { return }
+        do {
+            try write(["protocolVersion": 1, "hostCommand": "owner-retire", "owner": generation])
+        } catch {
+            fail("Desktop Node capability host write failed: \(error.localizedDescription)")
+        }
     }
 
     private func reapProcessOwners() {
@@ -451,9 +577,9 @@ private final class NodeCapabilityHost {
         let reap = { [weak self] in
             guard let self else { return }
             var settled: [Int] = []
-            for (handle, pid) in self.processOwners {
-                _ = Darwin.kill(-pid, SIGKILL)
-                if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { settled.append(handle) }
+            for (handle, owner) in self.processOwners {
+                _ = Darwin.kill(-owner.pid, SIGKILL)
+                if Darwin.kill(-owner.pid, 0) == -1 && errno == ESRCH { settled.append(handle) }
             }
             for handle in settled { self.processOwners.removeValue(forKey: handle) }
             if self.processOwners.isEmpty {
@@ -559,8 +685,11 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     private let identifier: String
     private let projectDirectory: String
     private let worker: NodeCapabilityHost
-    private var incomingChunks: [Int: IncomingChunks] = [:]
+    private var incomingChunks: [BridgeIdentity: IncomingChunks] = [:]
     private var incomingBytes = 0
+    private var activeGeneration: String?
+    private var retiredGenerations = Set<String>()
+    private var retiredGenerationOrder: [String] = []
     weak var webView: WKWebView?
 
     init(identifier: String, projectDirectory: String, worker: NodeCapabilityHost) {
@@ -577,32 +706,56 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
             return
         }
         guard let request = BridgeRequest(body) else { return }
+        guard accept(generation: request.generation) else {
+            complete(identity: BridgeIdentity(generation: request.generation, id: request.id), value: nil, error: "Desktop document generation is no longer active")
+            return
+        }
         handle(request, body: body)
     }
 
+    func retireDocument() {
+        guard let generation = activeGeneration else { return }
+        activeGeneration = nil
+        if retiredGenerations.insert(generation).inserted {
+            retiredGenerationOrder.append(generation)
+            if retiredGenerationOrder.count > 1024 {
+                retiredGenerations.remove(retiredGenerationOrder.removeFirst())
+            }
+        }
+        let discarded = incomingChunks.filter { $0.key.generation == generation }
+        for (identity, state) in discarded {
+            incomingBytes -= state.data.count
+            incomingChunks.removeValue(forKey: identity)
+        }
+        worker.retire(generation: generation)
+    }
+
     private func receiveChunk(_ body: [String: Any]) {
-        guard let chunk = BridgeTransportChunk(body), incomingChunks.count < 16 || incomingChunks[chunk.id] != nil else { return }
-        var state = incomingChunks[chunk.id] ?? IncomingChunks(total: chunk.total, nextIndex: 0, data: Data())
+        guard let chunk = BridgeTransportChunk(body) else { return }
+        let identity = BridgeIdentity(generation: chunk.generation, id: chunk.id)
+        guard accept(generation: chunk.generation), incomingChunks.count < 16 || incomingChunks[identity] != nil else { return }
+        var state = incomingChunks[identity] ?? IncomingChunks(total: chunk.total, nextIndex: 0, data: Data())
         guard state.total == chunk.total, state.nextIndex == chunk.index,
               incomingBytes + chunk.data.count <= 128 * 1024 * 1024 else {
             incomingBytes -= state.data.count
-            incomingChunks.removeValue(forKey: chunk.id)
-            complete(id: chunk.id, value: nil, error: "Invalid Desktop request chunk sequence")
+            incomingChunks.removeValue(forKey: identity)
+            complete(identity: identity, value: nil, error: "Invalid Desktop request chunk sequence")
             return
         }
         state.data.append(chunk.data)
         state.nextIndex += 1
         incomingBytes += chunk.data.count
         if state.nextIndex < state.total {
-            incomingChunks[chunk.id] = state
+            incomingChunks[identity] = state
             return
         }
-        incomingChunks.removeValue(forKey: chunk.id)
+        incomingChunks.removeValue(forKey: identity)
         incomingBytes -= state.data.count
         guard let value = try? JSONSerialization.jsonObject(with: state.data),
               let decoded = value as? [String: Any],
-              let request = BridgeRequest(decoded), request.id == chunk.id else {
-            complete(id: chunk.id, value: nil, error: "Invalid Desktop request transport")
+              let request = BridgeRequest(decoded), request.id == chunk.id,
+              request.generation == chunk.generation else {
+            complete(identity: identity, value: nil, error: "Invalid Desktop request transport")
             return
         }
         handle(request, body: decoded)
@@ -631,23 +784,38 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
             default:
                 throw NSError(domain: "VelarDesktop", code: 404, userInfo: [NSLocalizedDescriptionKey: "Unknown Desktop operation '\(request.operation)'"])
             }
-            complete(id: request.id, value: value, error: nil)
+            complete(identity: BridgeIdentity(generation: request.generation, id: request.id), value: value, error: nil)
         } catch {
-            complete(id: request.id, value: nil, error: error.localizedDescription)
+            complete(identity: BridgeIdentity(generation: request.generation, id: request.id), value: nil, error: error.localizedDescription)
         }
     }
 
-    private func complete(id: Int, value: String?, error: String?) {
-        var payload: [String: Any] = ["id": id, "ok": error == nil]
+    private func accept(generation: String) -> Bool {
+        if retiredGenerations.contains(generation) { return false }
+        if let activeGeneration { return activeGeneration == generation }
+        activeGeneration = generation
+        return true
+    }
+
+    private func complete(identity: BridgeIdentity, value: String?, error: String?) {
+        var payload: [String: Any] = ["id": identity.id, "ok": error == nil]
         if let value { payload["value"] = value }
         if let error { payload["error"] = error }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               data.count <= 65 * 1024 * 1024 else { return }
-        deliverBridgeResponse(data, to: webView)
+        deliverBridgeResponse(data, generation: identity.generation, to: webView)
     }
 }
 
 private final class NavigationPolicy: NSObject, WKNavigationDelegate {
+    private weak var bridge: DesktopBridge?
+
+    init(bridge: DesktopBridge) { self.bridge = bridge }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        bridge?.retireDocument()
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { decisionHandler(.cancel); return }
         if url.scheme == "velar-app" && url.host == "app" {
@@ -692,7 +860,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 launchDirectory: launchDirectory
             )
             let bridge = DesktopBridge(identifier: host.identifier, projectDirectory: launchDirectory, worker: nodeHost)
-            let navigationPolicy = NavigationPolicy()
+            let navigationPolicy = NavigationPolicy(bridge: bridge)
             let webConfiguration = WKWebViewConfiguration()
             webConfiguration.setURLSchemeHandler(schemeHandler, forURLScheme: "velar-app")
             let projectDirectoryData = try JSONSerialization.data(withJSONObject: launchDirectory, options: [.fragmentsAllowed])
@@ -768,6 +936,7 @@ private enum VelarDesktopHost {
                 }
                 guard let request = BridgeRequest([
                     "protocolVersion": 1,
+                    "generation": "00000000000000000000000000000001",
                     "id": 1,
                     "capability": "fs",
                     "operation": "list",

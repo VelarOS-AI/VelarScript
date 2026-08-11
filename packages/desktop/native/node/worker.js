@@ -34,6 +34,7 @@ const httpHandles = new Map();
 const fileMutationTails = new Map();
 let nextTextReplacementIdentity = 1;
 let fatalDrainStarted = false;
+let activeOwner = null;
 const roots = [];
 const lexicalRoots = [];
 let projectRoot = null;
@@ -68,31 +69,58 @@ reader.on("line", async (line) => {
   try {
     if (Buffer.byteLength(line, "utf8") > MAX_MESSAGE_BYTES) throw new RangeError("Desktop request exceeds its 128 MiB transport bound");
     const request = JSON.parse(line);
+    if (request?.hostCommand !== undefined) {
+      handleHostCommand(request);
+      return;
+    }
     id = request.id;
     if (request.protocolVersion !== 1 || !Number.isSafeInteger(id) || id < 1
-      || typeof request.capability !== "string" || typeof request.operation !== "string" || !Array.isArray(request.args)) {
+      || typeof request.capability !== "string" || typeof request.operation !== "string" || !Array.isArray(request.args)
+      || !validOwner(request.owner) || request.owner !== activeOwner) {
       throw new TypeError("Invalid Desktop worker request");
     }
-    const value = await dispatch(request.capability, request.operation, request.args);
+    const value = await dispatch(request.capability, request.operation, request.args, request.owner);
+    if (request.owner !== activeOwner) throw new Error("Desktop document generation is no longer active");
     respond({ id, ok: true, value });
   } catch (error) {
     respond({ id, ok: false, error: safeError(error) });
   }
 });
 
-async function dispatch(capability, operation, args) {
+function handleHostCommand(request) {
+  if (request.protocolVersion !== 1 || !validOwner(request.owner)
+    || Object.keys(request).some((key) => !["protocolVersion", "hostCommand", "owner"].includes(key))) {
+    throw new TypeError("Invalid Desktop host command");
+  }
+  if (request.hostCommand === "owner-activate") {
+    if (activeOwner !== null && activeOwner !== request.owner) retireOwner(activeOwner);
+    activeOwner = request.owner;
+    return;
+  }
+  if (request.hostCommand === "owner-retire") {
+    retireOwner(request.owner);
+    return;
+  }
+  throw new TypeError("Unknown Desktop host command");
+}
+
+function validOwner(value) {
+  return typeof value === "string" && /^[0-9a-f]{32}$/u.test(value);
+}
+
+async function dispatch(capability, operation, args, owner) {
   if (capability === "fs") return fsOperation(operation, args);
   if (capability === "process") {
-    if (operation === "run") return processRun(args);
-    if (operation === "start") return processStart(args);
-    if (operation === "read") return processRead(args);
-    if (operation === "wait") return processWait(args);
-    if (operation === "stop") return processStop(args);
+    if (operation === "run") return processRun(args, owner);
+    if (operation === "start") return processStart(args, owner);
+    if (operation === "read") return processRead(args, owner);
+    if (operation === "wait") return processWait(args, owner);
+    if (operation === "stop") return processStop(args, owner);
   }
   if (capability === "http") {
-    if (operation === "request") return httpRequest(args);
-    if (operation === "read") return httpRead(args);
-    if (operation === "cancel") return httpCancel(args);
+    if (operation === "request") return httpRequest(args, owner);
+    if (operation === "read") return httpRead(args, owner);
+    if (operation === "cancel") return httpCancel(args, owner);
   }
   throw new Error(`Unknown Desktop capability '${capability}.${operation}'`);
 }
@@ -349,42 +377,45 @@ async function commitTextReplacement(path, data, mode) {
   finally { await rm(temporary, {force: true, recursive: false}); }
 }
 
-async function processRun(args) {
-  const started = await processStart(args);
-  const outcome = await processWait([started.handle]);
+async function processRun(args, owner) {
+  const started = await processStart(args, owner);
+  const outcome = await processWait([started.handle], owner);
   if (outcome.retained) {
-    retainRunHandle(started.handle);
+    retainRunHandle(started.handle, owner);
     throw processError(outcome.error);
   }
   if (outcome.error) throw processError(outcome.error);
   return outcome.result;
 }
 
-function retainRunHandle(handle) {
+function retainRunHandle(handle, owner) {
   const retry = () => {
-    processStop([handle]).catch(() => { setTimeout(retry, 1000); });
+    processStop([handle], owner).catch(() => { setTimeout(retry, 1000); });
   };
   setTimeout(retry, 0);
 }
 
-async function processStart(args) {
+async function processStart(args, owner) {
   if (processHandles.size >= 128) throw new RangeError("Desktop process handle limit reached");
   const handle = nextProcessHandle++;
-  const task = await launchProcess(args, () => respond({ protocolVersion: 1, hostEvent: "process-settled", handle }));
+  const task = await launchProcess(args, () => respond({ protocolVersion: 1, hostEvent: "process-settled", owner, handle }));
+  task.owner = owner;
   processHandles.set(handle, task);
   // The native shell becomes the crash-recovery owner before the renderer
   // receives the public start/run result.
-  respond({ protocolVersion: 1, hostEvent: "process-owned", handle, pid: task.pid });
+  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });
   // A caller may start before it waits. Keep rejection observed while the
   // explicit wait/stop operation still owns delivery and handle release.
   task.result.catch(() => {});
+  if (owner !== activeOwner) {
+    retainRetiredProcess(handle, task);
+    throw new Error("Desktop document generation is no longer active");
+  }
   return { handle, pid: task.pid };
 }
 
-async function processWait(args) {
-  const handle = processHandle(args[0]);
-  const task = processHandles.get(handle);
-  if (!task) throw new Error("Desktop process handle is unknown or already released");
+async function processWait(args, owner) {
+  const [handle, task] = ownedProcess(args[0], owner);
   if (task.reading) throw new Error("Process wait() cannot run while next() is pending");
   task.waitStarted = true;
   if (task.waitRetained && !task.settled) signalTree(task.child, "SIGKILL");
@@ -394,22 +425,56 @@ async function processWait(args) {
   return outcome;
 }
 
-async function processRead(args) {
-  const handle = processHandle(args[0]);
-  const task = processHandles.get(handle);
-  if (!task) throw new Error("Desktop process handle is unknown or already released");
+async function processRead(args, owner) {
+  const [, task] = ownedProcess(args[0], owner);
   return task.next();
 }
 
-async function processStop(args) {
+async function processStop(args, owner) {
   const handle = processHandle(args[0]);
   const task = processHandles.get(handle);
   if (!task) return { result: null, error: null };
+  if (task.owner !== owner) throw new Error("Desktop process handle belongs to another document generation");
   task.stop();
   const outcome = await waitForTask(task);
   if (outcome.retained) throw processError(outcome.error);
   processHandles.delete(handle);
   return { result: outcome.result, error: outcome.error };
+}
+
+function ownedProcess(value, owner) {
+  const handle = processHandle(value);
+  const task = processHandles.get(handle);
+  if (!task) throw new Error("Desktop process handle is unknown or already released");
+  if (task.owner !== owner) throw new Error("Desktop process handle belongs to another document generation");
+  return [handle, task];
+}
+
+function retainRetiredProcess(handle, task) {
+  task.stop();
+  const retry = async () => {
+    try {
+      const outcome = await waitForTask(task);
+      if (outcome.retained) throw processError(outcome.error);
+      if (processHandles.get(handle) === task) processHandles.delete(handle);
+    } catch {
+      setTimeout(retry, 1000);
+    }
+  };
+  void retry();
+}
+
+function retireOwner(owner) {
+  if (activeOwner === owner) activeOwner = null;
+  for (const [handle, task] of processHandles) {
+    if (task.owner === owner) retainRetiredProcess(handle, task);
+  }
+  for (const [handle, request] of httpHandles) {
+    if (request.owner !== owner) continue;
+    request.controller.abort(new Error("Desktop document generation retired"));
+    void request.reader?.cancel().catch(() => {});
+    finishHttp(handle, request);
+  }
 }
 
 async function fatalDrain() {
@@ -713,7 +778,7 @@ async function resolveExecutable(name, pathValue) {
   throw new Error(`Granted process '${name}' was not found on the trusted executable path`);
 }
 
-async function httpRequest(args) {
+async function httpRequest(args, owner) {
   const [handleValue, methodValue, urlValue, options = {}] = args;
   const handle = httpHandle(handleValue);
   if (httpHandles.has(handle)) throw new Error("Desktop HTTP handle is already active");
@@ -744,6 +809,7 @@ async function httpRequest(args) {
   if ((method === "GET" || method === "HEAD") && body !== null) throw new TypeError(`${method} requests cannot have a body`);
   const controller = new AbortController();
   const request = {
+    owner,
     controller,
     reader: null,
     decoder: new TextDecoder("utf-8", { fatal: true }),
@@ -757,6 +823,7 @@ async function httpRequest(args) {
   let response = null;
   try {
     response = await fetchAuthorized(url, method, headers, secretHeaderNames, body, controller.signal);
+    if (owner !== activeOwner) throw new Error("Desktop document generation is no longer active");
     const ok = response.ok;
     const status = response.status;
     const statusText = response.statusText;
@@ -780,11 +847,11 @@ async function httpRequest(args) {
     const declaredLength = transportDeclaredLength(response.headers.get("content-length"));
     request.declaredTooLarge = hasBody && declaredLength !== null && declaredLength > maxBytes;
     request.reader = response.body?.getReader() ?? null;
-    if (!hasBody) finishHttp(handle);
+    if (!hasBody) finishHttp(handle, request);
     return { ok, status, statusText, url: responseUrl, headers: responseHeaders, body: hasBody };
   } catch (error) {
     try { await response?.body?.cancel(error); } catch {}
-    finishHttp(handle);
+    finishHttp(handle, request);
     throw error;
   }
 }
@@ -880,15 +947,16 @@ function authorizeOrigin(url) {
   if (!allowedOrigins.has(url.origin)) throw new Error(`Network origin '${url.origin}' is not granted by desktop.permissions.network`);
 }
 
-async function httpRead(args) {
+async function httpRead(args, owner) {
   const handle = httpHandle(args[0]);
   const request = httpHandles.get(handle);
   if (!request) throw new Error("Desktop HTTP handle is unknown or already released");
+  if (request.owner !== owner) throw new Error("Desktop HTTP handle belongs to another document generation");
   try {
     if (request.declaredTooLarge) throw new RangeError("HTTP response exceeds maxBytes");
     if (!request.reader) {
       const tail = request.decoder.decode();
-      finishHttp(handle);
+      finishHttp(handle, request);
       return { done: true, text: tail };
     }
     let result;
@@ -897,9 +965,10 @@ async function httpRead(args) {
       if (request.controller.signal.aborted) throw error;
       throw new HttpTransportFailure("response");
     }
+    if (owner !== activeOwner) throw new Error("Desktop document generation is no longer active");
     if (result.done) {
       const tail = request.decoder.decode();
-      finishHttp(handle);
+      finishHttp(handle, request);
       return { done: true, text: tail };
     }
     if (!(result.value instanceof Uint8Array)) throw new TypeError("HTTP response yielded a non-byte chunk");
@@ -910,18 +979,19 @@ async function httpRead(args) {
     return { done: false, text: request.decoder.decode(result.value, { stream: true }) };
   } catch (error) {
     try { await request.reader?.cancel(error); } catch {}
-    finishHttp(handle);
+    finishHttp(handle, request);
     throw error;
   }
 }
 
-async function httpCancel(args) {
+async function httpCancel(args, owner) {
   const handle = httpHandle(args[0]);
   const request = httpHandles.get(handle);
   if (!request) return null;
+  if (request.owner !== owner) throw new Error("Desktop HTTP handle belongs to another document generation");
   request.controller.abort(new Error("HTTP request cancelled"));
   try { await request.reader?.cancel(); } catch {}
-  finishHttp(handle);
+  finishHttp(handle, request);
   return null;
 }
 
@@ -930,9 +1000,9 @@ function httpHandle(value) {
   return value;
 }
 
-function finishHttp(handle) {
+function finishHttp(handle, expected) {
   const request = httpHandles.get(handle);
-  if (!request) return;
+  if (!request || request !== expected) return;
   if (request.timer) clearTimeout(request.timer);
   httpHandles.delete(handle);
 }

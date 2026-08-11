@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -10,8 +11,12 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   assert.match(hostSource, /environmentBytes \+ entryBytes <= 1024 \* 1024/u);
   assert.match(hostSource, /process\.terminationHandler/u);
   assert.match(hostSource, /case "process-owned":/u);
-  assert.match(hostSource, /Darwin\.kill\(-pid, SIGKILL\)/u);
+  assert.match(hostSource, /Darwin\.kill\(-owner\.pid, SIGKILL\)/u);
   assert.match(hostSource, /pending\.removeAll/u);
+  assert.match(hostSource, /private var pending: \[Int: PendingRequest\]/u);
+  assert.match(hostSource, /func webView\(_ webView: WKWebView, didCommit navigation:/u);
+  assert.match(hostSource, /worker\.retire\(generation: generation\)/u);
+  assert.match(hostSource, /response\["id"\] = request\.identity\.id/u);
   const match = /private let bridgeScript = #"""\n([\s\S]*?)\n"""#/u.exec(hostSource);
   const bridgeSource = match?.[1];
   assert.ok(bridgeSource, "native host must contain the injected bridge script");
@@ -20,6 +25,7 @@ test("Desktop WebView bridge chunks large requests and responses without changin
     atob,
     btoa,
     clearTimeout,
+    crypto: webcrypto,
     setTimeout,
     TextDecoder,
     TextEncoder,
@@ -62,7 +68,9 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   assert.ok(messages.length > 1);
   assert.ok(messages.every((message) => message.transport === "chunk"));
   const requestBytes = Buffer.concat(messages.map((message) => Buffer.from(message.base64 as string, "base64")));
-  const request = JSON.parse(requestBytes.toString("utf8")) as { id: number; capability: string; operation: string; args: [string, string] };
+  const request = JSON.parse(requestBytes.toString("utf8")) as { generation: string; id: number; capability: string; operation: string; args: [string, string] };
+  assert.match(request.generation, /^[0-9a-f]{32}$/u);
+  assert.ok(messages.every((message) => message.generation === request.generation));
   assert.deepEqual({ capability: request.capability, operation: request.operation, path: request.args[0] }, {
     capability: "fs",
     operation: "writeText",
@@ -74,10 +82,46 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   const response = Buffer.from(JSON.stringify({ id: request.id, ok: true, value: output }), "utf8");
   const chunkBytes = 192 * 1024;
   const total = Math.ceil(response.byteLength / chunkBytes);
-  const receive = (context as { __velarDesktopTransportChunk?: (id: number, index: number, total: number, base64: string) => void }).__velarDesktopTransportChunk;
+  const receive = (context as { __velarDesktopTransportChunk?: (generation: string, id: number, index: number, total: number, base64: string) => void }).__velarDesktopTransportChunk;
+  const complete = (context as { __velarDesktopComplete?: (generation: string, response: unknown) => void }).__velarDesktopComplete;
   assert.ok(receive);
+  assert.ok(complete);
+  let settled = false;
+  void result.then(() => { settled = true; }, () => { settled = true; });
+  complete("0".repeat(32), { id: request.id, ok: true, value: "forged" });
+  receive("0".repeat(32), request.id, 0, total, response.subarray(0, Math.min(response.byteLength, chunkBytes)).toString("base64"));
+  await new Promise((resolveWait) => setImmediate(resolveWait));
+  assert.equal(settled, false, "a page must not forge native completion without its private generation");
   for (let index = total - 1; index >= 0; index -= 1) {
-    receive(request.id, index, total, response.subarray(index * chunkBytes, Math.min(response.byteLength, (index + 1) * chunkBytes)).toString("base64"));
+    receive(request.generation, request.id, index, total, response.subarray(index * chunkBytes, Math.min(response.byteLength, (index + 1) * chunkBytes)).toString("base64"));
   }
   assert.equal(await result, output);
+
+  const reloadedMessages: Array<Record<string, unknown>> = [];
+  const reloadedContext = vm.createContext({
+    atob,
+    btoa,
+    clearTimeout,
+    crypto: webcrypto,
+    setTimeout,
+    TextDecoder,
+    TextEncoder,
+    webkit: { messageHandlers: { velarDesktop: { postMessage(value: Record<string, unknown>) { reloadedMessages.push(value); } } } },
+  });
+  vm.runInContext(`${source}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`, reloadedContext);
+  const reloadedBridge = (reloadedContext as { __bridgeUnderTest?: { invoke(capability: string, operation: string, args: unknown[], timeout?: number): Promise<unknown> } }).__bridgeUnderTest;
+  assert.ok(reloadedBridge);
+  const reloadedResult = reloadedBridge.invoke("desktop", "projectDirectory", [], 0);
+  const reloadedRequest = reloadedMessages[0] as { generation: string; id: number };
+  assert.equal(reloadedRequest.id, request.id, "a reloaded document intentionally restarts its page-local request IDs");
+  assert.notEqual(reloadedRequest.generation, request.generation);
+  const reloadedComplete = (reloadedContext as { __velarDesktopComplete?: (generation: string, response: unknown) => void }).__velarDesktopComplete;
+  assert.ok(reloadedComplete);
+  let reloadedSettled = false;
+  void reloadedResult.then(() => { reloadedSettled = true; }, () => { reloadedSettled = true; });
+  reloadedComplete(request.generation, { id: reloadedRequest.id, ok: true, value: "stale" });
+  await new Promise((resolveWait) => setImmediate(resolveWait));
+  assert.equal(reloadedSettled, false, "an old document response must not settle a reloaded document request with the same page ID");
+  reloadedComplete(reloadedRequest.generation, { id: reloadedRequest.id, ok: true, value: "/tmp/velar-project" });
+  assert.equal(await reloadedResult, "/tmp/velar-project");
 });

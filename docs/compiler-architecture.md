@@ -562,6 +562,16 @@ initialization therefore cannot change which case is selected.
   numeric process, HTTP, server, request, and terminal identities cannot safely
   cross such a restart. Application restart is the fail-closed generation
   boundary.
+  The macOS Desktop WebView adds a document-generation boundary inside that
+  application lifetime. Each injected bridge owns a private random generation;
+  native code maps `(generation, page request id)` to a distinct Worker id and
+  rewrites the response only after the Worker owner is resolved. A committed
+  navigation retires the previous generation, drops its pending response
+  delivery, and asks the capability Worker to stop generation-owned processes
+  and HTTP streams. Process and HTTP operations validate the owner on every
+  handle access and again after awaited host work, so an old asynchronous start
+  cannot publish a resource into the new document. Filesystem effects may
+  finish but cannot cross the response boundary.
   Environment and graceful-shutdown modules have smaller canonical captured
   host fragments because their effects do not require a second Realm.
   Filesystem, inbound-server, and outbound Node HTTP effects share a separate compiler-owned Worker

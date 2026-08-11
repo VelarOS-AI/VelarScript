@@ -708,7 +708,7 @@ if (nodeProcessModuleSource.includes('from "node:child_process"') || nodeProcess
 }
 if ((nodeProcessWorkerRuntimeSource.match(/new StringDecoder\("utf8"\)/gu)?.length ?? 0) < 2
   || !desktopProcessModuleSource.includes('invoke("read", [this.handle], 0)')
-  || !desktopWorkerSource.includes('if (operation === "read") return processRead(args)')
+  || !desktopWorkerSource.includes('if (operation === "read") return processRead(args, owner)')
   || (desktopWorkerSource.match(/new StringDecoder\("utf8"\)/gu)?.length ?? 0) < 2
   || !desktopWorkerSource.includes("return task.next()")) {
   failures.push("Node/Desktop: process output must preserve incremental UTF-8 decoding through the pull-based worker bridge");
@@ -1641,10 +1641,26 @@ for (const phrase of [
   "const hostTextEncode = TextEncoder.prototype.encode",
   "process.terminationHandler =",
   'case "process-owned":',
-  "Darwin.kill(-pid, SIGKILL)",
+  "Darwin.kill(-owner.pid, SIGKILL)",
 ]) {
   if (!desktopNativeHostSource.includes(phrase)) {
     failures.push(`packages/desktop/native/macos/VelarDesktopHost.swift: missing captured bridge operation '${phrase}'`);
+  }
+}
+for (const phrase of [
+  'const generationBytes = new hostUint8Array(16)',
+  'const complete = (owner, message) =>',
+  'private var pending: [Int: PendingRequest] = [:]',
+  'forwarded["owner"] = request.generation',
+  'func webView(_ webView: WKWebView, didCommit navigation:',
+  'worker.retire(generation: generation)',
+  'request.owner !== activeOwner',
+  'if (task.owner !== owner)',
+  'if (request.owner !== owner)',
+  'finishHttp(handle, request)',
+]) {
+  if (!(desktopNativeHostSource + "\n" + desktopWorkerSource).includes(phrase)) {
+    failures.push(`Desktop document generations do not preserve '${phrase}'`);
   }
 }
 

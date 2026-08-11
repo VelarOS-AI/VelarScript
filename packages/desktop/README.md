@@ -87,6 +87,17 @@ secret-derived header. Large filesystem, process-input, and HTTP-request values 
 bidirectional chunk transport instead of inheriting WebView message-size
 accidents.
 
+Each loaded main document owns a private bridge generation. Page request IDs
+may restart at one after reload, but the native host translates the generation
+and page ID to a host-global Worker request ID before forwarding. Committed
+navigation retires the old generation: late responses are discarded, old
+process groups are terminated, old HTTP streams are aborted, and the Worker
+rejects any handle used by a different generation. Native completion injection
+requires the private generation as well, so application JavaScript cannot
+resolve a pending bridge request by invoking the transport hook with only a
+guessed numeric ID. Filesystem work that has already reached the OS may finish;
+its retired response is never routed into the replacement document.
+
 Filesystem content calls follow symlinks only when the canonical target stays
 inside a granted root. Metadata, move, and removal operate on the final entry
 instead; dangling links cannot be used as write targets. The renderer, native

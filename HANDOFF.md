@@ -2289,9 +2289,45 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍
   只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-122 继续审计 W-121 留下的 application/Worker generation 边界，确认 Desktop reload/navigation
+  过去只销毁 WebView 文档，不销毁长期 capability Worker。每个新文档的 bridge request id 都从 1
+  重新分配，而原生 Host 和 Worker 仍用这个页内数字做全局 identity；旧响应可能命中新文档的同号
+  请求，迟到响应又可能被当成 unknown protocol response 杀死整个 Host。旧文档持有的 Process 和
+  HTTP handle 也没有 owner，页面消失后仍可继续运行。公开在页面 global 上的 native completion hook
+  只需要数字 id，应用代码还能伪造 pending Promise 的完成。
+
+  现在每个 main document 在系统 bridge 初始化时通过 Web Crypto 生成私有 128-bit generation；请求和
+  chunk 都携带它，但应用 API 不暴露它。macOS Host 使用独立、可回绕且避免 live collision 的 Worker
+  request id，把 `(generation,page id)` 映射到 Worker id，响应通过 ledger 还原后才送回匹配 generation。
+  old generation 的 pending response 只等待 Worker 收敛并丢弃，不可能命中新页面。completion/chunk
+  hook 同样要求私有 generation，因此只有原生注入能完成对应 Promise。
+
+  committed navigation 会退休旧 generation：原生 Host 立即 SIGKILL 已转移的旧 process group，并向
+  capability Worker 发送私有 owner-retire；Worker 为每个 Process/HTTP handle 保存 owner，每次访问及
+  await 后发布前都重新确认 active owner。旧 Process 进入 retryable drain，旧 HTTP controller/reader
+  被 abort/cancel 并以对象 identity 删除，避免迟到的旧 request 删除新 generation 复用的同号 HTTP
+  handle。已经提交给 OS 的 filesystem effect 不做虚假回滚，但它的旧响应永远不会进入新文档。
+
+  回归不只做 source assertion：两个独立 bridge document 都从 page id 1 开始，旧 generation 无法完成
+  新 Promise；真实 capability Worker 切换 owner 后回收长驻 child、释放并立即复用同号 HTTP handle；
+  真实打包 macOS WKWebView 应用用纯 Vel `velar/process` 启动长驻 Node child、调用公开 `reload()`，
+  replacement document 再用公开 filesystem API 写出成功标记，并证明旧 PID 在五秒内消失。
+
+  当前组合证据为 `npm run check`（51 个格式化源、98 个文档示例、63 项 runtime boundary）、
+  553/553 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对本轮
+  rehearsal 六包的安装态验收，以及完整 Dev/Production/External Preview、27+6+15+6 三浏览器和
+  installed browser project。Lite 四项目 check、40 shared + 42 server tests、真实 concurrent/
+  disconnected server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/Desktop
+  production build 也全部通过。薄包为 878,767 bytes（858.2 KiB）：host 299,744、renderer 530,946、
+  capability host 46,684、metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `256940c3c0953a81c6ffbfe9d09fa511854929e83c881989839e009c60e09a26`；相比 W-121 增加 42,428
+  bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍
+  只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-121 的 Worker/Capability Host failure generation、fatal drain、owner transfer 与完整
+1. W-122 的 document generation、native request ledger、navigation retirement 与完整
    compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从多会话长时间
    运行、host backpressure、request cancellation 和工具恢复审计可观测性与 resource ownership；
    产品策略继续留在 Lite，只把通用语言、Node/Web/Desktop API 缺口修回官方包。

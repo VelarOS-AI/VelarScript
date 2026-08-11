@@ -803,6 +803,19 @@ Workers are not restarted inside the current application process: old process,
 server, request, and terminal handles have no safe identity in a fresh Worker
 generation. Restarting the application is the explicit authority and identity
 reset.
+Desktop navigation is a narrower boundary than application restart. Every
+main-document bridge instance generates an unguessable private generation and
+combines it with its page-local request number. The native shell translates
+that pair to a host-global Worker request identity, so a response from a
+destroyed document cannot settle a request whose counter restarted after
+reload. Navigation retirement discards old responses and transfers no Process
+or HTTP handles: the capability Worker stops the old document's processes,
+aborts its HTTP bodies, and rejects cross-generation handle use. A filesystem
+operation already committed by the operating system is not rolled back, but
+its obsolete result is never delivered into the new document. The completion
+hooks exposed for native response injection also require the private
+generation, preventing application code from completing an arbitrary pending
+bridge Promise by calling the hook directly.
 Standard output and error share a bounded capture budget, and no command-string
 parsing or shell expansion is performed. Timeouts and output-bound failures
 request termination and independently bound confirmation at five seconds even
