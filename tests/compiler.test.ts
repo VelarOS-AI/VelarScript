@@ -17178,6 +17178,44 @@ console.log(direct?.name, direct?.message, nativeApply(nativeHasInstance, Native
   assert.equal(hostile.stdout, "NarrowingError true 0\nNarrowingError Flow narrowing for '.value' no longer holds: expected number at source offset 42 true 7 0\n");
 });
 
+test("class-valued flow narrowings include their nominal validation runtime", async () => {
+  const source = `
+class RopeNode:
+    const child: RopeNode?
+    const length: number
+
+    constructor(child: RopeNode? = null):
+        self.child = child
+        self.length = child == null ? 1 : child.length + 1
+
+const root = RopeNode(RopeNode())
+print(root.length)
+`.trimStart();
+  const standalone = compileCore(source);
+  assert.deepEqual(standalone.diagnostics, []);
+  assert.match(standalone.code ?? "", /function __velarValidationIsInstance/u);
+  assert.doesNotMatch(standalone.code ?? "", /compiler-runtime-types-v1/u);
+  const execution = executeModule(standalone.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "2\n");
+
+  const shared = compileCore(source, { sharedRuntimeModules: true });
+  assert.deepEqual(shared.diagnostics, []);
+  assert.ok(shared.runtimeModules.includes(VELAR_TYPE_VALIDATION_MODULE));
+  assert.match(shared.code ?? "", /validationIsInstance as __velarValidationIsInstance/u);
+  assert.doesNotMatch(shared.code ?? "", /function __velarValidationIsInstance/u);
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-class-narrowing-runtime-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, source, "utf8");
+  const run = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "run", entry], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.equal(run.stdout, "2\n");
+});
+
 test("project compilation shares error normalization across Core and Web without publishing it", async () => {
   const source = `
 def recover() -> string:

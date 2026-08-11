@@ -160,8 +160,10 @@ identity have one compiler-owned source: standalone output inlines it, while
 project consumers import `narrow` from a hidden internal module. The constructor
 is consistent across project modules but has no public `ModuleInterface`; each
 call still supplies its own value, evidence, expected type, description, and
-source offset. This mechanism is independent of readonly
-conversion.
+source offset. A class-valued narrowing also activates the nominal validation
+runtime that provides the captured `instanceof` evidence; standalone output
+must inline that helper and shared project output must declare its hidden runtime
+module dependency. This mechanism is independent of readonly conversion.
 
 Body-backed functions, concrete methods, and actions may omit their result
 annotation. Predeclaration installs a distinct unresolved-result placeholder,

@@ -741,7 +741,7 @@ export class JavaScriptEmitter {
       return;
     }
     if (type.kind === "list" || type.kind === "set" || type.kind === "map" || type.kind === "record"
-      || type.kind === "promise" || type.kind === "named") {
+      || type.kind === "promise" || type.kind === "named" || type.kind === "class") {
       this.markRuntimeType(type);
     }
   }
