@@ -7741,7 +7741,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/forms"], ["checkedValue", "clearError", "clearErrors", "errors", "fieldValue", "fieldValues", "focusFirstError", "numberValue", "read", "reset", "setError", "setPending", "textValue", "values"]);
   assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
   assert.deepEqual(api.modules["velar/storage"], ["database", "session", "storage"]);
-  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "scrollIntoView", "scrollTo", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
+  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "capturePointer", "clipboardText", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "releasePointer", "scrollElementTo", "scrollIntoView", "scrollMetrics", "scrollTo", "setClipboardText", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
   assert.deepEqual(api.modules["velar/realtime"], ["eventStream", "socket"]);
   assert.deepEqual(api.modules["velar/test"], ["expect"]);
@@ -7750,7 +7750,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.equal(browserTestController?.kind, "object");
   if (browserTestController?.kind === "object") {
     assert.deepEqual([...browserTestController.fields.keys()].sort(), [
-      "attribute", "click", "count", "currentPath", "fill", "measureClick", "measureFill", "measurePress", "namespace", "open", "press", "reload", "select", "text", "timings", "viewport", "visible", "waitFor", "waitForText",
+      "attribute", "click", "count", "currentPath", "fill", "measureClick", "measureFill", "measurePress", "namespace", "open", "press", "reload", "scroll", "select", "text", "timings", "viewport", "visible", "waitFor", "waitForText",
     ]);
   }
   const webRuntime = standardModuleSource("velar/web", { base: "/studio/" }) ?? "";
@@ -7779,7 +7779,7 @@ import {Head, RouteContext, Router, Link, NavLink, announce, back, currentRoute,
 import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, focusFirstError, numberValue, read, reset, setError, setPending, textValue, values} from "velar/forms"
 import {HttpAbortError, formBody, http} from "velar/http"
 import {database, session, storage} from "velar/storage"
-import {after, blur, closeDialog, dialogResult, environment, every, focus, frame, location as browserLocation, measure, media, scrollIntoView, setTextSelection, showDialog, textSelection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
+import {after, blur, capturePointer, clipboardText, closeDialog, dialogResult, environment, every, focus, frame, location as browserLocation, measure, media, releasePointer, scrollElementTo, scrollIntoView, scrollMetrics, setClipboardText, setTextSelection, showDialog, textSelection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
 import {download, pick} from "velar/files"
 import {eventStream, socket} from "velar/realtime"
 import {onError, reportError} from "velar/app"
@@ -7822,6 +7822,17 @@ component App:
     const dark = media("(prefers-color-scheme: dark)")
     const headingId = domId("heading")
 
+    def compose(event: CompositionEvent) -> null:
+        print(event.data)
+
+    def paste(event: ClipboardEvent) -> null:
+        event.preventDefault()
+        print(clipboardText(event))
+
+    def copy(event: ClipboardEvent) -> null:
+        event.preventDefault()
+        setClipboardText(event, "copied")
+
     def inspect() -> null:
         if form:
             const currentForm = form
@@ -7841,7 +7852,11 @@ component App:
             clearError(currentForm, "name")
             clearErrors(currentForm)
             const bounds = measure(currentForm)
+            const scrolling = scrollMetrics(currentForm)
+            scrollElementTo(currentForm, scrolling.x, scrolling.y)
             scrollIntoView(currentForm)
+            capturePointer(currentForm, 1)
+            releasePointer(currentForm, 1)
             focus(currentForm, true)
             blur(currentForm)
             announce("Checked")
@@ -7854,7 +7869,7 @@ component App:
             const selectedText = textSelection(currentEditor)
             setTextSelection(currentEditor, selectedText.start, selectedText.end, selectedText.direction)
 
-    return <><Head title="API" description="Typed Web" canonical="https://example.com/" robots="index,follow" image="/share.png" themeColor="#111827" language="en-US" /><form host ref={form}><input name="name" /><input name="count" type="number" /><input name="selected" type="checkbox" /><input name="labels" /><select name="mode"><option value={FormMode.create}>Create</option></select></form><textarea ref={editor}></textarea><dialog ref={dialog}>Confirm</dialog><Router routes={[route("/", Missing), route("/items/:id", ItemPage)]} fallback={Missing} /></>
+    return <><Head title="API" description="Typed Web" canonical="https://example.com/" robots="index,follow" image="/share.png" themeColor="#111827" language="en-US" /><form host ref={form}><input name="name" /><input name="count" type="number" /><input name="selected" type="checkbox" /><input name="labels" /><select name="mode"><option value={FormMode.create}>Create</option></select></form><textarea ref={editor} on:compositionend={compose} on:paste={paste} on:copy={copy}></textarea><dialog ref={dialog}>Confirm</dialog><Router routes={[route("/", Missing), route("/items/:id", ItemPage)]} fallback={Missing} /></>
 
 const link = <Link to="/items" replace={true}>Items</Link>
 const navLink = <NavLink to="/items" exact={true}>Items</NavLink>
@@ -9099,6 +9114,86 @@ catch (error) { console.log(error.name); }
   assert.equal(execution.stdout, "1:2:forward\n1:4:backward\n0\nTypeError\nRangeError\n");
 });
 
+test("element scrolling, pointer capture, and event clipboard text use captured Web hosts", () => {
+  const source = standardModuleSource("velar/browser") ?? "";
+  const execution = executeModule(`
+const elementState = new WeakMap();
+const clipboardState = new WeakMap();
+const eventState = new WeakMap();
+const calls = [];
+let ambientCalls = 0;
+class FakeElement {
+  constructor() { elementState.set(this, { x: 4, y: 8, viewportWidth: 100, viewportHeight: 50, contentWidth: 500, contentHeight: 1000 }); }
+  get scrollLeft() { return elementState.get(this).x; }
+  get scrollTop() { return elementState.get(this).y; }
+  get clientWidth() { return elementState.get(this).viewportWidth; }
+  get clientHeight() { return elementState.get(this).viewportHeight; }
+  get scrollWidth() { return elementState.get(this).contentWidth; }
+  get scrollHeight() { return elementState.get(this).contentHeight; }
+  scrollTo(options) { calls.push("scroll:" + options.left + ":" + options.top + ":" + options.behavior); elementState.get(this).x = options.left; elementState.get(this).y = options.top; }
+  setPointerCapture(id) { calls.push("capture:" + id); }
+  releasePointerCapture(id) { calls.push("release:" + id); }
+}
+class FakeDataTransfer {
+  constructor(text) { clipboardState.set(this, text); }
+  getData(kind) { calls.push("read:" + kind); return clipboardState.get(this); }
+  setData(kind, value) { calls.push("write:" + kind + ":" + value); clipboardState.set(this, value); }
+}
+class FakeClipboardEvent {
+  constructor(data) { eventState.set(this, data); }
+  get clipboardData() { return eventState.get(this); }
+}
+globalThis.Element = FakeElement;
+globalThis.DataTransfer = FakeDataTransfer;
+globalThis.ClipboardEvent = FakeClipboardEvent;
+${source}
+const element = new FakeElement();
+const initial = scrollMetrics(element);
+console.log([initial.x, initial.y, initial.viewportWidth, initial.viewportHeight, initial.contentWidth, initial.contentHeight].join(":"));
+const data = new FakeDataTransfer("paste");
+const event = new FakeClipboardEvent(data);
+const poison = () => { ambientCalls += 1; throw new Error("ambient host operation"); };
+for (const name of ["scrollLeft", "scrollTop", "clientWidth", "clientHeight", "scrollWidth", "scrollHeight"]) {
+  Object.defineProperty(FakeElement.prototype, name, { configurable: true, get: poison });
+}
+for (const name of ["scrollTo", "setPointerCapture", "releasePointerCapture"]) Object.defineProperty(FakeElement.prototype, name, { configurable: true, value: poison });
+Object.defineProperty(FakeClipboardEvent.prototype, "clipboardData", { configurable: true, get: poison });
+for (const name of ["getData", "setData"]) Object.defineProperty(FakeDataTransfer.prototype, name, { configurable: true, value: poison });
+scrollElementTo(element, 20, 30, "instant");
+capturePointer(element, 7);
+releasePointer(element, 7);
+console.log(clipboardText(event));
+setClipboardText(event, "copied");
+console.log(clipboardState.get(data));
+console.log(calls.join(","));
+console.log(ambientCalls);
+const failures = [];
+for (const operation of [
+  () => scrollElementTo(element, Number.NaN, 0),
+  () => capturePointer(element, -1),
+  () => clipboardText({}),
+  () => setClipboardText(event, 17),
+]) {
+  try { operation(); failures.push("accepted"); }
+  catch (error) { failures.push(error.name); }
+}
+elementState.get(element).contentHeight = -1;
+try { scrollMetrics(element); failures.push("accepted"); }
+catch (error) { failures.push(error.name); }
+console.log(failures.join(","));
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "4:8:100:50:500:1000",
+    "paste",
+    "copied",
+    "scroll:20:30:instant,capture:7,release:7,read:text/plain,write:text/plain:copied",
+    "0",
+    "TypeError,RangeError,TypeError,TypeError,RangeError",
+    "",
+  ].join("\n"));
+});
+
 test("clipboard and dialog helpers snapshot hosts and bypass instance overrides", () => {
   const source = standardModuleSource("velar/browser") ?? "";
   const execution = executeModule(`
@@ -10193,10 +10288,10 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/text-buffer", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 271);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 118);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 283);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
-  assert.equal(api.modules["velar/text"]?.length, 19);
+  assert.equal(api.modules["velar/text"]?.length, 20);
   assert.equal(api.modules["velar/math"]?.length, 32);
   assert.deepEqual(api.modules["velar/json"], ["clone", "deepEqual", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
@@ -10204,7 +10299,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
-  assert.deepEqual(api.modules["velar/text-buffer"], ["TextBuffer", "TextChange", "TextPosition"]);
+  assert.deepEqual(api.modules["velar/text-buffer"], ["TextBuffer", "TextChange", "TextEdit", "TextHistory", "TextLineSlice", "TextPosition", "TextSelection", "TextTransaction"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
   assert.deepEqual(api.modules["velar/fs"], ["Blob", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readBlob", "readText", "removeFile", "replaceTextIfMatches", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
@@ -10218,7 +10313,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, range, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
-import {capitalize, escapeHtml, findMatch, findMatches, lines, lineStarts, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, utf8Size, words} from "velar/text"
+import {capitalize, chunks, escapeHtml, findMatch, findMatches, lines, lineStarts, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, utf8Size, words} from "velar/text"
 import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians} from "velar/math"
 import {clone as cloneJson, deepEqual, parse as parseJson, stableStringify, stringify, tryParse} from "velar/json"
 import {all as allAsync, map as asyncMap, retry, series, sleep, timeout} from "velar/async"
@@ -10262,6 +10357,7 @@ print(truncate("VelarScript", 6))
 print(normalizeWhitespace("  a   b  "))
 print(lines("a\\nb").size)
 print(lineStarts("A😀\\nB\\n").map(offset => str(offset)).join(","))
+print(chunks("A😀游戏B", 2).join("|"))
 print(words("a  b").size)
 print("ABC".lower())
 print("abc".upper())
@@ -10357,7 +10453,7 @@ print(logLevel())
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "15", "10", "x", "2", "Ada", "1", "Lin", "a,b", "5", "2", "true",
-    "Velar", "Next Generation Web", "velar-web-游戏", "Velar…", "a b", "2", "0,3,5", "2", "abc", "ABC", "true", "11", "&lt;velar&gt;",
+    "Velar", "Next Generation Web", "velar-web-游戏", "Velar…", "a b", "2", "0,3,5", "A😀|游戏|B", "2", "abc", "ABC", "true", "11", "&lt;velar&gt;",
     "true", "42", "7", "2", "2", "22", "a# b#", "a|b|c", "true", "true", "null", "x$&", "a|b", "TypeError", "TypeError",
     "3.14", "10", "2", "8", "90", "6", "24",
     "Nova", "fallback", '{"a":2,"z":1}', "[1,2]", "true", "false",
@@ -10368,12 +10464,12 @@ print(logLevel())
   ].join("\n"));
 });
 
-test("pure VelarScript text buffer ships a typed piece table with code-point positions", async () => {
+test("pure VelarScript text buffer ships a balanced rope with code-point positions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-text-buffer-"));
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
-import {TextBuffer, TextChange, TextPosition} from "velar/text-buffer"
+import {TextBuffer, TextChange, TextEdit, TextHistory, TextLineSlice, TextPosition, TextSelection, TextTransaction} from "velar/text-buffer"
 
 const buffer = TextBuffer("ab😀\\ncd")
 const initialPosition: TextPosition = buffer.positionAt(4)
@@ -10402,6 +10498,81 @@ const newline = TextBuffer("a\\nb")
 newline.delete(1, 2)
 const newlinePosition = newline.positionAt(1)
 print(f"{str(newline.lineCount)}|{str(newlinePosition.line)}:{str(newlinePosition.column)}|{newline.lineText(0)}")
+
+const lines = TextBuffer("a\\r\\nb\\n😀")
+const viewport: TextLineSlice = lines.lineSlice(1, 3)
+print(f"{str(lines.size)}|{str(lines.lineCount)}|{lines.lineText(0)}|{str(viewport.start)}:{str(viewport.end)}|{viewport.text == "b\\n😀"}")
+const crlfMiddle = lines.positionAt(2)
+print(f"{str(crlfMiddle.line)}:{str(crlfMiddle.column)}|{str(lines.offsetAt(crlfMiddle.line, crlfMiddle.column))}")
+
+const batch = TextBuffer("0123456789")
+const edits: List<TextEdit> = [
+    {start: 1, end: 3, inserted: "A"},
+    {start: 7, end: 9, inserted: "😀"},
+]
+const transaction: TextTransaction = batch.apply(edits)
+print(f"{batch.text()}|{str(transaction.changes.size)}|{transaction.changes[0].removed}|{transaction.changes[1].removed}|{str(batch.revision)}")
+batch.apply([
+    {start: 1, end: 1, inserted: "x"},
+    {start: 1, end: 1, inserted: "y"},
+])
+print(batch.text())
+const beforeFailure = batch.text()
+try:
+    batch.apply([
+        {start: 0, end: 2, inserted: "first"},
+        {start: 1, end: 3, inserted: "overlap"},
+    ])
+catch error:
+    print(f"{error.name}|{batch.text() == beforeFailure}|{str(batch.revision)}")
+
+const owned = TextBuffer("abc")
+const history = TextHistory(owned, maxEntries=2, maxBytes=1024)
+const before: TextSelection = {anchor: 1, head: 2}
+const after: TextSelection = {anchor: 2, head: 2}
+history.apply([{start: 1, end: 2, inserted: "X"}], before, after)
+history.begin(after)
+history.apply([{start: 2, end: 2, inserted: "中"}], after, {anchor: 3, head: 3})
+history.apply([{start: 3, end: 3, inserted: "😀"}], {anchor: 3, head: 3}, {anchor: 4, head: 4})
+history.commit({anchor: 4, head: 4})
+const groupUndo = history.undo()
+const editUndo = history.undo()
+print(f"{owned.text()}|{str(groupUndo?.head ?? -1)}|{str(editUndo?.anchor ?? -1)}|{history.canRedo}")
+const editRedo = history.redo()
+const groupRedo = history.redo()
+print(f"{owned.text()}|{str(editRedo?.head ?? -1)}|{str(groupRedo?.head ?? -1)}|{history.canUndo}")
+history.begin(groupRedo)
+history.apply([{start: 4, end: 4, inserted: "!"}], groupRedo, {anchor: 5, head: 5})
+const cancelled = history.cancel()
+print(f"{owned.text()}|{str(cancelled?.head ?? -1)}|{str(owned.revision)}")
+
+let model = "alpha😀\\r\\nbeta\\n"
+const fuzz = TextBuffer(model)
+let iteration = 0
+while iteration < 500:
+    const start = (iteration * 37 + 11) % (model.size + 1)
+    const available = model.size - start
+    const requested = (iteration * 13) % 3
+    const removed = requested < available ? requested : available
+    const inserted = iteration % 4 == 0 ? "中\\n" : iteration % 4 == 1 ? "😀" : iteration % 4 == 2 ? "" : "x"
+    fuzz.replace(start, start + removed, inserted)
+    model = model.slice(0, start) + inserted + model.slice(start + removed)
+    assert fuzz.text() == model else "TextBuffer diverged from the reference text"
+    const probe = (iteration * 19) % (model.size + 1)
+    const position = fuzz.positionAt(probe)
+    const normalized = fuzz.offsetAt(position.line, position.column)
+    const insideCrLf = probe > 0 and probe < model.size and model.slice(probe - 1, probe + 1) == "\\r\\n"
+    assert normalized == (insideCrLf ? probe - 1 : probe) else "TextBuffer position mapping diverged"
+    iteration += 1
+print(f"{str(fuzz.revision)}|{fuzz.text() == model}")
+
+const externallyChanged = TextBuffer("owner")
+const staleHistory = TextHistory(externallyChanged)
+externallyChanged.insert(5, "!")
+try:
+    staleHistory.apply([{start: 0, end: 0, inserted: "x"}])
+catch error:
+    print(f"{error.name}|{externallyChanged.text()}")
 `.trimStart(), "utf8");
 
   const project = await compileProjectCore(entry);
@@ -10414,7 +10585,8 @@ print(f"{str(newline.lineCount)}|{str(newlinePosition.line)}:{str(newlinePositio
   assert.equal(build.status, 0, String(build.stderr));
   const generated = await readFile(join(output, "node_modules", "velar", "text-buffer.js"), "utf8");
   assert.match(generated, /class TextBuffer/u);
-  assert.match(generated, /#pieces/u);
+  assert.match(generated, /class RopeNode/u);
+  assert.match(generated, /#root/u);
   assert.match(generated, /__velarStringSlice/u);
   await readFile(join(output, "node_modules", "velar", "text.js"), "utf8");
   const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
@@ -10428,6 +10600,16 @@ print(f"{str(newline.lineCount)}|{str(newlinePosition.line)}:{str(newlinePositio
     "107|3|Y|103",
     "AssertionError",
     "1|0:1|ab",
+    "6|3|a|3:6|true",
+    "0:1|1",
+    "0A3456😀9|2|12|78|1",
+    "0xyA3456😀9",
+    "AssertionError|true|2",
+    "abc|2|1|true",
+    "aX中😀c|2|4|true",
+    "aX中😀c|4|11",
+    "500|true",
+    "AssertionError|owner!",
     "",
   ].join("\n"));
 
@@ -10438,12 +10620,44 @@ import {TextBuffer} from "velar/text-buffer"
 const buffer = TextBuffer("value")
 buffer.replace("0", 1, "x")
 buffer.offsetAt(0, "1")
+buffer.apply([{start: 0, end: 1, inserted: 1}])
+buffer.compact()
 print(buffer.pieces)
 `.trimStart(), "utf8");
   const invalid = await compileProjectCore(invalidEntry);
   const diagnostics = invalid.modules.flatMap((module) => module.result.diagnostics).map((diagnostic) => diagnostic.message).join("\n");
   assert.match(diagnostics, /Cannot assign string to number/u);
+  assert.match(diagnostics, /Cannot assign number to string/u);
+  assert.match(diagnostics, /Class 'TextBuffer' has no member 'compact'/u);
   assert.match(diagnostics, /Class 'TextBuffer' has no member 'pieces'/u);
+});
+
+test("TextBuffer keeps repeated 1 MiB middle edits below the piece-table regression budget", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-text-buffer-performance-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+import {TextBuffer} from "velar/text-buffer"
+
+const buffer = TextBuffer("const value = 1\\n".repeat(65536))
+const offset = (buffer.size / 2).floor()
+let count = 0
+while count < 2000:
+    buffer.insert(offset, "x")
+    count += 1
+const end = buffer.positionAt(buffer.size)
+print(f"{str(buffer.size)}|{str(buffer.byteSize)}|{str(buffer.lineCount)}|{str(end.line)}:{str(end.column)}|{str(buffer.revision)}")
+`.trimStart(), "utf8");
+
+  const started = performance.now();
+  const execution = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "run", entry], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 12_000,
+  });
+  const elapsed = performance.now() - started;
+  assert.equal(execution.status, 0, String(execution.stderr || execution.error));
+  assert.equal(execution.stdout, "1050576|1050576|65537|65536:0|2000\n");
+  assert.ok(elapsed < 8_000, `TextBuffer 1 MiB repeated-edit gate took ${elapsed.toFixed(1)}ms`);
 });
 
 test("Core builtins and standard modules share one named-argument ABI", async () => {
@@ -11743,6 +11957,7 @@ test("text methods and velar/text reject native count coercion and accessor opti
   const execution = executeModule(`${source}
 console.log(__velarStringPadStart("7", 3, "0"));
 console.log(truncate("VelarScript", 6));
+console.log(chunks("A😀B", 1).join("|"));
 let getterReads = 0;
 const options = {};
 Object.defineProperty(options, "ignoreCase", { enumerable: true, get() { getterReads += 1; return true; } });
@@ -11752,6 +11967,8 @@ for (const operation of [
   () => __velarStringPadEnd("x", -1),
   () => __velarStringIndex("x", "x", 0.5),
   () => truncate("x", Number.MAX_SAFE_INTEGER + 1),
+  () => chunks("x", 0),
+  () => chunks("x", "1"),
   () => matches("Velar", "velar", options),
   () => matches("Velar", "velar", new (class PatternOptions { constructor() { this.ignoreCase = true; } })()),
 ]) {
@@ -11770,8 +11987,8 @@ console.log(findMatches("💙", "").map(match => match.index).join(","));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    "007", "Velar…",
-    "RangeError", "RangeError", "RangeError", "TypeError", "RangeError", "TypeError", "TypeError", "0",
+    "007", "Velar…", "A|😀|B",
+    "RangeError", "RangeError", "RangeError", "TypeError", "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "0",
     "true 0", "2 null 0", "0,1", "",
   ].join("\n"));
 });
@@ -11817,6 +12034,8 @@ const wordList = words("  one   two ");
 console.log(rowList.length, rowList[0], rowList[1], rowList[2] === "", wordList.length, wordList[0], wordList[1]);
 const starts = lineStarts("A😀\\nB\\n");
 console.log(starts.length, starts[0], starts[1], starts[2]);
+const chunked = chunks("A😀游戏B", 2);
+console.log(chunked.length, chunked[0], chunked[1], chunked[2]);
 console.log(slug("Crème brûlée!"), truncate("A😀B", 2));
 console.log(indent("a\\nb", "-") === "-a\\n-b", dedent("  a\\n    b") === "a\\n  b");
 console.log(normalizeWhitespace("  a\\n b  "), escapeHtml('<a href="x">'));
@@ -11842,6 +12061,7 @@ console.log(typeIdentity, rangeIdentity, poisonCalls);
     "x x Élan Hello World Foo Bar",
     "3 a b true 2 one two",
     "3 0 3 5",
+    "3 A😀 游戏 B",
     "creme-brulee A…",
     "true true",
     "a b &lt;a href=&quot;x&quot;&gt;",
@@ -25487,11 +25707,23 @@ globalThis.document = {
 test("component roots update transactionally, own their current nodes, and mount only once", () => {
   const result = compile(`
 state projectOpen = false
+let childUpdate: (() -> null)? = null
+let childInstances = 0
+
+component Workspace:
+    childInstances += 1
+    state viewportStart = 0
+    def scroll() -> null:
+        viewportStart += 1
+    childUpdate = scroll
+    mounted:
+        const initialViewport = viewportStart
+    return <main><div look:top={f"{viewportStart}px"}>{[viewportStart].map(row => <span key={row}>{row}</span>)}</div></main>
 
 component App:
     cleanup:
         print("cleanup")
-    return projectOpen ? <main>workspace</main> : <section>welcome</section>
+    return projectOpen ? <Workspace /> : <section>welcome</section>
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /__velarDynamicComponent\(\(\$velarDynamicScope\) => \(projectOpen\.get\(\) \?/u);
@@ -25504,6 +25736,12 @@ class FakeNode {
     this.textContent = textContent;
     this.childNodes = [];
     this.parentNode = null;
+    this.style = {
+      getPropertyValue() { return ""; },
+      getPropertyPriority() { return ""; },
+      setProperty() {},
+      removeProperty() {},
+    };
   }
   static detach(node) {
     if (!node.parentNode) return;
@@ -25550,6 +25788,9 @@ console.log("initial:" + tags());
 projectOpen.set(true);
 await flush();
 console.log("updated:" + tags());
+childUpdate();
+await flush();
+console.log("child-update:" + tags() + ":" + childInstances);
 try { app.mount("#app"); } catch (error) { console.log("remount:" + error.message); }
 app.destroy();
 console.log("destroyed:" + target.childNodes.length);
@@ -25558,6 +25799,7 @@ console.log("destroyed:" + target.childNodes.length);
   assert.equal(execution.stdout, [
     "initial:section",
     "updated:main",
+    "child-update:main:1",
     "remount:Cannot mount a VelarScript component more than once",
     "cleanup",
     "destroyed:0",
@@ -25752,6 +25994,12 @@ type KeyPayload = KeyboardEvent
 def isKeyPayload(value: unknown) -> bool:
     return value is KeyPayload
 
+def isCompositionPayload(value: unknown) -> bool:
+    return value is CompositionEvent
+
+def isClipboardPayload(value: unknown) -> bool:
+    return value is ClipboardEvent
+
 component Controls:
     def handleAny(event: Event) -> null:
         print(event.type)
@@ -25759,8 +26007,14 @@ component Controls:
     def handleKey(event: KeyboardEvent) -> null:
         print(event.key)
 
+    def handleComposition(event: CompositionEvent) -> null:
+        print(event.data)
+
+    def handleClipboard(event: ClipboardEvent) -> null:
+        event.preventDefault()
+
     return <main>
-        <input on:keydown={handleKey} on:keyup={event => print(event.code)} on:input={event => print(event.inputType)} />
+        <input on:keydown={handleKey} on:keyup={event => print(event.code)} on:input={event => print(event.inputType)} on:compositionend={handleComposition} on:paste={handleClipboard} />
         <button type="button" on:click={event => print(event.clientX)}>Point</button>
         <button type="button" on:click={handleAny}>Any event</button>
     </main>
@@ -25771,9 +26025,32 @@ component Controls:
   assert.ok(contextual.some((item) => item.type === "KeyboardEvent"));
   assert.ok(contextual.some((item) => item.type === "InputEvent"));
   assert.ok(contextual.some((item) => item.type === "PointerEvent"));
+  assert.match(result.code ?? "", /typeof CompositionEvent !== "undefined"/u);
+  assert.match(result.code ?? "", /typeof ClipboardEvent !== "undefined"/u);
   assert.match(result.code ?? "", /__velarOn\(\$velarElement\d+, "keydown"/u);
   assert.match(result.code ?? "", /typeof KeyboardEvent !== "undefined"/u);
   assert.doesNotMatch(result.code ?? "", /new (?:Keyboard|Pointer|Input)Event/u);
+
+  const primitiveChecks = compile(`
+def isComposition(value: unknown) -> bool:
+    return value is CompositionEvent
+
+def isClipboard(value: unknown) -> bool:
+    return value is ClipboardEvent
+`.trimStart());
+  assert.deepEqual(primitiveChecks.diagnostics, []);
+  assert.doesNotMatch(primitiveChecks.code ?? "", /(?:CompositionEvent|ClipboardEvent)\.is/u);
+  const primitiveExecution = executeModule(`
+class NativeComposition {}
+class NativeClipboard {}
+globalThis.CompositionEvent = NativeComposition;
+globalThis.ClipboardEvent = NativeClipboard;
+${primitiveChecks.code ?? ""}
+console.log(isComposition(new NativeComposition()), isComposition({}));
+console.log(isClipboard(new NativeClipboard()), isClipboard({}));
+`);
+  assert.equal(primitiveExecution.status, 0, String(primitiveExecution.stderr));
+  assert.equal(primitiveExecution.stdout, "true false\ntrue false\n");
 
   const structural = compile(`
 type Summary:
@@ -25803,11 +26080,15 @@ component Broken:
         <input on:keydown={pointerOnly} />
         <button type="button" on:click={tooMany}>Wrong</button>
         <input on:keydown={event => print(event.missing)} />
+        <input on:compositionend={event => print(event.inputType)} />
+        <input on:paste={event => print(event.data)} />
     </main>
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => item.code === "VEL5021" && /provides KeyboardEvent, not PointerEvent/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => item.code === "VEL5021" && /zero parameters or one PointerEvent/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /KeyboardEvent.*no field 'missing'/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /CompositionEvent.*no field 'inputType'/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /ClipboardEvent.*no field 'data'/u.test(item.message)));
 });
 
 test("event modifiers use native Event operations without invoking synthetic overrides", () => {

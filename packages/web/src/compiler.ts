@@ -224,6 +224,11 @@ const rectType = object({
   x: numberType, y: numberType, width: numberType, height: numberType,
   top: numberType, right: numberType, bottom: numberType, left: numberType,
 });
+const scrollMetricsType = object({
+  x: numberType, y: numberType,
+  viewportWidth: numberType, viewportHeight: numberType,
+  contentWidth: numberType, contentHeight: numberType,
+});
 const textSelectionType = object({ start: numberType, end: numberType, direction: stringType });
 const fileOptionsType = object({ accept: optional(stringType), multiple: optional(boolType) });
 const socketHandlersType = object({
@@ -269,6 +274,7 @@ const browserTestControllerType = object({
   fill: namedFunction(["selector", "value"], [stringType, stringType], promise(nullType)),
   select: namedFunction(["selector", "value"], [stringType, stringType], promise(nullType)),
   press: namedFunction(["selector", "key"], [stringType, stringType], promise(nullType)),
+  scroll: namedFunction(["selector", "x", "y"], [stringType, numberType, numberType], promise(nullType)),
   text: namedFunction(["selector"], [stringType], promise(stringType)),
   attribute: namedFunction(["selector", "name"], [stringType, stringType], promise(optional(stringType))),
   namespace: namedFunction(["selector"], [stringType], promise(stringType)),
@@ -417,11 +423,17 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["open", namedFunction(["url", "target"], [stringType, stringType], nullType, 1)],
     ["scrollTo", namedFunction(["x", "y", "behavior"], [numberType, numberType, stringType], nullType, 2)],
     ["scrollIntoView", namedFunction(["element", "behavior"], [webElementType, stringType], nullType, 1)],
+    ["scrollMetrics", namedFunction(["element"], [webElementType], scrollMetricsType)],
+    ["scrollElementTo", namedFunction(["element", "x", "y", "behavior"], [webElementType, numberType, numberType, stringType], nullType, 3)],
     ["focus", namedFunction(["element", "preventScroll"], [webElementType, boolType], nullType, 1)],
     ["blur", namedFunction(["element"], [webElementType], nullType)],
     ["measure", namedFunction(["element"], [webElementType], rectType)],
     ["textSelection", namedFunction(["element"], [textAreaElementType], textSelectionType)],
     ["setTextSelection", namedFunction(["element", "start", "end", "direction"], [textAreaElementType, numberType, numberType, stringType], nullType, 3)],
+    ["clipboardText", namedFunction(["event"], [{ kind: "named", name: "ClipboardEvent" }], stringType)],
+    ["setClipboardText", namedFunction(["event", "value"], [{ kind: "named", name: "ClipboardEvent" }, stringType], nullType)],
+    ["capturePointer", namedFunction(["element", "pointerId"], [webElementType, numberType], nullType)],
+    ["releasePointer", namedFunction(["element", "pointerId"], [webElementType, numberType], nullType)],
     ["media", namedFunction(["query"], [stringType], boolType)],
     ["watchMedia", namedFunction(["query", "callback"], [stringType, functionType([boolType], unknownType)], cleanupType)],
     ["watchOnline", namedFunction(["callback"], [functionType([boolType], unknownType)], cleanupType)],
@@ -503,7 +515,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
+    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
     primitiveParents: new Map([
       ["InputElement", new Set(["Element"])],
       ["TextAreaElement", new Set(["InputElement"])],
@@ -512,6 +524,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["KeyboardEvent", new Set(["Event"])],
       ["PointerEvent", new Set(["Event"])],
       ["InputEvent", new Set(["Event"])],
+      ["CompositionEvent", new Set(["Event"])],
+      ["ClipboardEvent", new Set(["Event"])],
     ]),
     primitiveMutableFields: new Map([
       ["InputElement", new Set(["value", "checked"])],

@@ -1240,6 +1240,12 @@ export class JavaScriptEmitter {
     }
   }
 
+  protected emitIsCheck(type: ValueType, value: string): string {
+    return type.kind === "named"
+      ? `${type.name}.is(${value})`
+      : this.emitTypeCheck(type, value);
+  }
+
   protected emitNarrowingCheck(type: ValueType, value: string, state = "undefined"): string {
     switch (type.kind) {
       case "optional":
@@ -1474,9 +1480,7 @@ export class JavaScriptEmitter {
         }
         {
           const checked = resolveTypeReference(expression.type);
-          return checked.kind === "named"
-            ? `${checked.name}.is(${this.emitMappedExpression(expression.value)})`
-            : this.emitTypeCheck(checked, this.emitMappedExpression(expression.value));
+          return this.emitIsCheck(checked, this.emitMappedExpression(expression.value));
         }
       case "ArrowFunctionExpression": {
         const body = this.emitMappedExpression(expression.body);

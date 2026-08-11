@@ -122,7 +122,7 @@ try {
 
   await writeFile(join(directory, "main.vel"), `
 import {range, sum} from "velar/collections"
-import {utf8Size} from "velar/text"
+import {chunks, utf8Size} from "velar/text"
 import {TextBuffer} from "velar/text-buffer"
 
 export const answer = sum(range(0, 7)) * 2
@@ -130,15 +130,16 @@ const buffer = TextBuffer("A😀\\nB")
 buffer.insert(buffer.size, "!")
 print(answer)
 print(utf8Size("A😀游戏"))
+print(chunks("A😀游戏", 2).join("|"))
 print(f"{str(buffer.size)}:{buffer.lineText(1)}")
 `.trimStart(), "utf8");
   await run(process.execPath, [installedCli, "build", "main.vel", "--out", "main.js"], directory);
   assert.match(await readFile(join(directory, "main.js"), "utf8"), /from "velar\/collections"/u);
   assert.match(await readFile(join(directory, "node_modules", "velar", "collections.js"), "utf8"), /export function range/u);
-  assert.match(await readFile(join(directory, "node_modules", "velar", "text.js"), "utf8"), /export function utf8Size/u);
+  assert.match(await readFile(join(directory, "node_modules", "velar", "text.js"), "utf8"), /export function chunks/u);
   assert.match(await readFile(join(directory, "node_modules", "velar", "text-buffer.js"), "utf8"), /class TextBuffer/u);
   const built = await run(process.execPath, [join(directory, "main.js")], directory);
-  assert.equal(built.stdout, "42\n11\n5:B!\n");
+  assert.equal(built.stdout, "42\n11\nA😀|游戏\n5:B!\n");
 
   const api = await run(process.execPath, [
     "--input-type=module",

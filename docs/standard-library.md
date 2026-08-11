@@ -182,7 +182,7 @@ exists. `text.has(part)` and `part in text` are the method and operator forms of
 the same substring test. Direct string indexing stays absent.
 
 The `velar/text` module keeps transformations that are not simple receiver
-operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `words`,
+operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`,
 `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, and
 `escapeHtml`. Blank text can be tested directly with `text.trim().size == 0`.
 `utf8Size(text)` returns the exact byte count used
@@ -191,7 +191,10 @@ three-byte treatment of an unpaired surrogate. `lineStarts(text)` performs one
 bounded scan and returns `[0, ...]` Unicode code-point offsets immediately after
 each line-feed character, including the final text size when the text ends in a
 line feed. This keeps large-file line indexes out of repeated `.char(index)`
-lookups without exposing JavaScript UTF-16 units. Stateless pattern operations are `matches`, `findMatch`,
+lookups without exposing JavaScript UTF-16 units. `chunks(text,size)` performs
+the same single bounded code-point scan and returns non-empty pieces of at most
+`size` code points; it never splits a surrogate pair, and an empty input returns
+an empty List. Stateless pattern operations are `matches`, `findMatch`,
 `findMatches`, `replaceMatches`, and `splitPattern`.
 
 `title` treats separators as word boundaries. `truncate` reserves room for its
@@ -250,32 +253,54 @@ print(f"{initial ?? "?"}:{short.size}")
 ## `velar/text-buffer`
 
 `TextBuffer(text="")` is the Standard owner for incremental editable text. Its
-implementation is pure VelarScript and uses a piece table: the original text
-and append-only insertion chunks remain stable while replacements rebuild only
-piece metadata. Public offsets, lengths, line columns, slices, and change
-records all use the same Unicode code-point positions as Core strings.
+implementation is pure VelarScript and uses immutable AVL rope nodes with
+4,096-code-point maximum leaves. Nodes cache code-point length, UTF-8 bytes,
+line-feed count, trailing column, height, and leaf count; leaves cache local
+line starts. Split, concatenate, replacement, line lookup, and viewport reads
+therefore traverse tree height plus touched text instead of rebuilding global
+piece or line metadata. Adjacent small leaves coalesce automatically, so storage
+maintenance does not leak into a public `compact()` command. Public offsets,
+lengths, line columns, slices, and change records all use the same Unicode
+code-point positions as Core strings.
 
-The public surface is `size`, `lineCount`, `revision`, `text()`,
+The public surface is `size`, `byteSize`, `lineCount`, `revision`, `text()`,
 `slice(start,end)`, `replace(start,end,text)`, `insert(offset,text)`,
 `delete(start,end)`, `positionAt(offset)`, `offsetAt(line,column)`, and
-`lineText(line)`. A replacement returns a `TextChange` containing the removed
-and inserted text plus before/after revisions, so a product can own transactions
-and undo without reaching into buffer storage. Positions and lines are
-zero-based; line text excludes LF and an immediately preceding CR.
+`lineText(line)`. `lineSlice(startLine,endLine)` returns a raw line-aligned
+viewport plus its absolute offsets; `endLine` is exclusive and may equal
+`lineCount`. Positions and lines are zero-based. Line text excludes LF and an
+immediately preceding CR. An offset between CR and LF normalizes to the visible
+end-of-line position, so every returned position is accepted by `offsetAt`.
 
-The buffer accepts at most 16 MiB of UTF-8 text and one million pieces. Its line
-index is lazy: code that only edits or slices text does not pay to scan every
-line. The first line/position query uses `velar/text.lineStarts`, and later
-edits update an established index incrementally. `text()` also returns a single
-complete source chunk directly instead of re-slicing it. Editors should keep
-the full document in this owner and render bounded view slices rather than
-copying the entire document into a DOM control.
+`apply(edits)` commits one non-empty ordered List of non-overlapping `TextEdit`
+ranges. Every range belongs to the same pre-revision, all validation and the
+16 MiB UTF-8 budget complete before state changes, and a successful batch
+increments revision exactly once. The returned `TextTransaction` contains one
+invertible `TextChange` per edit with shared before/after revisions. `replace`,
+`insert`, and `delete` are single-edit conveniences over that contract.
+
+`TextHistory(buffer,maxEntries=1000,maxBytes=32 MiB)` is the bounded undo/redo
+owner for one buffer. Its `apply` stores copied forward and inverse edits plus
+optional before/after `TextSelection` metadata. `begin`, repeated `apply`, and
+`commit` form one composition/history command; `cancel` reverts an active group.
+`undo` and `redo` return the selection to restore. An edit made directly on the
+attached buffer causes later history operations to fail closed on revision
+mismatch rather than replaying stale coordinates. History storage is bounded by
+both entry count and UTF-8 bytes.
+
+The buffer accepts at most 16 MiB of UTF-8 text, one million leaves, and 100,000
+edits per transaction. Editors should keep the full document in this owner,
+render `lineSlice` viewports, and route normal, multi-cursor, and composition
+changes through transactions rather than copying the document into a DOM input.
 
 ```velar
-import {TextBuffer} from "velar/text-buffer"
+import {TextBuffer, TextHistory} from "velar/text-buffer"
 
 const text = TextBuffer("first\nthird")
-const change = text.insert(text.offsetAt(1, 0), "second\n")
+const history = TextHistory(text)
+const change = history.apply([
+    {start: text.offsetAt(1, 0), end: text.offsetAt(1, 0), inserted: "second\n"},
+])
 print(text.lineText(1))
 print(f"{str(change.beforeRevision)}:{str(change.afterRevision)}")
 ```

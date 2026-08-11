@@ -132,7 +132,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   protected override emitTypeCheck(type: ValueType, value: string, state = "undefined"): string {
     if (type.kind === "named") {
-      if (type.name === "Event" || type.name === "KeyboardEvent" || type.name === "PointerEvent" || type.name === "InputEvent") {
+      if (type.name === "Event" || type.name === "KeyboardEvent" || type.name === "PointerEvent" || type.name === "InputEvent" || type.name === "CompositionEvent" || type.name === "ClipboardEvent") {
         return `(typeof ${type.name} !== "undefined" && ${value} instanceof ${type.name})`;
       }
       if (type.name === "Element") return `(typeof Element !== "undefined" && ${value} instanceof Element)`;
@@ -149,6 +149,25 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
     }
     return super.emitTypeCheck(type, value, state);
+  }
+
+  protected override emitIsCheck(type: ValueType, value: string): string {
+    if (type.kind === "named" && (
+      type.name === "Event"
+      || type.name === "KeyboardEvent"
+      || type.name === "PointerEvent"
+      || type.name === "InputEvent"
+      || type.name === "CompositionEvent"
+      || type.name === "ClipboardEvent"
+      || type.name === "Element"
+      || type.name === "CanvasElement"
+      || type.name === "DialogElement"
+      || type.name === "InputElement"
+      || type.name === "TextAreaElement"
+      || type.name === "Blob"
+      || type.name === "File"
+    )) return this.emitTypeCheck(type, value);
+    return super.emitIsCheck(type, value);
   }
 
   protected override additionalHelpers(_program: Program): readonly string[] {
@@ -1342,7 +1361,7 @@ function __velarMountScope(scope) {
   scope.mounted = true;
   for (const mount of scope.mounts) {
     try {
-      const result = mount();
+      const result = __velarUntracked(mount);
       __velarObservePromise(result, (error) => __velarReport(error, "mounted", scope));
     } catch (error) { __velarReport(error, "mounted", scope); }
   }
@@ -1351,7 +1370,7 @@ function __velarMountScope(scope) {
 function __velarDestroyScope(scope) {
   for (const cleanup of [...scope.cleanups].reverse()) {
     try {
-      const result = cleanup();
+      const result = __velarUntracked(cleanup);
       __velarObservePromise(result, (error) => __velarReport(error, "cleanup", scope));
     } catch (error) { __velarReport(error, "cleanup", scope); }
   }
@@ -1360,7 +1379,7 @@ function __velarDestroyScope(scope) {
 
 function __velarCleanupStep(run, scope) {
   try {
-    const result = run();
+    const result = __velarUntracked(run);
     __velarObservePromise(result, (error) => __velarReport(error, "cleanup", scope));
   } catch (error) { __velarReport(error, "cleanup", scope); }
 }
@@ -1441,7 +1460,7 @@ function __velarComponent(node, scope, mounted, cleanup, handleState) {
       if (handleState) handleState.revoke();
       if (cleanup) {
         try {
-          const result = cleanup();
+          const result = __velarUntracked(cleanup);
           __velarObservePromise(result, (error) => __velarReport(error, "cleanup", scope));
         } catch (error) { __velarReport(error, "cleanup", scope); }
       }
@@ -2085,7 +2104,7 @@ function __velarOn(element, event, read, scope, modifiers = []) {
       // through live props always see the current value.
       const handler = __velarUntracked(read);
       if (typeof handler !== "function") throw new TypeError("Event '" + event + "' requires a function");
-      const result = handler(value);
+      const result = __velarUntracked(() => handler(value));
       __velarObservePromise(result, (error) => __velarReportEvent(error, scope, event));
     } catch (error) { __velarReportEvent(error, scope, event); }
   };

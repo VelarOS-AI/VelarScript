@@ -170,6 +170,7 @@ export component WebCapabilities:
         keyboardLabel = event.key
 
     def captureInput(event: InputEvent) -> null:
+        event.preventDefault()
         inputLabel = event.inputType
 
     def capturePointer(event: PointerEvent) -> null:
@@ -302,7 +303,7 @@ export component WebCapabilities:
             <span look={summaryItemLook} data-render-stable>{renderStatus()}</span>
         </div>
         <div class="actions" look={capabilityRowLook}>
-            <input look={eventInputLook} data-event-input aria-label="Native event probe" on:keydown={captureKey} on:input={captureInput} />
+            <input look={eventInputLook} data-event-input aria-label="Native event probe" on:keydown={captureKey} on:beforeinput={captureInput} />
             <button look={actionButtonLook} data-pointer-probe type="button" on:pointerdown={capturePointer}>Check pointer event</button>
             <button look={actionButtonLook} type="button" disabled={chooseFile.pending} on:click={chooseFile}>Choose text file</button>
             <button look={actionButtonLook} type="button" on:click={saveStatus}>Download status</button>

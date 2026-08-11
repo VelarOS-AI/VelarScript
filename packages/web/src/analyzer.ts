@@ -74,6 +74,7 @@ const nativeDomEventNames = new Set([
   "pointerdown", "pointerup", "pointermove", "pointerenter", "pointerleave", "pointerover", "pointerout", "pointercancel",
   "touchstart", "touchend", "touchmove", "touchcancel",
   "dragstart", "dragend", "dragover", "dragenter", "dragleave", "drop", "drag",
+  "compositionstart", "compositionupdate", "compositionend",
   "copy", "cut", "paste", "load", "error", "transitionend", "animationend", "play", "pause", "ended",
 ]);
 const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle", "Opacity"]);
@@ -1435,6 +1436,8 @@ function webTypeFields(name: string): ReadonlyMap<string, ValueType> | null {
   if (name === "KeyboardEvent") return new Map([...eventFields(), ["key", stringType], ["code", stringType], ["repeat", boolType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "PointerEvent") return new Map([...eventFields(), ["pointerId", numberType], ["pointerType", stringType], ["pressure", numberType], ["button", numberType], ["buttons", numberType], ["clientX", numberType], ["clientY", numberType], ["movementX", numberType], ["movementY", numberType], ["altKey", boolType], ["ctrlKey", boolType], ["metaKey", boolType], ["shiftKey", boolType]]);
   if (name === "InputEvent") return new Map([...eventFields(), ["data", optionalOf(stringType)], ["inputType", stringType], ["isComposing", boolType]]);
+  if (name === "CompositionEvent") return new Map([...eventFields(), ["data", stringType]]);
+  if (name === "ClipboardEvent") return eventFields();
   if (name === "Blob") return new Map();
   if (name === "File") return new Map([["name", stringType], ["size", numberType], ["type", stringType], ["modified", numberType]]);
   if (name === "Element" || name === "InputElement" || name === "TextAreaElement" || name === "CanvasElement" || name === "DialogElement") {
@@ -1451,5 +1454,7 @@ function webEventType(name: string): ValueType {
   if (name === "keydown" || name === "keyup" || name === "keypress") return { kind: "named", name: "KeyboardEvent" };
   if (["click", "pointerdown", "pointerup", "pointermove", "pointercancel", "pointerover", "pointerout", "pointerenter", "pointerleave"].includes(name)) return { kind: "named", name: "PointerEvent" };
   if (name === "beforeinput" || name === "input") return { kind: "named", name: "InputEvent" };
+  if (name === "compositionstart" || name === "compositionupdate" || name === "compositionend") return { kind: "named", name: "CompositionEvent" };
+  if (name === "copy" || name === "cut" || name === "paste") return { kind: "named", name: "ClipboardEvent" };
   return { kind: "named", name: "Event" };
 }

@@ -318,6 +318,8 @@ const __velarBrowserElementConstructor = __velarBrowserConstructor("Element");
 const __velarBrowserHtmlElementConstructor = __velarBrowserConstructor("HTMLElement");
 const __velarBrowserTextAreaConstructor = __velarBrowserConstructor("HTMLTextAreaElement");
 const __velarBrowserDialogConstructor = __velarBrowserConstructor("HTMLDialogElement");
+const __velarBrowserClipboardEventConstructor = __velarBrowserConstructor("ClipboardEvent");
+const __velarBrowserDataTransferConstructor = __velarBrowserConstructor("DataTransfer");
 const __velarBrowserDomRectConstructor = __velarBrowserConstructor("DOMRect");
 const __velarBrowserDomRectReadOnlyConstructor = __velarBrowserConstructor("DOMRectReadOnly");
 const __velarBrowserClipboardConstructor = __velarBrowserConstructor("Clipboard");
@@ -344,6 +346,15 @@ const __velarBrowserDialogResult = __velarBrowserPrototypeMember(__velarBrowserD
 const __velarBrowserDialogShowModal = __velarBrowserPrototypeMember(__velarBrowserDialogConstructor, "showModal", "value");
 const __velarBrowserDialogClose = __velarBrowserPrototypeMember(__velarBrowserDialogConstructor, "close", "value");
 const __velarBrowserElementScrollIntoView = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "scrollIntoView", "value");
+const __velarBrowserElementScrollTo = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "scrollTo", "value");
+const __velarBrowserElementScrollLeft = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "scrollLeft", "get");
+const __velarBrowserElementScrollTop = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "scrollTop", "get");
+const __velarBrowserElementScrollWidth = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "scrollWidth", "get");
+const __velarBrowserElementScrollHeight = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "scrollHeight", "get");
+const __velarBrowserElementClientWidth = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "clientWidth", "get");
+const __velarBrowserElementClientHeight = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "clientHeight", "get");
+const __velarBrowserElementSetPointerCapture = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "setPointerCapture", "value");
+const __velarBrowserElementReleasePointerCapture = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "releasePointerCapture", "value");
 const __velarBrowserElementMeasure = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "getBoundingClientRect", "value");
 const __velarBrowserElementFocus = __velarBrowserPrototypeMember(__velarBrowserHtmlElementConstructor, "focus", "value");
 const __velarBrowserElementBlur = __velarBrowserPrototypeMember(__velarBrowserHtmlElementConstructor, "blur", "value");
@@ -362,6 +373,9 @@ const __velarBrowserRectBottom = __velarBrowserPrototypeMember(__velarBrowserDom
 const __velarBrowserRectLeft = __velarBrowserPrototypeMember(__velarBrowserDomRectReadOnlyConstructor, "left", "get");
 const __velarBrowserClipboardWrite = __velarBrowserPrototypeMember(__velarBrowserClipboardConstructor, "writeText", "value");
 const __velarBrowserClipboardRead = __velarBrowserPrototypeMember(__velarBrowserClipboardConstructor, "readText", "value");
+const __velarBrowserClipboardEventData = __velarBrowserPrototypeMember(__velarBrowserClipboardEventConstructor, "clipboardData", "get");
+const __velarBrowserDataTransferGetData = __velarBrowserPrototypeMember(__velarBrowserDataTransferConstructor, "getData", "value");
+const __velarBrowserDataTransferSetData = __velarBrowserPrototypeMember(__velarBrowserDataTransferConstructor, "setData", "value");
 const __velarBrowserEventAdd = __velarBrowserPrototypeMember(__velarBrowserEventTargetConstructor, "addEventListener", "value");
 const __velarBrowserEventRemove = __velarBrowserPrototypeMember(__velarBrowserEventTargetConstructor, "removeEventListener", "value");
 const __velarBrowserEventDispatch = __velarBrowserPrototypeMember(__velarBrowserEventTargetConstructor, "dispatchEvent", "value");
@@ -2727,6 +2741,36 @@ export async function readClipboardText() { return browserText(await __velarBrow
 export function open(url, target = "_blank") { url = browserText(url, "Browser URL", 2 * 1024 * 1024); target = browserText(target, "Browser target", 256); __velarBrowserCallCaptured(__velarBrowserOpen, __velarBrowserWindow, [url, target, target === "_blank" ? "noopener,noreferrer" : undefined], "open"); return null; }
 export function scrollTo(x, y, behavior = "auto") { __velarBrowserCallCaptured(__velarBrowserScrollTo, __velarBrowserWindow, [{ left: browserNumber(x, "Scroll x"), top: browserNumber(y, "Scroll y"), behavior: scrollBehavior(behavior) }], "scrollTo"); return null; }
 export function scrollIntoView(element, behavior = "smooth") { element = requireElement(element); __velarBrowserCallCaptured(__velarBrowserElementScrollIntoView, element, [{ behavior: scrollBehavior(behavior), block: "nearest" }], "Element.scrollIntoView"); return null; }
+export function scrollMetrics(element) {
+  element = requireElement(element);
+  const x = browserNumber(__velarBrowserField(element, "scrollLeft", __velarBrowserElementScrollLeft, __velarBrowserElementConstructor), "Element scroll x");
+  const y = browserNumber(__velarBrowserField(element, "scrollTop", __velarBrowserElementScrollTop, __velarBrowserElementConstructor), "Element scroll y");
+  const viewportWidth = browserNumber(__velarBrowserField(element, "clientWidth", __velarBrowserElementClientWidth, __velarBrowserElementConstructor), "Element viewport width");
+  const viewportHeight = browserNumber(__velarBrowserField(element, "clientHeight", __velarBrowserElementClientHeight, __velarBrowserElementConstructor), "Element viewport height");
+  const contentWidth = browserNumber(__velarBrowserField(element, "scrollWidth", __velarBrowserElementScrollWidth, __velarBrowserElementConstructor), "Element content width");
+  const contentHeight = browserNumber(__velarBrowserField(element, "scrollHeight", __velarBrowserElementScrollHeight, __velarBrowserElementConstructor), "Element content height");
+  if (viewportWidth < 0 || viewportHeight < 0 || contentWidth < 0 || contentHeight < 0) throw new RangeError("Element scroll dimensions cannot be negative");
+  return Object.freeze({ x, y, viewportWidth, viewportHeight, contentWidth, contentHeight });
+}
+export function scrollElementTo(element, x, y, behavior = "auto") {
+  element = requireElement(element);
+  __velarBrowserCallCaptured(__velarBrowserElementScrollTo, element, [{ left: browserNumber(x, "Element scroll x"), top: browserNumber(y, "Element scroll y"), behavior: scrollBehavior(behavior) }], "Element.scrollTo");
+  return null;
+}
+function pointerId(value) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 2147483647) throw new RangeError("Pointer ID must be an integer from 0 through 2147483647");
+  return value;
+}
+export function capturePointer(element, id) {
+  element = requireElement(element);
+  __velarBrowserCallCaptured(__velarBrowserElementSetPointerCapture, element, [pointerId(id)], "Element.setPointerCapture");
+  return null;
+}
+export function releasePointer(element, id) {
+  element = requireElement(element);
+  __velarBrowserCallCaptured(__velarBrowserElementReleasePointerCapture, element, [pointerId(id)], "Element.releasePointerCapture");
+  return null;
+}
 export function focus(element, preventScroll = false) {
   element = requireFocusableElement(element);
   preventScroll = __velarBool(preventScroll, "Focus preventScroll");
@@ -2799,6 +2843,22 @@ export function setTextSelection(element, start, end, direction = "none") {
     __velarTextCodeUnitOffset(value, end),
     direction,
   ], "HTMLTextAreaElement.setSelectionRange");
+  return null;
+}
+function clipboardData(event) {
+  if (!__velarBrowserNativeInstance(event, __velarBrowserClipboardEventConstructor)) throw new TypeError("Clipboard helpers require a ClipboardEvent");
+  const data = __velarBrowserField(event, "clipboardData", __velarBrowserClipboardEventData, __velarBrowserClipboardEventConstructor);
+  if (!__velarBrowserNativeInstance(data, __velarBrowserDataTransferConstructor)) throw new TypeError("ClipboardEvent does not expose native clipboard data");
+  return data;
+}
+export function clipboardText(event) {
+  const data = clipboardData(event);
+  return browserText(__velarBrowserCallCaptured(__velarBrowserDataTransferGetData, data, ["text/plain"], "DataTransfer.getData"), "Clipboard event text", 16 * 1024 * 1024);
+}
+export function setClipboardText(event, value) {
+  value = browserText(value, "Clipboard event text", 16 * 1024 * 1024);
+  const data = clipboardData(event);
+  __velarBrowserCallCaptured(__velarBrowserDataTransferSetData, data, ["text/plain", value], "DataTransfer.setData");
   return null;
 }
 export function media(query) { const matcher = __velarBrowserCallCaptured(__velarBrowserMatchMedia, __velarBrowserWindow, [browserText(query, "Media query", 4096)], "matchMedia"); return browserBool(__velarBrowserField(matcher, "matches", __velarBrowserMediaMatches, __velarBrowserMediaQueryListConstructor), "Media query result"); }
@@ -3217,6 +3277,7 @@ export const browser = Object.freeze({
   fill(selector, value) { return browserRuntime().fill(selector, value); },
   select(selector, value) { return browserRuntime().select(selector, value); },
   press(selector, key) { return browserRuntime().press(selector, key); },
+  scroll(selector, x, y) { return browserRuntime().scroll(selector, x, y); },
   text(selector) { return browserRuntime().text(selector); },
   attribute(selector, name) { return browserRuntime().attribute(selector, name); },
   namespace(selector) { return browserRuntime().namespace(selector); },

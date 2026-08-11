@@ -157,13 +157,21 @@ checks lower inline, data checks reuse the runtime validation ABI, and erased
 generic or opaque capability types fall back to a presence check rather than
 inventing a runtime type object. The guard and its captured native `TypeError`
 identity have one compiler-owned source: standalone output inlines it, while
-project consumers import `narrow` from a hidden internal module. The constructor
-is consistent across project modules but has no public `ModuleInterface`; each
+project consumers import `narrow` from a hidden internal module. The
+`NarrowingError` constructor is consistent across project modules but has no
+public `ModuleInterface`; each
 call still supplies its own value, evidence, expected type, description, and
 source offset. A class-valued narrowing also activates the nominal validation
 runtime that provides the captured `instanceof` evidence; standalone output
 must inline that helper and shared project output must declare its hidden runtime
 module dependency. This mechanism is independent of readonly conversion.
+
+Ordinary `is` expressions use an overridable direct-check dispatch. Core named
+data types and imported runtime Types retain their established `.is` owner;
+an extension must explicitly route its named host primitives to the same
+predicate used by nested runtime checks. Direct Web primitive checks and
+transparent aliases therefore generate the same native identity test without
+changing Core data-Type code generation.
 
 Body-backed functions, concrete methods, and actions may omit their result
 annotation. Predeclaration installs a distinct unresolved-result placeholder,
@@ -830,9 +838,10 @@ replacement and splitting do not delegate back to mutable RegExp symbol hooks.
 The code-point length helper first uses one captured RegExp operation to prove
 that text contains no astral or unpaired-surrogate value; ordinary source text
 then returns its native unit length directly, while text containing either
-shape retains the explicit code-point scan. `velar/text.lineStarts` performs one
-captured scan and returns code-point line starts without repeated source-level
-`.char(index)` calls.
+shape retains the explicit code-point scan. `velar/text.lineStarts` and
+`velar/text.chunks` perform one captured scan and return code-point line starts
+or bounded pieces without repeated source-level `.char(index)` calls or
+surrogate splitting.
 
 Portable Standard algorithms may be authored as CLI-owned `.vel` assets.
 `standard-modules.ts` inspects their explicit public interface, permits only
@@ -841,6 +850,11 @@ source lazily with shared runtime modules, and caches its JavaScript plus exact
 dependency closure. `velar/text-buffer` is the first such module. Published CLI
 artifacts include the source asset; applications still import only the stable
 `velar/text-buffer` identity and never resolve a repository path.
+Its immutable AVL rope and bounded history are consequently compiled by the
+ordinary class, optional narrowing, collection, and primitive-method lowering
+paths. The compiler owns none of its editor semantics; generated-code and real
+execution gates prove that this substantial Standard implementation consumes
+the same public language contract as application code.
 
 Checked Number receiver methods use a separate compiler-owned Number runtime.
 It captures the exact Math operations, `Number.isSafeInteger`, native
@@ -916,6 +930,10 @@ and browser runtimes and do not define a separate VelarScript memory model.
 - One shared application error channel classifies mount, render, watch, event,
   mounted, and cleanup failures. Synchronous and rejected event work is caught;
   cleanup reports a failing independent step and continues the remaining steps.
+- Event and lifecycle callbacks lower through an explicit untracked boundary.
+  Mounting or destroying a child while a conditional/keyed observer is active
+  therefore cannot make child-local `mounted`/`cleanup` reads invalidate and
+  reconstruct the parent position.
 - Lazy components cache successful module resolution, retry failed loads,
   replace loading/resolved/error children with deterministic mount and destroy
   ownership, and report loading failures through the application resource phase.

@@ -40,6 +40,7 @@ const browserPerformanceInitScript = String.raw`
   const nativeDocument = globalThis.document;
   const nativeEventTarget = globalThis.EventTarget;
   const nativeEvent = globalThis.Event;
+  const nativeElement = globalThis.Element;
   const getOwnPropertyDescriptor = nativeObject.getOwnPropertyDescriptor;
   const defineProperty = nativeObject.defineProperty;
   const freeze = nativeObject.freeze;
@@ -57,6 +58,7 @@ const browserPerformanceInitScript = String.raw`
   const eventRemove = getOwnPropertyDescriptor(nativeEventTarget.prototype, "removeEventListener")?.value;
   const eventTarget = getOwnPropertyDescriptor(nativeEvent.prototype, "target")?.get;
   const eventTimeStamp = getOwnPropertyDescriptor(nativeEvent.prototype, "timeStamp")?.get;
+  const elementScrollTo = getOwnPropertyDescriptor(nativeElement.prototype, "scrollTo")?.value;
   const performancePrototype = callPrototype(nativePerformance);
   const performanceNow = getOwnPropertyDescriptor(performancePrototype, "now")?.value;
   const performanceEntriesByType = getOwnPropertyDescriptor(performancePrototype, "getEntriesByType")?.value;
@@ -111,10 +113,23 @@ const browserPerformanceInitScript = String.raw`
       loadMs: finite(field(navigation, "loadEventEnd"), "Load timing"),
     });
   }
+  function scroll(element, x, y) {
+    if (!(element instanceof nativeElement)) throw new TypeError("Browser test scroll target must be an Element");
+    if (typeof x !== "number" || !call(numberFinite, nativeNumber, [x], "Number.isFinite")
+      || typeof y !== "number" || !call(numberFinite, nativeNumber, [y], "Number.isFinite")
+      || call(mathMax, nativeMath, [x, -x, y, -y], "Math.max") > 100000000) {
+      throw new RangeError("Browser test scroll coordinates are outside the supported bound");
+    }
+    call(elementScrollTo, element, [{ left: x, top: y, behavior: "auto" }], "Element.scrollTo");
+    return null;
+  }
   function prepare(element, eventName) {
-    if (eventName !== "click" && eventName !== "input") throw new TypeError("Measured browser event must be click or input");
+    if (eventName !== "click" && eventName !== "input" && eventName !== "beforeinput-or-input") {
+      throw new TypeError("Measured browser event must be click, input, or beforeinput-or-input");
+    }
     if (!(element instanceof nativeEventTarget)) throw new TypeError("Measured browser target must be an EventTarget");
     if (call(mapSize, measurements, [], "Map.size") >= 32) throw new RangeError("Too many pending browser performance measurements");
+    const eventNames = eventName === "beforeinput-or-input" ? ["beforeinput", "input"] : [eventName];
     const id = nextMeasurement++;
     let finish;
     let fail;
@@ -124,7 +139,7 @@ const browserPerformanceInitScript = String.raw`
     const cleanup = () => {
       if (listening) {
         listening = false;
-        call(eventRemove, nativeDocument, [eventName, listener, true], "Document.removeEventListener");
+        for (const name of eventNames) call(eventRemove, nativeDocument, [name, listener, true], "Document.removeEventListener");
       }
       if (timer !== null) {
         call(clearTimeout_, globalThis, [timer], "clearTimeout");
@@ -154,7 +169,7 @@ const browserPerformanceInitScript = String.raw`
         }], "queueMicrotask");
       } catch (error) { fail(error); }
     };
-    call(eventAdd, nativeDocument, [eventName, listener, true], "Document.addEventListener");
+    for (const name of eventNames) call(eventAdd, nativeDocument, [name, listener, true], "Document.addEventListener");
     timer = call(setTimeout_, globalThis, [() => { cleanup(); fail(new Error("Measured browser interaction did not dispatch its expected event")); }, 5000], "setTimeout");
     call(mapSet, measurements, [id, freeze({ promise, cleanup })], "Map.set");
     return id;
@@ -172,7 +187,7 @@ const browserPerformanceInitScript = String.raw`
     call(mapDelete, measurements, [id], "Map.delete");
     return null;
   }
-  defineProperty(globalThis, key, { value: freeze({ timings, prepare, finish: finishMeasurement, cancel }), enumerable: false, configurable: false, writable: false });
+  defineProperty(globalThis, key, { value: freeze({ timings, scroll, prepare, finish: finishMeasurement, cancel }), enumerable: false, configurable: false, writable: false });
 })();
 `;
 
@@ -349,6 +364,20 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
     async fill(selector: unknown, value: unknown) { await locator(selector).fill(String(value)); return null; },
     async select(selector: unknown, value: unknown) { await locator(selector).selectOption(String(value)); return null; },
     async press(selector: unknown, key: unknown) { await locator(selector).press(String(key)); return null; },
+    async scroll(selector: unknown, x: unknown, y: unknown) {
+      if (typeof x !== "number" || !Number.isFinite(x) || typeof y !== "number" || !Number.isFinite(y)
+        || Math.abs(x) > 100_000_000 || Math.abs(y) > 100_000_000) {
+        throw new RangeError("browser.scroll requires finite coordinates within 100000000 pixels");
+      }
+      await locator(selector).evaluate((element, position) => {
+        const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(position.key))?.value as {
+          scroll?: (target: Element, left: number, top: number) => unknown;
+        } | undefined;
+        if (!runtime || typeof runtime.scroll !== "function") throw new Error("Browser test scroll runtime is unavailable");
+        runtime.scroll(element, position.x, position.y);
+      }, { key: browserPerformanceRuntimeKey, x, y });
+      return null;
+    },
     async text(selector: unknown) { return await locator(selector).textContent() ?? ""; },
     async attribute(selector: unknown, name: unknown) { return locator(selector).getAttribute(String(name)); },
     async namespace(selector: unknown) {
@@ -396,12 +425,12 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
     async measureFill(selector: unknown, value: unknown) {
       const target = locator(selector);
       const text = String(value);
-      return measureBrowserInteraction(page, target, "input", async () => { await target.fill(text); });
+      return measureBrowserInteraction(page, target, "beforeinput-or-input", async () => { await target.fill(text); });
     },
     async measurePress(selector: unknown, key: unknown) {
       const target = locator(selector);
       const value = String(key);
-      return measureBrowserInteraction(page, target, "input", async () => { await target.press(value); });
+      return measureBrowserInteraction(page, target, "beforeinput-or-input", async () => { await target.press(value); });
     },
     async storageGet(area: unknown, key: unknown) {
       const input = { area: storageArea(area), key: String(key) };
@@ -492,7 +521,7 @@ interface BrowserInteractionTiming {
 async function measureBrowserInteraction(
   page: Page,
   target: Locator,
-  eventName: "click" | "input",
+  eventName: "click" | "input" | "beforeinput-or-input",
   action: () => Promise<void>,
 ): Promise<BrowserInteractionTiming> {
   const measurement = await target.evaluate((element, input) => {

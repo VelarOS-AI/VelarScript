@@ -334,6 +334,11 @@ component RuntimeStatus:
 - The compiler reports failures from initial `mount`, reactive `render` and
   synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
   and `cleanup`.
+- Event handlers and lifecycle callbacks are non-tracking execution boundaries.
+  Reads performed by `mounted` or `cleanup` cannot become dependencies of an
+  enclosing conditional/keyed render that happened to mount or destroy the
+  component, and a synchronously dispatched event cannot inherit a framework
+  observer. State writes still notify their actual render/watch consumers.
 - JSX rendering and `computed` callbacks are synchronous. Async component data
   belongs in `resource`; explicit UI operations belong in `action`, declared in
   the component that triggers them or at module scope when a shared store owns
@@ -842,8 +847,12 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
 - Helpers require a real form element. Submission remains explicit through
   ordinary VelarScript event directives.
 - Event directives pass native browser events. Contextual `KeyboardEvent`,
-  `PointerEvent`, and `InputEvent` parameters expose bounded stable fields;
+  `PointerEvent`, `InputEvent`, `CompositionEvent`, and `ClipboardEvent`
+  parameters expose their typed fields;
   zero-parameter handlers remain valid and no synthetic event runtime is added.
+  Composition start/update/end provide `CompositionEvent.data`. Copy, cut, and
+  paste provide `ClipboardEvent`; its raw `DataTransfer` stays hidden behind the
+  bounded `velar/browser` text helpers described below.
   Framework-owned `self`, `prevent`, and `stop` modifier work uses captured
   native Event getters and methods, so an own accessor or instance override
   cannot run before the application handler.
@@ -851,7 +860,7 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
 ## `velar/browser`
 
 ```velar
-import {after, blur, closeDialog, dialogResult, environment, every, focus, setTextSelection, showDialog, textSelection, watchOnline, watchVisibility} from "velar/browser"
+import {after, blur, closeDialog, dialogResult, environment, every, focus, scrollElementTo, scrollMetrics, setTextSelection, showDialog, textSelection, watchOnline, watchVisibility} from "velar/browser"
 
 component EnvironmentStatus:
     const stopReady = after(250, () => print("ready"))
@@ -910,12 +919,28 @@ React-style effect API.
   when browser permission or user-gesture policy denies access. Each operation
   snapshots the secure-context and native clipboard host once, then uses the
   captured platform method rather than a replaceable instance method.
-- `open`, `scrollTo`, `scrollIntoView`, `measure`, and `frame` cover intentional
+- `clipboardText(event)` and `setClipboardText(event,text)` are the synchronous
+  copy/cut/paste event boundary. They require a native `ClipboardEvent`, use only
+  `text/plain`, cap text at 16 MiB, and call captured DataTransfer operations.
+  Raw clipboard formats, files, and DataTransfer mutation do not enter source.
+  The handler remains responsible for calling `event.preventDefault()` when it
+  replaces the browser's default copy, cut, or paste behavior.
+- `open`, `scrollTo`, `scrollIntoView`, `scrollMetrics`, `scrollElementTo`,
+  `measure`, and `frame` cover intentional
   window, element, layout, and animation-frame operations. Text/URL/query
   inputs are strings, scroll coordinates are finite numbers, and behavior is
   exactly `auto`, `smooth`, or `instant`; invalid values fail before invoking
-  the browser capability. Element scrolling and measurement call the validated
-  platform prototype rather than an instance override.
+  the browser capability. `scrollMetrics(element)` returns
+  `{x,y,viewportWidth,viewportHeight,contentWidth,contentHeight}` from captured
+  native getters, and `scrollElementTo` moves that exact element without
+  exposing mutable `scrollTop`/`scrollLeft` fields. Element scrolling and
+  measurement call the validated platform prototype rather than an instance
+  override.
+- `capturePointer(element,pointerId)` and `releasePointer(element,pointerId)`
+  keep drag/select ownership on one native Element. IDs are bounded
+  non-negative integers and the captured prototype operations retain native
+  active-pointer errors; pointer capture state itself is not duplicated in
+  VelarScript runtime state.
 - `focus(element, preventScroll=false)` and `blur(element)` provide explicit
   accessibility focus ownership for typed JSX refs. They require a real HTML
   element and invoke the native prototype operation rather than an instance
@@ -1069,7 +1094,7 @@ async def test_home_page() -> null:
 ```
 
 The `browser` controller intentionally exposes a compact automation surface:
-`open`, `reload`, `click`, `fill`, `select`, `press`, `text`, `attribute`, `namespace`, `count`,
+`open`, `reload`, `click`, `fill`, `select`, `press`, `scroll`, `text`, `attribute`, `namespace`, `count`,
 `visible`, `waitFor`, `waitForText`, `currentPath`, `viewport`, `timings`,
 `measureClick`, `measureFill`, and `measurePress`. It is not a
 DOM or Playwright escape hatch. The CLI builds a real CSP production site,
@@ -1080,12 +1105,20 @@ selected explicitly. `namespace(selector)` requires one matched node and
 returns its platform namespace URI so SVG/HTML lowering can be asserted without
 arbitrary page evaluation. Browser binaries remain an explicit Playwright
 install.
+`scroll(selector,x,y)` performs one bounded element scroll with finite
+coordinates, allowing virtualized products to verify viewport transitions
+without exposing page evaluation. Its test-only page owner captures native
+Element identity and `scrollTo` before application code, so product prototype
+changes cannot redirect the automation seam.
 
 `timings()` returns the current navigation's
 `{firstContentfulPaintMs?,domContentLoadedMs,loadMs}` snapshot. FCP is `null`
 when the browser supplies no paint entry. The three `measure*` methods perform
 the corresponding real automation action and return
 `{inputDelayMs,processingDurationMs,nextFrameMs}` for its click or input event.
+Text `measureFill`/`measurePress` accepts the first matching `beforeinput` or
+`input` event, so a controlled editor that prevents native mutation in
+`beforeinput` has the same measurement contract as an uncontrolled field.
 Processing duration ends after synchronous event dispatch; `nextFrameMs` is the
 end-to-end UI publication metric and therefore also covers queued framework DOM
 work and rendering. These records are finite, bounded, fail-closed values

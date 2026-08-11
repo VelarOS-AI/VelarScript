@@ -149,6 +149,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["title", apiFunction(["value"], [stringType], stringType)],
     ["lines", apiFunction(["value"], [stringType], listString)],
     ["lineStarts", apiFunction(["value"], [stringType], listNumber)],
+    ["chunks", apiFunction(["value", "size"], [stringType, numberType], listString)],
     ["words", apiFunction(["value"], [stringType], listString)],
     ["slug", apiFunction(["value"], [stringType], stringType)],
     ["truncate", apiFunction(["value", "length", "suffix"], [stringType, numberType, stringType], stringType, 2)],
@@ -914,6 +915,29 @@ export function lineStarts(value) {
     codePointOffset += 1;
   }
   return textList(output, "lineStarts");
+}
+export function chunks(value, size) {
+  value = valueOf(value);
+  size = textCount(size, "chunks size");
+  if (size === 0) throw new __velarTextNativeRangeError("chunks size must be greater than zero");
+  if (value.length === 0) return [];
+  const output = [];
+  let start = 0, offset = 0, count = 0;
+  while (offset < value.length) {
+    offset = __velarTextNextCodePointOffset(value, offset);
+    count += 1;
+    if (count === size) {
+      if (output.length >= maxTextItems) throw new __velarTextNativeRangeError("chunks cannot produce more than " + maxTextItems + " items");
+      __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [start, offset]));
+      start = offset;
+      count = 0;
+    }
+  }
+  if (start < value.length) {
+    if (output.length >= maxTextItems) throw new __velarTextNativeRangeError("chunks cannot produce more than " + maxTextItems + " items");
+    __velarTextAppend(output, __velarTextCall(__velarNativeStringSlice, value, [start]));
+  }
+  return textList(output, "chunks");
 }
 export function words(value) { const cleaned = __velarTextCall(__velarNativeStringTrim, valueOf(value), []); return cleaned ? textList(__velarTextRegexSplit(cleaned, __velarTextWords, maxTextItems + 1), "words") : []; }
 export function slug(value) { let output = __velarTextCall(__velarTextStringNormalize, valueOf(value), ["NFKD"]); output = __velarTextRegexReplace(output, __velarTextMarks, ""); output = __velarTextCall(__velarNativeStringLower, output, []); output = __velarTextCall(__velarNativeStringTrim, output, []); output = __velarTextRegexReplace(output, __velarTextSlugSeparators, "-"); output = __velarTextRegexReplace(output, __velarTextSlugEdges, ""); return textOutput(output, "slug"); }
