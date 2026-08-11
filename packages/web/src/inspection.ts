@@ -49,7 +49,6 @@ function visitDependencyStatement(statement: Statement, context: CompilerDepende
       }
       return true;
     case "StateDeclaration":
-    case "ComputedDeclaration":
     case "ResourceDeclaration":
       context.visitExpression(statement.initializer);
       return true;
@@ -72,7 +71,7 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
   if (statement.kind === "ActionDeclaration") {
     // An exported module action travels as its analyzed action type, so the
     // importing module can call it and read its reactive pending/error fields.
-    // Unlike state and computed exports it needs no reactiveExports entry: the
+    // Unlike state exports it needs no reactiveExports entry: the
     // action value is an ordinary function whose reactive cells live behind
     // its own property getters, so imported reads never lower through .get().
     const rest = statement.parameters.find((parameter) => parameter.rest);
@@ -89,13 +88,13 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
     );
     return true;
   }
-  if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration") {
+  if (statement.kind === "StateDeclaration") {
     context.exports.set(
       statement.name,
       context.bindingType(statement.name, statement.span.start)
         ?? (statement.type ? context.resolve(statement.type) : context.inferPublicExpression(statement.initializer)),
     );
-    context.reactiveExports.set(statement.name, statement.kind === "StateDeclaration" ? "state" : "computed");
+    context.reactiveExports.set(statement.name, "state");
     return true;
   }
   if (statement.kind === "ComponentDeclaration") {

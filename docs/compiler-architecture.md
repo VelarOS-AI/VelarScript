@@ -840,7 +840,9 @@ and browser runtimes and do not define a separate VelarScript memory model.
 - Components lower to direct DOM creation and updates; there is no virtual DOM.
 - Component reactive ownership is destroyed deterministically; module state
   persists with the ESM module and acts as the store boundary.
-- DOM jobs commit before watch jobs; computed values remain lazy.
+- DOM jobs commit before watch jobs. Computed accessors evaluate on first read,
+  refresh on demand or during the reactive flush while observed, and notify
+  downstream jobs only when their cached result changes.
 - Component setup and initial JSX construction execute as one ownership
   transaction. A thrown construction path runs sibling cleanup, destroys the
   incomplete reactive scope, and rethrows the original failure into the owning

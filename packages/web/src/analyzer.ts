@@ -88,6 +88,20 @@ const LOOK_PROPERTY_TYPES = new Map<string, ValueType>([
 export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
   const { intrinsic, argumentAt, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
   switch (intrinsic.name) {
+    case "reactive.computed": {
+      arity(1, 1);
+      const callback = callbackAt(0, [], unknownType);
+      if (callback.kind === "any") return { kind: "function", parameters: [], requiredParameters: 0, result: anyType };
+      if (callback.kind !== "function" && callback.kind !== "intrinsic") {
+        context.typeError("computed requires a synchronous zero-argument function", argumentAt(0)?.span ?? callSpan);
+        return { kind: "function", parameters: [], requiredParameters: 0, result: unknownType };
+      }
+      const result = callback.result;
+      if (context.expandAliases(result).kind === "promise") {
+        context.typeError("computed cannot cache a Promise; load asynchronous data with a resource", argumentAt(0)?.span ?? callSpan);
+      }
+      return { kind: "function", parameters: [], requiredParameters: 0, result };
+    }
     case "web.route": {
       arity(2, 2);
       inferAt(0, stringType);
@@ -454,7 +468,6 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
 
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
-  private componentReactiveNames: Set<string> | null = null;
   private mountedDepth = 0;
   private synchronousReactiveDepth = 0;
   private jsxDepth = 0;
@@ -474,16 +487,6 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   override analyze(program: Program): readonly Diagnostic[] {
-    // The emitter receives the completed module reactive-name table, so
-    // lexical shadow hints must be computed against that same complete set.
-    // Collect module state/computed names before walking function bodies;
-    // otherwise a local declared before a same-named reactive declaration is
-    // analyzed as ordinary, then incorrectly rewritten through `.get()` by
-    // the emitter after the later declaration has populated the table.
-    for (const statement of program.body) {
-      if (statement.kind === "StateDeclaration") this.reactiveBindings.set(statement.name, "state");
-      else if (statement.kind === "ComputedDeclaration") this.reactiveBindings.set(statement.name, "computed");
-    }
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     return super.analyze(program);
   }
@@ -500,28 +503,14 @@ export class VelarWebAnalyzer extends Analyzer {
       case "ComponentDeclaration":
         this.analyzeComponent(statement);
         return true;
-      case "StateDeclaration":
-      case "ComputedDeclaration": {
-        if (!this.isTopLevelScope()) {
-          this.diagnostics.push(diagnostic("VEL3010", `'${statement.kind === "StateDeclaration" ? "state" : "computed"}' is only valid at module or component scope`, statement.span));
-          return true;
-        }
+      case "StateDeclaration": {
         const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
         const annotationContext = statement.type ? this.resolveValidatedAnnotation(statement.type) : null;
-        if (statement.kind === "ComputedDeclaration") {
-          this.flowFrameDepth += 1;
-          this.synchronousReactiveDepth += 1;
-        }
         const actual = this.inferExpression(statement.initializer, annotationContext ?? unknownType);
-        if (statement.kind === "ComputedDeclaration") {
-          this.synchronousReactiveDepth -= 1;
-          this.flowFrameDepth -= 1;
-        }
         const declared = annotationContext ?? actual;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
-        const kind = statement.kind === "StateDeclaration" ? "state" : "computed";
-        this.declareBinding(statement.name, kind === "state", declared, statement.span);
-        this.reactiveBindings.set(statement.name, kind);
+        this.declareBinding(statement.name, true, declared, statement.span);
+        this.markDeclaredBindingReactive(statement.name, "state");
         return true;
       }
       case "ResourceDeclaration":
@@ -649,26 +638,10 @@ export class VelarWebAnalyzer extends Analyzer {
     return super.inferExpression(expression, contextualType);
   }
 
-  // Component state and computed names shadow like module reactive bindings:
-  // an ordinary local binding reusing the name is an ordinary lexical binding
-  // and its references never lower reactively.
-  protected override declareBinding(
-    name: string,
-    mutable: boolean,
-    type: ValueType,
-    declarationSpan: Span,
-    internal = false,
-    declaredType = type,
-  ): void {
-    super.declareBinding(name, mutable, type, declarationSpan, internal, declaredType);
-    if (!internal && this.componentReactiveNames?.has(name)) this.markDeclaredBindingReactiveShadow(name);
-  }
-
   // A name refers to writable reactive state only when ordinary lexical lookup
   // still resolves it to the state binding; a shadowing local wins instead.
   private writableStateName(name: string): boolean {
-    if (this.lookup(name)?.reactiveShadow) return false;
-    return this.componentStates?.has(name) === true || this.reactiveBindings.get(name) === "state";
+    return this.reactiveBindingKind(name) === "state";
   }
 
   protected override extensionFieldsOf(name: string): ReadonlyMap<string, ValueType> | null {
@@ -682,7 +655,7 @@ export class VelarWebAnalyzer extends Analyzer {
 
   protected override invalidExtensionAwaitMessage(): string | null {
     if (this.jsxDepth > 0) return "JSX rendering is synchronous; load async component data with a resource or await before constructing JSX";
-    if (this.synchronousReactiveDepth > 0) return "Computed expressions and watch blocks are synchronous; use resource, action, or mounted for async work";
+    if (this.synchronousReactiveDepth > 0) return "Computed callbacks and watch blocks are synchronous; use resource, action, or mounted for async work";
     return "Component setup and cleanup are synchronous; use resource, action, or mounted for async work";
   }
 
@@ -747,17 +720,7 @@ export class VelarWebAnalyzer extends Analyzer {
     this.enterScope();
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
-    const previousReactiveNames = this.componentReactiveNames;
     this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
-    // Props lower reactively like component state and computed values, so a
-    // local binding that reuses a prop name must suppress reactive lowering
-    // for its own references exactly like a state-name shadow does.
-    this.componentReactiveNames = new Set([
-      ...statement.parameters.map((parameter) => parameter.name),
-      ...statement.body
-        .filter((item) => item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration")
-        .map((item) => item.name),
-    ]);
     // Component items are analyzed one by one rather than through
     // analyzeStatements, so the shadow prescan runs here — before the
     // parameters, whose defaults are emitted as closures inside the component
@@ -769,7 +732,7 @@ export class VelarWebAnalyzer extends Analyzer {
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       this.declareBinding(parameter.name, false, this.readonlyPropType(valid ? type : this.resolveValidatedAnnotation(parameter.type)), parameter.span);
-      this.markDeclaredBindingReactive(parameter.name);
+      this.markDeclaredBindingReactive(parameter.name, "prop");
     }
     this.constructorDepth = 0;
     let renders = 0;
@@ -777,22 +740,14 @@ export class VelarWebAnalyzer extends Analyzer {
     let mounted = 0;
     let cleanup = 0;
     for (const item of statement.body) {
-      if (item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration") {
+      if (item.kind === "StateDeclaration") {
         const annotationValid = item.type ? this.validateTypeReference(item.type) : true;
         const annotationContext = item.type ? this.resolveValidatedAnnotation(item.type) : null;
-        if (item.kind === "ComputedDeclaration") {
-          this.flowFrameDepth += 1;
-          this.synchronousReactiveDepth += 1;
-        }
         const actual = this.inferExpression(item.initializer, annotationContext ?? unknownType);
-        if (item.kind === "ComputedDeclaration") {
-          this.synchronousReactiveDepth -= 1;
-          this.flowFrameDepth -= 1;
-        }
         const declared = annotationContext ?? actual;
         if (annotationValid) this.requireAssignable(actual, declared, item.initializer.span);
-        this.declareBinding(item.name, item.kind === "StateDeclaration", declared, item.span);
-        this.markDeclaredBindingReactive(item.name);
+        this.declareBinding(item.name, true, declared, item.span);
+        this.markDeclaredBindingReactive(item.name, "state");
       } else if (item.kind === "ResourceDeclaration") {
         this.flowFrameDepth += 1;
         this.analyzeResourceDeclaration(item);
@@ -838,7 +793,6 @@ export class VelarWebAnalyzer extends Analyzer {
     if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
     if (renderValue?.kind === "JSXElementExpression") this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
-    this.componentReactiveNames = previousReactiveNames;
     this.flowFrameDepth -= 1;
     this.exitScope();
     this.constructorDepth = outerConstructorDepth;

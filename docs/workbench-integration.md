@@ -109,7 +109,7 @@ then invalid language features. A Web project declares the extension in
 ```
 
 The same `velar lsp` process loads that extension and supplies component tags,
-checked props, native attributes, events, `state`, `computed`, `resource`,
+checked props, native attributes, events, `state`, computed accessors,
 `action`, lifecycle, and Look semantics. Workbench does not switch to a
 different VelarScript-specific editor implementation.
 

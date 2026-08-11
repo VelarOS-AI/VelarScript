@@ -13,7 +13,6 @@ export type Statement =
   | ExternModuleDeclaration
   | ComponentDeclaration
   | StateDeclaration
-  | ComputedDeclaration
   | ResourceDeclaration
   | ActionDeclaration
   | WatchDeclaration
@@ -148,7 +147,6 @@ export interface ComponentDeclaration {
 export type ComponentItem =
   | Statement
   | StateDeclaration
-  | ComputedDeclaration
   | ResourceDeclaration
   | ActionDeclaration
   | WatchDeclaration
@@ -157,15 +155,6 @@ export type ComponentItem =
 
 export interface StateDeclaration {
   readonly kind: "StateDeclaration";
-  readonly exported: boolean;
-  readonly name: string;
-  readonly type: TypeReference | null;
-  readonly initializer: Expression;
-  readonly span: Span;
-}
-
-export interface ComputedDeclaration {
-  readonly kind: "ComputedDeclaration";
   readonly exported: boolean;
   readonly name: string;
   readonly type: TypeReference | null;

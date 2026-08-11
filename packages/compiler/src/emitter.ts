@@ -498,6 +498,7 @@ export class JavaScriptEmitter {
         "hostRaw as __velarHostRaw",
         ...(needsCollections ? [
           "reactiveIterateKey as __velarReactiveIterateKey",
+          "reactiveStructureKey as __velarReactiveStructureKey",
           "reactiveCollectionRead as __velarReactiveCollectionRead",
           "reactiveCollectionTrack as __velarReactiveCollectionTrack",
           "reactiveCollectionLink as __velarReactiveCollectionLink",

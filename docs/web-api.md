@@ -92,21 +92,28 @@ Lists keep their documented identities.
 
 ## Performance contracts
 
-The language exposes no memoization or batching API. Repeated-computation
-problems are the framework's job: two behaviors below are contracts of the
-compiler and runtime, not calls an application makes. Removed experiments do
-not remain as aliases — the short-lived `memo` and `batch` Web globals are
-gone, and both names are ordinary identifiers.
+`computed(() => value)` is the single derived-cache API. It returns a callable
+accessor; there is no second `memo` spelling and no manual batching API.
+Repeated-computation and assignment-coalescing behavior below is a compiler and
+runtime contract rather than additional application controls. Removed
+experiments do not remain as aliases — `memo` and `batch` are ordinary
+identifiers.
 
 ### Synchronous assignment bursts publish once
 
-Consecutive synchronous `state` assignments publish once: every affected
-computed, watch, and render observer re-runs a single time per burst,
-delivered on the microtask flush after the synchronous work completes.
+Consecutive synchronous `state` assignments without an intervening read of an
+invalidated computed accessor publish once: every affected computed accessor,
+watch, and render observer re-runs a single time per burst, delivered on the
+microtask flush after the synchronous work completes. Reading an invalidated
+computed accessor synchronously refreshes it immediately; the pending flush
+does not recompute it again, and changed results still reach other observers.
 Assignments still commit their values immediately — a read between two
 assignments always sees the latest value, and computed invalidation is
-synchronous, so state never tears — and the burst may span ordinary function
-calls; the synchronous extent is what counts.
+synchronous through every downstream computed accessor, so a same-turn read of
+a derived chain cannot observe an intermediate stale cache and state never
+tears — and the burst may span ordinary function calls; the synchronous extent
+is what counts. Render and watch observers are still notified only after the
+recomputed public result actually changes.
 
 ```velar fragment
 def commitSend(userMessage: Message, reply: Message) -> null:
@@ -115,7 +122,7 @@ def commitSend(userMessage: Message, reply: Message) -> null:
     streamingMessageId = reply.id
 ```
 
-All three assignments above publish as one commit: a computed reading
+All three assignments above publish as one commit: a computed accessor reading
 `messages` recomputes once, not twice, and a watch on it fires once. The
 boundary of the contract is the synchronous extent: a burst spread across
 `await` boundaries publishes per assignment, and a throw mid-burst does not
@@ -140,9 +147,16 @@ redirect subscriptions, cleanup, batching, deep mutation, or watch equality.
 
 A reactive observer subscribes to the property or collection key it reads.
 Nested mutations bubble a version change to owning state for deep watches, but
-unrelated property and `Map`-key consumers remain clean. Keyed JSX rows receive
-reactive record items even though dense-List validation intentionally reads raw
-descriptors.
+unrelated property and `Map`-key consumers remain clean. List size and shifted
+indexes, Map/Record key structure, and Map values are distinct dependencies:
+inserting at index `i` invalidates only tracked indexes at or after `i`, while
+updating an existing Map value does not invalidate `keys()` or `size`.
+Clearing a Map, Set, or Record invalidates every concrete key that has an active
+subscriber as well as its iteration and structure dependencies.
+Temporary Lists produced by `map`/`filter` do not become permanent parents of
+every item they expose, and replacing a state root detaches the old root from
+the deep parent graph. Keyed JSX rows receive reactive record items even though
+dense-List validation intentionally reads raw descriptors.
 
 ```velar fragment
 state messagesById: Map<string, Message> = Map()
@@ -206,7 +220,7 @@ component RuntimeStatus:
 - The compiler reports failures from initial `mount`, reactive `render` and
   synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
   and `cleanup`.
-- JSX rendering and `computed` expressions are synchronous. Async component data
+- JSX rendering and `computed` callbacks are synchronous. Async component data
   belongs in `resource`; explicit UI operations belong in `action`, declared in
   the component that triggers them or at module scope when a shared store owns
   the operation and its `pending`/`error` surface; setup that must finish after

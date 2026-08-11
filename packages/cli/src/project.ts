@@ -394,7 +394,7 @@ function extensionOwnsStandardModule(source: string, extensions: readonly Compil
 
 function importedReactiveAssignmentDiagnostics(
   result: CompileResult,
-  reactiveImports: ReadonlyMap<string, "state" | "computed">,
+  reactiveImports: ReadonlyMap<string, "state">,
 ): CompileResult {
   if (reactiveImports.size === 0) return result;
   const diagnostics = result.diagnostics.map((item) => {
@@ -641,7 +641,7 @@ async function createAnalysisContext(
 ): Promise<AnalysisContext> {
   const imports = new Map<string, ValueType>();
   const dynamicImports = new Map<string, ValueType>();
-  const reactiveImports = new Map<string, "state" | "computed">();
+  const reactiveImports = new Map<string, "state">();
   const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
   const namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
   const namedTypeIdentities = new Map<string, string>();
@@ -962,7 +962,7 @@ function importInterface(
   dependency: ModuleInspection["dependencies"][number],
   interface_: ModuleInspection["moduleInterface"],
   imports: Map<string, ValueType>,
-  reactiveImports: Map<string, "state" | "computed">,
+  reactiveImports: Map<string, "state">,
   namedTypes: Map<string, ReadonlyMap<string, ValueType>>,
   namedTypeReadonlyFields: Map<string, ReadonlySet<string>>,
   namedTypeIdentities: Map<string, string>,

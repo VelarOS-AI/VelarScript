@@ -95,10 +95,10 @@ export component Board:
                 <p class="intro" look={introLook}>Capture the next useful task, move it through the work, and keep the whole project visible without turning the board into another job.</p>
             </div>
             <div class="summary" look={summaryLook} aria-label="Board summary">
-                <span look={summaryItemLook} data-board-state>{changed ? "Modified" : "Sample"}</span>
-                <span look={summaryItemLook} data-todo-count>{todoCount} to do</span>
-                <span look={summaryItemLook} data-doing-count>{doingCount} in progress</span>
-                <span look={summaryItemLook} data-done-count>{doneCount} done</span>
+                <span look={summaryItemLook} data-board-state>{changed() ? "Modified" : "Sample"}</span>
+                <span look={summaryItemLook} data-todo-count>{todoCount()} to do</span>
+                <span look={summaryItemLook} data-doing-count>{doingCount()} in progress</span>
+                <span look={summaryItemLook} data-done-count>{doneCount()} done</span>
             </div>
         </section>
 
@@ -115,10 +115,10 @@ export component Board:
             <button look={controlLook(true)} data-reset-board type="button" on:click={resetBoard}>Reset sample</button>
         </section>
 
-        <p class="results" look={resultsLook} data-results>{visibleTasks.size} of {tasks.size} tasks shown</p>
+        <p class="results" look={resultsLook} data-results>{visibleTasks().size} of {tasks.size} tasks shown</p>
         <section class="board" look={boardLook} aria-label="Task board">
-            <BoardColumn title="To do" status={TaskStatus.todo} tasks={visibleTasks} onAdvance={advanceTask} onDelete={deleteTask} />
-            <BoardColumn title="In progress" status={TaskStatus.doing} tasks={visibleTasks} onAdvance={advanceTask} onDelete={deleteTask} />
-            <BoardColumn title="Done" status={TaskStatus.done} tasks={visibleTasks} onAdvance={advanceTask} onDelete={deleteTask} />
+            <BoardColumn title="To do" status={TaskStatus.todo} tasks={visibleTasks()} onAdvance={advanceTask} onDelete={deleteTask} />
+            <BoardColumn title="In progress" status={TaskStatus.doing} tasks={visibleTasks()} onAdvance={advanceTask} onDelete={deleteTask} />
+            <BoardColumn title="Done" status={TaskStatus.done} tasks={visibleTasks()} onAdvance={advanceTask} onDelete={deleteTask} />
         </section>
     </main>

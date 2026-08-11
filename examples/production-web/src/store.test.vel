@@ -4,7 +4,7 @@ import {dark, setTheme, theme} from "./store.vel"
 def test_theme_store() -> null:
     setTheme("dark")
     expect(theme).toBe("dark")
-    expect(dark).toBe(true)
+    expect(dark()).toBe(true)
     expect({theme: theme, values: [1, 2]}).toEqual({theme: "dark", values: [1, 2]})
     expect([theme, "light"]).toContain("dark")
     expect("VelarScript 0.10").toMatch("0\\.10")

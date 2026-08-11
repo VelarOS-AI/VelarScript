@@ -89,14 +89,18 @@ const pageButtonLook = look:
     cursor = "pointer"
 export component TicketsPage(route: RouteContext):
     resource catalog = loadTickets()
-    computed loadFailure = catalog.error
+    const loadFailure = computed(() => catalog.error)
     const requestedPage = number(route.query.get("page") ?? "")
     if requestedPage != null:
         setPage(requestedPage)
 
+    def failureView() -> WebNode:
+        const current = loadFailure()
+        return current ? <p class="state error" look={stateLook(true)} role="alert">{current.message}<button look={retryLook} type="button" on:click={catalog.reload}>Retry</button></p> : <></>
+
     return <main class="page" look={pageLook} data-support-desk>
         <Head title="SupportDesk · Customer issues" description="A routed support application built with VelarScript" themeColor="#f5f7fb" />
-        <section class="hero" look={heroLook}><div><h1 look={titleLook}>Support, in focus.</h1><p look={introLook}>Turn incoming issues into clear, owned work without losing the customer’s context.</p></div><p look={introLook} data-result-count>{selectedTickets.size} tickets</p></section>
+        <section class="hero" look={heroLook}><div><h1 look={titleLook}>Support, in focus.</h1><p look={introLook}>Turn incoming issues into clear, owned work without losing the customer’s context.</p></div><p look={introLook} data-result-count>{selectedTickets().size} tickets</p></section>
         <TicketForm />
         <section class="tools" look={toolsLook} aria-label="Ticket controls">
             <input look={controlLook} data-search bind:value={query} aria-label="Search tickets" placeholder="Search issue or requester" />
@@ -104,7 +108,7 @@ export component TicketsPage(route: RouteContext):
             <select look={controlLook} data-sort bind:value={sort} aria-label="Sort tickets"><option value={TicketSort.recent}>Recently updated</option><option value={TicketSort.oldest}>Oldest updated</option><option value={TicketSort.priority}>Priority</option></select>
         </section>
         {catalog.loading ? <p class="state" look={stateLook()} aria-busy="true">Loading tickets…</p> : null}
-        {loadFailure ? <p class="state error" look={stateLook(true)} role="alert">{loadFailure.message}<button look={retryLook} type="button" on:click={catalog.reload}>Retry</button></p> : null}
-        <section class="list" look={listLook} aria-label="Tickets">{visibleTickets.map(ticket => <TicketCard key={ticket.id} ticket={ticket} />)}</section>
-        <nav class="pagination" look={paginationLook} aria-label="Ticket pages"><button look={pageButtonLook} data-previous type="button" on:click={previousPage}>Previous</button><span data-page>Page {page} of {totalPages}</span><button look={pageButtonLook} data-next type="button" on:click={nextPage}>Next</button></nav>
+        {failureView()}
+        <section class="list" look={listLook} aria-label="Tickets">{visibleTickets().map(ticket => <TicketCard key={ticket.id} ticket={ticket} />)}</section>
+        <nav class="pagination" look={paginationLook} aria-label="Ticket pages"><button look={pageButtonLook} data-previous type="button" on:click={previousPage}>Previous</button><span data-page>Page {page} of {totalPages()}</span><button look={pageButtonLook} data-next type="button" on:click={nextPage}>Next</button></nav>
     </main>

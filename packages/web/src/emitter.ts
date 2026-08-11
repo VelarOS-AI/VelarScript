@@ -60,6 +60,7 @@ function __velarHostRaw(value) { return __velarToRaw(value); }
 
 const WEB_LOCAL_REACTIVE_COLLECTION_BRIDGE_RUNTIME = String.raw`
 const __velarReactiveIterateKey = Symbol.for("velar.reactive.iterate.v1");
+const __velarReactiveStructureKey = Symbol.for("velar.reactive.structure.v1");
 const __velarReactiveCollectionReadOperation = __velarRuntime.collectionRead;
 const __velarReactiveCollectionTriggerOperation = __velarRuntime.collectionTrigger;
 const __velarReactiveCollectionUnlinkOperation = __velarRuntime.collectionUnlink;
@@ -68,12 +69,11 @@ const __velarReactiveTrackOperation = __velarRuntime.track;
 function __velarReactiveCollectionRead(value, key, child) { return __velarReactiveCollectionReadOperation(value, key, child === undefined ? null : child); }
 function __velarReactiveCollectionTrack(value, key = __velarReactiveIterateKey) { __velarReactiveTrackOperation(__velarToRaw(value), key); }
 function __velarReactiveCollectionLink(value, child) { __velarReactiveOperation(child, __velarToRaw(value)); }
-function __velarReactiveCollectionTrigger(value, key, iterate = true) { __velarReactiveCollectionTriggerOperation(value, key, iterate); }
+function __velarReactiveCollectionTrigger(value, key, iterate = true, structure = false, indexFrom = null, allKeys = false) { __velarReactiveCollectionTriggerOperation(value, key, iterate, structure, indexFrom, allKeys); }
 function __velarReactiveCollectionUnlink(value, child) { __velarReactiveCollectionUnlinkOperation(value, child); }
 `.trimStart();
 
 export class WebJavaScriptEmitter extends JavaScriptEmitter {
-  private readonly reactive = new Map<string, "state" | "computed" | "prop">();
   private currentScope: string | null = null;
   private currentJsxNamespace = '"html"';
   private readonly resourceContents: ReadonlyMap<string, string>;
@@ -102,8 +102,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   override emit(program: Program): string {
-    this.reactive.clear();
-    for (const [name, kind] of this.hints.reactiveBindings) this.reactive.set(name, kind);
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     this.prepareLooks(program);
     this.webOutput = containsWebSyntax(program);
@@ -195,7 +193,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     visitStatement: (statement: Statement) => void,
   ): boolean {
     if (statement.kind === "UnsafeCssImportDeclaration") return true;
-    if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration" || statement.kind === "ResourceDeclaration") {
+    if (statement.kind === "StateDeclaration" || statement.kind === "ResourceDeclaration") {
       visitExpression(statement.initializer);
       return true;
     }
@@ -212,7 +210,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (statement.kind !== "ComponentDeclaration") return false;
     statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
     statement.body.forEach((item) => {
-      if (item.kind === "StateDeclaration" || item.kind === "ComputedDeclaration" || item.kind === "ResourceDeclaration") visitExpression(item.initializer);
+      if (item.kind === "StateDeclaration" || item.kind === "ResourceDeclaration") visitExpression(item.initializer);
       else if (item.kind === "ActionDeclaration") {
         item.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
         item.body.forEach(visitStatement);
@@ -243,10 +241,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (statement.kind === "StateDeclaration") {
       const indentation = "  ".repeat(depth);
       return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarState(${this.emitMappedExpression(statement.initializer)});`;
-    }
-    if (statement.kind === "ComputedDeclaration") {
-      const indentation = "  ".repeat(depth);
-      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarComputed(() => ${this.emitMappedExpression(statement.initializer)}, __velarGlobalScope);`;
     }
     if (statement.kind === "ResourceDeclaration") return "";
     if (statement.kind === "ActionDeclaration") {
@@ -292,11 +286,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (expression.kind === "LookHookExpression") return "false";
     if (expression.kind === "LookExpression") return this.emitLook(expression);
     if (expression.kind === "IdentifierExpression") {
-      if (this.reactive.has(expression.name) && !this.hints.shadowedReactiveSpans.has(spanIdentity(expression.span))) {
+      if (this.hints.reactiveReferences.has(spanIdentity(expression.span))) {
         return `${expression.name}.get()`;
       }
       if (expression.name === "mount") return "__velarMount";
       if (expression.name === "tick") return "__velarTick";
+      if (expression.name === "computed") return "__velarRuntime.computed";
       const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
@@ -373,20 +368,13 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const indentation = "  ".repeat(depth);
     const outerIndent = "  ".repeat(depth + 1);
     const bodyIndent = "  ".repeat(depth + 2);
-    const previousReactive = new Map(this.reactive);
     const previousScope = this.currentScope;
     const previousJsxNamespace = this.currentJsxNamespace;
     this.currentScope = "__scope";
     this.currentJsxNamespace = "__namespace";
     // Props are live reactive inputs: every parameter becomes a read-only
     // handle over the per-instance props store, so prop reads lower through
-    // .get() exactly like state and computed reads do.
-    for (const parameter of statement.parameters) this.reactive.set(parameter.name, "prop");
-    for (const item of statement.body) {
-      if (item.kind === "StateDeclaration") this.reactive.set(item.name, "state");
-      else if (item.kind === "ComputedDeclaration") this.reactive.set(item.name, "computed");
-    }
-
+    // .get() exactly like state reads do.
     const lines: string[] = [];
     for (const parameter of statement.parameters) {
       if (parameter.defaultValue) {
@@ -401,8 +389,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     for (const item of statement.body) {
       if (item.kind === "StateDeclaration") {
         lines.push(`${bodyIndent}const ${item.name} = __velarState(${this.emitMappedExpression(item.initializer)});`);
-      } else if (item.kind === "ComputedDeclaration") {
-        lines.push(`${bodyIndent}const ${item.name} = __velarComputed(() => ${this.emitMappedExpression(item.initializer)}, __scope);`);
       } else if (item.kind === "ResourceDeclaration") {
         lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitMappedExpression(item.initializer)}, __scope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "ActionDeclaration") {
@@ -458,8 +444,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       `${outerIndent}}`,
     ];
 
-    this.reactive.clear();
-    for (const [name, kind] of previousReactive) this.reactive.set(name, kind);
     this.currentScope = previousScope;
     this.currentJsxNamespace = previousJsxNamespace;
     return `${indentation}${statement.exported ? "export " : ""}function ${statement.name}(__props = {}, __namespace = "html") {\n${functionLines.filter(Boolean).join("\n")}\n${indentation}}`;
@@ -467,8 +451,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   private emitReactiveAssignment(statement: AssignmentStatement, depth: number): string | null {
     const indentation = "  ".repeat(depth);
-    if (statement.target.kind === "IdentifierExpression" && this.reactive.get(statement.target.name) === "state"
-      && !this.hints.shadowedReactiveSpans.has(spanIdentity(statement.target.span))) {
+    if (statement.target.kind === "IdentifierExpression"
+      && this.hints.reactiveReferences.get(spanIdentity(statement.target.span)) === "state") {
       const state = statement.target.name;
       const value = this.emitMappedExpression(statement.value);
       if (statement.operator === "=") return `${indentation}${state}.set(${value});`;
@@ -937,8 +921,8 @@ function containsWebSyntax(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   if (record.kind === "ComponentDeclaration" || record.kind === "UnsafeCssImportDeclaration" || record.kind === "LookExpression" || record.kind === "JSXElementExpression"
-    || record.kind === "StateDeclaration" || record.kind === "ComputedDeclaration" || record.kind === "ResourceDeclaration" || record.kind === "ActionDeclaration" || record.kind === "WatchDeclaration") return true;
-  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick")) return true;
+    || record.kind === "StateDeclaration" || record.kind === "ResourceDeclaration" || record.kind === "ActionDeclaration" || record.kind === "WatchDeclaration") return true;
+  if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "computed")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
 }
 
@@ -1068,9 +1052,7 @@ function __velarScheduleFlush() {
 }
 
 function __velarTrack(subscribers) {
-  if (!__velarRuntime.activeObserver || __velarRuntime.activeObserver.stopped) return;
-  __velarGraphSetInsert(subscribers, __velarRuntime.activeObserver);
-  __velarGraphSetInsert(__velarRuntime.activeObserver.dependencies, subscribers);
+  __velarRuntime.trackSubscribers(subscribers);
 }
 
 function __velarToRaw(value) { return __velarRuntime.toRaw(value); }
@@ -1087,8 +1069,7 @@ function __velarUntracked(read) {
 }
 
 function __velarCleanupObserver(observer) {
-  for (const subscribers of __velarGraphSetItems(observer.dependencies)) __velarGraphSetRemove(subscribers, observer);
-  __velarGraphSetEmpty(observer.dependencies);
+  __velarRuntime.cleanupObserver(observer);
 }
 
 function __velarObserver(read, mode, scope) {
@@ -1100,13 +1081,10 @@ function __velarObserver(read, mode, scope) {
     dependencies: __velarGraphCreateSet(),
     run() {
       if (observer.stopped) return;
-      __velarCleanupObserver(observer);
-      const previous = __velarRuntime.activeObserver;
-      __velarRuntime.activeObserver = observer;
       observer.running = true;
-      try { read(); }
+      try { __velarRuntime.runTracked(observer, read); }
       catch (error) { __velarReport(error, mode === "watch" ? "watch" : "render", scope); }
-      finally { observer.running = false; __velarRuntime.activeObserver = previous; }
+      finally { observer.running = false; }
     },
     notify() {
       if (observer.stopped) return;
@@ -1137,41 +1115,19 @@ function __velarState(initial) {
     set(next) {
       next = __velarToRaw(next);
       if (__velarGraphSame(value, next)) return next;
+      const previous = value;
       value = next;
+      // Keep deep-change bubbling attached only to the value currently owned
+      // by this cell. Otherwise every replaced object remains linked to the
+      // state cell and continues to occupy the parent graph indefinitely.
+      __velarRuntime.collectionUnlink(cell, previous);
+      __velarReactive(value, cell);
       for (const observer of __velarGraphSetItems(subscribers)) observer.notify();
       return next;
     },
   };
+  __velarReactive(value, cell);
   return cell;
-}
-
-function __velarComputed(read, scope) {
-  let dirty = true;
-  let value;
-  const subscribers = __velarGraphCreateSet();
-  const observer = {
-    stopped: false,
-    dependencies: __velarGraphCreateSet(),
-    notify() {
-      if (dirty) return;
-      dirty = true;
-      for (const dependent of __velarGraphSetItems(subscribers)) dependent.notify();
-    },
-    stop() { observer.stopped = true; __velarCleanupObserver(observer); __velarGraphSetEmpty(subscribers); },
-  };
-  scope.cleanups.push(() => observer.stop());
-  return {
-    get() {
-      __velarTrack(subscribers);
-      if (dirty) {
-        __velarCleanupObserver(observer);
-        const previous = __velarRuntime.activeObserver;
-        __velarRuntime.activeObserver = observer;
-        try { value = read(); dirty = false; } finally { __velarRuntime.activeObserver = previous; }
-      }
-      return value;
-    },
-  };
 }
 
 function __velarResource(load, scope, name) {

@@ -7,14 +7,14 @@ const baseline = seedTasks()
 const initial: BoardData = {tasks: baseline}
 const persisted = boardStorage.get("board", BoardData, initial)
 
-export state tasks: List<Task> = persisted.tasks
+export state tasks: List<Task> = persisted.tasks.copy()
 export state query = ""
 export state filter: TaskFilter = TaskFilter.all
-export computed visibleTasks: List<Task> = filterTasks(tasks, query, filter)
-export computed todoCount: number = countStatus(tasks, TaskStatus.todo)
-export computed doingCount: number = countStatus(tasks, TaskStatus.doing)
-export computed doneCount: number = countStatus(tasks, TaskStatus.done)
-export computed changed: bool = not deepEqual(tasks, baseline)
+export const visibleTasks = computed(() => filterTasks(tasks, query, filter))
+export const todoCount = computed(() => countStatus(tasks, TaskStatus.todo))
+export const doingCount = computed(() => countStatus(tasks, TaskStatus.doing))
+export const doneCount = computed(() => countStatus(tasks, TaskStatus.done))
+export const changed = computed(() => not deepEqual(tasks, baseline))
 
 def persist() -> null:
     boardStorage.set("board", {tasks})

@@ -688,11 +688,11 @@ export class Lexer {
   }
 
   private isIdentifierStart(character: string): boolean {
-    return /[A-Za-z_]/.test(character);
+    return /[A-Za-z_$]/.test(character);
   }
 
   private isIdentifierPart(character: string): boolean {
-    return /[A-Za-z0-9_]/.test(character);
+    return /[A-Za-z0-9_$]/.test(character);
   }
 
   private isDigit(character: string): boolean {

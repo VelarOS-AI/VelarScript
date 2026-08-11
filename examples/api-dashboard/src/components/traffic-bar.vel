@@ -10,10 +10,10 @@ const labelLook = look:
     fontSize = 12px
 
 export component TrafficBar(point: TrafficPoint, scale: ChartScale):
-    computed height = scale.heightFor(point.value)
-    computed y = scale.yFor(point.value)
+    const height = computed(() => scale.heightFor(point.value))
+    const y = computed(() => scale.yFor(point.value))
 
     return <g data-chart-bar={point.id}>
-        <rect class="bar" look={barLook} x={point.x} y={y} width="24" height={height} rx="5" />
+        <rect class="bar" look={barLook} x={point.x} y={y()} width="24" height={height()} rx="5" />
         <text class="label" look={labelLook} x={point.x + 12} y="174" text-anchor="middle">{point.label}</text>
     </g>

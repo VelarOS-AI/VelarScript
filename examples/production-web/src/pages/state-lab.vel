@@ -43,6 +43,6 @@ export component StateLab:
         <button type="button" data-lab-theme on:click={toggleTheme}>Toggle lab theme</button>
         <button type="button" data-lab-branch on:click={swapBranch}>Swap lab branch</button>
         <button type="button" data-lab-reverse on:click={reverseRows}>Reverse lab rows</button>
-        {showFirst ? <Draft label="first" busy={busy} dark={dark} /> : <Draft label="second" busy={busy} dark={dark} />}
+        {showFirst ? <Draft label="first" busy={busy} dark={dark()} /> : <Draft label="second" busy={busy} dark={dark()} />}
         <ul data-lab-list>{labRows.map(row => <LabRowView key={row.id} row={row} />)}</ul>
     </main>

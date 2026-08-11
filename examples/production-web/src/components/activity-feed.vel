@@ -27,9 +27,13 @@ export component ActivityFeed:
         const activity = await http.get("data/activity.json").parse(ActivityPayload)
         message = activity.message
 
-    computed failure = refresh.error
+    const failure = computed(() => refresh.error)
+
+    def activityMessage() -> string:
+        const current = failure()
+        return current ? current.message : message
 
     return <section class="activity" look={activityLook} aria-live="polite">
-        <span data-activity>{failure ? failure.message : message}</span>
+        <span data-activity>{activityMessage()}</span>
         <button look={buttonLook} type="button" disabled={refresh.pending} on:click={refresh}>Refresh activity</button>
     </section>

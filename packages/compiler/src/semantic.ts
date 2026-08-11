@@ -23,7 +23,6 @@ export type SemanticSymbolKind =
   | "style"
   | "function"
   | "state"
-  | "computed"
   | "resource"
   | "action"
   | "variable"
@@ -917,7 +916,7 @@ export function semanticVisibleSymbolsAt(index: SemanticIndex, offset: number): 
   }
 
   const lexicalKinds = new Set<SemanticSymbolKind>([
-    "import", "type", "enum", "class", "component", "function", "state", "computed",
+    "import", "type", "enum", "class", "component", "function", "state",
     "resource", "action", "variable", "parameter", "watch-value", "catch",
   ]);
   const rootHoistedKinds = new Set<SemanticSymbolKind>(["import", "type", "enum", "class", "component", "function"]);

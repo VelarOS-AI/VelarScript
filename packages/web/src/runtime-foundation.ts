@@ -274,6 +274,7 @@ const __velarGraphNativeProxy = globalThis.Proxy;
 const __velarGraphReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 const __velarGraphArrayIsArray = Object.getOwnPropertyDescriptor(Array, "isArray")?.value;
 const __velarGraphObjectIs = Object.getOwnPropertyDescriptor(Object, "is")?.value;
+const __velarGraphObjectFreeze = Object.getOwnPropertyDescriptor(Object, "freeze")?.value;
 const __velarGraphObjectIsExtensible = Object.getOwnPropertyDescriptor(Object, "isExtensible")?.value;
 const __velarGraphObjectGetPrototypeOf = Object.getOwnPropertyDescriptor(Object, "getPrototypeOf")?.value;
 const __velarGraphObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor(Object, "getOwnPropertyDescriptor")?.value;
@@ -291,6 +292,7 @@ const __velarGraphMapGet = __velarGraphMapPrototype && Object.getOwnPropertyDesc
 const __velarGraphMapSet = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "set")?.value;
 const __velarGraphMapDelete = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "delete")?.value;
 const __velarGraphMapValues = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "values")?.value;
+const __velarGraphMapKeys = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "keys")?.value;
 const __velarGraphMapSize = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "size")?.get;
 const __velarGraphWeakSetPrototype = Object.getOwnPropertyDescriptor(__velarGraphNativeWeakSet, "prototype")?.value;
 const __velarGraphWeakSetHas = __velarGraphWeakSetPrototype && Object.getOwnPropertyDescriptor(__velarGraphWeakSetPrototype, "has")?.value;
@@ -334,6 +336,7 @@ function __velarGraphMapRead(value, key) { return __velarGraphApply(__velarGraph
 function __velarGraphMapWrite(value, key, item) { return __velarGraphApply(__velarGraphMapSet, value, [key, item], "Map.set"); }
 function __velarGraphMapRemove(value, key) { return __velarGraphApply(__velarGraphMapDelete, value, [key], "Map.delete"); }
 function __velarGraphMapItems(value) { return __velarGraphApply(__velarGraphMapValues, value, [], "Map.values"); }
+function __velarGraphMapKeyItems(value) { return __velarGraphApply(__velarGraphMapKeys, value, [], "Map.keys"); }
 function __velarGraphMapCount(value) { return __velarGraphApply(__velarGraphMapSize, value, [], "Map.size"); }
 function __velarGraphWeakSetContains(value, item) { return __velarGraphApply(__velarGraphWeakSetHas, value, [item], "WeakSet.has"); }
 function __velarGraphWeakSetInsert(value, item) { return __velarGraphApply(__velarGraphWeakSetAdd, value, [item], "WeakSet.add"); }
@@ -344,6 +347,7 @@ function __velarGraphWeakMapWrite(value, key, item) { return __velarGraphApply(_
 function __velarGraphWeakMapRemove(value, key) { return __velarGraphApply(__velarGraphWeakMapDelete, value, [key], "WeakMap.delete"); }
 function __velarGraphIsList(value) { return __velarGraphApply(__velarGraphArrayIsArray, __velarGraphNativeArray, [value], "Array.isArray"); }
 function __velarGraphSame(left, right) { return __velarGraphApply(__velarGraphObjectIs, __velarGraphNativeObject, [left, right], "Object.is"); }
+function __velarGraphFreeze(value) { return __velarGraphApply(__velarGraphObjectFreeze, __velarGraphNativeObject, [value], "Object.freeze"); }
 function __velarGraphIsExtensible(value) { return __velarGraphApply(__velarGraphObjectIsExtensible, __velarGraphNativeObject, [value], "Object.isExtensible"); }
 function __velarGraphPrototype(value) { return __velarGraphApply(__velarGraphObjectGetPrototypeOf, __velarGraphNativeObject, [value], "Object.getPrototypeOf"); }
 function __velarGraphOwnDescriptor(value, key) { return __velarGraphApply(__velarGraphObjectGetOwnPropertyDescriptor, __velarGraphNativeObject, [value, key], "Object.getOwnPropertyDescriptor"); }
@@ -411,7 +415,8 @@ const __velarRuntimeFields = Object.freeze([
   "version", "domQueue", "watchQueue", "flushPending", "activeObserver", "errorHandlers",
   "actionFailures", "lookSources", "classSources", "dependencies", "rawToProxy", "proxyToRaw",
   "versions", "parents", "toRaw", "reactive", "track", "trackDeep", "trigger", "versionOf",
-  "collectionRead", "collectionTrigger", "collectionUnlink", "report", "applyLook", "installLook",
+  "collectionRead", "collectionTrigger", "collectionUnlink", "trackSubscribers", "runTracked", "cleanupObserver", "computed",
+  "report", "applyLook", "installLook",
 ]);
 
 function __velarRuntimeCollection(value, kind) {
@@ -463,23 +468,66 @@ function __velarCreateRuntime() {
   const proxyToRaw = Object.freeze(__velarGraphCreateWeakMap());
   const versions = Object.freeze(__velarGraphCreateWeakMap());
   const parents = Object.freeze(__velarGraphCreateWeakMap());
+  const subscriptionStops = __velarGraphCreateWeakMap();
   const iterateKey = Symbol.for("velar.reactive.iterate.v1");
+  const structureKey = Symbol.for("velar.reactive.structure.v1");
   const deepKey = Symbol.for("velar.reactive.deep.v1");
   let lookImplementation = null;
   const toRaw = (value) => {
     if ((typeof value !== "object" && typeof value !== "function") || value === null) return value;
     return __velarGraphWeakMapRead(proxyToRaw, value) ?? value;
   };
+  const trackSubscribers = (subscribers) => {
+    const observer = runtime.activeObserver;
+    if (!observer || observer.stopped) return;
+    __velarGraphSetInsert(subscribers, observer);
+    __velarGraphSetInsert(observer.dependencies, subscribers);
+  };
+  const runTracked = (observer, read) => {
+    const previousDependencies = observer.dependencies;
+    observer.dependencies = __velarGraphCreateSet();
+    const previousObserver = runtime.activeObserver;
+    runtime.activeObserver = observer;
+    try { return read(); }
+    finally {
+      runtime.activeObserver = previousObserver;
+      for (const subscribers of __velarGraphSetItems(previousDependencies)) {
+        if (__velarGraphSetContains(observer.dependencies, subscribers)) continue;
+        __velarGraphSetRemove(subscribers, observer);
+        if (__velarGraphSetCount(subscribers) === 0) {
+          const stop = __velarGraphWeakMapRead(subscriptionStops, subscribers);
+          if (stop) stop();
+        }
+      }
+    }
+  };
+  const cleanupObserver = (observer) => {
+    for (const subscribers of __velarGraphSetItems(observer.dependencies)) {
+      __velarGraphSetRemove(subscribers, observer);
+      if (__velarGraphSetCount(subscribers) === 0) {
+        const stop = __velarGraphWeakMapRead(subscriptionStops, subscribers);
+        if (stop) stop();
+      }
+    }
+    __velarGraphSetEmpty(observer.dependencies);
+  };
   const track = (target, key) => {
     target = toRaw(target);
-    const observer = runtime.activeObserver;
-    if (!observer || observer.stopped || (typeof target !== "object" && typeof target !== "function") || target === null) return;
+    if ((typeof target !== "object" && typeof target !== "function") || target === null) return;
     let byKey = __velarGraphWeakMapRead(dependencies, target);
     if (!byKey) { byKey = __velarGraphCreateMap(); __velarGraphWeakMapWrite(dependencies, target, byKey); }
     let subscribers = __velarGraphMapRead(byKey, key);
-    if (!subscribers) { subscribers = __velarGraphCreateSet(); __velarGraphMapWrite(byKey, key, subscribers); }
-    __velarGraphSetInsert(subscribers, observer);
-    __velarGraphSetInsert(observer.dependencies, subscribers);
+    if (!subscribers) {
+      subscribers = __velarGraphCreateSet();
+      __velarGraphMapWrite(byKey, key, subscribers);
+      const ownedSubscribers = subscribers;
+      __velarGraphWeakMapWrite(subscriptionStops, subscribers, () => {
+        if (__velarGraphMapRead(byKey, key) !== ownedSubscribers) return;
+        __velarGraphMapRemove(byKey, key);
+        if (__velarGraphMapCount(byKey) === 0) __velarGraphWeakMapRemove(dependencies, target);
+      });
+    }
+    trackSubscribers(subscribers);
   };
   const notify = (target, key) => {
     const byKey = __velarGraphWeakMapRead(dependencies, target);
@@ -489,7 +537,7 @@ function __velarCreateRuntime() {
   const bump = (target) => {
     __velarGraphWeakMapWrite(versions, target, (__velarGraphWeakMapRead(versions, target) ?? 0) + 1);
   };
-  const trigger = (target, key, iterate = false) => {
+  const trigger = (target, key, iterate = false, structure = false, indexFrom = null, allKeys = false) => {
     target = toRaw(target);
     if ((typeof target !== "object" && typeof target !== "function") || target === null) return;
     const visited = __velarGraphCreateSet();
@@ -499,7 +547,15 @@ function __velarCreateRuntime() {
       bump(current);
       if (direct) {
         notify(current, key);
+        if (allKeys || indexFrom !== null) {
+          const byKey = __velarGraphWeakMapRead(dependencies, current);
+          if (byKey) for (const candidate of __velarGraphMapKeyItems(byKey)) {
+            if (candidate === key) continue;
+            if (allKeys || (typeof candidate === "number" && candidate >= indexFrom)) notify(current, candidate);
+          }
+        }
         if (iterate) notify(current, iterateKey);
+        if (structure) notify(current, structureKey);
       }
       notify(current, deepKey);
       const owners = __velarGraphWeakMapRead(parents, current);
@@ -575,7 +631,7 @@ function __velarCreateRuntime() {
         if (!written || !changed) return written;
         link(next, target);
         if (!contains(target, previous)) unlink(previous, target);
-        trigger(target, key, !present);
+        trigger(target, key, true, !present);
         return true;
       },
       has(target, key) { track(target, key); return __velarGraphHas(target, key); },
@@ -585,7 +641,7 @@ function __velarCreateRuntime() {
         const deleted = __velarGraphDelete(target, key);
         if (deleted) {
           if (!contains(target, previous)) unlink(previous, target);
-          trigger(target, key, true);
+          trigger(target, key, true, true);
         }
         return deleted;
       },
@@ -604,10 +660,98 @@ function __velarCreateRuntime() {
   const collectionRead = (value, key, child) => {
     value = toRaw(value);
     track(value, key);
-    return reactive(child, value);
+    // Only containers already connected to a state graph own children read
+    // through them. Fresh derived Lists (filter/map/etc.) stay ephemeral and
+    // cannot become strongly retained parents of every item merely by being
+    // iterated during rendering.
+    return reactive(child, __velarGraphWeakMapContains(parents, value) ? value : null);
   };
-  const collectionTrigger = (value, key, iterate = true) => trigger(toRaw(value), key, iterate);
-  const collectionUnlink = (value, child) => { value = toRaw(value); if (!contains(value, child)) unlink(child, value); };
+  const collectionTrigger = (value, key, iterate = true, structure = false, indexFrom = null, allKeys = false) => trigger(toRaw(value), key, iterate, structure, indexFrom, allKeys);
+  const collectionUnlink = (value, child) => {
+    value = toRaw(value);
+    child = toRaw(child);
+    if (!child || (typeof child !== "object" && typeof child !== "function")
+      || !__velarGraphWeakMapContains(parents, child)) return;
+    if (!contains(value, child)) unlink(child, value);
+  };
+  const computed = (read) => {
+    if (typeof read !== "function") throw new TypeError("computed requires a function");
+    let dirty = true;
+    let evaluating = false;
+    let initialized = false;
+    let value;
+    let failed = false;
+    let failure;
+    const subscribers = __velarGraphCreateSet();
+    const notifyDependents = (skip = null) => {
+      for (const dependent of __velarGraphSetItems(subscribers)) if (dependent !== skip) dependent.notify();
+    };
+    const invalidateComputedDependents = () => {
+      for (const dependent of __velarGraphSetItems(subscribers)) {
+        if (dependent.mode === "computed") dependent.notify();
+      }
+    };
+    const observer = {
+      mode: "computed",
+      stopped: false,
+      dependencies: __velarGraphCreateSet(),
+      notify() {
+        if (dirty) return;
+        dirty = true;
+        if (__velarGraphSetCount(subscribers) === 0) {
+          cleanupObserver(observer);
+          return;
+        }
+        __velarSchedule(observer);
+        // A downstream computed must become dirty immediately so a same-turn
+        // read cannot observe its cached result while an upstream dependency
+        // is already stale. DOM and watch observers still wait for evaluation
+        // to prove that the public result actually changed.
+        invalidateComputedDependents();
+      },
+      run() {
+        if (!dirty || __velarGraphSetCount(subscribers) === 0) return;
+        if (evaluate(false)) notifyDependents();
+      },
+    };
+    const detach = () => {
+      cleanupObserver(observer);
+      dirty = true;
+    };
+    __velarGraphWeakMapWrite(subscriptionStops, subscribers, detach);
+    const evaluate = (throwFailure) => {
+      if (evaluating) throw new RangeError("A computed value cannot read itself recursively");
+      const previous = value;
+      const previouslyFailed = failed;
+      const previousFailure = failure;
+      const hadValue = initialized;
+      evaluating = true;
+      failed = false;
+      failure = undefined;
+      try { value = runTracked(observer, read); }
+      catch (error) { failed = true; failure = error; }
+      finally {
+        evaluating = false;
+        initialized = true;
+        dirty = false;
+      }
+      if (__velarGraphSetCount(subscribers) === 0) detach();
+      const changed = !hadValue || previouslyFailed !== failed || (failed ? previousFailure !== failure : !__velarGraphSame(previous, value));
+      if (throwFailure && failed) throw failure;
+      return changed;
+    };
+    const access = () => {
+      const consumer = runtime.activeObserver;
+      if (consumer !== observer) trackSubscribers(subscribers);
+      if (dirty) {
+        const changed = evaluate(false);
+        if (changed && initialized) notifyDependents(consumer);
+      }
+      if (failed) throw failure;
+      return value;
+    };
+    return __velarGraphFreeze(access);
+  };
   const report = (value, options) => {
     const error = __velarNormalizeError(value);
     const checked = __velarReportOptions(options);
@@ -644,6 +788,7 @@ function __velarCreateRuntime() {
     version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}, domQueue, watchQueue, flushPending: false, activeObserver: null, errorHandlers,
     actionFailures, lookSources, classSources, dependencies, rawToProxy, proxyToRaw, versions, parents,
     toRaw, reactive, track, trackDeep, trigger, versionOf, collectionRead, collectionTrigger, collectionUnlink,
+    trackSubscribers, runTracked, cleanupObserver, computed,
     report, applyLook, installLook,
   };
   for (const name of __velarRuntimeFields) Object.defineProperty(runtime, name, {
@@ -680,6 +825,8 @@ function __velarRequireRuntime(value) {
     || typeof value.toRaw !== "function" || typeof value.reactive !== "function" || typeof value.track !== "function"
     || typeof value.trackDeep !== "function" || typeof value.trigger !== "function" || typeof value.versionOf !== "function"
     || typeof value.collectionRead !== "function" || typeof value.collectionTrigger !== "function" || typeof value.collectionUnlink !== "function"
+    || typeof value.trackSubscribers !== "function" || typeof value.runTracked !== "function"
+    || typeof value.cleanupObserver !== "function" || typeof value.computed !== "function"
     || typeof value.report !== "function" || typeof value.applyLook !== "function" || typeof value.installLook !== "function") {
     throw new TypeError("VelarScript Web runtime values are invalid");
   }

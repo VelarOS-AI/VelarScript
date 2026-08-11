@@ -142,9 +142,9 @@ const timeLook = look:
     fontSize = 12px
 
 export component Analytics:
-    computed progress = completion(tasks.size, doneCount)
-    computed progressState = progressLabel(progress)
-    computed priorityRows = countBy(tasks, task => task.priority).entries()
+    const progress = computed(() => completion(tasks.size, doneCount()))
+    const progressState = computed(() => progressLabel(progress()))
+    const priorityRows = computed(() => countBy(tasks, task => task.priority).entries())
     const recent = sortBy(tasks, task => task.updatedAt, true)
 
     return <main class="page" look={pageLook} data-analytics>
@@ -153,10 +153,10 @@ export component Analytics:
         <header><h1 look={titleLook}>Project pulse</h1><p class="lead" look={leadLook}>A compact view of throughput and the work that changed most recently.</p></header>
         <section class="metrics" look={metricsLook} aria-label="Project metrics">
             <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(tasks.size)}</strong><span look={metricLabelLook}>Total tasks</span></article>
-            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(todoCount)}</strong><span look={metricLabelLook}>Waiting</span></article>
-            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(doingCount)}</strong><span look={metricLabelLook}>In progress</span></article>
-            <article class="metric" look={metricLook}><strong look={metricValueLook} data-completion>{metricText(f"{progress}%")}</strong><span look={metricLabelLook} data-progress-label>{progressState}</span></article>
-            <div class="progress" look={progressLook} role="progressbar" aria-label="Completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><div class="fill" look={progressFillLook(progress)}></div></div>
+            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(todoCount())}</strong><span look={metricLabelLook}>Waiting</span></article>
+            <article class="metric" look={metricLook}><strong look={metricValueLook}>{metricText(doingCount())}</strong><span look={metricLabelLook}>In progress</span></article>
+            <article class="metric" look={metricLook}><strong look={metricValueLook} data-completion>{metricText(f"{progress()}%")}</strong><span look={metricLabelLook} data-progress-label>{progressState()}</span></article>
+            <div class="progress" look={progressLook} role="progressbar" aria-label="Completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress()}><div class="fill" look={progressFillLook(progress())}></div></div>
         </section>
         <section class="activity" look={sectionLook}>
             <div><h2 look={sectionTitleLook}>Recent activity</h2><p>{lastUpdated(tasks)}</p></div>
@@ -164,6 +164,6 @@ export component Analytics:
         </section>
         <section class="priorities" look={sectionLook}>
             <h2 look={sectionTitleLook}>Priority mix</h2>
-            <div class="priority-grid" look={priorityGridLook}>{priorityRows.map(entry => <article class="priority" look={priorityLook} key={entry.key}><span>{entry.key}</span><strong>{entry.value}</strong></article>)}</div>
+            <div class="priority-grid" look={priorityGridLook}>{priorityRows().map(entry => <article class="priority" look={priorityLook} key={entry.key}><span>{entry.key}</span><strong>{entry.value}</strong></article>)}</div>
         </section>
     </main>

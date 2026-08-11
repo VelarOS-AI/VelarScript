@@ -2,7 +2,7 @@
 
 The optional single-project VelarScript Desktop framework. Application authors
 write one ordinary VelarScript source graph with the same components, JSX,
-Look, state, computed values, resources, and actions used by
+Look, state, derived values, resources, and actions used by
 `@velarscript/web`. There is no user-facing renderer project, main project,
 local server, port, or IPC layer.
 

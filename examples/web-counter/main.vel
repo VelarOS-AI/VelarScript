@@ -11,7 +11,7 @@ def counterLook(active: bool) -> Look:
 
 export component Counter(start: number = 0):
     state count = start
-    computed doubled = count * 2
+    const doubled = computed(() => count * 2)
 
     def increment() -> null:
         count += 1
@@ -30,7 +30,7 @@ export component Counter(start: number = 0):
         look={counterLook(count > 0)}
         on:click={increment}
     >
-        Count: {count}, Double: {doubled}
+        Count: {count}, Double: {doubled()}
     </button>
 
 mount(<Counter start={1} />, "#app")

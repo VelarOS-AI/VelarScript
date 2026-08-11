@@ -81,7 +81,7 @@ component TodoApp:
         {id: 2, title: "Build a Web app", done: false},
     ]
     let nextId = 3
-    computed remaining = todos.filter(todo => not todo.done).size
+    const remaining = computed(() => todos.filter(todo => not todo.done).size)
 
     def addTodo() -> null:
         if draft != "":
@@ -102,7 +102,7 @@ component TodoApp:
 
     return <main look={pageLook}><section class="todo-app" look={cardLook}>
         <h1>VelarScript Todo App</h1>
-        <p>{remaining} task(s) remaining</p>
+        <p>{remaining()} task(s) remaining</p>
         <form class="composer" look={composerLook}>
             <input look={inputLook} aria-label="New task" placeholder="What needs doing?" bind:value={draft} on:keydown={addTodoOnKey} />
             <button look={buttonLook()} type="button" disabled={draft == ""} on:click={addTodo}>Add task</button>

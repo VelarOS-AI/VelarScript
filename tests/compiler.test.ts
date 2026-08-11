@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_TYPE_VALIDATION_MODULE } from "@velarscript/compiler/extension";
+import { VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_VALIDATION_MODULE } from "@velarscript/compiler/extension";
 import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { compileProject as compileProjectCore, moduleInterfaceIdentity, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
@@ -5895,7 +5895,7 @@ mount(<App />, "#app")
 test("module state, computed values, and watches form a reactive module", () => {
   const result = compile(`
 export state count: number = 0
-export computed doubled = count * 2
+export const doubled = computed(() => count * 2)
 
 export def increment() -> null:
     count += 1
@@ -5904,15 +5904,15 @@ watch count as current, previous:
     print(f"{previous} -> {current}")
 
 component Counter:
-    return <button on:click={increment}>{count} / {doubled}</button>
+    return <button on:click={increment}>{count} / {doubled()}</button>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.moduleInterface.reactiveExports.get("count"), "state");
-  assert.equal(result.moduleInterface.reactiveExports.get("doubled"), "computed");
+  assert.equal(result.moduleInterface.reactiveExports.has("doubled"), false);
   assert.equal(describeType(result.moduleInterface.exports.get("increment")!), "() -> null");
   assert.match(result.code ?? "", /export const count = __velarState\(0\)/);
-  assert.match(result.code ?? "", /export const doubled = __velarComputed\(\(\) => \(count\.get\(\) \* 2\)/);
+  assert.match(result.code ?? "", /export const doubled = __velarRuntime\.computed\(\(\) => \(count\.get\(\) \* 2\)\)/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarWatch\(\(\) => count\.get\(\)/);
 
@@ -5941,10 +5941,10 @@ watch await later():
 async def later() -> number:
     return 1
 
-computed value = await later()
+const value = computed(() => await later())
 `.trimStart());
   assert.equal(asynchronousComputed.code, null);
-  assert.ok(asynchronousComputed.diagnostics.some((item) => item.code === "VEL4007" && /Computed expressions.*synchronous/u.test(item.message)));
+  assert.ok(asynchronousComputed.diagnostics.some((item) => item.code === "VEL4007" || /computed cannot cache a Promise/u.test(item.message)));
 
   const asynchronousJsx = compile(`
 async def label() -> string:
@@ -6005,6 +6005,21 @@ mount(target="#app", node=<App />)
   assert.match(reorderedMount.code ?? "", /__namedArguments\[1\], __namedArguments\[0\]/u);
 });
 
+test("computed alone installs its runtime and retired declaration syntax has one migration diagnostic", () => {
+  const result = compile("export const one = computed(() => 1)\n");
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /const __velarRuntimeKey/u);
+  const execution = executeModule(`${result.code ?? ""}\nconsole.log(one());\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1\n");
+
+  const retired = compile("state count = 1\ncomputed doubled = count * 2\n");
+  assert.equal(retired.code, null);
+  assert.equal(retired.diagnostics.filter((item) => item.code === "VEL5055").length, 1);
+  assert.match(retired.diagnostics.find((item) => item.code === "VEL5055")?.message ?? "", /const doubled = computed\(\(\) => \.\.\.\)/u);
+  assert.doesNotMatch(retired.diagnostics.map((item) => item.message).join("\n"), /Unknown name 'doubled'/u);
+});
+
 test("deep reactivity retires identity memo caches without changing derivation results", () => {
   const store = compile(`
 type Session:
@@ -6037,9 +6052,9 @@ def latestFor(list: List<Message>, sessionId: string) -> Message?:
 def buildEntries(sessionList: List<Session>, messageList: List<Message>) -> List<string>:
     return sessionList.map(session => previewOf(latestFor(messageList, session.id)))
 
-computed previews: List<string> = buildEntries(sessions, messages)
+const previews = computed(() => buildEntries(sessions, messages))
 
-watch previews as current, previous:
+watch previews() as current, previous:
     print(f"previews:{current.join("|")}")
 
 export def appendChunk(replyId: string, chunk: string) -> null:
@@ -6096,9 +6111,9 @@ def previewOf(message: Message) -> string:
     return textOf(message)
 
 state items: List<Message> = [{id: "m1", text: "alpha"}, {id: "m2", text: "beta"}]
-computed previews: List<string> = items.map(previewOf)
+const previews = computed(() => items.map(previewOf))
 
-watch previews as current, previous:
+watch previews() as current, previous:
     print(f"previews:{current.join("|")}")
 
 export def snapshot() -> List<string>:
@@ -6148,7 +6163,7 @@ def decorate(value: string) -> string:
     return shout(value) + suffix
 
 state items: List<string> = []
-computed labels: List<string> = items.map(decorate)
+const labels = computed(() => items.map(decorate))
 `.trimStart(), "reactive read");
 
   // (b) Capturing a mutable module binding.
@@ -6162,7 +6177,7 @@ def label(value: string) -> string:
     return shout(value) + str(counter)
 
 state items: List<string> = []
-computed labels: List<string> = items.map(label)
+const labels = computed(() => items.map(label))
 `.trimStart(), "mutable capture");
 
   // (c) Calling anything unproved — an async def here.
@@ -6178,7 +6193,7 @@ def label(value: string) -> string:
     return shout(value)
 
 state items: List<string> = []
-computed labels: List<string> = items.map(label)
+const labels = computed(() => items.map(label))
 `.trimStart(), "unproved callee");
 
   // (d) Mutating the argument through member assignment.
@@ -6194,7 +6209,7 @@ def bump(box: Box) -> number:
     return helperOf(box)
 
 state boxes: List<Box> = []
-computed values: List<number> = boxes.map(bump)
+const values = computed(() => boxes.map(bump))
 `.trimStart(), "argument mutation");
 
   // (e) A trivial non-delegating callback is cheaper than its cache entry.
@@ -6203,7 +6218,7 @@ def double(value: number) -> number:
     return value * 2
 
 state items: List<number> = []
-computed doubled: List<number> = items.map(double)
+const doubled = computed(() => items.map(double))
 `.trimStart(), "non-delegating callback");
 
   // (f) Actions and event handlers are not derivation contexts.
@@ -6262,9 +6277,9 @@ state latestById: Map<string, Message> = Map()
 def buildPreviews(sessionList: List<Session>, latest: Map<string, Message>) -> List<string>:
     return sessionList.map(session => messagePreview(latest.get(session.id)))
 
-computed previews: List<string> = buildPreviews(sessions, latestById)
+const previews = computed(() => buildPreviews(sessions, latestById))
 
-mount(<main>{previews.join("|")}</main>, "#app")
+mount(<main>{previews().join("|")}</main>, "#app")
 `.trimStart(), "utf8");
 
   const project = await compileProject(mainPath);
@@ -6295,9 +6310,9 @@ def sumOf(a: number, b: number) -> number:
     print(f"sum:{a}:{b}")
     return a + b
 
-computed total: number = sumOf(left, right)
+const total = computed(() => sumOf(left, right))
 
-watch total as current, previous:
+watch total() as current, previous:
     print(f"total:{current}")
 
 export def commitBurst() -> null:
@@ -6382,7 +6397,7 @@ state byTask: Map<Task, string> = Map()
 state selected: Set<string> = Set()
 state selectedTasks: Set<Task> = Set()
 state session: Session = {title: "old", meta: {count: 0}}
-computed doneCount: number = tasks.filter(task => task.done).size
+const doneCount = computed(() => tasks.filter(task => task.done).size)
 
 watch tasks as current, previous:
     print("tasks:" + str(current.size) + ":same=" + str(current == previous))
@@ -6400,7 +6415,7 @@ export async def exercise() -> null:
     print("size:" + str(tasks.size))
     mark(alias[0])
     await tick()
-    print("done:" + str(doneCount))
+    print("done:" + str(doneCount()))
     byTask.set(alias[0], "first")
     selectedTasks.add(alias[0])
     print("identity:" + str(byTask.get(alias[0])) + ":set=" + str(alias[0] in selectedTasks))
@@ -6467,21 +6482,21 @@ def readScore(key: string) -> number?:
     print("derive:" + key)
     return scores.get(key)
 
-computed leftValue: number = readLeft()
-computed rightValue: number = readRight()
-computed alpha: number? = readScore("alpha")
-computed beta: number? = readScore("beta")
+const leftValue = computed(() => readLeft())
+const rightValue = computed(() => readRight())
+const alpha = computed(() => readScore("alpha"))
+const beta = computed(() => readScore("beta"))
 
-watch leftValue as current, previous:
+watch leftValue() as current, previous:
     print("left:" + str(current))
 
-watch rightValue as current, previous:
+watch rightValue() as current, previous:
     print("right:" + str(current))
 
-watch alpha as current, previous:
+watch alpha() as current, previous:
     print("alpha:" + str(current))
 
-watch beta as current, previous:
+watch beta() as current, previous:
     print("beta:" + str(current))
 
 export async def exercise() -> null:
@@ -6553,16 +6568,19 @@ type Model:
 
 state count = 0
 state model: Model = {value: 0}
-computed total = count + model.value
+const total = computed(() => count + model.value)
 
-watch total as current, previous:
+export def makeTotal() -> () -> number:
+    return computed(() => count + model.value)
+
+watch total() as current, previous:
     print("total:" + str(current))
 
 export async def exercise() -> null:
     count = 1
     model.value = 2
     await tick()
-    print("fresh:" + str(total))
+    print("fresh:" + str(total()))
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   const execution = executeModule(`${result.code ?? ""}
@@ -6592,6 +6610,7 @@ NativeMap.prototype.get = fail("Map.get");
 NativeMap.prototype.set = fail("Map.set");
 NativeMap.prototype.delete = fail("Map.delete");
 NativeMap.prototype.values = fail("Map.values");
+NativeMap.prototype.keys = fail("Map.keys");
 NativeWeakSet.prototype.has = fail("WeakSet.has");
 NativeWeakSet.prototype.add = fail("WeakSet.add");
 NativeWeakSet.prototype.delete = fail("WeakSet.delete");
@@ -6601,15 +6620,280 @@ NativeWeakMap.prototype.set = fail("WeakMap.set");
 NativeWeakMap.prototype.delete = fail("WeakMap.delete");
 NativeArray.isArray = fail("Array.isArray");
 NativeObject.is = fail("Object.is");
+NativeObject.freeze = fail("Object.freeze");
 NativeReflect.get = fail("Reflect.get");
 NativeReflect.set = fail("Reflect.set");
 NativeReflect.has = fail("Reflect.has");
 NativeReflect.deleteProperty = fail("Reflect.deleteProperty");
 globalThis.Reflect = fail("Reflect object");
 await exercise();
+const lateTotal = makeTotal();
+console.log("late:" + lateTotal());
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "total:3\nfresh:3\n");
+  assert.equal(execution.stdout, "total:3\nfresh:3\nlate:3\n");
+});
+
+test("state snapshots, writable cells, and computed queries remain distinct", () => {
+  const result = compile(`
+type Task:
+    label: string
+
+state tasks: List<Task> = [{label: "first"}, {label: "second"}]
+const snapshot = tasks[0]
+state selected = tasks[0]
+const liveFirst = computed(() => tasks[0])
+state price = 2
+state quantity = 3
+state capturedTotal = price * quantity
+state $updates = 0
+
+export async def exercise() -> null:
+    tasks.insert(0, {label: "new"})
+    price = 4
+    $updates += 1
+    await tick()
+    print(snapshot.label + ":" + selected.label + ":" + liveFirst().label + ":" + str(capturedTotal) + ":" + str($updates))
+    selected = tasks[1]
+    print(selected.label + ":" + liveFirst().label)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /const \$updates = __velarState\(0\)/u);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "first:first:new:6:1\nfirst:new\n");
+
+  const hydratedState = compile(`
+type Model:
+    value: number
+
+const seed: Model = {value: 0}
+state model = seed
+`.trimStart());
+  assert.deepEqual(hydratedState.diagnostics, []);
+
+  const rebuiltState = compile(`
+type Model:
+    value: number
+
+type Wrapper:
+    model: Model
+
+state model: Model = {value: 0}
+const wrapper: Wrapper = {model: {value: 1}}
+model = wrapper.model
+`.trimStart());
+  assert.deepEqual(rebuiltState.diagnostics, []);
+
+  const primitiveSnapshot = compile("const seed = {value: 1}\nstate count = seed.value\n");
+  assert.deepEqual(primitiveSnapshot.diagnostics, []);
+
+  const conventionOnly = compile("const $value = 1\nconst value = $value + 1\n");
+  assert.deepEqual(conventionOnly.diagnostics, []);
+  assert.doesNotMatch(conventionOnly.code ?? "", /\$value\.get\(\)/u);
+});
+
+test("computed suppresses equal results and switches dynamic dependencies", () => {
+  const result = compile(`
+state useLeft = true
+state left = 1
+state right = 10
+
+def selectValue() -> number:
+    print("derive:" + str(useLeft ? left : right))
+    return useLeft ? left % 2 : right % 2
+
+const selected = computed(selectValue)
+
+watch selected() as current, previous:
+    print("watch:" + str(current))
+
+export async def exercise() -> null:
+    left = 3
+    await tick()
+    useLeft = false
+    await tick()
+    left = 5
+    await tick()
+    right = 11
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "derive:1",
+    "derive:3",
+    "derive:10",
+    "watch:0",
+    "derive:11",
+    "watch:1",
+    "",
+  ].join("\n"));
+});
+
+test("a synchronous computed read before flush still publishes a changed result", () => {
+  const result = compile(`
+state count = 1
+const parity = computed(() => count % 2)
+
+watch parity() as current, previous:
+    print("watch:" + str(current))
+
+export async def exercise() -> null:
+    count = 2
+    print("sync:" + str(parity()))
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "sync:0\nwatch:0\n");
+});
+
+test("computed invalidation reaches a synchronously read downstream computed", () => {
+  const result = compile(`
+state items: List<number> = []
+state page = 2
+const count = computed(() => items.size)
+const pages = computed(() => count() > 1 ? count() : 1)
+
+watch pages() as current, previous:
+    print("watch:" + str(current))
+
+export async def exercise() -> null:
+    items = [1, 2]
+    page = page < pages() ? page : pages()
+    print("sync:" + str(page))
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "sync:2\nwatch:2\n");
+});
+
+test("dynamic reactive keys release empty dependency slots", () => {
+  const result = compile(`
+export state active = "a"
+export state scores: Map<string, number> = Map([["a", 1], ["b", 2]])
+const selected = computed(() => scores.get(active))
+
+watch selected() as current, previous:
+    print(str(current))
+
+export async def switchKey() -> null:
+    active = "b"
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}
+const rawScores = __velarRuntime.toRaw(scores.get());
+const initialByKey = __velarGraphWeakMapRead(__velarRuntime.dependencies, rawScores);
+console.log("slots:" + __velarGraphMapCount(initialByKey));
+await switchKey();
+const nextByKey = __velarGraphWeakMapRead(__velarRuntime.dependencies, rawScores);
+console.log("slots:" + __velarGraphMapCount(nextByKey));
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "slots:1\n2\nslots:1\n");
+});
+
+test("collection invalidation distinguishes shifted indexes from Map key structure", () => {
+  const result = compile(`
+state items: List<number> = [10, 20, 30]
+state lookup: Map<string, number> = Map([["a", 1]])
+
+def readSecond() -> number:
+    print("derive:index")
+    return items[1]
+
+def readKeys() -> string:
+    print("derive:keys")
+    return lookup.keys().join(",")
+
+const second = computed(readSecond)
+const keys = computed(readKeys)
+
+watch second() as current, previous:
+    print("second:" + str(current))
+
+watch keys() as current, previous:
+    print("keys:" + current)
+
+export async def exercise() -> null:
+    items.insert(0, 5)
+    lookup.set("a", 2)
+    await tick()
+    lookup.set("b", 3)
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "derive:index",
+    "derive:keys",
+    "derive:index",
+    "second:10",
+    "derive:keys",
+    "keys:a,b",
+    "",
+  ].join("\n"));
+});
+
+test("clearing keyed collections invalidates every tracked key", () => {
+  const result = compile(`
+state lookup: Map<string, number> = Map([["a", 1]])
+state selected: Set<string> = Set(["a"])
+state fields: Record<number> = {a: 1}
+
+const mapValue = computed(() => lookup.get("a"))
+const hasValue = computed(() => "a" in selected)
+const recordValue = computed(() => fields.get("a"))
+
+watch mapValue() as current, previous:
+    print("map:" + str(current))
+
+watch hasValue() as current, previous:
+    print("set:" + str(current))
+
+watch recordValue() as current, previous:
+    print("record:" + str(current))
+
+export async def exercise() -> null:
+    lookup.clear()
+    selected.clear()
+    fields.clear()
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}\nawait exercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "map:null\nset:false\nrecord:null\n");
+});
+
+test("state replacement releases the previous deep parent graph", () => {
+  const result = compile(`
+type Model:
+    value: number
+
+export state model: Model = {value: 1}
+
+export def replace() -> null:
+    model = {value: 2}
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}
+const previous = __velarRuntime.toRaw(model.get());
+console.log(__velarGraphWeakMapRead(__velarRuntime.parents, previous) == null ? "detached" : "attached");
+replace();
+console.log(__velarGraphWeakMapRead(__velarRuntime.parents, previous) == null ? "detached" : "attached");
+const current = __velarRuntime.toRaw(model.get());
+console.log(__velarGraphWeakMapRead(__velarRuntime.parents, current) == null ? "detached" : "attached");
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "attached\ndetached\nattached\n");
 });
 
 test("reactive module imports lower reads and reject ambiguous access", async () => {
@@ -6618,7 +6902,7 @@ test("reactive module imports lower reads and reject ambiguous access", async ()
   const mainPath = join(directory, "main.vel");
   await writeFile(storePath, `
 export state count = 0
-export computed doubled = count * 2
+export const doubled = computed(() => count * 2)
 export def increment() -> null:
     count += 1
 `.trimStart(), "utf8");
@@ -6626,7 +6910,7 @@ export def increment() -> null:
 import {count, doubled, increment} from "./store.vel"
 
 component App:
-    return <button on:click={increment}>{count} / {doubled}</button>
+    return <button on:click={increment}>{count} / {doubled()}</button>
 `.trimStart(), "utf8");
 
   const project = await compileProject(mainPath);
@@ -6635,7 +6919,7 @@ component App:
   assert.ok(main);
   assert.deepEqual(main.result.diagnostics, []);
   assert.match(main.result.code ?? "", /count\.get\(\)/);
-  assert.match(main.result.code ?? "", /doubled\.get\(\)/);
+  assert.match(main.result.code ?? "", /doubled\(\)/);
 
   await writeFile(mainPath, "import * as store from \"./store.vel\"\nprint(store.count)\n", "utf8");
   const namespace = await compileProject(mainPath);
@@ -11346,7 +11630,7 @@ console.log(coercions + ":" + getterReads);
     "manual:test:expected",
     "0",
     "false:false:false",
-    "true:false:0.11",
+    `true:false:${VELAR_RUNTIME_SCHEMA_VERSION}`,
     "TypeError", "TypeError", "TypeError",
     "TypeError", "TypeError", "TypeError", "RangeError", "TypeError",
     "0:0",
@@ -12968,9 +13252,25 @@ test("VelarScript source packages cannot escape their package root", async () =>
   assert.ok(project.failures.some((failure) => /cannot escape VelarScript package 'unsafe-package'/u.test(failure.message)));
 });
 
-test("reactive bindings cannot be declared in functions", () => {
-  const nested = compile("def invalid() -> null:\n    state count = 0\n");
-  assert.ok(nested.diagnostics.some((diagnostic) => diagnostic.code === "VEL3010"));
+test("local state creates one lexical cell per function execution", () => {
+  const nested = compile(`
+def counter(start: number) -> () -> number:
+    state count = start
+    def next() -> number:
+        count += 1
+        return count
+    return next
+
+export def exercise() -> null:
+    const left = counter(0)
+    const right = counter(10)
+    print(str(left()) + ":" + str(left()) + ":" + str(right()))
+`.trimStart());
+  assert.deepEqual(nested.diagnostics, []);
+  assert.match(nested.code ?? "", /const count = __velarState\(start\)/u);
+  const execution = executeModule(`${nested.code ?? ""}\nexercise();\n`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1:2:11\n");
 });
 
 test("locals shadow module reactive bindings with ordinary lexical semantics", () => {
@@ -13006,11 +13306,11 @@ mount(<App />, "#app")
   // Reads outside any shadow scope still lower reactively.
   assert.match(result.code ?? "", /darkLabel\(dark\.get\(\)\)/u);
 
-  // Component state and computed names follow the same lexical rule.
+  // Component state and computed accessors follow the same lexical rule.
   const component = compile(`
 component App:
     state open = false
-    computed title: string = open ? "open" : "closed"
+    const title = computed(() => open ? "open" : "closed")
 
     def describe(open: bool) -> string:
         return open ? "yes" : "no"
@@ -13021,14 +13321,14 @@ component App:
     action toggle() -> null:
         open = not open
 
-    return <p>{describe(open)} {echo(title)}</p>
+    return <p>{describe(open)} {echo(title())}</p>
 `.trimStart());
   assert.deepEqual(component.diagnostics, []);
   assert.match(component.code ?? "", /function describe\(open\) \{\n {6}return \(open \? "yes" : "no"\);/u);
   assert.match(component.code ?? "", /function echo\(title\) \{\n {6}return title;/u);
   assert.match(component.code ?? "", /open\.set\(!\(open\.get\(\)\)\);/u);
   assert.match(component.code ?? "", /describe\(open\.get\(\)\)/u);
-  assert.match(component.code ?? "", /echo\(title\.get\(\)\)/u);
+  assert.match(component.code ?? "", /echo\(title\(\)\)/u);
 });
 
 test("locals shadow later module reactive bindings independent of declaration order", () => {
@@ -13393,9 +13693,8 @@ component App:
 mount(<App />, "#app")
 `, initializerDirective("count"));
 
-  // Component state and computed declarations shadowing module reactive names
-  // follow the same rule: their initializers are emitted inside 'const <name>
-  // = __velarState(...)', so the outer read cannot survive emission either.
+  // Component state and ordinary const declarations shadowing outer names
+  // follow the same initializer rule.
   reports(`
 state count = 1
 
@@ -13406,11 +13705,11 @@ component App:
 mount(<App />, "#app")
 `, initializerDirective("count"));
   reports(`
-computed title: string = "outer"
+const title = computed(() => "outer")
 
 component App:
-    computed title: string = title
-    return <p>{title}</p>
+    const title = computed(() => title())
+    return <p>{title()}</p>
 
 mount(<App />, "#app")
 `, initializerDirective("title"));
@@ -15945,6 +16244,7 @@ test("project compilation shares compiler runtime modules while standalone compi
     "reactiveCollectionUnlink",
     "reactiveIterateKey",
     "reactiveRaw",
+    "reactiveStructureKey",
   ]);
 });
 
@@ -22779,7 +23079,7 @@ const counterLook = look:
 
 component Counter(start: number = 0):
     state count = start
-    computed doubled = count * 2
+    const doubled = computed(() => count * 2)
 
     def increment() -> null:
         count += 1
@@ -22793,7 +23093,7 @@ component Counter(start: number = 0):
     cleanup:
         print("cleanup")
 
-    return <button class="counter" look={counterLook} class:active={count > 0} on:click={increment}>{count} / {doubled}</button>
+    return <button class="counter" look={counterLook} class:active={count > 0} on:click={increment}>{count} / {doubled()}</button>
 
 mount(<Counter start={1} />, "#app")
 `.trimStart());
@@ -22801,7 +23101,7 @@ mount(<Counter start={1} />, "#app")
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.extensions, ["@velarscript/web"]);
   assert.match(result.code ?? "", /const count = __velarState\(start\.get\(\)\)/);
-  assert.match(result.code ?? "", /const doubled = __velarComputed/);
+  assert.match(result.code ?? "", /const doubled = __velarRuntime\.computed/);
   assert.match(result.code ?? "", /__velarWatch/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
   assert.match(result.code ?? "", /__velarCreateElement\("button", __namespace\)/);
@@ -23447,9 +23747,9 @@ component App:
         catch error:
             label = error.message
 
-    computed failure = refresh.error
+    const failure = computed(() => refresh.error)
 
-    return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure ? <p role="alert">{failure.message}</p> : null}</main>
+    return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure() ? <p role="alert">{failure()?.message}</p> : null}</main>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -23529,7 +23829,7 @@ def prepare() -> null:
 component App:
     action save() -> string:
         return 1
-    computed unsupported = save.reload
+    const unsupported = computed(() => save.reload)
     return <main>Invalid</main>
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
@@ -23861,7 +24161,7 @@ component Profile(user: User?, failed: Error?, loading: bool):
 
   assert.deepEqual(result.diagnostics, []);
   // Prop reads route through the live prop handle, so narrowed branch reads
-  // lower through .get() like state and computed reads.
+  // lower through .get() like state reads.
   assert.match(result.code ?? "", /if \(loading\.get\(\)\)/u);
   assert.match(result.code ?? "", /\(failed\.get\(\) \?\? null\) != null/u);
   assert.match(result.code ?? "", /\(user\.get\(\) \?\? null\) != null/u);
@@ -24485,9 +24785,9 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     "    return \"remote\"",
     "component Summary:",
     "    state count = 1",
-    "    computed doubled = count * 2",
+    "    const doubled = computed(() => count * 2)",
     "    resource remote = loadLabel()",
-    "    return <><p host>{remote.loading ? \"Loading\" : doubled}</p><button type=\"button\" on:click={() => remote.reload()}>Reload</button></>",
+    "    return <><p host>{remote.loading ? \"Loading\" : doubled()}</p><button type=\"button\" on:click={() => remote.reload()}>Reload</button></>",
     "",
   ].join("\n");
   await linkWorkspaceWebExtension(directory);
@@ -24806,7 +25106,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const typeHints = inlayHints.result as Array<{ position: { line: number; character: number }; label: string; kind: number; paddingRight: boolean }>;
   assert.ok(typeHints.some((hint) => hint.position.line === 1 && hint.label === ": string"));
   assert.ok(typeHints.some((hint) => hint.position.line === 6 && hint.label === ": number"));
-  assert.ok(typeHints.some((hint) => hint.position.line === 7 && hint.label === ": number"));
+  assert.ok(typeHints.some((hint) => hint.position.line === 7 && hint.label === ": () -> number"));
   assert.ok(!typeHints.some((hint) => hint.position.line === 2), "explicit annotations must not receive duplicate hints");
   assert.ok(!typeHints.some((hint) => hint.position.line === 8), "resource handle types must not masquerade as source annotations");
   send({ jsonrpc: "2.0", id: 31, method: "textDocument/semanticTokens/full", params: { textDocument: { uri: mainUri } } });
@@ -24834,7 +25134,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const semanticCompletion = await waitFor((message) => message.id === 25);
   const semanticItems = (semanticCompletion.result as { items: Array<{ label: string; kind: number; detail?: string; documentation?: { value?: string } }> }).items;
   assert.ok(semanticItems.some((item) => item.label === "count" && item.kind === 6 && item.detail === "number"));
-  assert.ok(semanticItems.some((item) => item.label === "doubled" && item.kind === 6 && item.detail === "number"));
+  assert.ok(semanticItems.some((item) => item.label === "doubled" && item.kind === 6 && item.detail === "() -> number"));
   assert.ok(semanticItems.some((item) => item.label === "Summary" && item.kind === 7));
   assert.ok(semanticItems.some((item) => item.label === "greet" && item.kind === 6
     && /Greets one visible user/u.test(item.documentation?.value ?? "")));

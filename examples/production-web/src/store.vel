@@ -4,7 +4,7 @@ export type Preferences:
     theme: string
 
 export state theme = "system"
-export computed dark: bool = theme == "dark"
+export const dark = computed(() => theme == "dark")
 
 export def setTheme(next: string) -> null:
     theme = next

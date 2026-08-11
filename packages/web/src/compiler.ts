@@ -47,9 +47,16 @@ function namedFunction(parameterNames: readonly string[], parameters: readonly V
   return { kind: "function", parameterNames, parameters, requiredParameters, result };
 }
 
+const unknownType: ValueType = { kind: "unknown" };
 const webGlobals = new Map<string, ValueType>([
   ["mount", namedFunction(["node", "target"], [nodeType, mountTargetType], nullType)],
   ["tick", namedFunction([], [], { kind: "promise", value: nullType })],
+  ["computed", namedIntrinsic(
+    "reactive.computed",
+    ["read"],
+    [{ kind: "function", parameters: [], requiredParameters: 0, result: unknownType }],
+    { kind: "function", parameters: [], requiredParameters: 0, result: unknownType },
+  )],
 ]);
 
 const lookModuleExports = new Map<string, ValueType>([
@@ -91,7 +98,6 @@ function object(fields: Readonly<Record<string, ValueType>>): ValueType {
   return { kind: "object", fields: new Map(Object.entries(fields)) };
 }
 
-const unknownType: ValueType = { kind: "unknown" };
 const errorType: ValueType = { kind: "class", name: "Error" };
 const cleanupType = namedFunction([], [], nullType);
 const arrayString: ValueType = { kind: "list", element: stringType };
@@ -441,7 +447,6 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     keywords: Object.freeze({
       component: "component",
       state: "state",
-      computed: "computed",
       resource: "resource",
       action: "action",
       watch: "watch",
@@ -486,7 +491,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["CanvasElement", new Set(["width", "height"])],
     ]),
     globals: webGlobals,
-    reservedBindings: new Set(["mount", "tick"]),
+    reservedBindings: new Set(["mount", "tick", "computed"]),
     globalGuidance: new Map([
       ...[...LOOK_BUILDERS].map((name) => [name, `Import '${name}' by name from \"velar/look\"`] as const),
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
@@ -502,8 +507,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     project: velarWebProjectEditorExtension,
     keywordDocumentation: Object.freeze({
       component: "Declares a compiler-managed Web component that initializes once.",
-      state: "Declares writable reactive state at module or component scope.",
-      computed: "Declares a lazy cached value derived from module or component state.",
+      state: "Declares writable reactive state in the current lexical scope.",
       resource: "Declares component-owned asynchronous data with reactive value, loading, ready, error, and reload fields.",
       action: "Declares an asynchronous operation with reactive pending and error fields at module or component scope.",
       watch: "Runs a block after a watched expression changes and DOM updates commit.",
@@ -523,9 +527,10 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),
     completions: Object.freeze([
-      ...["component", "state", "computed", "resource", "action", "watch", "mounted", "cleanup", "look"].map((label) => ({ label, kind: 14 })),
+      ...["component", "state", "resource", "action", "watch", "mounted", "cleanup", "look"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
+      { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
       { label: "on:click", kind: 10, detail: "DOM click handler" },

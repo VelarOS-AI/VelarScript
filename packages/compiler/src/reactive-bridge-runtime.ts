@@ -18,6 +18,7 @@ if (typeof __velarReactiveBridgeGetOwnPropertyDescriptor !== "function" || typeo
   || typeof __velarReactiveBridgeSymbolFor !== "function") throw new __velarReactiveBridgeNativeTypeError("The JavaScript reactive bridge runtime is unavailable");
 const __velarReactiveRuntimeKey = __velarReactiveBridgeSymbolFor(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)});
 const __velarReactiveIterateKey = __velarReactiveBridgeSymbolFor("velar.reactive.iterate.v1");
+const __velarReactiveStructureKey = __velarReactiveBridgeSymbolFor("velar.reactive.structure.v1");
 let __velarReactiveBridge = null;
 function __velarReactiveBridgeField(runtime, name) {
   const descriptor = __velarReactiveBridgeGetOwnPropertyDescriptor(runtime, name);
@@ -87,9 +88,9 @@ function __velarReactiveCollectionLink(value, child) {
   const bridge = __velarResolveReactiveCollectionBridge();
   if (bridge) bridge.reactive(child, bridge.toRaw(value));
 }
-function __velarReactiveCollectionTrigger(value, key, iterate = true) {
+function __velarReactiveCollectionTrigger(value, key, iterate = true, structure = false, indexFrom = null, allKeys = false) {
   const bridge = __velarResolveReactiveCollectionBridge();
-  if (bridge) bridge.collectionTrigger(value, key, iterate);
+  if (bridge) bridge.collectionTrigger(value, key, iterate, structure, indexFrom, allKeys);
 }
 function __velarReactiveCollectionUnlink(value, child) {
   const bridge = __velarResolveReactiveCollectionBridge();
@@ -102,6 +103,7 @@ ${VELAR_REACTIVE_BRIDGE_RUNTIME}
 ${VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME}
 export {
   __velarReactiveIterateKey as reactiveIterateKey,
+  __velarReactiveStructureKey as reactiveStructureKey,
   __velarReactiveRaw as reactiveRaw,
   __velarHostRaw as hostRaw,
   __velarReactiveCollectionRead as reactiveCollectionRead,

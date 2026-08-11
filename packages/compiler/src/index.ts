@@ -586,7 +586,7 @@ function interfaceOf(
   const classes = new Map<string, ClassInfo>();
   const exports = new Map<string, ValueType>();
   const mutableExports = new Set<string>();
-  const reactiveExports = new Map<string, "state" | "computed">();
+  const reactiveExports = new Map<string, "state">();
   const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
   const testFunctions: string[] = [];
   const extensionExports = new Map(extensions.map((extension) => [extension.id, new Map<string, unknown>()] as const));

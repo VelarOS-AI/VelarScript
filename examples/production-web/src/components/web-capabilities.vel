@@ -120,7 +120,7 @@ export component WebCapabilities:
     const capabilityNames = Set(["http", "storage", "files"])
     capabilityNames.add("realtime")
     resource recoveryResource = loadResourceLabel()
-    computed resourceFailure = recoveryResource.error
+    const resourceFailure = computed(() => recoveryResource.error)
     state online = initialEnvironment.online
     state visible = initialEnvironment.visible
     state darkScheme = media("(prefers-color-scheme: dark)")
@@ -199,7 +199,15 @@ export component WebCapabilities:
             throw CapabilityError("Action recovery ready")
         actionLabel = "action-ready"
 
-    computed actionFailure = recoverAction.error
+    const actionFailure = computed(() => recoverAction.error)
+
+    def resourceStatus() -> string:
+        const current = resourceFailure()
+        return current ? current.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")
+
+    def actionStatus() -> string:
+        const current = actionFailure()
+        return current ? current.message : recoverAction.pending ? "action-pending" : actionLabel
 
     const stopOnline = watchOnline(onlineChanged)
     const stopVisibility = watchVisibility(visibilityChanged)
@@ -284,8 +292,8 @@ export component WebCapabilities:
             <span look={summaryItemLook} data-set>{capabilityNames.size}:{capabilityNames.has("files") ? "set-ready" : "set-missing"}</span>
             <span look={summaryItemLook} data-config>{config.apiBase}:{config.releaseChannel}:{config.features.recovery ? "recovery" : "disabled"}</span>
             <span look={summaryItemLook} data-runtime-error>{runtimeErrorLabel}</span>
-            <span look={summaryItemLook} data-resource>{resourceFailure ? resourceFailure.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")}</span>
-            <span look={summaryItemLook} data-action>{actionFailure ? actionFailure.message : recoverAction.pending ? "action-pending" : actionLabel}</span>
+            <span look={summaryItemLook} data-resource>{resourceStatus()}</span>
+            <span look={summaryItemLook} data-action>{actionStatus()}</span>
             <span look={summaryItemLook} data-log>{logLabel}</span>
             <span look={summaryItemLook} data-keyboard-event>{keyboardLabel}</span>
             <span look={summaryItemLook} data-input-event>{inputLabel}</span>

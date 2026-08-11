@@ -219,6 +219,8 @@ for (const phrase of [
   "__velarReactiveBridge = { runtime, toRaw }",
   "function __velarResolveReactiveCollectionBridge()",
   "__velarReactiveCollectionBridge = { runtime: bridge.runtime, toRaw: bridge.toRaw",
+  "function __velarReactiveCollectionTrigger(value, key, iterate = true, structure = false, indexFrom = null, allKeys = false)",
+  "bridge.collectionTrigger(value, key, iterate, structure, indexFrom, allKeys)",
 ]) {
   if (!compilerReactiveBridgeRuntimeSource.includes(phrase)) failures.push(`packages/compiler: reactive bridge runtime is missing captured or late-binding operation '${phrase}'`);
 }
@@ -234,6 +236,7 @@ for (const phrase of [
 }
 const reactiveBridgeExports = [
   "reactiveIterateKey",
+  "reactiveStructureKey",
   "reactiveRaw",
   "hostRaw",
   "reactiveCollectionRead",
@@ -275,6 +278,7 @@ for (const phrase of [
   "const __velarReactiveRaw = __velarToRaw",
   "const __velarReactiveCollectionReadOperation = __velarRuntime.collectionRead",
   "const __velarReactiveCollectionTriggerOperation = __velarRuntime.collectionTrigger",
+  "function __velarReactiveCollectionTrigger(value, key, iterate = true, structure = false, indexFrom = null, allKeys = false)",
   "const __velarReactiveCollectionUnlinkOperation = __velarRuntime.collectionUnlink",
   "const __velarReactiveOperation = __velarRuntime.reactive",
   "const __velarReactiveTrackOperation = __velarRuntime.track",
@@ -1063,6 +1067,7 @@ for (const phrase of [
   "const __velarGraphNativeSet = globalThis.Set",
   "const __velarGraphNativeWeakMap = globalThis.WeakMap",
   "const __velarGraphObjectIs = Object.getOwnPropertyDescriptor(Object, \"is\")",
+  "const __velarGraphObjectFreeze = Object.getOwnPropertyDescriptor(Object, \"freeze\")",
   "function __velarGraphSetItems(value)",
   "function __velarGraphWeakMapRead(value, key)",
   "function __velarGraphGet(value, key, receiver)",
@@ -1074,8 +1079,12 @@ for (const phrase of [
   "const track = (target, key) =>",
   "const reactive = (value, parent = null) =>",
   "const collectionRead = (value, key, child) =>",
-  "const collectionTrigger = (value, key, iterate = true) =>",
+  "const collectionTrigger = (value, key, iterate = true, structure = false, indexFrom = null, allKeys = false) =>",
   "const collectionUnlink = (value, child) =>",
+  "const trackSubscribers = (subscribers) =>",
+  "const runTracked = (observer, read) =>",
+  "const cleanupObserver = (observer) =>",
+  "const computed = (read) =>",
 ]) {
   if (!webFoundationSource.includes(phrase)) failures.push(`packages/web: runtime registry operation must remain receiver-independent '${phrase}'`);
 }
@@ -1297,6 +1306,9 @@ if (VELAR_COLLECTION_LOWERING_DEPENDENCIES.length !== 2
   || !VELAR_COLLECTION_LOWERING_DEPENDENCIES.includes(VELAR_COLLECTION_HOST_MODULE)
   || !VELAR_COLLECTION_LOWERING_DEPENDENCIES.includes(VELAR_REACTIVE_BRIDGE_MODULE)) {
   failures.push("packages/compiler/src/collection-lowering-runtime.ts: collection lowering dependency closure is incomplete");
+}
+if (!compilerCollectionLoweringRuntimeSource.includes("__velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true)")) {
+  failures.push("packages/compiler/src/collection-lowering-runtime.ts: keyed collection clear must invalidate every tracked key");
 }
 for (const phrase of [
   "VELAR_COLLECTION_LOWERING_MODULE_SOURCE",

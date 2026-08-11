@@ -73,12 +73,12 @@ def trendLook(improving: bool) -> Look:
         color = improving ? success : danger
 
 component MetricCard(metric: Metric):
-    computed improving = metric.trend >= 0
+    const improving = computed(() => metric.trend >= 0)
 
     return <article class="metric" look={metricLook} data-metric={metric.id}>
         <span>{metric.label}</span>
         <div class="value" look={metricValueLook}>{formatValue(metric.value)}</div>
-        <div class="trend" look={trendLook(improving)}>{metric.trend >= 0 ? "+" : ""}{metric.trend}%</div>
+        <div class="trend" look={trendLook(improving())}>{metric.trend >= 0 ? "+" : ""}{metric.trend}%</div>
     </article>
 
 const chartSummaryLook = look:
@@ -113,16 +113,16 @@ const chartLook = look:
     minHeight = 220px
 
 component TrafficChart(points: List<TrafficPoint>, maxValue: number, peakLabel: string):
-    computed scale = ChartScale(maxValue)
+    const scale = computed(() => ChartScale(maxValue))
 
     return <section class="chart-shell" look={chartShellLook} aria-labelledby="traffic-heading">
         <h2 id="traffic-heading">Weekly traffic</h2>
         <svg class="chart" look={chartLook} data-trend-chart role="img" aria-labelledby="traffic-chart-title traffic-chart-description" viewBox="0 0 360 190">
             <title id="traffic-chart-title">Weekly visitor traffic</title>
             <desc id="traffic-chart-description">A bar chart of visitors from Monday through Sunday.</desc>
-            <line x1="12" y1={scale.top} x2="348" y2={scale.top} stroke="#e6ecf4" />
-            <line x1="12" y1={scale.baseline} x2="348" y2={scale.baseline} stroke="#cbd6e5" />
-            {points.map(point => <TrafficBar key={point.id} point={point} scale={scale} />)}
+            <line x1="12" y1={scale().top} x2="348" y2={scale().top} stroke="#e6ecf4" />
+            <line x1="12" y1={scale().baseline} x2="348" y2={scale().baseline} stroke="#cbd6e5" />
+            {points.map(point => <TrafficBar key={point.id} point={point} scale={scale()} />)}
             <ChartSummary peakLabel={peakLabel} />
         </svg>
     </section>
@@ -174,29 +174,42 @@ def statusLook(failed: bool) -> Look:
 
 component Dashboard:
     resource dashboard: DashboardData = loadDashboard()
-    computed payload = dashboard.value
-    computed failure = dashboard.error
+    const payload = computed(() => dashboard.value)
+    const failure = computed(() => dashboard.error)
 
     def status() -> WebNode:
         if dashboard.loading:
             return <p class="status" look={statusLook(false)} aria-busy="true">Loading dashboard...</p>
-        if failure:
-            return <p class="status" look={statusLook(true)} role="alert">{failure.message}</p>
+        const currentFailure = failure()
+        if currentFailure:
+            return <p class="status" look={statusLook(true)} role="alert">{currentFailure.message}</p>
         return <p class="status" look={statusLook(false)}></p>
+
+    def updated() -> string:
+        const current = payload()
+        return current ? current.updatedAt : "not yet"
+
+    def metrics() -> WebNode:
+        const current = payload()
+        return current ? <>{current.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />)}</> : <></>
+
+    def traffic() -> WebNode:
+        const current = payload()
+        return current ? <TrafficChart points={current.traffic} maxValue={current.trafficMax} peakLabel={current.peakLabel} /> : <></>
 
     return <main class="dashboard" look={dashboardLook} data-dashboard><div look={dashboardInnerLook}>
         <header class="toolbar" look={toolbarLook}>
             <div>
                 <h1>VelarScript Metrics</h1>
-                <p>Updated: {payload ? payload.updatedAt : "not yet"}</p>
+                <p>Updated: {updated()}</p>
             </div>
             <button look={refreshLook} data-refresh type="button" disabled={dashboard.loading} on:click={dashboard.reload}>Refresh</button>
         </header>
         {status()}
         <section class="grid" look={gridLook} aria-label="Current metrics">
-            {payload ? payload.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />) : <></>}
+            {metrics()}
         </section>
-        {payload ? <TrafficChart points={payload.traffic} maxValue={payload.trafficMax} peakLabel={payload.peakLabel} /> : null}
+        {traffic()}
     </div></main>
 
 mount(<Dashboard />, "#app")

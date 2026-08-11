@@ -9,7 +9,7 @@ export const VELAR_RUNTIME_REGISTRY_KEY = "velar.runtime.v1";
  * Shape and semantic contract implemented by the value stored in the global
  * registry. This version is independent from npm package and language versions.
  */
-export const VELAR_RUNTIME_SCHEMA_VERSION = "0.11";
+export const VELAR_RUNTIME_SCHEMA_VERSION = "0.12";
 
 /**
  * Global identity for compiler-known runtime Type objects. The registry is

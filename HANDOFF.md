@@ -2360,22 +2360,63 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍
   只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-124 在用户明确恢复后接管响应式系统重构工作树，没有回退或重复 W-122/W-123。所有权最终
+  收敛为：Core analyzer 负责词法 binding identity、类型与 state 赋值；Web extension 负责响应式
+  语法检查、lowering、图运行时和 DOM 消费；`runtime-abi.ts` 继续是 ABI literal 单一来源；Node 与
+  Desktop 只提供各自 host capability；Lite 仅以普通第三方身份消费公开包，Agent/provider/tool/
+  approval 策略仍全部属于 Lite。Workbench 只验证安装态，既有函数返回值推断 5 文件没有被修改。
+
+  源语言现在只有一个派生值入口：`computed(() => value)` 返回 `() -> value` accessor。旧
+  `computed name = value` declaration 被干净移除并得到单一 `VEL5055` 迁移诊断；纯 computed 模块也
+  会安装 Web runtime，不再生成调用未定义 `__velarRuntime` 的 JavaScript。`state` 可在函数体创建，
+  每次调用获得独立 cell；读写 lowering 按 analyzer 解析出的 binding span，而不是按名字猜测，局部
+  shadow 与导入 state 因而共用普通词法规则。`$name` 只是合法命名约定，不携带隐藏响应语义。
+
+  深层运行时按实际读取的 record property、Map/Set key、List index/size、collection structure 与 deep
+  owner 分别订阅；List 插入只失效右侧 index，Map/Set/Record `clear()` 会失效所有已跟踪具体 key。
+  state 替换会解除旧 parent graph，动态依赖离开后删除空 subscription slot。computed 没有第二套
+  memo/batch API：同步赋值 burst 仍由 microtask 合并；源失效会同步贯穿下游 computed 链，保证同一
+  调用栈读取不会看到旧缓存，但 DOM/watch 只有在最终公开值真的变化时才收到通知。无 subscriber 的
+  computed 会解除上游依赖，失败和值相等比较也都在同一 runtime 所有权内。
+
+  审计期间真实执行先后发现并修复四个断裂：纯 computed 模块缺 runtime、同步 flush 前读取吞掉
+  watch 通知、Map/Set/Record clear 留下 key-specific stale cache、旧 declaration 产生级联 Unknown name。
+  完整三浏览器门禁又发现 chained computed 只标脏第一层：Support Desk 的 `tickets -> selectedTickets
+  -> totalPages` 在异步加载后同步 clamp 到旧页数，导致 `/?page=2` 三浏览器都停在 Page 1。runtime
+  现在只在失效阶段同步向下传播 computed dirty，最终等值时仍不唤醒 render/watch；新增真实执行
+  回归与 Support Desk Chromium/Firefox/WebKit 场景共同封死该问题。
+
+  一个在重构工作树中出现的 `VEL5054` 曾试图禁止普通 mutable alias 进入 state。Lite 的真实
+  hydration、session index rebuild 与持久化恢复立即产生 10 个合法失败，证明这会迫使产品复制数据
+  或伪造 ownership。该限制已从 analyzer、测试与文档全部删除：state 不隐式 copy/freeze，也不宣称
+  排他所有权；普通已校验值可以初始化或替换 state，之后通过 state、state-derived alias 或官方
+  collection 操作进行可观察变更。
+
+  runtime schema 从 0.11 提升到 0.12，且仍只由 `packages/compiler/src/runtime-abi.ts` 定义。compiler
+  lowering 的永久证据同时覆盖诊断（单一 `VEL5055`）、生成代码（computed accessor、cell `.get/.set`
+  与 runtime 安装）和真实执行（等值抑制、同步链失效、collection clear、parent/subscription cleanup）。
+  Lite 只把 4 个应用源迁移为公开 computed accessor，没有新增产品补丁、workspace、Desktop 私有包
+  或 JavaScript 响应式桥。
+
+  最终证据为 `npm run check`（51 个格式化源、100 个文档示例、64 项 runtime boundary）、562/562
+  串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对
+  rehearsal 六包的安装态验收、完整 Dev/Production/External Preview、27+6+15+6 三浏览器和 installed
+  browser project。Lite 独立通过 10/22/21/29 模块 check、40 shared + 42 server tests、真实
+  concurrent/disconnected server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/
+  Desktop production build。薄包为 900,286 bytes（879.2 KiB）：host 301,792、renderer 548,463、
+  capability host 48,638、metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `43c6c4495df27ee628958c0ed7e87375596bb9518624e8b5082a3ed86f2dbd8b`；相比 W-123 增加 17,517
+  bytes，仍远低于 10 MiB。未推送、未发布、未提升版本。
+
 下一执行顺序：
 
-1. W-123 的 document-qualified cancellation、request/response aggregate backpressure 与完整
-   compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。用户已要求本轮提交后暂停，
-   以便先重构响应式系统；不得自行开启 W-124 或继续修改 reactivity，等待用户明确恢复。
-2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；
-   它只能像普通第三方一样消费公开的 `@velarscript/*` 包。继续扩展真实使用场景，但不得把产品
-   Agent/provider/tool policy、workspace 或 approval UI 重新放回语言包。
-3. 遇到目标间 API 分叉、测试 seam 缺失或边界
-   假实现时先修语言/官方包，再改 Lite。相同问题按类别清理，不做页面特判。
-4. 继续审计 Desktop transport、package graph、Node/Web 等效语义与产物可移植性；每个
-   能力必须同时有静态契约、生成代码、运行时、权限失败和真实执行证据，才可视为完成。
-   本轮产物可移植性、process、filesystem、path、environment、serve、terminal、host
-   lifecycle、runtime Type registry、strict JSON/storage、Web host-event、browser-platform
-   与 storage-host/Desktop-host
-   切片已通过
-   `npm run check`、完整串行测试、四个生产示例、27+6+15+6 三浏览器场景、六包安装消费、
-   release rehearsal、独立 Lite 全门禁，以及 Workbench 对该 rehearsal 六包的安装态验收；
-   未推送、未发布。
+1. 从 W-124 已闭合的词法 cell、computed accessor 与 schema 0.12 契约继续，不得恢复 computed
+   declaration、名字驱动 lowering、`VEL5054` alias 限制或 W-122/W-123 已完成的 Desktop 工作。
+2. 下一波优先用 Lite、四个官方示例和 adversarial execution 继续审计响应图生命周期、异步资源与
+   computed error/recovery 边界；发现语言层缺口先修 compiler/runtime/Web，再让 Lite 消费公开能力。
+3. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
+   架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
+4. 每次 compiler lowering 改动继续同时验证诊断、生成代码和真实执行；完成一波后再跑 compiler/
+   runtime、六包、release rehearsal、Workbench 安装态、三浏览器与 Lite 全门禁。保护 Workbench 的
+   并行 5 文件和任何新出现的并行工作，只精确暂存本轮文件；只允许本地提交。

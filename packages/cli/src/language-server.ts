@@ -749,7 +749,7 @@ function projectInlayHints(project: ProjectResult, path: string, text: string, r
   // `: { value, loading, ... }` would look like a valid source annotation but
   // mean something different, so keep resource types in hover until the
   // semantic index carries the source-facing resolved type separately.
-  const kinds = new Set(["variable", "state", "computed"]);
+  const kinds = new Set(["variable", "state"]);
   const hints: unknown[] = [];
   for (const symbol of module.result.semanticIndex.symbols) {
     if (hints.length >= MAX_LSP_RESULT_ITEMS) break;
@@ -781,7 +781,6 @@ function lspSymbolKind(kind: string): number {
     case "function":
     case "style":
     case "action": return 12;
-    case "computed": return 14;
     case "state":
     case "variable":
     case "parameter":
@@ -802,7 +801,6 @@ function lspCompletionKind(kind: string): number {
     case "variable":
     case "parameter":
     case "state":
-    case "computed":
     case "resource":
     case "watch-value":
     case "catch":

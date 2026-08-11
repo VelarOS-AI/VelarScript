@@ -18,7 +18,6 @@ import {
 type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
 type ComponentItem = ComponentDeclaration["body"][number];
 type StateDeclaration = Extract<Statement, { kind: "StateDeclaration" }>;
-type ComputedDeclaration = Extract<Statement, { kind: "ComputedDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
 type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type WatchDeclaration = Extract<Statement, { kind: "WatchDeclaration" }>;
@@ -45,6 +44,18 @@ export class VelarWebParser extends Parser {
     start: number,
     modifiers: { readonly exported: boolean; readonly abstract: boolean; readonly asynchronous: boolean },
   ): Statement | null | undefined {
+    if (this.current().kind === "identifier" && this.current().value === "computed"
+      && this.peekKind(1) === "identifier" && (this.peekKind(2) === "assign" || this.peekKind(2) === "colon")) {
+      const keyword = this.advance();
+      const name = this.advance();
+      this.diagnostics.push(diagnostic(
+        "VEL5055",
+        `Use 'const ${name.value} = computed(() => ...)'; computed is a function that returns a derived accessor, not a declaration keyword`,
+        span(keyword.span.start, name.span.end),
+      ));
+      this.skipMistypedDeclaration();
+      return { kind: "PassStatement", span: span(keyword.span.start, name.span.end) };
+    }
     if (this.current().kind === "extensionKeyword" && this.current().value === "look"
       && this.peekKind(1) === "identifier" && this.peekKind(2) === "colon") {
       const keyword = this.advance();
@@ -64,7 +75,6 @@ export class VelarWebParser extends Parser {
     }
     if (modifiers.abstract || modifiers.asynchronous) return undefined;
     if (this.matchExtensionKeyword("state")) return this.parseStateDeclaration(start, modifiers.exported);
-    if (this.matchExtensionKeyword("computed")) return this.parseComputedDeclaration(start, modifiers.exported);
     if (this.matchExtensionKeyword("resource")) {
       if (modifiers.exported) this.diagnostics.push(diagnostic("VEL2018", "A resource is component-owned and cannot be exported", this.previous().span));
       return this.parseResourceDeclaration(start, modifiers.exported);
@@ -172,14 +182,6 @@ export class VelarWebParser extends Parser {
     return { kind: "StateDeclaration", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
   }
 
-  private parseComputedDeclaration(start: number, exported: boolean): ComputedDeclaration {
-    const name = this.expect("identifier", "Expected a computed name");
-    const type = this.match("colon") ? this.parseTypeReference() : null;
-    this.expect("assign", "Expected '=' after computed name");
-    const initializer = this.parseExpression();
-    return { kind: "ComputedDeclaration", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
-  }
-
   private parseResourceDeclaration(start: number, exported: boolean): ResourceDeclaration {
     const name = this.expect("identifier", "Expected a resource name");
     const type = this.match("colon") ? this.parseTypeReference() : null;
@@ -244,8 +246,6 @@ export class VelarWebParser extends Parser {
       let item: ComponentItem | null = null;
       if (this.matchExtensionKeyword("state")) {
         item = this.parseStateDeclaration(itemStart, false);
-      } else if (this.matchExtensionKeyword("computed")) {
-        item = this.parseComputedDeclaration(itemStart, false);
       } else if (this.matchExtensionKeyword("resource")) {
         item = this.parseResourceDeclaration(itemStart, false);
       } else if (this.matchExtensionKeyword("action")) {

@@ -108,14 +108,12 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
         }
         context.exitScope();
         return true;
-      case "StateDeclaration":
-      case "ComputedDeclaration": {
+      case "StateDeclaration": {
         context.visitExpression(statement.initializer);
         context.typeReferences(statement.type);
-        const kind = statement.kind === "StateDeclaration" ? "state" : "computed";
-        context.declare(statement, statement.name, kind, statement.span, context.nameSpan(statement.span, statement.name), {
+        context.declare(statement, statement.name, "state", statement.span, context.nameSpan(statement.span, statement.name), {
           exported: statement.exported,
-          mutable: kind === "state",
+          mutable: true,
         });
         return true;
       }

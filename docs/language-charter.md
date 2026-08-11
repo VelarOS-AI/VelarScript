@@ -28,7 +28,7 @@ CSS variables, and DOM bindings owned by the Web package. There is no VelarScrip
 
 Desktop does not define a second source language. A Desktop application uses
 one VelarScript module graph with the same components, JSX, Look, state,
-computed values, and actions as Web. Files, paths, processes, HTTP, environment,
+derived values, and actions as Web. Files, paths, processes, HTTP, environment,
 and native window hosting are permission-scoped framework capabilities.
 Renderer/main processes and their versioned transport are internal security
 boundaries, not user-facing project concepts. Host-effectful resource
@@ -103,10 +103,14 @@ attempts += 1
   read-only. Use a `readonly` type view when mutation through that reference
   must be forbidden.
 - Both are lexically scoped.
+- `$` is allowed in identifiers and has no compiler meaning. Teams may use a
+  leading `$` as a visual convention for values whose changes can affect the
+  view, in the same spirit as `_` for a private-looking field, but the compiler
+  never infers reactivity from the spelling.
 - A binding cannot be declared twice in the same scope.
 - Shadowing follows ordinary lexical lookup everywhere, including module
-  reactive bindings: a parameter or local binding may reuse a `state` or
-  `computed` name, and inside that scope the name is that ordinary binding.
+  reactive bindings: a parameter or local binding may reuse a `state` name,
+  and inside that scope the name is that ordinary binding.
   Reads and writes of a shadowing binding are ordinary lexical reads and
   writes; only assignment that resolves to the module reactive binding itself
   publishes an update.
@@ -1284,7 +1288,7 @@ The source package then exposes the following language extension:
 - `component`
 - JSX expressions
 - `state`
-- `computed`
+- the global `computed(() => value)` derived-cache function
 - `resource`
 - `action`
 - `watch`
@@ -1324,11 +1328,11 @@ inside a call's parentheses.
 A component element owns one stable instance for as long as its position is
 mounted. Props are live inputs, not construction-time values: when a reactive
 value passed as a prop changes, the existing instance sees the new value
-through every prop read — render positions, watches, computed values, and
+through every prop read — render positions, watches, computed accessors, and
 event handlers — and its local state, refs, and lifecycle are untouched. The
 component body still runs exactly once per instance, so a `state` initializer
 captures the construction-time prop value, and a body-level `const` derived
-from a prop does not follow later updates — derive with `computed` when it
+from a prop does not follow later updates — derive with `computed(() => ...)` when it
 should. An instance is destroyed and recreated only when its position
 unmounts: a conditional branch switches, a keyed list entry's key or value
 disappears, or the enclosing region re-renders away. Runtime-implemented
@@ -1337,9 +1341,9 @@ construction.
 
 ```velar fragment
 export component TicketBadge(count: number):
-    computed label = count == 1 ? "1 open ticket" : f"{count} open tickets"
+    const label = computed(() => count == 1 ? "1 open ticket" : f"{count} open tickets")
 
-    return <span class="badge">{label}</span>
+    return <span class="badge">{label()}</span>
 ```
 
 JSX children render strings, finite numbers, booleans, enums, `WebNode` values,
@@ -1383,7 +1387,7 @@ rather than a silently ignored attribute.
 ```velar fragment
 export component Profile(userId: string):
     state expanded = false
-    computed label = expanded ? "Hide" : "Show"
+    const label = computed(() => expanded ? "Hide" : "Show")
     resource profile: User = loadUser(userId)
 
     action save() -> User:
@@ -1393,13 +1397,16 @@ export component Profile(userId: string):
         expanded = not expanded
 
     return <section>
-        <button type="button" on:click={toggleExpanded}>{label}</button>
+        <button type="button" on:click={toggleExpanded}>{label()}</button>
         <button type="button" disabled={save.pending} on:click={save}>Save</button>
     </section>
 ```
 
-`state` is deeply reactive. Assigning the binding, mutating a `List`, `Set`, or
-`Map`, and assigning a field anywhere inside a nested record all publish the
+`state` is a writable, lexically scoped reactive cell. It may be declared at
+module, component, or ordinary block/function scope. Each function execution
+creates a distinct cell and closures capture that cell normally. Assigning the
+binding, mutating a `List`, `Set`, or `Map`, and assigning a field anywhere
+inside a nested record all publish the
 affected reactive reads. State references may be aliased, returned, and passed
 through ordinary functions; helpers can mutate the owned value directly.
 
@@ -1413,14 +1420,58 @@ def retitle(task: Task, title: string) -> null:
 retitle(tasks[0], "Ready")
 ```
 
-`computed` is read-only and tracks its reactive dependencies. Computed
-expressions are synchronous; asynchronous component data belongs in a
-`resource`. Record properties and collection keys are tracked independently,
+An initializer is evaluated once. It does not create a formula:
+
+```velar fragment
+const currentTask = tasks[0]                   // one ordinary reference snapshot
+state selectedTask = tasks[0]                  // an independent writable cell
+const liveFirstTask = computed(() => tasks[0]) // a live positional query
+```
+
+The first two bindings initially refer to the same task object, so deep
+mutation of that object remains visible through either reference; neither one
+follows a later List insertion at index `0`. Reassigning `selectedTask` changes
+only that state cell. `liveFirstTask()` is the spelling that follows the current
+first position.
+
+State does not copy, freeze, or claim linear ownership of a mutable value.
+Hydrated data, rebuilt indexes, and other ordinary values may initialize or be
+assigned into state directly:
+
+```velar fragment
+const restored = loadSnapshot()
+state model = restored.model
+
+def replaceModel(next: Model) -> null:
+    model = next
+```
+
+Assigning the cell publishes the new root immediately. Continue later deep
+mutation through the state binding, a reference read from it, or the official
+collection operations; an old raw alias mutated outside those paths is not an
+observable write. VelarScript intentionally does not pretend to have an
+ownership system by rejecting only some aliases or forcing product-layer
+copies.
+
+`computed` is a function, not a declaration keyword. The removed
+`computed name = expression` declaration has no compatibility alias; write
+`const name = computed(() => expression)`. The function accepts one
+synchronous zero-argument function and returns a read-only accessor
+`() -> T`. Calling that accessor tracks dynamic reactive dependencies. Its
+result is evaluated on first access and cached while observed. An invalidated
+observed result refreshes during the reactive flush; a synchronous access
+before that flush refreshes it immediately and still publishes a changed result
+to the other downstream observers. Downstream observers are notified only when
+the result changes by identity/value equality. When its last consumer is
+disposed it detaches from upstream dependencies. Asynchronous component data
+belongs in a `resource`. Record properties and collection keys are tracked
+independently,
 so changing `task.done` invalidates consumers of that property without
 invalidating unrelated `task.title` reads, and changing one `Map` entry does not
-invalidate consumers of other keys. The language exposes no memoization or
-batching API; property-level tracking and synchronous assignment coalescing are
-framework contracts owned by the Web API document.
+invalidate consumers of other keys. There is no separate `memo` API and no
+manual batching API; `computed` is the one derived-cache abstraction, while
+property-level tracking and synchronous assignment coalescing are framework
+contracts owned by the Web API document.
 
 Reactive imports keep the same split as ordinary imports: assigning an imported
 binding is forbidden, while mutating the value inside an imported state binding
@@ -1438,7 +1489,7 @@ stale-result and component-destruction handling.
 An action is an async UI operation with reactive `pending` and `error` fields.
 It reports the failure through the Web error chain and still rejects its call;
 errors are never silently converted into successful `null` results. Use
-`try`/`catch` when the caller owns recovery. Like `state` and `computed`, an
+`try`/`catch` when the caller owns recovery. Like module `state`, an
 `action` may also be declared at module scope, so a shared store owns an
 operation together with its `pending`/`error` surface; a module action lives
 for the life of the module and is never disposed. A `resource` remains

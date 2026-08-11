@@ -211,7 +211,7 @@ export interface CompilerDependencyContext {
 
 export interface CompilerInterfaceContext {
   readonly exports: Map<string, ValueType>;
-  readonly reactiveExports: Map<string, "state" | "computed">;
+  readonly reactiveExports: Map<string, "state">;
   readonly extensionExports: Map<string, unknown>;
   readonly resolve: (reference: TypeReference | null) => ValueType;
   readonly inferPublicExpression: (expression: Expression) => ValueType;
@@ -253,7 +253,7 @@ export interface CompilerAnalyzerFactory {
 export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
   readonly mutableExports: ReadonlySet<string>;
-  readonly reactiveExports: ReadonlyMap<string, "state" | "computed">;
+  readonly reactiveExports: ReadonlyMap<string, "state">;
   /** Named re-exports (`export {name} from "source"`), keyed by the exported alias. */
   readonly reExports: ReadonlyMap<string, { readonly source: string; readonly imported: string }>;
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;

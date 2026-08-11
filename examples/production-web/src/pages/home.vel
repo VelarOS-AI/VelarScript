@@ -67,7 +67,7 @@ export component Home:
             </div>
             <nav class="actions" look={actionsLook} aria-label="Primary navigation">
                 <StatusBadge theme={theme} />
-                <button class={dark ? "active" : null} look={themeButtonLook(dark)} on:click={toggleTheme}>Toggle theme</button>
+                <button class={dark() ? "active" : null} look={themeButtonLook(dark())} on:click={toggleTheme}>Toggle theme</button>
             </nav>
         </header>
         <Metrics projects={projectCount()} />

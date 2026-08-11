@@ -82,8 +82,8 @@ export component TicketDetail(route: RouteContext):
     let resolveButton: Element? = null
     state resolution = ""
     resource catalog = loadTickets()
-    computed ticket = ticketById(id)
-    computed loadFailure = catalog.error
+    const ticket = computed(() => ticketById(id))
+    const loadFailure = computed(() => catalog.error)
 
     def askResolve() -> null:
         if confirmDialog:
@@ -113,22 +113,24 @@ export component TicketDetail(route: RouteContext):
             <p look={bodyLook}>Loading ticket…</p>
         </section>
 
-        if loadFailure:
+        const currentFailure = loadFailure()
+        if currentFailure:
             return <section class="missing" look={surfaceLook} role="alert">
             <Head title="Ticket unavailable · SupportDesk" />
             <h1 look={titleLook}>Ticket unavailable</h1>
-            <p look={bodyLook}>{loadFailure.message}</p>
+            <p look={bodyLook}>{currentFailure.message}</p>
             <button look={buttonLook()} type="button" on:click={catalog.reload}>Retry</button>
         </section>
 
-        if ticket:
+        const currentTicket = ticket()
+        if currentTicket:
             return <article look={surfaceLook}>
-            <Head title={f"{ticket.title} · SupportDesk"} />
-            <p look={bodyLook}>{ticket.requester} · {ticket.priority} priority</p>
-            <h1 look={titleLook}>{ticket.title}</h1>
-            <p look={bodyLook}>{ticket.summary}</p>
+            <Head title={f"{currentTicket.title} · SupportDesk"} />
+            <p look={bodyLook}>{currentTicket.requester} · {currentTicket.priority} priority</p>
+            <h1 look={titleLook}>{currentTicket.title}</h1>
+            <p look={bodyLook}>{currentTicket.summary}</p>
             <p look={bodyLook} data-route-id>Route ID: {id}</p>
-            <p look={bodyLook} data-detail-status>Status: {ticket.status}</p>
+            <p look={bodyLook} data-detail-status>Status: {currentTicket.status}</p>
             <button look={buttonLook()} ref={resolveButton} data-resolve type="button" on:click={askResolve}>Resolve ticket</button>
             <span class="visually-hidden" look={visuallyHiddenLook} data-dialog-result>{resolution}</span>
             <dialog look={dialogLook} ref={confirmDialog} data-resolve-dialog aria-labelledby="resolve-dialog-title">

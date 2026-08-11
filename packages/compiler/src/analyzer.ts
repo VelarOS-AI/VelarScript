@@ -64,10 +64,10 @@ interface Binding {
   readonly storageBinding?: Binding;
   readonly span: Span;
   narrowingFrame: number | null;
-  // An ordinary lexical binding whose name shadows a module reactive binding.
-  // References that resolve to it are recorded for lowering so the emitter
-  // treats them as plain lexical reads/writes instead of reactive .get()/.set().
-  reactiveShadow?: boolean;
+  // Exact reactive identity belongs to the resolved lexical binding, not to
+  // its spelling. Lowering records each resolved read/write span so local
+  // state can shadow (and be shadowed by) ordinary bindings safely.
+  reactiveKind?: "state" | "prop";
 }
 
 interface CollectionInferenceGroup {
@@ -230,8 +230,7 @@ export interface LoweringHints {
   readonly privateInstanceFieldReads: ReadonlySet<string>;
   readonly staticFieldReads: ReadonlyMap<string, number>;
   readonly optionalBindingEntries: ReadonlySet<number>;
-  readonly reactiveBindings: ReadonlyMap<string, "state" | "computed">;
-  readonly shadowedReactiveSpans: ReadonlySet<string>;
+  readonly reactiveReferences: ReadonlyMap<string, "state" | "prop">;
   readonly enumValueBindings: ReadonlyMap<number, string>;
   readonly exhaustiveMatches: ReadonlySet<number>;
   readonly formReads: ReadonlyMap<string, readonly FormReadField[]>;
@@ -249,7 +248,7 @@ export interface RuntimeNarrowingGuard {
 export interface AnalysisContext {
   readonly imports?: ReadonlyMap<string, ValueType>;
   readonly dynamicImports?: ReadonlyMap<string, ValueType>;
-  readonly reactiveImports?: ReadonlyMap<string, "state" | "computed">;
+  readonly reactiveImports?: ReadonlyMap<string, "state">;
   readonly namedTypes?: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeReadonlyFields?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly namedTypeIdentities?: ReadonlyMap<string, string>;
@@ -426,8 +425,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly privateInstanceFieldReads = new Set<string>();
   private readonly staticFieldReads = new Map<string, number>();
   private readonly optionalBindingEntries = new Set<number>();
-  protected readonly reactiveBindings = new Map<string, "state" | "computed">();
-  private readonly shadowedReactiveSpans = new Set<string>();
+  protected readonly reactiveBindings = new Map<string, "state">();
+  private readonly reactiveReferences = new Map<string, "state" | "prop">();
   private readonly pendingScopeDeclarations: Map<string, PendingScopeDeclaration>[] = [new Map()];
   private readonly reportedShadowedReads = new Set<string>();
   protected readonly enumValueBindings = new Map<number, string>();
@@ -717,6 +716,8 @@ export class Analyzer implements TypeEnvironment {
             specifier.span,
             false,
           );
+          const reactive = this.reactiveBindings.get(specifier.local);
+          if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
         }
         this.predeclared.add(statement);
       } else if (statement.kind === "TypeDeclaration" || statement.kind === "TypeAliasDeclaration") {
@@ -948,8 +949,7 @@ export class Analyzer implements TypeEnvironment {
       privateInstanceFieldReads: this.privateInstanceFieldReads,
       staticFieldReads: this.staticFieldReads,
       optionalBindingEntries: this.optionalBindingEntries,
-      reactiveBindings: this.reactiveBindings,
-      shadowedReactiveSpans: this.shadowedReactiveSpans,
+      reactiveReferences: this.reactiveReferences,
       enumValueBindings: this.enumValueBindings,
       exhaustiveMatches: this.exhaustiveMatches,
       formReads: this.formReads,
@@ -1340,6 +1340,8 @@ export class Analyzer implements TypeEnvironment {
               specifier.span,
               false,
             );
+            const reactive = this.reactiveBindings.get(specifier.local);
+            if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
           }
         }
         break;
@@ -2807,7 +2809,7 @@ export class Analyzer implements TypeEnvironment {
         return;
       }
       this.checkShadowedRead(statement.target.name, statement.target.span);
-      if (binding.reactiveShadow) this.shadowedReactiveSpans.add(spanIdentity(statement.target.span));
+      if (binding.reactiveKind) this.reactiveReferences.set(spanIdentity(statement.target.span), binding.reactiveKind);
       if (!binding.mutable) {
         this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to const binding '${statement.target.name}'`, statement.target.span));
         targetWritable = false;
@@ -3035,7 +3037,7 @@ export class Analyzer implements TypeEnvironment {
           return unknownType;
         }
         this.checkShadowedRead(expression.name, expression.span);
-        if (binding.reactiveShadow) this.shadowedReactiveSpans.add(spanIdentity(expression.span));
+        if (binding.reactiveKind) this.reactiveReferences.set(spanIdentity(expression.span), binding.reactiveKind);
         if (binding.narrowingFrame !== null) {
           this.runtimeNarrowings.set(spanIdentity(expression.span), {
             expected: binding.type,
@@ -7012,26 +7014,22 @@ export class Analyzer implements TypeEnvironment {
       storageType: type,
       span: declarationSpan,
       narrowingFrame: null,
-      ...(!internal && this.scopes.length > 1 && this.reactiveBindings.has(name) ? { reactiveShadow: true } : {}),
     };
     scope.set(name, binding);
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
   }
 
-  // A reactive declaration (state or computed) owns its name as a reactive
-  // binding even when an outer reactive binding uses the same name, so its
-  // references keep reactive lowering instead of shadow suppression.
-  protected markDeclaredBindingReactive(name: string): void {
+  // A reactive state declaration owns its resolved lexical binding identity,
+  // even when an outer reactive binding uses the same spelling.
+  protected markDeclaredBindingReactive(name: string, kind: "state" | "prop" = "state"): void {
     const binding = this.scopes.at(-1)?.get(name);
-    if (binding) delete binding.reactiveShadow;
+    if (binding) {
+      binding.reactiveKind = kind;
+    }
   }
 
-  // An extension analyzer marks a just-declared ordinary binding as shadowing
-  // a reactive binding it tracks outside the module-level reactive map, such
-  // as component-scoped state and computed names.
-  protected markDeclaredBindingReactiveShadow(name: string): void {
-    const binding = this.scopes.at(-1)?.get(name);
-    if (binding) binding.reactiveShadow = true;
+  protected reactiveBindingKind(name: string): "state" | "prop" | null {
+    return this.lookup(name)?.reactiveKind ?? null;
   }
 
   private recordSemanticBinding(key: string, type: ValueType): void {
@@ -7212,7 +7210,7 @@ export class Analyzer implements TypeEnvironment {
         this.collectPatternNames(statement.pattern, (name) => {
           if (!pending.has(name)) pending.set(name, { span: statement.span, loopHead: false });
         });
-      } else if (statement.kind === "StateDeclaration" || statement.kind === "ComputedDeclaration" || statement.kind === "ResourceDeclaration") {
+      } else if (statement.kind === "StateDeclaration" || statement.kind === "ResourceDeclaration") {
         if (!pending.has(statement.name)) pending.set(statement.name, { span: statement.span, loopHead: false });
       }
     }
@@ -7420,7 +7418,7 @@ export class Analyzer implements TypeEnvironment {
           ...(binding ? { storageBinding: binding.storageBinding ?? binding } : {}),
           span: binding?.span ?? narrowingSpan,
           narrowingFrame: this.flowFrameDepth,
-          ...(binding?.reactiveShadow ? { reactiveShadow: true } : {}),
+          ...(binding?.reactiveKind ? { reactiveKind: binding.reactiveKind } : {}),
         });
       }
     }
@@ -7449,7 +7447,7 @@ export class Analyzer implements TypeEnvironment {
           storageBinding: binding.storageBinding ?? binding,
           span: binding.span,
           narrowingFrame: this.flowFrameDepth,
-          ...(binding.reactiveShadow ? { reactiveShadow: true } : {}),
+          ...(binding.reactiveKind ? { reactiveKind: binding.reactiveKind } : {}),
         });
       }
     }
