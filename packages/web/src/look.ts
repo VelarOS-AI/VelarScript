@@ -51,7 +51,7 @@ export const LOOK_PROPERTIES = new Set([
   "inset", "top", "right", "bottom", "left",
   "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock",
   "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock",
-  "overflow", "overflowX", "overflowY", "objectFit", "visibility", "clip", "clipPath",
+  "overflow", "overflowX", "overflowY", "resize", "objectFit", "visibility", "clip", "clipPath",
   "background", "backgroundColor", "backgroundImage", "backgroundPosition", "backgroundSize", "backgroundRepeat",
   "fill", "stroke", "strokeWidth",
   "border", "borderWidth", "borderStyle", "borderColor", "borderTop", "borderRight", "borderBottom", "borderLeft", "borderRadius",

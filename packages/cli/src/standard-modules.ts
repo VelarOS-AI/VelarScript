@@ -1,4 +1,5 @@
-import { optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
+import { readFileSync } from "node:fs";
+import { compile, formatDiagnostic, inspectModule, optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import {
   VELAR_CLASS_FIELD_MODULE,
   VELAR_CLASS_FIELD_MODULE_SOURCE,
@@ -147,6 +148,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["capitalize", apiFunction(["value"], [stringType], stringType)],
     ["title", apiFunction(["value"], [stringType], stringType)],
     ["lines", apiFunction(["value"], [stringType], listString)],
+    ["lineStarts", apiFunction(["value"], [stringType], listNumber)],
     ["words", apiFunction(["value"], [stringType], listString)],
     ["slug", apiFunction(["value"], [stringType], stringType)],
     ["truncate", apiFunction(["value", "length", "suffix"], [stringType, numberType, stringType], stringType, 2)],
@@ -257,6 +259,64 @@ function moduleInterface(
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
 ): ModuleInterface {
   return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities: new Map(), typeAliases: new Map(), enums: new Map(), classes, testFunctions: [], extensionExports: new Map(), extensionData: new Map() };
+}
+
+interface VelarSourceStandardModule {
+  readonly source: string;
+  readonly interface: ModuleInterface;
+  readonly sourceDependencies: readonly string[];
+  compiled: { readonly code: string; readonly dependencies: readonly string[] } | null;
+}
+
+function loadVelarSourceStandardModule(source: string, asset: string): VelarSourceStandardModule {
+  const text = readFileSync(new URL(`../stdlib/${asset}`, import.meta.url), "utf8");
+  const inspection = inspectModule(text, { path: source });
+  if (inspection.diagnostics.length > 0) {
+    throw new Error(inspection.diagnostics.map((diagnostic) => formatDiagnostic(inspection.source, diagnostic)).join("\n\n"));
+  }
+  const sourceDependencies: string[] = [];
+  for (const dependency of inspection.dependencies) {
+    if (dependency.javascript || dependency.dynamic || dependency.reExport || !dependency.source.startsWith("velar/")) {
+      throw new Error(`VelarScript source standard module '${source}' may only use static named imports from existing standard modules`);
+    }
+    if (!sourceDependencies.includes(dependency.source)) sourceDependencies.push(dependency.source);
+    if (dependency.specifiers.some((specifier) => specifier.namespace)) {
+      throw new Error(`VelarScript source standard module '${source}' may not use namespace imports`);
+    }
+  }
+  return { source: text, interface: inspection.moduleInterface, sourceDependencies, compiled: null };
+}
+
+const velarSourceStandardModules = new Map<string, VelarSourceStandardModule>([
+  ["velar/text-buffer", loadVelarSourceStandardModule("velar/text-buffer", "text-buffer.vel")],
+]);
+
+for (const [source, module] of velarSourceStandardModules) coreModuleInterfaces.set(source, module.interface);
+
+function compiledVelarSourceStandardModule(source: string, module: VelarSourceStandardModule): { readonly code: string; readonly dependencies: readonly string[] } {
+  if (module.compiled) return module.compiled;
+  const inspection = inspectModule(module.source, { path: source });
+  const imports = new Map<string, ValueType>();
+  for (const dependency of inspection.dependencies) {
+    const dependencyInterface = coreModuleInterfaces.get(dependency.source);
+    if (!dependencyInterface || velarSourceStandardModules.has(dependency.source)) {
+      throw new Error(`VelarScript source standard module '${source}' depends on unavailable bootstrap module '${dependency.source}'`);
+    }
+    for (const specifier of dependency.specifiers) {
+      const type = dependencyInterface.exports.get(specifier.imported);
+      if (!type) throw new Error(`VelarScript source standard module '${source}' imports missing export '${specifier.imported}' from '${dependency.source}'`);
+      imports.set(specifier.local, type);
+    }
+  }
+  const result = compile(module.source, { path: source, analysis: { imports }, sharedRuntimeModules: true });
+  if (result.diagnostics.length > 0 || result.code === null) {
+    throw new Error(result.diagnostics.map((diagnostic) => formatDiagnostic(result.source, diagnostic)).join("\n\n"));
+  }
+  module.compiled = {
+    code: result.code,
+    dependencies: [...new Set([...module.sourceDependencies, ...result.runtimeModules])],
+  };
+  return module.compiled;
 }
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {
@@ -843,6 +903,18 @@ export function trimEnd(value) { return __velarTextCall(__velarTextStringTrimEnd
 export function capitalize(value) { value = valueOf(value); if (!value) return ""; const end = __velarTextNextCodePointOffset(value, 0); const first = __velarTextCall(__velarNativeStringSlice, value, [0, end]); const tail = __velarTextCall(__velarNativeStringSlice, value, [end]); return textOutput(__velarTextCall(__velarNativeStringUpper, first, []) + __velarTextCall(__velarNativeStringLower, tail, []), "capitalize"); }
 export function title(value) { let output = __velarTextCall(__velarNativeStringLower, valueOf(value), []); output = __velarTextRegexReplace(output, __velarTextTitleSeparators, " "); output = __velarTextRegexReplace(output, __velarTextTitleWords, match => match.groups[0] + __velarTextCall(__velarNativeStringUpper, match.groups[1], [])); return textOutput(output, "title"); }
 export function lines(value) { return textList(__velarTextRegexSplit(valueOf(value), __velarTextLines, maxTextItems + 1), "lines"); }
+export function lineStarts(value) {
+  value = valueOf(value);
+  const output = [0];
+  let unitOffset = 0, codePointOffset = 0;
+  while (unitOffset < value.length) {
+    const nextUnitOffset = __velarTextNextCodePointOffset(value, unitOffset);
+    if (__velarTextCall(__velarNativeStringCharCodeAt, value, [unitOffset]) === 10) __velarTextAppend(output, codePointOffset + 1);
+    unitOffset = nextUnitOffset;
+    codePointOffset += 1;
+  }
+  return textList(output, "lineStarts");
+}
 export function words(value) { const cleaned = __velarTextCall(__velarNativeStringTrim, valueOf(value), []); return cleaned ? textList(__velarTextRegexSplit(cleaned, __velarTextWords, maxTextItems + 1), "words") : []; }
 export function slug(value) { let output = __velarTextCall(__velarTextStringNormalize, valueOf(value), ["NFKD"]); output = __velarTextRegexReplace(output, __velarTextMarks, ""); output = __velarTextCall(__velarNativeStringLower, output, []); output = __velarTextCall(__velarNativeStringTrim, output, []); output = __velarTextRegexReplace(output, __velarTextSlugSeparators, "-"); output = __velarTextRegexReplace(output, __velarTextSlugEdges, ""); return textOutput(output, "slug"); }
 export function truncate(value, length, suffix = "…") { value = valueOf(value); suffix = valueOf(suffix); length = textCount(length, "truncate length"); const valueLength = codePointLength(value); if (valueLength <= length) return value; const suffixLength = codePointLength(suffix); if (suffixLength >= length) return codePointPrefix(suffix, length); return codePointPrefix(value, length - suffixLength) + suffix; }
@@ -1958,6 +2030,7 @@ export function standardModuleSources(extensions: readonly CompilerExtension[] =
   const activeExtensions = standardExtensions(extensions);
   return new Map([
     ...coreModuleSources,
+    ...[...velarSourceStandardModules].map(([source, module]) => [source, compiledVelarSourceStandardModule(source, module).code] as const),
     ...combinedExtensionModules<string>(activeExtensions, "sources"),
   ]);
 }
@@ -1992,6 +2065,8 @@ export function standardModuleSource(
     const framework = extension.modules?.source?.(source, extensionConfig) ?? extension.modules?.sources.get(source) ?? null;
     if (framework !== null) return framework;
   }
+  const velarSourceModule = velarSourceStandardModules.get(source);
+  if (velarSourceModule) return compiledVelarSourceStandardModule(source, velarSourceModule).code;
   return coreModuleSources.get(source) ?? null;
 }
 
@@ -2005,6 +2080,8 @@ export function standardModuleDependencies(
     const moduleSource = extension.modules?.source?.(source, extensionConfig) ?? extension.modules?.sources.get(source) ?? null;
     if (moduleSource !== null) return extension.modules?.dependencies?.get(source) ?? [];
   }
+  const velarSourceModule = velarSourceStandardModules.get(source);
+  if (velarSourceModule) return compiledVelarSourceStandardModule(source, velarSourceModule).dependencies;
   return coreModuleSources.has(source) ? coreModuleDependencies.get(source) ?? [] : null;
 }
 

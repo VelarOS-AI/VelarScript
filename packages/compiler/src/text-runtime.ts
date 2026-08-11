@@ -9,6 +9,7 @@ const __velarTextNativeObject = globalThis.Object;
 const __velarTextNativeTypeError = globalThis.TypeError;
 const __velarTextNativeRangeError = globalThis.RangeError;
 const __velarTextGetOwnPropertyDescriptor = __velarTextNativeObject.getOwnPropertyDescriptor;
+const __velarTextRuntimeGetPrototypeOf = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getPrototypeOf")?.value;
 const __velarTextReflectApply = __velarTextGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
 const __velarTextStringPrototype = __velarTextGetOwnPropertyDescriptor(__velarTextNativeString, "prototype")?.value;
 const __velarTextArrayIsArray = __velarTextGetOwnPropertyDescriptor(__velarTextNativeArray, "isArray")?.value;
@@ -27,6 +28,9 @@ const __velarNativeStringSplit = __velarTextGetOwnPropertyDescriptor(__velarText
 const __velarNativeStringReplace = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "replace")?.value;
 const __velarNativeStringReplaceAll = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "replaceAll")?.value;
 const __velarNativeStringRepeat = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "repeat")?.value;
+const __velarTextSurrogatePattern = /[\u{10000}-\u{10FFFF}\uD800-\uDFFF]/u;
+const __velarTextRegExpPrototype = typeof __velarTextRuntimeGetPrototypeOf === "function" ? __velarTextRuntimeGetPrototypeOf(__velarTextSurrogatePattern) : null;
+const __velarTextSurrogateExec = __velarTextRegExpPrototype ? __velarTextGetOwnPropertyDescriptor(__velarTextRegExpPrototype, "exec")?.value : null;
 function __velarTextCall(operation, receiver, arguments_) {
   if (typeof operation !== "function" || typeof __velarTextReflectApply !== "function") throw new __velarTextNativeTypeError("The JavaScript text runtime is unavailable");
   return __velarTextReflectApply(operation, receiver, arguments_);
@@ -63,6 +67,7 @@ function __velarTextNextCodePointOffset(value, offset) {
   return second >= 0xDC00 && second <= 0xDFFF ? offset + 2 : offset + 1;
 }
 function __velarTextCodePointLength(value) {
+  if (__velarTextCall(__velarTextSurrogateExec, __velarTextSurrogatePattern, [value]) === null) return value.length;
   let length = 0, offset = 0;
   while (offset < value.length) { offset = __velarTextNextCodePointOffset(value, offset); length += 1; }
   return length;

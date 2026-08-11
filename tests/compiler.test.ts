@@ -7741,11 +7741,18 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.deepEqual(api.modules["velar/forms"], ["checkedValue", "clearError", "clearErrors", "errors", "fieldValue", "fieldValues", "focusFirstError", "numberValue", "read", "reset", "setError", "setPending", "textValue", "values"]);
   assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
   assert.deepEqual(api.modules["velar/storage"], ["database", "session", "storage"]);
-  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "scrollIntoView", "scrollTo", "showDialog", "watchMedia", "watchOnline", "watchVisibility"]);
+  assert.deepEqual(api.modules["velar/browser"], ["after", "blur", "closeDialog", "copyText", "dialogResult", "environment", "every", "focus", "frame", "location", "measure", "media", "open", "readClipboardText", "scrollIntoView", "scrollTo", "setTextSelection", "showDialog", "textSelection", "watchMedia", "watchOnline", "watchVisibility"]);
   assert.deepEqual(api.modules["velar/files"], ["download", "pick", "readDataUrl", "readText"]);
   assert.deepEqual(api.modules["velar/realtime"], ["eventStream", "socket"]);
   assert.deepEqual(api.modules["velar/test"], ["expect"]);
   assert.deepEqual(api.modules["velar/web-test"], ["browser", "localStorage", "network", "sessionStorage"]);
+  const browserTestController = webModuleInterfaces.get("velar/web-test")?.exports.get("browser");
+  assert.equal(browserTestController?.kind, "object");
+  if (browserTestController?.kind === "object") {
+    assert.deepEqual([...browserTestController.fields.keys()].sort(), [
+      "attribute", "click", "count", "currentPath", "fill", "measureClick", "measureFill", "measurePress", "namespace", "open", "press", "reload", "select", "text", "timings", "viewport", "visible", "waitFor", "waitForText",
+    ]);
+  }
   const webRuntime = standardModuleSource("velar/web", { base: "/studio/" }) ?? "";
   assert.match(webRuntime, /const appBase = "\/studio\/"/u);
   assert.doesNotMatch(webRuntime, /__VELAR_WEB_BASE__/u);
@@ -7772,7 +7779,7 @@ import {Head, RouteContext, Router, Link, NavLink, announce, back, currentRoute,
 import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, focusFirstError, numberValue, read, reset, setError, setPending, textValue, values} from "velar/forms"
 import {HttpAbortError, formBody, http} from "velar/http"
 import {database, session, storage} from "velar/storage"
-import {after, blur, closeDialog, dialogResult, environment, every, focus, frame, location as browserLocation, measure, media, scrollIntoView, showDialog, watchMedia, watchOnline, watchVisibility} from "velar/browser"
+import {after, blur, closeDialog, dialogResult, environment, every, focus, frame, location as browserLocation, measure, media, scrollIntoView, setTextSelection, showDialog, textSelection, watchMedia, watchOnline, watchVisibility} from "velar/browser"
 import {download, pick} from "velar/files"
 import {eventStream, socket} from "velar/realtime"
 import {onError, reportError} from "velar/app"
@@ -7804,6 +7811,7 @@ component ItemPage(route: RouteContext):
 component App:
     let form: Element? = null
     let dialog: DialogElement? = null
+    let editor: TextAreaElement? = null
     const request = http.request("GET", "/api/items", {timeout: 100})
     const abortError = HttpAbortError("cancelled")
     const known = storage.has("items")
@@ -7841,8 +7849,12 @@ component App:
             const currentDialog = dialog
             showDialog(currentDialog)
             closeDialog(currentDialog, dialogResult(currentDialog))
+        if editor:
+            const currentEditor = editor
+            const selectedText = textSelection(currentEditor)
+            setTextSelection(currentEditor, selectedText.start, selectedText.end, selectedText.direction)
 
-    return <><Head title="API" description="Typed Web" canonical="https://example.com/" robots="index,follow" image="/share.png" themeColor="#111827" language="en-US" /><form host ref={form}><input name="name" /><input name="count" type="number" /><input name="selected" type="checkbox" /><input name="labels" /><select name="mode"><option value={FormMode.create}>Create</option></select></form><dialog ref={dialog}>Confirm</dialog><Router routes={[route("/", Missing), route("/items/:id", ItemPage)]} fallback={Missing} /></>
+    return <><Head title="API" description="Typed Web" canonical="https://example.com/" robots="index,follow" image="/share.png" themeColor="#111827" language="en-US" /><form host ref={form}><input name="name" /><input name="count" type="number" /><input name="selected" type="checkbox" /><input name="labels" /><select name="mode"><option value={FormMode.create}>Create</option></select></form><textarea ref={editor}></textarea><dialog ref={dialog}>Confirm</dialog><Router routes={[route("/", Missing), route("/items/:id", ItemPage)]} fallback={Missing} /></>
 
 const link = <Link to="/items" replace={true}>Items</Link>
 const navLink = <NavLink to="/items" exact={true}>Items</NavLink>
@@ -9046,6 +9058,47 @@ console.log(failures.join(","));
   assert.equal(execution.stdout, "10\nprototype-focus:true,prototype-blur,prototype-scroll:smooth,prototype-measure\nTypeError,TypeError,TypeError\n");
 });
 
+test("textarea selection stays on Core code-point offsets and captured Web operations", () => {
+  const source = standardModuleSource("velar/browser") ?? "";
+  const execution = executeModule(`
+const state = new WeakMap();
+let ambientCalls = 0;
+class FakeElement {}
+class FakeHTMLElement extends FakeElement {}
+class FakeTextArea extends FakeHTMLElement {
+  constructor(value, start, end, direction = "none") { super(); state.set(this, { value, start, end, direction }); }
+  get value() { return state.get(this).value; }
+  get selectionStart() { return state.get(this).start; }
+  get selectionEnd() { return state.get(this).end; }
+  get selectionDirection() { return state.get(this).direction; }
+  setSelectionRange(start, end, direction) { state.set(this, { ...state.get(this), start, end, direction }); }
+}
+globalThis.Element = FakeElement;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.HTMLTextAreaElement = FakeTextArea;
+${source}
+const area = new FakeTextArea("A😀B", 1, 3, "forward");
+const initial = textSelection(area);
+console.log(initial.start + ":" + initial.end + ":" + initial.direction);
+const poison = () => { ambientCalls += 1; throw new Error("ambient textarea operation"); };
+for (const name of ["value", "selectionStart", "selectionEnd", "selectionDirection"]) {
+  Object.defineProperty(FakeTextArea.prototype, name, { configurable: true, get: poison });
+}
+Object.defineProperty(FakeTextArea.prototype, "setSelectionRange", { configurable: true, value: poison });
+setTextSelection(area, 1, 3, "backward");
+const selected = state.get(area);
+console.log(selected.start + ":" + selected.end + ":" + selected.direction);
+console.log(ambientCalls);
+state.set(area, { value: "A😀B", start: 2, end: 3, direction: "none" });
+try { textSelection(area); console.log("accepted"); }
+catch (error) { console.log(error.name); }
+try { setTextSelection(area, 0, 5); console.log("accepted"); }
+catch (error) { console.log(error.name); }
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "1:2:forward\n1:4:backward\n0\nTypeError\nRangeError\n");
+});
+
 test("clipboard and dialog helpers snapshot hosts and bypass instance overrides", () => {
   const source = standardModuleSource("velar/browser") ?? "";
   const execution = executeModule(`
@@ -10138,12 +10191,12 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
-    "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
+    "velar/test", "velar/text-buffer", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 265);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 117);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 271);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 118);
   assert.equal(api.modules["velar/collections"]?.length, 28);
-  assert.equal(api.modules["velar/text"]?.length, 18);
+  assert.equal(api.modules["velar/text"]?.length, 19);
   assert.equal(api.modules["velar/math"]?.length, 32);
   assert.deepEqual(api.modules["velar/json"], ["clone", "deepEqual", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
@@ -10151,6 +10204,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
+  assert.deepEqual(api.modules["velar/text-buffer"], ["TextBuffer", "TextChange", "TextPosition"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
   assert.deepEqual(api.modules["velar/fs"], ["Blob", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readBlob", "readText", "removeFile", "replaceTextIfMatches", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
@@ -10164,7 +10218,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, range, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
-import {capitalize, escapeHtml, findMatch, findMatches, lines, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, utf8Size, words} from "velar/text"
+import {capitalize, escapeHtml, findMatch, findMatches, lines, lineStarts, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, utf8Size, words} from "velar/text"
 import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians} from "velar/math"
 import {clone as cloneJson, deepEqual, parse as parseJson, stableStringify, stringify, tryParse} from "velar/json"
 import {all as allAsync, map as asyncMap, retry, series, sleep, timeout} from "velar/async"
@@ -10207,6 +10261,7 @@ print(slug("  Velar Web 游戏  "))
 print(truncate("VelarScript", 6))
 print(normalizeWhitespace("  a   b  "))
 print(lines("a\\nb").size)
+print(lineStarts("A😀\\nB\\n").map(offset => str(offset)).join(","))
 print(words("a  b").size)
 print("ABC".lower())
 print("abc".upper())
@@ -10302,7 +10357,7 @@ print(logLevel())
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "15", "10", "x", "2", "Ada", "1", "Lin", "a,b", "5", "2", "true",
-    "Velar", "Next Generation Web", "velar-web-游戏", "Velar…", "a b", "2", "2", "abc", "ABC", "true", "11", "&lt;velar&gt;",
+    "Velar", "Next Generation Web", "velar-web-游戏", "Velar…", "a b", "2", "0,3,5", "2", "abc", "ABC", "true", "11", "&lt;velar&gt;",
     "true", "42", "7", "2", "2", "22", "a# b#", "a|b|c", "true", "true", "null", "x$&", "a|b", "TypeError", "TypeError",
     "3.14", "10", "2", "8", "90", "6", "24",
     "Nova", "fallback", '{"a":2,"z":1}', "[1,2]", "true", "false",
@@ -10311,6 +10366,84 @@ print(logLevel())
     "2024-01-02T03:04:05.000Z", "2024", "true", "info:core:ready", "debug::trace", "debug",
     "",
   ].join("\n"));
+});
+
+test("pure VelarScript text buffer ships a typed piece table with code-point positions", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-text-buffer-"));
+  const entry = join(directory, "main.vel");
+  const output = join(directory, "dist");
+  await writeFile(entry, `
+import {TextBuffer, TextChange, TextPosition} from "velar/text-buffer"
+
+const buffer = TextBuffer("ab😀\\ncd")
+const initialPosition: TextPosition = buffer.positionAt(4)
+print(f"{str(buffer.size)}|{str(buffer.lineCount)}|{buffer.lineText(0)}|{str(initialPosition.line)}:{str(initialPosition.column)}")
+
+const first: TextChange = buffer.replace(1, 3, "X\\nY")
+print(first.removed == "b😀")
+print(f"{str(first.beforeRevision)}:{str(first.afterRevision)}:{str(buffer.revision)}")
+print(buffer.text() == "aX\\nY\\ncd")
+const finalPosition = buffer.positionAt(buffer.offsetAt(2, 2))
+print(f"{str(finalPosition.line)}:{str(finalPosition.column)}")
+
+buffer.insert(buffer.size, "!")
+buffer.delete(1, 2)
+let count = 0
+while count < 100:
+    buffer.insert(buffer.size, "x")
+    count += 1
+print(f"{str(buffer.size)}|{str(buffer.lineCount)}|{buffer.lineText(1)}|{str(buffer.revision)}")
+try:
+    buffer.slice(-1, 0)
+catch error:
+    print(error.name)
+
+const newline = TextBuffer("a\\nb")
+newline.delete(1, 2)
+const newlinePosition = newline.positionAt(1)
+print(f"{str(newline.lineCount)}|{str(newlinePosition.line)}:{str(newlinePosition.column)}|{newline.lineText(0)}")
+`.trimStart(), "utf8");
+
+  const project = await compileProjectCore(entry);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", entry, "--out-dir", output], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(build.status, 0, String(build.stderr));
+  const generated = await readFile(join(output, "node_modules", "velar", "text-buffer.js"), "utf8");
+  assert.match(generated, /class TextBuffer/u);
+  assert.match(generated, /#pieces/u);
+  assert.match(generated, /__velarStringSlice/u);
+  await readFile(join(output, "node_modules", "velar", "text.js"), "utf8");
+  const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "6|2|ab😀|1:0",
+    "true",
+    "0:1:1",
+    "true",
+    "2:2",
+    "107|3|Y|103",
+    "AssertionError",
+    "1|0:1|ab",
+    "",
+  ].join("\n"));
+
+  const invalidEntry = join(directory, "invalid.vel");
+  await writeFile(invalidEntry, `
+import {TextBuffer} from "velar/text-buffer"
+
+const buffer = TextBuffer("value")
+buffer.replace("0", 1, "x")
+buffer.offsetAt(0, "1")
+print(buffer.pieces)
+`.trimStart(), "utf8");
+  const invalid = await compileProjectCore(invalidEntry);
+  const diagnostics = invalid.modules.flatMap((module) => module.result.diagnostics).map((diagnostic) => diagnostic.message).join("\n");
+  assert.match(diagnostics, /Cannot assign string to number/u);
+  assert.match(diagnostics, /Class 'TextBuffer' has no member 'pieces'/u);
 });
 
 test("Core builtins and standard modules share one named-argument ABI", async () => {
@@ -11682,6 +11815,8 @@ console.log(trimStart("  x"), trimEnd("x  "), capitalize("élan"), title("hello_
 const rowList = lines("a\\r\\nb\\n");
 const wordList = words("  one   two ");
 console.log(rowList.length, rowList[0], rowList[1], rowList[2] === "", wordList.length, wordList[0], wordList[1]);
+const starts = lineStarts("A😀\\nB\\n");
+console.log(starts.length, starts[0], starts[1], starts[2]);
 console.log(slug("Crème brûlée!"), truncate("A😀B", 2));
 console.log(indent("a\\nb", "-") === "-a\\n-b", dedent("  a\\n    b") === "a\\n  b");
 console.log(normalizeWhitespace("  a\\n b  "), escapeHtml('<a href="x">'));
@@ -11706,6 +11841,7 @@ console.log(typeIdentity, rangeIdentity, poisonCalls);
     "007 7😀😀 abab",
     "x x Élan Hello World Foo Bar",
     "3 a b true 2 one two",
+    "3 0 3 5",
     "creme-brulee A…",
     "true true",
     "a b &lt;a href=&quot;x&quot;&gt;",
@@ -24598,6 +24734,7 @@ def surface(radius: Length, color: Color) -> Look:
 
 const interactive = look:
     cursor = "pointer"
+    resize = "none"
 
     if @focusVisible:
         outline = border(width=2px, color=rgb(63, 115, 150))
@@ -24616,6 +24753,7 @@ component ActionButton:
   assert.match(result.code ?? "", /surface\(\.\.\.\(\(\$velarNamedArguments\) => \[\$velarNamedArguments\[1\], \$velarNamedArguments\[0\]\]/u);
   assert.match(result.code ?? "", /__velarLook\(\[/u);
   assert.match(result.css ?? "", /focus-visible:outline"\]\[data-velar-look\]:where\(:focus-visible\)/u);
+  assert.match(result.css ?? "", /base:resize"\]\{resize:var\(--velar-look-base-resize\)\}/u);
 });
 
 test("Look rejects ambiguous maintenance hazards", () => {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
-import { chromium, firefox, webkit, type Browser, type BrowserType, type Page } from "playwright";
+import { chromium, firefox, webkit, type Browser, type BrowserType, type Locator, type Page } from "playwright";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
@@ -17,6 +17,164 @@ export type BrowserEngine = "chromium" | "firefox" | "webkit";
 export type BrowserEngineSelection = BrowserEngine | "all";
 
 const browserTypes: Readonly<Record<BrowserEngine, BrowserType>> = { chromium, firefox, webkit };
+const browserPerformanceRuntimeKey = "velar.browser.test.performance.v1";
+const browserPerformanceInitScript = String.raw`
+(() => {
+  "use strict";
+  const key = Symbol.for(${JSON.stringify(browserPerformanceRuntimeKey)});
+  const existing = Object.getOwnPropertyDescriptor(globalThis, key);
+  if (existing) {
+    if (!("value" in existing) || !existing.value || typeof existing.value !== "object") {
+      throw new TypeError("Browser performance test runtime identity is invalid");
+    }
+    return;
+  }
+  const nativeObject = globalThis.Object;
+  const nativeNumber = globalThis.Number;
+  const nativeArray = globalThis.Array;
+  const nativeMath = globalThis.Math;
+  const nativeMap = globalThis.Map;
+  const nativePromise = globalThis.Promise;
+  const nativeReflect = globalThis.Reflect;
+  const nativePerformance = globalThis.performance;
+  const nativeDocument = globalThis.document;
+  const nativeEventTarget = globalThis.EventTarget;
+  const nativeEvent = globalThis.Event;
+  const getOwnPropertyDescriptor = nativeObject.getOwnPropertyDescriptor;
+  const defineProperty = nativeObject.defineProperty;
+  const freeze = nativeObject.freeze;
+  const getPrototypeOf = nativeObject.getPrototypeOf;
+  const reflectApply = getOwnPropertyDescriptor(nativeReflect, "apply")?.value;
+  const numberFinite = getOwnPropertyDescriptor(nativeNumber, "isFinite")?.value;
+  const arrayIsArray = getOwnPropertyDescriptor(nativeArray, "isArray")?.value;
+  const mathMax = getOwnPropertyDescriptor(nativeMath, "max")?.value;
+  const mapPrototype = getOwnPropertyDescriptor(nativeMap, "prototype")?.value;
+  const mapGet = getOwnPropertyDescriptor(mapPrototype, "get")?.value;
+  const mapSet = getOwnPropertyDescriptor(mapPrototype, "set")?.value;
+  const mapDelete = getOwnPropertyDescriptor(mapPrototype, "delete")?.value;
+  const mapSize = getOwnPropertyDescriptor(mapPrototype, "size")?.get;
+  const eventAdd = getOwnPropertyDescriptor(nativeEventTarget.prototype, "addEventListener")?.value;
+  const eventRemove = getOwnPropertyDescriptor(nativeEventTarget.prototype, "removeEventListener")?.value;
+  const eventTarget = getOwnPropertyDescriptor(nativeEvent.prototype, "target")?.get;
+  const eventTimeStamp = getOwnPropertyDescriptor(nativeEvent.prototype, "timeStamp")?.get;
+  const performancePrototype = callPrototype(nativePerformance);
+  const performanceNow = getOwnPropertyDescriptor(performancePrototype, "now")?.value;
+  const performanceEntriesByType = getOwnPropertyDescriptor(performancePrototype, "getEntriesByType")?.value;
+  const performanceEntriesByName = getOwnPropertyDescriptor(performancePrototype, "getEntriesByName")?.value;
+  const performanceTimeOrigin = nativePerformance.timeOrigin;
+  const queueMicrotask_ = getOwnPropertyDescriptor(globalThis, "queueMicrotask")?.value;
+  const requestAnimationFrame_ = getOwnPropertyDescriptor(globalThis, "requestAnimationFrame")?.value;
+  const setTimeout_ = getOwnPropertyDescriptor(globalThis, "setTimeout")?.value;
+  const clearTimeout_ = getOwnPropertyDescriptor(globalThis, "clearTimeout")?.value;
+  const measurements = new nativeMap();
+  let nextMeasurement = 1;
+
+  function callPrototype(value) {
+    if (typeof getPrototypeOf !== "function") throw new TypeError("Object.getPrototypeOf is unavailable");
+    return getPrototypeOf(value);
+  }
+  function call(operation, receiver, args, name) {
+    if (typeof operation !== "function" || typeof reflectApply !== "function") throw new TypeError(name + " is unavailable");
+    return reflectApply(operation, receiver, args);
+  }
+  function finite(value, name) {
+    if (!call(numberFinite, nativeNumber, [value], "Number.isFinite") || value < 0 || value > 600000) {
+      throw new RangeError(name + " is outside the browser performance test bound");
+    }
+    return value;
+  }
+  function now() { return finite(call(performanceNow, nativePerformance, [], "performance.now"), "Browser monotonic time"); }
+  function entries(operation, value) {
+    const result = call(operation, nativePerformance, [value], "Performance entry lookup");
+    if (!call(arrayIsArray, nativeArray, [result], "Array.isArray") || result.length > 10000) throw new TypeError("Browser performance entries are invalid");
+    return result;
+  }
+  function field(value, name) {
+    const descriptor = value && getOwnPropertyDescriptor(value, name);
+    if (descriptor && "value" in descriptor) return descriptor.value;
+    let prototype = value && callPrototype(value);
+    for (let depth = 0; prototype && depth < 8; depth += 1) {
+      const getter = getOwnPropertyDescriptor(prototype, name)?.get;
+      if (typeof getter === "function") return call(getter, value, [], "Performance entry " + name);
+      prototype = callPrototype(prototype);
+    }
+    throw new TypeError("Performance entry " + name + " is unavailable");
+  }
+  function timings() {
+    const navigation = entries(performanceEntriesByType, "navigation")[0];
+    if (!navigation) throw new Error("The browser did not expose navigation timing");
+    const paints = entries(performanceEntriesByName, "first-contentful-paint");
+    const paint = paints.length === 0 ? null : finite(field(paints[0], "startTime"), "First contentful paint");
+    return freeze({
+      firstContentfulPaintMs: paint,
+      domContentLoadedMs: finite(field(navigation, "domContentLoadedEventEnd"), "DOMContentLoaded timing"),
+      loadMs: finite(field(navigation, "loadEventEnd"), "Load timing"),
+    });
+  }
+  function prepare(element, eventName) {
+    if (eventName !== "click" && eventName !== "input") throw new TypeError("Measured browser event must be click or input");
+    if (!(element instanceof nativeEventTarget)) throw new TypeError("Measured browser target must be an EventTarget");
+    if (call(mapSize, measurements, [], "Map.size") >= 32) throw new RangeError("Too many pending browser performance measurements");
+    const id = nextMeasurement++;
+    let finish;
+    let fail;
+    const promise = new nativePromise((resolve, reject) => { finish = resolve; fail = reject; });
+    let timer = null;
+    let listening = true;
+    const cleanup = () => {
+      if (listening) {
+        listening = false;
+        call(eventRemove, nativeDocument, [eventName, listener, true], "Document.removeEventListener");
+      }
+      if (timer !== null) {
+        call(clearTimeout_, globalThis, [timer], "clearTimeout");
+        timer = null;
+      }
+    };
+    const listener = (event) => {
+      if (call(eventTarget, event, [], "Event.target") !== element) return;
+      cleanup();
+      try {
+        const listenerStart = now();
+        let eventTime = call(eventTimeStamp, event, [], "Event.timeStamp");
+        if (typeof eventTime !== "number" || !call(numberFinite, nativeNumber, [eventTime], "Number.isFinite")) eventTime = listenerStart;
+        if (eventTime > listenerStart + 1000 && typeof performanceTimeOrigin === "number") eventTime -= performanceTimeOrigin;
+        if (eventTime < 0 || eventTime > listenerStart + 1000) eventTime = listenerStart;
+        const inputDelayMs = finite(call(mathMax, nativeMath, [0, listenerStart - eventTime], "Math.max"), "Input delay");
+        call(queueMicrotask_, globalThis, [() => {
+          try {
+            const processingDurationMs = finite(call(mathMax, nativeMath, [0, now() - listenerStart], "Math.max"), "Input processing duration");
+            call(requestAnimationFrame_, globalThis, [(frameTime) => {
+              try {
+                const nextFrameMs = finite(call(mathMax, nativeMath, [inputDelayMs + processingDurationMs, frameTime - eventTime], "Math.max"), "Next frame timing");
+                finish(freeze({ inputDelayMs, processingDurationMs, nextFrameMs }));
+              } catch (error) { fail(error); }
+            }], "requestAnimationFrame");
+          } catch (error) { fail(error); }
+        }], "queueMicrotask");
+      } catch (error) { fail(error); }
+    };
+    call(eventAdd, nativeDocument, [eventName, listener, true], "Document.addEventListener");
+    timer = call(setTimeout_, globalThis, [() => { cleanup(); fail(new Error("Measured browser interaction did not dispatch its expected event")); }, 5000], "setTimeout");
+    call(mapSet, measurements, [id, freeze({ promise, cleanup })], "Map.set");
+    return id;
+  }
+  async function finishMeasurement(id) {
+    const measurement = call(mapGet, measurements, [id], "Map.get");
+    if (!measurement) throw new Error("Browser performance measurement is unknown");
+    try { return await measurement.promise; }
+    finally { measurement.cleanup(); call(mapDelete, measurements, [id], "Map.delete"); }
+  }
+  function cancel(id) {
+    const measurement = call(mapGet, measurements, [id], "Map.get");
+    if (!measurement) return null;
+    measurement.cleanup();
+    call(mapDelete, measurements, [id], "Map.delete");
+    return null;
+  }
+  defineProperty(globalThis, key, { value: freeze({ timings, prepare, finish: finishMeasurement, cancel }), enumerable: false, configurable: false, writable: false });
+})();
+`;
 
 export async function runBrowserTests(
   config: VelarProjectConfig,
@@ -94,6 +252,7 @@ export async function runBrowserTests(
                 runtimeFailures.push(`${message.type()}: ${message.text()}`);
               }
             });
+            await installBrowserPerformanceRuntime(page);
             await installFrameworkRuntime(page, contract.initScript?.(config.framework.config));
             installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
             try {
@@ -131,6 +290,10 @@ async function installFrameworkRuntime(page: Page, source: string | undefined): 
     throw new Error("Framework browser-test init script must contain 1 byte through 1 MiB of text");
   }
   await page.addInitScript({ content: source });
+}
+
+async function installBrowserPerformanceRuntime(page: Page): Promise<void> {
+  await page.addInitScript({ content: browserPerformanceInitScript });
 }
 
 async function compileBrowserTest(
@@ -218,6 +381,28 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
       await page.setViewportSize(next);
       return null;
     },
+    async timings() {
+      const value = await page.evaluate((key) => {
+        const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(key))?.value as { timings?: () => unknown } | undefined;
+        if (!runtime || typeof runtime.timings !== "function") throw new Error("Browser performance test runtime is unavailable");
+        return runtime.timings();
+      }, browserPerformanceRuntimeKey);
+      return navigationTiming(value);
+    },
+    async measureClick(selector: unknown) {
+      const target = locator(selector);
+      return measureBrowserInteraction(page, target, "click", async () => { await target.click(); });
+    },
+    async measureFill(selector: unknown, value: unknown) {
+      const target = locator(selector);
+      const text = String(value);
+      return measureBrowserInteraction(page, target, "input", async () => { await target.fill(text); });
+    },
+    async measurePress(selector: unknown, key: unknown) {
+      const target = locator(selector);
+      const value = String(key);
+      return measureBrowserInteraction(page, target, "input", async () => { await target.press(value); });
+    },
     async storageGet(area: unknown, key: unknown) {
       const input = { area: storageArea(area), key: String(key) };
       return page.evaluate(({ area: name, key: itemKey }) => {
@@ -296,6 +481,95 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
 
 function removeBrowserRuntime(runtimeKey: symbol): void {
   delete (globalThis as unknown as { [key: symbol]: unknown })[runtimeKey];
+}
+
+interface BrowserInteractionTiming {
+  readonly inputDelayMs: number;
+  readonly processingDurationMs: number;
+  readonly nextFrameMs: number;
+}
+
+async function measureBrowserInteraction(
+  page: Page,
+  target: Locator,
+  eventName: "click" | "input",
+  action: () => Promise<void>,
+): Promise<BrowserInteractionTiming> {
+  const measurement = await target.evaluate((element, input) => {
+    const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(input.key))?.value as {
+      prepare?: (target: Element, event: string) => unknown;
+    } | undefined;
+    if (!runtime || typeof runtime.prepare !== "function") throw new Error("Browser performance test runtime is unavailable");
+    return runtime.prepare(element, input.eventName);
+  }, { key: browserPerformanceRuntimeKey, eventName });
+  if (!Number.isSafeInteger(measurement) || (measurement as number) < 1) throw new TypeError("Browser performance runtime returned an invalid measurement identity");
+  try {
+    await action();
+    const value = await page.evaluate(async (input) => {
+      const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(input.key))?.value as {
+        finish?: (identity: number) => Promise<unknown>;
+      } | undefined;
+      if (!runtime || typeof runtime.finish !== "function") throw new Error("Browser performance test runtime is unavailable");
+      return runtime.finish(input.identity);
+    }, { key: browserPerformanceRuntimeKey, identity: measurement as number });
+    return interactionTiming(value);
+  } catch (error) {
+    await page.evaluate((input) => {
+      const runtime = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(input.key))?.value as {
+        cancel?: (identity: number) => unknown;
+      } | undefined;
+      if (runtime && typeof runtime.cancel === "function") runtime.cancel(input.identity);
+    }, { key: browserPerformanceRuntimeKey, identity: measurement as number }).catch(() => {});
+    throw error;
+  }
+}
+
+function navigationTiming(value: unknown): Readonly<{
+  firstContentfulPaintMs: number | null;
+  domContentLoadedMs: number;
+  loadMs: number;
+}> {
+  const record = timingRecord(value, ["firstContentfulPaintMs", "domContentLoadedMs", "loadMs"]);
+  const firstContentfulPaintMs = record.firstContentfulPaintMs;
+  if (firstContentfulPaintMs !== null) boundedTiming(firstContentfulPaintMs, "firstContentfulPaintMs");
+  return Object.freeze({
+    firstContentfulPaintMs: firstContentfulPaintMs as number | null,
+    domContentLoadedMs: boundedTiming(record.domContentLoadedMs, "domContentLoadedMs"),
+    loadMs: boundedTiming(record.loadMs, "loadMs"),
+  });
+}
+
+function interactionTiming(value: unknown): BrowserInteractionTiming {
+  const record = timingRecord(value, ["inputDelayMs", "processingDurationMs", "nextFrameMs"]);
+  const inputDelayMs = boundedTiming(record.inputDelayMs, "inputDelayMs");
+  const processingDurationMs = boundedTiming(record.processingDurationMs, "processingDurationMs");
+  const nextFrameMs = boundedTiming(record.nextFrameMs, "nextFrameMs");
+  if (nextFrameMs + Number.EPSILON < inputDelayMs + processingDurationMs) {
+    throw new TypeError("Browser interaction timing ends before processing completes");
+  }
+  return Object.freeze({ inputDelayMs, processingDurationMs, nextFrameMs });
+}
+
+function timingRecord(value: unknown, fields: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new TypeError("Browser performance runtime returned an invalid record");
+  }
+  const names = Object.keys(value);
+  if (names.length !== fields.length || names.some((name) => !fields.includes(name))) {
+    throw new TypeError("Browser performance runtime returned unexpected fields");
+  }
+  for (const name of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new TypeError("Browser performance runtime returned an accessor field");
+  }
+  return value as Record<string, unknown>;
+}
+
+function boundedTiming(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 600_000) {
+    throw new RangeError(`Browser performance ${name} is outside its supported bound`);
+  }
+  return value;
 }
 
 async function buildProject(config: VelarProjectConfig, outputDirectory: string): Promise<{ readonly ok: boolean; readonly output: string }> {

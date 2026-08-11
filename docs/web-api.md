@@ -851,7 +851,7 @@ import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberV
 ## `velar/browser`
 
 ```velar
-import {after, blur, closeDialog, dialogResult, environment, every, focus, showDialog, watchOnline, watchVisibility} from "velar/browser"
+import {after, blur, closeDialog, dialogResult, environment, every, focus, setTextSelection, showDialog, textSelection, watchOnline, watchVisibility} from "velar/browser"
 
 component EnvironmentStatus:
     const stopReady = after(250, () => print("ready"))
@@ -929,6 +929,15 @@ React-style effect API.
   Dialog state is read once per operation and opening/closing uses the captured
   native prototype methods, so an instance override cannot replace framework
   behavior.
+- `<textarea ref={value}>` narrows the mutable ref to `TextAreaElement?`, a
+  subtype of `InputElement`. `textSelection(area)` returns
+  `{start,end,direction}` and `setTextSelection(area,start,end,direction="none")`
+  updates it. Start/end are Unicode code-point offsets, never DOM UTF-16 units;
+  a native selection that splits a surrogate pair is rejected. Ranges must be
+  ordered and in bounds, and direction is `none`, `forward`, or `backward`.
+  Textarea identity, value/selection getters, and `setSelectionRange` are
+  captured when `velar/browser` initializes, so later prototype or instance
+  replacement cannot redirect an editor transaction.
 
 ## `velar/files`
 
@@ -1061,7 +1070,8 @@ async def test_home_page() -> null:
 
 The `browser` controller intentionally exposes a compact automation surface:
 `open`, `reload`, `click`, `fill`, `select`, `press`, `text`, `attribute`, `namespace`, `count`,
-`visible`, `waitFor`, `waitForText`, `currentPath`, and `viewport`. It is not a
+`visible`, `waitFor`, `waitForText`, `currentPath`, `viewport`, `timings`,
+`measureClick`, `measureFill`, and `measurePress`. It is not a
 DOM or Playwright escape hatch. The CLI builds a real CSP production site,
 starts an isolated local host, creates a fresh browser context for each test,
 and automatically fails on page errors or error/warning console messages.
@@ -1070,6 +1080,18 @@ selected explicitly. `namespace(selector)` requires one matched node and
 returns its platform namespace URI so SVG/HTML lowering can be asserted without
 arbitrary page evaluation. Browser binaries remain an explicit Playwright
 install.
+
+`timings()` returns the current navigation's
+`{firstContentfulPaintMs?,domContentLoadedMs,loadMs}` snapshot. FCP is `null`
+when the browser supplies no paint entry. The three `measure*` methods perform
+the corresponding real automation action and return
+`{inputDelayMs,processingDurationMs,nextFrameMs}` for its click or input event.
+Processing duration ends after synchronous event dispatch; `nextFrameMs` is the
+end-to-end UI publication metric and therefore also covers queued framework DOM
+work and rendering. These records are finite, bounded, fail-closed values
+created by a test-only page runtime installed before application code. They do
+not expose a clock callback, page evaluation, production global, or arbitrary
+event injection to VelarScript source.
 
 `localStorage` and `sessionStorage` from `velar/web-test` expose raw string
 `get`, `set`, `remove`, and `clear` operations after `browser.open`. They exist

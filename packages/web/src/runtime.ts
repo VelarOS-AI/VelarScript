@@ -3,6 +3,7 @@ import {
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
   VELAR_STRICT_JSON_RUNTIME,
+  VELAR_TEXT_METHOD_RUNTIME,
   VELAR_TYPE_REGISTRY_RUNTIME,
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
@@ -315,6 +316,7 @@ const __velarBrowserEventTargetConstructor = __velarBrowserConstructor("EventTar
 const __velarBrowserNodeConstructor = __velarBrowserConstructor("Node");
 const __velarBrowserElementConstructor = __velarBrowserConstructor("Element");
 const __velarBrowserHtmlElementConstructor = __velarBrowserConstructor("HTMLElement");
+const __velarBrowserTextAreaConstructor = __velarBrowserConstructor("HTMLTextAreaElement");
 const __velarBrowserDialogConstructor = __velarBrowserConstructor("HTMLDialogElement");
 const __velarBrowserDomRectConstructor = __velarBrowserConstructor("DOMRect");
 const __velarBrowserDomRectReadOnlyConstructor = __velarBrowserConstructor("DOMRectReadOnly");
@@ -345,6 +347,11 @@ const __velarBrowserElementScrollIntoView = __velarBrowserPrototypeMember(__vela
 const __velarBrowserElementMeasure = __velarBrowserPrototypeMember(__velarBrowserElementConstructor, "getBoundingClientRect", "value");
 const __velarBrowserElementFocus = __velarBrowserPrototypeMember(__velarBrowserHtmlElementConstructor, "focus", "value");
 const __velarBrowserElementBlur = __velarBrowserPrototypeMember(__velarBrowserHtmlElementConstructor, "blur", "value");
+const __velarBrowserTextAreaValue = __velarBrowserPrototypeMember(__velarBrowserTextAreaConstructor, "value", "get");
+const __velarBrowserTextAreaSelectionStart = __velarBrowserPrototypeMember(__velarBrowserTextAreaConstructor, "selectionStart", "get");
+const __velarBrowserTextAreaSelectionEnd = __velarBrowserPrototypeMember(__velarBrowserTextAreaConstructor, "selectionEnd", "get");
+const __velarBrowserTextAreaSelectionDirection = __velarBrowserPrototypeMember(__velarBrowserTextAreaConstructor, "selectionDirection", "get");
+const __velarBrowserTextAreaSetSelectionRange = __velarBrowserPrototypeMember(__velarBrowserTextAreaConstructor, "setSelectionRange", "value");
 const __velarBrowserRectX = __velarBrowserPrototypeMember(__velarBrowserDomRectConstructor, "x", "get");
 const __velarBrowserRectY = __velarBrowserPrototypeMember(__velarBrowserDomRectConstructor, "y", "get");
 const __velarBrowserRectWidth = __velarBrowserPrototypeMember(__velarBrowserDomRectConstructor, "width", "get");
@@ -2570,6 +2577,7 @@ export function database(name) {
 }
 `.trimStart()],
   ["velar/browser", String.raw`
+${VELAR_TEXT_METHOD_RUNTIME}
 ${ownedCallbackRuntime}
 ${optionsRuntime}
 ${browserHostRuntime}
@@ -2743,6 +2751,55 @@ export function measure(element) {
     bottom: browserNumber(__velarBrowserField(value, "bottom", __velarBrowserRectBottom, __velarBrowserDomRectReadOnlyConstructor), "Element bottom"),
     left: browserNumber(__velarBrowserField(value, "left", __velarBrowserRectLeft, __velarBrowserDomRectReadOnlyConstructor), "Element left"),
   });
+}
+function requireTextArea(value) {
+  if (!__velarBrowserNativeInstance(value, __velarBrowserTextAreaConstructor)
+    || typeof __velarBrowserTextAreaValue !== "function"
+    || typeof __velarBrowserTextAreaSelectionStart !== "function"
+    || typeof __velarBrowserTextAreaSelectionEnd !== "function"
+    || typeof __velarBrowserTextAreaSelectionDirection !== "function"
+    || typeof __velarBrowserTextAreaSetSelectionRange !== "function") {
+    throw new TypeError("Text selection helpers require a <textarea> element");
+  }
+  return value;
+}
+function textAreaValue(element) {
+  const value = __velarBrowserField(element, "value", __velarBrowserTextAreaValue, __velarBrowserTextAreaConstructor);
+  if (typeof value !== "string" || value.length > __velarMaxTextCodeUnits) throw new TypeError("Textarea value is outside VelarScript text bounds");
+  return value;
+}
+function selectionDirection(value) {
+  if (value !== "forward" && value !== "backward" && value !== "none") throw new TypeError("Text selection direction must be forward, backward, or none");
+  return value;
+}
+export function textSelection(element) {
+  element = requireTextArea(element);
+  const value = textAreaValue(element);
+  const unitStart = __velarBrowserField(element, "selectionStart", __velarBrowserTextAreaSelectionStart, __velarBrowserTextAreaConstructor);
+  const unitEnd = __velarBrowserField(element, "selectionEnd", __velarBrowserTextAreaSelectionEnd, __velarBrowserTextAreaConstructor);
+  const direction = selectionDirection(__velarBrowserField(element, "selectionDirection", __velarBrowserTextAreaSelectionDirection, __velarBrowserTextAreaConstructor));
+  if (!Number.isSafeInteger(unitStart) || !Number.isSafeInteger(unitEnd) || unitStart < 0 || unitEnd < unitStart || unitEnd > value.length) {
+    throw new TypeError("Textarea selection is outside its value");
+  }
+  const start = __velarTextCodePointIndex(value, unitStart);
+  const end = __velarTextCodePointIndex(value, unitEnd);
+  if (start === null || end === null) throw new TypeError("Textarea selection cannot split a Unicode code point");
+  return Object.freeze({ start, end, direction });
+}
+export function setTextSelection(element, start, end, direction = "none") {
+  element = requireTextArea(element);
+  const value = textAreaValue(element);
+  const size = __velarTextCodePointLength(value);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > size) {
+    throw new RangeError("Text selection must be an ordered code-point range inside the textarea value");
+  }
+  direction = selectionDirection(direction);
+  __velarBrowserCallCaptured(__velarBrowserTextAreaSetSelectionRange, element, [
+    __velarTextCodeUnitOffset(value, start),
+    __velarTextCodeUnitOffset(value, end),
+    direction,
+  ], "HTMLTextAreaElement.setSelectionRange");
+  return null;
 }
 export function media(query) { const matcher = __velarBrowserCallCaptured(__velarBrowserMatchMedia, __velarBrowserWindow, [browserText(query, "Media query", 4096)], "matchMedia"); return browserBool(__velarBrowserField(matcher, "matches", __velarBrowserMediaMatches, __velarBrowserMediaQueryListConstructor), "Media query result"); }
 export function watchMedia(query, callback) {
@@ -3169,6 +3226,10 @@ export const browser = Object.freeze({
   waitForText(selector, text) { return browserRuntime().waitForText(selector, text); },
   currentPath() { return browserRuntime().currentPath(); },
   viewport(width, height) { return browserRuntime().viewport(width, height); },
+  timings() { return browserRuntime().timings(); },
+  measureClick(selector) { return browserRuntime().measureClick(selector); },
+  measureFill(selector, value) { return browserRuntime().measureFill(selector, value); },
+  measurePress(selector, key) { return browserRuntime().measurePress(selector, key); },
 });
 function storageRuntime(area) {
   return Object.freeze({

@@ -2556,18 +2556,67 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   lowering 断言使用 W-127 的 `$velarValue` 临时名；两者均未改变语言实现。Lite 的既有 11 文件并行
   WIP 未修改，Workbench 未修改；未推送、未发布、未提升版本。
 
+- W-129 用 Editor 的第一个真实编辑面和 1 MiB 文本场景关闭了六类正式 owner 缺陷。标准库过去没有
+  可复用的增量文本模型，而且 CLI 只能把标准实现手写成 TypeScript 内嵌 JavaScript。CLI/标准库 owner
+  现在支持从随包发布的 `.vel` 资产检查、提取接口、编译并传递依赖闭包；首个 `velar/text-buffer` 是纯
+  VelarScript piece table，公开 code-point `size/slice/replace/insert/delete/positionAt/offsetAt/lineText`、
+  单调 revision 和 `TextChange`，并以 16 MiB UTF-8 与一百万 piece 上限 fail closed。没有新增 npm 包、
+  npm 依赖或语法，packed CLI 会携带并真实构建/运行这个源码标准模块。
+
+  纯 VelarScript 首版逐字符建立 1 MiB 行索引超过 30 秒，证明问题不应留成 Editor workaround。
+  `velar/text.lineStarts` 现在用捕获的 text host 单次有界扫描返回 code-point 行首；compiler text runtime
+  对普通 BMP 文本使用捕获 RegExp 快路径，astral 与孤立 surrogate 仍走严格 code-point 扫描。TextBuffer
+  行索引改为惰性建立和增量维护，审计还发现删除换行时旧行首恰等于半开区间 `end` 会被错误保留；
+  owner 条件改为只平移 `offset > end`，真实执行锁定 `a\nb -> ab` 后 `lineCount=1`、位置 `0:1`。
+
+  Web owner 新增 `TextAreaElement` 及 `velar/browser.textSelection/setTextSelection`。公开 offset 是 Core
+  Unicode code point，DOM UTF-16 换算、constructor/getter/setSelectionRange 捕获和 surrogate-split/
+  out-of-range 拒绝都留在 Web host；prototype poisoning 执行证明应用不能重定向这些操作。Web Look
+  补齐标准 `resize`。browser-test owner 在应用代码前安装专用、受界限保护的 performance runtime，并
+  公开 navigation/FCP 与 measured click/fill/press 的 input delay、同步 processing、next frame；Node
+  请求边界再次验证返回 record 形状与数值，不信任页面值。
+
+  diagnostics、lowering 与执行证据同时覆盖：错误的 TextBuffer string offset 得到 number mismatch，
+  跨模块 `pieces` 不在公开 class interface；生成 `text-buffer.js` 含原生 class、`#pieces` 和 compiler
+  code-point helper；真实运行覆盖 emoji、revision、100 次碎片编辑、非法范围、行/位置 round trip 及
+  上述换行删除。textarea 真实 runtime 覆盖 code-point 选区和 hostile prototype；Web API、browser-test
+  surface 与 Look CSS 都有永久生成断言。
+
+  Editor 删除了全量 1 MiB textarea DOM 值方案，正式 document owner 只用 `TextBuffer`，输入事务只用
+  `beforeinput/input` 与公开选区 API；完整 1,048,576 字符留在 buffer，textarea 只消费前 65,536 个
+  code point。Editor 没有私有文本模型、UTF-16 helper、计时器、JavaScript bridge、npm 依赖或手写
+  HTML/CSS/JS。最终三引擎每个采样 10 次 FCP、20 次输入：Chromium FCP median/p95 12/56 ms、输入帧
+  0.5/4.6 ms；Firefox 21/37 ms、1/3 ms；WebKit 21/26 ms、7/10 ms。1 MiB load/input next-frame 分别为
+  Chromium 14.166/8.266 ms、Firefox 6.34/11 ms、WebKit 31/22 ms；当前只记录证据，尚未伪装成 release
+  threshold。
+
+  最终证据为 `npm run check`（52 个格式化源、107 个文档示例、70 项 runtime boundary）、586/586
+  串行 compiler/runtime/CLI/Desktop/hardening/release tests、四个官方示例 check 与 1+3+3+3 Core
+  tests、六包 packed consumer acceptance、Dev/Production 三引擎、External Preview Chromium、
+  27+6+15+6 三浏览器及 installed browser consumer。Editor 独立通过 format、2-module check、
+  1 Core test、9/9 三浏览器、
+  contract check/run、production build/package 与 native smoke。`.app` 为 585,630 bytes（571.9 KiB）：
+  host 301,936、renderer 118,124、capability host 48,638、metadata 116,932；renderer JS+CSS 113,146
+  bytes，SHA-256 `6a1e0780986be7ce8c8b806849acf78e413af113b4c08e50719ae1b13deead4b`。
+
+  仍阻止生产可用的是：viewport 只显示首窗且尚未随滚动/选区移动；TextBuffer 尚无平衡树或 compaction
+  owner；undo/redo、文件 workspace/recovery、搜索/semantic index、LSP/formatter、JavaScript/TypeScript
+  编辑、任务运行和 native cold-start/RSS/正式性能阈值均未完成。Lite 的既有 11 文件并行 WIP 未修改，
+  Workbench 未修改；未推送、未发布、未提升版本。
+
 下一执行顺序：
 
-1. 以 W-126/W-127/W-128 的 target-extension、source-grammar 与 package-host contract 为边界，
+1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
+   standard-module contract 为边界，
    Web、Node、Desktop、Game
    继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
    host/product policy 放回 Core。
-2. 继续用 Editor 的第一个真实文本缓冲、文件打开与 workspace 生命周期审计 W-125 剩余的 props/Look
-   值构造、mounted/cleanup/event Promise 观察；dynamic/lazy 销毁与重复挂载已有 W-128 契约，不再用
-   产品补丁重复处理。若需要新语法，先按提案流程暂停确认。
-3. 为 Editor 建立公开性能证据：优先补齐现有 Web/browser-test owner 的 FCP、输入延迟和大文本测量，
-   再实现并验证 TextBuffer、选区/光标、undo/redo、项目文件与 LSP/formatter 消费；通用文本或索引
-   能力进入现有 Core/Node/Web/Desktop owner，Editor 只保留编排和 UX。
+2. 下一波先用 Editor 的滚动窗口、跨窗选区与 undo/redo 场景审计 TextBuffer piece 查找复杂度、
+   compaction/transaction owner 及 Web selection/lifecycle；先给 owner 永久执行和性能证据，再让 Editor
+   消费。若需要新语法，按提案流程暂停确认。
+3. 随后用真实文件打开、保存、冲突恢复和 workspace 生命周期审计 Node/Desktop grants、资源所有权、
+   LSP/formatter/semantic index 的公开增量契约；Editor 只保留项目/标签/命令/索引编排与 UX，不复制
+   filesystem、text、language-service 或 host policy。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
 5. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release

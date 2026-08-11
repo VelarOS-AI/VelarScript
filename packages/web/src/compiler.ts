@@ -23,6 +23,7 @@ const boolType: ValueType = { kind: "bool" };
 const nodeType: ValueType = webNodeType;
 const elementType: ValueType = { kind: "named", name: "Element" };
 const inputElementType: ValueType = { kind: "named", name: "InputElement" };
+const textAreaElementType: ValueType = { kind: "named", name: "TextAreaElement" };
 const canvasElementType: ValueType = { kind: "named", name: "CanvasElement" };
 const dialogElementType: ValueType = { kind: "named", name: "DialogElement" };
 const blobType: ValueType = { kind: "named", name: "Blob" };
@@ -223,6 +224,7 @@ const rectType = object({
   x: numberType, y: numberType, width: numberType, height: numberType,
   top: numberType, right: numberType, bottom: numberType, left: numberType,
 });
+const textSelectionType = object({ start: numberType, end: numberType, direction: stringType });
 const fileOptionsType = object({ accept: optional(stringType), multiple: optional(boolType) });
 const socketHandlersType = object({
   open: optional(functionType([], unknownType)),
@@ -250,6 +252,16 @@ const appErrorType = object({
   component: stringType,
   timestamp: numberType,
 });
+const browserTestNavigationTimingType = object({
+  firstContentfulPaintMs: optional(numberType),
+  domContentLoadedMs: numberType,
+  loadMs: numberType,
+});
+const browserTestInteractionTimingType = object({
+  inputDelayMs: numberType,
+  processingDurationMs: numberType,
+  nextFrameMs: numberType,
+});
 const browserTestControllerType = object({
   open: namedFunction(["path"], [stringType], promise(nullType), 0),
   reload: namedFunction([], [], promise(nullType)),
@@ -266,6 +278,10 @@ const browserTestControllerType = object({
   waitForText: namedFunction(["selector", "text"], [stringType, stringType], promise(nullType)),
   currentPath: namedFunction([], [], promise(stringType)),
   viewport: namedFunction(["width", "height"], [numberType, numberType], promise(nullType)),
+  timings: namedFunction([], [], promise(browserTestNavigationTimingType)),
+  measureClick: namedFunction(["selector"], [stringType], promise(browserTestInteractionTimingType)),
+  measureFill: namedFunction(["selector", "value"], [stringType, stringType], promise(browserTestInteractionTimingType)),
+  measurePress: namedFunction(["selector", "key"], [stringType, stringType], promise(browserTestInteractionTimingType)),
 });
 const browserTestStorageControllerType = object({
   get: namedFunction(["key"], [stringType], promise(optional(stringType))),
@@ -404,6 +420,8 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["focus", namedFunction(["element", "preventScroll"], [webElementType, boolType], nullType, 1)],
     ["blur", namedFunction(["element"], [webElementType], nullType)],
     ["measure", namedFunction(["element"], [webElementType], rectType)],
+    ["textSelection", namedFunction(["element"], [textAreaElementType], textSelectionType)],
+    ["setTextSelection", namedFunction(["element", "start", "end", "direction"], [textAreaElementType, numberType, numberType, stringType], nullType, 3)],
     ["media", namedFunction(["query"], [stringType], boolType)],
     ["watchMedia", namedFunction(["query", "callback"], [stringType, functionType([boolType], unknownType)], cleanupType)],
     ["watchOnline", namedFunction(["callback"], [functionType([boolType], unknownType)], cleanupType)],
@@ -485,9 +503,10 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
+    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
     primitiveParents: new Map([
       ["InputElement", new Set(["Element"])],
+      ["TextAreaElement", new Set(["InputElement"])],
       ["CanvasElement", new Set(["Element"])],
       ["DialogElement", new Set(["Element"])],
       ["KeyboardEvent", new Set(["Event"])],
@@ -531,6 +550,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       WebNode: "A value that can be rendered as component or JSX children.",
       Element: "A general native element reference obtained through JSX `ref`.",
       InputElement: "A native input, select, or textarea reference obtained through JSX `ref`.",
+      TextAreaElement: "A native textarea reference whose selection is accessed through velar/browser code-point APIs.",
       CanvasElement: "A native canvas reference obtained through JSX `ref`.",
       DialogElement: "A native dialog reference obtained from `<dialog ref={value}>` and operated through `velar/browser`.",
       Blob: "An opaque binary HTTP body returned by `blob()` and accepted by HTTP request bodies.",

@@ -1285,9 +1285,10 @@ export class VelarWebAnalyzer extends Analyzer {
       } else {
         const bindingType = this.lookup(value.name)!.type;
         const target = nonOptional(bindingType);
-        const expected = expression.tag === "canvas" ? "CanvasElement" : expression.tag === "dialog" ? "DialogElement" : ["input", "select", "textarea"].includes(expression.tag) ? "InputElement" : "Element";
-        if (bindingType.kind !== "any" && bindingType.kind !== "optional") this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element? so cleanup can restore null`, attribute.span));
-        else if (target.kind !== "any" && (target.kind !== "named" || (target.name !== expected && target.name !== "Element"))) this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or Element?`, attribute.span));
+        const expected = expression.tag === "canvas" ? "CanvasElement" : expression.tag === "dialog" ? "DialogElement" : expression.tag === "textarea" ? "TextAreaElement" : ["input", "select"].includes(expression.tag) ? "InputElement" : "Element";
+        const accepted = expected === "TextAreaElement" ? new Set(["TextAreaElement", "InputElement", "Element"]) : new Set([expected, "Element"]);
+        if (bindingType.kind !== "any" && bindingType.kind !== "optional") this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or a parent element type so cleanup can restore null`, attribute.span));
+        else if (target.kind !== "any" && (target.kind !== "named" || !accepted.has(target.name))) this.diagnostics.push(diagnostic("VEL5024", `A <${expression.tag}> ref requires ${expected}? or a parent element type`, attribute.span));
       }
     } else if (attribute.name === "bind") {
       this.diagnostics.push(diagnostic("VEL5019", "Use 'bind:value={name}'; the bind directive names the bound property, such as bind:value or bind:checked", attribute.span));
@@ -1436,9 +1437,10 @@ function webTypeFields(name: string): ReadonlyMap<string, ValueType> | null {
   if (name === "InputEvent") return new Map([...eventFields(), ["data", optionalOf(stringType)], ["inputType", stringType], ["isComposing", boolType]]);
   if (name === "Blob") return new Map();
   if (name === "File") return new Map([["name", stringType], ["size", numberType], ["type", stringType], ["modified", numberType]]);
-  if (name === "Element" || name === "InputElement" || name === "CanvasElement" || name === "DialogElement") {
+  if (name === "Element" || name === "InputElement" || name === "TextAreaElement" || name === "CanvasElement" || name === "DialogElement") {
     const fields = new Map<string, ValueType>([["focus", functionType([], [], nullType)], ["remove", functionType([], [], nullType)]]);
-    if (name === "InputElement") { fields.set("value", stringType); fields.set("checked", boolType); }
+    if (name === "InputElement" || name === "TextAreaElement") fields.set("value", stringType);
+    if (name === "InputElement") fields.set("checked", boolType);
     if (name === "CanvasElement") { fields.set("width", numberType); fields.set("height", numberType); fields.set("getContext", functionType(["kind"], [stringType], unknownType)); }
     return fields;
   }

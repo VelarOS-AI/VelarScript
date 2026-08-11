@@ -43,7 +43,13 @@ async def test_release_studio_recovery() -> null:
 
 async def test_native_event_fields_cross_the_real_browser_boundary() -> null:
     await browser.open("/")
-    await browser.press("[data-event-input]", "K")
+    const navigation = await browser.timings()
+    expect(navigation.domContentLoadedMs >= 0).toBe(true)
+    expect(navigation.loadMs >= navigation.domContentLoadedMs).toBe(true)
+    const timing = await browser.measurePress("[data-event-input]", "K")
+    expect(timing.inputDelayMs >= 0).toBe(true)
+    expect(timing.processingDurationMs >= 0).toBe(true)
+    expect(timing.nextFrameMs >= timing.inputDelayMs + timing.processingDurationMs).toBe(true)
     await browser.waitForText("[data-keyboard-event]", "K")
     await browser.waitForText("[data-input-event]", "insertText")
     await browser.click("[data-pointer-probe]")

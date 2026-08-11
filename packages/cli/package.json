@@ -6,6 +6,7 @@
   "type": "module",
   "files": [
     "dist",
+    "stdlib",
     "README.md"
   ],
   "scripts": {

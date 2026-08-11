@@ -825,6 +825,20 @@ captures string, array, numeric, reflection, Unicode-progress, and Error
 operations at module initialization; `velar/text` extends that source with its
 captured RegExp constructor/exec and bounded transformation helpers. Pattern
 replacement and splitting do not delegate back to mutable RegExp symbol hooks.
+The code-point length helper first uses one captured RegExp operation to prove
+that text contains no astral or unpaired-surrogate value; ordinary source text
+then returns its native unit length directly, while text containing either
+shape retains the explicit code-point scan. `velar/text.lineStarts` performs one
+captured scan and returns code-point line starts without repeated source-level
+`.char(index)` calls.
+
+Portable Standard algorithms may be authored as CLI-owned `.vel` assets.
+`standard-modules.ts` inspects their explicit public interface, permits only
+static named imports from already-bootstrapped Standard modules, compiles the
+source lazily with shared runtime modules, and caches its JavaScript plus exact
+dependency closure. `velar/text-buffer` is the first such module. Published CLI
+artifacts include the source asset; applications still import only the stable
+`velar/text-buffer` identity and never resolve a repository path.
 
 Checked Number receiver methods use a separate compiler-owned Number runtime.
 It captures the exact Math operations, `Number.isSafeInteger`, native

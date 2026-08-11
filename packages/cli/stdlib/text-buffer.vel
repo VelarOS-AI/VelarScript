@@ -1,0 +1,218 @@
+import {lineStarts as textLineStarts, utf8Size} from "velar/text"
+
+/// A stable zero-based line and Unicode code-point column.
+export type TextPosition:
+    line: number
+    column: number
+
+/// One committed text replacement, suitable for transaction and undo owners.
+export type TextChange:
+    start: number
+    removed: string
+    inserted: string
+    beforeRevision: number
+    afterRevision: number
+
+type Piece:
+    added: bool
+    chunk: number
+    start: number
+    length: number
+
+/// An incremental piece-table text model with Unicode code-point offsets.
+export class TextBuffer:
+    private static const maxBytes: number = 16 * 1024 * 1024
+    private static const maxPieces: number = 1000000
+    private const original: string
+    private const originalLength: number
+    private let additions: List<string> = []
+    private let additionLengths: List<number> = []
+    private let pieces: List<Piece> = []
+    private let length: number
+    private let bytes: number
+    private let lines: List<number>? = null
+    private let version: number = 0
+
+    constructor(text: string = ""):
+        const length = text.size
+        const bytes = utf8Size(text)
+        assert bytes <= TextBuffer.maxBytes else "TextBuffer content cannot exceed 16 MiB of UTF-8 text"
+        self.original = text
+        self.originalLength = length
+        self.length = length
+        self.bytes = bytes
+        if length > 0:
+            self.pieces.append({added: false, chunk: 0, start: 0, length})
+
+    /// Current Unicode code-point length.
+    get size() -> number:
+        return self.length
+
+    /// Current number of logical lines, including a final empty line.
+    get lineCount() -> number:
+        return self.lineIndex().size
+
+    /// Monotonic revision incremented by every successful replacement.
+    get revision() -> number:
+        return self.version
+
+    /// Materializes the current text without exposing piece-table storage.
+    def text() -> string:
+        const piece = self.pieces.get(0)
+        if self.pieces.size == 1 and piece != null and piece.start == 0 and piece.length == self.pieceSourceLength(piece):
+            return self.pieceText(piece)
+        return self.slice(0, self.length)
+
+    /// Reads one Unicode code-point range without materializing unrelated pieces.
+    def slice(start: number, end: number) -> string:
+        self.requireRange(start, end)
+        if start == end:
+            return ""
+        let output: List<string> = []
+        let cursor = 0
+        for piece in self.pieces:
+            const pieceEnd = cursor + piece.length
+            if pieceEnd > start and cursor < end:
+                const localStart = start > cursor ? start - cursor : 0
+                const localEnd = end < pieceEnd ? end - cursor : piece.length
+                output.append(self.pieceText(piece).slice(piece.start + localStart, piece.start + localEnd))
+            cursor = pieceEnd
+            if cursor >= end:
+                break
+        return output.join("")
+
+    /// Replaces one range and returns the committed revision record.
+    def replace(start: number, end: number, inserted: string) -> TextChange:
+        self.requireRange(start, end)
+        const removed = self.slice(start, end)
+        const insertedLength = inserted.size
+        const nextBytes = self.bytes - utf8Size(removed) + utf8Size(inserted)
+        assert nextBytes <= TextBuffer.maxBytes else "TextBuffer content cannot exceed 16 MiB of UTF-8 text"
+        const beforeRevision = self.version
+        let next: List<Piece> = []
+        self.appendPrefix(next, start)
+        if insertedLength > 0:
+            const chunk = self.additions.size
+            self.additions.append(inserted)
+            self.additionLengths.append(insertedLength)
+            self.appendPiece(next, {added: true, chunk, start: 0, length: insertedLength})
+        self.appendSuffix(next, end)
+        assert next.size <= TextBuffer.maxPieces else "TextBuffer cannot exceed 1000000 pieces"
+        self.pieces = next
+        self.updateLines(start, end, inserted, insertedLength)
+        self.length += insertedLength - (end - start)
+        self.bytes = nextBytes
+        self.version += 1
+        return {start, removed, inserted, beforeRevision, afterRevision: self.version}
+
+    /// Inserts text at one Unicode code-point offset.
+    def insert(offset: number, text: string) -> TextChange:
+        return self.replace(offset, offset, text)
+
+    /// Deletes one Unicode code-point range.
+    def delete(start: number, end: number) -> TextChange:
+        return self.replace(start, end, "")
+
+    /// Maps one Unicode code-point offset to a zero-based line and column.
+    def positionAt(offset: number) -> TextPosition:
+        self.requireOffset(offset)
+        const lines = self.lineIndex()
+        let low = 0
+        let high = lines.size
+        while low + 1 < high:
+            const middle = ((low + high) / 2).floor()
+            if lines[middle] <= offset:
+                low = middle
+            else:
+                high = middle
+        return {line: low, column: offset - lines[low]}
+
+    /// Maps one zero-based line and Unicode code-point column to an offset.
+    def offsetAt(line: number, column: number) -> number:
+        self.requireLine(line)
+        assert column.floor() == column and column >= 0 else "TextBuffer column must be a non-negative integer"
+        const content = self.lineText(line)
+        assert column <= content.size else "TextBuffer column is outside the line"
+        return self.lineIndex()[line] + column
+
+    /// Returns one line without its line terminator.
+    def lineText(line: number) -> string:
+        self.requireLine(line)
+        const lines = self.lineIndex()
+        const start = lines[line]
+        let end = line + 1 < lines.size ? lines[line + 1] - 1 : self.length
+        if end > start and self.slice(end - 1, end) == "\r":
+            end -= 1
+        return self.slice(start, end)
+
+    private def pieceText(piece: Piece) -> string:
+        return piece.added ? self.additions[piece.chunk] : self.original
+
+    private def pieceSourceLength(piece: Piece) -> number:
+        return piece.added ? self.additionLengths[piece.chunk] : self.originalLength
+
+    private def appendPrefix(output: List<Piece>, end: number) -> null:
+        let cursor = 0
+        for piece in self.pieces:
+            if cursor >= end:
+                break
+            const take = end - cursor < piece.length ? end - cursor : piece.length
+            self.appendPiece(output, {added: piece.added, chunk: piece.chunk, start: piece.start, length: take})
+            cursor += piece.length
+
+    private def appendSuffix(output: List<Piece>, start: number) -> null:
+        let cursor = 0
+        for piece in self.pieces:
+            const pieceEnd = cursor + piece.length
+            if pieceEnd > start:
+                const skip = start > cursor ? start - cursor : 0
+                self.appendPiece(output, {added: piece.added, chunk: piece.chunk, start: piece.start + skip, length: piece.length - skip})
+            cursor = pieceEnd
+
+    private def appendPiece(output: List<Piece>, piece: Piece) -> null:
+        if piece.length == 0:
+            return null
+        const previous = output.get(-1)
+        if previous != null and previous.added == piece.added and previous.chunk == piece.chunk and previous.start + previous.length == piece.start:
+            output[-1] = {added: previous.added, chunk: previous.chunk, start: previous.start, length: previous.length + piece.length}
+        else:
+            output.append(piece)
+
+    private def lineStarts(text: string) -> List<number>:
+        return textLineStarts(text)
+
+    private def lineIndex() -> List<number>:
+        if self.lines == null:
+            self.lines = self.lineStarts(self.text())
+        return self.lines ?? [0]
+
+    private def updateLines(start: number, end: number, inserted: string, insertedLength: number) -> null:
+        const current = self.lines
+        if current == null:
+            return null
+        let next: List<number> = []
+        for offset in current:
+            if offset <= start:
+                self.appendLineStart(next, offset)
+        const insertedLines = textLineStarts(inserted).slice(1)
+        next.extend(start == 0 ? insertedLines : insertedLines.map(offset => start + offset))
+        for offset in current:
+            if offset > end:
+                self.appendLineStart(next, offset + insertedLength - (end - start))
+        self.lines = next
+
+    private def appendLineStart(output: List<number>, offset: number) -> null:
+        const previous = output.get(-1)
+        if previous == null or previous != offset:
+            output.append(offset)
+
+    private def requireOffset(offset: number) -> null:
+        assert offset.floor() == offset and offset >= 0 and offset <= self.length else "TextBuffer offset is outside the document"
+
+    private def requireRange(start: number, end: number) -> null:
+        self.requireOffset(start)
+        self.requireOffset(end)
+        assert start <= end else "TextBuffer range start must not exceed its end"
+
+    private def requireLine(line: number) -> null:
+        assert line.floor() == line and line >= 0 and line < self.lineIndex().size else "TextBuffer line is outside the document"

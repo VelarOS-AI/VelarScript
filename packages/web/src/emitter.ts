@@ -141,6 +141,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (type.name === "InputElement") {
         return `((typeof HTMLInputElement !== "undefined" && ${value} instanceof HTMLInputElement) || (typeof HTMLSelectElement !== "undefined" && ${value} instanceof HTMLSelectElement) || (typeof HTMLTextAreaElement !== "undefined" && ${value} instanceof HTMLTextAreaElement))`;
       }
+      if (type.name === "TextAreaElement") return `(typeof HTMLTextAreaElement !== "undefined" && ${value} instanceof HTMLTextAreaElement)`;
       if (type.name === "Blob") return `(typeof Blob !== "undefined" && ${value} instanceof Blob)`;
       if (type.name === "File") {
         this.needsFileTypeHelper = true;

@@ -13,6 +13,13 @@ standard library.
 - Module-level capabilities are imported from official `velar/*` modules.
   Everyday value operations live on checked string, number, and collection
   members. Nothing patches JavaScript prototypes or creates new global names.
+- Standard modules whose implementation is naturally portable VelarScript may
+  ship as `.vel` assets inside the existing CLI package. The CLI derives their
+  public interface from that source, compiles them with shared compiler-runtime
+  modules, and includes their static Standard dependencies in the same
+  fail-closed closure as handwritten host modules. This is an implementation
+  form inside the existing Standard owner, not a new package identity or a
+  project source-path escape.
 - Collection transforms return new lists and maps unless their name explicitly
   describes another result. JavaScript reference identity and `number`
   semantics remain unchanged.
@@ -175,12 +182,16 @@ exists. `text.has(part)` and `part in text` are the method and operator forms of
 the same substring test. Direct string indexing stays absent.
 
 The `velar/text` module keeps transformations that are not simple receiver
-operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `words`,
+operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `words`,
 `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, and
 `escapeHtml`. Blank text can be tested directly with `text.trim().size == 0`.
 `utf8Size(text)` returns the exact byte count used
 by official UTF-8 transport, JSON, and filesystem budgets, including stable
-three-byte treatment of an unpaired surrogate. Stateless pattern operations are `matches`, `findMatch`,
+three-byte treatment of an unpaired surrogate. `lineStarts(text)` performs one
+bounded scan and returns `[0, ...]` Unicode code-point offsets immediately after
+each line-feed character, including the final text size when the text ends in a
+line feed. This keeps large-file line indexes out of repeated `.char(index)`
+lookups without exposing JavaScript UTF-16 units. Stateless pattern operations are `matches`, `findMatch`,
 `findMatches`, `replaceMatches`, and `splitPattern`.
 
 `title` treats separators as word boundaries. `truncate` reserves room for its
@@ -234,6 +245,39 @@ const fields = splitPattern("one, two; three", " *[,;] *")
 const initial = "Ada".char(0)
 const short = "VelarScript".slice(0, 5)
 print(f"{initial ?? "?"}:{short.size}")
+```
+
+## `velar/text-buffer`
+
+`TextBuffer(text="")` is the Standard owner for incremental editable text. Its
+implementation is pure VelarScript and uses a piece table: the original text
+and append-only insertion chunks remain stable while replacements rebuild only
+piece metadata. Public offsets, lengths, line columns, slices, and change
+records all use the same Unicode code-point positions as Core strings.
+
+The public surface is `size`, `lineCount`, `revision`, `text()`,
+`slice(start,end)`, `replace(start,end,text)`, `insert(offset,text)`,
+`delete(start,end)`, `positionAt(offset)`, `offsetAt(line,column)`, and
+`lineText(line)`. A replacement returns a `TextChange` containing the removed
+and inserted text plus before/after revisions, so a product can own transactions
+and undo without reaching into buffer storage. Positions and lines are
+zero-based; line text excludes LF and an immediately preceding CR.
+
+The buffer accepts at most 16 MiB of UTF-8 text and one million pieces. Its line
+index is lazy: code that only edits or slices text does not pay to scan every
+line. The first line/position query uses `velar/text.lineStarts`, and later
+edits update an established index incrementally. `text()` also returns a single
+complete source chunk directly instead of re-slicing it. Editors should keep
+the full document in this owner and render bounded view slices rather than
+copying the entire document into a DOM control.
+
+```velar
+import {TextBuffer} from "velar/text-buffer"
+
+const text = TextBuffer("first\nthird")
+const change = text.insert(text.offsetAt(1, 0), "second\n")
+print(text.lineText(1))
+print(f"{str(change.beforeRevision)}:{str(change.afterRevision)}")
 ```
 
 ## `velar/math`
