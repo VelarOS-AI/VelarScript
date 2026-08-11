@@ -1,7 +1,6 @@
 import {border, color, rgb, rgba, shadow, spacing, tracks} from "velar/look"
 import {announce} from "velar/web"
 import {clearErrors, errors, focusFirstError, read, reset, setError} from "velar/forms"
-import {isBlank} from "velar/text"
 import {TicketDraft, TicketPriority} from "../domain.vel"
 import {addTicket} from "../store.vel"
 
@@ -67,9 +66,9 @@ export component TicketForm:
             const draft = read(currentForm, TicketDraft)
             const title = draft.title.trim()
             const requester = draft.requester.trim()
-            if isBlank(title):
+            if title.size == 0:
                 setError(currentForm, "title", "Add a short issue title")
-            if isBlank(requester):
+            if requester.size == 0:
                 setError(currentForm, "requester", "Add the requester name")
             if draft.estimate == null:
                 setError(currentForm, "estimate", "Add an estimate in minutes")

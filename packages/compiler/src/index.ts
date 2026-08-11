@@ -1,4 +1,4 @@
-import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, isCoreReservedBinding, type AnalysisContext, type ClassField, type ClassInfo } from "./analyzer.ts";
+import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo } from "./analyzer.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
@@ -6,6 +6,7 @@ import type { CompilerEmitter, CompilerEmitterOptions, CompilerExtension, Compil
 import { Lexer } from "./lexer.ts";
 import { isParserComplexityFailure, Parser } from "./parser.ts";
 import { SourceText } from "./source.ts";
+import { bindingNameRestriction, memberNameRestriction } from "./source-names.ts";
 import { buildSemanticIndex, type SemanticIndex } from "./semantic.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
@@ -30,6 +31,7 @@ export { formatSource } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
 export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
+export { bindingNameRestriction, isCoreReservedBinding, isForbiddenPrototypeMember, isJavaScriptReservedBinding, isSourceIdentifierPart, isSourceIdentifierStart, isValidSourceIdentifier, memberNameRestriction, type BindingNameRestriction, type MemberNameRestriction } from "./source-names.ts";
 export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
@@ -304,6 +306,8 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
   const capabilities = new Set<string>();
   const primitiveOwners = new Map<string, string>();
   const globalOwners = new Map<string, string>();
+  const extensionKeywords = new Set(extensions.flatMap((extension) => Object.keys(extension.lexical?.keywords ?? {})));
+  const extensionReservedBindings = new Set(extensions.flatMap((extension) => [...extension.analysis?.reservedBindings ?? []]));
   for (const extension of extensions) {
     if (!extension.id || seen.has(extension.id)) throw new Error(`Compiler extension '${extension.id}' is invalid or duplicated`);
     seen.add(extension.id);
@@ -316,13 +320,15 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
     for (const name of extension.analysis?.primitiveTypes ?? []) {
       const owner = primitiveOwners.get(name);
       if (isCorePrimitiveName(name)) throw new Error(`Compiler extension '${extension.id}' cannot replace Core primitive '${name}'`);
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || owner) {
+      if (bindingNameRestriction(name, extensionKeywords, extensionReservedBindings) || owner) {
         throw new Error(`Compiler primitive '${name}' is invalid or has more than one owner${owner ? ` (${owner}, ${extension.id})` : ""}`);
       }
       primitiveOwners.set(name, extension.id);
     }
     for (const name of extension.analysis?.globals?.keys() ?? []) {
-      if (isCoreReservedBinding(name)) throw new Error(`Compiler extension '${extension.id}' cannot replace reserved Core binding '${name}'`);
+      const restriction = bindingNameRestriction(name, extensionKeywords);
+      if (restriction === "core") throw new Error(`Compiler extension '${extension.id}' cannot replace reserved Core binding '${name}'`);
+      if (restriction) throw new Error(`Compiler extension '${extension.id}' declares invalid global '${name}'`);
       const owner = globalOwners.get(name);
       if (owner) throw new Error(`Compiler global '${name}' has more than one owner (${owner}, ${extension.id})`);
       globalOwners.set(name, extension.id);
@@ -347,7 +353,7 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
         throw new Error(`Compiler extension '${extension.id}' cannot make fields writable on primitive '${name}' that it does not own`);
       }
       for (const field of fields) {
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(field)) throw new Error(`Compiler primitive '${name}' has invalid writable field '${field}'`);
+        if (memberNameRestriction(field, "data")) throw new Error(`Compiler primitive '${name}' has invalid writable field '${field}'`);
       }
     }
   }
@@ -499,6 +505,7 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       case "WhileStatement": visitExpression(statement.condition); visitBlock(statement.body); break;
       case "TryStatement": visitBlock(statement.tryBody); if (statement.catchBody) visitBlock(statement.catchBody); if (statement.finallyBody) visitBlock(statement.finallyBody); break;
       case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
+      case "InvertStatement": visitExpression(statement.target); break;
       case "ExpressionStatement": visitExpression(statement.expression); break;
       case "ImportDeclaration":
       case "ReExportDeclaration":

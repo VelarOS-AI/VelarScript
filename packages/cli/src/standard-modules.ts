@@ -153,7 +153,6 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["indent", apiFunction(["value", "prefix"], [stringType, stringType], stringType, 1)],
     ["dedent", apiFunction(["value"], [stringType], stringType)],
     ["normalizeWhitespace", apiFunction(["value"], [stringType], stringType)],
-    ["isBlank", apiFunction(["value"], [stringType], boolType)],
     ["utf8Size", apiFunction(["value"], [stringType], numberType)],
     ["escapeHtml", apiFunction(["value"], [stringType], stringType)],
     ["matches", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], boolType, 2)],
@@ -860,7 +859,6 @@ export function indent(value, prefix = "    ") {
 }
 export function dedent(value) { const rows = lines(valueOf(value)); let width = null; for (let index = 0; index < rows.length; index += 1) { const line = rows[index]; if (__velarTextCall(__velarNativeStringTrim, line, [])) { let current = 0; while (current < line.length && (line[current] === " " || line[current] === "\t")) current += 1; width = width === null ? current : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [width, current]); } } const output = new __velarTextNativeArray(rows.length); for (let index = 0; index < rows.length; index += 1) output[index] = __velarTextCall(__velarNativeStringSlice, rows[index], [width ?? 0]); return __velarTextJoin(output, "\n"); }
 export function normalizeWhitespace(value) { return __velarTextRegexReplace(__velarTextCall(__velarNativeStringTrim, valueOf(value), []), __velarTextWhitespace, " "); }
-export function isBlank(value) { return __velarTextCall(__velarNativeStringTrim, valueOf(value), []).length === 0; }
 export function utf8Size(value) { return __velarUtf8ByteLength(valueOf(value)); }
 export function escapeHtml(value) {
   value = valueOf(value);

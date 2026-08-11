@@ -54,7 +54,7 @@ const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ..
 // appear inside a record literal's field list. A keyword followed by ':' is a
 // keyword-named field, so it never counts as statement evidence.
 const statementStarterKinds = new Set<TokenKind>([
-  "const", "let", "def", "return", "throw", "assert", "if", "match", "for", "while", "break", "continue", "try", "pass",
+  "const", "let", "def", "return", "throw", "assert", "invert", "if", "match", "for", "while", "break", "continue", "try", "pass",
 ]);
 // Token kinds that legally appear at the top level of a record literal's
 // field list: field names, shorthand entries, and their separators.
@@ -342,6 +342,23 @@ export class Parser {
         }
       }
       return { kind: "AssertStatement", condition, message, span: span(keyword.span.start, message?.span.end ?? condition.span.end) };
+    }
+
+    if (this.match("invert")) {
+      const keyword = this.previous();
+      if (this.atStatementEnd()) {
+        this.diagnostics.push(diagnostic("VEL2017", "'invert' requires a writable bool target", keyword.span));
+        return null;
+      }
+      const target = this.parseExpression();
+      if (target.kind !== "IdentifierExpression" && target.kind !== "MemberExpression" && target.kind !== "IndexExpression") {
+        this.diagnostics.push(diagnostic("VEL2005", "Invert target must be a name, member, or index", target.span));
+      }
+      return {
+        kind: "InvertStatement",
+        target: target as AssignmentStatement["target"],
+        span: span(keyword.span.start, target.span.end),
+      };
     }
 
     if (this.match("if")) {
@@ -835,6 +852,63 @@ export class Parser {
     return parameters;
   }
 
+  private parseClassConstructorParameters(): readonly ClassParameter[] {
+    this.expect("leftParen", "Expected '('");
+    const parameters: ClassParameter[] = [];
+    let sawRest = false;
+    let sawDefault = false;
+    if (!this.check("rightParen")) {
+      do {
+        const rest = this.match("ellipsis");
+        let private_ = this.match("private");
+        const invalidStatic = this.match("static") ? this.previous() : null;
+        if (!private_) private_ = this.match("private");
+        const binding = this.match("const") ? "const" : this.match("let") ? "let" : null;
+        const name = this.expect("identifier", "Expected a constructor parameter name");
+        const type = this.match("colon") ? this.parseTypeReference() : null;
+        const defaultValue = this.match("assign") ? this.parseExpression() : null;
+        const parameterSpan = span(name.span.start, defaultValue?.span.end ?? type?.span.end ?? name.span.end);
+        if (invalidStatic) {
+          this.diagnostics.push(diagnostic("VEL2021", "Constructor parameters cannot be static", invalidStatic.span));
+        }
+        if (private_ && !binding) {
+          this.diagnostics.push(diagnostic("VEL2021", "A private constructor parameter must declare a field with 'const' or 'let'", parameterSpan));
+        }
+        if (binding && !type) {
+          this.diagnostics.push(diagnostic("VEL2021", "Constructor parameter fields require an explicit type", parameterSpan));
+        }
+        if (sawRest) {
+          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter must be the final parameter", parameterSpan));
+        }
+        if (rest && !type) {
+          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter requires an element type", parameterSpan));
+        }
+        if (rest && defaultValue) {
+          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot have a default value", parameterSpan));
+        }
+        if (rest && binding) {
+          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot declare a class field", parameterSpan));
+        }
+        if (!rest && !defaultValue && sawDefault && !sawRest) {
+          this.diagnostics.push(diagnostic("VEL2016", "A required parameter cannot follow a parameter with a default value", parameterSpan));
+        }
+        parameters.push({
+          name: name.value,
+          type,
+          defaultValue,
+          rest,
+          binding,
+          private: private_ && binding !== null,
+          span: parameterSpan,
+        });
+        if (!rest && defaultValue) sawDefault = true;
+        sawRest ||= rest;
+      } while (this.match("comma") && !this.check("rightParen"));
+    }
+    this.expect("rightParen", "Expected ')' after constructor parameters");
+    return parameters;
+  }
+
   private parseExternClassParameters(): readonly ClassParameter[] {
     this.expect("leftParen", "Expected '('");
     const parameters: ClassParameter[] = [];
@@ -1035,8 +1109,7 @@ export class Parser {
         if (methodAbstract || methodOverride || methodStatic || methodPrivate || asynchronous) {
           this.diagnostics.push(diagnostic("VEL2022", "A constructor does not accept method modifiers", span(methodStart, this.previous().span.end)));
         }
-        const constructorParameters = constructorName.value === "constructor" ? this.parseParameters() : [];
-        parameters = constructorParameters.map((parameter) => ({ ...parameter, binding: null, private: false }));
+        parameters = constructorName.value === "constructor" ? [...this.parseClassConstructorParameters()] : [];
         const initBody = this.parseBlock();
         const block = {
           kind: "ClassInitBlock",
@@ -1680,7 +1753,8 @@ export class Parser {
     let left = this.parseUnary();
 
     while (true) {
-      const precedence = binaryPrecedence[this.current().kind];
+      const javaScriptInstanceof = this.check("identifier") && this.current().value === "instanceof";
+      const precedence = javaScriptInstanceof ? binaryPrecedence.is : binaryPrecedence[this.current().kind];
       if (precedence === undefined || precedence < minimumPrecedence) {
         break;
       }
@@ -1713,7 +1787,14 @@ export class Parser {
             } satisfies ComparisonChainExpression;
         continue;
       }
-      if (operator.kind === "is") {
+      if (operator.kind === "is" || javaScriptInstanceof) {
+        if (javaScriptInstanceof) {
+          this.diagnostics.push(recoveredDiagnostic(
+            "VEL2031",
+            "Use 'is' for a type test; VelarScript does not expose JavaScript 'instanceof'",
+            operator.span,
+          ));
+        }
         const conditionalTypeTest = this.typeTestHasConditionalQuestion();
         const type = this.parseTypeReference(!conditionalTypeTest);
         if (conditionalTypeTest) {
@@ -1867,6 +1948,18 @@ export class Parser {
   }
 
   private parseUnary(): Expression {
+    if (this.check("identifier") && (this.current().value === "delete" || this.current().value === "typeof")
+      && !["rightParen", "rightBracket", "rightBrace", "comma", "colon", "newline", "dedent", "eof"].includes(this.peekKind(1))) {
+      const operator = this.advance();
+      this.diagnostics.push(recoveredDiagnostic(
+        "VEL2031",
+        operator.value === "delete"
+          ? "VelarScript does not expose JavaScript 'delete'; use a collection remove operation or construct updated data explicitly"
+          : "Use 'is' or a declared type; VelarScript does not expose JavaScript 'typeof'",
+        operator.span,
+      ));
+      return this.withParseDepth(() => this.parseUnary());
+    }
     if (this.match("not") || this.match("plus") || this.match("minus")) {
       const operator = this.previous();
       return this.withParseDepth(() => {

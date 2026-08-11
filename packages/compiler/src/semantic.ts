@@ -837,6 +837,7 @@ export function buildSemanticIndex(
         if (statement.finallyBody) visitBlock(statement.finallyBody, statement.span);
         break;
       case "AssignmentStatement": visitExpression(statement.target, true); visitExpression(statement.value); break;
+      case "InvertStatement": visitExpression(statement.target, true); break;
       case "ExpressionStatement": visitExpression(statement.expression); break;
       case "BreakStatement":
       case "ContinueStatement":
@@ -997,7 +998,7 @@ function contains(span: Span, offset: number): boolean {
 
 function wordSpans(text: string, valueSpan: Span): Span[] {
   const value = text.slice(valueSpan.start, valueSpan.end);
-  return [...value.matchAll(/[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => {
+  return [...value.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/gu)].map((match) => {
     const start = valueSpan.start + (match.index ?? 0);
     return { start, end: start + match[0].length };
   });
@@ -1006,7 +1007,7 @@ function wordSpans(text: string, valueSpan: Span): Span[] {
 function findNameSpan(text: string, valueSpan: Span, name: string, from: number): Span {
   const startAt = Math.max(valueSpan.start, from);
   const value = text.slice(startAt, valueSpan.end);
-  const pattern = new RegExp(`(?:^|[^A-Za-z0-9_])(${escapeRegExp(name)})(?![A-Za-z0-9_])`, "u");
+  const pattern = new RegExp(`(?:^|[^A-Za-z0-9_$])(${escapeRegExp(name)})(?![A-Za-z0-9_$])`, "u");
   const match = pattern.exec(value);
   if (!match) return { start: startAt, end: Math.min(valueSpan.end, startAt + name.length) };
   const prefix = match[0].length - match[1]!.length;

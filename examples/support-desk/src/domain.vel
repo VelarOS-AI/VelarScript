@@ -1,7 +1,6 @@
 import {find, sortBy} from "velar/collections"
 import {uuid} from "velar/id"
 import {now} from "velar/time"
-import {isBlank} from "velar/text"
 
 export enum TicketStatus:
     open
@@ -71,7 +70,7 @@ def priorityRank(priority: TicketPriority) -> number:
 
 export def selectTickets(tickets: List<Ticket>, query: string, filter: TicketFilter, sort: TicketSort) -> List<Ticket>:
     const needle = query.trim().lower()
-    const filtered = tickets.filter(ticket => matchesStatus(ticket, filter) and (isBlank(needle) or needle in ticket.title.lower() or needle in ticket.requester.lower()))
+    const filtered = tickets.filter(ticket => matchesStatus(ticket, filter) and (needle.size == 0 or needle in ticket.title.lower() or needle in ticket.requester.lower()))
     match sort:
         case TicketSort.recent:
             return sortBy(filtered, ticket => ticket.updatedAt, true)

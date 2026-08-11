@@ -168,7 +168,7 @@ mount(<App />, "#app")
     assert.equal(invalidRootSmoke.status, 1);
     assert.match(invalidRootSmoke.stderr, /must be an absolute path/u);
 
-    const generationHost = spawn(join(application, "Contents", "MacOS", "VelarDesktopHost"), [], {
+    const generationHost = spawn(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--headless-smoke"], {
       env: {
         ...smokeEnvironment,
         VELAR_DESKTOP_GENERATION_SMOKE: "1",

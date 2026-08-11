@@ -2478,16 +2478,54 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   155,952-byte 官方 macOS 品牌图标；Lite 的独立薄包门槛从不再真实的 1 MiB 调整为 2 MiB，仍远低于
   Desktop 公开 10 MiB 预算。未推送、未发布、未提升版本。
 
+- W-127 合并并收口 W-126 后的语言语义工作树，没有回退或重复 W-122/W-123。Core source grammar
+  现在仍是显式 allowlist，并由新的 `source-names.ts` 单点拥有 binding/member 命名限制：普通 `$name`
+  合法，`$velar`/`__velar` 大小写不敏感地保留给编译器；JavaScript-only `delete`、`typeof`、
+  `instanceof`、`eval`、私有标记 `#field`、`prototype` 与 `__proto__` 不会进入 Velar AST 或对象模型。
+  analyzer、extension validation、semantic index、LSP word lookup 和 project rename 共用这份契约，编辑器
+  不能再重命名出编译器拒绝的源码。Core/Web 生成临时名统一迁移到 `$velar...`，并有真实 optional
+  lowering 与 Web component/JSX execution 证明用户绑定不会捕获生成变量；`runtime-abi.ts` 未改，仍是
+  ABI literal 单一来源。
+
+  新语句 `invert target` 专门翻转 writable bool binding/member/List index，receiver 与 index 都只求值
+  一次；`target = not target` 得到单一 `VEL3018` 和可安全应用时的 preferred LSP quick fix。构造器参数
+  支持 `const`/`let` 公共字段及 `private const`/`private let` 原生私有字段，派生类严格在 `super(...)`
+  之后、body field initializer 之前初始化；rest、缺类型、无 field modifier 的 private 参数及 static
+  参数继续 fail closed。List 严格索引和赋值支持 `-size...-1` 从尾部定位，越界仍抛 `IndexError`。
+  diagnostics、formatter、semantic index、生成 JavaScript 和真实 Node execution 均有对应回归。
+
+  `velar/text.isBlank` 被移除，语言文档、官方示例与 Lite 全部使用公开的 `text.trim().size == 0`；这不是
+  Lite shim。collection lowering 的长运行时改为 `String.raw`，改写前后均为 44,626 bytes、SHA-256
+  `8a515e30e28274b5da4cef2c1c0a76272beeddf1e541242126d855597053369b`。runtime boundary gate 现在直接
+  检查导出的运行时值，不再依赖旧字符串数组的引号排版，因此安全检查没有随表示法变化而放松。
+
+  Desktop 集成测试过去会运行真实 `.app`、创建窗口并抢前台，表现为 Lite 反复出现又消失。真实
+  generation/reload/child cleanup smoke 现在通过私有 `--headless-smoke` 使用 prohibited activation policy，
+  保留 WKWebView 和 capability Worker 全链路但不显示窗口。官方默认 macOS 图标也以原始品牌轮廓重制
+  为纯白底、主体居中占 640/1024 安全区；最终 `VelarScript.icns` 为 115,622 bytes，SHA-256
+  `67c0678648e45f593bcc51ddaefb694ae8f60e4723b397cd2b4062779c3e64fe`，Desktop 与 Lite 都只消费公开
+  默认资产。
+
+  最终证据为 `npm run check`（51 个格式化源、106 个文档示例、67 项 runtime boundary）、完整串行
+  compiler/runtime/CLI/Desktop/hardening/release acceptance 全绿（W-126 的 empty-collection alias 基线
+  失败不再复现）、四个生产示例 check/test、六包 packed consumer acceptance、publication rehearsal、
+  Workbench 安装态验收、完整 Dev/Production/External Preview、27+6+15+6 三浏览器及 installed browser
+  project。Desktop 定向 3/3 smoke 同样全绿且没有可见窗口。Lite 独立通过 10/22/21/29 模块 check、
+  40 shared + 42 server tests、concurrent/disconnected server acceptance、package acceptance、54/54
+  三浏览器和 CLI/Desktop production build。Lite Desktop bundle 为 1,058,788 bytes：host 301,936、
+  renderer 591,141、capability host 48,638、metadata 117,073，外置 Node.js >=24；npm tarball 为
+  501,546 bytes，SHA-256 `ecabdd1941fcb02d212a92ec1f1fcaf04457fef028d02798f76a7eca76ab8d74`。
+  未推送、未发布、未提升版本。
+
 下一执行顺序：
 
-1. 以 W-126 的 target-extension contract 为新边界，后续 Web、Node、Desktop、Game 等能力只能通过
-   自有 AST/type/semantic/editor/formatter/lowering/runtime 层扩展；不得把目标名字、目标类型 variant
-   或 host/product policy 放回 Core。
+1. 以 W-126/W-127 的 target-extension 与 source-grammar contract 为边界，Web、Node、Desktop、Game
+   继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
+   host/product policy 放回 Core。
 2. 回到 W-125 留下的 Web lifecycle 队列，审计 props/Look 值构造、mounted/cleanup/event Promise
    观察、dynamic/lazy child 销毁与重复挂载；相同 host-operation 类别集中收敛，并继续用 Lite reload/
    stop、四个官方示例和 hostile post-initialization execution 找真实断裂。
 3. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
-4. 等并行函数返回值推断工作完成后，先重跑当前唯一失败的 empty-collection alias regression，再跑完整
-   compiler/runtime、六包、release rehearsal、Workbench 安装态、三浏览器与 Lite 全门禁；保护任何
-   新出现的并行工作，只精确暂存本轮文件，只允许本地提交。
+4. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release
+   rehearsal、Workbench 安装态、三浏览器和 Lite 门禁；只精确暂存本轮文件，只允许本地提交。

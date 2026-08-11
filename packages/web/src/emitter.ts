@@ -25,6 +25,7 @@ import {
 } from "./ast.ts";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
+type InvertStatement = Extract<Statement, { readonly kind: "InvertStatement" }>;
 
 interface LookStaticAtom {
   readonly kind: "hook" | "media" | "scheme";
@@ -275,6 +276,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const reactive = this.emitReactiveAssignment(statement, depth);
       if (reactive) return reactive;
     }
+    if (statement.kind === "InvertStatement") {
+      const reactive = this.emitReactiveInvert(statement, depth);
+      if (reactive) return reactive;
+    }
     return super.emitStatement(statement, depth);
   }
 
@@ -314,10 +319,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
       const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
       const arguments_ = namedOrder
-        ? namedOrder.map((source) => source === -1 ? "undefined" : `__namedArguments[${source}]`)
+        ? namedOrder.map((source) => source === -1 ? "undefined" : `$velarNamedArguments[${source}]`)
         : sourceArguments;
       const evaluated = namedOrder
-        ? `((__namedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+        ? `(($velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
         : `[${arguments_.join(", ")}]`;
       const targetSource = namedOrder?.[1] ?? 1;
       const target = targetSource >= 0 ? expression.arguments[targetSource] : null;
@@ -381,17 +386,17 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const bodyIndent = "  ".repeat(depth + 2);
     const previousScope = this.currentScope;
     const previousJsxNamespace = this.currentJsxNamespace;
-    this.currentScope = "__scope";
-    this.currentJsxNamespace = "__namespace";
+    this.currentScope = "$velarScope";
+    this.currentJsxNamespace = "$velarNamespace";
     // Props are live reactive inputs: every parameter becomes a read-only
     // handle over the per-instance props store, so prop reads lower through
     // .get() exactly like state reads do.
     const lines: string[] = [];
     for (const parameter of statement.parameters) {
       if (parameter.defaultValue) {
-        lines.push(`${bodyIndent}const ${parameter.name} = __velarProp(__props, ${JSON.stringify(parameter.name)}, () => (${this.emitMappedExpression(parameter.defaultValue)}));`);
+        lines.push(`${bodyIndent}const ${parameter.name} = __velarProp($velarProps, ${JSON.stringify(parameter.name)}, () => (${this.emitMappedExpression(parameter.defaultValue)}));`);
       } else {
-        lines.push(`${bodyIndent}const ${parameter.name} = __velarRequiredProp(__props, ${JSON.stringify(parameter.name)}, ${JSON.stringify(statement.name)});`);
+        lines.push(`${bodyIndent}const ${parameter.name} = __velarRequiredProp($velarProps, ${JSON.stringify(parameter.name)}, ${JSON.stringify(statement.name)});`);
       }
     }
     let render: Expression | null = null;
@@ -402,17 +407,17 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (item.kind === "ExtensionStatement:web:state") {
         lines.push(`${bodyIndent}const ${item.name} = __velarState(${this.emitMappedExpression(item.initializer)});`);
       } else if (item.kind === "ExtensionStatement:web:resource") {
-        lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitMappedExpression(item.initializer)}, __scope, ${JSON.stringify(item.name)});`);
+        lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitMappedExpression(item.initializer)}, $velarScope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "ExtensionStatement:web:action") {
         const parameters = item.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
         const actionLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean);
         if (!this.blockAlwaysReturns(item.body)) actionLines.push(`${"  ".repeat(depth + 3)}return null;`);
         const actionBody = actionLines.join("\n");
-        lines.push(`${bodyIndent}const ${item.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${bodyIndent}` : ""}}, __scope, ${JSON.stringify(item.name)});`);
+        lines.push(`${bodyIndent}const ${item.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${bodyIndent}` : ""}}, $velarScope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "ExtensionStatement:web:watch") {
         const parameters = [item.currentName, item.previousName].filter((name): name is string => name !== null).join(", ");
         const watchLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
-        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __scope);`);
+        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, $velarScope);`);
       } else if (item.kind === "ExtensionStatement:web:expose") {
         expose ??= item.value;
       } else if (item.kind === "ExtensionStatement:web:mounted") {
@@ -430,11 +435,11 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     // any other component element; emitExpression already routes JSX through
     // __velarChild with the current scope, so no dynamic wrapper is needed.
     const renderedRoot = render ? this.emitMappedExpression(render) : "__velarDomCreateComment(\"missing render\")";
-    lines.push(`${bodyIndent}const __root = ${renderedRoot};`);
-    lines.push(`${bodyIndent}const __handle = ${expose ? `__velarComponentHandle(${this.emitMappedExpression(expose)}, ${JSON.stringify(statement.name)})` : "null"};`);
-    lines.push(`${bodyIndent}if (__props.class !== undefined) __velarClassBindRoot(__root, () => __props.class, __scope);`);
-    lines.push(`${bodyIndent}if (__props.look !== undefined) __velarLookBindRoot(__root, () => __props.look, __scope);`);
-    lines.push(`${bodyIndent}if (__props.__velarStyle !== undefined) __velarStyleBindRoot(__root, () => __props.__velarStyle, __scope);`);
+    lines.push(`${bodyIndent}const $velarRoot = ${renderedRoot};`);
+    lines.push(`${bodyIndent}const $velarHandle = ${expose ? `__velarComponentHandle(${this.emitMappedExpression(expose)}, ${JSON.stringify(statement.name)})` : "null"};`);
+    lines.push(`${bodyIndent}if ($velarProps.class !== undefined) __velarClassBindRoot($velarRoot, () => $velarProps.class, $velarScope);`);
+    lines.push(`${bodyIndent}if ($velarProps.look !== undefined) __velarLookBindRoot($velarRoot, () => $velarProps.look, $velarScope);`);
+    lines.push(`${bodyIndent}if ($velarProps.__velarStyle !== undefined) __velarStyleBindRoot($velarRoot, () => $velarProps.__velarStyle, $velarScope);`);
     const mounted = mountedBody.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
     const cleanup = cleanupBody.map((child) => {
       if (["VariableDeclaration", "FunctionDeclaration", "ClassDeclaration", "TypeDeclaration", "EnumDeclaration"].includes(child.kind)) {
@@ -443,26 +448,26 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const inner = this.emitMappedStatement(child, depth + 4);
       if (!inner) return "";
       const cleanupIndent = "  ".repeat(depth + 3);
-      return `${cleanupIndent}__velarCleanupStep(() => {\n${inner}\n${cleanupIndent}}, __scope);`;
+      return `${cleanupIndent}__velarCleanupStep(() => {\n${inner}\n${cleanupIndent}}, $velarScope);`;
     }).filter(Boolean).join("\n");
     const cleanupBodyText = `() => {${cleanup ? `\n${cleanup}\n${bodyIndent}` : ""}}`;
     const functionLines = [
-      `${outerIndent}const __scope = __velarScope(${JSON.stringify(statement.name)});`,
-      `${outerIndent}let __constructionCleanup = () => {};`,
+      `${outerIndent}const $velarScope = __velarScope(${JSON.stringify(statement.name)});`,
+      `${outerIndent}let $velarConstructionCleanup = () => {};`,
       `${outerIndent}try {`,
-      `${bodyIndent}__constructionCleanup = ${cleanupBodyText};`,
+      `${bodyIndent}$velarConstructionCleanup = ${cleanupBodyText};`,
       ...lines,
-      `${bodyIndent}return __velarComponent(__root, __scope, async () => {${mounted ? `\n${mounted}\n${bodyIndent}` : ""}}, __constructionCleanup, __handle);`,
-      `${outerIndent}} catch (__constructionError) {`,
-      `${bodyIndent}try { __constructionCleanup(); } catch (__cleanupError) { __velarReport(__cleanupError, "cleanup", __scope); }`,
-      `${bodyIndent}__velarDestroyScope(__scope);`,
-      `${bodyIndent}throw __constructionError;`,
+      `${bodyIndent}return __velarComponent($velarRoot, $velarScope, async () => {${mounted ? `\n${mounted}\n${bodyIndent}` : ""}}, $velarConstructionCleanup, $velarHandle);`,
+      `${outerIndent}} catch ($velarConstructionError) {`,
+      `${bodyIndent}try { $velarConstructionCleanup(); } catch ($velarCleanupError) { __velarReport($velarCleanupError, "cleanup", $velarScope); }`,
+      `${bodyIndent}__velarDestroyScope($velarScope);`,
+      `${bodyIndent}throw $velarConstructionError;`,
       `${outerIndent}}`,
     ];
 
     this.currentScope = previousScope;
     this.currentJsxNamespace = previousJsxNamespace;
-    return `${indentation}${statement.exported ? "export " : ""}function ${statement.name}(__props = {}, __namespace = "html") {\n${functionLines.filter(Boolean).join("\n")}\n${indentation}}`;
+    return `${indentation}${statement.exported ? "export " : ""}function ${statement.name}($velarProps = {}, $velarNamespace = "html") {\n${functionLines.filter(Boolean).join("\n")}\n${indentation}}`;
   }
 
   private emitReactiveAssignment(statement: AssignmentStatement, depth: number): string | null {
@@ -477,6 +482,16 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     return null;
   }
 
+  private emitReactiveInvert(statement: InvertStatement, depth: number): string | null {
+    const indentation = "  ".repeat(depth);
+    if (statement.target.kind === "IdentifierExpression"
+      && this.hints.reactiveReferences.get(spanIdentity(statement.target.span)) === "state") {
+      const state = statement.target.name;
+      return `${indentation}${state}.set(!${state}.get());`;
+    }
+    return null;
+  }
+
   private emitJsx(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string, mapped = true): string {
     const render = (): string => this.emitJsxCode(expression, scope, asChild, namespace);
     return mapped ? this.emitMappedJavaScript(expression.span, render) : render();
@@ -485,7 +500,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private emitJsxCode(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string): string {
     if (/^[A-Z]/u.test(expression.tag)) {
       const reactiveComponent = this.hints.reactiveReferences.has(spanIdentity(expression.tagSpan));
-      const componentScope = reactiveComponent ? "__dynamicScope" : scope;
+      const componentScope = reactiveComponent ? "$velarDynamicScope" : scope;
       const previousScope = this.currentScope;
       if (reactiveComponent) this.currentScope = componentScope;
       try {
@@ -523,7 +538,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         const component = reactiveComponent ? `${expression.tag}.get()` : expression.tag;
         const arguments_ = `${component}, { ${properties.join(", ")} }, ${children}, ${componentScope}, ${namespace}${refSetter ? `, ${refSetter}` : ""}`;
         if (reactiveComponent) {
-          return `__velarDynamicComponent((__dynamicScope) => __velarChild(${arguments_}), ${scope})`;
+          return `__velarDynamicComponent(($velarDynamicScope) => __velarChild(${arguments_}), ${scope})`;
         }
         return asChild ? `__velarChild(${arguments_})` : `__velarInstantiate(${arguments_})`;
       } finally {
@@ -532,7 +547,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
 
     const id = ++this.jsxId;
-    const element = `__el${id}`;
+    const element = `$velarElement${id}`;
     const elementNamespace = expression.tag === "svg" ? '"svg"' : namespace;
     const childNamespace = expression.tag === "foreignObject" ? '"html"' : elementNamespace;
     const lines = [expression.tag
@@ -617,7 +632,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const leaves = dynamicChildLeaves(expression);
     const previousScope = this.currentScope;
     const previousJsxNamespace = this.currentJsxNamespace;
-    this.currentScope = "__childScope";
+    this.currentScope = "$velarChildScope";
     this.currentJsxNamespace = namespace;
     // A conditional splits into one region per branch leaf only when a keyed
     // list is somewhere among them; each region gates itself on the shared
@@ -626,7 +641,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     // Without a keyed leaf the interpolation stays one dynamic region.
     const statements = leaves.some((leaf) => leaf.list?.key)
       ? leaves.map((leaf) => this.emitDynamicChildLeaf(parent, leaf, scope, namespace))
-      : [`__velarDynamic(${parent}, (__childScope) => ${this.emitMappedExpression(expression)}, ${scope});`];
+      : [`__velarDynamic(${parent}, ($velarChildScope) => ${this.emitMappedExpression(expression)}, ${scope});`];
     this.currentScope = previousScope;
     this.currentJsxNamespace = previousJsxNamespace;
     return statements.join(" ");
@@ -638,11 +653,11 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const source = this.emitGuardedExpression(leaf.guards, this.emitMappedExpression(list.source), "[]");
       const parameter = list.arrow.parameters[0]!.name;
       const key = this.emitJsxAttributeValue(list.key);
-      const render = this.emitJsx(list.arrow.body, "__childScope", true, namespace);
-      return `__velarKeyed(${parent}, () => ${source}, (${parameter}) => ${key}, (${parameter}, __childScope) => ${render}, ${scope});`;
+      const render = this.emitJsx(list.arrow.body, "$velarChildScope", true, namespace);
+      return `__velarKeyed(${parent}, () => ${source}, (${parameter}) => ${key}, (${parameter}, $velarChildScope) => ${render}, ${scope});`;
     }
     const value = this.emitGuardedExpression(leaf.guards, this.emitMappedExpression(leaf.expression), "null");
-    return `__velarDynamic(${parent}, (__childScope) => ${value}, ${scope});`;
+    return `__velarDynamic(${parent}, ($velarChildScope) => ${value}, ${scope});`;
   }
 
   // Wraps a leaf's expression in its branch conditions, innermost last, so the

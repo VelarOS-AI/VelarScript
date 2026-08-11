@@ -33,6 +33,7 @@ import {
   VELAR_COLLECTION_LOWERING_EXPORTS,
   VELAR_COLLECTION_LOWERING_MODULE,
   VELAR_COLLECTION_LOWERING_MODULE_SOURCE,
+  VELAR_COLLECTION_LOWERING_RUNTIME,
 } from "../packages/compiler/src/collection-lowering-runtime.ts";
 import {
   VELAR_ERROR_NORMALIZATION_MODULE,
@@ -921,9 +922,9 @@ for (const phrase of [
   "function __velarRecordCopy(value)",
   '!descriptor.configurable || !descriptor.writable',
 ]) {
-  if (!compilerCollectionLoweringRuntimeSource.includes(phrase)) failures.push(`packages/compiler/src/collection-lowering-runtime.ts: missing controlled Record<T> operation '${phrase}'`);
+  if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes(phrase)) failures.push(`packages/compiler/src/collection-lowering-runtime.ts: missing controlled Record<T> operation '${phrase}'`);
 }
-if (!compilerCollectionLoweringRuntimeSource.includes('__velarRecordFields(value, \\"Record index\\")')) {
+if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes('__velarRecordFields(value, "Record index")')) {
   failures.push("packages/compiler/src/collection-lowering-runtime.ts: missing controlled Record<T> index operation");
 }
 for (const phrase of [
@@ -1369,7 +1370,7 @@ if (VELAR_COLLECTION_LOWERING_DEPENDENCIES.length !== 2
   || !VELAR_COLLECTION_LOWERING_DEPENDENCIES.includes(VELAR_REACTIVE_BRIDGE_MODULE)) {
   failures.push("packages/compiler/src/collection-lowering-runtime.ts: collection lowering dependency closure is incomplete");
 }
-if (!compilerCollectionLoweringRuntimeSource.includes("__velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true)")) {
+if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes("__velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true)")) {
   failures.push("packages/compiler/src/collection-lowering-runtime.ts: keyed collection clear must invalidate every tracked key");
 }
 for (const phrase of [
@@ -1471,38 +1472,35 @@ if (/\b(?:Array\.isArray|Object\.(?:getOwnPropertyDescriptor|freeze)|Boolean)\s*
   || !emittedRuntimeTypeDeclarationSource.includes("__velarValidationFreeze")) {
   failures.push("packages/compiler/src/emitter.ts: generated type, alias, or enum validation bypasses the captured runtime Type validation ABI");
 }
-const emittedListValidationSource = compilerCollectionLoweringRuntimeSource.slice(compilerCollectionLoweringRuntimeSource.indexOf('"function __velarValidateDenseList'), compilerCollectionLoweringRuntimeSource.indexOf('"function* __velarReactiveListIterator'))
-  + compilerCollectionLoweringRuntimeSource.slice(compilerCollectionLoweringRuntimeSource.indexOf('"function __velarCopyList'), compilerCollectionLoweringRuntimeSource.indexOf('"function __velarRecordFields'));
-const emittedListConstructionSource = compilerCollectionLoweringRuntimeSource.slice(compilerCollectionLoweringRuntimeSource.indexOf('"function __velarCreateList(parts)'), compilerCollectionLoweringRuntimeSource.indexOf('"function __velarCreateSet'));
-const emittedListReceiverSource = compilerCollectionLoweringRuntimeSource.slice(compilerCollectionLoweringRuntimeSource.indexOf('"function __velarCollectionSlice'), compilerCollectionLoweringRuntimeSource.indexOf('"function __velarSetAdd'));
-const emittedListSetIndexStart = compilerCollectionLoweringRuntimeSource.indexOf('"function __velarSetIndex');
-const emittedListIndexSource = compilerCollectionLoweringRuntimeSource.slice(compilerCollectionLoweringRuntimeSource.indexOf('"function __velarIndex'), compilerCollectionLoweringRuntimeSource.indexOf('"  if (!__velarIsRecord(value)', compilerCollectionLoweringRuntimeSource.indexOf('"function __velarIndex')))
-  + compilerCollectionLoweringRuntimeSource.slice(emittedListSetIndexStart, compilerCollectionLoweringRuntimeSource.indexOf('"  if (!__velarIsRecord(value)', emittedListSetIndexStart));
+const emittedListValidationSource = VELAR_COLLECTION_LOWERING_RUNTIME.slice(VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarValidateDenseList"), VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function* __velarReactiveListIterator"))
+  + VELAR_COLLECTION_LOWERING_RUNTIME.slice(VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarCopyList"), VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarRecordFields"));
+const emittedListConstructionSource = VELAR_COLLECTION_LOWERING_RUNTIME.slice(VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarCreateList(parts)"), VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarCreateSet"));
+const emittedListReceiverSource = VELAR_COLLECTION_LOWERING_RUNTIME.slice(VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarCollectionSlice"), VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarSetAdd"));
+const emittedListSetIndexStart = VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarSetIndex");
+const emittedListIndexSource = VELAR_COLLECTION_LOWERING_RUNTIME.slice(VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarIndex"), VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("  if (!__velarIsRecord(value)", VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("function __velarIndex")))
+  + VELAR_COLLECTION_LOWERING_RUNTIME.slice(emittedListSetIndexStart, VELAR_COLLECTION_LOWERING_RUNTIME.indexOf("  if (!__velarIsRecord(value)", emittedListSetIndexStart));
 const emittedListOperationSource = emittedListValidationSource + emittedListConstructionSource + emittedListReceiverSource;
 if (/\b(?:Array\.(?:isArray|prototype)|Object\.(?:getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|defineProperty|is)|Number\.(?:isInteger|isNaN|isFinite)|Math\.(?:max|min))\b|\bnew (?:Array|TypeError|RangeError)\b|\.(?:push|map)\s*\(|for \(const /u.test(emittedListOperationSource)
   || /\b(?:Array\.isArray|Number\.isInteger|Object\.is)\s*\(/u.test(emittedListIndexSource)) {
   failures.push("packages/compiler: List validation, construction, indexing, or receiver methods bypass the captured List host ABI");
 }
 for (const phrase of [
-  '"class __VelarIndexError extends __velarCollectionListNativeRangeError',
-  '"function __velarIndex(value, index)',
-  '"function __velarOptionalIndex(value, index)',
-  '"function __velarSetIndex(value, index, next)',
+  "class __VelarIndexError extends __velarCollectionListNativeRangeError",
+  "function __velarIndex(value, index)",
+  "function __velarOptionalIndex(value, index)",
+  "function __velarSetIndex(value, index, next)",
 ]) {
-  if (!compilerCollectionLoweringRuntimeSource.includes(phrase)) failures.push(`packages/compiler/src/collection-lowering-runtime.ts: canonical index runtime is missing '${phrase}'`);
+  if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes(phrase)) failures.push(`packages/compiler/src/collection-lowering-runtime.ts: canonical index runtime is missing '${phrase}'`);
 }
 if (compilerEmitterSource.includes('"class __VelarIndexError') || compilerEmitterSource.includes('"function __velarIndex(value, index)')) {
   failures.push("packages/compiler/src/emitter.ts: project consumers retain a second inline index runtime owner");
 }
-const emittedCollectionHelperSource = compilerCollectionLoweringRuntimeSource.slice(
-  compilerCollectionLoweringRuntimeSource.indexOf("export const VELAR_COLLECTION_LOWERING_RUNTIME"),
-  compilerCollectionLoweringRuntimeSource.indexOf('].join("\\n")'),
-);
+const emittedCollectionHelperSource = VELAR_COLLECTION_LOWERING_RUNTIME;
 if (/\b(?:Map|Set)\.prototype\b|\bnew (?:Map|Set)\b|Reflect\.getOwnPropertyDescriptor\s*\(\s*(?:Map|Set)\.prototype|Object\.getPrototypeOf\s*\(|\[\.\.\.(?:Map|Set)\.prototype/u.test(emittedCollectionHelperSource)) {
   failures.push("packages/compiler/src/emitter.ts: Set/Map construction, traversal, snapshots, or receiver methods bypass the captured Set/Map host ABI");
 }
 if (/Reflect\.deleteProperty\s*\(|Object\.freeze\s*\(|for \(const field|\.values\(\)|\.map\s*\(/u.test(emittedCollectionHelperSource)
-  || !compilerCollectionLoweringRuntimeSource.includes("__velarCollectionRecordGetOwnPropertyDescriptor(value, index)")) {
+  || !VELAR_COLLECTION_LOWERING_RUNTIME.includes("__velarCollectionRecordGetOwnPropertyDescriptor(value, index)")) {
   failures.push("packages/compiler: Record validation, indexing, traversal, snapshots, or receiver methods bypass the captured Record host ABI");
 }
 const emittedRecordLoweringSource = compilerEmitterSource.slice(compilerEmitterSource.indexOf('"function __velarSetRecordField'), compilerEmitterSource.indexOf("    if (this.needsObjectBindingHelpers)"));

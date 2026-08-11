@@ -1,5 +1,5 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { collectionMemberGuidance, compile, formatSource, sourceTypeNameGuidance, type CollectionKind, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
+import { collectionMemberGuidance, compile, formatSource, isSourceIdentifierPart, sourceTypeNameGuidance, type CollectionKind, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
 import type { ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
@@ -58,6 +58,7 @@ const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
 
 const keywordDocumentation = new Map<string, string>([
   ["assert", "Requires a boolean or optional invariant and narrows stable values in following statements."],
+  ["invert", "Reverses one writable bool binding, member, or index in place."],
   ["constructor", "Initializes class fields and calls super(...) first when the class extends another class."],
   ["type", "Declares one data shape used for static checking and runtime validation."],
   ["enum", "Declares a finite set of string-backed values for application states."],
@@ -90,7 +91,7 @@ const builtinTypeDocumentation = new Map<string, string>([
 ]);
 
 const coreCompletionItems = [
-  ...["const", "let", "readonly", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
+  ...["const", "let", "readonly", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "invert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
   { label: "str", kind: 3, detail: "str(value) -> string" },
   { label: "print", kind: 3, detail: "print(value) -> null" },
@@ -687,6 +688,10 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
     } else if (diagnostic.code === "VEL1002" && original === "\t") {
       replacement = "    ";
       title = "Replace the indentation tab with four spaces";
+    } else if (diagnostic.code === "VEL1005" && original === "#" && typeof diagnostic.message === "string"
+      && diagnostic.message.includes("JavaScript private identifiers")) {
+      replacement = "";
+      title = "Remove the JavaScript private marker";
     } else if (diagnostic.code === "VEL1005") {
       const direct = new Map<string, readonly [string, string]>([
         ["undefined", ["null", "Use VelarScript null"]],
@@ -719,8 +724,14 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
         replacement = "=";
         title = "Use '=' for the named argument";
       }
+    } else if (diagnostic.code === "VEL3018") {
+      const selfNegation = /^([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\s*=\s*not\s+(.+)$/u.exec(original);
+      if (selfNegation && selfNegation[1] === selfNegation[2]!.trim()) {
+        replacement = `invert ${selfNegation[1]}`;
+        title = `Use 'invert ${selfNegation[1]}'`;
+      }
     } else if (diagnostic.code === "VEL4001" && typeof diagnostic.message === "string") {
-      const member = /\.([A-Za-z][A-Za-z0-9_]*)$/u.exec(original);
+      const member = /\.([A-Za-z_$][A-Za-z0-9_$]*)$/u.exec(original);
       const owner = /^(List|Set|Map) has no member/u.exec(diagnostic.message)?.[1] as CollectionKind | undefined;
       const guidance = member && owner ? collectionMemberGuidance(owner, member[1]!) : null;
       if (member && guidance?.replacement && guidance.title) {
@@ -729,7 +740,7 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
         title = guidance.title;
       }
     }
-    if (!replacement || !title) continue;
+    if (replacement === null || !title) continue;
     actions.push({
       title,
       kind: "quickfix",
@@ -876,8 +887,8 @@ function lineEndAt(text: string, start: number): number {
 function wordAt(text: string, offset: number): string {
   let start = offset;
   let end = offset;
-  while (start > 0 && /[A-Za-z0-9_]/u.test(text[start - 1]!)) start -= 1;
-  while (end < text.length && /[A-Za-z0-9_]/u.test(text[end]!)) end += 1;
+  while (start > 0 && isSourceIdentifierPart(text[start - 1]!)) start -= 1;
+  while (end < text.length && isSourceIdentifierPart(text[end]!)) end += 1;
   return text.slice(start, end);
 }
 

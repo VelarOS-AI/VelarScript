@@ -1,6 +1,7 @@
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import { findInterpolatedExpressionEnd, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
 import type { CompilerExtension } from "./extension.ts";
+import { isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
 
 export interface FormatOptions {
   readonly indentWidth?: number;
@@ -19,7 +20,7 @@ const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<="
 const genericNames = new Set(["List", "Set", "Map", "Promise", "Function", "Type"]);
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
-const expressionStatementWords = new Set(["return", "throw", "assert"]);
+const expressionStatementWords = new Set(["return", "throw", "assert", "invert"]);
 const parenthesizedKeywordWords = new Set([
   "if", "while", "for", "match", "case", "catch",
   ...expressionStatementWords,
@@ -103,7 +104,7 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
       continue;
     }
     const previous = source[index - 1];
-    const scanned = (!previous || !/[A-Za-z0-9_]/u.test(previous)) ? scanStringLiteral(source, index) : null;
+    const scanned = (!previous || !isSourceIdentifierPart(previous)) ? scanStringLiteral(source, index) : null;
     if (!scanned) {
       output += source[index]!;
       index += 1;
@@ -178,7 +179,8 @@ function reindentLayoutLiteral(value: string, originalIndent: string, formattedI
 }
 
 function isChainContinuationLine(content: string): boolean {
-  return /^(?:\.|\?\.)[A-Za-z_]/u.test(content);
+  const member = content.startsWith("?.") ? content[2] : content[1];
+  return (content.startsWith(".") || content.startsWith("?.")) && Boolean(member && isSourceIdentifierStart(member));
 }
 
 function nextEmbeddedDepth(
@@ -293,9 +295,9 @@ function tokenizeInline(
       tokens.push({ kind: "embedded", text: source.slice(index).trimEnd() });
       break;
     }
-    if (/[A-Za-z_]/u.test(character)) {
+    if (isSourceIdentifierStart(character)) {
       const start = index++;
-      while (index < source.length && /[A-Za-z0-9_]/u.test(source[index]!)) index += 1;
+      while (index < source.length && isSourceIdentifierPart(source[index]!)) index += 1;
       const value = source.slice(start, index);
       tokens.push({ kind: value === "true" || value === "false" || value === "null" ? "literal" : "word", text: value });
       continue;

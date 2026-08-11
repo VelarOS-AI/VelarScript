@@ -1,42 +1,9 @@
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
+import { forbiddenSourceIdentifiers, isForbiddenPrototypeMember, isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
-
-interface ForbiddenIdentifierRule {
-  readonly guidance: string;
-  /**
-   * Tokens to emit as if the guided spelling had been written, letting the
-   * parser and analyzer report their own guidance in the same compile. A rule
-   * without recovery has no unambiguous guided form, so it keeps the current
-   * behavior: the diagnostic gates parsing entirely.
-   */
-  readonly recovery: readonly { readonly kind: TokenKind; readonly value: string }[] | null;
-}
-
-function forbidden(guidance: string, recovery: ForbiddenIdentifierRule["recovery"]): ForbiddenIdentifierRule {
-  return { guidance, recovery };
-}
-
-const forbiddenSourceIdentifiers = new Map<string, ForbiddenIdentifierRule>([
-  ["var", forbidden("Use 'let' or 'const'; VelarScript does not expose 'var'", [{ kind: "let", value: "let" }])],
-  ["undefined", forbidden("Use 'null'; VelarScript does not expose 'undefined'", [{ kind: "null", value: "null" }])],
-  ["none", forbidden("Use 'null'; VelarScript uses the Web-native empty value spelling", [{ kind: "null", value: "null" }])],
-  ["None", forbidden("Use 'null'; VelarScript keywords are lowercase and Web-native", [{ kind: "null", value: "null" }])],
-  ["True", forbidden("Use 'true'; VelarScript keywords are lowercase", [{ kind: "true", value: "true" }])],
-  ["False", forbidden("Use 'false'; VelarScript keywords are lowercase", [{ kind: "false", value: "false" }])],
-  ["elif", forbidden("Use 'else if'; VelarScript keeps ordinary readable if chains", [{ kind: "else", value: "else" }, { kind: "if", value: "if" }])],
-  ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
-  ["float", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
-  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "match", value: "match" }])],
-  ["this", forbidden("Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'", [{ kind: "identifier", value: "self" }])],
-  ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [])],
-  ["eval", forbidden("VelarScript does not expose 'eval'", null)],
-  ["with", forbidden("Use a record spread such as '{...value, field: next}' to build an updated record; VelarScript does not expose 'with'", null)],
-]);
-
-const forbiddenPrototypeMembers = new Set(["prototype", "__proto__"]);
 const MAX_TOKENS = 250000;
 const MAX_NESTING = 512;
 
@@ -286,6 +253,7 @@ export class Lexer {
           }
           break;
         case "#":
+          if (this.readJavaScriptPrivateIdentifier(start)) break;
           if (this.readHexColor(start)) break;
           if (this.readHashComment(start)) break;
           this.invalidCharacter(character, start);
@@ -416,7 +384,7 @@ export class Lexer {
       this.diagnostics.push(diagnostic("VEL1005", rule.guidance, span(start, this.index)));
     } else if (extensionGuidance) {
       this.diagnostics.push(diagnostic("VEL1005", extensionGuidance, span(start, this.index)));
-    } else if (forbiddenPrototypeMembers.has(value) && (previous === "dot" || previous === "optionalDot")) {
+    } else if (isForbiddenPrototypeMember(value) && (previous === "dot" || previous === "optionalDot")) {
       this.diagnostics.push(diagnostic("VEL1005", "VelarScript does not expose prototype manipulation", span(start, this.index)));
     }
     const extensionKeyword = this.extensionKeywords.get(value);
@@ -653,6 +621,24 @@ export class Lexer {
     return true;
   }
 
+  private readJavaScriptPrivateIdentifier(start: number): boolean {
+    const previous = this.tokens.at(-1);
+    const memberAccess = previous?.kind === "dot" || previous?.kind === "optionalDot";
+    const declaration = previous?.kind === "let" || previous?.kind === "const" || previous?.kind === "def"
+      || (previous?.kind === "identifier" && previous.value === "get");
+    if ((!memberAccess && !declaration) || !this.isIdentifierStart(this.peek(1))) return false;
+    this.index = start + 1;
+    const nameStart = this.index;
+    while (this.isIdentifierPart(this.peek())) this.advance();
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL1005",
+      "Remove '#'; VelarScript owns class privacy and does not expose JavaScript private identifiers",
+      span(start, start + 1),
+    ));
+    this.tokens.push({ kind: "identifier", value: this.text.slice(nameStart, this.index), span: span(nameStart, this.index) });
+    return true;
+  }
+
   // A '#' that starts a line is a Python-style comment: it receives "use //"
   // guidance and the rest of the line is skipped like a comment, so the
   // commented text never produces its own error cascade. Bare hex colors were
@@ -688,11 +674,11 @@ export class Lexer {
   }
 
   private isIdentifierStart(character: string): boolean {
-    return /[A-Za-z_$]/.test(character);
+    return isSourceIdentifierStart(character);
   }
 
   private isIdentifierPart(character: string): boolean {
-    return /[A-Za-z0-9_$]/.test(character);
+    return isSourceIdentifierPart(character);
   }
 
   private isDigit(character: string): boolean {

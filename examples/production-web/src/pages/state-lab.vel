@@ -8,10 +8,10 @@ state showFirst = true
 state labRows: List<LabRow> = [{id: "alpha"}, {id: "beta"}, {id: "gamma"}]
 
 def toggleBusy() -> null:
-    busy = not busy
+    invert busy
 
 def swapBranch() -> null:
-    showFirst = not showFirst
+    invert showFirst
 
 def reverseRows() -> null:
     labRows = labRows.reversed()

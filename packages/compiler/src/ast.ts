@@ -28,6 +28,7 @@ export type CoreStatement =
   | TryStatement
   | PassStatement
   | AssignmentStatement
+  | InvertStatement
   | ExpressionStatement;
 
 export type Statement = CoreStatement | ExtensionStatement;
@@ -508,6 +509,12 @@ export interface AssignmentStatement {
 }
 
 export type AssignmentTarget = IdentifierExpression | MemberExpression | IndexExpression;
+
+export interface InvertStatement {
+  readonly kind: "InvertStatement";
+  readonly target: AssignmentTarget;
+  readonly span: Span;
+}
 
 export interface ExpressionStatement {
   readonly kind: "ExpressionStatement";

@@ -107,10 +107,11 @@ attempts += 1
   read-only. Use a `readonly` type view when mutation through that reference
   must be forbidden.
 - Both are lexically scoped.
-- `$` is allowed in identifiers and has no compiler meaning. Teams may use a
-  leading `$` as a visual convention for values whose changes can affect the
-  view, in the same spirit as `_` for a private-looking field, but the compiler
-  never infers reactivity from the spelling.
+- `$` is allowed in identifiers. Teams may use a leading `$` as a visual
+  convention for values whose changes can affect the view, in the same spirit
+  as `_` for a private-looking field, but the compiler never infers reactivity
+  from the spelling. The `$velar` prefix is the sole exception: it belongs to
+  hygienic generated JavaScript and cannot begin a source binding.
 - A binding cannot be declared twice in the same scope.
 - Shadowing follows ordinary lexical lookup everywhere, including module
   reactive bindings: a parameter or local binding may reuse a `state` name,
@@ -134,8 +135,9 @@ attempts += 1
   lexical lookup, so a local or imported `color` or `clamp` naturally wins.
   An extension may reserve an actual runtime entry point such as Web `mount` or
   `tick` when shadowing would make emitted behavior ambiguous.
-- Binding names beginning with `__velar` are reserved for hygienic generated
-  helpers. Object fields and JavaScript property names are unaffected.
+- Binding names beginning with `$velar` or `__velar`, case-insensitively, are
+  reserved for hygienic generated helpers. Object fields and JavaScript
+  property names are unaffected because they cannot capture a lexical helper.
 
 Literals are intentionally small:
 
@@ -262,6 +264,22 @@ optional conditions; they are not general value-selection operators. `and` and
 `or` short-circuit in source order. The right side receives facts established
 by the path that reaches it, so `user and user.active` and
 `user == null or not user.active` need no optional-access workaround.
+
+Use `invert target` when a writable `bool` must be reversed in place:
+
+```velar fragment
+let active = false
+invert active
+invert panel.visible
+invert flags[index]
+```
+
+The target may be a mutable binding, writable member, or writable List index.
+Its receiver and index are each evaluated exactly once. `active = not active`
+is deliberately rejected: the dedicated statement states the mutation intent,
+avoids repeating complex target expressions, and can use a reactive state's
+read/write protocol as one operation. The language server offers a preferred
+quick fix when the equivalent rewrite is statically unambiguous.
 
 Equality uses `==` and `!=` in source and compiles to strict JavaScript
 identity/value equality. There is no coercive equality spelling.
@@ -820,9 +838,10 @@ List members:
 | `reversed()` | Reversed copy. |
 | `join(separator="")` | Joined string for `List<string>`. |
 
-Direct indexing is strict and throws `IndexError` outside the List. Use `get`
-for an optional read. `sorted` and `reversed` do not mutate the source. Callback
-operations (`find`, `some`, `every`, `map`, `filter`, `reduce`, keyed `sorted`,
+Direct indexing and indexed assignment are strict. Negative indexes count from
+the end; indexes outside `-size` through `size - 1` throw `IndexError`. Use
+`get` for an optional read. `sorted` and `reversed` do not mutate the source.
+Callback operations (`find`, `some`, `every`, `map`, `filter`, `reduce`, keyed `sorted`,
 `sum`, `min`, and `max`) read one
 checked shallow snapshot, so a callback may mutate the original List without
 changing which values belong to the current operation.
@@ -1112,12 +1131,10 @@ Classes use typed body fields and one explicit constructor.
 
 ```velar
 class Session:
-    const id: string
-    let active: bool
+    let active: bool = true
 
-    constructor(id: string):
-        self.id = id
-        self.active = true
+    constructor(const id: string):
+        pass
 
     get label() -> string:
         return self.active ? self.id : f"{self.id} (closed)"
@@ -1128,7 +1145,15 @@ class Session:
 
 - Fields are `const` or `let` and require a type.
 - A field initializer is optional.
-- The constructor initializes required fields through `self.field = value`.
+- A constructor parameter prefixed with `const` or `let` declares a public
+  instance field and initializes it from that argument. Prefix the parameter
+  property with `private` for native private storage. Parameter properties
+  require an explicit type and cannot be rest parameters.
+- An ordinary constructor parameter remains local to the constructor. Required
+  body fields are initialized through one direct `self.field = value` assignment.
+- In a derived class, parameter properties initialize after the leading
+  `super(...)` call and before body field initializers and the remaining
+  constructor statements.
 - There is no class-header constructor shorthand.
 - Instances are called directly: `Session("session-1")`.
 - `self` is explicit in method bodies.
@@ -1138,19 +1163,14 @@ Inheritance is explicit:
 
 ```velar
 abstract class Entity:
-    const id: string
-
-    constructor(id: string):
-        self.id = id
+    constructor(const id: string):
+        pass
 
     abstract def describe() -> string
 
 class Player extends Entity:
-    let score: number
-
-    constructor(id: string, score: number = 0):
+    constructor(id: string, let score: number = 0):
         super(id)
-        self.score = score
 
     override def describe() -> string:
         return f"{self.id}: {self.score}"
@@ -1161,7 +1181,9 @@ A derived constructor calls `super(...)` before using `self`. `abstract` and
 declares class-owned fields and methods; inherited static fields cannot be
 redeclared because that would create two independent storage locations.
 `private` lowers to native JavaScript private storage and is accessible only
-inside the declaring class.
+inside the declaring class. The Velar spelling remains `private let field` and
+`self.field`; direct JavaScript private-identifier syntax such as `#field` or
+`self.#field` is rejected with a safe fix that removes only the `#` marker.
 
 `super.member` follows JavaScript's lexical rule. It is available directly in a
 derived constructor, method, getter, or field initializer and remains available
@@ -1169,9 +1191,10 @@ inside a nested arrow. A nested `def` creates a new function boundary and does
 not inherit `super`; name the base class explicitly when that is the intended
 call.
 
-VelarScript preserves JavaScript prototype and reference semantics. It does not
-copy Python's multiple inheritance, metaclasses, descriptors, or operator
-overloading.
+VelarScript preserves JavaScript prototype and reference semantics at runtime,
+but source cannot read or mutate `prototype` or `__proto__` as object-model
+entry points. It does not copy Python's multiple inheritance, metaclasses,
+descriptors, or operator overloading.
 
 ## 11. Errors and assertions
 
@@ -1504,7 +1527,7 @@ export component Profile(userId: string):
         return await saveUser(profile.value)
 
     def toggleExpanded() -> null:
-        expanded = not expanded
+        invert expanded
 
     return <section>
         <button type="button" on:click={toggleExpanded}>{label()}</button>
@@ -1935,6 +1958,11 @@ VelarScript preserves the JavaScript runtime where it matters:
 The compiler adds checked boundaries, bounded collection helpers, runtime data
 validators, optional-chain normalization, readable DOM output, and source maps.
 It does not pretend those additions create a different memory model.
+Compiler-created lexical temporaries use the reserved `$velar...` namespace;
+the analyzer and editor refactors reject source bindings in that namespace, so
+optional lowering, component setup, and JSX callbacks cannot capture a user's
+binding. The explicit `js unsafe` import boundary remains host JavaScript, not
+a second form of Velar binding declaration.
 Calls and awaited operations whose checked result is `null` normalize their
 observable result to `null` after evaluation. Every expression typed as
 optional, `null`, or `unknown` translates JavaScript `undefined` to `null` by
@@ -1956,6 +1984,11 @@ The following are not part of VelarScript:
 - `switch`
 - `new`
 - `this` in VelarScript class methods
+- JavaScript `delete`, `typeof`, `instanceof`, `eval`, regular-expression
+  literals, increment/decrement operators, or bitwise operators
+- direct JavaScript private identifiers such as `#field`; use the `private`
+  class modifier and ordinary `self.field` access
+- source-level `prototype` or `__proto__` manipulation
 - class-header constructor fields
 - `init:` constructor blocks
 - TypeScript-style interfaces, assertions, overloads, or type programming
@@ -1970,10 +2003,16 @@ The following are not part of VelarScript:
 - random class or variable names
 - automatic compatibility aliases for removed spellings
 
-JavaScript reserved words that are not already VelarScript keywords cannot be
-used as binding names because generated modules must remain valid JavaScript.
-They remain valid as ordinary record keys and class member names, so external
-data and Web APIs do not need renamed fields.
+The source grammar is an allowlist: a syntax addition to JavaScript never
+becomes VelarScript syntax without an explicit language decision, AST node,
+analysis rule, lowering, and proof test. JavaScript reserved words that are not
+already VelarScript keywords cannot be used as binding names because generated
+modules must remain valid JavaScript. Spellings such as `delete`, `default`,
+and `arguments` remain valid as ordinary record keys and class member names, so
+external data and Web APIs do not need renamed fields. Execution-capability and
+object-model spellings such as `eval`, `prototype`, and `__proto__` stay
+unavailable through direct member syntax; controlled records may still carry
+those strings as data keys.
 
 When a removed spelling is common enough to be a likely mistake, the compiler
 reports the direct current spelling. It does not keep the old behavior alive.

@@ -8,6 +8,7 @@ import type {
   ExternFunctionDeclaration,
   ExternConstantDeclaration,
   FunctionDeclaration,
+  InvertStatement,
   MatchPattern,
   MatchValue,
   Program,
@@ -21,6 +22,7 @@ import type {
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
 import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
+import { bindingNameRestriction } from "./source-names.ts";
 import { spanIdentity, type Span } from "./source.ts";
 import {
   analysisTypeIdentity,
@@ -139,6 +141,91 @@ function continuesOptionalChain(expression: Expression): boolean {
     return continuesOptionalChain(expression.callee);
   }
   return false;
+}
+
+function sameExpressionShape(left: Expression, right: Expression): boolean {
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case "LiteralExpression":
+      return right.kind === "LiteralExpression" && Object.is(left.value, right.value);
+    case "FStringExpression":
+      return right.kind === "FStringExpression"
+        && left.parts.length === right.parts.length
+        && left.parts.every((part, index) => {
+          const other = right.parts[index]!;
+          return part.kind === other.kind && (part.kind === "text"
+            ? part.value === other.value
+            : other.kind === "expression" && sameExpressionShape(part.value, other.value));
+        });
+    case "IdentifierExpression":
+      return right.kind === "IdentifierExpression" && left.name === right.name;
+    case "SuperExpression":
+      return right.kind === "SuperExpression";
+    case "DynamicImportExpression":
+      return right.kind === "DynamicImportExpression" && left.source === right.source;
+    case "ListExpression":
+      return right.kind === "ListExpression"
+        && left.elements.length === right.elements.length
+        && left.elements.every((element, index) => sameExpressionShape(element, right.elements[index]!));
+    case "ObjectExpression":
+      return right.kind === "ObjectExpression"
+        && left.properties.length === right.properties.length
+        && left.properties.every((property, index) => {
+          const other = right.properties[index]!;
+          return property.kind === other.kind
+            && (property.kind !== "ObjectProperty" || other.kind === "ObjectProperty" && property.name === other.name)
+            && sameExpressionShape(property.value, other.value);
+        });
+    case "SpreadExpression":
+      return right.kind === "SpreadExpression" && sameExpressionShape(left.value, right.value);
+    case "UnaryExpression":
+      return right.kind === "UnaryExpression"
+        && left.operator === right.operator
+        && sameExpressionShape(left.operand, right.operand);
+    case "BinaryExpression":
+      return right.kind === "BinaryExpression"
+        && left.operator === right.operator
+        && sameExpressionShape(left.left, right.left)
+        && sameExpressionShape(left.right, right.right);
+    case "AssignmentExpression":
+      return right.kind === "AssignmentExpression"
+        && left.operator === right.operator
+        && sameExpressionShape(left.target, right.target)
+        && sameExpressionShape(left.value, right.value);
+    case "ComparisonChainExpression":
+      return right.kind === "ComparisonChainExpression"
+        && left.operators.length === right.operators.length
+        && left.operators.every((operator, index) => operator === right.operators[index])
+        && left.operands.length === right.operands.length
+        && left.operands.every((operand, index) => sameExpressionShape(operand, right.operands[index]!));
+    case "ConditionalExpression":
+      return right.kind === "ConditionalExpression"
+        && sameExpressionShape(left.condition, right.condition)
+        && sameExpressionShape(left.thenValue, right.thenValue)
+        && sameExpressionShape(left.elseValue, right.elseValue);
+    case "CallExpression":
+      return right.kind === "CallExpression"
+        && left.optional === right.optional
+        && sameExpressionShape(left.callee, right.callee)
+        && left.arguments.length === right.arguments.length
+        && left.arguments.every((argument, index) => sameExpressionShape(argument, right.arguments[index]!))
+        && (left.argumentNames ?? []).length === (right.argumentNames ?? []).length
+        && (left.argumentNames ?? []).every((name, index) => name === (right.argumentNames ?? [])[index]);
+    case "MemberExpression":
+      return right.kind === "MemberExpression"
+        && left.property === right.property
+        && left.optional === right.optional
+        && sameExpressionShape(left.object, right.object);
+    case "IndexExpression":
+      return right.kind === "IndexExpression"
+        && left.optional === right.optional
+        && sameExpressionShape(left.object, right.object)
+        && sameExpressionShape(left.index, right.index);
+    case "IsExpression":
+    case "ArrowFunctionExpression":
+    default:
+      return false;
+  }
 }
 
 export interface ClassField {
@@ -300,13 +387,6 @@ function sameInferredResult(left: ValueType, right: ValueType): boolean {
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown"]);
 const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type"]);
-const reservedBindings = new Set([
-  "Array", "Boolean", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
-  "Symbol", "TypeError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
-]);
-const javaScriptReservedBindings = new Set([
-  "arguments", "debugger", "default", "delete", "do", "function", "implements", "instanceof", "interface", "package", "protected", "public", "typeof", "void", "yield",
-]);
 const memberNarrowingPrefix = "\u0000member:";
 const coreGlobalGuidance = new Map([
   ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
@@ -333,10 +413,6 @@ function trimTrailingOmittedArguments(sources: readonly number[]): readonly numb
 
 export function isCorePrimitiveName(name: string): boolean {
   return corePrimitiveNames.has(name);
-}
-
-export function isCoreReservedBinding(name: string): boolean {
-  return reservedBindings.has(name);
 }
 
 // The human-readable origin of a nominal contract, recovered from its
@@ -2126,6 +2202,9 @@ export class Analyzer implements TypeEnvironment {
       case "AssignmentStatement":
         this.analyzeAssignment(statement);
         break;
+      case "InvertStatement":
+        this.analyzeAssignment(statement);
+        break;
       case "ExpressionStatement":
         this.inferExpression(statement.expression);
         break;
@@ -2844,7 +2923,9 @@ export class Analyzer implements TypeEnvironment {
     if (completedFlow) this.restoreFlowFacts(completedFlow);
   }
 
-  private analyzeAssignment(statement: AssignmentStatement): void {
+  private analyzeAssignment(statement: AssignmentStatement | InvertStatement): void {
+    const inverted = statement.kind === "InvertStatement";
+    const operator = inverted ? null : statement.operator;
     let targetType = unknownType;
     let targetBinding: Binding | null = null;
     let targetWritable = true;
@@ -2867,15 +2948,15 @@ export class Analyzer implements TypeEnvironment {
         targetWritable = false;
       }
       targetBinding = binding;
-      targetType = statement.operator === "=" ? (binding.storageBinding ?? binding).declaredType : binding.type;
+      targetType = inverted || operator !== "=" ? binding.type : (binding.storageBinding ?? binding).declaredType;
     } else if (statement.target.kind === "MemberExpression") {
       targetType = this.inferMember(
         statement.target.object,
         statement.target.property,
         statement.target.optional,
         statement.target.span,
-        statement.operator !== "=",
-        statement.operator !== "=",
+        inverted || operator !== "=",
+        inverted || operator !== "=",
       );
       const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
       if (owner.kind === "union" && this.dataFieldIsReadonly(owner, statement.target.property)) {
@@ -2965,7 +3046,7 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot index-assign through ${describeType(objectType)}; it is a read-only view`, statement.target.span));
           targetWritable = false;
         }
-        if (statement.operator !== "=") {
+        if (inverted || operator !== "=") {
           this.typeError("Record keys may be absent; read and check the value before a compound assignment", statement.target.span);
           targetWritable = false;
         }
@@ -2975,17 +3056,40 @@ export class Analyzer implements TypeEnvironment {
       }
     }
 
-    const valueType = this.inferExpression(statement.value, statement.operator === "=" ? targetType : unknownType);
+    if (inverted) {
+      const targetIsBool = this.contextuallyAssignable(targetType, boolType, statement.target.span);
+      this.requireAssignable(targetType, boolType, statement.target.span);
+      if (targetWritable && targetIsBool) {
+        if (statement.target.kind === "MemberExpression") this.invalidateCurrentMemberNarrowings();
+        else this.invalidateAssignmentNarrowings(statement.target, targetBinding);
+      }
+      return;
+    }
 
-    if (statement.operator !== "=" && targetType.kind !== "number" && !(statement.operator === "+=" && targetType.kind === "string")) {
-      this.typeError(`Operator '${statement.operator}' is not valid for ${describeType(targetType)}`, statement.span);
+    const valueType = this.inferExpression(statement.value, operator === "=" ? targetType : unknownType);
+
+    if (targetWritable
+      && operator === "="
+      && statement.value.kind === "UnaryExpression"
+      && statement.value.operator === "not"
+      && sameExpressionShape(statement.target, statement.value.operand)
+      && sameType(this.expandAliases(targetType), boolType)) {
+      this.diagnostics.push(diagnostic(
+        "VEL3018",
+        "Use 'invert target' to reverse a writable bool; self-negating assignment is not part of VelarScript",
+        statement.span,
+      ));
+    }
+
+    if (operator !== "=" && targetType.kind !== "number" && !(operator === "+=" && targetType.kind === "string")) {
+      this.typeError(`Operator '${operator}' is not valid for ${describeType(targetType)}`, statement.span);
     }
     const assignmentValid = this.contextuallyAssignable(valueType, targetType, statement.value.span);
     this.requireAssignable(valueType, targetType, statement.value.span);
     if (targetWritable && assignmentValid) {
       if (statement.target.kind === "MemberExpression") {
         this.invalidateCurrentMemberNarrowings();
-      } else if (statement.operator === "=") {
+      } else if (operator === "=") {
         this.invalidateAssignmentNarrowings(statement.target, targetBinding);
         if (targetBinding?.mutable) {
           const storageBinding = targetBinding.storageBinding ?? targetBinding;
@@ -7068,23 +7172,23 @@ export class Analyzer implements TypeEnvironment {
     declaredType = type,
   ): void {
     this.pendingScopeDeclarations.at(-1)?.delete(name);
-    if (!internal && javaScriptReservedBindings.has(name)) {
-      this.diagnostics.push(diagnostic("VEL3007", name === "arguments"
-        ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
-        : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`, declarationSpan));
-      return;
-    }
-    if (!internal && name.toLowerCase().startsWith("__velar")) {
-      this.diagnostics.push(diagnostic("VEL3007", `'${name}' uses the reserved compiler prefix '__velar'`, declarationSpan));
-      return;
-    }
-    if (!internal && reservedBindings.has(name)) {
-      this.diagnostics.push(diagnostic("VEL3007", `'${name}' is a reserved Core binding`, declarationSpan));
-      return;
-    }
-    if (!internal && this.extensionReservedBindings.has(name)) {
-      this.diagnostics.push(diagnostic("VEL3007", `'${name}' is a reserved extension binding`, declarationSpan));
-      return;
+    if (!internal) {
+      const restriction = bindingNameRestriction(name, undefined, this.extensionReservedBindings);
+      if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
+        const message = restriction === "javascript"
+          ? name === "arguments"
+            ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
+            : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`
+          : restriction === "compiler"
+            ? `'${name}' uses a reserved compiler prefix ('$velar' or '__velar')`
+            : restriction === "core"
+              ? `'${name}' is a reserved Core binding`
+              : restriction === "extension"
+                ? `'${name}' is a reserved extension binding`
+                : `'${name}' is not available as a VelarScript binding`;
+        this.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
+        return;
+      }
     }
     const scope = this.scopes.at(-1)!;
     if (scope.has(name)) {

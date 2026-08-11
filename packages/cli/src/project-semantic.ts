@@ -1,5 +1,9 @@
 import { dirname, extname, resolve } from "node:path";
 import {
+  bindingNameRestriction,
+  isSourceIdentifierPart,
+  isSourceIdentifierStart,
+  memberNameRestriction,
   semanticImportAt,
   semanticModuleReferenceAt,
   semanticSymbolAt,
@@ -81,14 +85,35 @@ interface MemberTarget {
   readonly symbol: SemanticSymbol;
 }
 
-const reservedNames = new Set([
-  "abstract", "and", "as", "async", "await", "break", "case", "catch", "class", "const", "continue",
-  "def", "else", "enum", "export", "extends", "extern", "false", "finally", "for", "from", "if", "import", "in", "is", "js", "let",
-  "match", "module", "null", "not", "or", "override", "pass", "private", "return", "static", "super", "throw", "assert", "true", "try", "type", "unsafe", "while",
-]);
+function bindingRenameRestrictionMessage(project: ProjectResult, name: string): string | null {
+  const extensionKeywords = new Set(project.compilerExtensions.flatMap((extension) => Object.keys(extension.lexical?.keywords ?? {})));
+  const extensionReservedBindings = new Set(project.compilerExtensions.flatMap((extension) => [...extension.analysis?.reservedBindings ?? []]));
+  const restriction = bindingNameRestriction(name, extensionKeywords, extensionReservedBindings);
+  if (!restriction) return null;
+  if (restriction === "invalid") return "The new name is not a valid VelarScript identifier";
+  if (restriction === "keyword") return "The new name is reserved by VelarScript";
+  if (restriction === "source") return `The source spelling '${name}' is unavailable in VelarScript`;
+  if (restriction === "javascript") return `The new name '${name}' is reserved by JavaScript for lexical bindings`;
+  if (restriction === "compiler") return "The new name uses a reserved compiler prefix ('$velar' or '__velar')";
+  if (restriction === "core") return `The new name '${name}' is a reserved Core binding`;
+  return `The new name '${name}' is a reserved extension binding`;
+}
 
-function reservedName(project: ProjectResult, name: string): boolean {
-  return reservedNames.has(name) || project.compilerExtensions.some((extension) => Object.hasOwn(extension.lexical?.keywords ?? {}, name));
+function memberRenameRestrictionMessage(name: string, owner: "class" | "enum" | "data"): string | null {
+  const restriction = memberNameRestriction(name, owner);
+  if (!restriction) return null;
+  if (restriction === "invalid") return "The new name is not a valid VelarScript identifier";
+  if (restriction === "source") return `The source spelling '${name}' is unavailable in VelarScript`;
+  if (restriction === "prototype") return "VelarScript does not expose prototype manipulation";
+  if (restriction === "constructor") return "Class member 'constructor' is reserved for the constructor(...) declaration";
+  return `Enum member '${name}' is reserved for runtime validation`;
+}
+
+function memberOwnerKind(target: MemberTarget): "class" | "data" {
+  if (!target.symbol.container) return "data";
+  const owner = target.module.result.semanticIndex.symbols.find((symbol) => symbol.name === target.symbol.container
+    && (symbol.kind === "class" || symbol.kind === "type" || symbol.kind.startsWith("extension:class:") || symbol.kind.startsWith("extension:type:")));
+  return owner?.kind === "class" || owner?.kind.startsWith("extension:class:") ? "class" : "data";
 }
 
 export function projectDefinitionAt(project: ProjectResult, path: string, offset: number): ProjectLocation | null {
@@ -162,18 +187,22 @@ export function projectRenameAt(
   offset: number,
   newName: string,
 ): ProjectRename | ProjectRenameFailure {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(newName)) return "The new name is not a valid VelarScript identifier";
-  if (reservedName(project, newName)) return "The new name is reserved by VelarScript";
   const module = moduleAt(project, path);
   if (!module) return "No renameable VelarScript symbol at this position";
   const enumMember = enumMemberTargetAt(project, module, offset);
   if (enumMember) {
+    const restriction = memberRenameRestrictionMessage(newName, "enum");
+    if (restriction) return restriction;
     if (enumMember.name === newName) return { edits: [], placeholder: enumMember.name };
     if (enumMemberRenameCollides(project, enumMember, newName)) return "The new name collides with another declaration";
     return { edits: enumMemberLocations(project, enumMember, true), placeholder: enumMember.name };
   }
   const member = accessibleMemberTargetAt(project, module, offset);
   if (member) {
+    const restriction = member.symbol.kind === "parameter"
+      ? bindingRenameRestrictionMessage(project, newName)
+      : memberRenameRestrictionMessage(newName, memberOwnerKind(member));
+    if (restriction) return restriction;
     const protection = extensionRenameProtection(project, member);
     if (protection) return protection;
     if (!renameableMember(member)) return "No renameable VelarScript symbol at this position";
@@ -183,6 +212,8 @@ export function projectRenameAt(
   }
   const target = targetAt(project, module, offset, "rename");
   if (!target || !renameable(target.symbol)) return "No renameable VelarScript symbol at this position";
+  const restriction = bindingRenameRestrictionMessage(project, newName);
+  if (restriction) return restriction;
   if (target.symbol.name === newName) return { edits: [], placeholder: target.symbol.name };
   if (renameCollides(project, target, newName)) return "The new name collides with another declaration";
   const locations = target.kind === "export"
@@ -448,7 +479,7 @@ function objectFieldContextAt(index: SemanticIndex, source: string, offset: numb
   if (current.includes(":")) return null;
   const used = new Set<string>();
   for (const segment of segments) {
-    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)/u.exec(segment);
+    const match = /^\s*([A-Za-z_$][A-Za-z0-9_$]*)/u.exec(segment);
     if (match) used.add(match[1]!);
   }
   return { expression, used };
@@ -456,7 +487,7 @@ function objectFieldContextAt(index: SemanticIndex, source: string, offset: numb
 
 function memberAccessAt(source: string, offset: number): { readonly ownerOffset: number | null; readonly ownerEnd: number } | null {
   let cursor = Math.min(Math.max(0, offset), source.length);
-  while (cursor > 0 && /[A-Za-z0-9_]/u.test(source[cursor - 1]!)) cursor -= 1;
+  while (cursor > 0 && isSourceIdentifierPart(source[cursor - 1]!)) cursor -= 1;
   let dot = cursor - 1;
   while (dot >= 0 && /\s/u.test(source[dot]!)) dot -= 1;
   if (source[dot] !== ".") return null;
@@ -464,8 +495,8 @@ function memberAccessAt(source: string, offset: number): { readonly ownerOffset:
   if (source[ownerEnd - 1] === "?") ownerEnd -= 1;
   while (ownerEnd > 0 && /\s/u.test(source[ownerEnd - 1]!)) ownerEnd -= 1;
   let ownerStart = ownerEnd;
-  while (ownerStart > 0 && /[A-Za-z0-9_]/u.test(source[ownerStart - 1]!)) ownerStart -= 1;
-  const ownerOffset = ownerStart < ownerEnd && /[A-Za-z_]/u.test(source[ownerStart]!) ? ownerStart : null;
+  while (ownerStart > 0 && isSourceIdentifierPart(source[ownerStart - 1]!)) ownerStart -= 1;
+  const ownerOffset = ownerStart < ownerEnd && isSourceIdentifierStart(source[ownerStart]!) ? ownerStart : null;
   return { ownerOffset, ownerEnd };
 }
 
@@ -502,8 +533,8 @@ function memberCallAt(
   if (source[ownerEnd - 1] === "?") ownerEnd -= 1;
   while (ownerEnd > 0 && /\s/u.test(source[ownerEnd - 1]!)) ownerEnd -= 1;
   let ownerStart = ownerEnd;
-  while (ownerStart > 0 && /[A-Za-z0-9_]/u.test(source[ownerStart - 1]!)) ownerStart -= 1;
-  if (ownerStart === ownerEnd || !/[A-Za-z_]/u.test(source[ownerStart]!)) return null;
+  while (ownerStart > 0 && isSourceIdentifierPart(source[ownerStart - 1]!)) ownerStart -= 1;
+  if (ownerStart === ownerEnd || !isSourceIdentifierStart(source[ownerStart]!)) return null;
   const owner = projectSymbolAt(project, module.inputPath, ownerStart);
   const memberName = source.slice(callee.start, callee.end);
   return owner?.members.find((member) => member.name === memberName) ?? null;
@@ -865,8 +896,8 @@ function enumMemberAt(project: ProjectResult, module: ProjectModule, offset: num
   let ownerEnd = dot;
   while (ownerEnd > 0 && /\s/u.test(source[ownerEnd - 1]!)) ownerEnd -= 1;
   let ownerStart = ownerEnd;
-  while (ownerStart > 0 && /[A-Za-z0-9_]/u.test(source[ownerStart - 1]!)) ownerStart -= 1;
-  if (ownerStart === ownerEnd || !/[A-Za-z_]/u.test(source[ownerStart]!)) return null;
+  while (ownerStart > 0 && isSourceIdentifierPart(source[ownerStart - 1]!)) ownerStart -= 1;
+  if (ownerStart === ownerEnd || !isSourceIdentifierStart(source[ownerStart]!)) return null;
   const owner = projectSymbolAt(project, module.inputPath, ownerStart);
   if (owner?.kind !== "enum") return null;
   const target = moduleAt(project, owner.path);
@@ -1016,11 +1047,11 @@ function contains(span: Span, offset: number): boolean {
 
 function wordSpanAt(source: string, offset: number): Span | null {
   let start = Math.min(Math.max(0, offset), source.length);
-  if (start === source.length || !/[A-Za-z0-9_]/u.test(source[start]!)) start -= 1;
-  if (start < 0 || !/[A-Za-z0-9_]/u.test(source[start]!)) return null;
+  if (start === source.length || !isSourceIdentifierPart(source[start]!)) start -= 1;
+  if (start < 0 || !isSourceIdentifierPart(source[start]!)) return null;
   let end = start + 1;
-  while (start > 0 && /[A-Za-z0-9_]/u.test(source[start - 1]!)) start -= 1;
-  while (end < source.length && /[A-Za-z0-9_]/u.test(source[end]!)) end += 1;
+  while (start > 0 && isSourceIdentifierPart(source[start - 1]!)) start -= 1;
+  while (end < source.length && isSourceIdentifierPart(source[end]!)) end += 1;
   return { start, end };
 }
 
@@ -1042,7 +1073,7 @@ function callAt(source: string, offset: number): { readonly calleeOffset: number
       let end = index;
       while (end > 0 && /\s/u.test(source[end - 1]!)) end -= 1;
       let start = end;
-      while (start > 0 && /[A-Za-z0-9_]/u.test(source[start - 1]!)) start -= 1;
+      while (start > 0 && isSourceIdentifierPart(source[start - 1]!)) start -= 1;
       return start === end ? null : { calleeOffset: start, activeParameter };
     }
     if (character === "," && depth === 0) activeParameter += 1;

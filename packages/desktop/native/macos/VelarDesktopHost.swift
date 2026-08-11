@@ -908,11 +908,16 @@ private final class NavigationPolicy: NSObject, WKNavigationDelegate {
 }
 
 private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
+    private let headless: Bool
     private var window: NSWindow?
     private var schemeHandler: AssetSchemeHandler?
     private var bridge: DesktopBridge?
     private var navigationPolicy: NavigationPolicy?
     private var nodeHost: NodeCapabilityHost?
+
+    init(headless: Bool) {
+        self.headless = headless
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -977,8 +982,10 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             window.minSize = NSSize(width: host.window.minWidth, height: host.window.minHeight)
             window.contentView = webView
             window.center()
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            if !headless {
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
             webView.load(URLRequest(url: URL(string: "velar-app://app/index.html")!))
             self.window = window
             self.schemeHandler = schemeHandler
@@ -1029,9 +1036,10 @@ private enum VelarDesktopHost {
                 exit(1)
             }
         }
+        let headlessSmoke = CommandLine.arguments.dropFirst() == ["--headless-smoke"]
         let application = NSApplication.shared
-        let delegate = ApplicationDelegate()
-        application.setActivationPolicy(.regular)
+        let delegate = ApplicationDelegate(headless: headlessSmoke)
+        application.setActivationPolicy(headlessSmoke ? .prohibited : .regular)
         application.delegate = delegate
         application.run()
         _ = delegate

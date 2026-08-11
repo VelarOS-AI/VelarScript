@@ -33,6 +33,7 @@ export type TokenKind =
   | "return"
   | "throw"
   | "assert"
+  | "invert"
   | "if"
   | "else"
   | "match"
@@ -125,6 +126,7 @@ export const keywordKinds: Readonly<Record<string, TokenKind>> = {
   return: "return",
   throw: "throw",
   assert: "assert",
+  invert: "invert",
   if: "if",
   else: "else",
   match: "match",
