@@ -130,6 +130,11 @@ const fileInfoType = object({
   size: numberType,
   modifiedAt: numberType,
 });
+const fileWatchBatchType = object({
+  paths: listStringType,
+  rescan: boolType,
+});
+const fileWatcherType: ValueType = { kind: "named", name: "FileWatcher", identity: "velar/fs#type:FileWatcher" };
 const processResultType = object({
   code: optional(numberType),
   signal: optional(stringType),
@@ -271,6 +276,8 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
   ["velar/fs", moduleInterface(
     new Map([
       ["Blob", { kind: "classConstructor", name: "Blob", identity: blobIdentity }],
+      ["FileWatchBatch", { kind: "typeObject", name: "FileWatchBatch" }],
+      ["FileWatcher", { kind: "typeObject", name: "FileWatcher" }],
       ["readText", functionType(["path", "maxBytes"], [stringType, numberType], promise(stringType), 1)],
       ["createText", functionType(["path", "text"], [stringType, stringType], promise(nullType))],
       ["replaceTextIfMatches", functionType(["path", "expected", "replacement"], [stringType, stringType, stringType], promise(boolType))],
@@ -285,10 +292,16 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["move", functionType(["source", "target", "replace"], [stringType, stringType, boolType], promise(nullType), 2)],
       ["removeFile", functionType(["path"], [stringType], promise(nullType))],
       ["readBlob", functionType(["path", "maxBytes"], [stringType, numberType], promise(blobType), 1)],
+      ["watchFiles", functionType(["path", "recursive"], [stringType, boolType], promise(fileWatcherType), 1)],
     ]),
-    new Map(),
-    new Map(),
-    new Map(),
+    new Map([
+      ["FileWatcher", new Map([
+        ["next", functionType([], [], promise(optional(fileWatchBatchType)))],
+        ["close", functionType([], [], promise(nullType))],
+      ])],
+    ]),
+    new Map([["FileWatcher", "velar/fs#type:FileWatcher"]]),
+    new Map([["FileWatchBatch", fileWatchBatchType]]),
     new Map([["Blob", blobClass]]),
   )],
   ["velar/env", moduleInterface(new Map([

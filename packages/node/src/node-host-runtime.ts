@@ -43,11 +43,13 @@ const __velarNodeHostClearTimeout = globalThis.clearTimeout;
 const __velarNodeHostPending = __velarNodeHostApply(__velarNodeHostObjectCreate, __velarNodeHostObject, [null]);
 const __velarNodeHostEventHandlers = __velarNodeHostApply(__velarNodeHostObjectCreate, __velarNodeHostObject, [null]);
 const __velarNodeHostActiveHttpHandles = __velarNodeHostApply(__velarNodeHostObjectCreate, __velarNodeHostObject, [null]);
+const __velarNodeHostActiveFileWatchers = __velarNodeHostApply(__velarNodeHostObjectCreate, __velarNodeHostObject, [null]);
 const __velarNodeHostMaxPending = 1024;
 let __velarNodeHostNextRequest = 1;
 let __velarNodeHostPendingCount = 0;
 let __velarNodeHostActiveServers = 0;
 let __velarNodeHostActiveHttpRequests = 0;
+let __velarNodeHostActiveWatcherCount = 0;
 let __velarNodeHostReady = false;
 let __velarNodeHostFailure = null;
 let __velarNodeHostReadyResolve;
@@ -103,7 +105,7 @@ function __velarNodeHostErrorOf(value, operation) {
 }
 
 function __velarNodeHostUpdateReference() {
-  const operation = __velarNodeHostPendingCount > 0 || __velarNodeHostActiveServers > 0 || __velarNodeHostActiveHttpRequests > 0
+  const operation = __velarNodeHostPendingCount > 0 || __velarNodeHostActiveServers > 0 || __velarNodeHostActiveHttpRequests > 0 || __velarNodeHostActiveWatcherCount > 0
     ? __velarNodeHostMessagePortRef
     : __velarNodeHostMessagePortUnref;
   __velarNodeHostCall(operation, __velarNodeHostPort, []);
@@ -137,8 +139,11 @@ function __velarNodeHostFail(error) {
   __velarNodeHostPendingCount = 0;
   __velarNodeHostActiveServers = 0;
   __velarNodeHostActiveHttpRequests = 0;
+  __velarNodeHostActiveWatcherCount = 0;
   const httpKeys = __velarNodeHostCall(__velarNodeHostOwnKeys, __velarNodeHostReflect, [__velarNodeHostActiveHttpHandles]);
   for (let index = 0; index < httpKeys.length; index += 1) delete __velarNodeHostActiveHttpHandles[httpKeys[index]];
+  const watcherKeys = __velarNodeHostCall(__velarNodeHostOwnKeys, __velarNodeHostReflect, [__velarNodeHostActiveFileWatchers]);
+  for (let index = 0; index < watcherKeys.length; index += 1) delete __velarNodeHostActiveFileWatchers[watcherKeys[index]];
   __velarNodeHostUpdateReference();
   __velarNodeHostCall(__velarNodeHostMessagePortClose, __velarNodeHostPort, []);
   const terminated = __velarNodeHostCall(__velarNodeHostWorkerTerminate, __velarNodeHostWorker, []);
@@ -173,6 +178,7 @@ function __velarNodeHostMessage(value) {
   const pending = descriptor.value;
   const responseError = message.ok ? null : __velarNodeHostErrorOf(message.error, pending.operation);
   let activeHttpDelta = 0;
+  let activeWatcherDelta = 0;
   if (message.ok && pending.operation === "http.request") {
     const result = __velarNodeHostRecord(message.value, "Node HTTP response");
     const body = __velarNodeHostOwnDescriptor(result, "body");
@@ -191,11 +197,34 @@ function __velarNodeHostMessage(value) {
       activeHttpDelta = -1;
     }
   }
+  if (message.ok && pending.operation === "fs.watchStart") {
+    if (!__velarNodeHostCall(__velarNodeHostNumberIsSafeInteger, __velarNodeHostNumber, [message.value]) || message.value < 1) {
+      throw new __velarNodeHostTypeError("Node host returned an invalid file watcher handle");
+    }
+    const key = __velarNodeHostString(message.value);
+    if (__velarNodeHostOwnDescriptor(__velarNodeHostActiveFileWatchers, key)) throw new __velarNodeHostError("Node host returned a duplicate file watcher handle");
+    __velarNodeHostActiveFileWatchers[key] = true;
+    activeWatcherDelta = 1;
+  } else if (pending.operation === "fs.watchNext" && (!message.ok || message.value === null)) {
+    const key = __velarNodeHostString(pending.handle);
+    if (__velarNodeHostOwnDescriptor(__velarNodeHostActiveFileWatchers, key)) {
+      delete __velarNodeHostActiveFileWatchers[key];
+      activeWatcherDelta = -1;
+    }
+  } else if (message.ok && pending.operation === "fs.watchClose") {
+    if (typeof message.value !== "boolean") throw new __velarNodeHostTypeError("Node host returned an invalid file watcher release result");
+    const key = __velarNodeHostString(pending.handle);
+    if (message.value && __velarNodeHostOwnDescriptor(__velarNodeHostActiveFileWatchers, key)) {
+      delete __velarNodeHostActiveFileWatchers[key];
+      activeWatcherDelta = -1;
+    }
+  }
   delete __velarNodeHostPending[message.id];
   __velarNodeHostPendingCount -= 1;
   if (message.ok && pending.operation === "serve.start") __velarNodeHostActiveServers += 1;
   else if (message.ok && pending.operation === "serve.stop" && __velarNodeHostActiveServers > 0) __velarNodeHostActiveServers -= 1;
   __velarNodeHostActiveHttpRequests += activeHttpDelta;
+  __velarNodeHostActiveWatcherCount += activeWatcherDelta;
   __velarNodeHostUpdateReference();
   if (message.ok) pending.resolve(message.value);
   else pending.reject(responseError);
@@ -242,6 +271,7 @@ export function __velarNodeHostInvoke(operation, args) {
   const id = __velarNodeHostRequestId();
   return new __velarNodeHostPromise((resolve, reject) => {
     const handle = operation === "http.request" || operation === "http.read" || operation === "http.cancel" || operation === "http.close"
+      || operation === "fs.watchNext" || operation === "fs.watchClose"
       ? args[0]
       : null;
     __velarNodeHostPending[id] = {operation, handle, resolve, reject};

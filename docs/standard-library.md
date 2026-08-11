@@ -715,10 +715,19 @@ fallback goes through the identical containment and size checks.
 | `move(source, target, replace=false)` | Moves one path; replacement is explicit. |
 | `removeFile(path)` | Removes one file and never recursively removes a directory. |
 | `readBlob(path, maxBytes=16777216)` | Returns an opaque, non-constructible `Blob` under an explicit byte budget. |
+| `watchFiles(path, recursive=false)` | Creates a bounded, resource-owned invalidation watcher for one existing file or directory. |
+| `FileWatcher.next()` | Pulls one sorted/deduplicated `FileWatchBatch`, permits only one active pull, and returns `null` after release. |
+| `FileWatcher.close()` | Idempotently releases the watcher and settles a pending pull with `null`. |
 
 Paths are non-empty, NUL-free strings of at most 4,096 code units. The module
-has no synchronous forms, recursive deletion, byte inspection, watchers, or
-public filesystem streams.
+has no synchronous forms, recursive deletion, byte inspection, callback event
+surface, or public filesystem streams. `FileWatchBatch` contains an ordinary
+`List<string>` named `paths` and a `rescan` flag. It is deliberately an
+invalidation stream rather than a lossless mutation log: paths are bounded,
+absolute, sorted, and deduplicated; an unknown native filename or exhaustion of
+the 4,096-path/2 MiB queue becomes `{paths: [], rescan: true}`. Each host owns
+at most 128 watchers. Native failure is terminal, and callers explicitly close
+the watcher when its consumer stops.
 `createText` is the no-clobber primitive for generated files, approvals, and
 other check-then-create workflows. Its exclusive-create decision and file
 creation are one host operation; callers must not emulate it with
@@ -737,7 +746,8 @@ Node initializes the module's path, number, UTF-8 encoder/decoder, typed-byte,
 Promise, reflection, and immutable-result operations once. It validates and
 assembles only Velar values in the application Realm, then delegates filesystem
 effects to the private isolated Node host shared with `velar/serve`. Only that
-Worker imports `node:fs/promises`; later replacement of application-Realm
+Worker imports `node:fs/promises` and callback `node:fs` watcher machinery;
+later replacement of application-Realm
 filesystem modules, `Promise.prototype.then`, typed-array sizing, or captured
 validation operations cannot redirect the public API.
 

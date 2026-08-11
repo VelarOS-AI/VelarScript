@@ -37,6 +37,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   let terminalProcessWaits = 0;
   let retainedRunStops = 0;
   let invalidProcessWaits = 0;
+  let malformedWatcherCloses = 0;
   let currentProjectDirectory = directory;
   let selectedProjectDirectory: string | null = null;
   const transportFailure = (phase: "request" | "response"): Error => {
@@ -140,6 +141,14 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       }
       if (capability === "fs") {
         const path = args[0];
+        if (operation === "watchStart") return path === "malformed-watch" ? 42 : 41;
+        if (operation === "watchNext") return args[0] === 42
+          ? { paths: ["/project/z.vel", "/project/a.vel"], rescan: false }
+          : { paths: ["/project/note.txt"], rescan: false };
+        if (operation === "watchClose") {
+          if (args[0] === 42) malformedWatcherCloses += 1;
+          return true;
+        }
         if (operation === "readText") return path === "oversized.txt" ? "too large" : "value";
         if (operation === "replaceTextIfMatches") return path === "invalid-replace" ? "yes" : true;
         if (operation === "exists") return path === "invalid-exists" ? "yes" : true;
@@ -433,6 +442,10 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       info(path: string): Promise<{ readonly name: string; readonly kind: string } | null>;
       canonical(path: string): Promise<string>;
       readBlob(path: string, maxBytes?: number): Promise<unknown>;
+      watchFiles(path: string, recursive?: boolean): Promise<{
+        next(): Promise<{ readonly paths: readonly string[]; readonly rescan: boolean } | null>;
+        close(): Promise<null>;
+      }>;
     }>(directory, "fs", "velar/fs");
     assert.equal(await fsRuntime.readText("note.txt", 16), "value");
     assert.equal(await fsRuntime.createText("created.txt", "value"), null);
@@ -455,6 +468,17 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.ok(await fsRuntime.readBlob("note.txt", 16) instanceof fsRuntime.Blob);
     await assert.rejects(fsRuntime.readBlob("invalid-blob", 16), /invalid Blob/u);
     await assert.rejects(fsRuntime.writeText("bad-result", "value"), /invalid writeText result/u);
+    const watcher = await fsRuntime.watchFiles(".", true);
+    const fileWatchBatch = await watcher.next();
+    assert.deepEqual(fileWatchBatch, { paths: ["/project/note.txt"], rescan: false });
+    assert.equal(Object.isFrozen(fileWatchBatch?.paths), false);
+    assert.equal(calls.at(-1)?.timeout, 0);
+    assert.equal(await watcher.close(), null);
+    assert.equal(await watcher.next(), null);
+    const malformedWatcher = await fsRuntime.watchFiles("malformed-watch", true);
+    await assert.rejects(malformedWatcher.next(), /invalid file watch paths/u);
+    assert.equal(malformedWatcherCloses, 1);
+    assert.equal(await malformedWatcher.next(), null);
 
     const pathRuntime = await runtime<{
       basename(path: string): string;
@@ -876,7 +900,9 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     window: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320 },
     permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"] },
     build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
-  }).replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;");
+  })
+    .replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;")
+    .replace("const maxWatchPaths = 4096;", "const maxWatchPaths = 1;");
   vm.runInContext(`${initScript}\nglobalThis.__bridgeUnderTest = globalThis[Symbol.for("velar.desktop.bridge.v1")]`, context);
   const bridge = (context as { __bridgeUnderTest?: { environment: Readonly<Record<string, string>>; invoke(capability: string, operation: string, args: unknown[]): Promise<unknown> } }).__bridgeUnderTest;
   assert.ok(bridge);
@@ -888,7 +914,22 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
   await assert.rejects(bridge.invoke("fs", "createText", ["exclusive.txt", "second"]), /createText target already exists/u);
   assert.equal(await bridge.invoke("fs", "replaceTextIfMatches", ["exclusive.txt", "first", "updated"]), true);
   assert.equal(await bridge.invoke("fs", "replaceTextIfMatches", ["exclusive.txt", "first", "lost"]), false);
+  const watcherHandle = await bridge.invoke("fs", "watchStart", ["/velar-test/project", true]) as number;
+  const watchedChange = bridge.invoke("fs", "watchNext", [watcherHandle]) as Promise<{paths: string[]; rescan: boolean}>;
   assert.equal(await bridge.invoke("fs", "writeText", ["nested/one/two/value.txt", "value"]), null);
+  const watchedBatch = await watchedChange;
+  assert.equal(watchedBatch.rescan, false);
+  assert.deepEqual([...watchedBatch.paths], ["/velar-test/project/nested/one/two/value.txt"]);
+  const pendingWatch = bridge.invoke("fs", "watchNext", [watcherHandle]);
+  assert.equal(await bridge.invoke("fs", "watchClose", [watcherHandle]), true);
+  assert.equal(await pendingWatch, null);
+  const overflowWatcher = await bridge.invoke("fs", "watchStart", ["/velar-test/project", true]) as number;
+  assert.equal(await bridge.invoke("fs", "writeText", ["overflow-one.vel", "one"]), null);
+  assert.equal(await bridge.invoke("fs", "writeText", ["overflow-two.vel", "two"]), null);
+  const overflowBatch = await bridge.invoke("fs", "watchNext", [overflowWatcher]) as {paths: string[]; rescan: boolean};
+  assert.equal(overflowBatch.rescan, true);
+  assert.deepEqual([...overflowBatch.paths], []);
+  assert.equal(await bridge.invoke("fs", "watchClose", [overflowWatcher]), true);
   assert.equal(await bridge.invoke("fs", "readText", ["nested/one/two/value.txt", 16]), "value");
   await assert.rejects(bridge.invoke("fs", "writeText", ["nested", "not-a-file"]), /requires a file path/u);
   assert.equal(await bridge.invoke("fs", "makeDirectory", ["budget"]), null);

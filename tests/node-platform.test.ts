@@ -81,6 +81,8 @@ test("Node path, filesystem, process, terminal, and HTTP modules expose typed Co
   assert.ok(api.modules["velar/fs"]?.includes("createText"));
   assert.ok(api.modules["velar/fs"]?.includes("replaceTextIfMatches"));
   assert.ok(api.modules["velar/fs"]?.includes("removeFile"));
+  assert.ok(api.modules["velar/fs"]?.includes("FileWatcher"));
+  assert.ok(api.modules["velar/fs"]?.includes("watchFiles"));
 
   const webApi = standardModuleApi([velarCompilerExtension]);
   assert.deepEqual(webApi.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "formBody", "http"]);
@@ -91,7 +93,7 @@ test("Node path, filesystem, process, terminal, and HTTP modules expose typed Co
   try {
     const entry = join(directory, "main.vel");
     await writeFile(entry, `
-import {appendText, canonical, copyFile, createText, info, makeDirectory, move, removeFile, replaceTextIfMatches} from "velar/fs"
+import {FileWatchBatch, FileWatcher, appendText, canonical, copyFile, createText, info, makeDirectory, move, removeFile, replaceTextIfMatches, watchFiles} from "velar/fs"
 import {basename, contains, extension, join, resolve} from "velar/path"
 import {Process, ProcessOutputChannel, run, start} from "velar/process"
 import {terminal} from "velar/terminal"
@@ -115,6 +117,9 @@ def transportPhase(error: Error) -> string:
 
 const root = resolve(["."])
 const file = join([root, "note.txt"])
+const watcher: FileWatcher = await watchFiles(root, recursive=true)
+const changed: FileWatchBatch? = await watcher.next()
+await watcher.close()
 const child: Process = await start("node", ["--version"])
 const args: List<string> = terminal.args()
 const interactive: bool = terminal.isInteractive()
@@ -137,6 +142,9 @@ print(childOutput)
     const project = await compileProject(entry, new Map(), { extensions: [] });
     assert.deepEqual(project.failures, []);
     assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+    const code = project.modules.find((module) => module.inputPath === entry)?.result.code ?? "";
+    assert.match(code, /watchFiles/u);
+    assert.match(code, /\.next\(\)/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -1072,6 +1080,10 @@ test("Node filesystem and path runtimes keep destructive operations bounded and 
     replaceTextIfMatches(path: string, expected: string, replacement: string): Promise<boolean>;
     removeFile(path: string): Promise<null>;
     writeText(path: string, text: string): Promise<null>;
+    watchFiles(path: string, recursive?: boolean): Promise<{
+      next(): Promise<{ readonly paths: readonly string[]; readonly rescan: boolean } | null>;
+      close(): Promise<null>;
+    }>;
   }>("velar/fs");
   const path = await runtime<{
     contains(root: string, target: string): boolean;
@@ -1085,6 +1097,24 @@ test("Node filesystem and path runtimes keep destructive operations bounded and 
     const copy = path.join([nested, "copy.txt"]);
     const moved = path.join([nested, "moved.txt"]);
     await fs.makeDirectory(nested);
+    const watcher = await fs.watchFiles(nested, true);
+    try {
+      const firstChange = watcher.next();
+      await assert.rejects(watcher.next(), /already has an active pull/u);
+      const watched = path.join([nested, "watched.txt"]);
+      await fs.writeText(watched, "watched");
+      const batch = await firstChange;
+      assert.ok(batch !== null);
+      assert.equal(batch.rescan, false);
+      assert.equal(Object.isFrozen(batch.paths), false);
+      assert.ok(batch.paths.includes(await fs.canonical(watched)));
+      const pending = watcher.next();
+      await watcher.close();
+      assert.equal(await pending, null);
+      assert.equal(await watcher.next(), null);
+    } finally {
+      await watcher.close();
+    }
     const exclusive = path.join([nested, "exclusive.txt"]);
     const competingCreates = await Promise.allSettled([
       fs.createText(exclusive, "first"),
@@ -1207,6 +1237,7 @@ const originals = {
   objectFreeze: nativeOwnDescriptor(Object, "freeze"),
   objectGetOwnPropertyDescriptor: nativeOwnDescriptor(Object, "getOwnPropertyDescriptor"),
   objectGetPrototypeOf: nativeOwnDescriptor(Object, "getPrototypeOf"),
+  objectKeys: nativeOwnDescriptor(Object, "keys"),
   promiseThen: nativeOwnDescriptor(Promise.prototype, "then"),
   reflectApply: nativeOwnDescriptor(Reflect, "apply"),
   statsIsDirectory: nativeOwnDescriptor(Stats.prototype, "isDirectory"),
@@ -1228,6 +1259,7 @@ nativeDefine(Object, "defineProperty", {...originals.objectDefineProperty, value
 nativeDefine(Object, "freeze", {...originals.objectFreeze, value: poison});
 nativeDefine(Object, "getOwnPropertyDescriptor", {...originals.objectGetOwnPropertyDescriptor, value: poison});
 nativeDefine(Object, "getPrototypeOf", {...originals.objectGetPrototypeOf, value: poison});
+nativeDefine(Object, "keys", {...originals.objectKeys, value: poison});
 nativeDefine(Promise.prototype, "then", {...originals.promiseThen, value: poison});
 nativeDefine(Reflect, "apply", {...originals.reflectApply, value: poison});
 nativeDefine(Stats.prototype, "isDirectory", {configurable: true, writable: true, value: poison});
@@ -1246,7 +1278,12 @@ const names = await fs.list(root);
 const info = await fs.info(file);
 const blob = await fs.readBlob(file);
 const missing = await fs.exists(root + "/missing.txt");
-const observed = [text, names[0], info?.kind, String(blob instanceof fs.Blob), String(missing), String(poisonCalls)].join("|");
+const watcher = await fs.watchFiles(root, true);
+const pendingWatch = watcher.next();
+await fs.writeText(root + "/watched.txt", "watch");
+const watchBatch = await pendingWatch;
+await watcher.close();
+const observed = [text, names[0], info?.kind, String(blob instanceof fs.Blob), String(missing), String(watchBatch?.paths.length > 0), String(poisonCalls)].join("|");
 
 nativeDefine(Array, "isArray", originals.arrayIsArray);
 nativeDefine(Array.prototype, "sort", originals.arraySort);
@@ -1257,6 +1294,7 @@ nativeDefine(Object, "defineProperty", originals.objectDefineProperty);
 nativeDefine(Object, "freeze", originals.objectFreeze);
 nativeDefine(Object, "getOwnPropertyDescriptor", originals.objectGetOwnPropertyDescriptor);
 nativeDefine(Object, "getPrototypeOf", originals.objectGetPrototypeOf);
+nativeDefine(Object, "keys", originals.objectKeys);
 nativeDefine(Promise.prototype, "then", originals.promiseThen);
 nativeDefine(Reflect, "apply", originals.reflectApply);
 for (const [name, descriptor] of [
@@ -1280,7 +1318,7 @@ nativeApply(nativeWrite, process.stdout, [observed + "\\n"]);
       process.env,
     );
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "one two|driver.mjs|file|true|false|0\n");
+    assert.equal(result.stdout, "one two|driver.mjs|file|true|false|true|0\n");
     assert.equal(result.stderr, "");
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -3,6 +3,7 @@
 // application code and npm dependencies remain in the application Realm.
 export const VELAR_NODE_HOST_WORKER_SOURCE = String.raw`
 import { Buffer } from "node:buffer";
+import { watch as watchNode } from "node:fs";
 import { appendFile, copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, request as createHttpRequest } from "node:http";
 import { request as createHttpsRequest } from "node:https";
@@ -26,9 +27,13 @@ const maxHttpResponseChunks = 1000000;
 const maxHttpRequests = 1024;
 const maxServers = 128;
 const maxRequests = 4096;
+const maxFileWatchers = 128;
+const maxWatchPaths = 4096;
+const maxWatchTextUnits = 2 * 1024 * 1024;
+const watchDebounceMilliseconds = 20;
 const operations = new Set([
   "fs.readFile", "fs.createFile", "fs.replaceFileIfMatches", "fs.writeFile", "fs.appendFile", "fs.exists", "fs.list", "fs.info",
-  "fs.canonical", "fs.makeDirectory", "fs.copyFile", "fs.move", "fs.removeFile",
+  "fs.canonical", "fs.makeDirectory", "fs.copyFile", "fs.move", "fs.removeFile", "fs.watchStart", "fs.watchNext", "fs.watchClose",
   "http.request", "http.read", "http.cancel", "http.close",
   "serve.start", "serve.stop", "serve.body", "serve.respond", "serve.respondFile",
   "serve.streamStart", "serve.streamWrite", "serve.streamEnd", "serve.fail",
@@ -37,9 +42,11 @@ const servers = new Map();
 const requests = new Map();
 const httpRequests = new Map();
 const fileMutationTails = new Map();
+const fileWatchers = new Map();
 let nextServerHandle = 1;
 let nextRequestHandle = 1;
 let nextTextReplacementIdentity = 1;
+let nextFileWatcherHandle = 1;
 let reservedServeBytes = 0;
 const contentTypes = Object.freeze({
   ".css": "text/css; charset=utf-8", ".gif": "image/gif", ".html": "text/html; charset=utf-8",
@@ -197,6 +204,139 @@ async function withFileMutations(paths, action) {
       if (fileMutationTails.get(reservation.identity) === reservation.tail) fileMutationTails.delete(reservation.identity);
     }
   }
+}
+
+function closeFileWatcher(task) {
+  if (task.closed) return false;
+  task.closed = true;
+  if (task.timer !== null) {
+    clearTimeout(task.timer);
+    task.timer = null;
+  }
+  try { task.watcher.close(); } catch {}
+  fileWatchers.delete(task.handle);
+  if (task.pending !== null) {
+    const pending = task.pending;
+    task.pending = null;
+    pending.resolve(null);
+  }
+  return true;
+}
+
+function fileWatchBatch(task) {
+  if (task.rescan) {
+    task.rescan = false;
+    task.paths.clear();
+    task.units = 0;
+    return {paths: [], rescan: true};
+  }
+  const paths = [...task.paths].sort();
+  task.paths.clear();
+  task.units = 0;
+  return {paths, rescan: false};
+}
+
+function settleFileWatch(task) {
+  if (task.pending === null || task.timer !== null || task.failure !== null || !task.rescan && task.paths.size === 0) return;
+  task.timer = setTimeout(() => {
+    task.timer = null;
+    if (task.pending === null || task.closed) return;
+    const pending = task.pending;
+    task.pending = null;
+    pending.resolve(fileWatchBatch(task));
+  }, watchDebounceMilliseconds);
+}
+
+function rescanFileWatch(task) {
+  task.rescan = true;
+  task.paths.clear();
+  task.units = 0;
+  settleFileWatch(task);
+}
+
+function enqueueFileWatch(task, filename) {
+  if (task.closed || task.failure !== null || task.rescan) return;
+  let path;
+  if (!task.directory) path = task.root;
+  else {
+    if (typeof filename !== "string" || filename.length === 0 || filename.length > maxPathCodeUnits || filename.includes("\0") || isAbsolute(filename)) {
+      rescanFileWatch(task);
+      return;
+    }
+    path = resolve(task.root, filename);
+    const local = relative(task.root, path);
+    if (local === ".." || local.startsWith("../") || isAbsolute(local)) {
+      rescanFileWatch(task);
+      return;
+    }
+  }
+  if (!task.paths.has(path)) {
+    if (task.paths.size >= maxWatchPaths || task.units + path.length > maxWatchTextUnits) {
+      rescanFileWatch(task);
+      return;
+    }
+    task.paths.add(path);
+    task.units += path.length;
+  }
+  settleFileWatch(task);
+}
+
+function failFileWatch(task, error) {
+  if (task.closed || task.failure !== null) return;
+  task.failure = error instanceof Error ? error : new Error("Node file watcher failed");
+  if (task.timer !== null) {
+    clearTimeout(task.timer);
+    task.timer = null;
+  }
+  try { task.watcher.close(); } catch {}
+  if (task.pending !== null) {
+    const pending = task.pending;
+    task.pending = null;
+    fileWatchers.delete(task.handle);
+    task.closed = true;
+    pending.reject(task.failure);
+  }
+}
+
+async function startFileWatch(args) {
+  if (args.length !== 2 || typeof args[1] !== "boolean") throw new TypeError("fs.watchStart arguments are invalid");
+  if (fileWatchers.size >= maxFileWatchers) throw new RangeError("Node host cannot own more than 128 file watchers");
+  const root = await realpath(boundedPath(args[0], "watchFiles"));
+  const metadata = await stat(root);
+  const directory = metadata.isDirectory();
+  if (!directory && !metadata.isFile()) throw new TypeError("watchFiles requires a file or directory path");
+  if (args[1] && !directory) throw new TypeError("recursive watchFiles requires a directory path");
+  const handle = allocateHandle(fileWatchers, nextFileWatcherHandle, maxFileWatchers, "Node file watcher");
+  nextFileWatcherHandle = advanceHandle(handle);
+  const task = {handle, root, directory, watcher: null, paths: new Set(), units: 0, rescan: false, pending: null, timer: null, failure: null, closed: false};
+  task.watcher = watchNode(root, {recursive: args[1], encoding: "utf8", persistent: true}, (_event, filename) => enqueueFileWatch(task, filename));
+  task.watcher.once("error", error => failFileWatch(task, error));
+  fileWatchers.set(handle, task);
+  return handle;
+}
+
+function nextFileWatch(args) {
+  if (args.length !== 1) throw new TypeError("fs.watchNext arguments are invalid");
+  const handle = integer(args[0], 1, Number.MAX_SAFE_INTEGER, "Node file watcher handle");
+  const task = fileWatchers.get(handle);
+  if (!task) throw new Error("Node file watcher handle is unknown or already released");
+  if (task.pending !== null) throw new Error("FileWatcher.next already has an active pull");
+  if (task.failure !== null) {
+    fileWatchers.delete(handle);
+    task.closed = true;
+    throw task.failure;
+  }
+  if (task.rescan || task.paths.size > 0) return fileWatchBatch(task);
+  return new Promise((resolveNext, rejectNext) => {
+    task.pending = {resolve: resolveNext, reject: rejectNext};
+  });
+}
+
+function closeFileWatchHandle(args) {
+  if (args.length !== 1) throw new TypeError("fs.watchClose arguments are invalid");
+  const handle = integer(args[0], 1, Number.MAX_SAFE_INTEGER, "Node file watcher handle");
+  const task = fileWatchers.get(handle);
+  return task ? closeFileWatcher(task) : false;
 }
 
 async function commitTextReplacement(path, data, mode) {
@@ -816,6 +956,9 @@ async function dispatch(operation, args) {
       return null;
     });
   }
+  if (operation === "fs.watchStart") return startFileWatch(args);
+  if (operation === "fs.watchNext") return nextFileWatch(args);
+  if (operation === "fs.watchClose") return closeFileWatchHandle(args);
   if (operation === "serve.start") return startServer(args);
   if (operation === "serve.stop") return stopServer(args);
   if (operation === "serve.body") {
@@ -960,6 +1103,9 @@ port.on("message", value => {
     result => port.postMessage({kind: "response", id, ok: true, value: result, error: null}),
     error => port.postMessage({kind: "response", id, ok: false, value: null, error: errorRecord(error)}),
   );
+});
+port.on("close", () => {
+  for (const task of fileWatchers.values()) closeFileWatcher(task);
 });
 port.start();
 port.postMessage({kind: "ready"});

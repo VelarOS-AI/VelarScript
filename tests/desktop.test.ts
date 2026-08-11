@@ -40,7 +40,7 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
     }, null, 2), "utf8");
     await writeFile(join(projectRoot, "src", "main.vel"), `
 import {appDataDirectory, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory} from "velar/desktop"
-import {createText, exists, readText, writeText} from "velar/fs"
+import {createText, exists, readText, watchFiles, writeText} from "velar/fs"
 import {get} from "velar/env"
 import {ProcessOutputChannel, run, start} from "velar/process"
 import {reload} from "velar/web"
@@ -49,6 +49,8 @@ component GenerationProbe:
     mounted:
         if get("VELAR_DESKTOP_GENERATION_SMOKE") == "1":
             const root = await projectDirectory()
+            const watcher = await watchFiles(root, recursive=true)
+            await watcher.close()
             const marker = root + "/generation-marker.txt"
             if await exists(marker):
                 await writeText(root + "/generation-success.txt", "ready")
@@ -244,8 +246,12 @@ async function linkDesktopExtension(projectRoot: string): Promise<void> {
 async function waitForText(path: string, timeoutMs: number, diagnostic: () => string): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try { return await readFile(path, "utf8"); }
-    catch { await new Promise((resolveWait) => setTimeout(resolveWait, 25)); }
+    try {
+      const value = await readFile(path, "utf8");
+      if (value.length > 0) return value;
+    }
+    catch {}
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
   }
   throw new Error(`Timed out waiting for ${path}${diagnostic() ? `: ${diagnostic()}` : ""}`);
 }

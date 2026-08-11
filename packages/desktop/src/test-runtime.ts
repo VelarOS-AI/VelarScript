@@ -22,11 +22,55 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
   const environment = Object.freeze({});
   const nodes = new Map();
   const processHandles = new Map();
+  const fileWatchers = new Map();
   let nextProcessHandle = 1;
+  let nextFileWatcherHandle = 1;
   const now = 0;
   const maxFileBytes = 16 * 1024 * 1024;
   const maxListItems = 100000;
   const maxListTextUnits = 2 * 1024 * 1024;
+  const maxWatchPaths = 4096;
+  const maxWatchTextUnits = 2 * 1024 * 1024;
+
+  function watchBatch(watcher) {
+    if (watcher.rescan) {
+      watcher.rescan = false;
+      watcher.paths.clear();
+      watcher.units = 0;
+      return {paths: [], rescan: true};
+    }
+    const paths = [...watcher.paths].sort();
+    watcher.paths.clear();
+    watcher.units = 0;
+    return {paths, rescan: false};
+  }
+  function settleWatch(watcher) {
+    if (!watcher.pending || watcher.scheduled || !watcher.rescan && watcher.paths.size === 0) return;
+    watcher.scheduled = true;
+    Promise.resolve().then(() => {
+      watcher.scheduled = false;
+      if (!watcher.pending || watcher.closed) return;
+      const resolveNext = watcher.pending;
+      watcher.pending = null;
+      resolveNext(watchBatch(watcher));
+    });
+  }
+  function notifyWatchers(path) {
+    for (const watcher of fileWatchers.values()) {
+      if (watcher.closed || path !== watcher.root && !(watcher.recursive ? contained(watcher.root, path) : parent(path) === watcher.root)) continue;
+      if (!watcher.paths.has(path)) {
+        if (watcher.paths.size >= maxWatchPaths || watcher.units + path.length > maxWatchTextUnits) {
+          watcher.rescan = true;
+          watcher.paths.clear();
+          watcher.units = 0;
+        } else {
+          watcher.paths.add(path);
+          watcher.units += path.length;
+        }
+      }
+      settleWatch(watcher);
+    }
+  }
 
   function normalize(value) {
     if (typeof value !== "string" || value.length === 0 || value.length > 4096 || value.includes("\0")) {
@@ -57,7 +101,7 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
   }
   function parent(path) { const index = path.lastIndexOf("/"); return index <= 0 ? "/" : path.slice(0, index); }
   function name(path) { return path === "/" ? "" : path.slice(path.lastIndexOf("/") + 1); }
-  function directory(path) { nodes.set(path, Object.freeze({ kind: "directory", body: "", modifiedAt: now })); }
+  function directory(path) { nodes.set(path, Object.freeze({ kind: "directory", body: "", modifiedAt: now })); notifyWatchers(path); }
   function makeDirectories(value) {
     const path = authorized(value);
     const parts = path.split("/").filter(Boolean);
@@ -77,6 +121,7 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
     if (new TextEncoder().encode(body).byteLength > maxFileBytes) throw new RangeError("Desktop test file content cannot exceed 16 MiB");
     if (nodes.get(path)?.kind === "directory") throw new TypeError("Desktop test file operation requires a file path");
     nodes.set(path, Object.freeze({ kind: "file", body, modifiedAt: now }));
+    notifyWatchers(path);
   }
   function existing(value) {
     const path = authorized(value);
@@ -94,6 +139,31 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
   if (grants.has("app-data")) makeDirectories(appDataRoot);
 
   async function fs(operation, args) {
+    if (operation === "watchStart") {
+      if (args.length !== 2 || typeof args[1] !== "boolean") throw new TypeError("watchStart arguments are invalid");
+      if (fileWatchers.size >= 128) throw new RangeError("Desktop test host cannot own more than 128 file watchers");
+      const {path, node} = existing(args[0]);
+      if (node.kind !== "directory" && node.kind !== "file") throw new TypeError("watchFiles requires a file or directory path");
+      if (args[1] && node.kind !== "directory") throw new TypeError("recursive watchFiles requires a directory path");
+      const handle = nextFileWatcherHandle++;
+      fileWatchers.set(handle, {root: path, recursive: args[1], paths: new Set(), units: 0, rescan: false, pending: null, scheduled: false, closed: false});
+      return handle;
+    }
+    if (operation === "watchNext") {
+      const watcher = fileWatchers.get(args[0]);
+      if (!watcher) throw new Error("Desktop test file watcher handle is unknown or already released");
+      if (watcher.pending) throw new Error("FileWatcher.next already has an active pull");
+      if (watcher.rescan || watcher.paths.size > 0) return watchBatch(watcher);
+      return new Promise(resolveNext => { watcher.pending = resolveNext; });
+    }
+    if (operation === "watchClose") {
+      const watcher = fileWatchers.get(args[0]);
+      if (!watcher) return false;
+      watcher.closed = true;
+      fileWatchers.delete(args[0]);
+      if (watcher.pending) { const resolveNext = watcher.pending; watcher.pending = null; resolveNext(null); }
+      return true;
+    }
     if (operation === "canonical") return existing(args[0]).path;
     if (operation === "exists") { const path = authorized(args[0]); return nodes.has(path); }
     if (operation === "makeDirectory") { makeDirectories(args[0]); return null; }
@@ -165,16 +235,18 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
       if (source.path === projectRoot || source.path === appDataRoot) throw new Error("move refuses a granted Desktop file root");
       if (source.node.kind === "directory" && contained(source.path, target)) throw new Error("move target cannot be inside its source");
       if (nodes.get(target)?.kind === "directory") throw new Error("move cannot replace a directory");
-      if (nodes.has(target)) nodes.delete(target);
+      if (nodes.has(target)) { nodes.delete(target); notifyWatchers(target); }
       const moving = [...nodes.entries()].filter(([path]) => path === source.path || path.startsWith(source.path + "/"));
       for (const [path] of moving) nodes.delete(path);
       for (const [path, node] of moving) nodes.set(target + path.slice(source.path.length), node);
+      notifyWatchers(source.path);
+      notifyWatchers(target);
       return null;
     }
     if (operation === "removeFile") {
       const { path, node } = existing(args[0]);
       if (node.kind !== "file") throw new Error("removeFile requires a file path");
-      nodes.delete(path); return null;
+      nodes.delete(path); notifyWatchers(path); return null;
     }
     if (operation === "readBlob") {
       const { node } = existing(args[0]);

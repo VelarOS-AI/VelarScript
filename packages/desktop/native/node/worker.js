@@ -1,4 +1,4 @@
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, watch as watchNode } from "node:fs";
 import { access, appendFile, copyFile as copyNodeFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
@@ -12,6 +12,10 @@ const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_HTTP_CHUNKS = 1000000;
 const MAX_HTTP_REDIRECTS = 20;
 const MAX_PATH_UNITS = 4096;
+const MAX_FILE_WATCHERS = 128;
+const MAX_WATCH_PATHS = 4096;
+const MAX_WATCH_TEXT_UNITS = 2 * 1024 * 1024;
+const WATCH_DEBOUNCE_MS = 20;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
 const FATAL_DRAIN_TIMEOUT_MS = 8000;
@@ -33,6 +37,8 @@ let nextProcessHandle = 1;
 const httpHandles = new Map();
 const activeRequests = new Map();
 const fileMutationTails = new Map();
+const fileWatchers = new Map();
+let nextFileWatcherHandle = 1;
 let nextTextReplacementIdentity = 1;
 let fatalDrainStarted = false;
 let activeOwner = null;
@@ -67,6 +73,7 @@ rebuildFileRoots();
 const reader = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
 reader.once("close", () => {
   if (activeOwner !== null) retireOwner(activeOwner);
+  for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host closed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
 });
 reader.on("line", async (line) => {
@@ -153,7 +160,7 @@ function validOwner(value) {
 
 async function dispatch(capability, operation, args, owner, activity) {
   await projectRootUpdate;
-  if (capability === "fs") return fsOperation(operation, args);
+  if (capability === "fs") return fsOperation(operation, args, owner, activity);
   if (capability === "process") {
     if (operation === "run") return processRun(args, owner, activity);
     if (operation === "start") return processStart(args, owner, activity);
@@ -186,6 +193,7 @@ async function replaceProjectRoot(path) {
   const canonical = await realpath(path);
   const metadata = await stat(canonical);
   if (!metadata.isDirectory()) throw new TypeError("Desktop project grant must identify a directory");
+  for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop project grant changed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
   for (const [handle, task] of processHandles) retainRetiredProcess(handle, task);
   for (const [handle, request] of httpHandles) {
@@ -198,7 +206,156 @@ async function replaceProjectRoot(path) {
   rebuildFileRoots();
 }
 
-async function fsOperation(operation, args) {
+function allocateFileWatcherHandle() {
+  let candidate = nextFileWatcherHandle;
+  for (let attempts = 0; attempts <= MAX_FILE_WATCHERS; attempts += 1) {
+    if (!fileWatchers.has(candidate)) {
+      nextFileWatcherHandle = candidate >= Number.MAX_SAFE_INTEGER ? 1 : candidate + 1;
+      return candidate;
+    }
+    candidate = candidate >= Number.MAX_SAFE_INTEGER ? 1 : candidate + 1;
+  }
+  throw new RangeError("Desktop file watcher handle space is unavailable");
+}
+
+function releaseFileWatcher(task, error = null) {
+  if (task.closed) return false;
+  task.closed = true;
+  if (task.timer !== null) { clearTimeout(task.timer); task.timer = null; }
+  try { task.watcher.close(); } catch {}
+  fileWatchers.delete(task.handle);
+  if (task.pending !== null) {
+    const pending = task.pending;
+    task.pending = null;
+    pending.activity.cancel = null;
+    if (error === null) pending.resolve(null);
+    else pending.reject(error);
+  }
+  return true;
+}
+
+function fileWatchBatch(task) {
+  if (task.rescan) {
+    task.rescan = false;
+    task.paths.clear();
+    task.units = 0;
+    return { paths: [], rescan: true };
+  }
+  const paths = [...task.paths].sort();
+  task.paths.clear();
+  task.units = 0;
+  return { paths, rescan: false };
+}
+
+function settleFileWatch(task) {
+  if (task.pending === null || task.timer !== null || task.failure !== null || !task.rescan && task.paths.size === 0) return;
+  task.timer = setTimeout(() => {
+    task.timer = null;
+    if (task.pending === null || task.closed) return;
+    const pending = task.pending;
+    task.pending = null;
+    pending.activity.cancel = null;
+    pending.resolve(fileWatchBatch(task));
+  }, WATCH_DEBOUNCE_MS);
+}
+
+function rescanFileWatch(task) {
+  task.rescan = true;
+  task.paths.clear();
+  task.units = 0;
+  settleFileWatch(task);
+}
+
+function enqueueFileWatch(task, filename) {
+  if (task.closed || task.failure !== null || task.rescan) return;
+  let path;
+  if (!task.directory) path = task.root;
+  else {
+    if (typeof filename !== "string" || filename.length === 0 || filename.length > MAX_PATH_UNITS || filename.includes("\0") || isAbsolute(filename)) {
+      rescanFileWatch(task);
+      return;
+    }
+    path = resolve(task.root, filename);
+    if (!contained(task.root, path) || path.length > MAX_PATH_UNITS) {
+      rescanFileWatch(task);
+      return;
+    }
+  }
+  if (!task.paths.has(path)) {
+    if (task.paths.size >= MAX_WATCH_PATHS || task.units + path.length > MAX_WATCH_TEXT_UNITS) {
+      rescanFileWatch(task);
+      return;
+    }
+    task.paths.add(path);
+    task.units += path.length;
+  }
+  settleFileWatch(task);
+}
+
+function failFileWatch(task, error) {
+  if (task.closed || task.failure !== null) return;
+  task.failure = error instanceof Error ? error : new Error("Desktop file watcher failed");
+  if (task.timer !== null) { clearTimeout(task.timer); task.timer = null; }
+  try { task.watcher.close(); } catch {}
+  if (task.pending !== null) releaseFileWatcher(task, task.failure);
+}
+
+async function startFileWatch(args, owner) {
+  if (args.length !== 2 || typeof args[1] !== "boolean") throw new TypeError("watchStart arguments are invalid");
+  if (fileWatchers.size >= MAX_FILE_WATCHERS) throw new RangeError("Desktop host cannot own more than 128 file watchers");
+  const root = await authorizedExisting(args[0]);
+  const metadata = await stat(root);
+  const directory = metadata.isDirectory();
+  if (!directory && !metadata.isFile()) throw new TypeError("watchFiles requires a file or directory path");
+  if (args[1] && !directory) throw new TypeError("recursive watchFiles requires a directory path");
+  const handle = allocateFileWatcherHandle();
+  const task = { handle, owner, root, directory, watcher: null, paths: new Set(), units: 0, rescan: false, pending: null, timer: null, failure: null, closed: false };
+  task.watcher = watchNode(root, { recursive: args[1], encoding: "utf8", persistent: true }, (_event, filename) => enqueueFileWatch(task, filename));
+  task.watcher.once("error", error => failFileWatch(task, error));
+  fileWatchers.set(handle, task);
+  return handle;
+}
+
+function ownedFileWatcher(value, owner) {
+  const handle = integer(value, 1, Number.MAX_SAFE_INTEGER, "Desktop file watcher handle");
+  const task = fileWatchers.get(handle);
+  if (!task) throw new Error("Desktop file watcher handle is unknown or already released");
+  if (task.owner !== owner) throw new Error("Desktop file watcher belongs to another document generation");
+  return task;
+}
+
+function nextFileWatch(args, owner, activity) {
+  if (args.length !== 1) throw new TypeError("watchNext arguments are invalid");
+  const task = ownedFileWatcher(args[0], owner);
+  if (task.pending !== null) throw new Error("FileWatcher.next already has an active pull");
+  if (task.failure !== null) {
+    const failure = task.failure;
+    releaseFileWatcher(task);
+    throw failure;
+  }
+  if (task.rescan || task.paths.size > 0) return fileWatchBatch(task);
+  return new Promise((resolveNext, rejectNext) => {
+    const pending = { resolve: resolveNext, reject: rejectNext, activity };
+    task.pending = pending;
+    activity.cancel = () => {
+      if (task.pending === pending) releaseFileWatcher(task, new Error("Desktop file watcher pull was cancelled"));
+    };
+  });
+}
+
+function closeFileWatchHandle(args, owner) {
+  if (args.length !== 1) throw new TypeError("watchClose arguments are invalid");
+  const handle = integer(args[0], 1, Number.MAX_SAFE_INTEGER, "Desktop file watcher handle");
+  const task = fileWatchers.get(handle);
+  if (!task) return false;
+  if (task.owner !== owner) throw new Error("Desktop file watcher belongs to another document generation");
+  return releaseFileWatcher(task);
+}
+
+async function fsOperation(operation, args, owner, activity) {
+  if (operation === "watchStart") return startFileWatch(args, owner);
+  if (operation === "watchNext") return nextFileWatch(args, owner, activity);
+  if (operation === "watchClose") return closeFileWatchHandle(args, owner);
   if (operation === "readText") {
     const [path, maximum = MAX_FILE_BYTES] = args;
     const data = await boundedFile(path, maximum, "readText");
@@ -544,6 +701,9 @@ function retainRetiredProcess(handle, task) {
 
 function retireOwner(owner) {
   if (activeOwner === owner) activeOwner = null;
+  for (const task of fileWatchers.values()) {
+    if (task.owner === owner) releaseFileWatcher(task, new Error("Desktop document generation retired"));
+  }
   for (const activity of activeRequests.values()) if (activity.owner === owner) cancelActivity(activity);
   for (const [handle, task] of processHandles) {
     if (task.owner === owner) retainRetiredProcess(handle, task);
@@ -561,6 +721,7 @@ async function fatalDrain() {
   fatalDrainStarted = true;
   reader.removeAllListeners("line");
   reader.close();
+  for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host failed"));
   const tasks = Array.from(processHandles.values());
   for (const task of tasks) task.stop();
   for (const request of httpHandles.values()) request.controller.abort(new Error("Desktop capability host failed"));

@@ -563,6 +563,10 @@ for (const phrase of [
   'await __velarNodeHostInvoke("fs.readFile"',
   'await __velarNodeHostInvoke("fs.createFile"',
   'await __velarNodeHostInvoke("fs.replaceFileIfMatches"',
+  'await __velarNodeHostInvoke("fs.watchNext"',
+  'await __velarNodeHostInvoke("fs.watchClose"',
+  "const __velarFsMaxWatchPaths = 4096",
+  "FileWatcher.next already has an active pull",
 ]) {
   if (!nodeFilesystemRuntimeSource.includes(phrase)) {
     failures.push(`packages/node/src/filesystem-runtime.ts: captured filesystem ABI is missing '${phrase}'`);
@@ -583,6 +587,7 @@ for (const phrase of [
   "let __velarNodeHostFailure = null",
   "if (__velarNodeHostFailure) return new __velarNodeHostPromise",
   "__velarNodeHostActiveServers > 0",
+  "__velarNodeHostActiveWatcherCount > 0",
   "Node host worker did not become ready",
 ]) {
   if (!sharedNodeHostRuntimeSource.includes(phrase)) {
@@ -591,6 +596,7 @@ for (const phrase of [
 }
 for (const phrase of [
   'from "node:fs/promises"',
+  'import { watch as watchNode } from "node:fs"',
   'from "node:worker_threads"',
   '"fs.readFile", "fs.createFile", "fs.replaceFileIfMatches", "fs.writeFile", "fs.appendFile"',
   'await writeFile(path, data, {flag: "wx"})',
@@ -602,6 +608,9 @@ for (const phrase of [
   "function allocateHandle(values, next, maximum, name)",
   "candidate >= Number.MAX_SAFE_INTEGER ? 1 : candidate + 1",
   "const maxServeAggregateBytes = 128 * 1024 * 1024",
+  "const maxFileWatchers = 128",
+  "const maxWatchPaths = 4096",
+  "function closeFileWatcher(task)",
   "function reserveServeBytes(task, bytes)",
   "function reserveTransientServeBytes(bytes)",
   "!task.completed && !task.abandoned",
@@ -1751,6 +1760,10 @@ for (const phrase of [
   'project-directory.bookmark',
   '"hostCommand": "project-root-set"',
   'async function replaceProjectRoot(path)',
+  'const MAX_FILE_WATCHERS = 128',
+  'const MAX_WATCH_PATHS = 4096',
+  'function releaseFileWatcher(task, error = null)',
+  'if (operation === "watchNext") return nextFileWatch(args, owner, activity)',
   'rebuildFileRoots()',
 ]) {
   if (!(desktopNativeHostSource + "\n" + desktopWorkerSource).includes(phrase)) {

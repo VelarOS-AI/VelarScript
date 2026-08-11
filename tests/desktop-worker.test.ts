@@ -123,6 +123,14 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     const appDataFile = join(appData, "data", "audit.ndjson");
     assert.equal(await client.call("fs", "writeText", [appDataFile, "{}\n"]), null);
     assert.equal(await client.call("fs", "readText", [appDataFile, 1024]), "{}\n");
+    const watcherHandle = await client.call("fs", "watchStart", [project, true]) as number;
+    const externalChange = client.call("fs", "watchNext", [watcherHandle]) as Promise<{ paths: string[]; rescan: boolean }>;
+    const externalPath = join(project, "external.vel");
+    await writeFile(externalPath, "const external = true\n", "utf8");
+    const externalBatch = await externalChange;
+    assert.equal(externalBatch.rescan, false);
+    assert.ok(externalBatch.paths.includes(await realpath(externalPath)));
+    const pendingWatcherPull = client.call("fs", "watchNext", [watcherHandle]);
     const replacementProject = join(directory, "replacement-project");
     await mkdir(replacementProject);
     await writeFile(join(replacementProject, "replacement.txt"), "replacement", "utf8");
@@ -131,7 +139,10 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
       ["-e", "setInterval(() => {}, 1000)"],
       { timeout: 0, maxOutputBytes: 65536 },
     ]) as { handle: number; pid: number };
-    await client.setProjectRoot(replacementProject);
+    const projectReplacement = client.setProjectRoot(replacementProject);
+    await assert.rejects(pendingWatcherPull, /project grant changed|cancelled|no longer active/u);
+    await projectReplacement;
+    assert.equal(await client.call("fs", "watchClose", [watcherHandle]), false);
     let replacedProjectProcessExists = true;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       try { process.kill(replacedProjectProcess.pid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }

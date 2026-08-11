@@ -2673,6 +2673,54 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   server/package acceptance、18 Chromium、54/54 三引擎及 production CLI/Desktop build。未推送、未发布、
   未提升版本。
 
+- W-132 用 Editor 的真实外部修改、目录增删、脏缓冲冲突和项目根切换关闭了 Node/Desktop 文件监视
+  owner 缺口。此前 `velar/fs` 只有一次性文件操作，复杂产品只能轮询或私有接入 host；同时首次实现
+  暴露了一个 runtime 契约错误：公开 `List<string>` 被返回为冻结数组，而 VelarScript List 运行时要求
+  普通可变数组。Node 现在公开 `FileWatchBatch { paths, rescan }`、`FileWatcher.next/close` 与
+  `watchFiles(path, recursive = false)`。它是失效通知流而非文件事件日志：批次为绝对、排序、去重路径，
+  无法安全保真时只返回空 paths 与 `rescan=true`；最多 128 个 watcher、每批 4096 个路径/2 MiB 文本，
+  单 watcher 只允许一个 pending pull，close 幂等且令 pending `next()` 得到 `null`。没有新增语法、npm 包
+  或 npm 依赖。
+
+  Node Worker 捕获 `node:fs.watch`，以 20 ms 合并窗口和有界队列拥有 native 资源；应用侧 active watcher
+  会保活共享 Worker，并在结束、错误或 close 时精确释放。Desktop renderer 复用同一公开契约，watch
+  pull timeout 为 `0`；capability Worker 以 owner 与 project-root generation 限定 handle，在 project root
+  切换、owner retire、fatal drain 或输入关闭前先终止 watcher，旧 generation 的 pending pull 明确失败，
+  不会把旧根事件泄漏给新项目。Desktop test owner 也实现确定性 watcher 与 overflow/rescan，从而不需要
+  产品测试 shim。runtime 返回的 paths 已改为符合 VelarScript 语义的普通 List，而非冻结数组。
+
+  diagnostics/codegen/真实执行证据同时覆盖：compiler 对错误 watcher 参数保持 clean type diagnostics，
+  生成代码含公开 watcher import 与 `.next()`；Node 真实临时目录覆盖外部写入、单 pending pull、close
+  后 null、hostile prototype 和资源释放；Desktop deterministic runtime 覆盖 close-pending 与 overflow
+  rescan，真实 Worker 覆盖外部写入、project-root 切换时旧 pull 拒绝及资源释放；packed Desktop fixture
+  真实启动并关闭 watcher。`B-NODE-FS`、`B-NODE-HOST` 与 `B-DESKTOP-BRIDGE` 永久门禁锁定配额、背压、
+  generation 和清理所有权。
+
+  Editor 没有轮询、私有 fs bridge 或事件日志 workaround：项目打开后只消费公开 watcher，以 bounded
+  invalidation 增量维护排序文件树，rescan 才重建；clean 活动文件外部变化重载新 rope/history generation，
+  删除后选择下一个文件；dirty buffer 保留本地文本并进入 recovery conflict。实现过程中发现产品侧
+  `documentDirty` 曾落后于异步 journal，可能把本地编辑后的外部写入误判为 clean；dirty ownership 已在
+  所有编辑/undo/redo/composition/large-load 事务同步建立，watch reconciliation 还会等待 recovery journal
+  结算。旧的一次性 workspace 假设已删除，watcher 在重选项目、卸载和 generation 更替时显式关闭。
+
+  完整证据为 `npm run check`（52 formatted sources、107 docs examples、71 runtime boundaries）、589/589、
+  四示例、六包 packed consumer、publication rehearsal、Dev/Production/External Preview、27+6+15+6
+  三引擎及 installed browser consumer。Workbench installed-toolchain acceptance 通过且无修改。Editor
+  format 6 files、3-module check、1 Core test、24/24 三浏览器、contract check/run、production
+  build/package/native smoke 全绿。最终 FCP median/p95 与输入帧 median/p95 分别为 Chromium 8/56 与
+  1.5/3.2 ms、Firefox 23/38 与 1.42/6.78 ms、WebKit 19/30 与 9/12 ms；1 MiB load/input next-frame
+  为 28.832/0、190.46/48.18、203/25 ms，仍只是证据而非 release threshold。`.app` 688,707 bytes
+  （672.6 KiB），renderer tree 179,433 bytes，JS+CSS 174,455 bytes，SHA-256
+  `78c0474d918c86f66fd80391a42cbf9b4d3b8adc9601c86ad8d1ef63a8d54afc`。Lite 的既有 11 文件并行 WIP
+  未修改，并独立通过 10/22/21/29 module check、40+42 tests、server/package acceptance、54/54
+  三浏览器和 CLI/Desktop production build；其 bundle 为 1,105,954 bytes，SHA-256
+  `6d2b3c811e8062180576c643ba821bf79f3408dd96a2bb2273b757274dcf0055`。未推送、未发布、未提升版本。
+
+  仍阻止生产可用的是：尚未用大 workspace 测量 watcher burst、rescan 延迟与内存；semantic index、
+  LSP/formatter project-session 增量契约、JavaScript/TypeScript 服务、全文搜索、multi-tab、任务/终端、
+  wide-glyph hit testing、native picker/IME automation、crash-in-the-middle recovery、cold-start/RSS/
+  sustained-edit 和正式 performance/package threshold 仍未完成。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
@@ -2680,12 +2728,11 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
    Web、Node、Desktop、Game
    继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
    host/product policy 放回 Core。
-2. 下一波先用 Editor 的真实外部文件变化、目录增删和大 workspace 场景审计 Node/Desktop watcher、
-   资源所有权、背压与增量 tree contract；先在正确 owner 给永久执行和性能证据，再让 Editor 消费。
-   若需要新语法，按提案流程暂停确认。
-3. 随后接通现有 semantic index、LSP 与 formatter 的公开 project-session 增量契约，验证 VelarScript、
+2. 下一波接通现有 semantic index、LSP 与 formatter 的公开 project-session 增量契约，验证 VelarScript、
    JavaScript 和 TypeScript 的 diagnostics/navigation/formatting；Editor 只保留项目、标签、命令、索引
    编排与 UX，不复制 filesystem、text、language-service 或 host policy。
+3. 用 synthetic 和真实大 workspace 测量 W-132 watcher burst、overflow/rescan、增量 tree 延迟与 RSS，
+   将足够通用的调度、索引和背压能力收敛到既有 owner；若需要新语法，按提案流程暂停确认。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
 5. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release

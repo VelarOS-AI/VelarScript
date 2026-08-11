@@ -10288,7 +10288,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/text-buffer", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 283);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 286);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 20);
@@ -10301,7 +10301,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
   assert.deepEqual(api.modules["velar/text-buffer"], ["TextBuffer", "TextChange", "TextEdit", "TextHistory", "TextLineSlice", "TextPosition", "TextSelection", "TextTransaction"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
-  assert.deepEqual(api.modules["velar/fs"], ["Blob", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readBlob", "readText", "removeFile", "replaceTextIfMatches", "writeText"]);
+  assert.deepEqual(api.modules["velar/fs"], ["Blob", "FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readBlob", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
   assert.deepEqual(api.modules["velar/host"], ["exit", "onShutdown"]);
   assert.deepEqual(api.modules["velar/terminal"], ["terminal"]);

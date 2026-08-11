@@ -82,6 +82,13 @@ mutations for one canonical target are coordinated inside the capability
 Worker and a matching replacement commits by same-directory rename. External
 processes outside the bridge are not silently described as participants in
 that lock.
+`watchFiles` also preserves Node's public pull contract and bounds: one active
+`next()`, at most 128 live watchers, a 4,096-path/2 MiB coalescing queue, and
+`rescan=true` when a native event cannot identify a safe path. Watcher handles
+belong to the current document generation and granted roots. Explicit
+`close()`, owner retirement, input shutdown, fatal drain, and a successful
+project-root replacement all close them; a pending pull cannot publish an
+event from the old project after authority changes.
 Desktop preserves the shared HTTP failure model across its native bridge:
 non-2xx, cancellation/timeout, and request/response transport failures remain
 distinct typed errors instead of collapsing Worker failures into one string.
@@ -147,8 +154,8 @@ It installs a deterministic, permission-aware in-memory Desktop filesystem and
 deterministic handles for manifest-granted processes; the native worker keeps
 a separate integration suite for real filesystem, process, and network
 enforcement. Test modules may import the restricted `velar/desktop-test`
-helpers to inspect app-data/project text, seed an external edit or recovery
-journal, and create a bounded test directory through the page's actual
+helpers to inspect app-data/project text, seed or remove an external edit or
+recovery journal, and create a bounded test directory through the page's actual
 capability bridge;
 ordinary `velar/fs` remains application-side and is not faked in the test
 controller process.

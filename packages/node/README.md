@@ -72,6 +72,14 @@ returns `false` on a detected mismatch. This is atomic against cooperating
 operations inside the runtime host and never exposes a partial replacement,
 but it deliberately does not claim to lock unrelated processes that bypass the
 API.
+`watchFiles(path, recursive=false)` returns a resource-owned `FileWatcher`
+whose single active `next()` pull yields bounded, sorted, deduplicated absolute
+paths. A batch is an invalidation hint, not a lossless operating-system event
+log: an unknown filename or exhausted 4,096-path/2 MiB queue yields
+`{paths: [], rescan: true}`. At most 128 watchers are live; `close()` is
+idempotent, settles a pending pull with `null`, and releases the shared Worker
+reference. Native watcher failures are terminal. The returned path List is a
+validated ordinary VelarScript List rather than a frozen host collection.
 `velar/serve` keeps request and response JSON on the compiler-owned strict JSON
 boundary; its public runtime types and response dispatcher inspect own data
 descriptors without invoking getters or collection overrides.

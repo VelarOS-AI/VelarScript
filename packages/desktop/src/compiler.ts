@@ -71,6 +71,7 @@ const desktopTestModuleInterface = moduleInterface(new Map([
   ["makeDirectory", functionType([stringType], { kind: "promise", value: nullType })],
   ["readText", functionType([stringType, { kind: "number" }], { kind: "promise", value: stringType })],
   ["writeText", functionType([stringType, stringType], { kind: "promise", value: nullType })],
+  ["removeFile", functionType([stringType], { kind: "promise", value: nullType })],
 ]));
 
 const nodeProcessInterface = nodeModuleInterfaces.get("velar/process")!;
@@ -155,6 +156,12 @@ export async function writeText(path, text) {
   if (typeof text !== "string") throw new TypeError("Desktop test writeText requires text");
   const value = await invoke("fs", "writeText", [path, text], 30000);
   if (value !== null) throw new TypeError("Desktop test host returned an invalid write result");
+  return null;
+}
+export async function removeFile(path) {
+  if (typeof path !== "string" || path.length === 0 || path.length > 4096 || path.includes("\0")) throw new TypeError("Desktop test removeFile requires a bounded path");
+  const value = await invoke("fs", "removeFile", [path], 30000);
+  if (value !== null) throw new TypeError("Desktop test host returned an invalid remove result");
   return null;
 }
 `.trimStart();
@@ -324,10 +331,12 @@ export function contains(root, target) { const value = relativeValue(root, targe
 const DESKTOP_FS_SOURCE = String.raw`
 ${DESKTOP_HOST_ABI_RUNTIME}
 const blobToken = Symbol("velar.desktop.fs.blob");
+const watcherToken = Symbol("velar.desktop.fs.watcher");
 const maxPathCodeUnits = 4096;
 const maxFileBytes = 16 * 1024 * 1024;
 const maxListItems = 100000;
 const maxListTextUnits = 2 * 1024 * 1024;
+const maxWatchPaths = 4096;
 function pathOf(value, operation) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(operation + " requires a non-empty path string");
   if (value.length > maxPathCodeUnits || value.includes("\0")) throw new RangeError(operation + " path is outside the supported bounds");
@@ -384,8 +393,29 @@ function infoOf(value) {
     || !Number.isFinite(value.modifiedAt)) throw new TypeError("Desktop host returned invalid file info");
   return Object.freeze({name: value.name, kind: value.kind, size: value.size, modifiedAt: value.modifiedAt});
 }
-function invoke(operation, args) {
-  return __velarDesktopHostCall("fs", operation, args);
+function watchBatchOf(value) {
+  value = recordOf(value, "Desktop file watch batch", new Set(["paths", "rescan"]));
+  if (Reflect.ownKeys(value).length !== 2 || typeof value.rescan !== "boolean" || !Array.isArray(value.paths)
+    || value.paths.length > maxWatchPaths || value.rescan && value.paths.length !== 0) {
+    throw new TypeError("Desktop host returned an invalid file watch batch");
+  }
+  const paths = [];
+  let units = 0;
+  let previous = null;
+  for (let index = 0; index < value.paths.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value.paths, String(index));
+    if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "string"
+      || descriptor.value.length === 0 || descriptor.value.length > maxPathCodeUnits || descriptor.value.includes("\0")
+      || previous !== null && descriptor.value <= previous) throw new TypeError("Desktop host returned invalid file watch paths");
+    units += descriptor.value.length;
+    if (units > maxListTextUnits) throw new RangeError("Desktop file watch paths cannot exceed 2 MiB of text");
+    paths.push(descriptor.value);
+    previous = descriptor.value;
+  }
+  return Object.freeze({paths, rescan: value.rescan});
+}
+function invoke(operation, args, timeout = 30000) {
+  return __velarDesktopHostCall("fs", operation, args, timeout);
 }
 async function mutate(operation, args) {
   const value = await invoke(operation, args);
@@ -398,6 +428,45 @@ export class Blob {
     Object.freeze(this);
   }
 }
+class FileWatcherHandle {
+  constructor(token, handle) {
+    if (token !== watcherToken || !Number.isSafeInteger(handle) || handle < 1) throw new TypeError("FileWatcher values are created only by velar/fs.watchFiles");
+    this.handle = handle;
+    this.closed = false;
+    this.pending = false;
+    this.next = async () => {
+      if (this.closed) return null;
+      if (this.pending) throw new Error("FileWatcher.next already has an active pull");
+      this.pending = true;
+      try {
+        const value = await invoke("watchNext", [this.handle], 0);
+        if (value === null) { this.closed = true; return null; }
+        return watchBatchOf(value);
+      } catch (error) {
+        this.closed = true;
+        try { await invoke("watchClose", [this.handle]); } catch {}
+        throw error;
+      } finally {
+        this.pending = false;
+      }
+    };
+  }
+  async close() {
+    if (this.closed) return null;
+    this.closed = true;
+    const value = await invoke("watchClose", [this.handle]);
+    if (typeof value !== "boolean") throw new TypeError("Desktop host returned an invalid file watcher release result");
+    return null;
+  }
+}
+export const FileWatcher = Object.freeze({
+  is(value) { return value instanceof FileWatcherHandle; },
+  parse(value) { if (!(value instanceof FileWatcherHandle)) throw new TypeError("Value does not match FileWatcher"); return value; },
+});
+export const FileWatchBatch = Object.freeze({
+  is(value) { try { watchBatchOf(value); return true; } catch { return false; } },
+  parse(value) { return watchBatchOf(value); },
+});
 export async function readText(path, maxBytes = maxFileBytes) {
   maxBytes = byteLimit(maxBytes, "readText");
   const value = await invoke("readText", [pathOf(path, "readText"), maxBytes]);
@@ -432,6 +501,11 @@ export async function makeDirectory(path) { await mutate("makeDirectory", [pathO
 export async function copyFile(source, target, replace = false) { await mutate("copyFile", [pathOf(source, "copyFile"), pathOf(target, "copyFile"), replaceOf(replace, "copyFile")]); return null; }
 export async function move(source, target, replace = false) { await mutate("move", [pathOf(source, "move"), pathOf(target, "move"), replaceOf(replace, "move")]); return null; }
 export async function removeFile(path) { await mutate("removeFile", [pathOf(path, "removeFile")]); return null; }
+export async function watchFiles(path, recursive = false) {
+  path = pathOf(path, "watchFiles");
+  if (typeof recursive !== "boolean") throw new TypeError("watchFiles recursive must be bool");
+  return new FileWatcherHandle(watcherToken, await invoke("watchStart", [path, recursive]));
+}
 export async function readBlob(path, maxBytes = maxFileBytes) {
   maxBytes = byteLimit(maxBytes, "readBlob");
   const value = recordOf(await invoke("readBlob", [pathOf(path, "readBlob"), maxBytes]), "Desktop Blob", new Set(["base64"]));
