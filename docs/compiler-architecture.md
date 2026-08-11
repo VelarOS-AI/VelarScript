@@ -666,17 +666,21 @@ initialization therefore cannot change which case is selected.
   inside the compiled program. For every
   declared extension it may load an optional `/host` export,
   validates framework-host protocol version 1 and matching compiler capability,
-  and composes at most one application host. CLI source neither identifies the
-  official Web npm package nor constructs Web HTML/CSP/JSX-editor/lifecycle
-  behavior.
+  and composes at most one application host. Native `velar package` separately
+  loads the selected target's `/package-host`: the CLI owns one checked renderer
+  build and constrains its output to the project, while the target owns native
+  assembly. CLI source constructs no Web HTML/CSP/JSX-editor/lifecycle behavior
+  and contains no Desktop packaging branch.
 - VelarOS Workbench owns the generic editor and LSP host. Its default VelarScript
   contribution owns presentation and connection metadata, but never copies or
   embeds compiler semantics.
 
 The compiler, Node runtime, Web and Desktop frameworks, creator, and CLI build as independent npm packages
 containing emitted JavaScript, source maps, and `.d.ts` declarations. Node and Web pin
-the exact compiler version. CLI pins the compiler, Node runtime, and creator but neither
-depends on nor peers with Web; a Web project installs Web directly.
+the exact compiler version. CLI pins the compiler, Node, Web, Desktop, and
+creator as its official toolchain fallback; normal projects may still install
+their own matching target, which resolves first. Desktop does not depend on or
+execute CLI.
 Packed tarballs must install and
 execute in a clean consumer; Workbench is neither bundled into nor imported by
 any package.

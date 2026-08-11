@@ -1,7 +1,7 @@
 import type { VelarDesktopConfig } from "./config.ts";
 
 /**
- * Creates the deterministic capability host used by `velar-desktop test`.
+ * Creates the deterministic capability host used by `velar test --browser`.
  * It is intentionally an in-memory filesystem, not a browser polyfill for the
  * operating system. The native worker has a separate integration suite.
  */

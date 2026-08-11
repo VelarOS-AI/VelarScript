@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { velarProjectExtension, type VelarDesktopConfig } from "./config.ts";
+import type { VelarDesktopConfig } from "./config.ts";
 
 export interface DesktopBuildManifest {
   readonly formatVersion: 1;
@@ -39,18 +39,16 @@ export interface DesktopBuildResult {
   readonly manifest: DesktopBuildManifest;
 }
 
-export async function buildDesktopApplication(projectInput: string | null = null, cwd = process.cwd()): Promise<DesktopBuildResult> {
+export async function buildDesktopApplication(
+  projectRoot: string,
+  config: VelarDesktopConfig,
+  buildRenderer: (outputDirectory: string) => Promise<void>,
+): Promise<DesktopBuildResult> {
   if (process.platform !== "darwin") throw new Error("@velarscript/desktop 0.10 currently builds only the macOS system-WebView host");
-  const projectRoot = resolve(cwd, projectInput ?? ".");
-  const manifestPath = join(projectRoot, "velar.json");
-  const projectManifest = await readJsonObject(manifestPath);
+  projectRoot = resolve(projectRoot);
   const packageManifestPath = await findPackageManifest(projectRoot);
   const packageManifest = await readJsonObject(packageManifestPath);
   const version = packageVersion(packageManifest, packageManifestPath);
-  if (!Array.isArray(projectManifest.extensions) || !projectManifest.extensions.includes("@velarscript/desktop")) {
-    throw new Error(`${manifestPath}: Desktop build requires '@velarscript/desktop' in extensions`);
-  }
-  const config = velarProjectExtension.parse(projectManifest.desktop, manifestPath);
   const outputDirectory = projectPath(projectRoot, config.build.outDir, "desktop.build.outDir");
   const parent = dirname(outputDirectory);
   await mkdir(parent, { recursive: true });
@@ -63,7 +61,7 @@ export async function buildDesktopApplication(projectInput: string | null = null
   const renderer = join(resources, "renderer");
   try {
     await Promise.all([mkdir(executableDirectory, { recursive: true }), mkdir(resources, { recursive: true })]);
-    await runVelarBuild(projectRoot, renderer);
+    await buildRenderer(renderer);
     const hostResources = join(resources, "host");
     await mkdir(hostResources);
     const workerPath = join(hostResources, "worker.js");
@@ -120,21 +118,16 @@ export async function buildDesktopApplication(projectInput: string | null = null
   }
 }
 
-async function runVelarBuild(projectRoot: string, outputDirectory: string): Promise<void> {
-  const cli = fileURLToPath(new URL("../../cli/dist/cli.js", import.meta.url));
-  await run(process.execPath, [cli, "build", projectRoot, "--out-dir", outputDirectory], projectRoot);
-}
-
 async function compileMacHost(output: string): Promise<void> {
   const source = fileURLToPath(new URL("../native/macos/VelarDesktopHost.swift", import.meta.url));
-  await run("/usr/bin/swiftc", [
+  await runProcess("/usr/bin/swiftc", [
     "-Osize", "-whole-module-optimization", "-swift-version", "5", "-parse-as-library",
     "-framework", "Cocoa", "-framework", "WebKit", source, "-o", output,
   ], dirname(output));
   await chmod(output, 0o755);
 }
 
-async function run(command: string, arguments_: readonly string[], cwd: string): Promise<void> {
+async function runProcess(command: string, arguments_: readonly string[], cwd: string): Promise<void> {
   const child = spawn(command, arguments_, { cwd, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";

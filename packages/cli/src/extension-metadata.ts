@@ -17,6 +17,11 @@ const API_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 const PACKAGE_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const MAX_VERSION_LENGTH = 256;
 const kinds = new Set<VelarExtensionKind>(["application", "capability", "language"]);
+const toolchainExtensionPackages = new Set([
+  "@velarscript/web",
+  "@velarscript/desktop",
+]);
+const toolchainRequire = createRequire(import.meta.url);
 
 export interface ResolvedExtensionPackage {
   readonly name: string;
@@ -28,6 +33,7 @@ export interface ResolvedExtensionPackage {
   readonly extends: Readonly<Record<string, string>>;
   readonly composes: Readonly<Record<string, string>>;
   readonly direct: boolean;
+  readonly resolution: "project" | "toolchain";
 }
 
 export async function resolveInstalledExtensionPackage(
@@ -53,7 +59,7 @@ export async function resolveExtensionPackages(
     if (packages.size >= MAX_EXTENSION_GRAPH_SIZE) {
       throw new Error(`Velar extension graph cannot contain more than ${MAX_EXTENSION_GRAPH_SIZE} packages`);
     }
-    const loaded = await readExtensionPackage(require, name, direct.has(name), false);
+    const loaded = await readExtensionPackage(require, name, direct.has(name), false, true);
     if (!loaded) throw new Error(`installed package '${name}' is not a VelarScript extension`);
     packages.set(name, loaded.package);
     const parents = Object.keys(loaded.package.extends).sort();
@@ -119,8 +125,14 @@ async function readExtensionPackage(
   name: string,
   direct: boolean,
   optional: boolean,
+  allowToolchain = false,
 ): Promise<{ readonly package: ResolvedExtensionPackage; readonly peerDependencies: Readonly<Record<string, unknown>> } | null> {
-  const manifestPath = await installedPackageManifest(require, name);
+  let manifestPath = await installedPackageManifest(require, name);
+  let resolution: ResolvedExtensionPackage["resolution"] = "project";
+  if (!manifestPath && allowToolchain && toolchainExtensionPackages.has(name)) {
+    manifestPath = await installedPackageManifest(toolchainRequire, name);
+    resolution = "toolchain";
+  }
   if (!manifestPath) throw new Error(`cannot resolve installed package '${name}'`);
   const information = await stat(manifestPath);
   if (information.size > MAX_JSON_BYTES) throw new RangeError(`${manifestPath}: package manifest exceeds 1 MiB`);
@@ -197,6 +209,7 @@ async function readExtensionPackage(
       extends: Object.freeze(extends_),
       composes: Object.freeze(composes),
       direct,
+      resolution,
     }),
     peerDependencies,
   };

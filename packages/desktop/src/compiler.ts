@@ -103,12 +103,12 @@ function invoke(capability, operation, args, timeout) {
   // call instead of retaining a previous test's Page authority.
   const runtimeDescriptor = getOwnPropertyDescriptor(globalThis, runtimeKey);
   if (!runtimeDescriptor || !("value" in runtimeDescriptor) || !runtimeDescriptor.value || typeof runtimeDescriptor.value !== "object") {
-    throw new Error("velar/desktop-test requires 'velar-desktop test'");
+    throw new Error("velar/desktop-test requires 'velar test --browser'");
   }
   const runtime = runtimeDescriptor.value;
   const invokeDescriptor = getOwnPropertyDescriptor(runtime, "frameworkInvoke");
   if (!invokeDescriptor || !("value" in invokeDescriptor) || typeof invokeDescriptor.value !== "function") {
-    throw new Error("velar/desktop-test requires 'velar-desktop test'");
+    throw new Error("velar/desktop-test requires 'velar test --browser'");
   }
   return reflectApply(invokeDescriptor.value, runtime, [capability, operation, args, timeout]);
 }

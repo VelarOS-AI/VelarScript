@@ -431,10 +431,23 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
     }
 
-    // A component-root render delegates through the same stable child path as
-    // any other component element; emitExpression already routes JSX through
-    // __velarChild with the current scope, so no dynamic wrapper is needed.
-    const renderedRoot = render ? this.emitMappedExpression(render) : "__velarDomCreateComment(\"missing render\")";
+    // A direct JSX root owns its own attribute/child observers and keeps a
+    // stable host. Every other WebNode expression is a live root position:
+    // evaluate it inside a dedicated child scope so conditions and helper
+    // calls can replace the root without rerunning component setup.
+    let renderedRoot = "__velarDomCreateComment(\"missing render\")";
+    if (render) {
+      if (isWebJsx(render)) renderedRoot = this.emitMappedExpression(render);
+      else {
+        const rootScope = this.currentScope;
+        this.currentScope = "$velarDynamicScope";
+        try {
+          renderedRoot = `__velarDynamicComponent(($velarDynamicScope) => ${this.emitMappedExpression(render)}, $velarScope)`;
+        } finally {
+          this.currentScope = rootScope;
+        }
+      }
+    }
     lines.push(`${bodyIndent}const $velarRoot = ${renderedRoot};`);
     lines.push(`${bodyIndent}const $velarHandle = ${expose ? `__velarComponentHandle(${this.emitMappedExpression(expose)}, ${JSON.stringify(statement.name)})` : "null"};`);
     lines.push(`${bodyIndent}if ($velarProps.class !== undefined) __velarClassBindRoot($velarRoot, () => $velarProps.class, $velarScope);`);
@@ -1411,6 +1424,7 @@ function __velarComponent(node, scope, mounted, cleanup, handleState) {
     },
     mount(target, before = null) {
       if (destroyed) throw new Error("Cannot mount a destroyed VelarScript component");
+      if (scope.mounted) throw new Error("Cannot mount a VelarScript component more than once");
       const parent = typeof target === "string" ? __velarDomQuerySelector(target) : target;
       if (!parent) throw new Error("VelarScript mount target was not found");
       __velarDomInsertBefore(parent, node, before);
@@ -1577,6 +1591,8 @@ function __velarDynamic(parent, read, scope, rootState = null) {
   }, "dom", scope);
   scope.cleanups.push(() => {
     if (childScope) __velarDestroyScope(childScope);
+    for (const node of nodes) __velarDomRemove(node);
+    nodes = [];
     if (rootState) {
       rootState.host = null;
       for (const listener of __velarGraphSetItems(rootState.listeners)) listener(null);

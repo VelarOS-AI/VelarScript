@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { formatDiagnostic, formatSource } from "@velarscript/compiler";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
@@ -23,6 +23,7 @@ import { createDeploymentVerificationReport, verifyRemoteDeployment } from "./de
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile } from "./source-limits.ts";
 import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
+import { loadApplicationPackageHost, validateApplicationPackageResult } from "./application-package-host.ts";
 
 
 interface CommandArguments {
@@ -228,7 +229,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
   }
 
-  if (command !== "check" && command !== "build" && command !== "format" && command !== "dev" && command !== "test") {
+  if (command !== "check" && command !== "build" && command !== "package" && command !== "format" && command !== "dev" && command !== "test") {
     process.stderr.write(`Unknown command '${command}'.\n\n`);
     printHelp(process.stderr);
     return 2;
@@ -334,7 +335,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
       : runTests(projectConfig, parsed.input);
   }
 
-  const parsed = parseCommandArguments(rest);
+  const parsed = command === "package" ? parsePackageArguments(rest) : parseCommandArguments(rest);
   if (typeof parsed === "string") {
     process.stderr.write(`velar ${command}: ${parsed}\n`);
     return 2;
@@ -368,6 +369,38 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return 0;
   }
 
+  if (command === "package") {
+    if (!project.framework) {
+      process.stderr.write("velar package: this project does not enable an application target\n");
+      return 1;
+    }
+    try {
+      const packageHost = await loadApplicationPackageHost(projectConfig);
+      let buildRequests = 0;
+      let frameworkBuild: Promise<void> | null = null;
+      const packageResult = await packageHost.packageApplication({
+        projectRoot: projectConfig.root,
+        config: projectConfig.framework!.config,
+        buildFramework: async (requestedOutput) => {
+          buildRequests += 1;
+          if (buildRequests > 1) throw new Error("application package host requested more than one framework build");
+          const outputDirectory = packageFrameworkOutput(projectConfig.root, requestedOutput);
+          frameworkBuild = writeFrameworkProductionApplication(project, outputDirectory);
+          await frameworkBuild;
+        },
+      });
+      if (buildRequests !== 1 || !frameworkBuild) throw new Error("application package host did not request exactly one checked framework build");
+      await frameworkBuild;
+      const result = validateApplicationPackageResult(packageResult, projectConfig.root);
+      process.stdout.write(`Packaged ${project.framework.host.displayName} application -> ${result.artifactPath}\n`);
+      for (const detail of result.details) process.stdout.write(`${detail}\n`);
+      return 0;
+    } catch (error) {
+      process.stderr.write(`velar package: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+  }
+
   if (parsed.output && project.modules.length !== 1) {
     process.stderr.write("velar build: --out is only valid for a single-file build; use --out-dir for module projects\n");
     return 2;
@@ -390,29 +423,9 @@ async function main(arguments_: readonly string[]): Promise<number> {
 
   const outputDirectory = parsed.outputDirectory ? resolve(parsed.outputDirectory) : projectConfig.outDir;
   if (project.framework) {
-    const parent = dirname(outputDirectory);
-    await mkdir(parent, { recursive: true });
-    const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
     try {
-      await copyPublicAssets(project.publicRoot, staging);
-      const production = await buildProductionFramework(project, staging);
-      const artifacts = createFrameworkArtifacts(project, false, {}, {
-        entryPath: production.entryPath,
-        stylesheetPath: production.stylesheetPath,
-        includeStandardImports: false,
-      });
-      if (!artifacts) throw new Error("The framework host did not create an application entry");
-      await writeFile(join(staging, "index.html"), artifacts.html, "utf8");
-      const deployment = await writeStaticDeployment(
-        staging,
-        artifacts.html,
-        project.framework.host.staticDeployment(project.framework.config),
-        production.framework,
-      );
-      await writeProductionManifest(staging, production, deployment);
-      await replaceOutputDirectory(staging, outputDirectory);
+      await writeFrameworkProductionApplication(project, outputDirectory);
     } catch (error) {
-      await rm(staging, { recursive: true, force: true });
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
     }
@@ -437,6 +450,45 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
   process.stdout.write(`Built ${project.modules.length} module${project.modules.length === 1 ? "" : "s"} -> ${outputDirectory}\n`);
   return 0;
+}
+
+async function writeFrameworkProductionApplication(project: ProjectResult, outputDirectory: string): Promise<void> {
+  if (!project.framework) throw new Error("the checked project has no framework host");
+  const parent = dirname(outputDirectory);
+  await mkdir(parent, { recursive: true });
+  const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
+  try {
+    await copyPublicAssets(project.publicRoot, staging);
+    const production = await buildProductionFramework(project, staging);
+    const artifacts = createFrameworkArtifacts(project, false, {}, {
+      entryPath: production.entryPath,
+      stylesheetPath: production.stylesheetPath,
+      includeStandardImports: false,
+    });
+    if (!artifacts) throw new Error("The framework host did not create an application entry");
+    await writeFile(join(staging, "index.html"), artifacts.html, "utf8");
+    const deployment = await writeStaticDeployment(
+      staging,
+      artifacts.html,
+      project.framework.host.staticDeployment(project.framework.config),
+      production.framework,
+    );
+    await writeProductionManifest(staging, production, deployment);
+    await replaceOutputDirectory(staging, outputDirectory);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function packageFrameworkOutput(root: string, input: string): string {
+  if (!isAbsolute(input)) throw new Error("application package host requested a non-absolute framework output path");
+  const output = resolve(input);
+  const fromRoot = relative(root, output);
+  if (fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(fromRoot)) {
+    throw new Error("application package host requested a framework output path outside the project root");
+  }
+  return output;
 }
 
 async function replaceOutputDirectory(staging: string, outputDirectory: string): Promise<void> {
@@ -627,6 +679,12 @@ function parseCommandArguments(arguments_: readonly string[]): CommandArguments 
   }
 
   return { input, output, outputDirectory };
+}
+
+function parsePackageArguments(arguments_: readonly string[]): CommandArguments | string {
+  if (arguments_.length > 1) return `unexpected extra input '${arguments_[1]}'`;
+  if (arguments_[0]?.startsWith("-")) return `unknown option '${arguments_[0]}'`;
+  return { input: arguments_[0] ?? null, output: null, outputDirectory: null };
 }
 
 function parseDevArguments(arguments_: readonly string[]): DevArguments | string {
@@ -822,6 +880,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar test [project-directory | file.test.vel]",
     "  velar test [project-directory] --browser [chromium|firefox|webkit|all]",
     "  velar build <single.vel> --out <file.js>",
+    "  velar package [project-directory]",
     "  velar format [file.vel | project-directory] [--check]",
     "  velar lsp",
     "  velar --version",
@@ -830,7 +889,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 }
 
 const commandNames = new Set([
-  "check", "create", "install", "add", "remove", "update", "dev", "build", "run", "verify", "preview",
+  "check", "create", "install", "add", "remove", "update", "dev", "build", "package", "run", "verify", "preview",
   "verify-deployment", "test", "format", "lsp",
 ]);
 
@@ -844,6 +903,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Runs the development server; the default port is 5173."],
     build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated framework application output or JavaScript modules."],
+    package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
     run: ["Usage: velar run [entry.vel | project-directory] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],
     preview: ["Usage: velar preview [project-directory | build-directory] [--port <1-65535>]", "Serves only a verified production build; the default port is 4173."],

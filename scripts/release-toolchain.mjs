@@ -219,13 +219,18 @@ async function readPackageManifests() {
   if (cli.dependencies?.["@velarscript/node"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact Node runtime version");
   }
-  for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web", "@velarscript/cli"]) {
+  for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web"]) {
     if (desktop.dependencies?.[dependency] !== rootManifest.version) {
       throw new Error(`@velarscript/desktop must pin the exact ${dependency} version`);
     }
   }
-  if (cli.dependencies?.["@velarscript/web"] || cli.peerDependencies?.["@velarscript/web"]) {
-    throw new Error("@velarscript/cli must not install the optional Web framework");
+  if (desktop.dependencies?.["@velarscript/cli"] || desktop.peerDependencies?.["@velarscript/cli"]) {
+    throw new Error("@velarscript/desktop must not depend on CLI orchestration");
+  }
+  for (const dependency of ["@velarscript/web", "@velarscript/desktop"]) {
+    if (cli.dependencies?.[dependency] !== rootManifest.version) {
+      throw new Error(`@velarscript/cli must pin the exact official ${dependency} toolchain target`);
+    }
   }
   if (cli.dependencies?.["create-velar"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact project creator version");

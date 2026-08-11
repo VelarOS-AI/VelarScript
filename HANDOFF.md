@@ -2517,15 +2517,58 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   501,546 bytes，SHA-256 `ecabdd1941fcb02d212a92ec1f1fcaf04457fef028d02798f76a7eca76ab8d74`。
   未推送、未发布、未提升版本。
 
+- W-128 以全新的零 npm `VelarScript-Editor` 作为生产消费者，先关闭三类正式 owner 缺陷。
+  第一，format-2 项目过去只能从项目 `node_modules` 解析 application extension，导致完全不安装
+  依赖的官方 Desktop 工程连 `check` 都无法开始。CLI 现只对随自身精确安装的 Web/Desktop 官方
+  application targets 提供 toolchain fallback；项目本地包优先，已有但损坏/符号链接 manifest 仍
+  fail closed，第三方扩展绝不回退。Node 继续是 CLI 已有的通用 host capability，不被伪装成 manifest
+  application extension。六包图相应改为 CLI 精确持有官方 target generation，Desktop 不再反向依赖
+  CLI。
+
+  第二，编辑器欢迎页的真实根条件场景证明 Web component 的非 JSX 直接根只在构造时求值一次；同时
+  dynamic root 销毁只清 child scope、不删除当时选中的 DOM，重复 mount 同一实例还会静默转移/丢失
+  所有权。Web emitter 现只让直接 JSX 根保持稳定 host，其余 WebNode 根在专用 dynamic child scope
+  中事务替换；销毁会删除当前 nodes，一个 component instance 只允许 mount 一次。生成代码回归锁定
+  `__velarDynamicComponent`，fake DOM 真实执行得到 `section -> main -> destroyed:0`，重复 mount 明确
+  抛错；既有 Router/lazy、mounted/cleanup 与 dynamic Component identity 回归保持通过。新增
+  `B-WEB-COMPONENT-ROOT` 永久边界。
+
+  第三，官方 CLI 过去只能 `build` renderer，原生 `.app` 必须走 Desktop 私有 `velar-desktop`，零 npm
+  工程无法用统一公开工具完成闭环。Compiler 现公开 target-neutral application-package-host ABI；CLI 的
+  `velar package` 只负责解析/校验、一次已检查 framework build 和项目内输出约束；Desktop 的
+  `/package-host` 只负责 macOS native assembly。Desktop 不再导入或执行 CLI，旧 bin、模板、文档和
+  测试调用源已删除。packed consumer 在项目安装目录之外建立无 `node_modules` Desktop 工程，使用
+  installed `velar check/package` 并通过 native `--smoke`，第三方缺失扩展仍拒绝。
+
+  Editor 没有加入 workaround：全部应用、测试和永久契约门禁均为 `.vel`。`tools/contract` 通过公开
+  `velar/fs`/`velar/path` 递归拒绝 `node_modules`、lockfile、手写 JS/TS/HTML/CSS/native/script、
+  `import js unsafe` 和非空 npm dependency map。编辑器自身 format 5 files、2-module check、1 Core
+  test、3/3 Chromium/Firefox/WebKit、contract check/run、production build、统一 package 与 native
+  smoke 全绿。首个 `.app` 为 546,032 bytes（533.2 KiB）：host 301,936、renderer 78,526、capability
+  host 48,638、metadata 116,932；renderer JS+CSS 73,549 bytes，SHA-256 为
+  `317af112db600bba6713861f504e2395b886d93ffa0cf4599caced192344b382`。
+
+  完整证据为 `npm run check`（51 formatted sources、106 docs examples、68 runtime boundaries）、
+  584/584 串行 compiler/runtime/CLI/Desktop/hardening/release tests、四个生产示例 check 与
+  1+3+3+3 tests、六包 packed zero-npm consumer acceptance、publication rehearsal、完整
+  Dev/Production/External Preview、27+6+15+6 三浏览器及 installed browser consumer。门禁过程中还
+  修正两条陈旧测试场景：Core collection-alias probe 不再使用 Web 保留字 `expose`，erased generic
+  lowering 断言使用 W-127 的 `$velarValue` 临时名；两者均未改变语言实现。Lite 的既有 11 文件并行
+  WIP 未修改，Workbench 未修改；未推送、未发布、未提升版本。
+
 下一执行顺序：
 
-1. 以 W-126/W-127 的 target-extension 与 source-grammar contract 为边界，Web、Node、Desktop、Game
+1. 以 W-126/W-127/W-128 的 target-extension、source-grammar 与 package-host contract 为边界，
+   Web、Node、Desktop、Game
    继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
    host/product policy 放回 Core。
-2. 回到 W-125 留下的 Web lifecycle 队列，审计 props/Look 值构造、mounted/cleanup/event Promise
-   观察、dynamic/lazy child 销毁与重复挂载；相同 host-operation 类别集中收敛，并继续用 Lite reload/
-   stop、四个官方示例和 hostile post-initialization execution 找真实断裂。
-3. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
+2. 继续用 Editor 的第一个真实文本缓冲、文件打开与 workspace 生命周期审计 W-125 剩余的 props/Look
+   值构造、mounted/cleanup/event Promise 观察；dynamic/lazy 销毁与重复挂载已有 W-128 契约，不再用
+   产品补丁重复处理。若需要新语法，先按提案流程暂停确认。
+3. 为 Editor 建立公开性能证据：优先补齐现有 Web/browser-test owner 的 FCP、输入延迟和大文本测量，
+   再实现并验证 TextBuffer、选区/光标、undo/redo、项目文件与 LSP/formatter 消费；通用文本或索引
+   能力进入现有 Core/Node/Web/Desktop owner，Editor 只保留编排和 UX。
+4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
-4. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release
+5. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release
    rehearsal、Workbench 安装态、三浏览器和 Lite 门禁；只精确暂存本轮文件，只允许本地提交。

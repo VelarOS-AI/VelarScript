@@ -379,6 +379,12 @@ component RuntimeStatus:
 - Root construction passed to `mount` is synchronous so the runtime can own its
   failure transaction. Await module-level preload work into a binding before
   calling `mount`; component data continues to use `resource`.
+- A direct JSX component root remains a stable host. Any other WebNode root
+  expression, including a conditional root, owns a dedicated dynamic child
+  scope: updates construct the replacement transactionally, destruction removes
+  the currently selected nodes, and component setup is not rerun. One component
+  instance may be mounted exactly once; a repeated mount fails explicitly
+  instead of silently transferring or losing DOM ownership.
 - `unsafe:html` is an explicit wholesale `innerHTML` assignment on every
   reactive update. It does not morph DOM or preserve descendant identity.
   Incremental Markdown therefore requires a parser-owned stable-prefix/dirty-tail

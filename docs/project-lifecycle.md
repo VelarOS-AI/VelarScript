@@ -41,8 +41,11 @@ npm exec velar -- remove package-name
 These commands do not replace npm. npm owns dependency resolution and the lock;
 VelarScript validates that it is operating inside a format-2 project and synchronizes
 only extension activation metadata. An extension package opts in through its
-own `package.json` `velar.extension` object, so the CLI has no official Web or
-future Game package-name branch.
+own `package.json` `velar.extension` object, so compiler composition has no
+official Web or future Game source-semantic branch. The installed CLI carries
+an explicit allowlist of its matching official Web and Desktop application targets
+solely as a zero-`node_modules` distribution fallback; arbitrary extensions
+still resolve only from the project.
 
 Format 2 makes the language/framework boundary explicit:
 
@@ -122,6 +125,9 @@ already do).
 `node_modules`, `.velar`, `publicDir`, and `outDir`. `velar format --check` is read-only.
 Build, verification, preview, and remote-deployment verification continue to
 operate on isolated, integrity-checked production output.
+For application targets with a native package host, `velar package` first runs
+the same checked production build and then delegates native container assembly
+to that target. `velar build` remains the renderer/static artifact command.
 
 An explicit manifest file may be passed instead of the conventional project
 directory. This supports checked-in deployment profiles sharing source and

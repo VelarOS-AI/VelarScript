@@ -21,5 +21,3 @@ export const velarDesktopFramework = Object.freeze({
   renderer: "@velarscript/web" as const,
   capabilityHost: "@velarscript/node" as const,
 });
-
-export { buildDesktopApplication, type DesktopBuildManifest, type DesktopBuildResult } from "./build.ts";

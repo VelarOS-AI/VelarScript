@@ -9,8 +9,11 @@ independent clients. Requires Node.js 24 or later.
 Application framework behavior is injected. For each project extension the CLI
 loads its compiler entry and optional host entry, validates the versioned host
 protocol, then supplies generic filesystem, bundling, development transport,
-preview, and browser-driver services. `@velarscript/cli` neither depends on
-`@velarscript/web` nor owns its HTML, CSP, lifecycle, or runtime APIs.
+preview, and browser-driver services. The CLI distribution includes exact
+official Node capability plus Web and Desktop application targets so a zero-`node_modules` project can
+consume that toolchain generation, but it owns none of their syntax, HTML,
+CSP, lifecycle, runtime, or native packaging behavior. Project-local targets
+take precedence and third-party extensions never use this fallback.
 
 ```sh
 npx @velarscript/cli create my-app
@@ -51,6 +54,7 @@ and `node_modules`, while VelarScript atomically owns only its project manifest.
 ```sh
 npm exec velar -- test --browser
 npm exec velar -- build
+npm exec velar -- package
 npm exec velar -- verify
 npm exec velar -- preview
 npm exec velar -- verify-deployment --url https://preview.example.com

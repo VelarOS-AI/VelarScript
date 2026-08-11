@@ -12,11 +12,7 @@
   "scripts": {
     "clean": "node ../../scripts/clean-package-dist.mjs",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "postbuild": "node ../../scripts/mark-package-bin.mjs dist/cli.js",
     "prepack": "npm run build"
-  },
-  "bin": {
-    "velar-desktop": "./dist/cli.js"
   },
   "engines": {
     "node": ">=24"
@@ -42,7 +38,6 @@
     }
   },
   "dependencies": {
-    "@velarscript/cli": "0.10.0",
     "@velarscript/compiler": "0.10.0",
     "@velarscript/node": "0.10.0",
     "@velarscript/web": "0.10.0"
@@ -59,6 +54,10 @@
     "./host": {
       "types": "./dist/host.d.ts",
       "default": "./dist/host.js"
+    },
+    "./package-host": {
+      "types": "./dist/package-host.d.ts",
+      "default": "./dist/package-host.js"
     }
   }
 }

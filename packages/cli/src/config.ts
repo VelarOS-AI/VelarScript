@@ -178,13 +178,13 @@ function extensionList(value: unknown, manifestPath: string): readonly string[] 
 }
 
 async function loadExtensions(root: string, names: readonly string[], manifestPath: string): Promise<LoadedExtensions> {
-  const require = createRequire(join(root, "package.json"));
   const packages = await resolveExtensionPackages(root, names);
   const compiler: CompilerExtension[] = [];
   const project: ProjectExtension[] = [];
   const hosts: FrameworkHostExtension[] = [];
   for (const package_ of packages) {
     const name = package_.name;
+    const require = createRequire(package_.manifestPath);
     try {
       const entry = require.resolve(`${name}/compiler`);
       const namespace = await import(pathToFileURL(entry).href) as { readonly velarCompilerExtension?: unknown; readonly velarProjectExtension?: unknown };

@@ -8,7 +8,6 @@ import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { velarDesktopFramework } from "../packages/desktop/src/index.ts";
 
 const cli = resolve("packages/cli/src/cli.ts");
-const desktopCli = resolve("packages/desktop/src/cli.ts");
 
 test("Desktop publishes its restricted page-side test seam", () => {
   assert.equal(velarDesktopFramework.modules.includes("velar/desktop-test"), true);
@@ -116,7 +115,7 @@ mount(<App />, "#app")
     const assets = await readFile(join(projectRoot, "build", manifestEntry(await readFile(join(projectRoot, "build", "velar-build.json"), "utf8"))), "utf8");
     assert.match(assets, /velar\.desktop\.bridge\.v1/u);
 
-    const packaged = spawnSync(process.execPath, [desktopCli, "build"], { cwd: projectRoot, encoding: "utf8" });
+    const packaged = spawnSync(process.execPath, [cli, "package"], { cwd: projectRoot, encoding: "utf8" });
     assert.equal(packaged.status, 0, packaged.stderr);
     const desktopBuild = JSON.parse(await readFile(join(projectRoot, "dist", "desktop", "velar-desktop-build.json"), "utf8")) as {
       kind: string;

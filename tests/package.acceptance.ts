@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
+const consumerDirectory = await mkdtemp(join(tmpdir(), "velar-zero-npm-consumer-"));
 
 try {
   const compiler = await pack("@velarscript/compiler");
@@ -27,11 +28,13 @@ try {
   assert.ok(cli.files.some((file) => file.path === "dist/preview-server.js"));
   assert.ok(cli.files.some((file) => file.path === "dist/deployment-verifier.js"));
   assert.ok(compiler.files.some((file) => file.path === "dist/framework-host.js"));
+  assert.ok(compiler.files.some((file) => file.path === "dist/application-package-host.js"));
   assert.ok(node.files.some((file) => file.path === "dist/compiler.js"));
   assert.ok(web.files.some((file) => file.path === "dist/host.js"));
   assert.ok(desktop.files.some((file) => file.path === "dist/compiler.js"));
   assert.ok(desktop.files.some((file) => file.path === "dist/host.js"));
-  assert.ok(desktop.files.some((file) => file.path === "dist/cli.js"));
+  assert.ok(desktop.files.some((file) => file.path === "dist/package-host.js"));
+  assert.ok(!desktop.files.some((file) => file.path === "dist/cli.js"));
   assert.ok(desktop.files.some((file) => file.path === "native/macos/VelarDesktopHost.swift"));
 
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
@@ -50,7 +53,6 @@ try {
 
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
   const installedCreate = join(directory, "node_modules", "create-velar", "dist", "cli.js");
-  const installedDesktopCli = join(directory, "node_modules", "@velarscript", "desktop", "dist", "cli.js");
   const installedCreateManifest = JSON.parse(await readFile(join(directory, "node_modules", "create-velar", "package.json"), "utf8")) as {
     bin: Record<string, string>;
     dependencies?: Record<string, string>;
@@ -67,9 +69,10 @@ try {
   assert.equal(installedManifest.dependencies.playwright, "^1.58.2");
   assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.10.0");
   assert.equal(installedManifest.dependencies["@velarscript/node"], "0.10.0");
+  assert.equal(installedManifest.dependencies["@velarscript/web"], "0.10.0");
+  assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.10.0");
   assert.equal(installedManifest.dependencies["create-velar"], "0.10.0");
   assert.equal(installedManifest.peerDependencies?.["@velarscript/web"], undefined);
-  assert.equal(installedManifest.dependencies["@velarscript/web"], undefined);
   const installedNodeManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "node", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
@@ -103,15 +106,18 @@ try {
       "@velarscript/node": "0.10",
     },
   });
-  for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web", "@velarscript/cli"]) {
+  for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web"]) {
     assert.equal(installedDesktopManifest.dependencies[dependency], "0.10.0");
   }
+  assert.equal(installedDesktopManifest.dependencies["@velarscript/cli"], undefined);
   assert.equal(installedDesktopManifest.dependencies.esbuild, undefined);
   const version = await run(process.execPath, [installedCli, "--version"], directory);
   assert.equal(version.stdout, "velar 0.10.0\n");
   const help = await run(process.execPath, [installedCli, "help", "build"], directory);
   assert.match(help.stdout, /Usage: velar build/u);
   assert.match(help.stdout, /isolated framework application output/u);
+  const packageHelp = await run(process.execPath, [installedCli, "help", "package"], directory);
+  assert.match(packageHelp.stdout, /target-owned native packaging host/u);
 
   await writeFile(join(directory, "main.vel"), `
 import {range, sum} from "velar/collections"
@@ -162,7 +168,7 @@ print(utf8Size("A😀游戏"))
   assert.equal(desktopApi.stdout, "@velarscript/desktop\n");
 
   if (process.platform === "darwin") {
-    const desktopProject = join(directory, "desktop-project");
+    const desktopProject = join(consumerDirectory, "desktop-project");
     await mkdir(join(desktopProject, "src"), { recursive: true });
     await writeFile(join(desktopProject, "package.json"), JSON.stringify({ name: "packed-desktop", version: "0.1.0", private: true, type: "module" }), "utf8");
     await writeFile(join(desktopProject, "velar.json"), JSON.stringify({
@@ -179,8 +185,9 @@ component App:
     return <main>{platform()}</main>
 mount(<App />, "#app")
 `.trimStart(), "utf8");
+    await assert.rejects(readFile(join(desktopProject, "node_modules", "@velarscript", "desktop", "package.json"), "utf8"), /ENOENT/u);
     await run(process.execPath, [installedCli, "check", desktopProject], directory);
-    await run(process.execPath, [installedDesktopCli, "build", desktopProject], directory);
+    await run(process.execPath, [installedCli, "package", desktopProject], directory);
     const builtDesktop = JSON.parse(await readFile(join(desktopProject, "dist", "desktop", "velar-desktop-build.json"), "utf8")) as {
       kind: string;
       applicationBundle: string;
@@ -366,7 +373,10 @@ for (const value of [
   await run(process.execPath, [installedRecordProbe], managedProject);
   process.stdout.write("VelarScript packed toolchain consumer acceptance passed\n");
 } finally {
-  await rm(directory, { recursive: true, force: true });
+  await Promise.all([
+    rm(directory, { recursive: true, force: true }),
+    rm(consumerDirectory, { recursive: true, force: true }),
+  ]);
 }
 
 interface PackedPackage {

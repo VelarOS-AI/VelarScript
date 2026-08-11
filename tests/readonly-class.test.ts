@@ -124,6 +124,6 @@ print(present("ready", () => null))
 
   assert.deepEqual(result.diagnostics, []);
   assert.doesNotMatch(result.code!, /T\.is/u);
-  assert.match(result.code!, /__value != null/u);
+  assert.match(result.code!, /\$velarValue != null/u);
   assert.doesNotThrow(() => runInNewContext(result.code!, { console }));
 });

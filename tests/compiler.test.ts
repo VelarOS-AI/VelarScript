@@ -41,6 +41,7 @@ import { startProductionPreview } from "../packages/cli/src/preview-server.ts";
 import { verifyRemoteDeployment, type DeploymentFetch } from "../packages/cli/src/deployment-verifier.ts";
 import { parseDependencyArguments, runDependencyCommand } from "../packages/cli/src/package-manager.ts";
 import { asHostError, hostErrorCode, hostErrorMessage, hostErrorStack } from "../packages/cli/src/host-error.ts";
+import { validateApplicationPackageResult } from "../packages/cli/src/application-package-host.ts";
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
 const webFormatOptions = Object.freeze({ extensions: webCompilerExtensions });
@@ -14562,6 +14563,67 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
   }
 });
 
+test("official toolchain targets resolve for zero-npm projects without weakening third-party extension lookup", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-toolchain-target-"));
+  try {
+    await mkdir(join(directory, "src"), { recursive: true });
+    await writeFile(join(directory, "package.json"), JSON.stringify({
+      name: "zero-npm-desktop",
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      dependencies: {},
+      devDependencies: {},
+    }), "utf8");
+    await writeFile(join(directory, "velar.json"), JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      extensions: ["@velarscript/desktop"],
+      desktop: {
+        productName: "Zero npm Desktop",
+        identifier: "dev.velarscript.zero-npm",
+        permissions: {},
+      },
+    }), "utf8");
+    await writeFile(join(directory, "src", "main.vel"), "component App:\n    return <main>ready</main>\n\nmount(<App />, \"#app\")\n", "utf8");
+
+    const project = await resolveVelarProject(directory);
+    assert.deepEqual(project.extensionGraph.map((item) => [item.name, item.resolution]), [
+      ["@velarscript/desktop", "toolchain"],
+    ]);
+    await assert.rejects(readFile(join(directory, "node_modules", "@velarscript", "desktop", "package.json"), "utf8"), /ENOENT/u);
+    const checked = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", directory], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assert.equal(checked.status, 0, checked.stderr);
+    assert.match(checked.stdout, /Checked 1 module/u);
+
+    await writeFile(join(directory, "velar.json"), JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      extensions: ["@example/missing"],
+    }), "utf8");
+    await assert.rejects(resolveVelarProject(directory), /cannot resolve installed package '@example\/missing'/u);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("application package results stay bounded inside the project owner", () => {
+  const root = resolve("package-result-owner");
+  assert.deepEqual(validateApplicationPackageResult({
+    artifactPath: join(root, "dist", "Example.app"),
+    details: ["ready"],
+  }, root), {
+    artifactPath: join(root, "dist", "Example.app"),
+    details: ["ready"],
+  });
+  assert.throws(() => validateApplicationPackageResult({ artifactPath: root, details: [] }, root), /outside the project root/u);
+  assert.throws(() => validateApplicationPackageResult({ artifactPath: resolve(root, "..", "escape.app"), details: [] }, root), /outside the project root/u);
+  assert.throws(() => validateApplicationPackageResult({ artifactPath: join(root, "dist", "Example.app"), details: ["bad\nline"] }, root), /invalid result/u);
+});
+
 test("extension resolution never skips an invalid nearer package manifest", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "velar-extension-shadow-"));
   const project = join(sandbox, "project");
@@ -15032,7 +15094,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     scripts: Record<string, string>;
   };
   assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.10.0");
-  assert.equal(desktopPackage.scripts.package, "velar-desktop build");
+  assert.equal(desktopPackage.scripts.package, "velar package");
+  assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   assert.match(await readFile(join(desktopRoot, "src", "app.vel"), "utf8"), /VelarScript Desktop/u);
   assert.match(await readFile(join(desktopRoot, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
   await linkWorkspaceDesktopExtension(desktopRoot);
@@ -16379,7 +16442,7 @@ previous.append("independent")
 type Bucket:
     values: List<unknown>
 
-def expose(values: List<unknown>) -> null:
+def share(values: List<unknown>) -> null:
     print(values.size)
 
 const objectValues = []
@@ -16389,7 +16452,7 @@ bucket.values.append("mixed")
 const objectNumber: number = objectValues[0]
 
 const argumentValues = []
-expose(argumentValues)
+share(argumentValues)
 argumentValues.append(1)
 const argumentNumber: number = argumentValues[0]
 `.trimStart());
@@ -25243,6 +25306,87 @@ globalThis.document = {
   const execution = executeModule(`${dom}\n${result.code ?? ""}\nconst app = App();\napp.mount("#app");\napp.destroy();\napp.destroy();\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "mounted\ncleanup\n");
+});
+
+test("component roots update transactionally, own their current nodes, and mount only once", () => {
+  const result = compile(`
+state projectOpen = false
+
+component App:
+    cleanup:
+        print("cleanup")
+    return projectOpen ? <main>workspace</main> : <section>welcome</section>
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarDynamicComponent\(\(\$velarDynamicScope\) => \(projectOpen\.get\(\) \?/u);
+
+  const dom = `
+class FakeNode {
+  constructor(nodeType, tagName = "", textContent = "") {
+    this.nodeType = nodeType;
+    this.tagName = tagName;
+    this.textContent = textContent;
+    this.childNodes = [];
+    this.parentNode = null;
+  }
+  static detach(node) {
+    if (!node.parentNode) return;
+    const siblings = node.parentNode.childNodes;
+    const index = siblings.indexOf(node);
+    if (index !== -1) siblings.splice(index, 1);
+    node.parentNode = null;
+  }
+  static insert(parent, node, before) {
+    if (node.nodeType === 11) {
+      for (const child of [...node.childNodes]) FakeNode.insert(parent, child, before);
+      return;
+    }
+    FakeNode.detach(node);
+    node.parentNode = parent;
+    const index = before === null ? -1 : parent.childNodes.indexOf(before);
+    if (index === -1) parent.childNodes.push(node);
+    else parent.childNodes.splice(index, 0, node);
+  }
+  append(...values) { for (const value of values) FakeNode.insert(this, value, null); }
+  insertBefore(node, before = null) { FakeNode.insert(this, node, before); return node; }
+  before(...values) { for (const value of values) FakeNode.insert(this.parentNode, value, this); }
+  remove() { FakeNode.detach(this); }
+  querySelectorAll() { return []; }
+  setAttribute() {}
+  removeAttribute() {}
+}
+const target = new FakeNode(1, "root");
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement(tag) { return new FakeNode(1, tag); },
+  createTextNode(value) { return new FakeNode(3, "", String(value)); },
+  createComment(value) { return new FakeNode(8, "", String(value)); },
+  createDocumentFragment() { return new FakeNode(11); },
+  querySelector(selector) { return selector === "#app" ? target : null; },
+};
+`;
+  const execution = executeModule(`${dom}\n${result.code ?? ""}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+const tags = () => target.childNodes.filter((node) => node.nodeType === 1).map((node) => node.tagName).join(",");
+const app = App();
+app.mount("#app");
+console.log("initial:" + tags());
+projectOpen.set(true);
+await flush();
+console.log("updated:" + tags());
+try { app.mount("#app"); } catch (error) { console.log("remount:" + error.message); }
+app.destroy();
+console.log("destroyed:" + target.childNodes.length);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "initial:section",
+    "updated:main",
+    "remount:Cannot mount a VelarScript component more than once",
+    "cleanup",
+    "destroyed:0",
+    "",
+  ].join("\n"));
 });
 
 test("Web runtime reports mount failures with a fatal fallback and continues cleanup steps", () => {

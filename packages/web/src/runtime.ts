@@ -1219,6 +1219,8 @@ function component(node, mounted, cleanup) {
     __velarComponent: true,
     node,
     mount(target, before = null) {
+      if (destroyed) throw new Error("Cannot mount a destroyed VelarScript component");
+      if (ready) throw new Error("Cannot mount a VelarScript component more than once");
       const parent = typeof target === "string" ? __velarDomQuerySelector(target) : target;
       if (!parent) throw new Error("VelarScript mount target was not found");
       __velarDomInsertBefore(parent, node, before);

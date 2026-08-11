@@ -122,11 +122,11 @@ from data descriptors under the same 64-variable, 64 KiB item, and 1 MiB total
 budgets enforced by the native host.
 
 ```sh
-velar-desktop build .
-velar-desktop test .
+velar package .
+velar test . --browser=all
 ```
 
-`velar-desktop test` runs `.browser.test.vel` files without opening a window.
+`velar test --browser` runs `.browser.test.vel` files without opening a window.
 It installs a deterministic, permission-aware in-memory Desktop filesystem and
 deterministic handles for manifest-granted processes; the native worker keeps
 a separate integration suite for real filesystem, process, and network

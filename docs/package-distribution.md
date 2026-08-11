@@ -5,7 +5,8 @@ Status: stable package contract for VelarScript 0.10; publication separately aut
 The toolchain is distributed as six independent npm packages:
 
 - `@velarscript/compiler`: compiler, formatter, diagnostics, semantic index,
-  Core lowering APIs, compiler-extension ABI, and neutral framework-host ABI.
+  Core lowering APIs, compiler-extension ABI, neutral framework-host ABI, and
+  target-neutral application-package-host ABI.
 - `@velarscript/node`: Node module contracts and zero-runtime-dependency
   implementations for local filesystem, paths, shell-free processes,
   environment, lifecycle, bounded terminal I/O, HTTP serving, and HTTP clients. It can be composed
@@ -27,11 +28,11 @@ All six packages require Node.js 24 or later and contain no Workbench code.
 Compiler, Node, Web, Desktop, creator, and CLI publish JavaScript and `.d.ts`
 artifacts from `dist`. Web pins the exact
 matching compiler version. Node pins compiler. Desktop pins compiler, Node,
-Web, CLI, and its build dependency so one installed framework cannot combine
-incompatible host/runtime generations. CLI pins compiler, Node, and creator but has no Web
-dependency: it resolves every compiler/project extension declared by the
-application's format-v2 manifest from that project, then discovers and
-validates an optional protocol-v1 `/host` entry from the same package.
+and Web, but never imports or executes the CLI. CLI pins compiler, Node, Web,
+Desktop, and creator as one complete official toolchain generation. It resolves
+every compiler/project extension declared by the application's format-v2
+manifest from the project first, then discovers and validates optional
+protocol-v1 `/host` and `/package-host` entries from the same owner.
 Workbench discovers the project-local
 `node_modules/.bin/velar` executable and never embeds the compiler.
 
@@ -98,10 +99,24 @@ Extension lookup follows Node's nearest `node_modules` search order but never
 falls through an existing malformed, symbolic, or unreadable package manifest
 to an ancestor package with the same name. Only a genuinely missing candidate
 continues the search.
+The CLI-installed official Web and Desktop application extensions form a narrow
+toolchain fallback for projects that intentionally contain no `node_modules`;
+the CLI's existing Node capability remains available without manifest activation.
+A project-local official target always wins, and an invalid local manifest
+fails closed instead of falling back. Third-party extensions never use the
+toolchain fallback and remain project-installed npm dependencies. Thus npm
+still owns every installed version and integrity graph while a zero-npm
+consumer may use the exact official targets shipped with its `velar` command.
 Project discovery follows the same nearest-owner rule. An existing local
 `velar.json` must be an ordinary file; directories, symbolic links, and read
 errors cannot silently select an ancestor project, and package commands use the
 same identity as checking, building, testing, and the language server.
+
+`velar package` resolves the selected application's optional `/package-host`.
+The CLI compiles and writes the already-checked framework renderer exactly
+once inside the project; the target package owns only its native container,
+size accounting, and platform artifacts. Desktop therefore cannot invoke the
+CLI recursively, and the CLI contains no Desktop-specific packaging branch.
 
 Removing a direct extension recomputes reachability from the remaining direct
 extensions over that semantic graph. Project fields owned by the removed node

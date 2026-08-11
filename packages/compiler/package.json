@@ -36,6 +36,10 @@
     "./framework-host": {
       "types": "./dist/framework-host.d.ts",
       "default": "./dist/framework-host.js"
+    },
+    "./application-package-host": {
+      "types": "./dist/application-package-host.d.ts",
+      "default": "./dist/application-package-host.js"
     }
   }
 }
