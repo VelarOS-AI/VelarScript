@@ -14,8 +14,10 @@ import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
 import { standardModuleApi, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
-import { nodeModuleDependencies, nodeModuleSources } from "../packages/node/src/compiler.ts";
+import { nodeModuleDependencies, nodeModuleSources, VELAR_NODE_HOST_MODULE } from "../packages/node/src/compiler.ts";
+import { VELAR_NODE_HOST_WORKER_SOURCE } from "../packages/node/src/node-host-worker-runtime.ts";
 import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
+import { VELAR_NODE_TERMINAL_WORKER_SOURCE } from "../packages/node/src/terminal-worker-runtime.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 async function runtime<T>(
@@ -247,6 +249,93 @@ await start(process.execPath, ["-e", ${JSON.stringify(childSource)}], {timeout: 
     assert.ok(Date.now() - startedAt >= 100, "the runner exited before its unobserved child settled");
     assert.equal(await readFile(marker, "utf8"), "done");
   } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("Node worker crashes fail closed and drain transferred process ownership", async () => {
+  const crashingHostWorker = VELAR_NODE_HOST_WORKER_SOURCE.replace(
+    'port.on("message", value => {',
+    'port.on("message", value => { process.exit(71);',
+  );
+  assert.notEqual(crashingHostWorker, VELAR_NODE_HOST_WORKER_SOURCE);
+  const filesystem = await runtime<{ exists(path: string): Promise<boolean> }>(
+    "velar/fs",
+    (source) => source,
+    (name, source) => name === VELAR_NODE_HOST_MODULE
+      ? source.replace(JSON.stringify(VELAR_NODE_HOST_WORKER_SOURCE), JSON.stringify(crashingHostWorker))
+      : source,
+  );
+  let hostFailure: unknown = null;
+  try { await filesystem.exists("."); } catch (error) { hostFailure = error; }
+  assert.ok(hostFailure instanceof Error);
+  const hostRetryStartedAt = Date.now();
+  await assert.rejects(filesystem.exists("."), (error: unknown) => error === hostFailure);
+  assert.ok(Date.now() - hostRetryStartedAt < 500, "a failed Node host must reject future work without posting to its dead port");
+
+  const crashingTerminalWorker = VELAR_NODE_TERMINAL_WORKER_SOURCE.replace(
+    'port.on("message", value => {',
+    'port.on("message", value => { process.exit(72);',
+  );
+  assert.notEqual(crashingTerminalWorker, VELAR_NODE_TERMINAL_WORKER_SOURCE);
+  const terminalRuntime = await runtime<{ terminal: { write(text: string): Promise<null> } }>(
+    "velar/terminal",
+    (source) => source.replace(JSON.stringify(VELAR_NODE_TERMINAL_WORKER_SOURCE), JSON.stringify(crashingTerminalWorker)),
+  );
+  let terminalFailure: unknown = null;
+  try { await terminalRuntime.terminal.write("first"); } catch (error) { terminalFailure = error; }
+  assert.ok(terminalFailure instanceof Error);
+  const terminalRetryStartedAt = Date.now();
+  await assert.rejects(terminalRuntime.terminal.write("second"), (error: unknown) => error === terminalFailure);
+  assert.ok(Date.now() - terminalRetryStartedAt < 500, "a failed terminal host must not disguise its failure as normal closure");
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-node-process-worker-crash-"));
+  const pidFile = join(directory, "pid.txt");
+  let childPid: number | null = null;
+  try {
+    const withoutWorkerExitCleanup = VELAR_NODE_PROCESS_WORKER_SOURCE.replace(
+      'process.once("exit", () => {\n  for (const task of processHandles.values()) signalTree(task.child, "SIGKILL");\n});\n',
+      "",
+    );
+    assert.notEqual(withoutWorkerExitCleanup, VELAR_NODE_PROCESS_WORKER_SOURCE);
+    const crashingProcessWorker = withoutWorkerExitCleanup.replace(
+      'send({kind: "owned", handle, pid: task.pid});',
+      'send({kind: "owned", handle, pid: task.pid}); setTimeout(() => { throw new Error("injected process Worker crash"); }, 100); await new Promise(() => {});',
+    );
+    assert.notEqual(crashingProcessWorker, withoutWorkerExitCleanup);
+    const processRuntime = await runtime<{
+      start(command: string, args: readonly string[], options: Record<string, unknown>): Promise<unknown>;
+    }>(
+      "velar/process",
+      (source) => source.replace(JSON.stringify(VELAR_NODE_PROCESS_WORKER_SOURCE), JSON.stringify(crashingProcessWorker)),
+    );
+    const childSource = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+    let processFailure: unknown = null;
+    try {
+      await processRuntime.start(process.execPath, ["-e", childSource], {timeout: 0, maxOutputBytes: 65536});
+    } catch (error) { processFailure = error; }
+    assert.ok(processFailure instanceof Error);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { childPid = Number(await readFile(pidFile, "utf8")); break; }
+      catch { await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+    }
+    assert.ok(childPid !== null && Number.isSafeInteger(childPid));
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { process.kill(childPid as number, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+      catch { childPid = null; break; }
+    }
+    assert.equal(childPid, null, "the process host crash path must reap a transferred child owner");
+    const processRetryStartedAt = Date.now();
+    await assert.rejects(
+      processRuntime.start(process.execPath, ["-e", "process.exit(0)"], {timeout: 1000, maxOutputBytes: 65536}),
+      (error: unknown) => error === processFailure,
+    );
+    assert.ok(Date.now() - processRetryStartedAt < 500, "a failed process host must reject future starts without posting to its dead port");
+  } finally {
+    if (childPid !== null) {
+      try { process.kill(-childPid, "SIGKILL"); }
+      catch { try { process.kill(childPid, "SIGKILL"); } catch {} }
+    }
     await rm(directory, {recursive: true, force: true});
   }
 });

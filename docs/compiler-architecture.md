@@ -549,6 +549,19 @@ initialization therefore cannot change which case is selected.
   seconds, and closes its own stdout/stderr read ends with a terminal process
   error if inherited pipes remain open after five seconds. Explicit `stop()`
   cancels that abandonment timer and keeps the handle retryable instead.
+  Before resolving a start, the Worker sends a private owned-handle/PID event
+  to the captured proxy; settlement removes that crash-recovery owner. An
+  uncaught Worker failure enters an eight-second fatal drain while its
+  `ChildProcess` handles can still reap children. The proxy remembers the first
+  fatal failure, rejects every pending and future request, closes the dead
+  transport, and has a bounded process-group kill fallback for transferred
+  owners. The shared filesystem/serve/HTTP proxy and the terminal proxy also
+  persist their first Worker failure, terminate the failed host, and never send
+  later calls to a dead port. Terminal failure remains an error rather than
+  becoming EOF. No proxy automatically creates a fresh Worker generation:
+  numeric process, HTTP, server, request, and terminal identities cannot safely
+  cross such a restart. Application restart is the fail-closed generation
+  boundary.
   Environment and graceful-shutdown modules have smaller canonical captured
   host fragments because their effects do not require a second Realm.
   Filesystem, inbound-server, and outbound Node HTTP effects share a separate compiler-owned Worker

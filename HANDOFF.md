@@ -2249,11 +2249,51 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍只有并行
   函数返回值推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-121 把私有 Worker/Capability Host 自身的崩溃视为一等资源所有权事件。审计先确认三个代理
+  的共同缺陷：Node shared host 和 process proxy 会拒绝当时 pending，却不保存 failure；后续调用仍向
+  已死亡的 MessagePort 投递并可能永久等待。Terminal 把 Worker crash 压成普通 closed/EOF。Desktop
+  原生 Host 只在 send 前读一次 `isRunning`，异步写失败、worker exit、无限期 process wait/read 和所有
+  WebView pending request 都没有共同结算点。
+
+  真实独立实验进一步证明，Worker thread 终止不会终止它 spawn 的 detached child；应用侧补发
+  SIGKILL 后 child 还可能作为同一 Node 主进程的 zombie 暂留，单纯轮询 `kill(pid, 0)` 会把新的
+  reaper 变成永久挂起。因此 Node process Worker 现在在公开 start response 前先发送私有
+  `{kind:"owned",handle,pid}`，settled 后撤销；uncaught exception/rejection 先停止接收请求，使用仍然
+  存活的 `ChildProcess` 句柄强制 drain/reap，最多八秒后退出。应用 proxy 永久保存第一次 host failure，
+  拒绝所有 pending 和未来调用、关闭 MessagePort，并对已转移 owner 做五秒有界进程组 kill 兜底。
+  shared fs/serve/HTTP host 与 terminal proxy 同样永久 fail-closed；clean/nonzero unexpected exit 都是
+  failure，invalid response 在删除 pending owner 前完成验证，terminal failure 不再伪装成 EOF。
+
+  Desktop capability Worker 也在 public run/start result 前发送 process-owned/process-settled event，
+  fatal failure 先 drain child。macOS 薄 Host 串行登记所有 forwarded request id 与 process group；write
+  failure、malformed/unknown response 或 Node worker termination 会一次拒绝全部 pending、永久拒绝新
+  dispatch，并持续 SIGKILL 已登记 group 直到 ESRCH。这里明确不自动重启 Worker/Capability Host：
+  旧 Process、HTTP、server、request、terminal 的数字 handle 不能安全指向从 1 重新分配的新一代；
+  application restart 才是权限与 identity generation 的显式重建边界。
+
+  新的故障注入让 shared host、terminal 与 process Worker 在请求中退出，证明当时 pending 和下一次
+  调用得到同一个 terminal failure、没有 dead-port retry；Node 和 Desktop 分别启动真实长驻 child，
+  在 owner transfer 后触发 uncaught crash，要求 host 退出前 child 已从系统消失。Desktop integration
+  还验证 owned 必须先于 settled 且 handle 一致；Swift native host 通过真实 Desktop build/smoke 与永久
+  source guard 覆盖 termination handler、pending settlement 和 Darwin group reaper。
+
+  当前组合证据为 `npm run check`（51 个格式化源、98 个文档示例、62 项 runtime boundary）、
+  553/553 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench 对本轮
+  rehearsal 六包的安装态验收，以及完整 Dev/Production/External Preview、27+6+15+6 三浏览器和
+  installed browser project。Lite 四项目 check、40 shared + 42 server tests、真实 repeated-disconnect/
+  capacity-convergence server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/Desktop
+  production build 也全部通过。薄包为 836,339 bytes（816.7 KiB）：host 260,240、renderer 530,946、
+  capability host 43,760、metadata 1,393，外置 Node.js >=24，SHA-256 为
+  `167c236ab38ffe4ef9028a97b32eab45b76e1552d97b3c24677118407623a3e3`；相比 W-120 增加 25,702
+  bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，Workbench 仍
+  只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-120 的 retryable wait、run cleanup ownership、timeout/root-exit convergence 与完整
+1. W-121 的 Worker/Capability Host failure generation、fatal drain、owner transfer 与完整
    compiler/runtime/六包/Workbench/三引擎/Lite 门禁均已取得明确证据。下一波继续从多会话长时间
-   运行、失败重启和工具恢复审计可观测性、resource ownership 与 host backpressure；
+   运行、host backpressure、request cancellation 和工具恢复审计可观测性与 resource ownership；
    产品策略继续留在 Lite，只把通用语言、Node/Web/Desktop API 缺口修回官方包。
 2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；
    它只能像普通第三方一样消费公开的 `@velarscript/*` 包。继续扩展真实使用场景，但不得把产品

@@ -788,6 +788,21 @@ running: importing `velar/process` alone does not keep a CLI alive, while an
 unobserved active child still owns its lifecycle until it settles. At most 128
 unreleased process handles may exist; callers release a settled handle through
 `wait()` or `stop()`.
+The Worker transfers each successful child handle and PID to its captured
+application-side proxy before resolving `start()`. If the Worker hits an
+uncaught internal failure, it stops accepting requests, force-drains every
+owned child through the still-live `ChildProcess` handles, and exits only after
+they settle or the fatal-drain deadline expires. The proxy records the first
+host failure permanently, rejects both pending and later calls with that same
+failure, and performs a bounded process-group kill fallback for already
+transferred owners. It never posts a retry to a dead MessagePort.
+The private filesystem/serve/HTTP Worker and terminal Worker use the same
+permanent fail-closed rule. A clean or non-zero unexpected Worker exit is a host
+failure; terminal failure is not disguised as ordinary end-of-input. These
+Workers are not restarted inside the current application process: old process,
+server, request, and terminal handles have no safe identity in a fresh Worker
+generation. Restarting the application is the explicit authority and identity
+reset.
 Standard output and error share a bounded capture budget, and no command-string
 parsing or shell expansion is performed. Timeouts and output-bound failures
 request termination and independently bound confirmation at five seconds even

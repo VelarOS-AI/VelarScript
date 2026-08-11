@@ -1,4 +1,5 @@
 import Cocoa
+import Darwin
 import Foundation
 import WebKit
 
@@ -313,6 +314,10 @@ private final class NodeCapabilityHost {
     private let output = Pipe()
     private let errors = Pipe()
     private var buffer = Data()
+    private var pending = Set<Int>()
+    private var processOwners: [Int: pid_t] = [:]
+    private var failure: String?
+    private var reaping = false
     private let queue = DispatchQueue(label: "velar.desktop.node-worker")
     weak var webView: WKWebView?
 
@@ -322,6 +327,11 @@ private final class NodeCapabilityHost {
         process.standardInput = input
         process.standardOutput = output
         process.standardError = errors
+        process.terminationHandler = { [weak self] process in
+            self?.queue.async {
+                self?.fail("Desktop Node capability host exited unexpectedly with status \(process.terminationStatus)")
+            }
+        }
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { return }
@@ -334,26 +344,36 @@ private final class NodeCapabilityHost {
         try process.run()
     }
 
-    func send(_ body: [String: Any]) throws {
-        guard process.isRunning else { throw NSError(domain: "VelarDesktop", code: 503, userInfo: [NSLocalizedDescriptionKey: "Desktop Node capability host is not running"]) }
+    func send(_ request: BridgeRequest, body: [String: Any]) throws {
         let data = try JSONSerialization.data(withJSONObject: body)
         guard data.count <= 128 * 1024 * 1024 else { throw NSError(domain: "VelarDesktop", code: 413, userInfo: [NSLocalizedDescriptionKey: "Desktop request exceeds its transport bound"]) }
         queue.async { [weak self] in
             guard let self else { return }
+            if self.pending.contains(request.id) {
+                self.complete(id: request.id, error: "Desktop request identity is already pending")
+                return
+            }
+            self.pending.insert(request.id)
+            if let failure = self.failure {
+                self.pending.remove(request.id)
+                self.complete(id: request.id, error: failure)
+                return
+            }
+            guard self.process.isRunning else {
+                self.fail("Desktop Node capability host is not running")
+                return
+            }
             do {
                 try self.input.fileHandleForWriting.write(contentsOf: data)
                 try self.input.fileHandleForWriting.write(contentsOf: Data([0x0A]))
             } catch {
-                FileHandle.standardError.write(Data("Velar Desktop worker write failed: \(error.localizedDescription)\n".utf8))
+                self.fail("Desktop Node capability host write failed: \(error.localizedDescription)")
             }
         }
     }
 
     func stop() {
-        output.fileHandleForReading.readabilityHandler = nil
-        errors.fileHandleForReading.readabilityHandler = nil
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
+        queue.async { [weak self] in self?.fail("Desktop Node capability host stopped") }
     }
 
     private func consume(_ data: Data) {
@@ -363,13 +383,94 @@ private final class NodeCapabilityHost {
             buffer.removeSubrange(...newline)
             guard line.count <= 65 * 1024 * 1024,
                   let value = try? JSONSerialization.jsonObject(with: line),
-                  let object = value as? [String: Any], object["id"] is Int else { continue }
+                  let object = value as? [String: Any] else {
+                fail("Desktop Node capability host returned an invalid response")
+                return
+            }
+            if let event = object["hostEvent"] as? String {
+                handle(event: event, object: object)
+                if failure != nil { return }
+                continue
+            }
+            guard let id = object["id"] as? Int, id > 0, pending.remove(id) != nil else {
+                fail("Desktop Node capability host returned an unknown response")
+                return
+            }
             let encoded = Data(line)
             DispatchQueue.main.async { [weak self] in
                 deliverBridgeResponse(encoded, to: self?.webView)
             }
         }
-        if buffer.count > 65 * 1024 * 1024 { buffer.removeAll(keepingCapacity: false) }
+        if buffer.count > 65 * 1024 * 1024 { fail("Desktop Node capability host response exceeded its transport bound") }
+    }
+
+    private func handle(event: String, object: [String: Any]) {
+        guard object["protocolVersion"] as? Int == 1,
+              let handle = object["handle"] as? Int, handle > 0 else {
+            fail("Desktop Node capability host returned an invalid lifecycle event")
+            return
+        }
+        switch event {
+        case "process-owned":
+            guard let pid = object["pid"] as? Int, pid > 0, pid <= Int(Int32.max), processOwners[handle] == nil else {
+                fail("Desktop Node capability host returned an invalid process owner")
+                return
+            }
+            processOwners[handle] = pid_t(pid)
+        case "process-settled":
+            guard processOwners.removeValue(forKey: handle) != nil else {
+                fail("Desktop Node capability host settled an unknown process owner")
+                return
+            }
+        default:
+            fail("Desktop Node capability host returned an unknown lifecycle event")
+        }
+    }
+
+    private func fail(_ message: String) {
+        guard failure == nil else { return }
+        failure = message
+        output.fileHandleForReading.readabilityHandler = nil
+        errors.fileHandleForReading.readabilityHandler = nil
+        try? input.fileHandleForWriting.close()
+        if process.isRunning { process.terminate() }
+        let ids = Array(pending)
+        pending.removeAll(keepingCapacity: false)
+        for id in ids { complete(id: id, error: message) }
+        reapProcessOwners()
+    }
+
+    private func complete(id: Int, error: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["id": id, "ok": false, "error": error]) else { return }
+        DispatchQueue.main.async { [weak self] in deliverBridgeResponse(data, to: self?.webView) }
+    }
+
+    private func reapProcessOwners() {
+        guard !reaping, !processOwners.isEmpty else { return }
+        reaping = true
+        let reap = { [weak self] in
+            guard let self else { return }
+            var settled: [Int] = []
+            for (handle, pid) in self.processOwners {
+                _ = Darwin.kill(-pid, SIGKILL)
+                if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { settled.append(handle) }
+            }
+            for handle in settled { self.processOwners.removeValue(forKey: handle) }
+            if self.processOwners.isEmpty {
+                self.reaping = false
+            } else {
+                self.queue.asyncAfter(deadline: .now() + .milliseconds(50), execute: self.reapClosure())
+            }
+        }
+        reap()
+    }
+
+    private func reapClosure() -> @Sendable () -> Void {
+        return { [weak self] in
+            guard let self else { return }
+            self.reaping = false
+            self.reapProcessOwners()
+        }
     }
 }
 
@@ -510,7 +611,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
     private func handle(_ request: BridgeRequest, body: [String: Any]) {
         do {
             if request.capability != "desktop" {
-                try worker.send(body)
+                try worker.send(request, body: body)
                 return
             }
             let value: String

@@ -14,6 +14,7 @@ const MAX_HTTP_REDIRECTS = 20;
 const MAX_PATH_UNITS = 4096;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
+const FATAL_DRAIN_TIMEOUT_MS = 8000;
 const processTerminationMarker = Object.freeze({});
 const processRootExitMarker = Object.freeze({});
 const processStopMarker = Object.freeze({});
@@ -32,6 +33,7 @@ let nextProcessHandle = 1;
 const httpHandles = new Map();
 const fileMutationTails = new Map();
 let nextTextReplacementIdentity = 1;
+let fatalDrainStarted = false;
 const roots = [];
 const lexicalRoots = [];
 let projectRoot = null;
@@ -367,9 +369,12 @@ function retainRunHandle(handle) {
 
 async function processStart(args) {
   if (processHandles.size >= 128) throw new RangeError("Desktop process handle limit reached");
-  const task = await launchProcess(args);
   const handle = nextProcessHandle++;
+  const task = await launchProcess(args, () => respond({ protocolVersion: 1, hostEvent: "process-settled", handle }));
   processHandles.set(handle, task);
+  // The native shell becomes the crash-recovery owner before the renderer
+  // receives the public start/run result.
+  respond({ protocolVersion: 1, hostEvent: "process-owned", handle, pid: task.pid });
   // A caller may start before it waits. Keep rejection observed while the
   // explicit wait/stop operation still owns delivery and handle release.
   task.result.catch(() => {});
@@ -405,6 +410,27 @@ async function processStop(args) {
   if (outcome.retained) throw processError(outcome.error);
   processHandles.delete(handle);
   return { result: outcome.result, error: outcome.error };
+}
+
+async function fatalDrain() {
+  if (fatalDrainStarted) return;
+  fatalDrainStarted = true;
+  reader.removeAllListeners("line");
+  reader.close();
+  const tasks = Array.from(processHandles.values());
+  for (const task of tasks) task.stop();
+  for (const request of httpHandles.values()) request.controller.abort(new Error("Desktop capability host failed"));
+  let timer = null;
+  try {
+    await Promise.race([
+      Promise.allSettled(tasks.map((task) => task.result)),
+      new Promise((resolveDrain) => { timer = setTimeout(resolveDrain, FATAL_DRAIN_TIMEOUT_MS); }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    for (const task of tasks) if (!task.settled) signalTree(task.child, "SIGKILL");
+    process.exit(1);
+  }
 }
 
 function processErrorRecord(error) {
@@ -475,7 +501,7 @@ function processHandle(value) {
   return value;
 }
 
-async function launchProcess(args) {
+async function launchProcess(args, settled) {
   const [command, commandArgs = [], options = {}] = args;
   if (typeof command !== "string" || !allowedProcesses.has(command) || command !== basename(command)) throw new Error(`Process '${String(command)}' is not granted by desktop.permissions.processes`);
   if (!Array.isArray(commandArgs) || commandArgs.length > 1000) throw new TypeError("Process args must be a bounded List<string>");
@@ -650,6 +676,7 @@ async function launchProcess(args) {
       }
       if (task.failure) rejectRun(task.failure);
       else resolveRun({ code, signal, stdout: Buffer.concat(task.stdout).toString("utf8"), stderr: Buffer.concat(task.stderr).toString("utf8") });
+      settled();
     });
   });
   task.timer = timeout === 0 ? null : setTimeout(() => {
@@ -952,3 +979,9 @@ function respond(value) {
     process.stdout.write(`${line}\n`);
   }
 }
+
+process.once("exit", () => {
+  for (const task of processHandles.values()) signalTree(task.child, "SIGKILL");
+});
+process.on("uncaughtException", () => { void fatalDrain(); });
+process.on("unhandledRejection", () => { void fatalDrain(); });

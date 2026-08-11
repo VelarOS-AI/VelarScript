@@ -8,6 +8,10 @@ test("Desktop WebView bridge chunks large requests and responses without changin
   const hostSource = await readFile(resolve("packages/desktop/native/macos/VelarDesktopHost.swift"), "utf8");
   assert.match(hostSource, /let entryBytes = name\.utf8\.count \+ valueBytes/u);
   assert.match(hostSource, /environmentBytes \+ entryBytes <= 1024 \* 1024/u);
+  assert.match(hostSource, /process\.terminationHandler/u);
+  assert.match(hostSource, /case "process-owned":/u);
+  assert.match(hostSource, /Darwin\.kill\(-pid, SIGKILL\)/u);
+  assert.match(hostSource, /pending\.removeAll/u);
   const match = /private let bridgeScript = #"""\n([\s\S]*?)\n"""#/u.exec(hostSource);
   const bridgeSource = match?.[1];
   assert.ok(bridgeSource, "native host must contain the injected bridge script");

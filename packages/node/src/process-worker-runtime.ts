@@ -14,10 +14,12 @@ const maxProcessHandles = 128;
 const maxOutputChunks = 1000000;
 const stopConfirmationTimeoutMs = 5000;
 const exitPipeConfirmationTimeoutMs = 5000;
+const fatalDrainTimeoutMs = 8000;
 const requestFields = new Set(["id", "operation", "args"]);
 const optionFields = new Set(["cwd", "env", "stdin", "timeout", "maxOutputBytes"]);
 const processHandles = new Map();
 let nextProcessHandle = 1;
+let fatalDrainStarted = false;
 const terminationMarker = Object.freeze({});
 const rootExitMarker = Object.freeze({});
 const stopMarker = Object.freeze({});
@@ -344,6 +346,10 @@ async function processStart(args) {
   const handle = nextProcessHandle++;
   const task = launchProcess(command, commandArgs, options, () => send({kind: "settled", handle}));
   processHandles.set(handle, task);
+  // Transfer cleanup ownership before the start response. The application
+  // proxy can then reap this process group even if this Worker exits between
+  // accepting the child and resolving start().
+  send({kind: "owned", handle, pid: task.pid});
   task.result.catch(() => {});
   return {handle, pid: task.pid};
 }
@@ -382,6 +388,25 @@ async function processStop(args) {
   return {result: outcome.result, error: outcome.error};
 }
 
+async function fatalDrain() {
+  if (fatalDrainStarted) return;
+  fatalDrainStarted = true;
+  port.removeAllListeners("message");
+  const tasks = Array.from(processHandles.values());
+  for (const task of tasks) task.stop();
+  let timer = null;
+  try {
+    await Promise.race([
+      Promise.allSettled(tasks.map(task => task.result)),
+      new Promise(resolve => { timer = setTimeout(resolve, fatalDrainTimeoutMs); }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    for (const task of tasks) if (!task.settled) signalTree(task.child, "SIGKILL");
+    process.exit(1);
+  }
+}
+
 async function dispatch(value) {
   const request = ownRecord(value, "Node process request", requestFields);
   const id = integer(request.id, 1, Number.MAX_SAFE_INTEGER, "Node process request id");
@@ -404,6 +429,12 @@ port.on("message", (value) => {
       send({kind: "response", id, ok: false, error: errorRecord(error)});
     },
   );
+});
+process.on("uncaughtException", () => { void fatalDrain(); });
+process.on("unhandledRejection", () => { void fatalDrain(); });
+port.on("close", () => { void fatalDrain(); });
+process.once("exit", () => {
+  for (const task of processHandles.values()) signalTree(task.child, "SIGKILL");
 });
 send({kind: "ready"});
 `;

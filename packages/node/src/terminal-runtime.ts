@@ -56,6 +56,8 @@ let __velarTerminalClosed = false;
 let __velarTerminalClosing = false;
 let __velarTerminalInteractive = false;
 let __velarTerminalReady = false;
+let __velarTerminalFailure = null;
+let __velarTerminalExpectedWorkerExit = false;
 let __velarTerminalReadyResolve;
 let __velarTerminalReadyReject;
 
@@ -133,11 +135,14 @@ function __velarTerminalUpdateReference() {
 }
 
 function __velarTerminalFail(error) {
+  if (__velarTerminalFailure) return;
   const failure = error instanceof __velarTerminalNativeError
     ? error
     : new __velarTerminalNativeError("Node terminal worker failed");
+  __velarTerminalFailure = failure;
   if (!__velarTerminalReady) __velarTerminalReadyReject(failure);
   __velarTerminalClosed = true;
+  __velarTerminalClosing = false;
   const keys = __velarTerminalCall(__velarTerminalOwnKeys, __velarTerminalNativeReflect, [__velarTerminalPending]);
   for (let index = 0; index < keys.length; index += 1) {
     const descriptor = __velarTerminalOwnDescriptor(__velarTerminalPending, keys[index]);
@@ -146,6 +151,14 @@ function __velarTerminalFail(error) {
   }
   __velarTerminalPendingCount = 0;
   __velarTerminalUpdateReference();
+  __velarTerminalCall(__velarTerminalMessagePortClose, __velarTerminalPort, []);
+  __velarTerminalExpectedWorkerExit = true;
+  const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
+  __velarTerminalCall(__velarTerminalPromiseThen, terminated, [() => null, () => null]);
+  if (__velarTerminalInputDescriptor >= 0 && __velarTerminalProcess.platform !== "win32") {
+    try { __velarTerminalCloseSync(__velarTerminalInputDescriptor); } catch {}
+    __velarTerminalInputDescriptor = -1;
+  }
 }
 
 function __velarTerminalMessage(value) {
@@ -176,6 +189,7 @@ function __velarTerminalMessage(value) {
       __velarTerminalInputDescriptor = -1;
     }
     __velarTerminalCall(__velarTerminalMessagePortClose, __velarTerminalPort, []);
+    __velarTerminalExpectedWorkerExit = true;
     const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
     __velarTerminalCall(__velarTerminalPromiseThen, terminated, [() => null, () => null]);
     return;
@@ -186,17 +200,18 @@ function __velarTerminalMessage(value) {
   const descriptor = __velarTerminalOwnDescriptor(__velarTerminalPending, __velarTerminalNativeString(message.id));
   if (!descriptor || !("value" in descriptor)) throw new __velarTerminalNativeError("Node terminal worker returned an unknown response");
   const pending = descriptor.value;
+  const responseError = message.ok ? null : __velarTerminalError(message.error);
+  if (pending.operation === "readLine") {
+    if (message.ok && message.value !== null && typeof message.value !== "string") throw new __velarTerminalNativeTypeError("Node terminal worker returned invalid input");
+    if (message.ok && typeof message.value === "string") __velarTerminalBoundedText(message.value, "Terminal input");
+  } else if (message.ok && message.value !== null) {
+    throw new __velarTerminalNativeTypeError("Node terminal worker returned invalid write completion");
+  }
   delete __velarTerminalPending[message.id];
   __velarTerminalPendingCount -= 1;
   __velarTerminalUpdateReference();
-  if (!message.ok) { pending.reject(__velarTerminalError(message.error)); return; }
-  if (pending.operation === "readLine") {
-    if (message.value !== null && typeof message.value !== "string") throw new __velarTerminalNativeTypeError("Node terminal worker returned invalid input");
-    if (typeof message.value === "string") __velarTerminalBoundedText(message.value, "Terminal input");
-  } else if (message.value !== null) {
-    throw new __velarTerminalNativeTypeError("Node terminal worker returned invalid write completion");
-  }
-  pending.resolve(message.value);
+  if (responseError) pending.reject(responseError);
+  else pending.resolve(message.value);
 }
 
 const __velarTerminalArguments = __velarTerminalProgramArguments();
@@ -228,7 +243,9 @@ const __velarTerminalWorker = new __VelarTerminalWorker(WORKER_SOURCE, {
 });
 __velarTerminalCall(__velarTerminalEventOn, __velarTerminalWorker, ["error", error => __velarTerminalFail(error)]);
 __velarTerminalCall(__velarTerminalEventOn, __velarTerminalWorker, ["exit", code => {
-  if (!__velarTerminalClosed && code !== 0) __velarTerminalFail(new __velarTerminalNativeError("Node terminal worker exited unexpectedly"));
+  if (!__velarTerminalExpectedWorkerExit) {
+    __velarTerminalFail(new __velarTerminalNativeError("Node terminal worker exited unexpectedly with code " + code));
+  }
 }]);
 const __velarTerminalReadyTimer = __velarTerminalSetTimeout(
   () => __velarTerminalReadyReject(new __velarTerminalNativeError("Node terminal worker did not become ready")),
@@ -241,6 +258,7 @@ __velarTerminalCall(__velarTerminalMessagePortUnref, __velarTerminalPort, []);
 
 function __velarTerminalInvoke(operation, value) {
   if (__velarTerminalClosed) {
+    if (__velarTerminalFailure) return new __velarTerminalNativePromise((_resolve, reject) => reject(__velarTerminalFailure));
     if (operation === "readLine") return new __velarTerminalNativePromise(resolve => resolve(null));
     return new __velarTerminalNativePromise((_resolve, reject) => reject(new __velarTerminalNativeError("Terminal is closed")));
   }

@@ -428,9 +428,11 @@ for (const phrase of [
   'stderrDecoder: new StringDecoder("utf8")',
   'port.on("message", (value) =>',
   'send({kind: "ready"})',
+  'send({kind: "owned", handle, pid: task.pid})',
   'send({kind: "settled", handle})',
   "task.result.catch(() => {})",
   "function signalTree(child, signal)",
+  "async function fatalDrain()",
 ]) {
   if (!nodeProcessWorkerRuntimeSource.includes(phrase)) {
     failures.push(`packages/node/src/process-worker-runtime.ts: isolated process host is missing '${phrase}'`);
@@ -476,6 +478,7 @@ for (const phrase of [
   "const __velarTerminalMaxPending = 256",
   "const __velarTerminalMessagePortPost =",
   "const __velarTerminalWorkerTerminate =",
+  "let __velarTerminalFailure = null",
   "Node terminal worker did not become ready",
   "readLine(prompt = \"\")",
 ]) {
@@ -533,6 +536,8 @@ for (const phrase of [
   "function __velarNodeHostRequestId()",
   "export function __velarNodeHostInvoke(operation, args)",
   "export function __velarNodeHostOn(event, handler)",
+  "let __velarNodeHostFailure = null",
+  "if (__velarNodeHostFailure) return new __velarNodeHostPromise",
   "__velarNodeHostActiveServers > 0",
   "Node host worker did not become ready",
 ]) {
@@ -690,6 +695,9 @@ for (const phrase of [
   'import { MessageChannel, MessagePort, Worker } from "node:worker_threads"',
   "${JSON.stringify(VELAR_NODE_PROCESS_WORKER_SOURCE)}",
   'const __velarNodeProcessMessagePortPost = __velarProcessDataOperation(MessagePort.prototype, "postMessage")',
+  "const __velarNodeProcessOwners = __velarProcessCreate(null)",
+  "function __velarNodeProcessReapOwners()",
+  "if (__velarNodeProcessFailure) return __velarProcessReject(__velarNodeProcessFailure)",
   "try { await __velarNodeProcessReadyPromise; }",
   '__velarProcessCall(__velarNodeProcessWorkerUnref, __velarNodeProcessWorker, [])',
 ]) {
@@ -1631,6 +1639,9 @@ for (const phrase of [
   "const hostMapGet = Map.prototype.get",
   "const hostPostMessage = hostMessageHandler.postMessage",
   "const hostTextEncode = TextEncoder.prototype.encode",
+  "process.terminationHandler =",
+  'case "process-owned":',
+  "Darwin.kill(-pid, SIGKILL)",
 ]) {
   if (!desktopNativeHostSource.includes(phrase)) {
     failures.push(`packages/desktop/native/macos/VelarDesktopHost.swift: missing captured bridge operation '${phrase}'`);

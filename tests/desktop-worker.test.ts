@@ -340,6 +340,8 @@ test("Desktop process grants work independently from filesystem grants and keep 
     ]) as { code: number; stdout: string };
     assert.equal(execution.code, 0);
     assert.equal(execution.stdout, await realpath(project));
+    assert.deepEqual(client.lifecycle().map((event) => event.hostEvent), ["process-owned", "process-settled"]);
+    assert.equal(client.lifecycle()[0]?.handle, client.lifecycle()[1]?.handle);
     await assert.rejects(client.call("fs", "exists", ["."]), /no granted filesystem scope/u);
     await assert.rejects(
       client.call("process", "run", [basename(process.execPath), ["--version"], { cwd: project }]),
@@ -474,6 +476,48 @@ setInterval(() => {}, 1000);
   }
 });
 
+test("Desktop capability host drains transferred process ownership before a fatal exit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-worker-crash-"));
+  const project = join(directory, "project");
+  const appData = join(directory, "app-data");
+  await mkdir(project);
+  await mkdir(appData);
+  const configPath = join(directory, "desktop.json");
+  await writeFile(configPath, JSON.stringify({
+    protocolVersion: 1,
+    permissions: { files: [], processes: [basename(process.execPath)], network: [] },
+  }), "utf8");
+  const source = await readFile(workerPath, "utf8");
+  const crashingSource = source.replace(
+    'respond({ protocolVersion: 1, hostEvent: "process-owned", handle, pid: task.pid });',
+    'respond({ protocolVersion: 1, hostEvent: "process-owned", handle, pid: task.pid }); setTimeout(() => { throw new Error("injected Desktop worker crash"); }, 100); await new Promise(() => {});',
+  );
+  assert.notEqual(crashingSource, source);
+  const crashingWorker = join(directory, "worker.mjs");
+  await writeFile(crashingWorker, crashingSource, "utf8");
+  const child = spawn(process.execPath, [crashingWorker, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
+  const client = new WorkerClient(child);
+  let ownedPid: number | null = null;
+  try {
+    await assert.rejects(
+      client.call("process", "start", [basename(process.execPath), ["-e", "setInterval(() => {}, 1000)"], {timeout: 0, maxOutputBytes: 65536}]),
+      /Desktop worker exited/u,
+    );
+    const ownership = client.lifecycle().find((event) => event.hostEvent === "process-owned");
+    assert.ok(ownership && Number.isSafeInteger(ownership.pid));
+    ownedPid = ownership.pid as number;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { process.kill(ownedPid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+      catch { ownedPid = null; break; }
+    }
+    assert.equal(ownedPid, null, "the Desktop worker must reap its child before fatal exit");
+  } finally {
+    if (ownedPid !== null) terminateProcessGroup(ownedPid);
+    client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function terminateProcessGroup(pid: number): void {
   try { process.kill(-pid, "SIGKILL"); }
   catch { try { process.kill(pid, "SIGKILL"); } catch {} }
@@ -482,13 +526,18 @@ function terminateProcessGroup(pid: number): void {
 class WorkerClient {
   private nextId = 1;
   private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  private readonly lifecycleEvents: Array<{ hostEvent: string; handle: number; pid?: number }> = [];
   private readonly child: ChildProcessWithoutNullStreams;
 
   constructor(child: ChildProcessWithoutNullStreams) {
     this.child = child;
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on("line", (line) => {
-      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown } };
+      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown }; hostEvent?: string; handle?: number; pid?: number };
+      if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled") && Number.isSafeInteger(message.handle)) {
+        this.lifecycleEvents.push({ hostEvent: message.hostEvent, handle: message.handle as number, ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}) });
+        return;
+      }
       const request = this.pending.get(message.id);
       if (!request) return;
       this.pending.delete(message.id);
@@ -514,6 +563,10 @@ class WorkerClient {
     const result = new Promise<unknown>((resolveCall, rejectCall) => this.pending.set(id, { resolve: resolveCall, reject: rejectCall }));
     this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, id, capability, operation, args })}\n`);
     return result;
+  }
+
+  lifecycle(): readonly { hostEvent: string; handle: number; pid?: number }[] {
+    return this.lifecycleEvents;
   }
 
   close(): void {

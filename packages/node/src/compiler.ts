@@ -423,10 +423,12 @@ const processOutputFields = new __velarProcessNativeSet(["channel", "text"]);
 const processStopFields = new __velarProcessNativeSet(["result", "error"]);
 const processWaitFields = new __velarProcessNativeSet(["result", "error", "retained"]);
 const processErrorFields = new __velarProcessNativeSet(["name", "message"]);
-const processHostMessageFields = new __velarProcessNativeSet(["kind", "id", "ok", "value", "error", "handle"]);
+const processHostMessageFields = new __velarProcessNativeSet(["kind", "id", "ok", "value", "error", "handle", "pid"]);
 const __velarNodeProcessToken = Symbol("velar.node.process");
 const __velarNodeProcessNativeProcess = process;
 const __velarNodeProcessEnvironment = __velarNodeProcessNativeProcess.env;
+const __velarNodeProcessKill = __velarProcessDataOperation(__velarNodeProcessNativeProcess, "kill");
+const __velarNodeProcessPlatform = __velarNodeProcessNativeProcess.platform;
 export const ProcessOutputChannel = __velarRegisterRuntimeType(__velarProcessFreeze({
   stdout: "stdout",
   stderr: "stderr",
@@ -563,15 +565,23 @@ const __velarNodeProcessMessagePortPost = __velarProcessDataOperation(MessagePor
 const __velarNodeProcessMessagePortStart = __velarProcessDataOperation(MessagePort.prototype, "start");
 const __velarNodeProcessMessagePortRef = __velarProcessDataOperation(MessagePort.prototype, "ref");
 const __velarNodeProcessMessagePortUnref = __velarProcessDataOperation(MessagePort.prototype, "unref");
+const __velarNodeProcessMessagePortClose = __velarProcessDataOperation(MessagePort.prototype, "close");
 const __velarNodeProcessWorkerUnref = __velarProcessDataOperation(Worker.prototype, "unref");
 const __velarNodeProcessEventOn = __velarProcessDataOperation(EventEmitter.prototype, "on");
 const __velarNodeProcessMessageData = __velarProcessOwnDescriptor(globalThis.MessageEvent.prototype, "data")?.get;
 if (typeof __velarNodeProcessMessageData !== "function") throw new __velarProcessNativeError("Node process MessageEvent data operation is unavailable");
 const __velarNodeProcessPending = __velarProcessCreate(null);
+const __velarNodeProcessOwners = __velarProcessCreate(null);
+const __velarNodeProcessUnconfirmedOwners = __velarProcessCreate(null);
+const __velarNodeProcessSettledOwners = __velarProcessCreate(null);
+const __velarNodeProcessMaxPending = 1024;
 let __velarNodeProcessNextRequest = 1;
 let __velarNodeProcessPendingCount = 0;
 let __velarNodeProcessRunningCount = 0;
 let __velarNodeProcessReady = false;
+let __velarNodeProcessFailure = null;
+let __velarNodeProcessReaper = null;
+let __velarNodeProcessReaperAttempts = 0;
 let __velarNodeProcessReadyResolve;
 let __velarNodeProcessReadyReject;
 const __velarNodeProcessReadyPromise = new __velarProcessNativePromise((resolve, reject) => {
@@ -587,8 +597,52 @@ function __velarNodeProcessUpdateReference() {
     : __velarNodeProcessMessagePortUnref;
   __velarProcessCall(operation, __velarNodeProcessPort, []);
 }
+function __velarNodeProcessSignal(pid, signal) {
+  try {
+    __velarProcessCall(__velarNodeProcessKill, __velarNodeProcessNativeProcess, [__velarNodeProcessPlatform === "win32" ? pid : -pid, signal]);
+  } catch {
+    try { __velarProcessCall(__velarNodeProcessKill, __velarNodeProcessNativeProcess, [pid, signal]); }
+    catch {}
+  }
+}
+function __velarNodeProcessOwnerAlive(pid) {
+  try {
+    __velarProcessCall(__velarNodeProcessKill, __velarNodeProcessNativeProcess, [__velarNodeProcessPlatform === "win32" ? pid : -pid, 0]);
+    return true;
+  } catch (error) {
+    const code = error && typeof error === "object" ? __velarProcessOwnDescriptor(error, "code") : null;
+    return !code || !("value" in code) || code.value !== "ESRCH";
+  }
+}
+function __velarNodeProcessReapOwners() {
+  __velarNodeProcessReaper = null;
+  __velarNodeProcessReaperAttempts += 1;
+  const keys = __velarProcessKeys(__velarNodeProcessOwners);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    const descriptor = __velarProcessOwnDescriptor(__velarNodeProcessOwners, key);
+    if (!descriptor || !("value" in descriptor)) continue;
+    const pid = descriptor.value;
+    __velarNodeProcessSignal(pid, "SIGKILL");
+    if (!__velarNodeProcessOwnerAlive(pid)) delete __velarNodeProcessOwners[key];
+  }
+  if (__velarProcessKeys(__velarNodeProcessOwners).length > 0 && __velarNodeProcessReaperAttempts < 100) {
+    __velarNodeProcessReaper = __velarProcessCall(__velarProcessSetTimeout, globalThis, [__velarNodeProcessReapOwners, 50]);
+  } else if (__velarNodeProcessReaperAttempts >= 100) {
+    const abandonedKeys = __velarProcessKeys(__velarNodeProcessOwners);
+    for (let index = 0; index < abandonedKeys.length; index += 1) delete __velarNodeProcessOwners[abandonedKeys[index]];
+  }
+}
+function __velarNodeProcessBeginReaping() {
+  if (__velarNodeProcessReaper === null && __velarProcessKeys(__velarNodeProcessOwners).length > 0) {
+    __velarNodeProcessReaperAttempts = 0;
+    __velarNodeProcessReapOwners();
+  }
+}
 function __velarNodeProcessFail(error) {
+  if (__velarNodeProcessFailure) return;
   const failure = error instanceof __velarProcessNativeError ? error : new __velarProcessNativeError("Node process worker failed");
+  __velarNodeProcessFailure = failure;
   if (!__velarNodeProcessReady) __velarNodeProcessReadyReject(failure);
   const keys = __velarProcessKeys(__velarNodeProcessPending);
   for (let index = 0; index < keys.length; index += 1) {
@@ -599,7 +653,13 @@ function __velarNodeProcessFail(error) {
   }
   __velarNodeProcessPendingCount = 0;
   __velarNodeProcessRunningCount = 0;
+  const settledKeys = __velarProcessKeys(__velarNodeProcessSettledOwners);
+  for (let index = 0; index < settledKeys.length; index += 1) delete __velarNodeProcessSettledOwners[settledKeys[index]];
+  const unconfirmedKeys = __velarProcessKeys(__velarNodeProcessUnconfirmedOwners);
+  for (let index = 0; index < unconfirmedKeys.length; index += 1) delete __velarNodeProcessUnconfirmedOwners[unconfirmedKeys[index]];
   __velarNodeProcessUpdateReference();
+  __velarNodeProcessBeginReaping();
+  __velarProcessCall(__velarNodeProcessMessagePortClose, __velarNodeProcessPort, []);
 }
 function __velarNodeProcessMessage(value) {
   const message = __velarProcessRecord(value, "Node process host message", processHostMessageFields);
@@ -609,9 +669,29 @@ function __velarNodeProcessMessage(value) {
     __velarNodeProcessReadyResolve(null);
     return;
   }
+  if (message.kind === "owned") {
+    if (!__velarProcessIsSafeInteger(message.handle) || message.handle < 1
+      || !__velarProcessIsSafeInteger(message.pid) || message.pid < 1
+      || __velarProcessOwnDescriptor(__velarNodeProcessOwners, __velarProcessNativeString(message.handle))
+      || __velarProcessOwnDescriptor(__velarNodeProcessSettledOwners, __velarProcessNativeString(message.handle))) {
+      throw new __velarProcessNativeTypeError("Node process worker returned an invalid owned handle");
+    }
+    __velarNodeProcessOwners[message.handle] = message.pid;
+    __velarNodeProcessUnconfirmedOwners[message.handle] = true;
+    __velarNodeProcessRunningCount += 1;
+    __velarNodeProcessUpdateReference();
+    return;
+  }
   if (message.kind === "settled") {
-    if (!__velarProcessIsSafeInteger(message.handle) || message.handle < 1 || __velarNodeProcessRunningCount < 1) {
+    const owner = __velarProcessIsSafeInteger(message.handle) && message.handle > 0
+      ? __velarProcessOwnDescriptor(__velarNodeProcessOwners, __velarProcessNativeString(message.handle))
+      : null;
+    if (!owner || !("value" in owner) || __velarNodeProcessRunningCount < 1) {
       throw new __velarProcessNativeTypeError("Node process worker returned an invalid settled handle");
+    }
+    delete __velarNodeProcessOwners[message.handle];
+    if (__velarProcessOwnDescriptor(__velarNodeProcessUnconfirmedOwners, __velarProcessNativeString(message.handle))) {
+      __velarNodeProcessSettledOwners[message.handle] = owner.value;
     }
     __velarNodeProcessRunningCount -= 1;
     __velarNodeProcessUpdateReference();
@@ -623,13 +703,26 @@ function __velarNodeProcessMessage(value) {
   const descriptor = __velarProcessOwnDescriptor(__velarNodeProcessPending, __velarProcessNativeString(message.id));
   if (!descriptor || !("value" in descriptor)) throw new __velarProcessNativeError("Node process worker returned an unknown response");
   const pending = descriptor.value;
+  let responseValue = message.value;
+  let responseError = null;
+  if (message.ok) {
+    if (pending.operation === "start") {
+      const started = startValueOf(message.value);
+      const owner = __velarProcessOwnDescriptor(__velarNodeProcessOwners, __velarProcessNativeString(started.handle))
+        ?? __velarProcessOwnDescriptor(__velarNodeProcessSettledOwners, __velarProcessNativeString(started.handle));
+      if (!owner || !("value" in owner) || owner.value !== started.pid) {
+        throw new __velarProcessNativeError("Node process worker resolved start without transferring cleanup ownership");
+      }
+      delete __velarNodeProcessUnconfirmedOwners[started.handle];
+      delete __velarNodeProcessSettledOwners[started.handle];
+      responseValue = started;
+    }
+  } else responseError = processErrorOf(message.error);
   delete __velarNodeProcessPending[message.id];
   __velarNodeProcessPendingCount -= 1;
-  if (message.ok) {
-    if (pending.operation === "start") __velarNodeProcessRunningCount += 1;
-    pending.resolve(message.value);
-  } else pending.reject(processErrorOf(message.error));
   __velarNodeProcessUpdateReference();
+  if (responseError) pending.reject(responseError);
+  else pending.resolve(responseValue);
 }
 
 __velarNodeProcessPort.onmessage = event => {
@@ -646,7 +739,7 @@ const __velarNodeProcessWorker = new Worker(${JSON.stringify(VELAR_NODE_PROCESS_
 });
 __velarProcessCall(__velarNodeProcessEventOn, __velarNodeProcessWorker, ["error", () => __velarNodeProcessFail(new __velarProcessNativeError("Node process worker failed"))]);
 __velarProcessCall(__velarNodeProcessEventOn, __velarNodeProcessWorker, ["exit", code => {
-  if (code !== 0) __velarNodeProcessFail(new __velarProcessNativeError("Node process worker exited unexpectedly"));
+  __velarNodeProcessFail(new __velarProcessNativeError("Node process worker exited unexpectedly with code " + code));
 }]);
 const __velarNodeProcessReadyTimer = __velarProcessCall(__velarProcessSetTimeout, globalThis, [
   () => __velarNodeProcessReadyReject(new __velarProcessNativeError("Node process worker did not become ready")),
@@ -659,9 +752,18 @@ __velarProcessCall(__velarNodeProcessWorkerUnref, __velarNodeProcessWorker, []);
 __velarProcessCall(__velarNodeProcessMessagePortUnref, __velarNodeProcessPort, []);
 
 function invoke(operation, args) {
+  if (__velarNodeProcessFailure) return __velarProcessReject(__velarNodeProcessFailure);
+  if (__velarNodeProcessPendingCount >= __velarNodeProcessMaxPending) {
+    return __velarProcessReject(new __velarProcessNativeRangeError("Node process host cannot have more than 1024 pending operations"));
+  }
+  let attempts = 0;
+  while (__velarProcessOwnDescriptor(__velarNodeProcessPending, __velarProcessNativeString(__velarNodeProcessNextRequest))) {
+    __velarNodeProcessNextRequest = __velarNodeProcessNextRequest >= __velarProcessNativeNumber.MAX_SAFE_INTEGER ? 1 : __velarNodeProcessNextRequest + 1;
+    attempts += 1;
+    if (attempts > __velarNodeProcessMaxPending) return __velarProcessReject(new __velarProcessNativeRangeError("Node process request identity space is unavailable"));
+  }
   const id = __velarNodeProcessNextRequest;
-  __velarNodeProcessNextRequest += 1;
-  if (!__velarProcessIsSafeInteger(__velarNodeProcessNextRequest)) __velarNodeProcessNextRequest = 1;
+  __velarNodeProcessNextRequest = id >= __velarProcessNativeNumber.MAX_SAFE_INTEGER ? 1 : id + 1;
   return new __velarProcessNativePromise((resolve, reject) => {
     __velarNodeProcessPending[id] = {operation, resolve, reject};
     __velarNodeProcessPendingCount += 1;

@@ -31,8 +31,11 @@ const __velarNodeHostMessagePortPost = __velarNodeHostDataOperation(__VelarNodeH
 const __velarNodeHostMessagePortStart = __velarNodeHostDataOperation(__VelarNodeHostMessagePort.prototype, "start");
 const __velarNodeHostMessagePortRef = __velarNodeHostDataOperation(__VelarNodeHostMessagePort.prototype, "ref");
 const __velarNodeHostMessagePortUnref = __velarNodeHostDataOperation(__VelarNodeHostMessagePort.prototype, "unref");
+const __velarNodeHostMessagePortClose = __velarNodeHostDataOperation(__VelarNodeHostMessagePort.prototype, "close");
 const __velarNodeHostWorkerUnref = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "unref");
+const __velarNodeHostWorkerTerminate = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "terminate");
 const __velarNodeHostEventOn = __velarNodeHostDataOperation(__VelarNodeHostEventEmitter.prototype, "on");
+const __velarNodeHostPromiseThen = __velarNodeHostDataOperation(__velarNodeHostPromise.prototype, "then");
 const __velarNodeHostMessageData = __velarNodeHostOwnDescriptor(globalThis.MessageEvent.prototype, "data")?.get;
 if (typeof __velarNodeHostMessageData !== "function") throw new __velarNodeHostError("Node host MessageEvent data operation is unavailable");
 const __velarNodeHostSetTimeout = globalThis.setTimeout;
@@ -46,6 +49,7 @@ let __velarNodeHostPendingCount = 0;
 let __velarNodeHostActiveServers = 0;
 let __velarNodeHostActiveHttpRequests = 0;
 let __velarNodeHostReady = false;
+let __velarNodeHostFailure = null;
 let __velarNodeHostReadyResolve;
 let __velarNodeHostReadyReject;
 
@@ -120,7 +124,9 @@ function __velarNodeHostRequestId() {
 }
 
 function __velarNodeHostFail(error) {
+  if (__velarNodeHostFailure) return;
   const failure = error instanceof __velarNodeHostError ? error : new __velarNodeHostError("Node host worker failed");
+  __velarNodeHostFailure = failure;
   if (!__velarNodeHostReady) __velarNodeHostReadyReject(failure);
   const keys = __velarNodeHostCall(__velarNodeHostOwnKeys, __velarNodeHostReflect, [__velarNodeHostPending]);
   for (let index = 0; index < keys.length; index += 1) {
@@ -129,10 +135,14 @@ function __velarNodeHostFail(error) {
     delete __velarNodeHostPending[keys[index]];
   }
   __velarNodeHostPendingCount = 0;
+  __velarNodeHostActiveServers = 0;
   __velarNodeHostActiveHttpRequests = 0;
   const httpKeys = __velarNodeHostCall(__velarNodeHostOwnKeys, __velarNodeHostReflect, [__velarNodeHostActiveHttpHandles]);
   for (let index = 0; index < httpKeys.length; index += 1) delete __velarNodeHostActiveHttpHandles[httpKeys[index]];
   __velarNodeHostUpdateReference();
+  __velarNodeHostCall(__velarNodeHostMessagePortClose, __velarNodeHostPort, []);
+  const terminated = __velarNodeHostCall(__velarNodeHostWorkerTerminate, __velarNodeHostWorker, []);
+  __velarNodeHostCall(__velarNodeHostPromiseThen, terminated, [() => null, () => null]);
 }
 
 function __velarNodeHostMessage(value) {
@@ -161,6 +171,7 @@ function __velarNodeHostMessage(value) {
   const descriptor = __velarNodeHostOwnDescriptor(__velarNodeHostPending, __velarNodeHostString(message.id));
   if (!descriptor || !("value" in descriptor)) throw new __velarNodeHostError("Node host worker returned an unknown response");
   const pending = descriptor.value;
+  const responseError = message.ok ? null : __velarNodeHostErrorOf(message.error, pending.operation);
   let activeHttpDelta = 0;
   if (message.ok && pending.operation === "http.request") {
     const result = __velarNodeHostRecord(message.value, "Node HTTP response");
@@ -187,7 +198,7 @@ function __velarNodeHostMessage(value) {
   __velarNodeHostActiveHttpRequests += activeHttpDelta;
   __velarNodeHostUpdateReference();
   if (message.ok) pending.resolve(message.value);
-  else pending.reject(__velarNodeHostErrorOf(message.error, pending.operation));
+  else pending.reject(responseError);
 }
 
 const __velarNodeHostReadyPromise = new __velarNodeHostPromise((resolve, reject) => {
@@ -209,7 +220,7 @@ const __velarNodeHostWorker = new __VelarNodeHostWorker(WORKER_SOURCE, {
 });
 __velarNodeHostCall(__velarNodeHostEventOn, __velarNodeHostWorker, ["error", () => __velarNodeHostFail(new __velarNodeHostError("Node host worker failed"))]);
 __velarNodeHostCall(__velarNodeHostEventOn, __velarNodeHostWorker, ["exit", code => {
-  if (code !== 0) __velarNodeHostFail(new __velarNodeHostError("Node host worker exited unexpectedly"));
+  __velarNodeHostFail(new __velarNodeHostError("Node host worker exited unexpectedly with code " + code));
 }]);
 const __velarNodeHostReadyTimer = __velarNodeHostCall(__velarNodeHostSetTimeout, globalThis, [
   () => __velarNodeHostReadyReject(new __velarNodeHostError("Node host worker did not become ready")),
@@ -227,6 +238,7 @@ export function __velarNodeHostInvoke(operation, args) {
   if (__velarNodeHostPendingCount >= __velarNodeHostMaxPending) {
     return new __velarNodeHostPromise((_resolve, reject) => reject(new __velarNodeHostRangeError("Node host cannot have more than 1024 pending operations")));
   }
+  if (__velarNodeHostFailure) return new __velarNodeHostPromise((_resolve, reject) => reject(__velarNodeHostFailure));
   const id = __velarNodeHostRequestId();
   return new __velarNodeHostPromise((resolve, reject) => {
     const handle = operation === "http.request" || operation === "http.read" || operation === "http.cancel" || operation === "http.close"
@@ -247,6 +259,7 @@ export function __velarNodeHostInvoke(operation, args) {
 
 export function __velarNodeHostOn(event, handler) {
   if (event !== "serve.request" || typeof handler !== "function") throw new __velarNodeHostTypeError("Node host event registration is invalid");
+  if (__velarNodeHostFailure) throw __velarNodeHostFailure;
   if (__velarNodeHostOwnDescriptor(__velarNodeHostEventHandlers, event)) throw new __velarNodeHostError("Node host event already has an owner");
   __velarNodeHostEventHandlers[event] = handler;
   return null;
