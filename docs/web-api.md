@@ -547,13 +547,13 @@ type Settings:
 
 component PreferencesPanel:
     const preferences = storage.scope("studio")
-    const stopWatching = preferences.watch("settings", Settings, (next, previous) => print(next))
-    const settings = preferences.get("settings", Settings, {theme: "system"})
+    const stopWatching = preferences.watch("settings", Settings, (next, previous) => print(next), 262144)
+    const settings = preferences.get("settings", Settings, {theme: "system"}, 262144)
     const cache = database("release-studio")
 
     async def save() -> null:
-        preferences.set("settings", settings)
-        await cache.set("settings", settings)
+        preferences.set("settings", settings, 262144)
+        await cache.set("settings", settings, 262144)
 
     mounted:
         save()
@@ -566,6 +566,20 @@ component PreferencesPanel:
 
 - `storage` and `session` wrap local and session storage. Both provide typed
   `get`, JSON `set`, `has`, `keys`, `remove`, `clear`, and `watch`.
+- `get(key, Type, fallback=null, maxBytes=16777216)`,
+  `set(key, value, maxBytes=16777216)`, and
+  `watch(key, Type, callback, maxBytes=16777216)` accept a positive integer
+  encoded-value budget up to the 16 MiB hard ceiling. Named arguments may set
+  `maxBytes` without supplying a fallback. The budget uses the same
+  compiler-owned UTF-8 counter as HTTP and `velar/text.utf8Size`, including its
+  treatment of surrogate pairs and unpaired surrogates.
+- A local/session read whose stored JSON text exceeds `maxBytes` returns the
+  declared fallback without parsing it. A write serializes through strict JSON
+  and throws `RangeError` before any storage mutation when the encoded text is
+  over budget. A watch maps an individually oversized old or new value to
+  `null`; it does not deliver partially parsed data. An invalid budget fails
+  before reading storage, installing listeners, or opening an IndexedDB
+  transaction.
 - Local/session storage areas, their native getters and methods, same-page
   event dispatch, and global storage-event listeners are captured when the
   module initializes. Later replacement of a storage global, prototype
@@ -586,8 +600,12 @@ component PreferencesPanel:
   browser getters or enumerable own data fields; a synthetic accessor-backed
   event is ignored without executing its getters.
 - `database(name)` provides asynchronous IndexedDB `get`, `set`, `has`,
-  `keys`, `remove`, and `clear`. Values are JSON-serializable and typed reads
-  use the same VelarScript `type` validator and fallback rules.
+  `keys`, `remove`, and `clear`. Its `get` and `set` accept the same trailing
+  `maxBytes` contract. Values are stored as canonical strict JSON text rather
+  than arbitrary structured-clone objects, allowing an oversized value to be
+  rejected before parsing. Typed reads use the same VelarScript `type`
+  validator and fallback rules; values written directly by JavaScript in a
+  different representation are foreign data and return the declared fallback.
 - The IndexedDB factory, request getters, database/transaction/object-store
   methods, key-list checks, and event listeners use the same captured host ABI.
   JavaScript may still expose an explicit data-only test double, but ambient or
@@ -608,10 +626,10 @@ component PreferencesPanel:
 - Every write uses the strict `velar/json` data contract. Unsupported or lossy
   values that are visible to the compiler fail during checking; dynamic values
   are validated again at runtime before local/session storage or IndexedDB is
-  mutated. IndexedDB reads cross the same JSON snapshot before Type validation,
-  so a `Date`, `Map`, accessor record, or other foreign structured-clone value
-  written by JavaScript cannot enter Vel through a permissive runtime Type; the
-  read returns its declared fallback instead.
+  mutated. IndexedDB accepts only its strict JSON text representation before
+  Type validation, so a `Date`, `Map`, accessor record, object clone, or other
+  foreign value written by JavaScript cannot enter Vel through a permissive
+  runtime Type; the read returns its declared fallback instead.
 
 ## `velar/forms`
 

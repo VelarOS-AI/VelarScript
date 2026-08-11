@@ -2067,12 +2067,57 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值
   推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-116 用 Lite 的长期会话与真实命令失败继续审计“数据能写进去”之外的生产语义。旧
+  `velar/storage` 只有固定 16 MiB 上限，应用无法在 host effect 前声明更小的持久化预算；
+  local/session read 会先取出并解析任意上限内文本，IndexedDB 还直接保存 structured clone，导致
+  Web 两种存储后端并不共享一条严格 JSON/UTF-8 契约。Web 官方接口现在让 storage/session 的
+  `get/set/watch` 与 database 的 `get/set` 接受正整数 `maxBytes`，默认及硬上限仍为 16 MiB。
+  invalid budget 在读取、监听、open/transaction 前失败；超预算 read 返回 typed fallback，write 在
+  mutation 前抛 `RangeError`，watch 把各自超预算的 old/new 值映射为 `null`。IndexedDB 改存 compiler
+  strict JSON 的 canonical text，foreign structured-clone 值不再经第二套序列化语义被悄悄接纳；所有
+  字节计算复用 W-115 的 compiler-owned UTF-8 runtime，storage 同时移除最后一条 ambient
+  `Number.isSafeInteger` 路径。接口、Analyzer named-argument/arity、runtime、hostile intrinsic、精确
+  多字节预算、transaction-before-effect、文档与 permanent boundary guard 一起锁定。
+
+  Lite 只在产品层定义保留策略：最多 64 个 session、512 条 message，sessions/messages snapshot
+  分别为 128 KiB/4 MiB，并限制 durable id、title、message text、tool activity/detail 与 Agent input/text。
+  hydration 会拒绝重复 identity、dangling session、非 canonical tool id 与字段超限，重启时只把
+  running/awaiting-approval tool 标记 cancelled；超出总量时保留最新 suffix、同步移除已淘汰 session
+  的 message 并重建索引。浏览器存储失败会显示 durability warning，不再把内存成功伪装成已持久化。
+  Agent audit journal 限制单条 64 KiB、当前文件 1 MiB并保留一个 previous rotation。
+
+  process/tool lifecycle 同时收紧：真实非零 exit code 或 signal 现在是可继续交给 provider 的 declared
+  tool failure，而 transport/stream/validation escape 必须先 stop 活跃 process；stop 失败明确报告
+  termination unconfirmed。AgentCore 对 execute、observer、output validation 的 escape 统一拥有 cleanup，
+  cancellation 即使 provider 一侧失败也会继续尝试 active 或 awaiting tool。未确认取消可以再次调用，
+  每次都会重试 provider 与 tool 的幂等 cleanup；不会因为第一次已经设置 cancelled flag，就让第二次
+  调用无操作却被产品误记为成功。真实长进程终止、非零退出、declared failure continuation、escaped
+  execute cleanup、cleanup failure 与 first-fail/second-confirm cancellation 都有纯 Vel 回归。
+
+  Lite 首次整包启动还发现一个独立的语言缺陷：模块函数参数 `sessions` 写在同名
+  `export state sessions` 之前时，Analyzer 按当时尚未登记的 reactive name 把参数当普通局部，Emitter
+  却按最终完整 name table 错误生成 `sessions.get()`，浏览器因此白屏。没有在 Lite 改名规避；Web
+  Analyzer 现在在语义遍历前收集本模块全部 state/computed 名称，使 shadow hint 服从词法绑定身份且
+  与声明顺序无关。回归同时证明前置函数参数保持普通 collection lowering，模块 state read 仍生成
+  reactive `.get()`。
+
+  当前最终组合证据为 `npm run check`（51 个格式化源、98 个文档示例、61 项 runtime boundary）、
+  549/549 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench
+  安装态验收，以及完整 Dev/Production/External Preview、27+6+15+6 三浏览器与 installed browser
+  project，全部 exit 0。Lite 四项目 check、40 shared + 39 server tests、package acceptance、54/54
+  Desktop 三浏览器与 CLI/Desktop production build 也全部通过。薄包为 802,794 bytes（784.0 KiB）：
+  host 235,904、renderer 528,476、capability host 37,021、metadata 1,393，外置 Node.js >=24，
+  SHA-256 为 `615d8b8c1eb52ba3467ba3315a63658748cc25c98fe4712444560bcbcb786d61`；相比 W-115
+  增加 6,511 bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行
+  函数返回值推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-115 的完整 compiler/runtime、六包安装/rehearsal、Workbench 安装态、三引擎 Web 与独立
-   Lite 全门禁均已取得当前代码的明确 exit 0。下一波继续审计工具长期运行时的 output streaming、
-   process termination、partial failure 与 session persistence；产品策略继续留在 Lite，只把重新出现的
-   通用语言、Node/Web/Desktop API 缺口修回官方包。
+1. W-116 的完整 compiler/runtime、六包安装/rehearsal、Workbench 安装态、三引擎 Web 与独立
+   Lite 全门禁均已取得当前代码的明确 exit 0。下一波从真实长会话继续审计 crash consistency、
+   concurrent turn exclusion、server/client disconnect 与恢复语义；产品策略继续留在 Lite，只把重新
+   出现的通用语言、Node/Web/Desktop API 缺口修回官方包。
 2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；
    它只能像普通第三方一样消费公开的 `@velarscript/*` 包。继续扩展真实使用场景，但不得把产品
    Agent/provider/tool policy、workspace 或 approval UI 重新放回语言包。
@@ -2086,4 +2131,4 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
    切片已通过
    `npm run check`、完整串行测试、四个生产示例、27+6+15+6 三浏览器场景、六包安装消费、
    release rehearsal、独立 Lite 全门禁，以及 Workbench 对该 rehearsal 六包的安装态验收；
-   仍未提交、未推送、未发布。
+   未推送、未发布。

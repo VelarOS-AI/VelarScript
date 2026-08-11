@@ -7433,11 +7433,14 @@ async def prepare() -> null:
     const payload: BinaryPayload = {data: binary}
     const checked = BinaryPayload.parse(payload)
     const upload = http.post(url="/api/copy", options={body: binary})
-    const loaded: User? = storage.get(target=User, key="current")
-    const fallback: User = storage.get(fallback={name: "Ada"}, target=User, key="fallback")
-    storage.set(value=fallback, key="current")
+    const loaded: User? = storage.get(maxBytes=1024, target=User, key="current")
+    const fallback: User = storage.get(maxBytes=1024, fallback={name: "Ada"}, target=User, key="fallback")
+    storage.set(maxBytes=1024, value=fallback, key="current")
+    const stop = storage.watch(maxBytes=1024, callback=(next, previous) => print(next), target=User, key="current")
+    stop()
     const records = database(name="users")
-    const pending: Promise<User?> = records.get(target=User, key="current")
+    const pending: Promise<User?> = records.get(maxBytes=1024, target=User, key="current")
+    await records.set(maxBytes=1024, value=fallback, key="current")
     scrollTo(behavior="smooth", y=20, x=10)
     const channel = socket(handlers={}, url="wss://example.com/events")
     channel.send(data="ping")
@@ -7632,14 +7635,21 @@ globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.
 const data = new Map(), listeners = new Map();
 globalThis.localStorage = { get length() { return data.size; }, key(index) { return [...data.keys()][index] ?? null; }, getItem(key) { return data.get(key) ?? null; }, setItem(key, value) { data.set(key, value); }, removeItem(key) { data.delete(key); } };
 globalThis.CustomEvent = class { constructor(type, options) { this.type = type; this.detail = options.detail; } };
-globalThis.addEventListener = (name, callback) => listeners.set(name, callback);
-globalThis.removeEventListener = (name, callback) => { if (listeners.get(name) === callback) listeners.delete(name); };
-globalThis.dispatchEvent = (event) => { listeners.get(event.type)?.(event); return true; };
+globalThis.addEventListener = (name, callback) => { const values = listeners.get(name) ?? []; values.push(callback); listeners.set(name, values); };
+globalThis.removeEventListener = (name, callback) => { const values = (listeners.get(name) ?? []).filter(value => value !== callback); if (values.length === 0) listeners.delete(name); else listeners.set(name, values); };
+globalThis.dispatchEvent = (event) => { for (const callback of listeners.get(event.type) ?? []) callback(event); return true; };
 ${storageSource}
 const Item = __velarRegisterRuntimeType(Object.freeze({ is() { return true; }, parse(value) { return value; } }));
+const beforeInvalidWatch = listeners.size;
+try { storage.watch("invalid", Item, () => null, 0); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(listeners.size === beforeInvalidWatch);
 const stop = storage.watch("item", Item, async () => { throw new Error("storage failed"); });
+const observed = [];
+const stopBudget = storage.watch("large", Item, (next, previous) => observed.push([next, previous]), 5);
 storage.set("item", { value: 1 });
+storage.set("large", { value: "游戏" }, 64);
 await new Promise((resolve) => setTimeout(resolve, 0));
+console.log(observed.length, observed[0][0] === null, observed[0][1] === null);
 let storageEventGetterReads = 0;
 const hostileChange = Object.defineProperty({}, "detail", { enumerable: true, get() { storageEventGetterReads += 1; return {}; } });
 const hostileDetail = Object.defineProperty({ areaName: "local", newValue: null, oldValue: null }, "key", { enumerable: true, get() { storageEventGetterReads += 1; return "item"; } });
@@ -7647,18 +7657,18 @@ const hostileStored = Object.defineProperties({ newValue: null, oldValue: null }
   storageArea: { enumerable: true, get() { storageEventGetterReads += 1; return globalThis.localStorage; } },
   key: { enumerable: true, get() { storageEventGetterReads += 1; return "item"; } },
 });
-listeners.get("velar-storage-change")(hostileChange);
-listeners.get("velar-storage-change")({ detail: hostileDetail });
-listeners.get("storage")(hostileStored);
+for (const callback of listeners.get("velar-storage-change")) callback(hostileChange);
+for (const callback of listeners.get("velar-storage-change")) callback({ detail: hostileDetail });
+for (const callback of listeners.get("storage")) callback(hostileStored);
 console.log(storageEventGetterReads);
-stop();
+stop(); stopBudget();
 storage.set("item", { value: 2 });
 await new Promise((resolve) => setTimeout(resolve, 0));
 console.log(reports.join("|"));
 console.log(listeners.size);
 `);
   assert.equal(storageExecution.status, 0, String(storageExecution.stderr));
-  assert.equal(storageExecution.stdout, "0\nstorage:watch:storage failed\n0\n");
+  assert.equal(storageExecution.stdout, "RangeError\ntrue\n1 true true\n0\nstorage:watch:storage failed\n0\n");
 
   const realtimeSource = standardModuleSource("velar/realtime") ?? "";
   const realtimeExecution = executeModule(`
@@ -11474,8 +11484,17 @@ globalThis.dispatchEvent = () => true;
 ${storage}
 let runtimeTypeReads = 0;
 const forgedType = Object.defineProperty({ is() { return true; } }, "parse", { enumerable: true, get() { runtimeTypeReads += 1; return value => value; } });
+const Item = __velarRegisterRuntimeType(Object.freeze({ is() { return true; }, parse(value) { return value; } }));
 storage.set("valid", { value: 1 });
 console.log(globalThis.localStorage.getItem("valid"));
+const beforeLarge = storageReads;
+try { storage.set("too-large", { value: "游戏" }, 5); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(!data.has("too-large"), storageReads === beforeLarge);
+storage.set("budgeted", { value: "游戏" }, 64);
+console.log(storage.get("budgeted", Item, "fallback", 5));
+const beforeBudget = storageReads;
+try { storage.get("valid", Item, null, 0); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(storageReads === beforeBudget);
 let webJsonValueReads = 0;
 const changingRecord = new Proxy({ value: 1 }, {
   get(target, key) { webJsonValueReads += 1; return key === "value" ? 2 : Reflect.get(target, key); },
@@ -11505,7 +11524,7 @@ console.log(hostileStorageKeyReads);
 try { storage.scope("a".repeat(4095)).scope("b"); console.log("accepted"); } catch (error) { console.log(error.name); }
 `);
   assert.equal(storageExecution.status, 0, String(storageExecution.stderr));
-  assert.equal(storageExecution.stdout, '{"value":1}\n{"value":1} 0\nTypeError\ntrue 0\nTypeError\ntrue\nTypeError\nTypeError\nTypeError\nTypeError\nTypeError\n0 true\nsafe 1\nTypeError\n0\nRangeError\n');
+  assert.equal(storageExecution.stdout, '{"value":1}\nRangeError\ntrue true\nfallback\nRangeError\ntrue\n{"value":1} 0\nTypeError\ntrue 0\nTypeError\ntrue\nTypeError\nTypeError\nTypeError\nTypeError\nTypeError\n0 true\nsafe 1\nTypeError\n0\nRangeError\n');
 
   const http = standardModuleSource("velar/http") ?? "";
   const httpExecution = executeModule(`globalThis.fetch = async () => new Response("1e400", { status: 200, headers: { "content-type": "application/json" } });
@@ -11612,6 +11631,14 @@ try { await store.set("item", { value: 1 }); console.log("accepted"); } catch (e
 await store.set("item", { value: 2 });
 const Item = __velarRegisterRuntimeType(Object.freeze({ is() { return true; }, parse(value) { return value; } }));
 console.log((await store.get("item", Item)).value);
+const beforeLarge = transactionCount;
+try { await store.set("too-large", { value: "游戏" }, 5); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(!stored.has("too-large"), transactionCount === beforeLarge);
+stored.set("budgeted", '{"value":"游戏"}');
+console.log(await store.get("budgeted", Item, "fallback", 5));
+const beforeBudget = transactionCount;
+try { await store.get("item", Item, null, 0); console.log("accepted"); } catch (error) { console.log(error.name); }
+console.log(transactionCount === beforeBudget);
 const keys = await store.keys();
 keys.push("m");
 console.log(keys.join(","));
@@ -11623,7 +11650,7 @@ let patchedParseCalls = 0;
 JSON.parse = () => { patchedParseCalls += 1; return { tampered: true }; };
 await store.set("native-json", { value: 3 });
 JSON.parse = originalJsonParse;
-console.log(stored.get("native-json").value + ":" + patchedParseCalls);
+console.log(originalJsonParse(stored.get("native-json")).value + ":" + patchedParseCalls);
 failNextTransaction = true;
 try { await store.has("item"); console.log("accepted"); } catch (error) { console.log(error.message); }
 console.log(await store.has("item"), openAttempts);
@@ -11632,7 +11659,7 @@ try { await store.set(42, { value: 3 }); console.log("accepted"); } catch (error
 console.log(openAttempts);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "open failed\ntransaction aborted\n2\na,z,m\n0:false\nfallback\n3:0\nconnection closed\ntrue 3\nTypeError true\n3\n");
+  assert.equal(execution.stdout, "open failed\ntransaction aborted\n2\nRangeError\ntrue true\nfallback\nRangeError\ntrue\na,z,m\n0:false\nfallback\n3:0\nconnection closed\ntrue 3\nTypeError true\n3\n");
 });
 
 test("storage and IndexedDB retain captured WebIDL operations after global, prototype, and instance poisoning", () => {
@@ -11751,6 +11778,8 @@ globalThis.CustomEvent = class { constructor(type, options) { this.type = type; 
 globalThis.dispatchEvent = event => { calls.push("dispatch:" + event.type); return true; };
 ${source}
 poisonNewInstances = true;
+Number.isSafeInteger = () => { poisoned += 1; return true; };
+String.prototype.charCodeAt = () => { poisoned += 1; return 0; };
 globalThis.localStorage = {};
 globalThis.indexedDB = {};
 globalThis.dispatchEvent = () => { poisoned += 1; };
@@ -12941,6 +12970,25 @@ component App:
   assert.match(component.code ?? "", /open\.set\(!\(open\.get\(\)\)\);/u);
   assert.match(component.code ?? "", /describe\(open\.get\(\)\)/u);
   assert.match(component.code ?? "", /echo\(title\.get\(\)\)/u);
+});
+
+test("locals shadow later module reactive bindings independent of declaration order", () => {
+  const result = compile(`
+def countSaved(sessions: List<string>) -> number:
+    return sessions.size
+
+state sessions: List<string> = []
+
+component App:
+    return <p>{countSaved(["saved"])} {sessions.size}</p>
+
+mount(<App />, "#app")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  // Reactive lowering is determined by lexical binding identity, not by
+  // whether the module reactive declaration appeared before the local scope.
+  assert.match(result.code ?? "", /function countSaved\(sessions\) \{\n  return __velarCollectionSize\(sessions\);\n\}/u);
+  assert.match(result.code ?? "", /__velarCollectionSize\(sessions\.get\(\)\)/u);
 });
 
 test("a shadowed name cannot be referenced in the shadow's scope before its declaration", () => {

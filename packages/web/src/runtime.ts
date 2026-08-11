@@ -2311,18 +2311,23 @@ export const http = __velarFreezeOptionsValue({
   ["velar/storage", String.raw`
 ${ownedCallbackRuntime}
 ${VELAR_STRICT_JSON_RUNTIME}
+${VELAR_UTF8_RUNTIME}
 ${listRuntime}
 ${runtimeTypeRuntime}
 ${storageHostRuntime}
 const changeEvent = "velar-storage-change";
 const storageMaxKeyCodeUnits = 4096;
 const storageMaxListingCodeUnits = 16 * 1024 * 1024;
+const storageMaxValueBytes = 16 * 1024 * 1024;
+const storageNumberIsSafeInteger = Object.getOwnPropertyDescriptor(Number, "isSafeInteger")?.value;
 const storageStringSlice = Object.getOwnPropertyDescriptor(String.prototype, "slice").value;
 const storageListSort = Object.getOwnPropertyDescriptor(Array.prototype, "sort").value;
 const storageMissingField = __velarBrowserMissingField;
 
 function storageType(Type) { return __velarRequireRuntimeType(Type, "Storage reads"); }
 function storageText(value, name) { if (typeof value !== "string") throw new TypeError(name + " must be a string"); if (value.length > storageMaxKeyCodeUnits) throw new RangeError(name + " cannot exceed 4096 characters"); return value; }
+function storageSafeInteger(value) { return typeof storageNumberIsSafeInteger === "function" && __velarBrowserReflectApply(storageNumberIsSafeInteger, null, [value]); }
+function storageByteBudget(value) { if (!storageSafeInteger(value) || value <= 0 || value > storageMaxValueBytes) throw new RangeError("Storage maxBytes must be an integer from 1 through 16777216"); return value; }
 function storageOwnDataField(value, name) {
   return __velarBrowserOwnDataField(value, name);
 }
@@ -2349,9 +2354,10 @@ function storageEventSnapshot(event) {
   if (storageArea === storageMissingField || key === storageMissingField || newValue === storageMissingField || oldValue === storageMissingField) return null;
   return { storageArea, key, newValue, oldValue };
 }
-function parsed(raw, Type, fallback) {
+function parsed(raw, Type, fallback, maxBytes) {
   Type = storageType(Type);
   if (raw == null) return fallback;
+  if (typeof raw !== "string" || __velarUtf8ByteLength(raw) > maxBytes) return fallback;
   try { return Type.parse(__velarJsonParse(raw, "Stored JSON text")); } catch { return fallback; }
 }
 
@@ -2373,14 +2379,17 @@ function createStore(storageArea, prefix = "", areaName = "local") {
     return __velarBrowserCallCaptured(storageGlobalDispatch, storageWindow, [new storageNativeCustomEvent(changeEvent, { detail })], "dispatchEvent");
   };
   const api = {
-    get(key, Type, fallback = null) {
+    get(key, Type, fallback = null, maxBytes = storageMaxValueBytes) {
       Type = storageType(Type);
+      maxBytes = storageByteBudget(maxBytes);
       const name = full(key);
-      return parsed(storageHostCall(area(), "getItem", storageGetItem, storageNativeStorage, [name]), Type, fallback);
+      return parsed(storageHostCall(area(), "getItem", storageGetItem, storageNativeStorage, [name]), Type, fallback, maxBytes);
     },
-    set(key, value) {
+    set(key, value, maxBytes = storageMaxValueBytes) {
       const name = full(key);
+      maxBytes = storageByteBudget(maxBytes);
       const next = __velarJsonStringify(value);
+      if (__velarUtf8ByteLength(next) > maxBytes) throw new RangeError("Stored JSON exceeds maxBytes");
       const target = area();
       const previous = storageHostCall(target, "getItem", storageGetItem, storageNativeStorage, [name]);
       storageHostCall(target, "setItem", storageSetItem, storageNativeStorage, [name, next]);
@@ -2391,7 +2400,7 @@ function createStore(storageArea, prefix = "", areaName = "local") {
     keys() {
       const target = area();
       const count = storageHostField(target, "length", storageLength, storageNativeStorage);
-      if (!Number.isSafeInteger(count) || count < 0 || count > 100000) throw new RangeError("Browser storage cannot exceed 100000 keys");
+      if (!storageSafeInteger(count) || count < 0 || count > 100000) throw new RangeError("Browser storage cannot exceed 100000 keys");
       const output = [];
       let outputUnits = 0;
       for (let index = 0; index < count; index += 1) {
@@ -2423,19 +2432,20 @@ function createStore(storageArea, prefix = "", areaName = "local") {
       if (prefix.length > storageMaxKeyCodeUnits - value.length - 1) throw new RangeError("Storage scope paths cannot exceed 4096 characters");
       return createStore(storageArea, prefix + value + ":", areaName);
     },
-    watch(key, Type, callback) {
+    watch(key, Type, callback, maxBytes = storageMaxValueBytes) {
       if (typeof callback !== "function") throw new TypeError("Storage watch requires a callback");
       Type = storageType(Type);
+      maxBytes = storageByteBudget(maxBytes);
       const name = full(key);
       const changed = (event) => {
         const detail = storageChangeSnapshot(event);
         if (!detail || detail.areaName !== areaName || detail.key !== name) return;
-        __velarInvokeOwnedCallback(callback, [parsed(detail.newValue, Type, null), parsed(detail.oldValue, Type, null)], "storage", "watch");
+        __velarInvokeOwnedCallback(callback, [parsed(detail.newValue, Type, null, maxBytes), parsed(detail.oldValue, Type, null, maxBytes)], "storage", "watch");
       };
       const stored = (event) => {
         const snapshot = storageEventSnapshot(event);
         if (!snapshot || snapshot.storageArea !== area() || snapshot.key !== name) return;
-        __velarInvokeOwnedCallback(callback, [parsed(snapshot.newValue, Type, null), parsed(snapshot.oldValue, Type, null)], "storage", "watch");
+        __velarInvokeOwnedCallback(callback, [parsed(snapshot.newValue, Type, null, maxBytes), parsed(snapshot.oldValue, Type, null, maxBytes)], "storage", "watch");
       };
       const removeChanged = storageListenGlobal(changeEvent, changed);
       const removeStored = storageListenGlobal("storage", stored);
@@ -2533,11 +2543,13 @@ export function database(name) {
   };
   const keyOf = (key) => storageText(key, "Database key");
   return Object.freeze({
-    async get(key, Type, fallback = null) { Type = storageType(Type); const name = keyOf(key); const value = await request("readonly", (store) => objectOperation(store, "get", [name])); return value === undefined ? fallback : (() => { try { return Type.parse(__velarJsonClone(value)); } catch { return fallback; } })(); },
-    async set(key, value) {
+    async get(key, Type, fallback = null, maxBytes = storageMaxValueBytes) { Type = storageType(Type); maxBytes = storageByteBudget(maxBytes); const name = keyOf(key); const encoded = await request("readonly", (store) => objectOperation(store, "get", [name])); if (encoded === undefined || typeof encoded !== "string" || __velarUtf8ByteLength(encoded) > maxBytes) return fallback; try { return Type.parse(__velarJsonParse(encoded, "Stored JSON text")); } catch { return fallback; } },
+    async set(key, value, maxBytes = storageMaxValueBytes) {
       const name = keyOf(key);
-      const snapshot = __velarJsonClone(value);
-      await request("readwrite", (store) => objectOperation(store, "put", [snapshot, name]));
+      maxBytes = storageByteBudget(maxBytes);
+      const encoded = __velarJsonStringify(value);
+      if (__velarUtf8ByteLength(encoded) > maxBytes) throw new RangeError("Stored JSON exceeds maxBytes");
+      await request("readwrite", (store) => objectOperation(store, "put", [encoded, name]));
       return null;
     },
     async has(key) { const name = keyOf(key); return (await request("readonly", (store) => objectOperation(store, "getKey", [name]))) !== undefined; },

@@ -971,8 +971,19 @@ if (/\bqueueMicrotask\s*\(/u.test(webRuntimeSource)
 if (/\b(?:globalThis\.)?(?:localStorage|sessionStorage|indexedDB)\b/u.test(storagePlatformModuleSource)
   || /\.(?:getItem|setItem|removeItem|key|open|transaction|objectStore|createObjectStore|contains|getKey|getAllKeys|put|close)\s*\(/u.test(storagePlatformModuleSource)
   || /\.(?:result|error|objectStoreNames|onupgradeneeded|onsuccess|onerror|onblocked|onversionchange|onclose|onabort|oncomplete)\b/u.test(storagePlatformModuleSource)
-  || /\b(?:dispatchEvent|addEventListener|removeEventListener)\s*\(/u.test(storagePlatformModuleSource)) {
+  || /\b(?:dispatchEvent|addEventListener|removeEventListener)\s*\(/u.test(storagePlatformModuleSource)
+  || /\bNumber\.isSafeInteger\s*\(/u.test(storagePlatformModuleSource)) {
   failures.push("packages/web/src/runtime.ts: velar/storage bypasses the captured Storage or IndexedDB host ABI");
+}
+for (const phrase of [
+  "${VELAR_UTF8_RUNTIME}",
+  "function storageSafeInteger(value)",
+  "function storageByteBudget(value)",
+  "__velarUtf8ByteLength(next) > maxBytes",
+  'typeof encoded !== "string" || __velarUtf8ByteLength(encoded) > maxBytes',
+  'objectOperation(store, "put", [encoded, name])',
+]) {
+  if (!storagePlatformModuleSource.includes(phrase)) failures.push(`packages/web/src/runtime.ts: velar/storage budget boundary is missing '${phrase}'`);
 }
 for (const phrase of [
   "const NativeFormElement = typeof globalThis.HTMLFormElement",

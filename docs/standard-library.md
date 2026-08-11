@@ -867,6 +867,11 @@ standard module initializes. `velar/json`, Web/Node/Desktop HTTP, Node serve,
 browser storage, and IndexedDB all call those same captured intrinsics and the
 same strict snapshot. Later JavaScript mutation of ambient `JSON.parse` or
 `JSON.stringify` therefore cannot silently change official-module semantics.
+Browser storage and IndexedDB additionally accept a caller-selected positive
+UTF-8 byte budget up to 16 MiB. Oversized reads return the typed fallback before
+JSON parsing, while oversized writes fail before the host mutation or database
+transaction; applications can therefore enforce a smaller durable-state budget
+without reimplementing serialization or encoding rules.
 
 Response metadata is also snapshotted once at the host boundary. Node accepts
 only native `Response`, `Headers`, byte-stream, and byte-chunk values; Desktop

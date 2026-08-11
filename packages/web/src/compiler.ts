@@ -156,13 +156,13 @@ const httpType = object({
 
 function createStorageType(): ValueType {
   const common = (): Map<string, ValueType> => new Map([
-    ["get", namedIntrinsic("storage.get", ["key", "target", "fallback"], [stringType, anyType, anyType], anyType, 2)],
-    ["set", namedIntrinsic("storage.set", ["key", "value"], [stringType, anyType], nullType)],
+    ["get", namedIntrinsic("storage.get", ["key", "target", "fallback", "maxBytes"], [stringType, anyType, anyType, numberType], anyType, 2)],
+    ["set", namedIntrinsic("storage.set", ["key", "value", "maxBytes"], [stringType, anyType, numberType], nullType, 2)],
     ["has", namedFunction(["key"], [stringType], boolType)],
     ["keys", namedFunction([], [], arrayString)],
     ["remove", namedFunction(["key"], [stringType], nullType)],
     ["clear", namedFunction([], [], nullType)],
-    ["watch", namedIntrinsic("storage.watch", ["key", "target", "callback"], [stringType, anyType, anyType], cleanupType)],
+    ["watch", namedIntrinsic("storage.watch", ["key", "target", "callback", "maxBytes"], [stringType, anyType, anyType, numberType], cleanupType, 3)],
   ]);
   const scoped: ValueType = { kind: "object", fields: common() };
   const fields = common();
@@ -172,8 +172,8 @@ function createStorageType(): ValueType {
 
 const storageType = createStorageType();
 const databaseType = object({
-  get: namedIntrinsic("storage.databaseGet", ["key", "target", "fallback"], [stringType, anyType, anyType], promise(anyType), 2),
-  set: namedIntrinsic("storage.set", ["key", "value"], [stringType, anyType], promise(nullType)),
+  get: namedIntrinsic("storage.databaseGet", ["key", "target", "fallback", "maxBytes"], [stringType, anyType, anyType, numberType], promise(anyType), 2),
+  set: namedIntrinsic("storage.set", ["key", "value", "maxBytes"], [stringType, anyType, numberType], promise(nullType), 2),
   has: namedFunction(["key"], [stringType], promise(boolType)),
   keys: namedFunction([], [], promise(arrayString)),
   remove: namedFunction(["key"], [stringType], promise(nullType)),

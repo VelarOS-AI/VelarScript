@@ -178,9 +178,10 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       return intrinsic.result;
     }
     case "storage.set": {
-      arity(2, 2);
+      arity(2, 3);
       inferAt(0, stringType);
       const value = inferAt(1);
+      if (argumentAt(2)) inferAt(2, numberType);
       const valueExpression = argumentAt(1);
       if (context.jsonSerializable(value) === false && valueExpression) {
         context.typeError(`Storage values accept only records, Lists, enums, primitives, and optionals; received ${describeType(value)}`, valueExpression.span);
@@ -198,24 +199,27 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       arity(1, 1);
       return runtimeTypeAt(0);
     case "storage.get": {
-      arity(2, 3);
+      arity(2, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
+      if (argumentAt(3)) inferAt(3, numberType);
       if (argumentAt(2)) { inferAt(2, parsed); return parsed; }
       return optionalOf(parsed);
     }
     case "storage.databaseGet": {
-      arity(2, 3);
+      arity(2, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
+      if (argumentAt(3)) inferAt(3, numberType);
       if (argumentAt(2)) { inferAt(2, parsed); return { kind: "promise", value: parsed }; }
       return { kind: "promise", value: optionalOf(parsed) };
     }
     case "storage.watch": {
-      arity(3, 3);
+      arity(3, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
       callbackAt(2, [optionalOf(parsed), optionalOf(parsed)], unknownType);
+      if (argumentAt(3)) inferAt(3, numberType);
       return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
     }
     case "forms.read": {
@@ -470,6 +474,16 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   override analyze(program: Program): readonly Diagnostic[] {
+    // The emitter receives the completed module reactive-name table, so
+    // lexical shadow hints must be computed against that same complete set.
+    // Collect module state/computed names before walking function bodies;
+    // otherwise a local declared before a same-named reactive declaration is
+    // analyzed as ordinary, then incorrectly rewritten through `.get()` by
+    // the emitter after the later declaration has populated the table.
+    for (const statement of program.body) {
+      if (statement.kind === "StateDeclaration") this.reactiveBindings.set(statement.name, "state");
+      else if (statement.kind === "ComputedDeclaration") this.reactiveBindings.set(statement.name, "computed");
+    }
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     return super.analyze(program);
   }
