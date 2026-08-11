@@ -6773,6 +6773,65 @@ export async def exercise() -> null:
   assert.equal(execution.stdout, "sync:2\nwatch:2\n");
 });
 
+test("computed failures recover through downstream caches and disposed consumers detach", () => {
+  const result = compile(`
+state shouldFail = false
+state count = 1
+
+def derive() -> number:
+    print("derive:" + str(count))
+    if shouldFail:
+        throw Error("derived failed")
+    return count
+
+const base = computed(derive)
+const doubled = computed(() => base() * 2)
+
+watch doubled() as current, previous:
+    print("watch:" + str(current))
+
+export async def exercise() -> null:
+    shouldFail = true
+    await tick()
+    shouldFail = false
+    await tick()
+    print("recovered:" + str(doubled()))
+    count = 2
+    await tick()
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}
+__velarRuntime.errorHandlers.add((report) => console.log("error:" + report.phase + ":" + report.error.message));
+await exercise();
+
+let ownedReads = 0;
+const ownedCell = __velarState(1);
+const owned = __velarRuntime.computed(() => { ownedReads += 1; return ownedCell.get() * 2; });
+const ownedScope = __velarScope("OwnedProbe");
+__velarObserver(() => owned(), "watch", ownedScope);
+console.log("owned:" + ownedReads);
+__velarDestroyScope(ownedScope);
+ownedCell.set(2);
+await __velarTick();
+console.log("detached:" + ownedReads);
+console.log("direct:" + owned() + ":" + ownedReads);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "derive:1",
+    "derive:1",
+    "error:watch:derived failed",
+    "derive:1",
+    "recovered:2",
+    "derive:2",
+    "watch:4",
+    "owned:1",
+    "detached:1",
+    "direct:4:2",
+    "",
+  ].join("\n"));
+});
+
 test("dynamic reactive keys release empty dependency slots", () => {
   const result = compile(`
 export state active = "a"
@@ -23690,6 +23749,73 @@ console.log(failed.loading + ":" + failed.ready + ":" + failed.error.message);
     "2:3",
     "resource:catalog:Load failed",
     "false:true:Load failed",
+    "",
+  ].join("\n"));
+});
+
+test("managed Web async primitives retain captured Promise and Object operations", () => {
+  const result = compile(`
+async def loadValue() -> number:
+    return 1
+
+component App:
+    resource value: number = loadValue()
+
+    action save(input: number) -> number:
+        return input + 1
+
+    return <main>{value.value}</main>
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}
+const NativePromise = globalThis.Promise;
+const NativeObject = globalThis.Object;
+const NativeError = globalThis.Error;
+const nativeApply = Reflect.apply;
+const nativeDefine = NativeObject.defineProperty;
+const nativeResolve = NativeObject.getOwnPropertyDescriptor(NativePromise, "resolve").value;
+const nativeThenDescriptor = NativeObject.getOwnPropertyDescriptor(NativePromise.prototype, "then");
+const resolveValue = (value) => nativeApply(nativeResolve, NativePromise, [value]);
+let poisoned = 0;
+const poison = () => { poisoned += 1; throw new NativeError("poisoned managed async host"); };
+nativeDefine(NativePromise, "resolve", { configurable: true, writable: true, value: poison });
+nativeDefine(NativePromise, "reject", { configurable: true, writable: true, value: poison });
+nativeDefine(NativePromise.prototype, "then", { configurable: true, writable: true, value: poison });
+NativeObject.freeze = poison;
+NativeObject.defineProperty = poison;
+NativeObject.defineProperties = poison;
+globalThis.Promise = class PoisonedPromise { constructor() { poison(); } };
+
+const scope = __velarScope("ManagedAsyncProbe");
+let loads = 0;
+const resource = __velarResource(() => resolveValue(++loads), scope, "catalog");
+const action = __velarAction((value) => resolveValue(value + 1), scope, "save");
+__velarMountScope(scope);
+const tickPromise = __velarTick();
+const reloadPromise = resource.reload();
+const actionPromise = action(4);
+nativeDefine(NativePromise.prototype, "then", nativeThenDescriptor);
+await tickPromise;
+await reloadPromise;
+console.log("resource:" + resource.value + ":" + resource.loading + ":" + resource.ready);
+console.log("action:" + await actionPromise);
+nativeDefine(NativePromise.prototype, "then", { configurable: true, writable: true, value: poison });
+__velarDestroyScope(scope);
+const disposedPromise = resource.reload();
+const destroyedPromise = action(4);
+nativeDefine(NativePromise.prototype, "then", nativeThenDescriptor);
+console.log("disposed:" + await disposedPromise);
+try { await destroyedPromise; }
+catch (error) { console.log("destroyed:" + (error instanceof NativeError) + ":" + error.message); }
+console.log("poisoned:" + poisoned);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "resource:2:false:true",
+    "action:5",
+    "disposed:null",
+    "destroyed:true:Action 'save' cannot run after its component is destroyed",
+    "poisoned:0",
     "",
   ].join("\n"));
 });

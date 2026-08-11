@@ -1462,9 +1462,12 @@ result is evaluated on first access and cached while observed. An invalidated
 observed result refreshes during the reactive flush; a synchronous access
 before that flush refreshes it immediately and still publishes a changed result
 to the other downstream observers. Downstream observers are notified only when
-the result changes by identity/value equality. When its last consumer is
-disposed it detaches from upstream dependencies. Asynchronous component data
-belongs in a `resource`. Record properties and collection keys are tracked
+the result changes by identity/value equality. Failure and recovery are also
+result-state transitions: a synchronous failure reaches the managed consumer,
+and recovery wakes downstream caches even when it produces the same value as
+the last successful evaluation. When its last consumer is disposed it detaches
+from upstream dependencies. Asynchronous component data belongs in a
+`resource`. Record properties and collection keys are tracked
 independently,
 so changing `task.done` invalidates consumers of that property without
 invalidating unrelated `task.title` reads, and changing one `Map` entry does not
@@ -1484,7 +1487,10 @@ request a mutation, but it may not assign through the prop or invoke a mutating
 collection method on it.
 
 A resource exposes `value`, `loading`, `ready`, `error`, and `reload`. It owns
-stale-result and component-destruction handling.
+stale-result and component-destruction handling. Its Promise and Object host
+operations are captured when the generated Web module initializes, so later
+ambient replacement cannot redirect a load or make its managed start escape
+synchronously.
 
 An action is an async UI operation with reactive `pending` and `error` fields.
 It reports the failure through the Web error chain and still rejects its call;
@@ -1494,7 +1500,9 @@ errors are never silently converted into successful `null` results. Use
 operation together with its `pending`/`error` surface; a module action lives
 for the life of the module and is never disposed. A `resource` remains
 component-owned because its stale-result handling is tied to component
-destruction.
+destruction. Component actions use the same initialization-owned async host;
+after destruction, a call rejects with an owned `Error` instead of starting
+application work.
 
 `watch expression as current, previous:` runs an explicit side effect when the
 tracked value changes. A watch body is synchronous. Async component work belongs

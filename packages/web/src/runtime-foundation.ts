@@ -275,6 +275,7 @@ const __velarGraphReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply
 const __velarGraphArrayIsArray = Object.getOwnPropertyDescriptor(Array, "isArray")?.value;
 const __velarGraphObjectIs = Object.getOwnPropertyDescriptor(Object, "is")?.value;
 const __velarGraphObjectFreeze = Object.getOwnPropertyDescriptor(Object, "freeze")?.value;
+const __velarGraphObjectDefineProperty = Object.getOwnPropertyDescriptor(Object, "defineProperty")?.value;
 const __velarGraphObjectIsExtensible = Object.getOwnPropertyDescriptor(Object, "isExtensible")?.value;
 const __velarGraphObjectGetPrototypeOf = Object.getOwnPropertyDescriptor(Object, "getPrototypeOf")?.value;
 const __velarGraphObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor(Object, "getOwnPropertyDescriptor")?.value;
@@ -348,6 +349,7 @@ function __velarGraphWeakMapRemove(value, key) { return __velarGraphApply(__vela
 function __velarGraphIsList(value) { return __velarGraphApply(__velarGraphArrayIsArray, __velarGraphNativeArray, [value], "Array.isArray"); }
 function __velarGraphSame(left, right) { return __velarGraphApply(__velarGraphObjectIs, __velarGraphNativeObject, [left, right], "Object.is"); }
 function __velarGraphFreeze(value) { return __velarGraphApply(__velarGraphObjectFreeze, __velarGraphNativeObject, [value], "Object.freeze"); }
+function __velarGraphDefine(value, key, descriptor) { return __velarGraphApply(__velarGraphObjectDefineProperty, __velarGraphNativeObject, [value, key, descriptor], "Object.defineProperty"); }
 function __velarGraphIsExtensible(value) { return __velarGraphApply(__velarGraphObjectIsExtensible, __velarGraphNativeObject, [value], "Object.isExtensible"); }
 function __velarGraphPrototype(value) { return __velarGraphApply(__velarGraphObjectGetPrototypeOf, __velarGraphNativeObject, [value], "Object.getPrototypeOf"); }
 function __velarGraphOwnDescriptor(value, key) { return __velarGraphApply(__velarGraphObjectGetOwnPropertyDescriptor, __velarGraphNativeObject, [value, key], "Object.getOwnPropertyDescriptor"); }

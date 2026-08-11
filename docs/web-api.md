@@ -225,6 +225,20 @@ component RuntimeStatus:
   the component that triggers them or at module scope when a shared store owns
   the operation and its `pending`/`error` surface; setup that must finish after
   insertion belongs in `mounted`.
+- A `computed` failure is cached as part of the derived result state and is
+  rethrown to its managed consumer. Recovery from failure to a value is a real
+  result transition even when that value equals the last successful value, so
+  downstream computed chains wake and recover without publishing a duplicate
+  watch value. Once the last consumer is disposed, the computed detaches from
+  its upstream dependencies and recomputes only if read again.
+- `resource`, `action`, and `tick` use the Promise constructor plus
+  `resolve`/`reject`/`then` operations captured when the generated Web module
+  initializes. Resource/action surface construction uses the same captured
+  Object operations as the reactive graph. Later replacement of those ambient
+  constructors, static operations, or prototypes cannot turn an owned async
+  start into a synchronous escape or redirect its completion. A disposed
+  resource reload remains a resolved no-op; calling a disposed action remains
+  a rejected owned `Error`.
 - Managed callbacks from browser/media/online/visibility watchers, storage
   watches, WebSocket handlers, and server-sent-event handlers report both
   synchronous failures and rejected promises through the same `velar/app`

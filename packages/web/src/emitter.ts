@@ -1130,6 +1130,27 @@ function __velarState(initial) {
   return cell;
 }
 
+const __velarManagedAsyncNativePromise = globalThis.Promise;
+const __velarManagedAsyncPromisePrototype = __velarGraphOwnDescriptor(__velarManagedAsyncNativePromise, "prototype")?.value;
+const __velarManagedAsyncResolveOperation = __velarGraphOwnDescriptor(__velarManagedAsyncNativePromise, "resolve")?.value;
+const __velarManagedAsyncRejectOperation = __velarGraphOwnDescriptor(__velarManagedAsyncNativePromise, "reject")?.value;
+const __velarManagedAsyncThenOperation = __velarManagedAsyncPromisePrototype
+  ? __velarGraphOwnDescriptor(__velarManagedAsyncPromisePrototype, "then")?.value
+  : null;
+function __velarManagedAsyncResolve(value) {
+  return __velarGraphApply(__velarManagedAsyncResolveOperation, __velarManagedAsyncNativePromise, [value], "Promise.resolve");
+}
+function __velarManagedAsyncReject(error) {
+  return __velarGraphApply(__velarManagedAsyncRejectOperation, __velarManagedAsyncNativePromise, [error], "Promise.reject");
+}
+function __velarManagedAsyncThen(value, fulfilled, rejected) {
+  return __velarGraphApply(__velarManagedAsyncThenOperation, value, [fulfilled, rejected], "Promise.then");
+}
+function __velarManagedAsyncCreate(executor) {
+  if (typeof __velarManagedAsyncNativePromise !== "function") throw new TypeError("The JavaScript Promise API is unavailable");
+  return new __velarManagedAsyncNativePromise(executor);
+}
+
 function __velarResource(load, scope, name) {
   const value = __velarState(null);
   const loading = __velarState(true);
@@ -1140,12 +1161,12 @@ function __velarResource(load, scope, name) {
   let disposed = false;
 
   const reload = () => {
-    if (disposed) return Promise.resolve(null);
+    if (disposed) return __velarManagedAsyncResolve(null);
     started = true;
     const current = ++generation;
     loading.set(true);
     error.set(null);
-    return Promise.resolve().then(load).then(
+    return __velarManagedAsyncThen(__velarManagedAsyncThen(__velarManagedAsyncResolve(), load),
       (next) => {
         if (disposed || current !== generation) return null;
         value.set(next);
@@ -1166,7 +1187,7 @@ function __velarResource(load, scope, name) {
 
   scope.mounts.push(() => started ? null : reload());
   scope.cleanups.push(() => { disposed = true; generation += 1; });
-  return Object.freeze({
+  return __velarGraphFreeze({
     get value() { return value.get(); },
     get loading() { return loading.get(); },
     get ready() { return ready.get(); },
@@ -1183,14 +1204,14 @@ function __velarAction(execute, scope, name) {
   let disposed = false;
 
   const run = (...arguments_) => {
-    if (disposed) return Promise.reject(new Error(
+    if (disposed) return __velarManagedAsyncReject(__velarNormalizeError(
       "Action '" + name + "' cannot run after its component is destroyed",
     ));
     const current = ++generation;
     active += 1;
     pending.set(true);
     error.set(null);
-    return Promise.resolve().then(() => execute(...arguments_)).then(
+    return __velarManagedAsyncThen(__velarManagedAsyncThen(__velarManagedAsyncResolve(), () => execute(...arguments_)),
       (value) => {
         active -= 1;
         if (!disposed) pending.set(active > 0);
@@ -1213,12 +1234,10 @@ function __velarAction(execute, scope, name) {
     );
   };
 
-  Object.defineProperties(run, {
-    pending: { enumerable: true, get: () => pending.get() },
-    error: { enumerable: true, get: () => error.get() },
-  });
+  __velarGraphDefine(run, "pending", { enumerable: true, get: () => pending.get() });
+  __velarGraphDefine(run, "error", { enumerable: true, get: () => error.get() });
   scope.cleanups.push(() => { disposed = true; generation += 1; });
-  return Object.freeze(run);
+  return __velarGraphFreeze(run);
 }
 
 function __velarScope(component = "") {
@@ -1816,7 +1835,7 @@ function __velarChild(component, thunks, children, scope, namespace) {
 }
 
 function __velarTick() {
-  return new Promise((resolve) => __velarEnqueue(resolve));
+  return __velarManagedAsyncCreate((resolve) => __velarEnqueue(resolve));
 }
 `.trim();
 

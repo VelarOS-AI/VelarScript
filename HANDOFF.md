@@ -2409,12 +2409,44 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   `43c6c4495df27ee628958c0ed7e87375596bb9518624e8b5082a3ed86f2dbd8b`；相比 W-123 增加 17,517
   bytes，仍远低于 10 MiB。未推送、未发布、未提升版本。
 
+- W-125 从 W-124 已闭合的响应图继续审计，没有回退或重复 W-122/W-123。新的所有权结论是：
+  `computed` 的失败、恢复和最后订阅者解绑仍属于共享 Web 响应图；`resource`、`action` 和 `tick`
+  的 Promise 创建、接线与完成属于生成 Web 模块的 managed-async host；component scope 与 generation
+  分别拥有销毁和陈旧完成。Lite 继续只消费公开能力，未增加 Promise shim、产品重试或销毁补丁。
+
+  adversarial execution 先确认了一个真实断裂：生成模块初始化后替换 `globalThis.Promise` 或其
+  `resolve` 时，`resource.reload()` 与 action 调用会从 `Promise.resolve()` 同步抛出，绕过它们自己的
+  异步错误、stale generation 和 destruction 契约；`tick` 也仍从 live `new Promise` 取宿主。runtime
+  现在在模块初始化时捕获 Promise constructor、`resolve`、`reject`、`then`，并通过捕获的
+  `Object.freeze`/`Object.defineProperty` 构造 resource/action 表面。后续全局、静态方法、prototype
+  或 Object 方法替换不能重定向启动或完成。销毁后的 resource reload 仍解析为 `null`，销毁后的
+  component action 仍以原生拥有的 `Error` 拒绝且不会运行应用代码。
+
+  computed 审计没有再造第二套错误 API。真实执行现已证明：上游 computed 失败会穿过下游 cache 到
+  managed watch/error channel；从失败恢复到与上次成功值相同的值仍是状态转换，会唤醒整条 computed
+  链但不会产生重复 watch value；最后消费者销毁后，上游读取不会再发生，显式直接读取才重新计算。
+  新增 `B-WEB-ASYNC` 边界和永久 source guard；runtime schema 保持 0.12，`runtime-abi.ts` 仍是唯一
+  ABI literal 来源，因为本轮只增加生成模块内部 host adapter，没有改变共享 registry 字段。
+
+  最终证据为 `npm run check`（51 个格式化源、100 个文档示例、65 项 runtime boundary）、564/564
+  串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、独立 publication rehearsal、Workbench
+  对 rehearsal 六包的安装态验收、完整 Dev/Production/External Preview、27+6+15+6 三浏览器和
+  installed browser project。Lite 未加产品补丁，独立通过 10/22/21/29 模块 check、40 shared +
+  42 server tests、真实 concurrent/disconnected server acceptance、package acceptance、54/54
+  Desktop 三浏览器与 CLI/Desktop production build。薄包为 902,404 bytes（881.3 KiB）：host
+  301,792、renderer 550,581、capability host 48,638、metadata 1,393，外置 Node.js >=24，SHA-256
+  为 `c3aa791a91b66117de8183158ed6b67f38e6b660ef257f067b2f1a3bca92c2b5`；相比 W-124 增加
+  2,118 bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，
+  Workbench 仍只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布、未提升版本。
+
 下一执行顺序：
 
-1. 从 W-124 已闭合的词法 cell、computed accessor 与 schema 0.12 契约继续，不得恢复 computed
-   declaration、名字驱动 lowering、`VEL5054` alias 限制或 W-122/W-123 已完成的 Desktop 工作。
-2. 下一波优先用 Lite、四个官方示例和 adversarial execution 继续审计响应图生命周期、异步资源与
-   computed error/recovery 边界；发现语言层缺口先修 compiler/runtime/Web，再让 Lite 消费公开能力。
+1. 从 W-125 已闭合的 computed failure/recovery、managed Web async host 与 schema 0.12 契约继续，
+   不得恢复 computed declaration、名字驱动 lowering、`VEL5054` alias 限制或 W-122/W-123 工作。
+2. 下一波优先审计其余“模块初始化后才执行”的 Web runtime 路径，重点是 props/Look 值构造、
+   mounted/cleanup/event Promise 观察、dynamic/lazy child 销毁与重复挂载；用 Lite reload/stop、四个官方
+   示例和 hostile post-initialization execution 找真实断裂，相同 host-operation 类别集中收敛。
 3. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
 4. 每次 compiler lowering 改动继续同时验证诊断、生成代码和真实执行；完成一波后再跑 compiler/

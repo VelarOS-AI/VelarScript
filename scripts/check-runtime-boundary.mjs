@@ -379,6 +379,7 @@ const webDomHostRuntimeSource = constantSource(webFoundationSource, "WEB_DOM_HOS
 const webReactivityHostRuntimeSource = constantSource(webFoundationSource, "WEB_REACTIVITY_HOST_RUNTIME", "\n\nexport const WEB_ERROR_HOST_RUNTIME_BODY");
 const webErrorHostRuntimeSource = constantSource(webFoundationSource, "WEB_ERROR_HOST_RUNTIME_BODY", "\n\nexport const WEB_ERROR_HOST_RUNTIME =");
 const emittedReactivityRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarSchedule"), webEmitterSource.indexOf("function __velarResource"));
+const emittedManagedAsyncRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("const __velarManagedAsyncNativePromise"), webEmitterSource.indexOf("function __velarScope"));
 const emittedDomRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarComponent"), webEmitterSource.indexOf("function __velarLook(parts)"));
 const webComponentDomRuntimeSource = webPlatformModuleSource.slice(webPlatformModuleSource.indexOf("function component("));
 const webListGuardRuntimeSource = constantSource(webRuntimeSource, "listRuntime", "\nconst optionsRuntime");
@@ -1068,8 +1069,10 @@ for (const phrase of [
   "const __velarGraphNativeWeakMap = globalThis.WeakMap",
   "const __velarGraphObjectIs = Object.getOwnPropertyDescriptor(Object, \"is\")",
   "const __velarGraphObjectFreeze = Object.getOwnPropertyDescriptor(Object, \"freeze\")",
+  "const __velarGraphObjectDefineProperty = Object.getOwnPropertyDescriptor(Object, \"defineProperty\")",
   "function __velarGraphSetItems(value)",
   "function __velarGraphWeakMapRead(value, key)",
+  "function __velarGraphDefine(value, key, descriptor)",
   "function __velarGraphGet(value, key, receiver)",
 ]) {
   if (!webReactivityHostRuntimeSource.includes(phrase)) failures.push(`packages/web: shared reactivity host is missing captured operation '${phrase}'`);
@@ -1096,6 +1099,27 @@ if (!webFoundationSource.includes("${WEB_REACTIVITY_HOST_RUNTIME}")
 }
 if (/\bnew (?:Set|Map|WeakSet|WeakMap)\s*\(|\b(?:Set|Map|WeakSet|WeakMap)\.prototype|\bObject\.is\s*\(|\bArray\.isArray\s*\(|\bReflect\.(?:get|set|has|deleteProperty)\s*\(/u.test(emittedReactivityRuntimeSource)) {
   failures.push("packages/web/src/emitter.ts: reactive observers, cells, or queues bypass the captured graph ABI");
+}
+for (const phrase of [
+  "const __velarManagedAsyncNativePromise = globalThis.Promise",
+  "const __velarManagedAsyncResolveOperation = __velarGraphOwnDescriptor",
+  "const __velarManagedAsyncRejectOperation = __velarGraphOwnDescriptor",
+  "const __velarManagedAsyncThenOperation = __velarManagedAsyncPromisePrototype",
+  "function __velarManagedAsyncResolve(value)",
+  "function __velarManagedAsyncReject(error)",
+  "function __velarManagedAsyncThen(value, fulfilled, rejected)",
+  "function __velarManagedAsyncCreate(executor)",
+  "if (disposed) return __velarManagedAsyncResolve(null)",
+  "if (disposed) return __velarManagedAsyncReject(__velarNormalizeError(",
+  "return __velarGraphFreeze({",
+  "__velarGraphDefine(run, \"pending\"",
+  "__velarGraphDefine(run, \"error\"",
+]) {
+  if (!emittedManagedAsyncRuntimeSource.includes(phrase)) failures.push(`packages/web: managed async runtime is missing captured operation '${phrase}'`);
+}
+if (/\bPromise\.(?:resolve|reject)\s*\(|\bnew Promise\s*\(|\bObject\.(?:freeze|defineProperty|defineProperties)\s*\(/u.test(emittedManagedAsyncRuntimeSource)
+  || !webEmitterSource.includes("return __velarManagedAsyncCreate((resolve) => __velarEnqueue(resolve))")) {
+  failures.push("packages/web/src/emitter.ts: resource, action, or tick bypasses the captured managed async host ABI");
 }
 for (const phrase of [
   "const __velarErrorNativeError = globalThis.Error",
