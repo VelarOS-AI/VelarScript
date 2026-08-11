@@ -145,6 +145,10 @@ mount(<App />, "#app")
     assert.ok(desktopBuild.sizes.totalBytes < desktopBuild.sizeBudgetBytes, JSON.stringify(desktopBuild.sizes));
     const application = join(projectRoot, "dist", "desktop", desktopBuild.applicationBundle);
     assert.ok(!(await collectNames(application)).some((name) => name === "node_modules" || name.endsWith(".map")));
+    const information = await readFile(join(application, "Contents", "Info.plist"), "utf8");
+    assert.match(information, /<key>CFBundleIconFile<\/key><string>VelarScript<\/string>/u);
+    const applicationIcon = await readFile(join(application, "Contents", "Resources", "VelarScript.icns"));
+    assert.equal(applicationIcon.subarray(0, 4).toString("ascii"), "icns");
     const hostConfigText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfig = JSON.parse(hostConfigText) as Record<string, unknown>;
     assert.equal(hostConfig.nodeExecutableHint, undefined);

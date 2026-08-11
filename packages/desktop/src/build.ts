@@ -68,6 +68,7 @@ export async function buildDesktopApplication(projectInput: string | null = null
     await mkdir(hostResources);
     const workerPath = join(hostResources, "worker.js");
     await cp(fileURLToPath(new URL("../native/node/worker.js", import.meta.url)), workerPath);
+    await cp(fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
     const hostPath = join(executableDirectory, "VelarDesktopHost");
     await compileMacHost(hostPath);
     await writeFile(join(contents, "Info.plist"), infoPlist(config, version), "utf8");
@@ -190,6 +191,7 @@ function infoPlist(config: VelarDesktopConfig, version: string): string {
   <key>CFBundleDisplayName</key><string>${xml(config.productName)}</string>
   <key>CFBundleExecutable</key><string>VelarDesktopHost</string>
   <key>CFBundleIdentifier</key><string>${xml(config.identifier)}</string>
+  <key>CFBundleIconFile</key><string>VelarScript</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>${xml(config.productName)}</string>
   <key>CFBundlePackageType</key><string>APPL</string>

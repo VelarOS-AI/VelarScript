@@ -26,7 +26,6 @@ const sourceTypeGuidance = new Map<string, SourceTypeGuidance>([
   ["void", typeReplacement("Use 'null' for an explicit no-result type; omitted body-backed results are inferred", "null", "Use the VelarScript null type")],
   ["object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary")],
   ["Object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary")],
-  ["Function", typeGuidance("Write an explicit function type such as '(value: string) -> bool'")],
   ["Callable", typeGuidance("Write an explicit function type such as '(value: string) -> bool'")],
 ]);
 

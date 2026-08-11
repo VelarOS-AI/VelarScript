@@ -34,7 +34,7 @@ function printHelp(): void {
   process.stdout.write([
     "Create VelarScript",
     "",
-    "Usage: create-velar <project-directory> [--template <web|docs|library|component>]",
+    "Usage: create-velar <project-directory> [--template <web|node|desktop|docs|library|component>]",
     "",
     "Creates files transactionally without installing dependencies or initializing Git.",
     "",

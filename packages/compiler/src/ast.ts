@@ -140,6 +140,7 @@ export interface ComponentDeclaration {
   readonly exported: boolean;
   readonly name: string;
   readonly parameters: readonly Parameter[];
+  readonly handleType: TypeReference | null;
   readonly body: readonly ComponentItem[];
   readonly span: Span;
 }
@@ -150,8 +151,15 @@ export type ComponentItem =
   | ResourceDeclaration
   | ActionDeclaration
   | WatchDeclaration
+  | ExposeDeclaration
   | MountedBlock
   | CleanupBlock;
+
+export interface ExposeDeclaration {
+  readonly kind: "ExposeDeclaration";
+  readonly value: Expression;
+  readonly span: Span;
+}
 
 export interface StateDeclaration {
   readonly kind: "StateDeclaration";
@@ -421,6 +429,7 @@ export interface FunctionTypeParameterSyntax {
   readonly name: string | null;
   readonly type: TypeSyntax;
   readonly rest: boolean;
+  readonly optional: boolean;
   readonly span: Span;
 }
 
@@ -811,6 +820,7 @@ export interface IndexExpression {
 export interface JSXElementExpression {
   readonly kind: "JSXElementExpression";
   readonly tag: string;
+  readonly tagSpan: Span;
   readonly attributes: readonly JSXAttribute[];
   readonly children: readonly JSXChild[];
   readonly span: Span;

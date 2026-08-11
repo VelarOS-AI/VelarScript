@@ -21,6 +21,7 @@ import {
   type FormReadField,
   type Program,
   type Statement,
+  type TypeReference,
   type ValueType,
 } from "@velarscript/compiler/extension";
 import {
@@ -156,12 +157,12 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       }
       const loadingExpression = argumentAt(2);
       if (loadingExpression && !isInvalidType(loadingFallback) && loadingFallback.kind !== "null" && loadingFallback.kind !== "any") {
-        if (loadingFallback.kind !== "componentConstructor") context.typeError("A lazy loading fallback must be a component", loadingExpression.span);
+        if (loadingFallback.kind !== "component" && loadingFallback.kind !== "componentConstructor") context.typeError("A lazy loading fallback must be a component", loadingExpression.span);
         else if (loadingFallback.requiredProps.size > 0) context.typeError("A lazy loading fallback cannot require props", loadingExpression.span);
       }
       const failedExpression = argumentAt(3);
       if (failedExpression && !isInvalidType(failedFallback) && failedFallback.kind !== "null" && failedFallback.kind !== "any") {
-        if (failedFallback.kind !== "componentConstructor") context.typeError("A lazy failure fallback must be a component accepting error: Error", failedExpression.span);
+        if (failedFallback.kind !== "component" && failedFallback.kind !== "componentConstructor") context.typeError("A lazy failure fallback must be a component accepting error: Error", failedExpression.span);
         else {
           const error = failedFallback.props.get("error");
           if (!error || !context.isAssignable({ kind: "class", name: "Error" }, error) || [...failedFallback.requiredProps].some((prop) => prop !== "error")) {
@@ -399,7 +400,7 @@ function containsCssImport(source: string): boolean {
 
 function checkRouteComponent(type: ValueType, sourceSpan: Span, subject: string, context: CompilerIntrinsicAnalysisContext): void {
   if (isInvalidType(type)) return;
-  if (type.kind !== "componentConstructor") {
+  if (type.kind !== "component" && type.kind !== "componentConstructor") {
     if (type.kind !== "any") context.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
     return;
   }
@@ -668,6 +669,7 @@ export class VelarWebAnalyzer extends Analyzer {
       name: statement.name,
       props,
       requiredProps: new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
+      handle: statement.handleType ? this.resolveValidatedAnnotation(statement.handleType) : null,
     };
   }
 
@@ -726,19 +728,24 @@ export class VelarWebAnalyzer extends Analyzer {
     // parameters, whose defaults are emitted as closures inside the component
     // body where a later item's shadow would capture them.
     this.prescanScopeDeclarations(statement.body.filter((item): item is Statement =>
-      item.kind !== "MountedBlock" && item.kind !== "CleanupBlock"));
+      item.kind !== "MountedBlock" && item.kind !== "CleanupBlock" && item.kind !== "ExposeDeclaration"));
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
       this.declareBinding(parameter.name, false, this.readonlyPropType(valid ? type : this.resolveValidatedAnnotation(parameter.type)), parameter.span);
       this.markDeclaredBindingReactive(parameter.name, "prop");
+      if (parameter.name === "ref") this.diagnostics.push(diagnostic("VEL5056", "'ref' is a compiler-owned JSX directive and cannot be declared as a component prop", parameter.span));
     }
+    const handleType = statement.handleType ? this.resolveAnnotation(statement.handleType) : null;
+    const handleTypeValid = statement.handleType ? this.validateTypeReference(statement.handleType) : true;
+    if (handleType && handleTypeValid) this.validateComponentHandleType(handleType, statement.handleType!.span);
     this.constructorDepth = 0;
     let renders = 0;
     let renderValue: Expression | null = null;
     let mounted = 0;
     let cleanup = 0;
+    let exposes = 0;
     for (const item of statement.body) {
       if (item.kind === "StateDeclaration") {
         const annotationValid = item.type ? this.validateTypeReference(item.type) : true;
@@ -765,6 +772,13 @@ export class VelarWebAnalyzer extends Analyzer {
         this.exitScope();
         this.synchronousReactiveDepth -= 1;
         this.flowFrameDepth -= 1;
+      } else if (item.kind === "ExposeDeclaration") {
+        exposes += 1;
+        this.flowFrameDepth += 1;
+        const actual = this.inferExpression(item.value, handleType ?? unknownType);
+        this.flowFrameDepth -= 1;
+        if (!handleType) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' uses 'expose' without declaring 'exposes HandleType'`, item.span));
+        else if (handleTypeValid) this.requireAssignable(actual, handleType, item.value.span);
       } else if (item.kind === "MountedBlock") {
         mounted += 1;
         this.mountedDepth += 1;
@@ -791,6 +805,8 @@ export class VelarWebAnalyzer extends Analyzer {
     if (renders !== 1) this.diagnostics.push(diagnostic("VEL5008", `Component '${statement.name}' must have exactly one top-level return`, statement.span));
     if (mounted > 1) this.diagnostics.push(diagnostic("VEL5009", `Component '${statement.name}' has more than one mounted block`, statement.span));
     if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
+    if (exposes > 1) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' has more than one expose declaration`, statement.span));
+    if (statement.handleType && exposes === 0) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' declares an exposed Handle but does not provide an expose value`, statement.handleType.span));
     if (renderValue?.kind === "JSXElementExpression") this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
     this.flowFrameDepth -= 1;
@@ -800,6 +816,39 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private readonlyPropType(type: ValueType): ValueType {
     return this.readonlyDataViewOf(type);
+  }
+
+  private validateComponentHandleType(type: ValueType, sourceSpan: Span): void {
+    const expanded = this.expandAliases(type);
+    const fields = expanded.kind === "object"
+      ? expanded.fields
+      : expanded.kind === "named" ? this.fieldsOf(expanded.identity ?? expanded.name) : null;
+    if (!fields) this.diagnostics.push(diagnostic("VEL5056", `A component Handle must be a concrete record type, received ${describeType(type)}`, sourceSpan));
+  }
+
+  protected override resolveAnnotation(reference: TypeReference | null): ValueType {
+    return this.normalizeComponentContracts(super.resolveAnnotation(reference));
+  }
+
+  private normalizeComponentContracts(type: ValueType): ValueType {
+    if (type.kind === "optional") return optionalOf(this.normalizeComponentContracts(type.inner));
+    if (type.kind === "list" || type.kind === "set") return { ...type, element: this.normalizeComponentContracts(type.element) };
+    if (type.kind === "map") return { ...type, key: this.normalizeComponentContracts(type.key), value: this.normalizeComponentContracts(type.value) };
+    if (type.kind === "record") return { ...type, value: this.normalizeComponentContracts(type.value) };
+    if (type.kind === "promise" || type.kind === "runtimeType") return { ...type, value: this.normalizeComponentContracts(type.value) };
+    if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, this.normalizeComponentContracts(value)])) };
+    if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
+      ...type,
+      parameters: type.parameters.map((parameter) => this.normalizeComponentContracts(parameter)),
+      ...(type.rest ? { rest: this.normalizeComponentContracts(type.rest) } : {}),
+      result: this.normalizeComponentContracts(type.result),
+    };
+    if (type.kind === "union") return { kind: "union", members: type.members.map((member) => this.normalizeComponentContracts(member)) };
+    if (type.kind !== "component" && type.kind !== "componentConstructor") return type;
+    const props = new Map([...type.props].map(([name, value]) => [name, this.readonlyPropType(this.normalizeComponentContracts(value))]));
+    if (!props.has("class")) props.set("class", optionalOf(stringType));
+    if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
+    return { ...type, props, handle: type.handle ? this.normalizeComponentContracts(type.handle) : null };
   }
 
   private validateComponentHost(render: JSXElementExpression, component: ComponentDeclaration): void {
@@ -994,20 +1043,20 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private analyzeComponentElement(expression: JSXElementExpression): void {
-    const binding = this.lookup(expression.tag);
-    if (!binding || binding.type.kind !== "componentConstructor") {
+    const component = this.inferExpression({ kind: "IdentifierExpression", name: expression.tag, span: expression.tagSpan });
+    if (component.kind !== "component" && component.kind !== "componentConstructor") {
       this.diagnostics.push(diagnostic("VEL5011", `Unknown component '${expression.tag}'`, expression.span));
       return;
     }
-    const provided = new Set(expression.attributes.filter((attribute) => attribute.name !== "key" && !removedJsxControlAttributes.has(attribute.name)).map((attribute) => attribute.name));
+    const provided = new Set(expression.attributes.filter((attribute) => attribute.name !== "key" && attribute.name !== "ref" && !removedJsxControlAttributes.has(attribute.name)).map((attribute) => attribute.name));
     const hasChildren = expression.children.some((child) => child.kind !== "JSXText" || child.value.trim().length > 0);
     if (hasChildren && provided.has("children")) this.diagnostics.push(diagnostic("VEL5014", `Component '${expression.tag}' receives children both as a prop and as JSX content`, expression.span));
-    else if (hasChildren && !binding.type.props.has("children")) this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children`, expression.span));
+    else if (hasChildren && !component.props.has("children")) this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children`, expression.span));
     else if (hasChildren) {
       provided.add("children");
-      this.requireAssignable({ kind: "node" }, binding.type.props.get("children")!, expression.span);
+      this.requireAssignable({ kind: "node" }, component.props.get("children")!, expression.span);
     }
-    for (const required of binding.type.requiredProps) if (!provided.has(required)) this.diagnostics.push(diagnostic("VEL5012", `Component '${expression.tag}' requires prop '${required}'`, expression.span));
+    for (const required of component.requiredProps) if (!provided.has(required)) this.diagnostics.push(diagnostic("VEL5012", `Component '${expression.tag}' requires prop '${required}'`, expression.span));
     for (const attribute of expression.attributes) {
       if (removedJsxControlAttributes.has(attribute.name)) continue;
       if (attribute.name === "key") {
@@ -1015,7 +1064,11 @@ export class VelarWebAnalyzer extends Analyzer {
         if (!isInvalidType(key) && key.kind !== "string" && key.kind !== "number" && key.kind !== "enum" && key.kind !== "enumMember" && key.kind !== "any") this.diagnostics.push(diagnostic("VEL5022", "A JSX key must be a string, string-backed enum, or number", attribute.span));
         continue;
       }
-      const expected = binding.type.props.get(attribute.name);
+      if (attribute.name === "ref") {
+        this.analyzeComponentRef(expression, attribute, component);
+        continue;
+      }
+      const expected = component.props.get(attribute.name);
       if (attribute.name === "look") {
         const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
         if (attribute.value && typeof attribute.value !== "string" && attribute.value.kind === "LookExpression") {
@@ -1025,7 +1078,17 @@ export class VelarWebAnalyzer extends Analyzer {
       }
       if (attribute.name.startsWith("look:")) {
         const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-        this.analyzeInlineLookAttribute(attribute, actual);
+        this.analyzeInlineVisualAttribute(attribute, actual, "look");
+        continue;
+      }
+      if (attribute.name === "style") {
+        if (attribute.value && typeof attribute.value !== "string") this.inferExpression(attribute.value);
+        this.diagnostics.push(diagnostic("VEL5041", "Raw JSX style is not supported; use style:property for a checked high-priority inline override, or prefer Look for ordinary visuals", attribute.span));
+        continue;
+      }
+      if (attribute.name.startsWith("style:")) {
+        const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
+        this.analyzeInlineVisualAttribute(attribute, actual, "style");
         continue;
       }
       if (attribute.name === "class") {
@@ -1037,12 +1100,40 @@ export class VelarWebAnalyzer extends Analyzer {
         this.diagnostics.push(diagnostic("VEL5013", `Component '${expression.tag}' has no prop '${attribute.name}'`, attribute.span));
         continue;
       }
-      this.semanticJsxAttributeOwners.set(`${attribute.span.start}:${attribute.name}`, { ...binding.type, name: expression.tag });
+      this.semanticJsxAttributeOwners.set(`${attribute.span.start}:${attribute.name}`, component.kind === "componentConstructor"
+        ? { ...component, name: expression.tag }
+        : component);
       const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-      if (binding.type.intrinsic === "web.router" && attribute.name === "fallback" && actual.kind !== "null" && actual.kind !== "any") {
+      if (component.kind === "componentConstructor" && component.intrinsic === "web.router" && attribute.name === "fallback" && actual.kind !== "null" && actual.kind !== "any") {
         this.checkWebRouteComponent(actual, attribute.span, "A Router fallback");
       }
       this.requireAssignable(actual, expected, attribute.span);
+    }
+  }
+
+  private analyzeComponentRef(
+    expression: JSXElementExpression,
+    attribute: JSXAttribute,
+    component: Extract<ValueType, { kind: "component" | "componentConstructor" }>,
+  ): void {
+    const value = attribute.value;
+    if (!value || typeof value === "string" || value.kind !== "IdentifierExpression"
+      || !this.lookup(value.name)?.mutable || this.writableStateName(value.name)) {
+      this.diagnostics.push(diagnostic("VEL5057", "A component ref requires a mutable let binding", attribute.span));
+      return;
+    }
+    if (!component.handle) {
+      this.diagnostics.push(diagnostic("VEL5057", `Component '${expression.tag}' does not expose a Handle`, attribute.span));
+      return;
+    }
+    const bindingType = this.lookup(value.name)!.type;
+    if (bindingType.kind !== "any" && bindingType.kind !== "optional") {
+      this.diagnostics.push(diagnostic("VEL5057", `A component ref requires ${describeType(component.handle)}? so cleanup can restore null`, attribute.span));
+      return;
+    }
+    const target = nonOptional(bindingType);
+    if (target.kind !== "any" && !isAssignable(component.handle, target, this)) {
+      this.diagnostics.push(diagnostic("VEL5057", `Component '${expression.tag}' exposes ${describeType(component.handle)}, but this ref stores ${describeType(target)}?`, attribute.span));
     }
   }
 
@@ -1064,14 +1155,16 @@ export class VelarWebAnalyzer extends Analyzer {
       ));
     }
     const inferred = typeof value === "string" ? stringType : boundState ? anyType : value ? this.inferExpression(value, eventHandlerType ?? unknownType) : boolType;
-    if (attribute.name === "style" || attribute.name.startsWith("style:")) {
-      this.diagnostics.push(diagnostic("VEL5041", "Controlled VelarScript components do not expose inline style; use a Look or an unsafe CSS import", attribute.span));
+    if (attribute.name === "style") {
+      this.diagnostics.push(diagnostic("VEL5041", "Raw JSX style is not supported; use style:property for a checked high-priority inline override, or prefer Look for ordinary visuals", attribute.span));
+    } else if (attribute.name.startsWith("style:")) {
+      this.analyzeInlineVisualAttribute(attribute, inferred, "style");
     } else if (attribute.name === "look") {
       if (!value || typeof value === "string") this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
       else if (value.kind === "LookExpression") this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
       else if (!this.isLookInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(inferred)}`, attribute.span));
     } else if (attribute.name.startsWith("look:")) {
-      this.analyzeInlineLookAttribute(attribute, inferred);
+      this.analyzeInlineVisualAttribute(attribute, inferred, "look");
     } else if (attribute.name === "class") {
       if (!this.isClassInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX class requires string, string?, or a list of strings; received ${describeType(inferred)}`, attribute.span));
     } else if (attribute.name === "unsafe:html") {
@@ -1204,7 +1297,7 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private checkWebRouteComponent(type: ValueType, sourceSpan: Span, subject: string): void {
     if (isInvalidType(type)) return;
-    if (type.kind !== "componentConstructor") {
+    if (type.kind !== "component" && type.kind !== "componentConstructor") {
       if (type.kind !== "any") this.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
       return;
     }
@@ -1214,16 +1307,17 @@ export class VelarWebAnalyzer extends Analyzer {
     if (routeProp && !isAssignable({ kind: "named", name: "RouteContext", identity: routeContextIdentity }, routeProp, this)) this.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
   }
 
-  private analyzeInlineLookAttribute(attribute: JSXAttribute, actual: ValueType): void {
-    const property = attribute.name.slice("look:".length);
+  private analyzeInlineVisualAttribute(attribute: JSXAttribute, actual: ValueType, directive: "look" | "style"): void {
+    const property = attribute.name.slice(`${directive}:`.length);
+    const label = directive === "look" ? "inline Look" : "inline Style";
     if (!property || !LOOK_PROPERTIES.has(property)) {
       this.diagnostics.push(diagnostic("VEL5038", property
-        ? `Unknown inline Look property '${property}'; look:* uses the same camelCase property names as a Look block`
-        : "A look: directive requires a camelCase Look property name", attribute.span));
+        ? `Unknown ${label} property '${property}'; ${directive}:* uses the same camelCase property names as a Look block`
+        : `A ${directive}: directive requires a camelCase Look property name`, attribute.span));
       return;
     }
     if (attribute.value === null) {
-      this.diagnostics.push(diagnostic("VEL5040", `JSX look:${property} requires a string or expression value`, attribute.span));
+      this.diagnostics.push(diagnostic("VEL5040", `JSX ${directive}:${property} requires a string or expression value`, attribute.span));
       return;
     }
     const expression = typeof attribute.value === "string"

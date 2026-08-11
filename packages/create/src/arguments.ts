@@ -13,7 +13,7 @@ export function parseCreateArguments(arguments_: readonly string[]): CreateArgum
     const argument = arguments_[index]!;
     if (argument === "--template") {
       const value = arguments_[index + 1];
-      if (!value || value.startsWith("--")) return "--template requires web, docs, library, or component";
+      if (!value || value.startsWith("--")) return "--template requires web, node, desktop, docs, library, or component";
       const parsed = parseTemplate(value);
       if (typeof parsed === "object") return parsed.error;
       if (templateProvided) return "--template may be provided only once";
@@ -44,5 +44,5 @@ function parseTemplate(value: string): VelarProjectTemplate | { readonly error: 
   if (value === "game") return { error: "template 'game' is reserved for the future @velarscript/game framework" };
   return (VELAR_PROJECT_TEMPLATES as readonly string[]).includes(value)
     ? value as VelarProjectTemplate
-    : { error: `unknown template '${value}'; expected web, docs, library, or component` };
+    : { error: `unknown template '${value}'; expected web, node, desktop, docs, library, or component` };
 }

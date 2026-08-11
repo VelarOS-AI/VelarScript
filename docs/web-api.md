@@ -33,6 +33,105 @@ or missing names instead of guessing. Callback parameter names remain local to
 the callback; only the function that receives the callback defines the public
 call contract.
 
+## Component constructor values
+
+The Web extension exposes `Component` as the structural type of a component
+constructor. Use bare `Component` when a host will pass no application props,
+or write a named JSX-prop contract such as
+`Component<(item: Item, compact?: bool) -> WebNode>`. Optional markers govern
+omission: `compact?: bool` may be absent, whereas `compact: bool?` is required
+and may contain `null`. All components also accept the implicit optional host
+props `class` and `look`.
+
+A compatible constructor accepts every prop the contract permits and adds no
+new required prop; additional optional props are allowed. Render a received
+constructor with a PascalCase JSX identifier (`<View item={item} />`). It is
+not an ordinary callable and is distinct from an already-rendered `WebNode`.
+The selected constructor keeps its instance while its identity is unchanged,
+including across live prop updates. Replacing it with a different constructor
+runs cleanup for the old instance and mounts the new one; host `class` and
+`look` forwarding follows the new root.
+
+## Component Handles and `ref`
+
+A component may expose a narrow imperative Handle without exposing its internal
+scope, state cells, or component runtime object. The declaration names one
+concrete record contract with `exposes T` and provides exactly one matching
+record value with `expose expression`:
+
+```velar fragment
+type EditorHandle:
+    focus: () -> null
+    reset: () -> null
+    value: () -> string
+
+component Editor(initial: string = "draft") exposes EditorHandle:
+    state text = initial
+
+    def focusEditor() -> null:
+        pass
+
+    def reset() -> null:
+        text = initial
+
+    def value() -> string:
+        return text
+
+    expose {focus: focusEditor, reset, value}
+    return <input host bind:value={text} />
+
+component Page:
+    let editor: EditorHandle? = null
+
+    mounted:
+        if editor:
+            editor.focus()
+
+    return <Editor ref={editor} look:borderWidth={1px} />
+```
+
+`expose` is a position-independent top-level component declaration: it may be
+written before or after the single top-level `return`, but not inside a branch,
+function, lifecycle block, or other nested scope. Convention keeps `return`
+last and places `expose` immediately before it. Regardless of source order, the
+root is constructed before the Handle value is evaluated, so exposed element
+refs already refer to their constructed native elements.
+
+Component `ref` is a compiler-owned JSX directive rather than a prop. It
+requires a mutable optional `let` binding because cleanup restores `null`.
+Components without `exposes` reject `ref`, and component props cannot be named
+`ref`. The Handle becomes available after the child root has been constructed
+and before the parent's `mounted` block runs.
+
+The runtime creates one shallow-frozen Handle per component instance. Callable
+fields are guarded capabilities: after the instance is destroyed, a saved old
+Handle throws instead of reaching destroyed state or DOM. Conditional removal,
+keyed removal, and dynamic constructor replacement all clear the active ref;
+identity-checked cleanup prevents an old instance from clearing a newer Handle
+stored in the same binding.
+
+Use Handle functions for imperative commands such as `focus`, `reset`, `open`,
+`close`, and `scrollTo`. Prefer getter functions over publishing mutable state
+objects, and use callback or Component props when the parent is configuring or
+replacing behavior. Styling remains declarative: every component accepts
+`class`, `look`, and `look:*` on its stable host. A component that wants to
+style internal parts should expose named Look props instead of leaking DOM
+through its Handle.
+
+The optional second argument of a structural component contract carries the
+Handle type across locals, imports, exports, and dynamic component positions:
+
+```velar fragment
+type EditorHandle:
+    reset: () -> null
+
+type EditorView = Component<(initial?: string) -> WebNode, EditorHandle>
+```
+
+Handle compatibility is covariant: a constructor used as `Component<Props,
+Handle>` must expose a value assignable to `Handle`. Omitting the second type
+argument means callers cannot request a ref through that structural contract.
+
 ## `velar/look`
 
 Visual unit suffixes are language syntax and require no import. `px`, `rem`,
@@ -79,6 +178,21 @@ after any `look={value}` composition. Duplicate directives fail checking and a
 `null` expression removes the composed property. Hooks, media conditions,
 pseudo-elements, and spreads remain exclusive to a named or local full Look;
 forms such as `look:hover:color` do not exist.
+
+Checked `style:property="text"` and `style:property={expression}` directives
+exist only as a native inline-priority compatibility layer. They reuse Look's
+camelCase property table, property types, visual builders, safe serialization,
+reactive updates, and `null` removal, but write the real CSS property on the
+component host instead of producing a Look rule. Prefer Look: inline Style
+overrides normal Look and class declarations for the same property, including
+stateful Look rules. Raw `style="..."`, Style objects, conditional directive
+names, and reusable Style values remain unsupported.
+
+A base Look selector and a simple class selector have equal specificity, so
+their winner is determined by ordinary CSS source order; `before look` and
+`after look` imports make that order explicit. Compound selectors,
+stateful Look selectors, inline Style, and `!important` participate in the
+normal CSS cascade rather than receiving a separate Velar priority system.
 
 Official Web modules validate option records as own enumerable data fields and
 copy dense Lists before using them. Router, Forms, HTTP, Storage, Files, and

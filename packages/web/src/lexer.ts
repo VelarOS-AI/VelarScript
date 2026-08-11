@@ -22,6 +22,7 @@ export type WebJsxChildSyntax = WebJsxElementSyntax | WebJsxTextSyntax | WebJsxE
 export interface WebJsxElementSyntax {
   readonly kind: "WebJsxElementSyntax";
   readonly tag: string;
+  readonly tagSpan: Span;
   readonly attributes: readonly WebJsxAttributeSyntax[];
   readonly children: readonly WebJsxChildSyntax[];
   readonly span: Span;
@@ -226,7 +227,9 @@ class WebJsxScanner {
   private scanElement(): WebJsxElementSyntax {
     const start = this.index;
     this.expect("<", "Expected '<' to start JSX");
+    const tagStart = this.index;
     const tag = this.readName();
+    const tagSpan = { start: tagStart, end: this.index };
     const fragment = !tag && this.peek() === ">";
     if (!tag && !fragment) this.report("VEL5001", "Expected a JSX tag name or fragment", start, this.index);
     const attributes: WebJsxAttributeSyntax[] = [];
@@ -294,7 +297,7 @@ class WebJsxScanner {
       }
     }
 
-    return { kind: "WebJsxElementSyntax", tag, attributes, children, span: { start, end: this.index } };
+    return { kind: "WebJsxElementSyntax", tag, tagSpan, attributes, children, span: { start, end: this.index } };
   }
 
   private readEmbedded(): WebExpressionSource {

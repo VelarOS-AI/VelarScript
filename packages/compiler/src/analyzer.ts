@@ -298,7 +298,7 @@ function sameInferredResult(left: ValueType, right: ValueType): boolean {
 }
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown"]);
-const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "WebNode", "List", "Set", "Map", "Record", "Promise", "Type"]);
+const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "WebNode", "List", "Set", "Map", "Record", "Promise", "Function", "Type"]);
 const reservedBindings = new Set([
   "Array", "Boolean", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
   "Symbol", "TypeError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
@@ -1132,6 +1132,13 @@ export class Analyzer implements TypeEnvironment {
       if (type.kind === "runtimeType") return { kind: "runtimeType", value: expand(type.value) };
       if (type.kind === "typeObject") return type.value ? { ...type, value: expand(type.value) } : type;
       if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expand(value)])) };
+      if (type.kind === "component" || type.kind === "componentConstructor") {
+        return {
+          ...type,
+          props: new Map([...type.props].map(([name, value]) => [name, expand(value)])),
+          handle: type.handle ? expand(type.handle) : null,
+        };
+      }
       if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
         ...type,
         parameters: type.parameters.map(expand),
@@ -1187,6 +1194,17 @@ export class Analyzer implements TypeEnvironment {
         return [name, expanded] as const;
       }));
       return changed ? { ...type, fields } : type;
+    }
+    if (type.kind === "component" || type.kind === "componentConstructor") {
+      let changed = false;
+      const props = new Map([...type.props].map(([name, value]) => {
+        const expanded = this.expandAliases(value, seen);
+        changed ||= expanded !== value;
+        return [name, expanded] as const;
+      }));
+      const handle = type.handle ? this.expandAliases(type.handle, seen) : null;
+      changed ||= handle !== type.handle;
+      return changed ? { ...type, props, handle } : type;
     }
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") {
       const parameters = type.parameters.map((parameter) => this.expandAliases(parameter, seen));
@@ -3466,6 +3484,7 @@ export class Analyzer implements TypeEnvironment {
       || expanded.kind === "action"
       || expanded.kind === "intrinsic"
       || expanded.kind === "classConstructor"
+      || expanded.kind === "component"
       || expanded.kind === "componentConstructor";
   }
 
@@ -3788,8 +3807,10 @@ export class Analyzer implements TypeEnvironment {
       const result = this.inferIntrinsicCall(callee, arguments_, argumentNames, callSpan);
       return result;
     }
-    if (callee.kind === "componentConstructor") {
-      this.typeError(`Render component '${callee.name}' with JSX`, callSpan);
+    if (callee.kind === "component" || callee.kind === "componentConstructor") {
+      this.typeError(callee.kind === "componentConstructor"
+        ? `Render component '${callee.name}' with JSX`
+        : "Render a Component value with JSX", callSpan);
       if (hasNamed) this.typeError("Components use JSX props rather than named call arguments", callSpan);
       for (const argument of arguments_) this.inferExpression(argument);
       return { kind: "node" };
@@ -6351,6 +6372,13 @@ export class Analyzer implements TypeEnvironment {
         result: this.resolveNamedClasses(type.result),
       };
     }
+    if (type.kind === "component" || type.kind === "componentConstructor") {
+      return {
+        ...type,
+        props: new Map([...type.props].map(([name, value]) => [name, this.resolveNamedClasses(value)])),
+        handle: type.handle ? this.resolveNamedClasses(type.handle) : null,
+      };
+    }
     if (type.kind === "union") {
       return { kind: "union", members: type.members.map((member) => this.resolveNamedClasses(member)) };
     }
@@ -6374,6 +6402,11 @@ export class Analyzer implements TypeEnvironment {
             return false;
           }
           if (this.invalidDeclaredTypes.has(syntax.name)) return false;
+          if (syntax.name === "Component" && !this.primitiveNames.has("Component")) {
+            this.typeError("Unknown type 'Component'", syntax.span);
+            return false;
+          }
+          if (syntax.name === "Promise" || syntax.name === "Function") return true;
           if (this.typeParameterFrames.at(-1)?.has(syntax.name)) return true;
           if (this.primitiveNames.has(syntax.name)
             || this.namedTypes.has(syntax.name)
@@ -6414,7 +6447,12 @@ export class Analyzer implements TypeEnvironment {
         }
         case "GenericTypeSyntax": {
           let valid = true;
-          if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Type") {
+          const componentType = syntax.name === "Component" && this.primitiveNames.has("Component");
+          if (syntax.name === "Component" && !componentType) {
+            this.typeError("Unknown type 'Component'", syntax.nameSpan);
+            valid = false;
+          }
+          if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Function" && syntax.name !== "Type" && !componentType) {
             const resolved = resolver({ syntax, span: syntax.span });
             if (resolved.kind === "named") {
               this.typeError(`Unknown type '${syntax.name}'`, syntax.nameSpan);
@@ -6422,6 +6460,53 @@ export class Analyzer implements TypeEnvironment {
             }
           }
           const argumentsValid = syntax.arguments.map(validate).every(Boolean);
+          if (syntax.name === "Function" && syntax.arguments.length === 0) {
+            this.typeError("Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result", syntax.span);
+            valid = false;
+          }
+          if (componentType) {
+            if (syntax.arguments.length < 1 || syntax.arguments.length > 2) {
+              this.typeError("Component<Props, Handle> requires a named prop signature and at most one Handle type", syntax.span);
+              valid = false;
+            }
+            const signature = syntax.arguments[0];
+            if (!signature) return false;
+            if (signature.kind !== "FunctionTypeSyntax") {
+              this.typeError("Component<Props, Handle> requires a named function signature such as Component<(title: string) -> WebNode, DialogHandle>", signature.span);
+              valid = false;
+            } else {
+              const names = new Set<string>();
+              for (const parameter of signature.parameters) {
+                if (!parameter.name) {
+                  this.typeError("Every Component signature prop requires a name", parameter.span);
+                  valid = false;
+                } else if (names.has(parameter.name)) {
+                  this.typeError(`Component signature prop '${parameter.name}' is declared more than once`, parameter.span);
+                  valid = false;
+                } else names.add(parameter.name);
+                if (parameter.rest) {
+                  this.typeError("Component signatures use named props and cannot declare a rest parameter", parameter.span);
+                  valid = false;
+                }
+              }
+              const result = resolver({ syntax: signature.result, span: signature.result.span });
+              if (result.kind !== "node") {
+                this.typeError(`A Component signature must return WebNode, received ${describeType(result)}`, signature.result.span);
+                valid = false;
+              }
+            }
+            const handleSyntax = syntax.arguments[1];
+            if (handleSyntax && argumentsValid) {
+              const handle = this.expandAliases(resolver({ syntax: handleSyntax, span: handleSyntax.span }));
+              const fields = handle.kind === "object"
+                ? handle.fields
+                : handle.kind === "named" ? this.fieldsOf(handle.identity ?? handle.name) : null;
+              if (!fields) {
+                this.typeError(`A Component Handle must be a concrete record type, received ${describeType(handle)}`, handleSyntax.span);
+                valid = false;
+              }
+            }
+          }
           if (valid && argumentsValid && syntax.name === "Promise") {
             this.reportPromiseCarrierHazard(resolver({ syntax, span: syntax.span }), syntax.span);
           }
@@ -7096,7 +7181,7 @@ export class Analyzer implements TypeEnvironment {
       const readable = type.readonlyView || type.readonlyFields?.has(name) ? this.readonlyDataViewOf(value) : value;
       return [name, type.optionalFields?.has(name) ? optionalOf(readable) : readable];
     }));
-    if (type.kind === "componentConstructor") return type.props;
+    if (type.kind === "component" || type.kind === "componentConstructor") return type.props;
     if (type.kind === "named") {
       const identity = type.identity ?? type.name;
       const fields = this.fieldsOf(identity) ?? new Map();

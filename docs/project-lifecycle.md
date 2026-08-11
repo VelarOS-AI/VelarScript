@@ -7,11 +7,15 @@ commands use the same transactional `create-velar` implementation:
 
 ```sh
 npm create velar@latest my-app
+npm create velar@latest api -- --template node
+npm create velar@latest desktop-app -- --template desktop
 npm create velar@latest product-docs -- --template docs
 npm create velar@latest shared-library -- --template library
 npm create velar@latest component-library -- --template component
 
 velar create my-app
+velar create api --template node
+velar create desktop-app --template desktop
 velar create product-docs --template docs
 velar create shared-library --template library
 velar create component-library --template component
@@ -75,8 +79,12 @@ compiled. This is a clean architectural break rather than a compatibility
 transition. Unknown project fields and unknown extension-owned fields also fail
 closed.
 
-The `web`, `docs`, `library`, and `component` templates share the same creator.
-Web and docs projects include Core tests plus browser tests. `library` is a
+The `web`, `node`, `desktop`, `docs`, `library`, and `component` templates share
+the same creator. The three application targets begin with a branded Hello
+experience while retaining their target's ordinary project model: Web uses an
+interactive component, Node uses a checked HTTP server, and Desktop remains one
+system-WebView project with no renderer/main source split. Web, Desktop, and
+docs projects include Core tests plus browser tests. `library` is a
 framework-free Core source package. `component` is a Web source package with a
 single published `velar.entry`, a local preview application, a Core contract
 test, a browser rendering test, and `@velarscript/web` as both a development

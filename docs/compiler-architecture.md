@@ -754,6 +754,15 @@ side; compound assignment also performs an old-value read before the right
 side. The Web analyzer checks component JSX in emitted order—props, children,
 invocation.
 
+Static component tags retain the direct child-instantiation fast path. A JSX
+tag resolved from a reactive structural `Component` binding lowers to one
+owned dynamic component region: the tag read tracks constructor identity,
+while each JSX prop remains a separate live prop cell. Prop publication alone
+therefore updates the existing child; a constructor identity change
+transactionally destroys the old child scope and installs a new one. The
+dynamic root also carries the component host binding so caller `class` and
+`look` sources move to the replacement host instead of attaching to stale DOM.
+
 Catch lowering uses the host's cross-realm Error brand check, then converts
 foreign non-Error throws without applying JavaScript string coercion to objects
 or functions. Primitive messages remain readable; reference values receive a

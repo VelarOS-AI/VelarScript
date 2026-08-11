@@ -302,10 +302,10 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["Head", { kind: "componentConstructor", name: "Head", props: new Map<string, ValueType>([
       ["title", stringType], ["description", stringType], ["canonical", stringType], ["robots", stringType],
       ["image", stringType], ["themeColor", stringType], ["language", stringType],
-    ]), requiredProps: new Set(["title"]) }],
-    ["Router", { kind: "componentConstructor", name: "Router", props: new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", anyType]]), requiredProps: new Set(["routes"]), intrinsic: "web.router" }],
-    ["Link", { kind: "componentConstructor", name: "Link", props: new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
-    ["NavLink", { kind: "componentConstructor", name: "NavLink", props: new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]) }],
+    ]), requiredProps: new Set(["title"]), handle: null }],
+    ["Router", { kind: "componentConstructor", name: "Router", props: new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", anyType]]), requiredProps: new Set(["routes"]), handle: null, intrinsic: "web.router" }],
+    ["Link", { kind: "componentConstructor", name: "Link", props: new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]), handle: null }],
+    ["NavLink", { kind: "componentConstructor", name: "NavLink", props: new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]), handle: null }],
   ]), new Map(), new Map([["RouteContext", routeContextFields]]), new Map([
     ["RouteContext", "@velarscript/web:velar/web#type:RouteContext"],
   ]))],
@@ -452,6 +452,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       watch: "watch",
       mounted: "mounted",
       cleanup: "cleanup",
+      exposes: "exposes",
+      expose: "expose",
       look: "look",
       css: "css",
     }),
@@ -477,7 +479,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
+    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
     primitiveParents: new Map([
       ["InputElement", new Set(["Element"])],
       ["CanvasElement", new Set(["Element"])],
@@ -513,6 +515,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       watch: "Runs a block after a watched expression changes and DOM updates commit.",
       mounted: "Runs once after the component DOM is inserted.",
       cleanup: "Runs once before the component and its owned resources are destroyed.",
+      exposes: "Declares the explicit typed control Handle a component makes available through JSX ref.",
+      expose: "Provides the component Handle value declared by exposes.",
       look: "Builds a typed, composable Web appearance value.",
     }),
     typeDocumentation: Object.freeze({
@@ -527,7 +531,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),
     completions: Object.freeze([
-      ...["component", "state", "resource", "action", "watch", "mounted", "cleanup", "look"].map((label) => ({ label, kind: 14 })),
+      ...["component", "state", "resource", "action", "watch", "mounted", "cleanup", "exposes", "expose", "look"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
       { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },
@@ -537,6 +541,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "on:submit.prevent", kind: 10, detail: "DOM event with a preventDefault modifier" },
       { label: "class:", kind: 10, detail: "Reactive class directive" },
       { label: "look={value}", kind: 10, detail: "Apply a typed Look value" },
+      { label: "style:color={value}", kind: 10, detail: "High-priority checked inline Style compatibility override" },
       { label: "import css unsafe", kind: 14, detail: "Import native CSS before Look output" },
       { label: "after look", kind: 14, detail: "Place an unsafe CSS import after Look output" },
       { label: "velar/look", kind: 9, detail: "Named visual builders and visual value Type objects" },

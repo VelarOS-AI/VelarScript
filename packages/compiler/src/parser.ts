@@ -1534,15 +1534,24 @@ export class Parser {
       const open = this.previous();
       const parameters: Extract<TypeSyntax, { kind: "FunctionTypeSyntax" }>["parameters"][number][] = [];
       let sawRest = false;
+      let sawOptional = false;
       if (!this.check("rightParen")) {
         do {
           const parameterStart = this.current().span.start;
           const rest = this.match("ellipsis");
           if (sawRest) this.diagnostics.push(diagnostic("VEL2016", "A rest function type parameter must be final", this.current().span));
-          const parameterName = this.check("identifier") && this.peekKind(1) === "colon" ? this.advance().value : null;
-          if (parameterName) this.advance();
+          const named = this.check("identifier")
+            && (this.peekKind(1) === "colon" || (this.peekKind(1) === "question" && this.peekKind(2) === "colon"));
+          const parameterName = named ? this.advance().value : null;
+          const optional = parameterName !== null && this.match("question");
+          if (parameterName) this.expect("colon", "Expected ':' after a function type parameter name");
           const type = this.parseTypeReference();
-          parameters.push({ name: parameterName, type: type.syntax, rest, span: span(parameterStart, type.span.end) });
+          if (rest && optional) this.diagnostics.push(diagnostic("VEL2016", "A rest function type parameter cannot be optional", span(parameterStart, type.span.end)));
+          if (!optional && sawOptional && !rest) {
+            this.diagnostics.push(diagnostic("VEL2016", "A required function type parameter cannot follow an optional parameter", span(parameterStart, type.span.end)));
+          }
+          parameters.push({ name: parameterName, type: type.syntax, rest, optional, span: span(parameterStart, type.span.end) });
+          if (optional) sawOptional = true;
           if (rest) sawRest = true;
         } while (this.match("comma") && !this.check("rightParen"));
       }
@@ -1606,7 +1615,11 @@ export class Parser {
         this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
       }
       const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
-      if (expectedArguments !== null && arguments_.length !== expectedArguments) {
+      if (typeName === "Component" && arguments_.length !== 1 && arguments_.length !== 2) {
+        this.diagnostics.push(diagnostic("VEL2012", "Type 'Component' expects 1 or 2 type arguments", name.span));
+      } else if (typeName === "Function" && arguments_.length === 0) {
+        this.diagnostics.push(diagnostic("VEL2012", "Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result", name.span));
+      } else if (expectedArguments !== null && arguments_.length !== expectedArguments) {
         this.diagnostics.push(diagnostic("VEL2012", `Type '${typeName}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
       }
       syntax = { kind: "GenericTypeSyntax", name: typeName, nameSpan: name.span, arguments: arguments_, span: span(name.span.start, close.span.end) };

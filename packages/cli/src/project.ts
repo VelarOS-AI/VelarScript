@@ -1121,6 +1121,11 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
         ...(type.rest ? { rest: renameType(type.rest, aliases) } : {}),
         result: renameType(type.result, aliases),
       };
+    case "component":
+      return {
+        ...type,
+        props: new Map([...type.props].map(([name, value]) => [name, renameType(value, aliases)])),
+      };
     case "componentConstructor":
       return {
         ...type,
@@ -1184,6 +1189,7 @@ function resolveKnownNominals(
         ...(type.rest ? { rest: resolveKnownNominals(type.rest, classes, enums, namedTypeIdentities) } : {}),
         result: resolveKnownNominals(type.result, classes, enums, namedTypeIdentities),
       };
+    case "component":
     case "componentConstructor":
       return {
         ...type,
@@ -1230,6 +1236,7 @@ function expandKnownAliases(type: ValueType, aliases: ReadonlyMap<string, ValueT
         ...(type.rest ? { rest: expandKnownAliases(type.rest, aliases, seen) } : {}),
         result: expandKnownAliases(type.result, aliases, seen),
       };
+    case "component":
     case "componentConstructor":
       return { ...type, props: new Map([...type.props].map(([name, value]) => [name, expandKnownAliases(value, aliases, seen)])) };
     case "union":

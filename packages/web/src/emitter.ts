@@ -217,7 +217,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       } else if (item.kind === "WatchDeclaration") {
         visitExpression(item.expression);
         item.body.forEach(visitStatement);
-      } else if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") item.body.forEach(visitStatement);
+      } else if (item.kind === "ExposeDeclaration") visitExpression(item.value);
+      else if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") item.body.forEach(visitStatement);
       else visitStatement(item);
     });
     return true;
@@ -384,6 +385,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       }
     }
     let render: Expression | null = null;
+    let expose: Expression | null = null;
     let mountedBody: readonly Statement[] = [];
     let cleanupBody: readonly Statement[] = [];
     for (const item of statement.body) {
@@ -401,6 +403,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         const parameters = [item.currentName, item.previousName].filter((name): name is string => name !== null).join(", ");
         const watchLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
         lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __scope);`);
+      } else if (item.kind === "ExposeDeclaration") {
+        expose ??= item.value;
       } else if (item.kind === "MountedBlock") {
         mountedBody = item.body;
       } else if (item.kind === "CleanupBlock") {
@@ -417,8 +421,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     // __velarChild with the current scope, so no dynamic wrapper is needed.
     const renderedRoot = render ? this.emitMappedExpression(render) : "__velarDomCreateComment(\"missing render\")";
     lines.push(`${bodyIndent}const __root = ${renderedRoot};`);
+    lines.push(`${bodyIndent}const __handle = ${expose ? `__velarComponentHandle(${this.emitMappedExpression(expose)}, ${JSON.stringify(statement.name)})` : "null"};`);
     lines.push(`${bodyIndent}if (__props.class !== undefined) __velarClassBindRoot(__root, () => __props.class, __scope);`);
     lines.push(`${bodyIndent}if (__props.look !== undefined) __velarLookBindRoot(__root, () => __props.look, __scope);`);
+    lines.push(`${bodyIndent}if (__props.__velarStyle !== undefined) __velarStyleBindRoot(__root, () => __props.__velarStyle, __scope);`);
     const mounted = mountedBody.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
     const cleanup = cleanupBody.map((child) => {
       if (["VariableDeclaration", "FunctionDeclaration", "ClassDeclaration", "TypeDeclaration", "EnumDeclaration"].includes(child.kind)) {
@@ -436,7 +442,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       `${outerIndent}try {`,
       `${bodyIndent}__constructionCleanup = ${cleanupBodyText};`,
       ...lines,
-      `${bodyIndent}return __velarComponent(__root, __scope, async () => {${mounted ? `\n${mounted}\n${bodyIndent}` : ""}}, __constructionCleanup);`,
+      `${bodyIndent}return __velarComponent(__root, __scope, async () => {${mounted ? `\n${mounted}\n${bodyIndent}` : ""}}, __constructionCleanup, __handle);`,
       `${outerIndent}} catch (__constructionError) {`,
       `${bodyIndent}try { __constructionCleanup(); } catch (__cleanupError) { __velarReport(__cleanupError, "cleanup", __scope); }`,
       `${bodyIndent}__velarDestroyScope(__scope);`,
@@ -468,29 +474,51 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   private emitJsxCode(expression: JSXElementExpression, scope: string, asChild: boolean, namespace: string): string {
     if (/^[A-Z]/u.test(expression.tag)) {
-      // Component identity at a JSX position is stable: props are passed as
-      // thunks that the runtime turns into per-prop observers feeding a live
-      // props store, so a reactive prop update reaches the existing instance
-      // instead of re-creating it. Children render once per instance.
-      const properties = expression.attributes
-        .filter((attribute) => attribute.name !== "key" && attribute.name !== "look" && !attribute.name.startsWith("look:"))
-        .map((attribute) => this.emitMappedJavaScript(
-          attribute.span,
-          () => `${this.emitObjectKey(attribute.name)}: () => (${this.emitJsxAttributeValue(attribute)})`,
-        ));
-      const lookValue = this.emitJsxLookValue(expression);
-      const lookAttribute = expression.attributes.find((attribute) => attribute.name === "look" || attribute.name.startsWith("look:"));
-      if (lookValue && lookAttribute) {
-        properties.push(this.emitMappedJavaScript(lookAttribute.span, () => `look: () => (${lookValue})`));
+      const reactiveComponent = this.hints.reactiveReferences.has(spanIdentity(expression.tagSpan));
+      const componentScope = reactiveComponent ? "__dynamicScope" : scope;
+      const previousScope = this.currentScope;
+      if (reactiveComponent) this.currentScope = componentScope;
+      try {
+        // Static component identity keeps the existing stable child fast path.
+        // A reactive Component value owns a dynamic region that remounts only
+        // when the constructor identity itself changes; ordinary prop updates
+        // continue through the child's live prop cells.
+        const properties = expression.attributes
+          .filter((attribute) => attribute.name !== "key" && attribute.name !== "ref" && attribute.name !== "look" && !attribute.name.startsWith("look:")
+            && attribute.name !== "style" && !attribute.name.startsWith("style:"))
+          .map((attribute) => this.emitMappedJavaScript(
+            attribute.span,
+            () => `${this.emitObjectKey(attribute.name)}: () => (${this.emitJsxAttributeValue(attribute)})`,
+          ));
+        const lookValue = this.emitJsxLookValue(expression);
+        const lookAttribute = expression.attributes.find((attribute) => attribute.name === "look" || attribute.name.startsWith("look:"));
+        if (lookValue && lookAttribute) {
+          properties.push(this.emitMappedJavaScript(lookAttribute.span, () => `look: () => (${lookValue})`));
+        }
+        const styleValue = this.emitJsxStyleValue(expression);
+        const styleAttribute = expression.attributes.find((attribute) => attribute.name.startsWith("style:"));
+        if (styleValue && styleAttribute) {
+          properties.push(this.emitMappedJavaScript(styleAttribute.span, () => `__velarStyle: () => (${styleValue})`));
+        }
+        // Children stay a thunk so the charter's evaluation order holds at
+        // the runtime boundary: props left to right, then children, then the
+        // component function.
+        const children = hasMeaningfulChildren(expression.children)
+          ? `() => (${this.emitJsxChildren(expression.children, componentScope, namespace)})`
+          : "undefined";
+        const ref = expression.attributes.find((attribute) => attribute.name === "ref")?.value;
+        const refSetter = ref && typeof ref !== "string" && ref.kind === "IdentifierExpression"
+          ? `(next, previous) => { if (previous === undefined || ${ref.name} === previous) ${ref.name} = next; }`
+          : null;
+        const component = reactiveComponent ? `${expression.tag}.get()` : expression.tag;
+        const arguments_ = `${component}, { ${properties.join(", ")} }, ${children}, ${componentScope}, ${namespace}${refSetter ? `, ${refSetter}` : ""}`;
+        if (reactiveComponent) {
+          return `__velarDynamicComponent((__dynamicScope) => __velarChild(${arguments_}), ${scope})`;
+        }
+        return asChild ? `__velarChild(${arguments_})` : `__velarInstantiate(${arguments_})`;
+      } finally {
+        this.currentScope = previousScope;
       }
-      // Children stay a thunk so the charter's evaluation order holds at the
-      // runtime boundary: props left to right, then children, then the
-      // component function.
-      const children = hasMeaningfulChildren(expression.children)
-        ? `() => (${this.emitJsxChildren(expression.children, scope, namespace)})`
-        : "undefined";
-      const arguments_ = `${expression.tag}, { ${properties.join(", ")} }, ${children}, ${scope}, ${namespace}`;
-      return asChild ? `__velarChild(${arguments_})` : `__velarInstantiate(${arguments_})`;
     }
 
     const id = ++this.jsxId;
@@ -501,6 +529,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       ? `const ${element} = __velarCreateElement(${JSON.stringify(expression.tag)}, ${elementNamespace});`
       : `const ${element} = __velarDomCreateFragment();`];
     let emittedLook = false;
+    let emittedStyle = false;
     for (const attribute of expression.attributes) {
       if (attribute.name === "key") continue;
       if (attribute.name === "look" || attribute.name.startsWith("look:")) {
@@ -511,6 +540,15 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         }
         continue;
       }
+      if (attribute.name.startsWith("style:")) {
+        if (!emittedStyle) {
+          emittedStyle = true;
+          const styleValue = this.emitJsxStyleValue(expression);
+          if (styleValue) lines.push(this.emitMappedJavaScript(attribute.span, () => `__velarStyleBind(${element}, () => (${styleValue}), ${scope});`));
+        }
+        continue;
+      }
+      if (attribute.name === "style") continue;
       lines.push(this.emitMappedJavaScript(attribute.span, () => {
         const value = attribute.value;
         if (attribute.name === "ref" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
@@ -560,7 +598,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   private emitJsxChildren(children: JSXElementExpression["children"], scope: string, namespace: string): string {
-    const fragment: JSXElementExpression = { kind: "JSXElementExpression", tag: "", attributes: [], children, span: children[0]?.span ?? { start: 0, end: 0 } };
+    const fragmentSpan = children[0]?.span ?? { start: 0, end: 0 };
+    const fragment: JSXElementExpression = { kind: "JSXElementExpression", tag: "", tagSpan: { start: fragmentSpan.start, end: fragmentSpan.start }, attributes: [], children, span: fragmentSpan };
     return this.emitJsx(fragment, scope, true, namespace);
   }
 
@@ -632,6 +671,19 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     });
     const anonymous = `{ rules: { ${rules.join(", ")} } }`;
     return `__velarLook([${[baseValue, anonymous].filter(Boolean).join(", ")}])`;
+  }
+
+  private emitJsxStyleValue(expression: JSXElementExpression): string | null {
+    const inline = expression.attributes.filter((attribute) => attribute.name.startsWith("style:"));
+    if (inline.length === 0) return null;
+    const properties = inline.map((attribute) => {
+      const property = cssPropertyName(attribute.name.slice("style:".length));
+      const value = attribute.value === null ? "null"
+        : typeof attribute.value === "string" ? JSON.stringify(attribute.value)
+          : this.emitMappedExpression(attribute.value);
+      return `${JSON.stringify(property)}: ${value}`;
+    });
+    return `{ ${properties.join(", ")} }`;
   }
 
   private prepareLooks(program: Program): void {
@@ -920,7 +972,7 @@ function containsUnitLiteral(value: unknown): boolean {
 function containsWebSyntax(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  if (record.kind === "ComponentDeclaration" || record.kind === "UnsafeCssImportDeclaration" || record.kind === "LookExpression" || record.kind === "JSXElementExpression"
+  if (record.kind === "ComponentDeclaration" || record.kind === "ExposeDeclaration" || record.kind === "UnsafeCssImportDeclaration" || record.kind === "LookExpression" || record.kind === "JSXElementExpression"
     || record.kind === "StateDeclaration" || record.kind === "ResourceDeclaration" || record.kind === "ActionDeclaration" || record.kind === "WatchDeclaration") return true;
   if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "computed")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
@@ -1289,13 +1341,49 @@ function __velarWatch(read, callback, scope) {
   }, "watch", scope);
 }
 
-function __velarComponent(node, scope, mounted, cleanup) {
+function __velarComponentHandle(value, componentName) {
+  if (value === null || typeof value !== "object") throw new TypeError("Component " + componentName + " must expose an ordinary Handle record");
+  const prototype = __velarGraphPrototype(value);
+  if (prototype !== __velarGraphPrototype({}) && prototype !== null) throw new TypeError("Component " + componentName + " must expose an ordinary Handle record");
+  const output = {};
+  let active = true;
+  for (const name of __velarGraphOwnNames(value)) {
+    const descriptor = __velarGraphOwnDescriptor(value, name);
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) throw new TypeError("Component " + componentName + " Handle fields must be enumerable data values");
+    const member = typeof descriptor.value === "function"
+      ? (...arguments_) => {
+        if (!active) throw new Error("Component " + componentName + " Handle is no longer active");
+        return __velarGraphApply(descriptor.value, null, arguments_, "component Handle method");
+      }
+      : descriptor.value;
+    __velarGraphDefine(output, name, { enumerable: true, value: member });
+  }
+  return __velarGraphFreeze({
+    value: __velarGraphFreeze(output),
+    revoke() { active = false; },
+  });
+}
+
+function __velarComponent(node, scope, mounted, cleanup, handleState) {
   let destroyed = false;
+  const refCleanups = [];
   const ownedNodes = node && __velarDomNodeType(node) === 11 ? __velarDomChildNodes(node) : [node];
   if (mounted) scope.mounts.push(mounted);
   return {
     __velarComponent: true,
     node,
+    __bindRef(setRef) {
+      if (!handleState) throw new TypeError("This component does not expose a Handle");
+      const handle = handleState.value;
+      let bound = true;
+      setRef(handle, undefined);
+      refCleanups.push(() => {
+        if (!bound) return;
+        bound = false;
+        setRef(null, handle);
+      });
+      return null;
+    },
     mount(target, before = null) {
       if (destroyed) throw new Error("Cannot mount a destroyed VelarScript component");
       const parent = typeof target === "string" ? __velarDomQuerySelector(target) : target;
@@ -1308,6 +1396,9 @@ function __velarComponent(node, scope, mounted, cleanup) {
     destroy(remove = true) {
       if (destroyed) return null;
       destroyed = true;
+      for (const clearRef of [...refCleanups].reverse()) clearRef();
+      refCleanups.length = 0;
+      if (handleState) handleState.revoke();
       if (cleanup) {
         try {
           const result = cleanup();
@@ -1431,7 +1522,7 @@ function __velarAppend(parent, value, state = null) {
   throw new TypeError("JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values");
 }
 
-function __velarDynamic(parent, read, scope) {
+function __velarDynamic(parent, read, scope, rootState = null) {
   const start = __velarDomCreateComment("velar:start");
   const end = __velarDomCreateComment("velar:end");
   __velarDomAppend(parent, start, end);
@@ -1441,7 +1532,11 @@ function __velarDynamic(parent, read, scope) {
   __velarObserver(() => {
     const nextScope = __velarScope(scope.component);
     const fragment = __velarDomCreateFragment();
-    try { __velarAppend(fragment, read(nextScope)); }
+    let nextHost = null;
+    try {
+      __velarAppend(fragment, read(nextScope));
+      if (rootState) nextHost = __velarRootHost(fragment, "dynamic component");
+    }
     catch (error) { __velarDestroyScope(nextScope); throw error; }
     const nextNodes = __velarDomChildNodes(fragment);
     if (childScope) __velarDestroyScope(childScope);
@@ -1449,9 +1544,27 @@ function __velarDynamic(parent, read, scope) {
     __velarDomBefore(end, fragment);
     childScope = nextScope;
     nodes = nextNodes;
+    if (rootState) {
+      rootState.host = nextHost;
+      for (const listener of __velarGraphSetItems(rootState.listeners)) listener(nextHost);
+    }
     if (scope.mounted) __velarMountScope(nextScope);
   }, "dom", scope);
-  scope.cleanups.push(() => { if (childScope) __velarDestroyScope(childScope); });
+  scope.cleanups.push(() => {
+    if (childScope) __velarDestroyScope(childScope);
+    if (rootState) {
+      rootState.host = null;
+      for (const listener of __velarGraphSetItems(rootState.listeners)) listener(null);
+    }
+  });
+}
+
+function __velarDynamicComponent(read, scope) {
+  const fragment = __velarDomCreateFragment();
+  const rootState = { host: null, listeners: __velarGraphCreateSet() };
+  __velarGraphDefine(fragment, "__velarDynamicRoot", { value: rootState });
+  __velarDynamic(fragment, read, scope, rootState);
+  return fragment;
 }
 
 function __velarKeyed(parent, read, keyOf, render, scope) {
@@ -1602,6 +1715,131 @@ function __velarLookValue(token, value) {
   return value;
 }
 
+const __velarInlineStyleProperties = __velarGraphCreateSet(${JSON.stringify([...LOOK_PROPERTIES].map(cssPropertyName))});
+
+function __velarStyleDeclarations(value) {
+  if (!value || typeof value !== "object" || __velarGraphIsList(value)
+    || (__velarGraphPrototype(value) !== __velarGraphNativeObject.prototype && __velarGraphPrototype(value) !== null)
+    || __velarWebErrorOwnSymbols(value).length > 0) {
+    throw new TypeError("style:* requires compiler-owned inline declarations");
+  }
+  const names = __velarGraphOwnNames(value);
+  if (names.length > ${LOOK_PROPERTIES.size}) throw new RangeError("An inline Style has too many properties");
+  const output = {};
+  for (const property of names) {
+    if (!__velarGraphSetContains(__velarInlineStyleProperties, property)) throw new TypeError("Unknown inline Style property '" + property + "'");
+    const descriptor = __velarGraphOwnDescriptor(value, property);
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) throw new TypeError("Inline Style declarations cannot use accessors");
+    __velarGraphDefine(output, property, { value: descriptor.value, enumerable: true, configurable: false, writable: false });
+  }
+  return __velarGraphFreeze(output);
+}
+
+function __velarInlineStyleState(element) {
+  const current = __velarGraphOwnDescriptor(element, "__velarInlineStyleState");
+  if (current) {
+    if (!("value" in current) || current.enumerable || current.configurable || current.writable
+      || !current.value || typeof current.value !== "object") throw new TypeError("Inline Style ownership is invalid");
+    return current.value;
+  }
+  const state = __velarGraphFreeze({ base: __velarGraphCreateMap(), managed: __velarGraphCreateSet() });
+  __velarGraphDefine(element, "__velarInlineStyleState", { value: state });
+  return state;
+}
+
+function __velarApplyStyles(element) {
+  const sources = __velarRuntime.lookSources.get(element);
+  const merged = __velarGraphCreateMap();
+  if (sources) {
+    for (const source of __velarGraphSetItems(sources)) {
+      if (!source.styles) continue;
+      for (const property of __velarGraphOwnNames(source.styles)) {
+        __velarGraphMapWrite(merged, property, __velarGraphOwnDescriptor(source.styles, property).value);
+      }
+    }
+  }
+  const state = __velarInlineStyleState(element);
+  const next = __velarGraphCreateSet(__velarGraphMapKeyItems(merged));
+  for (const property of __velarGraphSetItems(next)) {
+    if (__velarGraphSetContains(state.managed, property)) continue;
+    __velarGraphMapWrite(state.base, property, {
+      value: element.style.getPropertyValue(property),
+      priority: element.style.getPropertyPriority(property),
+    });
+  }
+  for (const property of __velarGraphSetItems(state.managed)) {
+    if (__velarGraphSetContains(next, property)) continue;
+    const base = __velarGraphMapRead(state.base, property);
+    if (!base || (base.value === "" && base.priority === "")) element.style.removeProperty(property);
+    else element.style.setProperty(property, base.value, base.priority);
+    __velarGraphMapRemove(state.base, property);
+  }
+  for (const property of __velarGraphSetItems(next)) {
+    const value = __velarGraphMapRead(merged, property);
+    if (value == null) element.style.removeProperty(property);
+    else element.style.setProperty(property, __velarLookValue("base:" + property, value));
+  }
+  __velarGraphSetEmpty(state.managed);
+  for (const property of __velarGraphSetItems(next)) __velarGraphSetInsert(state.managed, property);
+}
+
+function __velarStyleBind(element, read, scope) {
+  const source = { rules: Object.create(null), styles: {} };
+  let sources = __velarRuntime.lookSources.get(element);
+  if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(element, sources); }
+  sources.add(source);
+  __velarObserver(() => {
+    source.styles = __velarStyleDeclarations(read());
+    __velarApplyStyles(element);
+  }, "dom", scope);
+  scope.cleanups.push(() => {
+    sources.delete(source);
+    if (sources.size === 0) __velarRuntime.lookSources.delete(element);
+    __velarApplyStyles(element);
+  });
+}
+
+function __velarMoveStyleSource(source, previous, next) {
+  if (previous) {
+    const sources = __velarRuntime.lookSources.get(previous);
+    if (sources) {
+      sources.delete(source);
+      if (sources.size === 0) __velarRuntime.lookSources.delete(previous);
+    }
+    __velarApplyStyles(previous);
+  }
+  if (next) {
+    let sources = __velarRuntime.lookSources.get(next);
+    if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(next, sources); }
+    sources.add(source);
+    __velarApplyStyles(next);
+  }
+}
+
+function __velarStyleBindRoot(root, read, scope) {
+  const dynamic = root?.__velarDynamicRoot;
+  if (!dynamic) {
+    __velarStyleBind(__velarRootHost(root, "style"), read, scope);
+    return;
+  }
+  const source = { rules: Object.create(null), styles: {} };
+  let host = null;
+  const move = (next) => {
+    __velarMoveStyleSource(source, host, next);
+    host = next;
+  };
+  __velarGraphSetInsert(dynamic.listeners, move);
+  move(dynamic.host);
+  __velarObserver(() => {
+    source.styles = __velarStyleDeclarations(read());
+    if (host) __velarApplyStyles(host);
+  }, "dom", scope);
+  scope.cleanups.push(() => {
+    __velarGraphSetRemove(dynamic.listeners, move);
+    move(null);
+  });
+}
+
 function __velarApplyLooks(element) {
   const sources = __velarRuntime.lookSources.get(element);
   const merged = Object.create(null);
@@ -1638,6 +1876,23 @@ function __velarLookBind(element, read, scope) {
   });
 }
 
+function __velarMoveLookSource(source, previous, next) {
+  if (previous) {
+    const sources = __velarRuntime.lookSources.get(previous);
+    if (sources) {
+      sources.delete(source);
+      if (sources.size === 0) __velarRuntime.lookSources.delete(previous);
+    }
+    __velarApplyLooks(previous);
+  }
+  if (next) {
+    let sources = __velarRuntime.lookSources.get(next);
+    if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(next, sources); }
+    sources.add(source);
+    __velarApplyLooks(next);
+  }
+}
+
 function __velarApplyExternalLook(element, value) {
   const source = { rules: __velarLook([value]).rules };
   let sources = __velarRuntime.lookSources.get(element);
@@ -1664,11 +1919,51 @@ function __velarRootHost(root, capability) {
 }
 
 function __velarLookBindRoot(root, read, scope) {
-  __velarLookBind(__velarRootHost(root, "look"), read, scope);
+  const dynamic = root?.__velarDynamicRoot;
+  if (!dynamic) {
+    __velarLookBind(__velarRootHost(root, "look"), read, scope);
+    return;
+  }
+  const source = { rules: Object.create(null) };
+  let host = null;
+  const move = (next) => {
+    __velarMoveLookSource(source, host, next);
+    host = next;
+  };
+  __velarGraphSetInsert(dynamic.listeners, move);
+  move(dynamic.host);
+  __velarObserver(() => {
+    source.rules = __velarLook([read()]).rules;
+    if (host) __velarApplyLooks(host);
+  }, "dom", scope);
+  scope.cleanups.push(() => {
+    __velarGraphSetRemove(dynamic.listeners, move);
+    move(null);
+  });
 }
 
 function __velarClassBindRoot(root, read, scope) {
-  __velarClassBind(__velarRootHost(root, "class"), read, scope);
+  const dynamic = root?.__velarDynamicRoot;
+  if (!dynamic) {
+    __velarClassBind(__velarRootHost(root, "class"), read, scope);
+    return;
+  }
+  const source = { names: [] };
+  let host = null;
+  const move = (next) => {
+    __velarMoveClassSource(source, host, next);
+    host = next;
+  };
+  __velarGraphSetInsert(dynamic.listeners, move);
+  move(dynamic.host);
+  __velarObserver(() => {
+    source.names = __velarClassNames(read());
+    if (host) __velarApplyClasses(host);
+  }, "dom", scope);
+  scope.cleanups.push(() => {
+    __velarGraphSetRemove(dynamic.listeners, move);
+    move(null);
+  });
 }
 
 function __velarClassNames(value) {
@@ -1687,6 +1982,23 @@ function __velarApplyClasses(element) {
   for (const name of previous) if (!next.has(name) && !base.has(name)) element.classList.remove(name);
   for (const name of next) element.classList.add(name);
   element.__velarManagedClasses = next;
+}
+
+function __velarMoveClassSource(source, previous, next) {
+  if (previous) {
+    const sources = __velarRuntime.classSources.get(previous);
+    if (sources) {
+      sources.delete(source);
+      if (sources.size === 0) __velarRuntime.classSources.delete(previous);
+    }
+    __velarApplyClasses(previous);
+  }
+  if (next) {
+    let sources = __velarRuntime.classSources.get(next);
+    if (!sources) { sources = new Set(); __velarRuntime.classSources.set(next, sources); }
+    sources.add(source);
+    __velarApplyClasses(next);
+  }
 }
 
 function __velarClassBind(element, read, scope) {
@@ -1795,14 +2107,26 @@ function __velarProp(props, name, fallback) {
 // its own observer that writes a reactive cell, and the props object exposes
 // tracked getters over those cells. The component call itself is untracked so
 // construction can never subscribe an enclosing dynamic region to prop reads.
-function __velarInstantiate(component, thunks, children, scope, namespace) {
+function __velarBindComponentRef(instance, setRef) {
+  if (setRef === undefined) return instance;
+  if (!instance || typeof instance.__bindRef !== "function") throw new TypeError("This component does not expose a Handle");
+  instance.__bindRef(setRef);
+  return instance;
+}
+
+function __velarInstantiate(component, thunks, children, scope, namespace, setRef) {
   if (component != null && component.__velarSnapshotProps === true) {
     // Runtime-implemented components (Head, Router, Link, NavLink) consume a
     // one-time plain snapshot so their strict record validation still holds.
     const snapshot = {};
-    for (const name of Object.getOwnPropertyNames(thunks)) snapshot[name] = __velarUntracked(thunks[name]);
+    const styleRead = thunks.__velarStyle;
+    for (const name of Object.getOwnPropertyNames(thunks)) {
+      if (name !== "__velarStyle") snapshot[name] = __velarUntracked(thunks[name]);
+    }
     if (children !== undefined) snapshot.children = __velarUntracked(children);
-    return __velarUntracked(() => component(snapshot, namespace));
+    const instance = __velarUntracked(() => component(snapshot, namespace));
+    if (styleRead !== undefined) __velarStyleBindRoot(instance.node, styleRead, scope);
+    return __velarBindComponentRef(instance, setRef);
   }
   const props = {};
   for (const name of Object.getOwnPropertyNames(thunks)) {
@@ -1812,19 +2136,19 @@ function __velarInstantiate(component, thunks, children, scope, namespace) {
     Object.defineProperty(props, name, { enumerable: true, get: () => cell.get() });
   }
   if (children !== undefined) Object.defineProperty(props, "children", { enumerable: true, value: __velarUntracked(children) });
-  return __velarUntracked(() => component(props, namespace));
+  return __velarBindComponentRef(__velarUntracked(() => component(props, namespace)), setRef);
 }
 
 // A component element in child position: one stable instance whose prop
 // observers live in a dedicated scope, destroyed only when the position
 // itself unmounts. Construction failures stay contained to the position.
-function __velarChild(component, thunks, children, scope, namespace) {
+function __velarChild(component, thunks, children, scope, namespace, setRef) {
   const childScope = __velarScope(scope.component);
   let constructed = false;
   scope.mounts.push(() => { if (constructed) __velarMountScope(childScope); });
   scope.cleanups.push(() => { if (constructed) __velarDestroyScope(childScope); });
   try {
-    const node = __velarUseComponent(__velarInstantiate(component, thunks, children, childScope, namespace), childScope);
+    const node = __velarUseComponent(__velarInstantiate(component, thunks, children, childScope, namespace, setRef), childScope);
     constructed = true;
     return node;
   } catch (error) {

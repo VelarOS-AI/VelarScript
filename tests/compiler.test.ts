@@ -132,6 +132,12 @@ async function linkWorkspaceWebExtension(projectRoot: string): Promise<void> {
   await symlink(resolve("packages/web"), join(scope, "web"), "dir");
 }
 
+async function linkWorkspaceDesktopExtension(projectRoot: string): Promise<void> {
+  const scope = join(projectRoot, "node_modules", "@velarscript");
+  await mkdir(scope, { recursive: true });
+  await symlink(resolve("packages/desktop"), join(scope, "desktop"), "dir");
+}
+
 test("compiles bindings, functions, and strict equality", () => {
   const result = compile(`
 export def double(value: number) -> number:
@@ -519,6 +525,101 @@ print(handler(request="ok"))
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "ok\n");
+});
+
+test("Promise and Function wrappers normalize to the existing Core callable types", async () => {
+  const result = compileCore(`
+type Done = Promise
+type Cleanup = Function
+type Reader = Function<string>
+type Writer = Function<string, null>
+type Compare = Function<string, number, bool>
+
+def apply<T, U>(value: T, transform: Function<T, U>) -> U:
+    return transform(value)
+
+async def save():
+    pass
+
+const pending: Promise = save()
+const cleanup: Cleanup = () => null
+const reader: Reader = () => "ready"
+const writer: Writer = value => print(value)
+const compare: Compare = (value, size) => value.size == size
+const canonical: (string) -> null = writer
+const wrapped: Function<string, null> = canonical
+
+print(reader())
+writer("written")
+print(compare("ok", 2))
+print(apply(4, value => f"number:{value}"))
+await pending
+cleanup()
+wrapped("wrapped")
+`.trimStart());
+
+  assert.deepEqual(result.diagnostics, []);
+  const symbols = result.semanticIndex.symbols;
+  assert.equal(symbols.find((item) => item.name === "pending")?.type, "Promise<null>");
+  assert.equal(symbols.find((item) => item.name === "cleanup")?.type, "() -> null");
+  assert.equal(symbols.find((item) => item.name === "reader")?.type, "() -> string");
+  assert.equal(symbols.find((item) => item.name === "writer")?.type, "(string) -> null");
+  assert.equal(symbols.find((item) => item.name === "compare")?.type, "(string, number) -> bool");
+  assert.equal(symbols.find((item) => item.name === "canonical")?.type, "(string) -> null");
+  assert.equal(symbols.find((item) => item.name === "wrapped")?.type, "(string) -> null");
+  assert.equal(describeType(result.moduleInterface.typeAliases.get("Done")!), "Promise<null>");
+  assert.equal(describeType(result.moduleInterface.typeAliases.get("Cleanup")!), "() -> null");
+  assert.equal(describeType(result.moduleInterface.typeAliases.get("Reader")!), "() -> string");
+  assert.equal(describeType(result.moduleInterface.typeAliases.get("Writer")!), "(string) -> null");
+  assert.equal(describeType(result.moduleInterface.typeAliases.get("Compare")!), "(string, number) -> bool");
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "ready\nwritten\ntrue\nnumber:4\nwrapped\n");
+
+  const directory = await mkdtemp(join(tmpdir(), "velar-type-wrapper-contract-"));
+  const libraryPath = join(directory, "library.vel");
+  const consumerPath = join(directory, "consumer.vel");
+  await writeFile(libraryPath, `
+export type Done = Promise
+export type Transform = Function<string, number>
+
+export async def finish():
+    pass
+
+export const transform: Transform = value => value.size
+`.trimStart(), "utf8");
+  await writeFile(consumerPath, `
+import {Done, finish, transform, Transform} from "./library.vel"
+
+const pending: Done = finish()
+const canonical: (string) -> number = transform
+const wrapped: Transform = canonical
+await pending
+print(wrapped("Velar"))
+`.trimStart(), "utf8");
+  const project = await compileProjectCore(consumerPath);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const consumerSymbols = project.modules.find((module) => module.inputPath === consumerPath)?.result.semanticIndex.symbols;
+  assert.equal(consumerSymbols?.find((item) => item.name === "pending")?.type, "Promise<null>");
+  assert.equal(consumerSymbols?.find((item) => item.name === "wrapped")?.type, "(string) -> number");
+
+  const emptyFunction = compileCore("const callback: Function<> = () => null\n");
+  assert.deepEqual(emptyFunction.diagnostics.map((item) => item.message), [
+    "Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result",
+  ]);
+  const invalidPromise = compileCore("const pending: Promise<string, number> = null\n");
+  assert.ok(invalidPromise.diagnostics.some((item) => /Type 'Promise' expects 1 type argument/u.test(item.message)));
+  const nestedPromise = compileCore("async def invalid() -> Promise:\n    pass\n");
+  assert.ok(nestedPromise.diagnostics.some((item) => item.code === "VEL4018" && /not '-> Promise<T>'/u.test(item.message)));
+  for (const runtimeName of ["Function", "Promise"]) {
+    const runtimeConstructor = compileCore(`${runtimeName}()\n`);
+    assert.ok(runtimeConstructor.diagnostics.some((item) => item.message === `Unknown name '${runtimeName}'`));
+  }
+
+  const formatted = formatSource("const callback: Function < string, number, bool > = (text, size) => true\n");
+  assert.equal(formatted, "const callback: Function<string, number, bool> = (text, size) => true\n");
+  assert.equal(formatSource(formatted), formatted);
 });
 
 test("override implementations keep parameter names local while declarations own named-call labels", () => {
@@ -1240,8 +1341,8 @@ const unsafeSpread: Outer = {...aliasedOuter}
     { kind: "union", members: [{ kind: "number" }, { kind: "string" }] },
   ), true);
   assert.equal(sameType(
-    { kind: "componentConstructor", name: "Card", props: new Map([["title", { kind: "string" }]]), requiredProps: new Set(["title"]) },
-    { kind: "componentConstructor", name: "Card", props: new Map([["count", { kind: "number" }]]), requiredProps: new Set(["count"]) },
+    { kind: "componentConstructor", name: "Card", props: new Map([["title", { kind: "string" }]]), requiredProps: new Set(["title"]), handle: null },
+    { kind: "componentConstructor", name: "Card", props: new Map([["count", { kind: "number" }]]), requiredProps: new Set(["count"]), handle: null },
   ), false);
   assert.equal(sameType(
     { kind: "intrinsic", name: "json.stringify", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
@@ -2730,7 +2831,7 @@ test("type annotations guide familiar JavaScript and Python spellings without pa
     ["const value: boolean = true\n", /Use 'bool'/u],
     ["const value: void = null\n", /Use 'null'/u],
     ["const value: object = {}\n", /Declare a named 'type'/u],
-    ["const callback: Function = value => value\n", /explicit function type/u],
+    ["const callback: Callable = value => value\n", /explicit function type/u],
   ] as const;
   for (const [source, expected] of spellings) {
     const result = compile(source);
@@ -14596,7 +14697,11 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(createdPackage.scripts["verify:deployment"], "velar verify-deployment");
   assert.match(await readFile(join(projectRoot, "src", "main.vel"), "utf8"), /import \{App\} from "\.\/app\.vel"/u);
   const generatedApp = await readFile(join(projectRoot, "src", "app.vel"), "utf8");
-  assert.match(generatedApp, /Built with Velar/u);
+  assert.match(generatedApp, /VelarScript Web/u);
+  assert.equal(
+    await readFile(join(projectRoot, "public", "velarscript-mark.svg"), "utf8"),
+    await readFile(resolve("assets/brand/velarscript-mark.svg"), "utf8"),
+  );
   assert.match(await readFile(join(projectRoot, "src", "app.test.vel"), "utf8"), /test_application_contract/u);
   assert.match(await readFile(join(projectRoot, "src", "app.browser.test.vel"), "utf8"), /browser\.open/u);
   await linkWorkspaceWebExtension(projectRoot);
@@ -14711,12 +14816,49 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(componentBuild.status, 0, componentBuild.stderr);
   await verifyProductionBuild(join(componentRoot, "dist"));
 
+  const nodeRoot = join(directory, "hello-node");
+  const nodeCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", nodeRoot, "--template", "node"], { cwd: directory, encoding: "utf8" });
+  assert.equal(nodeCreate.status, 0, nodeCreate.stderr);
+  assert.match(nodeCreate.stdout, /Created VelarScript node project/u);
+  const nodePackage = JSON.parse(await readFile(join(nodeRoot, "package.json"), "utf8")) as {
+    dependencies: Record<string, string>;
+    scripts: Record<string, string>;
+  };
+  assert.equal(nodePackage.dependencies["@velarscript/node"], "^0.10.0");
+  assert.equal(nodePackage.scripts.dev, "velar run");
+  assert.match(await readFile(join(nodeRoot, "src", "app.vel"), "utf8"), /from "velar\/serve"/u);
+  assert.match(await readFile(join(nodeRoot, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
+  const nodeCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", nodeRoot], { cwd: directory, encoding: "utf8" });
+  assert.equal(nodeCheck.status, 0, nodeCheck.stderr);
+  const nodeTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", nodeRoot], { cwd: directory, encoding: "utf8" });
+  assert.equal(nodeTest.status, 0, nodeTest.stderr);
+  assert.match(nodeTest.stdout, /app\.test\.vel :: test_node_application_contract/u);
+
+  const desktopRoot = join(directory, "hello-desktop");
+  const desktopCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", desktopRoot, "--template=desktop"], { cwd: directory, encoding: "utf8" });
+  assert.equal(desktopCreate.status, 0, desktopCreate.stderr);
+  assert.match(desktopCreate.stdout, /Created VelarScript desktop project/u);
+  const desktopPackage = JSON.parse(await readFile(join(desktopRoot, "package.json"), "utf8")) as {
+    dependencies: Record<string, string>;
+    scripts: Record<string, string>;
+  };
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "^0.10.0");
+  assert.equal(desktopPackage.scripts.package, "velar-desktop build");
+  assert.match(await readFile(join(desktopRoot, "src", "app.vel"), "utf8"), /VelarScript Desktop/u);
+  assert.match(await readFile(join(desktopRoot, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
+  await linkWorkspaceDesktopExtension(desktopRoot);
+  const desktopCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", desktopRoot], { cwd: directory, encoding: "utf8" });
+  assert.equal(desktopCheck.status, 0, desktopCheck.stderr);
+  const desktopTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", desktopRoot], { cwd: directory, encoding: "utf8" });
+  assert.equal(desktopTest.status, 0, desktopTest.stderr);
+  assert.match(desktopTest.stdout, /app\.test\.vel :: test_desktop_application_contract/u);
+
   const unavailableGame = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", join(directory, "game"), "--template", "game"], { cwd: directory, encoding: "utf8" });
   assert.equal(unavailableGame.status, 2);
   assert.match(unavailableGame.stderr, /reserved for the future @velarscript\/game/u);
-  const unknownTemplate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", join(directory, "unknown"), "--template=desktop"], { cwd: directory, encoding: "utf8" });
+  const unknownTemplate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", join(directory, "unknown"), "--template=mobile"], { cwd: directory, encoding: "utf8" });
   assert.equal(unknownTemplate.status, 2);
-  assert.match(unknownTemplate.stderr, /unknown template 'desktop'/u);
+  assert.match(unknownTemplate.stderr, /unknown template 'mobile'/u);
 
   const legacyRoot = join(directory, "legacy");
   await mkdir(legacyRoot);
@@ -14744,7 +14886,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
 
   const createHelp = spawnSync(process.execPath, [cli, "help", "create"], { encoding: "utf8" });
   assert.equal(createHelp.status, 0, createHelp.stderr);
-  assert.match(createHelp.stdout, /--template <web\|docs\|library\|component>/u);
+  assert.match(createHelp.stdout, /--template <web\|node\|desktop\|docs\|library\|component>/u);
 
   const addHelp = spawnSync(process.execPath, [cli, "help", "add"], { encoding: "utf8" });
   assert.equal(addHelp.status, 0, addHelp.stderr);
@@ -18845,6 +18987,7 @@ component Chart:
   assert.ok(propCompletions.some((item) => item.label === "onChoose" && item.detail === "(string) -> null"));
   assert.ok(propCompletions.some((item) => item.label === "key"));
   assert.ok(propCompletions.some((item) => item.label === "look:color" && item.detail === "inline checked Look property"));
+  assert.ok(propCompletions.some((item) => item.label === "style:color" && item.detail?.includes("high-priority inline Style")));
   assert.ok(!propCompletions.some((item) => item.label === "const"));
   const nativeAttribute = itemSource.indexOf("type=\"button\"");
   assert.equal(projectCompletionContextAt(valid, itemPath, nativeAttribute), "extension:@velarscript/web:native-attribute");
@@ -18852,6 +18995,7 @@ component Chart:
   assert.ok(nativeCompletions.some((item) => item.label === "aria-label"));
   assert.ok(nativeCompletions.some((item) => item.label === "on:click"));
   assert.ok(nativeCompletions.some((item) => item.label === "look:display" && item.detail === "inline checked Look property"));
+  assert.ok(nativeCompletions.some((item) => item.label === "style:display" && item.detail?.includes("prefer Look")));
   assert.ok(!nativeCompletions.some((item) => item.label === "while"));
   const componentTag = validSource.indexOf("<Choice") + "<Ch".length;
   assert.equal(projectCompletionContextAt(valid, validPath, componentTag), "extension:@velarscript/web:jsx-tag");
@@ -23174,6 +23318,501 @@ mount(<Counter start={1} />, "#app")
   assert.ok(domCommit >= 0 && watchCommit > domCommit);
 });
 
+test("Component contracts check passed component values by named JSX props", () => {
+  const source = `
+type Row:
+    label: string
+
+type RowView = Component<(row: Row, compact?: bool) -> WebNode>
+
+component Detailed(row: Row, compact: bool = false, tracking: string = "none"):
+    return <article data-compact={compact}>{row.label}:{tracking}</article>
+
+component Decoration(tone: string = "quiet"):
+    return <aside>{tone}</aside>
+
+component Host(View: RowView, row: Row):
+    return <View row={row} compact />
+
+component App:
+    const empty: Component = Decoration
+    return <Host View={Detailed} row={{label: "Ada"}} />
+`.trimStart();
+  const result = compile(source, { path: "/tmp/component-contract.vel" });
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.kind === "parameter" && symbol.name === "View")?.type,
+    "Component<(row: readonly Row, compact?: bool) -> WebNode>");
+  const tagStart = source.indexOf("<View") + 1;
+  assert.ok(result.semanticIndex.references.some((reference) => reference.name === "View"
+    && reference.span.start === tagStart && reference.span.end === tagStart + "View".length));
+  assert.match(result.code ?? "", /__velarDynamicComponent\(\(__dynamicScope\) => __velarChild\(View\.get\(\)/u);
+  assert.match(formatSource("type View = Component<(label: string, compact?: bool) -> WebNode>\n"), /compact\?: bool/u);
+
+  const incompatible = compile(`
+type Row:
+    label: string
+
+type RowView = Component<(row: Row, compact?: bool) -> WebNode>
+
+component WrongType(row: string, compact: bool = false):
+    return <p>{row}</p>
+
+component ExtraRequired(row: Row, mode: string, compact: bool = false):
+    return <p>{row.label}:{mode}</p>
+
+component MissingAcceptedProp(row: Row):
+    return <p>{row.label}</p>
+
+component RequiredDecoration(tone: string):
+    return <p>{tone}</p>
+
+const wrongType: RowView = WrongType
+const extraRequired: RowView = ExtraRequired
+const missingAccepted: RowView = MissingAcceptedProp
+const zeroProp: Component = RequiredDecoration
+`.trimStart());
+  assert.equal(incompatible.diagnostics.filter((item) => /Cannot assign component/u.test(item.message)).length, 4,
+    JSON.stringify(incompatible.diagnostics));
+
+  const invalidSignatures = compile(`
+component Plain(label: string):
+    return <p>{label}</p>
+
+const unnamed: Component<(string) -> WebNode> = Plain
+const wrongResult: Component<(label: string) -> string> = Plain
+const restProps: Component<(...labels: string) -> WebNode> = Plain
+const duplicate: Component<(label: string, label?: string) -> WebNode> = Plain
+`.trimStart());
+  assert.ok(invalidSignatures.diagnostics.some((item) => /Every Component signature prop requires a name/u.test(item.message)));
+  assert.ok(invalidSignatures.diagnostics.some((item) => /must return WebNode/u.test(item.message)));
+  assert.ok(invalidSignatures.diagnostics.some((item) => /cannot declare a rest parameter/u.test(item.message)));
+  assert.ok(invalidSignatures.diagnostics.some((item) => /declared more than once/u.test(item.message)));
+
+  const coreOnly = compileCore("const View: Component = null\n");
+  assert.ok(coreOnly.diagnostics.some((item) => /Unknown type 'Component'/u.test(item.message)));
+
+  const directCall = compile("component Host(View: Component):\n    return View()\n");
+  assert.ok(directCall.diagnostics.some((item) => /Render a Component value with JSX/u.test(item.message)));
+
+  const invalidJsx = compile(`
+type Row:
+    label: string
+type RowView = Component<(row: Row, compact?: bool) -> WebNode>
+component Host(View: RowView):
+    return <View compact surprise="no">children</View>
+`.trimStart());
+  assert.ok(invalidJsx.diagnostics.some((item) => item.code === "VEL5012" && /requires prop 'row'/u.test(item.message)));
+  assert.ok(invalidJsx.diagnostics.some((item) => item.code === "VEL5013" && /has no prop 'surprise'/u.test(item.message)));
+  assert.ok(invalidJsx.diagnostics.some((item) => item.code === "VEL5018" && /does not declare JSX children/u.test(item.message)));
+});
+
+test("Component contracts retain their props across project module interfaces", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-component-contract-"));
+  const libraryPath = join(directory, "views.vel");
+  const appPath = join(directory, "app.vel");
+  await writeFile(libraryPath, `
+export type RowView = Component<(label: string, compact?: bool) -> WebNode>
+
+export component Label(label: string, compact: bool = false):
+    return <p data-compact={compact}>{label}</p>
+
+export component Host(View: RowView, label: string):
+    return <View label={label} />
+`.trimStart(), "utf8");
+  await writeFile(appPath, `
+import {Host, Label} from "./views.vel"
+
+component App:
+    return <Host View={Label} label="Ada" />
+`.trimStart(), "utf8");
+  const valid = await compileProject(appPath);
+  assert.deepEqual(valid.failures, []);
+  assert.deepEqual(valid.modules.flatMap((module) => module.result.diagnostics), []);
+  const library = valid.modules.find((module) => module.inputPath === libraryPath)?.result;
+  assert.equal(library?.semanticIndex.symbols.find((symbol) => symbol.name === "RowView")?.type,
+    "Component<(label: string, compact?: bool) -> WebNode>");
+  const exportedHost = library?.moduleInterface.exports.get("Host");
+  assert.equal(exportedHost?.kind, "componentConstructor");
+  assert.equal(exportedHost?.kind === "componentConstructor" ? exportedHost.props.get("View")?.kind : null, "component");
+
+  await writeFile(appPath, `
+import {Host} from "./views.vel"
+
+component Incompatible(label: string, mode: string):
+    return <p>{label}:{mode}</p>
+
+component App:
+    return <Host View={Incompatible} label="Ada" />
+`.trimStart(), "utf8");
+  const invalid = await compileProject(appPath);
+  const diagnostics = invalid.modules.flatMap((module) => module.result.diagnostics);
+  assert.ok(diagnostics.some((diagnostic) => /Cannot assign component Incompatible/u.test(diagnostic.message)),
+    JSON.stringify(diagnostics));
+});
+
+test("component refs expose typed Handles without weakening props or style hosts", () => {
+  const source = `
+type EditorHandle:
+    focus: () -> null
+    reset: () -> null
+    value: () -> string
+
+type EditorView = Component<(initial?: string) -> WebNode, EditorHandle>
+
+const editorLook = look:
+    borderColor = "red"
+
+component Editor(initial: string = "draft") exposes EditorHandle:
+    state text = initial
+
+    def focusEditor() -> null:
+        pass
+
+    def reset() -> null:
+        text = initial
+
+    def value() -> string:
+        return text
+
+    expose {focus: focusEditor, reset, value}
+    return <input host bind:value={text} />
+
+component App(View: EditorView = Editor):
+    let editor: EditorHandle? = null
+    return <View ref={editor} class="compact" look={editorLook} look:borderWidth={2px} />
+`.trimStart();
+  const result = compile(source);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "EditorView")?.type,
+    "Component<(initial?: string) -> WebNode, EditorHandle>");
+  assert.match(result.code ?? "", /const __handle = __velarComponentHandle\(\{ focus: focusEditor, reset: reset, value: value \}, "Editor"\)/u);
+  assert.match(result.code ?? "", /__velarChild\(View\.get\(\), \{ class: \(\) => \("compact"\), look: \(\) => \(__velarLook/u);
+  assert.match(result.code ?? "", /\(next, previous\) => \{ if \(previous === undefined \|\| editor === previous\) editor = next; \}/u);
+  assert.doesNotMatch(result.code ?? "", /\{ ref: \(\) =>/u);
+  const formattedHandle = formatSource("component Control exposes Handle:\n  expose {run:run}\n  return <div />\n");
+  assert.match(formattedHandle, /component Control exposes Handle:\n\s+expose \{run: run\}/u);
+  assert.equal(formatSource(formattedHandle), formattedHandle);
+
+  const afterReturn = compile(`
+type Handle:
+    run: () -> null
+
+component AfterReturn exposes Handle:
+    def run() -> null:
+        pass
+    return <div>Ready</div>
+    expose {run}
+`.trimStart());
+  assert.deepEqual(afterReturn.diagnostics, []);
+  const afterReturnCode = afterReturn.code ?? "";
+  const afterReturnStart = afterReturnCode.indexOf("function AfterReturn");
+  const rootIndex = afterReturnCode.indexOf("const __root =", afterReturnStart);
+  const handleIndex = afterReturnCode.indexOf("const __handle =", afterReturnStart);
+  assert.ok(afterReturnStart >= 0 && rootIndex > afterReturnStart && handleIndex > rootIndex,
+    afterReturnCode.slice(Math.max(0, afterReturnStart), handleIndex + 80));
+
+  const invalid = compile(`
+type Handle:
+    run: () -> null
+
+type OtherHandle:
+    close: () -> null
+
+type HandledView = Component<() -> WebNode, Handle>
+type InvalidView = Component<() -> WebNode, string>
+
+component Controlled exposes Handle:
+    def run() -> null:
+        pass
+    expose {run}
+    return <button>Run</button>
+
+component Plain:
+    return <div>Plain</div>
+
+component Missing exposes Handle:
+    return <div>Missing</div>
+
+component Undeclared:
+    def run() -> null:
+        pass
+    expose {run}
+    return <div>Undeclared</div>
+
+component Duplicate exposes Handle:
+    def run() -> null:
+        pass
+    expose {run}
+    expose {run}
+    return <div>Duplicate</div>
+
+component InvalidHandle exposes string:
+    expose "wrong"
+    return <div>Wrong</div>
+
+component Mismatched exposes Handle:
+    expose {}
+    return <div>Mismatch</div>
+
+component Reserved(ref: Handle? = null):
+    return <div>Reserved</div>
+
+component App:
+    let fixed: Handle = {run: () => null}
+    let wrong: OtherHandle? = null
+    let plain: Handle? = null
+    state reactive: Handle? = null
+    return <main>
+        <Controlled ref={fixed} />
+        <Controlled ref={wrong} />
+        <Controlled ref={reactive} />
+        <Plain ref={plain} />
+    </main>
+
+const missingHandle: HandledView = Plain
+`.trimStart());
+  const messages = invalid.diagnostics.map((item) => item.message).join("\n");
+  assert.match(messages, /does not provide an expose value/u);
+  assert.match(messages, /uses 'expose' without declaring/u);
+  assert.match(messages, /more than one expose declaration/u);
+  assert.match(messages, /Handle must be a concrete record type/u);
+  assert.match(messages, /Object is missing required field 'run'/u);
+  assert.match(messages, /'ref' is a compiler-owned JSX directive/u);
+  assert.match(messages, /ref requires Handle\? so cleanup can restore null/u);
+  assert.match(messages, /stores OtherHandle/u);
+  assert.match(messages, /component ref requires a mutable let binding/u);
+  assert.match(messages, /does not expose a Handle/u);
+  assert.match(messages, /Cannot assign component Plain to Component<\(\) -> WebNode, Handle>/u);
+  assert.match(messages, /Component Handle must be a concrete record type, received string/u);
+
+  const misplaced = compile(`
+type Handle:
+    run: () -> null
+
+expose {run: () => null}
+
+component Nested exposes Handle:
+    if true:
+        expose {run: () => null}
+    return <div>Nested</div>
+`.trimStart());
+  assert.ok(misplaced.diagnostics.filter((item) => /'expose' is only valid as a top-level component item/u.test(item.message)).length >= 2,
+    JSON.stringify(misplaced.diagnostics));
+});
+
+test("component Handle contracts survive project module interfaces", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-component-handle-contract-"));
+  const libraryPath = join(directory, "dialog.vel");
+  const appPath = join(directory, "app.vel");
+  await writeFile(libraryPath, `
+export type DialogHandle:
+    open: () -> null
+    close: () -> null
+
+export type DialogView = Component<(title: string) -> WebNode, DialogHandle>
+
+export component Dialog(title: string) exposes DialogHandle:
+    def open() -> null:
+        print("open:" + title)
+
+    def close() -> null:
+        print("close:" + title)
+
+    expose {open, close}
+    return <dialog>{title}</dialog>
+`.trimStart(), "utf8");
+  await writeFile(appPath, `
+import {Dialog, DialogHandle, DialogView} from "./dialog.vel"
+
+const View: DialogView = Dialog
+
+component App:
+    let dialog: DialogHandle? = null
+    return <View ref={dialog} title="Confirm" />
+`.trimStart(), "utf8");
+  const valid = await compileProject(appPath);
+  assert.deepEqual(valid.failures, []);
+  assert.deepEqual(valid.modules.flatMap((module) => module.result.diagnostics), []);
+  const library = valid.modules.find((module) => module.inputPath === libraryPath)?.result;
+  const exported = library?.moduleInterface.exports.get("Dialog");
+  assert.equal(exported?.kind, "componentConstructor");
+  assert.equal(exported?.kind === "componentConstructor" ? describeType(exported.handle ?? { kind: "null" }) : null, "DialogHandle");
+
+  await writeFile(appPath, `
+import {Dialog} from "./dialog.vel"
+
+type WrongHandle:
+    toggle: () -> null
+
+component App:
+    let dialog: WrongHandle? = null
+    return <Dialog ref={dialog} title="Confirm" />
+`.trimStart(), "utf8");
+  const invalid = await compileProject(appPath);
+  assert.ok(invalid.modules.flatMap((module) => module.result.diagnostics)
+    .some((item) => /this ref stores WrongHandle/u.test(item.message)));
+});
+
+test("component Handle refs follow instance identity, clear on cleanup, and revoke stale aliases", () => {
+  const result = compile(`
+type CounterHandle:
+    increment: () -> null
+    value: () -> number
+
+type CounterView = Component<() -> WebNode, CounterHandle>
+
+state visible = true
+state currentView: CounterView = Counter
+let conditionalCounter: CounterHandle? = null
+let selectedCounter: CounterHandle? = null
+
+component Counter exposes CounterHandle:
+    state count = 0
+
+    def increment() -> null:
+        count += 1
+
+    def value() -> number:
+        return count
+
+    expose {increment, value}
+
+    cleanup:
+        print("counter-cleanup")
+
+    return <button>{count}</button>
+
+component Alternate exposes CounterHandle:
+    state count = 10
+
+    def increment() -> null:
+        count += 1
+
+    def value() -> number:
+        return count
+
+    expose {increment, value}
+
+    cleanup:
+        print("alternate-cleanup")
+
+    return <button>{count}</button>
+
+component Host(View: CounterView):
+    return <View ref={selectedCounter} />
+
+component App:
+    mounted:
+        if conditionalCounter:
+            print("parent-mounted")
+            conditionalCounter.increment()
+
+    return <main>
+        {visible ? <Counter ref={conditionalCounter} /> : null}
+        <Host View={currentView} />
+    </main>
+
+mount(<App />, "#app")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+
+  const dom = `
+class FakeNode {
+  constructor(nodeType, tagName = "", value = "") {
+    this.nodeType = nodeType;
+    this.tagName = tagName;
+    this.value = value;
+    this.childNodes = [];
+    this.parentNode = null;
+    this.attributes = new Map();
+  }
+  static detach(node) {
+    if (!node.parentNode) return;
+    const siblings = node.parentNode.childNodes;
+    const index = siblings.indexOf(node);
+    if (index !== -1) siblings.splice(index, 1);
+    node.parentNode = null;
+  }
+  static insert(parent, node, before) {
+    if (node.nodeType === 11) {
+      for (const child of [...node.childNodes]) FakeNode.insert(parent, child, before);
+      return;
+    }
+    FakeNode.detach(node);
+    node.parentNode = parent;
+    const index = before === null ? -1 : parent.childNodes.indexOf(before);
+    if (index === -1) parent.childNodes.push(node);
+    else parent.childNodes.splice(index, 0, node);
+  }
+  append(...values) { for (const value of values) FakeNode.insert(this, value, null); }
+  insertBefore(node, before = null) { FakeNode.insert(this, node, before); return node; }
+  before(...values) { for (const value of values) FakeNode.insert(this.parentNode, value, this); }
+  remove() { FakeNode.detach(this); }
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  removeAttribute(name) { this.attributes.delete(name); }
+  getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
+  querySelectorAll() {
+    const output = [];
+    const visit = (node) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 1) output.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return output;
+  }
+}
+const target = new FakeNode(1, "root");
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement(tag) { return new FakeNode(1, tag); },
+  createTextNode(value) { return new FakeNode(3, "", String(value)); },
+  createComment(value) { return new FakeNode(8, "", String(value)); },
+  createDocumentFragment() { return new FakeNode(11); },
+  querySelector(selector) { return selector === "#app" ? target : null; },
+};
+`;
+  const execution = executeModule(`${dom}\n${result.code ?? ""}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+await flush();
+const first = conditionalCounter;
+const selectedFirst = selectedCounter;
+console.log("initial:" + first.value() + ":" + selectedFirst.value() + ":" + Object.isFrozen(first));
+first.increment();
+await flush();
+console.log("incremented:" + first.value());
+try { first.increment = () => null; } catch (error) { console.log("frozen:" + error.name); }
+currentView.set(Alternate);
+await flush();
+const selectedSecond = selectedCounter;
+console.log("switched:" + (selectedSecond !== null && selectedSecond !== selectedFirst) + ":" + selectedSecond.value());
+try { selectedFirst.increment(); } catch (error) { console.log("stale-dynamic:" + error.message); }
+visible.set(false);
+await flush();
+console.log("cleared:" + (conditionalCounter === null) + ":" + (selectedCounter === selectedSecond) + ":" + selectedSecond.value());
+try { first.increment(); } catch (error) { console.log("stale-static:" + error.message); }
+visible.set(true);
+await flush();
+console.log("replaced:" + (conditionalCounter !== null && conditionalCounter !== first) + ":" + conditionalCounter.value());
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "parent-mounted",
+    "initial:1:0:true",
+    "incremented:2",
+    "frozen:TypeError",
+    "counter-cleanup",
+    "switched:true:10",
+    "stale-dynamic:Component Counter Handle is no longer active",
+    "counter-cleanup",
+    "cleared:true:true:10",
+    "stale-static:Component Counter Handle is no longer active",
+    "replaced:true:0",
+    "",
+  ].join("\n"));
+});
+
 test("Web lexical extensions share Core line-boundary semantics", () => {
   const source = [
     "const cardLook = look:",
@@ -23372,6 +24011,174 @@ component Broken:
   assert.match(messages, /duplicate attributes/u);
 });
 
+test("component callers override component-owned Look state properties", () => {
+  const result = compile(`
+const internalLook = look:
+    color = "black"
+
+    if @hover:
+        color = "red"
+
+const callerLook = look:
+    if @hover:
+        color = "blue"
+
+component Control:
+    return <button look={internalLook}>Control</button>
+
+component App:
+    return <Control look={callerLook} />
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\]\[data-velar-look\]:where\(:hover\)/u);
+
+  const execution = executeModule(`
+class FakeNode {
+  constructor(nodeType = 1, value = "") {
+    this.nodeType = nodeType;
+    this.value = value;
+    this.childNodes = [];
+    this.attributes = new Map();
+    const properties = new Map();
+    this.style = {
+      properties,
+      setProperty: (name, next) => properties.set(name, String(next)),
+      removeProperty: (name) => properties.delete(name),
+    };
+  }
+  append(...values) { this.childNodes.push(...values); }
+  remove() {}
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  removeAttribute(name) { this.attributes.delete(name); }
+}
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement() { return new FakeNode(); },
+  createTextNode(value) { return new FakeNode(3, String(value)); },
+  createComment(value) { return new FakeNode(8, String(value)); },
+  createDocumentFragment() { return new FakeNode(11); },
+};
+${result.code ?? ""}
+const app = App();
+const node = app.node;
+const tokens = new Set((node.attributes.get("data-velar-look") ?? "").split(" "));
+console.log((node.style.properties.get("--velar-look-hover-color") ?? "missing") + ":" + tokens.has("hover:color"));
+app.destroy();
+console.log((node.style.properties.get("--velar-look-hover-color") ?? "missing") + ":" + node.attributes.has("data-velar-look"));
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "blue:true\nmissing:false\n");
+});
+
+test("JSX style directives provide checked high-priority inline overrides on native and component hosts", () => {
+  const result = compile(`
+state tone: string? = "purple"
+
+component Panel:
+    return <div style:color="green">Note</div>
+
+component App:
+    return <Panel look:color="blue" style:color={tone} style:padding={12px} />
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarStyle: \(\) => \(\{ "color": \(tone\.get\(\) \?\? null\), "padding": "12px" \}\)/u);
+  assert.match(result.code ?? "", /__velarStyleBindRoot/u);
+  assert.match(result.code ?? "", /element\.style\.setProperty\(property/u);
+  assert.match(result.css ?? "", /base:color/u);
+  assert.doesNotMatch(result.css ?? "", /padding:var/u);
+
+  const dom = `
+class FakeNode {
+  constructor(nodeType = 1, value = "") {
+    this.nodeType = nodeType;
+    this.value = value;
+    this.childNodes = [];
+    this.attributes = new Map();
+    const properties = new Map();
+    const priorities = new Map();
+    this.style = {
+      properties,
+      getPropertyValue: (name) => properties.get(name) ?? "",
+      getPropertyPriority: (name) => priorities.get(name) ?? "",
+      setProperty: (name, next, priority = "") => {
+        properties.set(name, String(next));
+        if (priority) priorities.set(name, priority); else priorities.delete(name);
+      },
+      removeProperty: (name) => { properties.delete(name); priorities.delete(name); },
+    };
+  }
+  append(...values) { this.childNodes.push(...values); }
+  remove() {}
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  removeAttribute(name) { this.attributes.delete(name); }
+}
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement() { return new FakeNode(); },
+  createTextNode(value) { return new FakeNode(3, String(value)); },
+  createComment(value) { return new FakeNode(8, String(value)); },
+  createDocumentFragment() { return new FakeNode(11); },
+};
+`;
+  const execution = executeModule(`${dom}\n${result.code ?? ""}
+const app = App();
+const node = app.node;
+const read = (name) => node.style.properties.get(name) ?? "missing";
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+console.log("initial:" + read("color") + ":" + read("padding") + ":" + read("--velar-look-base-color"));
+tone.set(null);
+await flush();
+console.log("removed:" + read("color") + ":" + read("padding") + ":" + read("--velar-look-base-color"));
+tone.set("orange");
+await flush();
+console.log("updated:" + read("color") + ":" + read("padding"));
+app.destroy();
+console.log("cleanup:" + read("color") + ":" + read("padding") + ":" + read("--velar-look-base-color"));
+let snapshotReceivedInternalStyle = false;
+function Snapshot(props) {
+  snapshotReceivedInternalStyle = Object.prototype.hasOwnProperty.call(props, "__velarStyle");
+  return { __velarComponent: true, node: new FakeNode(), __mount() {}, destroy() {} };
+}
+Snapshot.__velarSnapshotProps = true;
+const snapshotScope = __velarScope();
+const snapshot = __velarInstantiate(Snapshot, { __velarStyle: () => ({ color: "navy" }) }, undefined, snapshotScope, "html", undefined);
+console.log("snapshot:" + (snapshot.node.style.properties.get("color") ?? "missing") + ":" + snapshotReceivedInternalStyle);
+__velarDestroyScope(snapshotScope);
+console.log("snapshot-cleanup:" + (snapshot.node.style.properties.get("color") ?? "missing"));
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "initial:purple:12px:blue",
+    "removed:missing:12px:blue",
+    "updated:orange:12px",
+    "cleanup:missing:missing:missing",
+    "snapshot:navy:false",
+    "snapshot-cleanup:missing",
+    "",
+  ].join("\n"));
+  assert.match(formatSource("component Styled:\n    return <div style:color=\"red\" style:padding={12px}>ok</div>\n"),
+    /style:color="red" style:padding=\{12px\}/u);
+
+  const invalid = compile(`
+component Broken:
+    return <div
+        style="color:red"
+        style:missing={12px}
+        style:hover:color="red"
+        style:gap={true}
+        style:color="red"
+        style:color="blue"
+    >Broken</div>
+`.trimStart());
+  const messages = invalid.diagnostics.map((item) => item.message).join("\n");
+  assert.equal(invalid.diagnostics.filter((item) => item.code === "VEL5041").length, 1);
+  assert.match(messages, /Unknown inline Style property 'missing'/u);
+  assert.match(messages, /Unknown inline Style property 'hover:color'/u);
+  assert.match(messages, /Cannot assign bool/u);
+  assert.match(messages, /duplicate attributes/u);
+  assert.doesNotMatch(invalid.code ?? "", /__velarStaticAttr\([^\n]*"style"/u);
+});
+
 test("unsafe CSS imports are explicit resources around the controlled Look segment", () => {
   const source = `
 import {rgb} from "velar/look"
@@ -23464,7 +24271,7 @@ component Card:
   assert.match(messages, /Unknown Look property 'missing'/u);
   assert.match(messages, /Unknown Look hook '@unknown'/u);
   assert.match(messages, /Unknown Look target '@unknownTarget'/u);
-  assert.equal(result.diagnostics.filter((item) => item.code === "VEL5041").length, 2);
+  assert.equal(result.diagnostics.filter((item) => item.code === "VEL5041").length, 1);
 
   const nestedComposition = compile(`
 import {rgb} from "velar/look"
@@ -24805,6 +25612,162 @@ console.log("list:" + dump("#list"));
     "row-cleanup:c",
     "row-cleanup:b",
     'list:<ul><article data-id="a" data-stamp="1"></article></ul>',
+    "",
+  ].join("\n"));
+});
+test("reactive Component identity remounts the selected child and forwards the host contract", () => {
+  const result = compile(`
+type SwitchView = Component<(label: string) -> WebNode>
+
+state currentView: SwitchView = Alpha
+state label = "one"
+let alphaBuilds = 0
+let betaBuilds = 0
+
+const outerLook = look:
+    color = "red"
+
+component Alpha(label: string):
+    alphaBuilds += 1
+    const stamp = alphaBuilds
+    mounted:
+        print("mounted:alpha")
+    cleanup:
+        print("cleanup:alpha")
+    return <article class="alpha" data-stamp={stamp}>{label}</article>
+
+component Beta(label: string):
+    betaBuilds += 1
+    const stamp = betaBuilds
+    mounted:
+        print("mounted:beta")
+    cleanup:
+        print("cleanup:beta")
+    return <section class="beta" data-stamp={stamp}>{label}</section>
+
+component Host(View: SwitchView, label: string):
+    return <View label={label} />
+
+component App:
+    return <Host View={currentView} label={label} class="outer" look={outerLook} />
+
+mount(<App />, "#app")
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /__velarDynamicComponent\(\(__dynamicScope\) => __velarChild\(View\.get\(\)/u);
+
+  const dom = `
+class FakeNode {
+  constructor(nodeType, tagName = "", textContent = "") {
+    this.nodeType = nodeType;
+    this.tagName = tagName;
+    this.textContent = textContent;
+    this.childNodes = [];
+    this.parentNode = null;
+    this.attributes = new Map();
+    this.classNames = new Set();
+    this.classList = {
+      add: (...names) => { for (const name of names) this.classNames.add(name); },
+      remove: (...names) => { for (const name of names) this.classNames.delete(name); },
+      [Symbol.iterator]: () => this.classNames[Symbol.iterator](),
+    };
+    const properties = new Map();
+    this.style = {
+      properties,
+      setProperty: (name, value) => properties.set(name, String(value)),
+      removeProperty: (name) => properties.delete(name),
+    };
+  }
+  static detach(node) {
+    if (!node.parentNode) return;
+    const siblings = node.parentNode.childNodes;
+    const index = siblings.indexOf(node);
+    if (index !== -1) siblings.splice(index, 1);
+    node.parentNode = null;
+  }
+  static insert(parent, node, before) {
+    if (node.nodeType === 11) {
+      for (const child of [...node.childNodes]) FakeNode.insert(parent, child, before);
+      return;
+    }
+    FakeNode.detach(node);
+    node.parentNode = parent;
+    const index = before === null ? -1 : parent.childNodes.indexOf(before);
+    if (index === -1) parent.childNodes.push(node);
+    else parent.childNodes.splice(index, 0, node);
+  }
+  append(...values) { for (const value of values) FakeNode.insert(this, value, null); }
+  insertBefore(node, before = null) { FakeNode.insert(this, node, before); return node; }
+  before(...values) { for (const value of values) FakeNode.insert(this.parentNode, value, this); }
+  remove() { FakeNode.detach(this); }
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
+    if (name === "class") this.classNames = new Set(String(value).split(/\\s+/).filter(Boolean));
+  }
+  removeAttribute(name) {
+    this.attributes.delete(name);
+    if (name === "class") this.classNames.clear();
+  }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  querySelectorAll() {
+    const output = [];
+    const visit = (node) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 1) output.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return output;
+  }
+}
+const target = new FakeNode(1, "root");
+globalThis.Node = FakeNode;
+globalThis.document = {
+  createElement(tag) { return new FakeNode(1, tag); },
+  createTextNode(value) { return new FakeNode(3, "", String(value)); },
+  createComment(value) { return new FakeNode(8, "", String(value)); },
+  createDocumentFragment() { return new FakeNode(11); },
+  querySelector(selector) { return selector === "#app" ? target : null; },
+};
+function host() { return target.childNodes.find((node) => node.nodeType === 1); }
+function text(node) { return node.nodeType === 3 ? node.textContent : node.childNodes.map(text).join(""); }
+function snapshot() {
+  const node = host();
+  return [node.tagName, [...node.classNames].sort().join("."), node.style.properties.get("--velar-look-base-color"), node.getAttribute("data-stamp"), text(node)].join(":");
+}
+`;
+  const execution = executeModule(`${dom}\n${result.code ?? ""}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+await flush();
+console.log("initial:" + snapshot());
+console.log("phase:label");
+label.set("two");
+await flush();
+console.log("label:" + snapshot());
+console.log("phase:beta");
+currentView.set(Beta);
+await flush();
+console.log("beta:" + snapshot());
+console.log("phase:alpha");
+currentView.set(Alpha);
+await flush();
+console.log("alpha:" + snapshot());
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "mounted:alpha",
+    "initial:article:alpha.outer:red:1:one",
+    "phase:label",
+    "label:article:alpha.outer:red:1:two",
+    "phase:beta",
+    "cleanup:alpha",
+    "mounted:beta",
+    "beta:section:beta.outer:red:1:two",
+    "phase:alpha",
+    "cleanup:beta",
+    "mounted:alpha",
+    "alpha:article:alpha.outer:red:2:two",
     "",
   ].join("\n"));
 });

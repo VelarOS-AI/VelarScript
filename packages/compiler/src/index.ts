@@ -566,6 +566,13 @@ function interfaceOf(
     if (type.kind === "runtimeType") return { kind: "runtimeType", value: expandAliases(type.value, seen) };
     if (type.kind === "typeObject") return type.value ? { ...type, value: expandAliases(type.value, seen) } : type;
     if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expandAliases(value, seen)])) };
+    if (type.kind === "component" || type.kind === "componentConstructor") {
+      return {
+        ...type,
+        props: new Map([...type.props].map(([name, value]) => [name, expandAliases(value, seen)])),
+        handle: type.handle ? expandAliases(type.handle, seen) : null,
+      };
+    }
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
       ...type,
       parameters: type.parameters.map((parameter) => expandAliases(parameter, seen)),
@@ -864,9 +871,10 @@ function resolveNominals(
     result: resolveNominals(type.result, classIdentities, enumNames, namedTypeIdentities),
   };
   if (type.kind === "union") return { kind: "union", members: type.members.map((member) => resolveNominals(member, classIdentities, enumNames, namedTypeIdentities)) };
-  if (type.kind === "componentConstructor") return {
+  if (type.kind === "component" || type.kind === "componentConstructor") return {
     ...type,
     props: new Map([...type.props].map(([name, value]) => [name, resolveNominals(value, classIdentities, enumNames, namedTypeIdentities)])),
+    handle: type.handle ? resolveNominals(type.handle, classIdentities, enumNames, namedTypeIdentities) : null,
   };
   return type;
 }

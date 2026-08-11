@@ -299,16 +299,36 @@ The built-in Core types are:
 - `Set<T>`
 - `Map<K, V>`
 - `Record<T>`
-- `Promise<T>`
+- `Promise<T>`, with bare `Promise` as `Promise<null>`
 - `T?`
 - small unions such as `string | number`
 - enum singleton types such as `Status.pending`
-- function types such as `(string, number) -> bool`
+- function types such as `(string, number) -> bool`, plus the positional
+  `Function<Input..., Result>` shorthand
 - read-only data views such as `readonly User` and `readonly List<User>`
 - `unknown` for unvalidated dynamic input
 
 `any` is reserved for explicit unsafe JavaScript declarations. Ordinary
 VelarScript code uses `unknown` and validates it.
+
+`Promise` and `Function` have bounded convenience spellings that normalize to
+the existing Core types; they do not introduce runtime constructors or a second
+callable model:
+
+| Shorthand | Canonical type |
+| --- | --- |
+| `Promise` | `Promise<null>` |
+| `Function` | `() -> null` |
+| `Function<Result>` | `() -> Result` |
+| `Function<Input, Result>` | `(Input) -> Result` |
+| `Function<First, Second, Result>` | `(First, Second) -> Result` |
+
+For `Function<...>`, the final type argument is always the result and every
+preceding argument is a positional input. Use the canonical arrow form whenever
+the contract needs parameter names, optional parameters, or a rest parameter.
+`Function<>` and `Promise<>` are invalid. This does not expose JavaScript's
+`Function` or `Promise` constructors as built-in callable values; the shorthand
+spellings exist only in type positions.
 
 VelarScript does not provide TypeScript conditional types, mapped types,
 overload sets, declaration merging, or type assertions. Type parameters exist
@@ -1325,6 +1345,83 @@ interpolation braces are a bracket context: the expression inside `{...}`
 continues across physical lines without parentheses, exactly as it would
 inside a call's parentheses.
 
+Components are first-class constructor values, but they are not ordinary
+functions and they are not rendered `WebNode` values. The Web extension owns a
+structural `Component` type for passing those constructors through props,
+locals, imports, and exports:
+
+```velar fragment
+type Row:
+    title: string
+
+type RowView = Component<(row: Row, compact?: bool) -> WebNode>
+
+component DetailedRow(row: Row, compact: bool = false, tracking: string = ""):
+    return <article>{row.title}{tracking}</article>
+
+component Table(View: RowView, row: Row):
+    return <View row={row} compact />
+```
+
+`Component` is the zero-application-prop contract. A typed contract uses one
+named function-shaped signature whose result must be `WebNode`; the signature
+describes JSX props rather than a callable function. `compact?: bool` means the
+prop may be omitted, while `compact: bool?` remains required and accepts
+`null`. Rest props and unnamed signature parameters are rejected. `class` and
+`look` are implicit optional host props on every component contract, just as
+they are on declarations.
+
+Component compatibility is checked by prop name. A constructor assigned to a
+contract must accept every prop that the contract permits its caller to pass,
+with a compatible input type, and it cannot add a required prop that the
+contract does not require. It may accept additional optional props. A
+component value renders only as a PascalCase identifier tag such as `<View
+row={row} />`; calling `View(...)` is rejected because that would bypass JSX
+ownership, prop cells, and lifecycle.
+
+A component may append `exposes HandleType` to its declaration and provide
+exactly one `expose expression` in its body. `HandleType` must be a concrete
+record type, and the expression must satisfy it. This is the only component
+instance surface visible through JSX `ref`; internal state cells, lifecycle
+scope, and the runtime component object are never exposed implicitly.
+`expose` is top-level and position-independent relative to the component's
+single top-level `return`; the conventional order places `expose` immediately
+before a final `return`. The root is constructed before the Handle expression
+is evaluated in either spelling.
+
+```velar fragment
+type DialogHandle:
+    open: () -> null
+    close: () -> null
+
+type DialogView = Component<(title: string) -> WebNode, DialogHandle>
+
+component Dialog(title: string) exposes DialogHandle:
+    def open() -> null:
+        print("open:" + title)
+
+    def close() -> null:
+        print("close:" + title)
+
+    expose {open, close}
+    return <dialog>{title}</dialog>
+
+component Page:
+    let dialog: DialogHandle? = null
+
+    mounted:
+        if dialog:
+            dialog.open()
+
+    return <Dialog ref={dialog} title="Confirm" />
+```
+
+The optional second `Component<Props, Handle>` argument is covariant and is
+preserved by module interfaces. A constructor may expose more than the required
+Handle contract, but a constructor without a compatible Handle cannot satisfy
+it. Bare `Component` and the one-argument `Component<Props>` contract do not
+authorize a component ref.
+
 A component element owns one stable instance for as long as its position is
 mounted. Props are live inputs, not construction-time values: when a reactive
 value passed as a prop changes, the existing instance sees the new value
@@ -1333,9 +1430,12 @@ event handlers — and its local state, refs, and lifecycle are untouched. The
 component body still runs exactly once per instance, so a `state` initializer
 captures the construction-time prop value, and a body-level `const` derived
 from a prop does not follow later updates — derive with `computed(() => ...)` when it
-should. An instance is destroyed and recreated only when its position
-unmounts: a conditional branch switches, a keyed list entry's key or value
-disappears, or the enclosing region re-renders away. Runtime-implemented
+should. At a JSX position backed by a `Component` value, retaining the same
+constructor identity retains the instance and its live prop cells; changing
+the constructor identity destroys the old instance, runs its cleanup, and
+mounts a fresh instance. An instance is otherwise destroyed and recreated only
+when its position unmounts: a conditional branch switches, a keyed list entry's
+key or value disappears, or the enclosing region re-renders away. Runtime-implemented
 components (`Head`, `Router`, `Link`, `NavLink`) snapshot their props once at
 construction.
 
@@ -1368,12 +1468,18 @@ Important native directives include:
 
 - `on:click={handler}` and other typed events
 - `bind:value={state}` for supported form controls
-- `ref={element}` for an optional element binding
+- `ref={element}` on a native element for an optional element binding
+- `ref={handle}` on a component that explicitly declares `exposes`
 - `look={visual}`
 - `class={nameOrList}`
 - stable `key` values for dynamic children
 
-Refs are restored to `null` during cleanup.
+Refs require mutable optional `let` bindings and are restored to `null` during
+cleanup. A component Handle is shallow-frozen, remains stable for its component
+instance, and revokes callable fields when that instance is destroyed. A stale
+saved alias therefore fails rather than operating on destroyed state or DOM.
+Use `class`, `look`, and `look:*` for host styling; use explicit Look props for
+internal parts rather than exposing DOM for style mutation.
 
 A `key` drives identity-preserving reuse only in the keyed-children shape: an
 interpolation that is `items.map(item => <Row key={item.id} />)`, or a `?:`
@@ -1682,6 +1788,52 @@ are errors and `null` removes the corresponding property. Conditions, `@` state
 hooks, media queries, pseudo-elements, spreads, and other structural Look
 features remain in an extracted `look:` value; directive names never encode a
 second copy of that language.
+
+### Inline Style compatibility
+
+VelarScript also accepts checked property-level inline Style when an existing
+Web integration requires native inline priority:
+
+```velar
+import {rgb} from "velar/look"
+
+const text = rgb(35, 39, 47)
+const cardLook = look:
+    borderRadius = 12px
+
+export component StyleCompatibility:
+    return <div
+        look={cardLook}
+        style:color={text}
+        style:padding={12px}
+        style:display="grid"
+    >Content</div>
+```
+
+`style:property` uses the same camelCase property table, visual value types,
+builders, finite-number checks, and reactive reads as Look, but lowers to the
+element's native inline style declaration rather than to a Look selector and
+CSS variable. It is therefore a compatibility override, not a second reusable
+visual language. Raw `style="..."`, Style objects, `style:hover:color`, media
+conditions, pseudo-elements, spreads, and Style values are not supported.
+Prefer `look:property` or a reusable Look unless native inline priority is the
+explicit requirement.
+
+All `style:property` directives on a component invocation attach to its host
+element after the component's own inline Style. Duplicate directives are
+errors. A `null` value removes the inline declaration, allowing Look and
+stylesheet rules to participate in the cascade again. A non-null inline Style
+declaration overrides normal Look rules and normal class stylesheet rules for
+the same CSS property, including Look state rules; an external `!important`
+declaration can still override a non-important inline declaration.
+
+Look and class alone have no universal winner. A base Look selector and a
+simple class selector both normally have specificity `(0,1,0)`, so source order
+decides: CSS imported `before look` loses an equal-specificity conflict to Look,
+while CSS imported `after look` wins it. Stateful Look selectors usually add a
+second attribute selector and are therefore more specific than one simple
+class. Compound selectors, IDs, pseudo-elements, and `!important` can change
+that result through the ordinary CSS cascade.
 
 ### Composition
 

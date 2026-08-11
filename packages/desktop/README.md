@@ -45,7 +45,11 @@ the previous test.
 
 The macOS host uses the system WKWebView and never bundles Chromium, Electron,
 or Tauri. Thin builds keep Node external and require Node.js 24 or newer. The
-host resolves an explicit absolute `VELAR_DESKTOP_NODE`, absolute entries from
+package supplies the borderless VelarScript mark as the default application
+icon, so a project receives a branded Dock and Finder identity without owning
+platform icon files. A future custom-icon contract must remain an explicit
+project setting rather than replacing this package default implicitly.
+The host resolves an explicit absolute `VELAR_DESKTOP_NODE`, absolute entries from
 the launch environment's `PATH`, and trusted system package-manager locations
 without a shell, then verifies the runtime version. Build-machine executable
 paths and versions are not embedded in the application.

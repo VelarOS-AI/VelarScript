@@ -6,12 +6,18 @@ behind `npm create velar@latest` and shares the same templates with
 
 ```sh
 npm create velar@latest my-app
+npm create velar@latest my-service -- --template node
+npm create velar@latest my-desktop -- --template desktop
 npm create velar@latest my-docs -- --template docs
 npm create velar@latest my-library -- --template library
 npm create velar@latest my-components -- --template component
 ```
 
-Available templates are `web`, `docs`, `library`, and `component`. The Core
+The first-class application templates are `web`, `node`, and `desktop`. Each
+starts with the borderless VelarScript mark and a small Hello experience shaped
+like the corresponding JavaScript framework category: an interactive Web page,
+a Node HTTP server, or a single-project Desktop window. Specialized templates
+remain available as `docs`, `library`, and `component`. The Core
 library template publishes a reusable `.vel` entry without Web; the component
 template publishes a checked Web component source entry and keeps its preview
 application outside that public entry. `game` is reserved for the future

@@ -37,6 +37,7 @@ export type {
   Expression,
   Program,
   Statement,
+  TypeReference,
 } from "./ast.ts";
 export type { AnalysisContext, ClassField, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
 export { Parser } from "./parser.ts";

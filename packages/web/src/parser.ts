@@ -21,6 +21,7 @@ type StateDeclaration = Extract<Statement, { kind: "StateDeclaration" }>;
 type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
 type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
 type WatchDeclaration = Extract<Statement, { kind: "WatchDeclaration" }>;
+type ExposeDeclaration = Extract<ComponentItem, { kind: "ExposeDeclaration" }>;
 type UnsafeCssImportDeclaration = Extract<Statement, { kind: "UnsafeCssImportDeclaration" }>;
 type LookExpression = Extract<Expression, { kind: "LookExpression" }>;
 type LookEntry = LookExpression["entries"][number];
@@ -85,6 +86,11 @@ export class VelarWebParser extends Parser {
     if (this.matchExtensionKeyword("watch")) {
       if (modifiers.exported) this.diagnostics.push(diagnostic("VEL2001", "A watch block cannot be exported", this.previous().span));
       return this.parseWatchDeclaration(start);
+    }
+    if (this.matchExtensionKeyword("expose")) {
+      const value = this.parseExpression();
+      this.diagnostics.push(diagnostic("VEL5056", "'expose' is only valid as a top-level component item; declare 'exposes HandleType' on that component", span(start, value.span.end)));
+      return { kind: "PassStatement", span: span(start, value.span.end) };
     }
     return undefined;
   }
@@ -234,6 +240,7 @@ export class VelarWebParser extends Parser {
         this.diagnostics.push(diagnostic("VEL2016", "Components use named props and do not support rest parameters", parameter.span));
       }
     }
+    const handleType = this.matchExtensionKeyword("exposes") ? this.parseTypeReference() : null;
     this.expect("colon", "Expected ':' before component body");
     this.expect("newline", "Expected a newline before component body");
     this.consumeNewlines();
@@ -244,7 +251,10 @@ export class VelarWebParser extends Parser {
     while (!this.check("dedent") && !this.check("eof")) {
       const itemStart = this.current().span.start;
       let item: ComponentItem | null = null;
-      if (this.matchExtensionKeyword("state")) {
+      if (this.matchExtensionKeyword("expose")) {
+        const value = this.parseExpression();
+        item = { kind: "ExposeDeclaration", value, span: span(itemStart, value.span.end) } satisfies ExposeDeclaration;
+      } else if (this.matchExtensionKeyword("state")) {
         item = this.parseStateDeclaration(itemStart, false);
       } else if (this.matchExtensionKeyword("resource")) {
         item = this.parseResourceDeclaration(itemStart, false);
@@ -274,7 +284,7 @@ export class VelarWebParser extends Parser {
       this.consumeNewlines();
     }
     const close = this.expect("dedent", "Expected the end of component body");
-    return { kind: "ComponentDeclaration", exported, name: name.value, parameters, body, span: span(start, body.at(-1)?.span.end ?? close.span.end) };
+    return { kind: "ComponentDeclaration", exported, name: name.value, parameters, handleType, body, span: span(start, body.at(-1)?.span.end ?? close.span.end) };
   }
 }
 
@@ -291,6 +301,7 @@ function shiftJsxSyntax(syntax: WebJsxElementSyntax, offset: number): WebJsxElem
   return {
     ...syntax,
     span: shiftSourceSpan(syntax.span, offset),
+    tagSpan: shiftSourceSpan(syntax.tagSpan, offset),
     attributes: syntax.attributes.map((attribute) => ({
       ...attribute,
       span: shiftSourceSpan(attribute.span, offset),
@@ -333,6 +344,7 @@ function jsxExpression(
   return {
     kind: "JSXElementExpression",
     tag: syntax.tag,
+    tagSpan: syntax.tagSpan,
     attributes: syntax.attributes.map((attribute) => ({
       name: attribute.name,
       value: typeof attribute.value === "object" && attribute.value !== null

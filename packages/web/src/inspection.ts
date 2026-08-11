@@ -45,6 +45,7 @@ function visitDependencyStatement(statement: Statement, context: CompilerDepende
       for (const parameter of statement.parameters) if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
       for (const item of statement.body) {
         if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") context.visitBlock(item.body);
+        else if (item.kind === "ExposeDeclaration") context.visitExpression(item.value);
         else context.visitStatement(item);
       }
       return true;
@@ -111,6 +112,7 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
       name: statement.name,
       props,
       requiredProps: new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
+      handle: statement.handleType ? context.resolve(statement.handleType) : null,
     });
     return true;
   }

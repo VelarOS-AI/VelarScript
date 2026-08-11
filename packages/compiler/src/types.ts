@@ -35,7 +35,8 @@ export type ValueType =
   | { readonly kind: "runtimeType"; readonly value: ValueType }
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | { readonly kind: "node" }
-  | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly intrinsic?: string }
+  | { readonly kind: "component"; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly handle: ValueType | null }
+  | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly handle: ValueType | null; readonly intrinsic?: string }
   | { readonly kind: "function"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "action"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "intrinsic"; readonly name: string; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
@@ -72,6 +73,9 @@ export function typeFromSyntax(syntax: TypeSyntax): ValueType {
         case "unknown": return unknownType;
         case "any": return anyType;
         case "WebNode": return { kind: "node" };
+        case "Component": return { kind: "component", props: new Map(), requiredProps: new Set(), handle: null };
+        case "Promise": return { kind: "promise", value: nullType };
+        case "Function": return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
         default: return { kind: "named", name: syntax.name };
       }
     case "EnumMemberTypeSyntax":
@@ -84,6 +88,24 @@ export function typeFromSyntax(syntax: TypeSyntax): ValueType {
       if (syntax.name === "Record") return { kind: "record", value: arguments_[0] ?? unknownType };
       if (syntax.name === "Promise") return { kind: "promise", value: arguments_[0] ?? unknownType };
       if (syntax.name === "Type") return { kind: "runtimeType", value: arguments_[0] ?? unknownType };
+      if (syntax.name === "Function") {
+        const result = arguments_.at(-1) ?? nullType;
+        const parameters = arguments_.slice(0, -1);
+        return { kind: "function", parameters, requiredParameters: parameters.length, result };
+      }
+      if (syntax.name === "Component") {
+        const signature = syntax.arguments[0];
+        if (signature?.kind !== "FunctionTypeSyntax" || signature.parameters.some((parameter) => !parameter.name)) {
+          return { kind: "component", props: new Map(), requiredProps: new Set(), handle: null };
+        }
+        const parameters = signature.parameters.filter((parameter) => !parameter.rest);
+        return {
+          kind: "component",
+          props: new Map(parameters.map((parameter) => [parameter.name!, typeFromSyntax(parameter.type)])),
+          requiredProps: new Set(parameters.filter((parameter) => !parameter.optional).map((parameter) => parameter.name!)),
+          handle: syntax.arguments[1] ? typeFromSyntax(syntax.arguments[1]) : null,
+        };
+      }
       return { kind: "named", name: formatTypeSyntax(syntax) };
     }
     case "ReadonlyTypeSyntax":
@@ -99,7 +121,7 @@ export function typeFromSyntax(syntax: TypeSyntax): ValueType {
         kind: "function",
         parameters: fixed.map((parameter) => typeFromSyntax(parameter.type)),
         ...(fixed.some((parameter) => parameter.name) ? { parameterNames: fixed.map((parameter) => parameter.name ?? "") } : {}),
-        requiredParameters: fixed.length,
+        requiredParameters: fixed.filter((parameter) => !parameter.optional).length,
         ...(rest ? { rest: typeFromSyntax(rest.type) } : {}),
         result: typeFromSyntax(syntax.result),
       };
@@ -119,7 +141,7 @@ export function formatTypeSyntax(syntax: TypeSyntax): string {
     case "ReadonlyTypeSyntax": return `readonly ${syntax.inner.kind === "UnionTypeSyntax" || syntax.inner.kind === "FunctionTypeSyntax" ? `(${formatTypeSyntax(syntax.inner)})` : formatTypeSyntax(syntax.inner)}`;
     case "OptionalTypeSyntax": return `${syntax.inner.kind === "UnionTypeSyntax" || syntax.inner.kind === "FunctionTypeSyntax" ? `(${formatTypeSyntax(syntax.inner)})` : formatTypeSyntax(syntax.inner)}?`;
     case "UnionTypeSyntax": return syntax.members.map(formatTypeSyntax).join(" | ");
-    case "FunctionTypeSyntax": return `(${syntax.parameters.map((parameter) => `${parameter.rest ? "..." : ""}${parameter.name ? `${parameter.name}: ` : ""}${formatTypeSyntax(parameter.type)}`).join(", ")}) -> ${formatTypeSyntax(syntax.result)}`;
+    case "FunctionTypeSyntax": return `(${syntax.parameters.map((parameter) => `${parameter.rest ? "..." : ""}${parameter.name ? `${parameter.name}${parameter.optional ? "?" : ""}: ` : ""}${formatTypeSyntax(parameter.type)}`).join(", ")}) -> ${formatTypeSyntax(syntax.result)}`;
   }
 }
 
@@ -397,6 +419,15 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     return callableInputsAssignable(actual, expected, environment, seen)
       && isAssignable(actual.result, expected.result, environment, seen);
   }
+  if ((actual.kind === "component" || actual.kind === "componentConstructor") && expected.kind === "component") {
+    for (const required of actual.requiredProps) if (!expected.requiredProps.has(required)) return false;
+    for (const [name, supplied] of expected.props) {
+      const accepted = actual.props.get(name);
+      if (!accepted || !isAssignable(supplied, accepted, environment, new Set(seen))) return false;
+    }
+    if (expected.handle && (!actual.handle || !isAssignable(actual.handle, expected.handle, environment, new Set(seen)))) return false;
+    return true;
+  }
   if (actual.kind === "node" && expected.kind === "node") {
     return true;
   }
@@ -473,12 +504,20 @@ function typeIdentity(type: ValueType, includeCallableParameterNames = true): st
         type.rest ? nested(type.rest) : "",
         nested(type.result),
       ]);
-    case "componentConstructor":
-      return identityNode("component", [type.intrinsic ?? "", type.name, ...[...type.props]
+    case "component":
+      return identityNode("component-signature", [...[...type.props]
         .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([name, value]) => identityNode("prop", [name, value])),
-      identityNode("required-props", [...type.requiredProps].sort())]);
+      identityNode("required-props", [...type.requiredProps].sort()),
+      identityNode("handle", [type.handle ? nested(type.handle) : ""])]);
+    case "componentConstructor":
+      return identityNode("component-constructor", [type.intrinsic ?? "", type.name, ...[...type.props]
+        .map(([name, value]) => [name, nested(value)] as const)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([name, value]) => identityNode("prop", [name, value])),
+      identityNode("required-props", [...type.requiredProps].sort()),
+      identityNode("handle", [type.handle ? nested(type.handle) : ""])]);
     case "union":
       return identityNode("union", type.members.map(nested).sort());
   }
@@ -532,6 +571,18 @@ export function describeType(type: ValueType): string {
       return `enum ${type.name}`;
     case "node":
       return "WebNode";
+    case "component": {
+      const props = [...type.props]
+        .filter(([name, value]) => {
+          if (type.requiredProps.has(name)) return true;
+          if (name === "class") return value.kind !== "optional" || value.inner.kind !== "string";
+          if (name === "look") return value.kind !== "optional" || value.inner.kind !== "named" || value.inner.name !== "Look";
+          return true;
+        })
+        .map(([name, value]) => `${name}${type.requiredProps.has(name) ? "" : "?"}: ${describeType(value)}`);
+      if (props.length === 0 && !type.handle) return "Component";
+      return `Component<(${props.join(", ")}) -> WebNode${type.handle ? `, ${describeType(type.handle)}` : ""}>`;
+    }
     case "componentConstructor":
       return `component ${type.name}`;
     case "function":
@@ -580,6 +631,10 @@ export function typeContainsParameter(
       return typeContainsParameter(type.value, matches);
     case "object":
       return [...type.fields.values()].some((field) => typeContainsParameter(field, matches));
+    case "component":
+    case "componentConstructor":
+      return [...type.props.values()].some((prop) => typeContainsParameter(prop, matches))
+        || (type.handle ? typeContainsParameter(type.handle, matches) : false);
     case "function":
     case "action":
     case "intrinsic":
@@ -653,6 +708,13 @@ export function substituteTypeParameters(type: ValueType, bindings: readonly (Va
     }
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])) };
+    case "component":
+    case "componentConstructor":
+      return {
+        ...type,
+        props: new Map([...type.props].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])),
+        handle: type.handle ? substituteTypeParameters(type.handle, bindings) : null,
+      };
     case "function":
     case "action":
     case "intrinsic":
@@ -693,6 +755,13 @@ export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap
       return { kind: "runtimeType", value: bindNamedTypeParameters(type.value, parameters) };
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, bindNamedTypeParameters(value, parameters)])) };
+    case "component":
+    case "componentConstructor":
+      return {
+        ...type,
+        props: new Map([...type.props].map(([name, value]) => [name, bindNamedTypeParameters(value, parameters)])),
+        handle: type.handle ? bindNamedTypeParameters(type.handle, parameters) : null,
+      };
     case "function":
     case "action":
     case "intrinsic":
@@ -770,6 +839,14 @@ export function unifyTypeParameters(
       const provided = fields.get(name);
       if (provided) unifyTypeParameters(field, provided, bindings, fieldsOf);
     }
+    return;
+  }
+  if (pattern.kind === "component" && (actual.kind === "component" || actual.kind === "componentConstructor")) {
+    for (const [name, prop] of pattern.props) {
+      const provided = actual.props.get(name);
+      if (provided) unifyTypeParameters(prop, provided, bindings, fieldsOf);
+    }
+    if (pattern.handle && actual.handle) unifyTypeParameters(pattern.handle, actual.handle, bindings, fieldsOf);
     return;
   }
   if ((pattern.kind === "function" || pattern.kind === "action" || pattern.kind === "intrinsic")

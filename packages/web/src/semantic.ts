@@ -9,10 +9,7 @@ type JsxExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
 
 function visitJsx(expression: JsxExpression, context: SemanticExtensionContext): void {
   if (/^[A-Z]/u.test(expression.tag)) {
-    context.reference(expression.tag, {
-      start: expression.span.start + 1,
-      end: expression.span.start + 1 + expression.tag.length,
-    });
+    context.reference(expression.tag, expression.tagSpan);
   }
   for (const attribute of expression.attributes) {
     const owner = context.jsxAttributeOwner(attribute.span, attribute.name);
@@ -90,6 +87,7 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
         return true;
       case "ComponentDeclaration":
         context.enterScope(statement.span);
+        context.typeReferences(statement.handleType);
         for (const parameter of statement.parameters) {
           if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
           context.typeReferences(parameter.type);
@@ -104,6 +102,7 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
         }
         for (const item of statement.body) {
           if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") context.visitBlock(item.body, item.span);
+          else if (item.kind === "ExposeDeclaration") context.visitExpression(item.value);
           else context.visitStatement(item);
         }
         context.exitScope();

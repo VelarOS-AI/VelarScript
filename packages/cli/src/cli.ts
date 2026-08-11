@@ -806,7 +806,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "",
     "Usage:",
     "  velar check [entry.vel | project-directory]",
-    "  velar create <project-directory> [--template <web|docs|library|component>]",
+    "  velar create <project-directory> [--template <web|node|desktop|docs|library|component>]",
     "  velar install",
     "  velar add <package[@version]>... [--dev]",
     "  velar remove <package>...",
@@ -835,7 +835,7 @@ const commandNames = new Set([
 function printCommandHelp(command: string, output: NodeJS.WritableStream = process.stdout): void {
   const details: Readonly<Record<string, readonly string[]>> = {
     check: ["Usage: velar check [entry.vel | project-directory]", "Type-checks the whole resolved project without writing build output."],
-    create: ["Usage: velar create <project-directory> [--template <web|docs|library|component>]", "Creates a transactional Web app, documentation site, Core source library, or Web component source package without installing dependencies."],
+    create: ["Usage: velar create <project-directory> [--template <web|node|desktop|docs|library|component>]", "Creates a transactional Web, Node, or Desktop app, documentation site, Core source library, or Web component source package without installing dependencies."],
     install: ["Usage: velar install", "Installs the current VelarScript project's declared dependencies through npm, then validates the project."],
     add: ["Usage: velar add <package[@version]>... [--dev]", "Adds npm registry packages and activates packages that declare velar.extension metadata."],
     remove: ["Usage: velar remove <package>...", "Removes npm packages and their extension-owned VelarScript project configuration."],

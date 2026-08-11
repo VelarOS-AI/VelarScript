@@ -1,9 +1,13 @@
+<p align="center">
+  <img src="./assets/brand/velarscript-mark.svg" alt="VelarScript" width="116" />
+</p>
+
 # VelarScript
 
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
-VelarScript is an extensible high-level language for AI-era application and
-tool development that compiles to modern JavaScript. Core stays target-neutral;
+VelarScript is the first extensible language framework for the AI era, built
+primarily for the JavaScript ecosystem and compiled to modern JavaScript. Core stays target-neutral;
 official Node, Web, and Desktop packages compose explicit capabilities without
 splitting the source language. It keeps the JavaScript runtime model—objects,
 references, garbage collection, Promises, the event loop, and the prototype
@@ -21,8 +25,8 @@ The Web framework is an extension package, not hidden compiler behavior:
   paths, processes, HTTP, and environment capabilities.
 - `@velarscript/cli` owns projects, builds, tests, the development server, and
   the language server.
-- `create-velar` creates applications, documentation sites, libraries, and
-  component packages.
+- `create-velar` creates first-class Web, Node, and Desktop applications plus
+  documentation sites, libraries, and component packages.
 
 VelarScript deliberately does not introduce a virtual machine, a second object
 model, TypeScript-style type programming, React effects, CSS Modules hashes, or
@@ -40,6 +44,8 @@ npm run dev
 Available templates:
 
 ```sh
+npm create velar@latest node-service -- --template node
+npm create velar@latest desktop-app -- --template desktop
 npm create velar@latest docs-site -- --template docs
 npm create velar@latest domain-kit -- --template library
 npm create velar@latest component-kit -- --template component
@@ -191,7 +197,7 @@ class Session:
 
 ```text
 velar check [entry.vel | project-directory]
-velar create <project-directory> [--template <web|docs|library|component>]
+velar create <project-directory> [--template <web|node|desktop|docs|library|component>]
 velar install
 velar add <package[@version]>... [--dev]
 velar remove <package>...

@@ -14,6 +14,8 @@ preview, and browser-driver services. `@velarscript/cli` neither depends on
 
 ```sh
 npx @velarscript/cli create my-app
+npx @velarscript/cli create api --template node
+npx @velarscript/cli create desktop-app --template desktop
 npx @velarscript/cli create product-docs --template docs
 npx @velarscript/cli create design-kit --template component
 cd my-app
@@ -24,8 +26,9 @@ npm exec velar -- dev
 ```
 
 Project creation delegates to the exact matching `create-velar` package, the
-same implementation used by `npm create velar@latest`. Available templates are
-`web`, `docs`, `library`, and `component`; creation never installs or initializes Git.
+same implementation used by `npm create velar@latest`. First-class application
+templates are `web`, `node`, and `desktop`; `docs`, `library`, and `component`
+remain available for specialized projects. Creation never installs or initializes Git.
 
 VelarScript deliberately uses npm as its package registry, resolver, installer, and
 lockfile authority. After the initial `npm install`, the project-aware commands

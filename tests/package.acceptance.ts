@@ -194,6 +194,10 @@ mount(<App />, "#app")
     assert.equal(builtDesktop.runtime.version, undefined);
     assert.equal(builtDesktop.runtime.executableHint, undefined);
     const application = join(desktopProject, "dist", "desktop", builtDesktop.applicationBundle);
+    const information = await readFile(join(application, "Contents", "Info.plist"), "utf8");
+    assert.match(information, /<key>CFBundleIconFile<\/key><string>VelarScript<\/string>/u);
+    const applicationIcon = await readFile(join(application, "Contents", "Resources", "VelarScript.icns"));
+    assert.equal(applicationIcon.subarray(0, 4).toString("ascii"), "icns");
     const hostConfigurationText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfiguration = JSON.parse(hostConfigurationText) as Record<string, unknown>;
     assert.equal(hostConfiguration.nodeExecutableHint, undefined);
@@ -231,6 +235,26 @@ mount(<App />, "#app")
   assert.equal(componentManifest.velar.entry, "src/index.vel");
   assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.10.0");
   await run(process.execPath, [installedCli, "check", componentProject], directory);
+
+  const nodeProject = join(directory, "created-node");
+  const nodeCreated = await run(process.execPath, [installedCreate, nodeProject, "--template", "node"], directory);
+  assert.match(nodeCreated.stdout, /Created VelarScript node project/u);
+  const nodeManifest = JSON.parse(await readFile(join(nodeProject, "package.json"), "utf8")) as {
+    dependencies: Record<string, string>;
+  };
+  assert.equal(nodeManifest.dependencies["@velarscript/node"], "^0.10.0");
+  assert.match(await readFile(join(nodeProject, "public", "index.html"), "utf8"), /velarscript-mark\.svg/u);
+  await run(process.execPath, [installedCli, "check", nodeProject], directory);
+
+  const createdDesktopProject = join(directory, "created-desktop");
+  const desktopCreated = await run(process.execPath, [installedCreate, createdDesktopProject, "--template", "desktop"], directory);
+  assert.match(desktopCreated.stdout, /Created VelarScript desktop project/u);
+  const createdDesktopManifest = JSON.parse(await readFile(join(createdDesktopProject, "package.json"), "utf8")) as {
+    dependencies: Record<string, string>;
+  };
+  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "^0.10.0");
+  assert.match(await readFile(join(createdDesktopProject, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
+  await run(process.execPath, [installedCli, "check", createdDesktopProject], directory);
 
   const localDependency = join(directory, "local-dependency");
   const managedProject = join(directory, "managed-project");

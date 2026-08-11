@@ -14,7 +14,7 @@ interface InlineToken {
 }
 
 const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%="] as const;
-const genericNames = new Set(["List", "Set", "Map", "Promise", "Type"]);
+const genericNames = new Set(["List", "Set", "Map", "Promise", "Function", "Type"]);
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
 const expressionStatementWords = new Set(["return", "throw", "assert"]);

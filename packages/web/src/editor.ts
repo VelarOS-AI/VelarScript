@@ -23,9 +23,15 @@ const svgElementNames = new Set<string>(nativeSvgTags);
 
 const jsxControlCompletions: readonly CompilerProjectEditorCompletion[] = [
   { label: "key", detail: "stable JSX list key", kind: "field" },
+  { label: "ref", detail: "typed Handle exposed by this component", kind: "field" },
   ...[...LOOK_PROPERTIES].sort().map((property) => ({
     label: `look:${property}`,
     detail: "inline checked Look property",
+    kind: "field" as const,
+  })),
+  ...[...LOOK_PROPERTIES].sort().map((property) => ({
+    label: `style:${property}`,
+    detail: "high-priority inline Style compatibility override; prefer Look",
     kind: "field" as const,
   })),
 ];

@@ -1179,6 +1179,7 @@ export class JavaScriptEmitter {
       case "runtimeType":
       case "enumObject":
       case "classConstructor":
+      case "component":
       case "componentConstructor":
       case "node":
       // Type parameters and static Type<T> carriers are erased; the analyzer
@@ -1213,6 +1214,7 @@ export class JavaScriptEmitter {
       case "runtimeType":
       case "enumObject":
       case "classConstructor":
+      case "component":
       case "componentConstructor":
       case "node":
         return `${value} != null`;
