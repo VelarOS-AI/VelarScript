@@ -8,76 +8,174 @@ import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { chromium, firefox, webkit, type BrowserType } from "playwright";
+import { chromium, firefox, webkit, type Browser, type BrowserServer, type BrowserType } from "playwright";
 import { prepareExternalPreview } from "../scripts/prepare-external-preview.mjs";
+import {
+  boundedBrowserOperation,
+  exitBrowserWorker,
+  observeBrowserWorkerParent,
+  superviseBrowserWorker,
+  terminateBrowserServer,
+} from "../packages/cli/src/browser-process-owner.ts";
 import { verifyProductionBuild } from "../packages/cli/src/production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "../packages/cli/src/preview-server.ts";
 
 type TrackedServer = Server & { velarUpgradedSockets?: Set<Duplex> };
-
-const root = fileURLToPath(new URL("..", import.meta.url));
-const appPort = await availablePort();
-let devServer: ChildProcess | null = null;
-let staticServer: Server | null = null;
-let realtimeServer: Server | null = null;
-let externalPreview: ProductionPreviewHandle | null = null;
-const productionDirectory = await mkdtemp(join(tmpdir(), "velar-browser-production-"));
-const externalPreviewRoot = await mkdtemp(join(tmpdir(), "velar-browser-external-preview-"));
-
-try {
-  const realtimePort = await availablePort();
-  realtimeServer = await startRealtimeServer(realtimePort);
-  devServer = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", "examples/production-web", "--port", String(appPort)], {
-    cwd: root,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const devOutput = collectOutput(devServer);
-  await waitFor(() => devOutput.text.includes("VelarScript dev server:"), 8_000, () => devOutput.text);
-
-  const baseUrl = `http://127.0.0.1:${appPort}/app/`;
-  const status = await (await fetch(`${baseUrl}__velar/status`)).json() as {
-    apiVersion: string;
-    ready: boolean;
-    notices: readonly string[];
-    compilation: { moduleCount: number; compiledModules: number };
-  };
-  assert.equal(status.apiVersion, "0.10");
-  assert.equal(status.ready, true);
-  assert.deepEqual(status.notices, []);
-  assert.ok(status.compilation.moduleCount >= 5);
-  assert.equal(status.compilation.compiledModules, status.compilation.moduleCount);
-
-  const browsers: Array<{ readonly name: string; readonly type: BrowserType }> = [
-    { name: "Chromium", type: chromium },
-    { name: "Firefox", type: firefox },
-    { name: "WebKit", type: webkit },
-  ];
-  for (const browser of browsers) await acceptBrowser(`Dev ${browser.name}`, browser.type, baseUrl, false, realtimePort);
-  await stop(devServer);
-  devServer = null;
-
-  await run(process.execPath, ["packages/cli/src/cli.ts", "build", "examples/production-web", "--out-dir", productionDirectory]);
-  const staticPort = await availablePort();
-  staticServer = await startStaticServer(productionDirectory, "/app/", staticPort);
-  const productionUrl = `http://127.0.0.1:${staticPort}/app/`;
-  for (const browser of browsers) await acceptBrowser(`Production ${browser.name}`, browser.type, productionUrl, true, realtimePort);
-  const externalDirectory = join(externalPreviewRoot, "site");
-  await prepareExternalPreview(externalDirectory);
-  externalPreview = await startProductionPreview(await verifyProductionBuild(externalDirectory), 0);
-  await acceptExternalPreview(externalPreview);
-  process.stdout.write(`VelarScript development and CSP production browser matrices passed\n`);
-} finally {
-  await stop(devServer);
-  await closeServer(staticServer);
-  await closeServer(realtimeServer);
-  await externalPreview?.close();
-  await rm(productionDirectory, { recursive: true, force: true });
-  await rm(externalPreviewRoot, { recursive: true, force: true });
+interface ActiveBrowser {
+  readonly server: BrowserServer;
+  browser: Browser | null;
+  closing: Promise<void> | null;
 }
 
-async function acceptExternalPreview(preview: ProductionPreviewHandle): Promise<void> {
-  const browser = await chromium.launch({ headless: true });
+class BrowserAcceptanceInterrupted extends Error {
+  readonly exitCode: number;
+
+  constructor(signal: "SIGHUP" | "SIGINT" | "SIGTERM", exitCode: number) {
+    super(`Browser acceptance interrupted by ${signal}`);
+    this.name = "BrowserAcceptanceInterrupted";
+    this.exitCode = exitCode;
+  }
+}
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const browserAcceptanceWorkerEnvironment = "VELAR_BROWSER_ACCEPTANCE_WORKER_V1";
+if (process.env[browserAcceptanceWorkerEnvironment] === "1" && typeof process.send === "function") {
+  const stopObservingParent = observeBrowserWorkerParent();
+  let code = 0;
+  try { await runBrowserAcceptance(); }
+  catch (error) {
+    code = error instanceof BrowserAcceptanceInterrupted ? error.exitCode : 1;
+    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  }
+  stopObservingParent();
+  await exitBrowserWorker(code);
+} else {
+  process.exitCode = await superviseBrowserWorker({
+    executable: process.execPath,
+    arguments: [fileURLToPath(import.meta.url)],
+    cwd: root,
+    environment: { ...process.env, [browserAcceptanceWorkerEnvironment]: "1" },
+    deadlineMs: 20 * 60_000,
+    cleanupTimeoutMs: 10_000,
+  });
+}
+
+async function runBrowserAcceptance(): Promise<void> {
+  const appPort = await availablePort();
+  let devServer: ChildProcess | null = null;
+  let staticServer: Server | null = null;
+  let realtimeServer: Server | null = null;
+  let externalPreview: ProductionPreviewHandle | null = null;
+  const activeBrowsers = new Set<ActiveBrowser>();
+  const activeChildren = new Set<ChildProcess>();
+  const productionDirectory = await mkdtemp(join(tmpdir(), "velar-browser-production-"));
+  const externalPreviewRoot = await mkdtemp(join(tmpdir(), "velar-browser-external-preview-"));
+  let rejectInterruption!: (error: BrowserAcceptanceInterrupted) => void;
+  const interruption = new Promise<never>((_resolve, reject) => { rejectInterruption = reject; });
+  void interruption.catch(() => {});
+  let interrupted: BrowserAcceptanceInterrupted | null = null;
+  const stop = (error: BrowserAcceptanceInterrupted): void => {
+    if (interrupted !== null) return;
+    interrupted = error;
+    rejectInterruption(error);
+  };
+  const onHangup = (): void => stop(new BrowserAcceptanceInterrupted("SIGHUP", 129));
+  const onInterrupt = (): void => stop(new BrowserAcceptanceInterrupted("SIGINT", 130));
+  const onTerminate = (): void => stop(new BrowserAcceptanceInterrupted("SIGTERM", 143));
+  process.once("SIGHUP", onHangup);
+  process.once("SIGINT", onInterrupt);
+  process.once("SIGTERM", onTerminate);
+  let scenarioFailed = false;
+  let scenarioFailure: unknown;
   try {
+    const scenario = async (): Promise<void> => {
+      const realtimePort = await availablePort();
+      realtimeServer = await startRealtimeServer(realtimePort);
+      devServer = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", "examples/production-web", "--port", String(appPort)], {
+        cwd: root,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const devOutput = collectOutput(devServer);
+      await waitFor(() => devOutput.text.includes("VelarScript dev server:"), 8_000, () => devOutput.text);
+
+      const baseUrl = `http://127.0.0.1:${appPort}/app/`;
+      const status = await (await fetch(`${baseUrl}__velar/status`)).json() as {
+        apiVersion: string;
+        ready: boolean;
+        notices: readonly string[];
+        compilation: { moduleCount: number; compiledModules: number };
+      };
+      assert.equal(status.apiVersion, "0.10");
+      assert.equal(status.ready, true);
+      assert.deepEqual(status.notices, []);
+      assert.ok(status.compilation.moduleCount >= 5);
+      assert.equal(status.compilation.compiledModules, status.compilation.moduleCount);
+
+      const browsers: Array<{ readonly name: string; readonly type: BrowserType }> = [
+        { name: "Chromium", type: chromium },
+        { name: "Firefox", type: firefox },
+        { name: "WebKit", type: webkit },
+      ];
+      for (const browser of browsers) {
+        await boundedBrowserOperation(acceptBrowser(`Dev ${browser.name}`, browser.type, baseUrl, false, realtimePort, activeBrowsers), 180_000, `Dev ${browser.name} acceptance`, interruption);
+      }
+      await stopChild(devServer);
+      devServer = null;
+
+      await run(process.execPath, ["packages/cli/src/cli.ts", "build", "examples/production-web", "--out-dir", productionDirectory], activeChildren);
+      const staticPort = await availablePort();
+      staticServer = await startStaticServer(productionDirectory, "/app/", staticPort);
+      const productionUrl = `http://127.0.0.1:${staticPort}/app/`;
+      for (const browser of browsers) {
+        await boundedBrowserOperation(acceptBrowser(`Production ${browser.name}`, browser.type, productionUrl, true, realtimePort, activeBrowsers), 180_000, `Production ${browser.name} acceptance`, interruption);
+      }
+      const externalDirectory = join(externalPreviewRoot, "site");
+      await prepareExternalPreview(externalDirectory);
+      externalPreview = await startProductionPreview(await verifyProductionBuild(externalDirectory), 0);
+      await boundedBrowserOperation(acceptExternalPreview(externalPreview, activeBrowsers), 120_000, "External preview Chromium acceptance", interruption);
+      process.stdout.write(`VelarScript development and CSP production browser matrices passed\n`);
+    };
+    await Promise.race([scenario(), interruption]);
+  } catch (error) {
+    scenarioFailed = true;
+    scenarioFailure = error;
+  } finally {
+    process.off("SIGHUP", onHangup);
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onTerminate);
+    const ownerCleanup = await Promise.allSettled([
+      ...[...activeBrowsers].map(closeBrowserOwner),
+      ...[...activeChildren].map(stopChild),
+      stopChild(devServer),
+      closeServer(staticServer),
+      closeServer(realtimeServer),
+      closeProductionPreview(externalPreview),
+    ]);
+    const storageCleanup = await Promise.allSettled([
+      rm(productionDirectory, { recursive: true, force: true }),
+      rm(externalPreviewRoot, { recursive: true, force: true }),
+    ]);
+    if (!scenarioFailed) {
+      const cleanupFailure = [...ownerCleanup, ...storageCleanup].find((result) => result.status === "rejected");
+      if (cleanupFailure?.status === "rejected") {
+        scenarioFailed = true;
+        scenarioFailure = cleanupFailure.reason;
+      }
+    }
+  }
+  if (scenarioFailed) throw scenarioFailure;
+}
+
+async function acceptExternalPreview(preview: ProductionPreviewHandle, active: Set<ActiveBrowser>): Promise<void> {
+  const owner: ActiveBrowser = {
+    server: await chromium.launchServer({ headless: true, timeout: 30_000 }),
+    browser: null,
+    closing: null,
+  };
+  active.add(owner);
+  try {
+    owner.browser = await chromium.connect(owner.server.wsEndpoint(), { timeout: 30_000 });
+    const browser = owner.browser;
     const page = await browser.newPage();
     const failures: string[] = [];
     page.on("pageerror", (error) => failures.push(error.stack ?? error.message));
@@ -101,13 +199,28 @@ async function acceptExternalPreview(preview: ProductionPreviewHandle): Promise<
     assert.deepEqual(failures, [], `External preview Chromium: ${failures.join("\n")}`);
     process.stdout.write("✓ External preview Chromium\n");
   } finally {
-    await browser.close();
+    await closeBrowserOwner(owner);
+    active.delete(owner);
   }
 }
 
-async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: string, production: boolean, realtimePort: number): Promise<void> {
-  const browser = await browserType.launch({ headless: true });
+async function acceptBrowser(
+  name: string,
+  browserType: BrowserType,
+  baseUrl: string,
+  production: boolean,
+  realtimePort: number,
+  active: Set<ActiveBrowser>,
+): Promise<void> {
+  const owner: ActiveBrowser = {
+    server: await browserType.launchServer({ headless: true, timeout: 30_000 }),
+    browser: null,
+    closing: null,
+  };
+  active.add(owner);
   try {
+    owner.browser = await browserType.connect(owner.server.wsEndpoint(), { timeout: 30_000 });
+    const browser = owner.browser;
     const page = await browser.newPage();
     const failures: string[] = [];
     let uploadRequests = 0;
@@ -243,8 +356,14 @@ async function acceptBrowser(name: string, browserType: BrowserType, baseUrl: st
     assert.deepEqual(failures, [], `${name}: ${failures.join("\n")}`);
     process.stdout.write(`✓ ${name}\n`);
   } finally {
-    await browser.close();
+    await closeBrowserOwner(owner);
+    active.delete(owner);
   }
+}
+
+function closeBrowserOwner(owner: ActiveBrowser): Promise<void> {
+  owner.closing ??= terminateBrowserServer(owner.browser, owner.server, 10_000);
+  return owner.closing;
 }
 
 async function startRealtimeServer(port: number): Promise<Server> {
@@ -359,13 +478,23 @@ async function closeServer(server: Server | null): Promise<void> {
   await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
 }
 
-async function run(command: string, arguments_: readonly string[]): Promise<void> {
+async function closeProductionPreview(preview: ProductionPreviewHandle | null): Promise<void> {
+  if (preview !== null) await preview.close();
+}
+
+async function run(command: string, arguments_: readonly string[], active: Set<ChildProcess>): Promise<void> {
   const child = spawn(command, arguments_, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+  active.add(child);
   const output = collectOutput(child);
-  const code = await new Promise<number | null>((resolvePromise, reject) => {
-    child.once("error", reject);
-    child.once("exit", resolvePromise);
-  });
+  let code: number | null;
+  try {
+    code = await new Promise<number | null>((resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("exit", resolvePromise);
+    });
+  } finally {
+    active.delete(child);
+  }
   if (code !== 0) throw new Error(`${command} failed (${code})\n${output.text}`);
 }
 
@@ -389,11 +518,19 @@ async function waitFor(
   throw new Error(`Timed out waiting for browser acceptance state\n${details()}`);
 }
 
-async function stop(child: ChildProcess | null): Promise<void> {
-  if (!child || child.exitCode !== null) return;
+async function stopChild(child: ChildProcess | null): Promise<void> {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
   await Promise.race([
     new Promise<void>((resolve) => child.once("exit", () => resolve())),
     new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
   ]);
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  await boundedBrowserOperation(
+    child.exitCode !== null || child.signalCode !== null
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => child.once("exit", () => resolve())),
+    5_000,
+    "Browser acceptance child cleanup",
+  );
 }

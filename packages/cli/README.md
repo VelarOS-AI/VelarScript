@@ -61,6 +61,15 @@ npm exec velar -- verify-deployment --url https://preview.example.com
 npm exec velar -- verify-deployment --url https://preview.example.com --json
 ```
 
+Browser tests run in a dedicated supervised process, not in the long-lived CLI
+owner. Each test has a 120-second deadline, the complete run has a 20-minute
+deadline, and browser/context cleanup has a 10-second deadline. The supervisor
+owns a private process group on POSIX hosts, forwards SIGHUP/SIGINT/SIGTERM,
+escalates to SIGKILL, and reaps any remaining BrowserServer or renderer process
+before it returns. The worker also observes parent IPC disconnect, so terminating
+or force-killing the invoking CLI cannot leave a browser test running. Signals
+retain conventional exit codes 129, 130, and 143.
+
 `verify-deployment` compares the verified local output to the served HTTPS
 origin. CI may provide the same target with `VELAR_DEPLOYMENT_URL`.
 `--json` emits the versioned verification report used as external-preview

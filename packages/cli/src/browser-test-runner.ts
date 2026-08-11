@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
-import { chromium, firefox, webkit, type Browser, type BrowserType, type Locator, type Page } from "playwright";
+import {
+  chromium,
+  firefox,
+  webkit,
+  type Browser,
+  type BrowserServer,
+  type BrowserType,
+  type Locator,
+  type Page,
+} from "playwright";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
@@ -12,11 +21,22 @@ import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "./preview-server.ts";
 import { hostErrorStack } from "./host-error.ts";
+import {
+  boundedBrowserOperation,
+  exitBrowserWorker,
+  observeBrowserWorkerParent,
+  superviseBrowserWorker,
+  terminateBrowserServer,
+} from "./browser-process-owner.ts";
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 export type BrowserEngineSelection = BrowserEngine | "all";
 
 const browserTypes: Readonly<Record<BrowserEngine, BrowserType>> = { chromium, firefox, webkit };
+const defaultBrowserTestTimeoutMs = 120_000;
+const defaultBrowserRunTimeoutMs = 20 * 60_000;
+const defaultBrowserCleanupTimeoutMs = 10_000;
+const browserTestWorkerEnvironment = "VELAR_BROWSER_TEST_WORKER_V1";
 const browserPerformanceRuntimeKey = "velar.browser.test.performance.v1";
 const browserPerformanceInitScript = String.raw`
 (() => {
@@ -191,11 +211,117 @@ const browserPerformanceInitScript = String.raw`
 })();
 `;
 
+export interface BrowserTestRunnerOptions {
+  readonly testTimeoutMs?: number;
+  readonly runTimeoutMs?: number;
+  readonly cleanupTimeoutMs?: number;
+  readonly executable?: string;
+}
+
+interface BrowserTestLimits {
+  readonly testTimeoutMs: number;
+  readonly runTimeoutMs: number;
+  readonly cleanupTimeoutMs: number;
+}
+
+class BrowserTestInterrupted extends Error {
+  readonly exitCode: number;
+
+  constructor(signal: "SIGHUP" | "SIGINT" | "SIGTERM", exitCode: number) {
+    super(`Browser test run interrupted by ${signal}`);
+    this.name = "BrowserTestInterrupted";
+    this.exitCode = exitCode;
+  }
+}
+
+class BrowserTestRunTimedOut extends Error {
+  constructor(timeoutMs: number) {
+    super(`Browser test run exceeded its ${timeoutMs} millisecond aggregate deadline`);
+    this.name = "BrowserTestRunTimedOut";
+  }
+}
+
+function browserTestLimits(options: BrowserTestRunnerOptions): BrowserTestLimits {
+  const bounded = (value: number | undefined, fallback: number, name: string, maximum: number): number => {
+    const resolved = value ?? fallback;
+    if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) {
+      throw new RangeError(`${name} must be an integer from 1 through ${maximum}`);
+    }
+    return resolved;
+  };
+  return {
+    testTimeoutMs: bounded(options.testTimeoutMs, defaultBrowserTestTimeoutMs, "Browser test timeout", 10 * 60_000),
+    runTimeoutMs: bounded(options.runTimeoutMs, defaultBrowserRunTimeoutMs, "Browser test run timeout", 60 * 60_000),
+    cleanupTimeoutMs: bounded(options.cleanupTimeoutMs, defaultBrowserCleanupTimeoutMs, "Browser cleanup timeout", 60_000),
+  };
+}
+
 export async function runBrowserTests(
   config: VelarProjectConfig,
   explicitInput: string | null,
   selection: BrowserEngineSelection,
+  options: BrowserTestRunnerOptions = {},
 ): Promise<number> {
+  const workerOptions = process.env[browserTestWorkerEnvironment];
+  if (workerOptions !== undefined && typeof process.send === "function") {
+    const resolvedOptions = browserTestWorkerOptions(workerOptions);
+    const stopObservingParent = observeBrowserWorkerParent();
+    let code = 1;
+    try {
+      code = await runBrowserTestsInWorker(config, explicitInput, selection, resolvedOptions);
+    } catch (error) {
+      process.stderr.write(`${stackOf(error)}\n`);
+    }
+    stopObservingParent();
+    await exitBrowserWorker(code);
+  }
+  return superviseBrowserTests(config, explicitInput, selection, options);
+}
+
+async function superviseBrowserTests(
+  config: VelarProjectConfig,
+  explicitInput: string | null,
+  selection: BrowserEngineSelection,
+  options: BrowserTestRunnerOptions,
+): Promise<number> {
+  const limits = browserTestLimits(options);
+  const executable = resolve(options.executable ?? process.argv[1]!);
+  const input = explicitInput === null ? config.root : resolve(explicitInput);
+  return superviseBrowserWorker({
+    executable: process.execPath,
+    arguments: [executable, "test", input, `--browser=${selection}`],
+    cwd: config.root,
+    environment: { ...process.env, [browserTestWorkerEnvironment]: JSON.stringify(limits) },
+    deadlineMs: limits.runTimeoutMs,
+    cleanupTimeoutMs: limits.cleanupTimeoutMs,
+  });
+}
+
+function browserTestWorkerOptions(value: string): BrowserTestRunnerOptions {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); }
+  catch { throw new TypeError("Browser test worker options are invalid"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+    || Object.keys(parsed).some((name) => name !== "testTimeoutMs" && name !== "runTimeoutMs" && name !== "cleanupTimeoutMs")) {
+    throw new TypeError("Browser test worker options are invalid");
+  }
+  const record = parsed as Record<string, unknown>;
+  for (const name of ["testTimeoutMs", "runTimeoutMs", "cleanupTimeoutMs"] as const) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, name);
+    if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "number") {
+      throw new TypeError("Browser test worker options are invalid");
+    }
+  }
+  return browserTestLimits(record as unknown as BrowserTestRunnerOptions);
+}
+
+async function runBrowserTestsInWorker(
+  config: VelarProjectConfig,
+  explicitInput: string | null,
+  selection: BrowserEngineSelection,
+  options: BrowserTestRunnerOptions = {},
+): Promise<number> {
+  const limits = browserTestLimits(options);
   const contract = config.framework?.host.browserTests;
   if (!config.framework || !contract) {
     process.stderr.write("The project framework does not provide browser-test hosting\n");
@@ -214,10 +340,12 @@ export async function runBrowserTests(
   const site = join(temporary, "site");
   const compiled = join(temporary, "tests");
   let server: ProductionPreviewHandle | null = null;
+  let activeBrowser: Browser | null = null;
+  let activeBrowserServer: BrowserServer | null = null;
   let passed = 0;
   let failed = 0;
   try {
-    const build = await buildProject(config, site);
+    const build = await buildProject(config, site, options.executable);
     if (!build.ok) {
       process.stderr.write(build.output);
       return 1;
@@ -243,57 +371,141 @@ export async function runBrowserTests(
     const engines: readonly BrowserEngine[] = selection === "all"
       ? ["chromium", "firefox", "webkit"]
       : [selection];
-
-    for (const engine of engines) {
-      let browser: Browser;
-      try {
-        browser = await browserTypes[engine].launch({ headless: true });
-      } catch (error) {
-        failed += entries.reduce((count, entry) => count + entry.tests.length, 0);
-        process.stderr.write(`✗ ${engine} could not start\n${stackOf(error)}\nInstall it with: npx playwright install ${engine}\n`);
-        continue;
-      }
-      try {
-        for (const entry of entries) {
-          const namespace = await import(`${pathToFileURL(entry.output).href}?engine=${engine}&run=${Date.now()}`) as Record<string, unknown>;
-          for (const name of entry.tests) {
-            const test = namespace[name];
-            const context = await browser.newContext();
-            const page = await context.newPage();
-            const runtimeFailures: string[] = [];
-            page.on("pageerror", (error) => runtimeFailures.push(error.stack ?? error.message));
-            page.on("console", (message) => {
-              if (message.type() === "error" || message.type() === "warning") {
-                runtimeFailures.push(`${message.type()}: ${message.text()}`);
+    let lifecycleFailure: BrowserTestInterrupted | BrowserTestRunTimedOut | null = null;
+    let rejectLifecycle!: (error: BrowserTestInterrupted | BrowserTestRunTimedOut) => void;
+    const lifecycle = new Promise<never>((_resolve, reject) => { rejectLifecycle = reject; });
+    void lifecycle.catch(() => {});
+    const stop = (error: BrowserTestInterrupted | BrowserTestRunTimedOut): void => {
+      if (lifecycleFailure !== null) return;
+      lifecycleFailure = error;
+      rejectLifecycle(error);
+    };
+    const onHangup = (): void => stop(new BrowserTestInterrupted("SIGHUP", 129));
+    const onInterrupt = (): void => stop(new BrowserTestInterrupted("SIGINT", 130));
+    const onTerminate = (): void => stop(new BrowserTestInterrupted("SIGTERM", 143));
+    process.once("SIGHUP", onHangup);
+    process.once("SIGINT", onInterrupt);
+    process.once("SIGTERM", onTerminate);
+    const runTimer = setTimeout(() => stop(new BrowserTestRunTimedOut(limits.runTimeoutMs)), limits.runTimeoutMs);
+    try {
+      for (const engine of engines) {
+        if (lifecycleFailure !== null) throw lifecycleFailure;
+        let engineStarted = false;
+        let engineUsable = true;
+        try {
+          activeBrowserServer = await browserTypes[engine].launchServer({ headless: true, timeout: 30_000 });
+          engineStarted = true;
+          if (lifecycleFailure !== null) throw lifecycleFailure;
+          activeBrowser = await browserTypes[engine].connect(activeBrowserServer.wsEndpoint(), { timeout: 30_000 });
+          engineEntries:
+          for (const entry of entries) {
+            const namespace = await import(`${pathToFileURL(entry.output).href}?engine=${engine}&run=${Date.now()}`) as Record<string, unknown>;
+            for (const name of entry.tests) {
+              if (lifecycleFailure !== null) throw lifecycleFailure;
+              const test = namespace[name];
+              const context = await activeBrowser.newContext();
+              const page = await context.newPage();
+              page.setDefaultTimeout(30_000);
+              page.setDefaultNavigationTimeout(30_000);
+              const runtimeFailures: string[] = [];
+              let testFailure: unknown = null;
+              page.on("pageerror", (error) => runtimeFailures.push(error.stack ?? error.message));
+              page.on("console", (message) => {
+                if (message.type() === "error" || message.type() === "warning") {
+                  runtimeFailures.push(`${message.type()}: ${message.text()}`);
+                }
+              });
+              try {
+                await installBrowserPerformanceRuntime(page);
+                await installFrameworkRuntime(page, contract.initScript?.(config.framework.config));
+                installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
+                if (typeof test !== "function") throw new Error(`Test function '${name}' was not emitted`);
+                if (test.length !== 0) throw new Error(`Browser test function '${name}' cannot declare parameters`);
+                await boundedBrowserOperation(
+                  Promise.resolve().then(() => test()),
+                  limits.testTimeoutMs,
+                  `Browser test ${relative(config.root, entry.file)} :: ${name}`,
+                  lifecycle,
+                );
+                if (runtimeFailures.length > 0) throw new Error(`Browser runtime failures:\n${runtimeFailures.join("\n")}`);
+              } catch (error) {
+                testFailure = error;
+              } finally {
+                removeBrowserRuntime(runtimeKey);
+                try {
+                  await boundedBrowserOperation(context.close(), limits.cleanupTimeoutMs, "Browser context cleanup");
+                } catch (cleanupError) {
+                  engineUsable = false;
+                  testFailure = new Error(`${testFailure === null ? "Browser test completed but its context leaked" : stackOf(testFailure)}\n${stackOf(cleanupError)}`);
+                }
               }
-            });
-            await installBrowserPerformanceRuntime(page);
-            await installFrameworkRuntime(page, contract.initScript?.(config.framework.config));
-            installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
-            try {
-              if (typeof test !== "function") throw new Error(`Test function '${name}' was not emitted`);
-              if (test.length !== 0) throw new Error(`Browser test function '${name}' cannot declare parameters`);
-              await test();
-              if (runtimeFailures.length > 0) throw new Error(`Browser runtime failures:\n${runtimeFailures.join("\n")}`);
-              passed += 1;
-              process.stdout.write(`✓ ${engine} :: ${relative(config.root, entry.file)} :: ${name}\n`);
-            } catch (error) {
-              failed += 1;
-              process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} :: ${name}\n${stackOf(error)}\n`);
-            } finally {
-              removeBrowserRuntime(runtimeKey);
-              await context.close();
+              if (testFailure instanceof BrowserTestInterrupted || testFailure instanceof BrowserTestRunTimedOut) throw testFailure;
+              if (testFailure === null) {
+                passed += 1;
+                process.stdout.write(`✓ ${engine} :: ${relative(config.root, entry.file)} :: ${name}\n`);
+              } else {
+                failed += 1;
+                process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} :: ${name}\n${stackOf(testFailure)}\n`);
+              }
+              if (!engineUsable) {
+                process.stderr.write(`✗ ${engine} was retired after context cleanup failed\n`);
+                break engineEntries;
+              }
             }
           }
+        } catch (error) {
+          if (lifecycleFailure !== null) throw lifecycleFailure;
+          if (error instanceof BrowserTestInterrupted || error instanceof BrowserTestRunTimedOut) throw error;
+          if (!engineStarted) {
+            failed += entries.reduce((count, entry) => count + entry.tests.length, 0);
+            process.stderr.write(`✗ ${engine} could not start\n${stackOf(error)}\nInstall it with: npx playwright install ${engine}\n`);
+          } else {
+            failed += 1;
+            process.stderr.write(`✗ ${engine} browser-test owner failed\n${stackOf(error)}\n`);
+          }
+        } finally {
+          if (activeBrowserServer !== null) {
+            const owned = activeBrowserServer;
+            const connection = activeBrowser;
+            activeBrowser = null;
+            activeBrowserServer = null;
+            await terminateBrowserServer(connection, owned, limits.cleanupTimeoutMs);
+          }
         }
-      } finally {
-        await browser.close();
       }
+    } catch (error) {
+      if (error instanceof BrowserTestInterrupted) {
+        process.stderr.write(`${error.message}\n`);
+        return error.exitCode;
+      }
+      if (error instanceof BrowserTestRunTimedOut) {
+        failed += 1;
+        process.stderr.write(`✗ ${error.message}\n`);
+      } else {
+        throw error;
+      }
+    } finally {
+      clearTimeout(runTimer);
+      process.off("SIGHUP", onHangup);
+      process.off("SIGINT", onInterrupt);
+      process.off("SIGTERM", onTerminate);
     }
   } finally {
     removeBrowserRuntime(runtimeKey);
-    if (server) await server.close();
-    await rm(temporary, { recursive: true, force: true });
+    let cleanupFailure: unknown = null;
+    if (activeBrowserServer !== null) {
+      try { await terminateBrowserServer(activeBrowser, activeBrowserServer, limits.cleanupTimeoutMs); }
+      catch (error) { cleanupFailure = error; }
+      activeBrowser = null;
+      activeBrowserServer = null;
+    }
+    if (server) {
+      try { await boundedBrowserOperation(server.close(), limits.cleanupTimeoutMs, "Browser preview cleanup"); }
+      catch (error) { cleanupFailure ??= error; }
+    }
+    try { await rm(temporary, { recursive: true, force: true }); }
+    catch (error) { cleanupFailure ??= error; }
+    if (cleanupFailure !== null) throw cleanupFailure;
   }
   process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
   return failed === 0 ? 0 : 1;
@@ -601,8 +813,12 @@ function boundedTiming(value: unknown, name: string): number {
   return value;
 }
 
-async function buildProject(config: VelarProjectConfig, outputDirectory: string): Promise<{ readonly ok: boolean; readonly output: string }> {
-  const executable = resolve(process.argv[1]!);
+async function buildProject(
+  config: VelarProjectConfig,
+  outputDirectory: string,
+  executableOverride: string | undefined,
+): Promise<{ readonly ok: boolean; readonly output: string }> {
+  const executable = resolve(executableOverride ?? process.argv[1]!);
   const child = spawn(process.execPath, [executable, "build", config.root, "--out-dir", outputDirectory], {
     cwd: config.root,
     stdio: ["ignore", "pipe", "pipe"],

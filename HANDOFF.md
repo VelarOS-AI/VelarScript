@@ -2721,6 +2721,43 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   wide-glyph hit testing、native picker/IME automation、crash-in-the-middle recovery、cold-start/RSS/
   sustained-edit 和正式 performance/package threshold 仍未完成。
 
+- W-133 由真实持续负载报告暴露浏览器测试生命周期 owner 的严重缺口：3 个 Playwright headless renderer
+  连续运行约 7.5 小时且各占满一个 CPU 核。问题不属于 Editor 产品层，也不需要语言语法变更；真正 owner
+  是 CLI browser-test runner 与仓库直接 browser acceptance。旧 runner 没有单测试/aggregate deadline，
+  并且即使 Promise race 已返回，VelarScript 测试中的未结束 Promise/计时器仍可保活 Node 进程；两条路径
+  都直接使用 opaque Playwright launch，父进程退出和信号也没有形成可验证的传递与资源收敛契约。
+
+  CLI 现在把整次 browser test 放进专用 IPC worker：单测试 120 秒、整轮 20 分钟、cleanup 10 秒。
+  Chromium/Firefox/WebKit 都改为显式 BrowserServer owner，按 connection close、server close、server kill、
+  child SIGKILL 顺序收敛；context close 失败会退休当前 engine。macOS/POSIX supervisor 使用独立进程组，
+  SIGHUP/SIGINT/SIGTERM 同时覆盖 worker 与浏览器后代并保留 129/130/143，worker 监听父 IPC disconnect，
+  supervisor 在 worker 退出前后对专用进程组执行最终清理。专用 worker 刷出输出后显式退出，因此一个已超时
+  但仍持有 JavaScript timer 的测试 Promise 也不能继续保活进程。直接 browser acceptance 复用同一 owner、
+  20 分钟 deadline、逐引擎 180 秒 deadline 和完整 all-settled cleanup，不再有第二套无界生命周期。
+
+  `B-CLI-BROWSER-TEST` 永久门禁锁定 deadline、IPC supervision、BrowserServer、进程组、signal 与 close/kill
+  fallback。新增真实 Chromium 回归以 `sleep(60000)` 构造未结束 VelarScript 测试，并观察实际后代 PID：
+  250 ms test deadline、CLI SIGTERM、supervisor SIGKILL/worker IPC disconnect、直接 acceptance SIGTERM 四条
+  路径以及正常 worker 退出时遗留 stubborn descendant 的最终 process-group reap，均验证退出码和全部
+  browser/server/renderer/descendant PID 消失；5/5 用时约 5.1 秒。正常 direct Dev/
+  Production 三引擎及 External Preview 也全绿，每个阶段之后独立检查进程表均无 Playwright 残留。
+
+  本波没有改变语言 diagnostics、lowering 或生成代码，`npm run check` 为 52 formatted sources、107 docs
+  examples、72 runtime boundaries；完整 compiler/runtime 为 594/594，四示例检查与 1+3+3+3 Core test、
+  六包 packed consumer、publication rehearsal、官方 27+6+15+6 三引擎及 installed browser consumer 全绿。
+  Editor 无需增加 cleanup workaround，原样通过 24/24 三引擎；本次样本 FCP median/p95、input next-frame
+  median/p95、1 MiB load/input next-frame 分别为 Chromium 12/44、5/5.4、32.332/5.1 ms，Firefox
+  23/26、3.88/6.28、123.54/25.54 ms，WebKit 22/26、12/14、125/18 ms。Lite 保留既有 11 文件 WIP并
+  原样通过 54/54 三引擎；Workbench installed-toolchain acceptance 通过。测试结束后没有残留 Playwright
+  进程。连续压力回归中 Flow Board Firefox 曾出现一次 navigation `networkidle` 30 秒超时；同一用例定向
+  重跑 2/2、随后完整官方 browser gate 重跑均通过，且失败路径当时也零残留，当前作为未复现瞬时失败保留
+  在证据中而不伪装成首次全绿。未推送、未发布、未提升版本。
+
+  仍阻止 VelarScript 达到生产可用的主线问题不变：semantic index/LSP/formatter 的公开增量 session、
+  JavaScript/TypeScript 服务、全文搜索、multi-tab、任务/终端、大 workspace watcher 与索引性能、
+  wide-glyph hit testing、native picker/IME automation、crash-in-the-middle recovery，以及 cold-start/RSS/
+  sustained-edit 和正式 performance/package threshold 尚未完成。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed

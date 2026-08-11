@@ -335,6 +335,9 @@ for (const phrase of [
 const projectCompilerSource = await readFile(join(root, "packages", "cli", "src", "project.ts"), "utf8");
 const standardModulesSource = await readFile(join(root, "packages", "cli", "src", "standard-modules.ts"), "utf8");
 const cliSource = await readFile(join(root, "packages", "cli", "src", "cli.ts"), "utf8");
+const browserTestRunnerSource = await readFile(join(root, "packages", "cli", "src", "browser-test-runner.ts"), "utf8");
+const browserProcessOwnerSource = await readFile(join(root, "packages", "cli", "src", "browser-process-owner.ts"), "utf8");
+const browserAcceptanceSource = await readFile(join(root, "tests", "browser.acceptance.ts"), "utf8");
 if (!projectCompilerSource.includes("sharedRuntimeModules: true")) {
   failures.push("packages/cli/src/project.ts: project compilation does not request shared compiler runtime modules");
 }
@@ -401,6 +404,39 @@ for (const phrase of [
   "result.css ? writeFile(cssPath, result.css, \"utf8\") : rm(cssPath, { force: true })",
 ]) {
   if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: single-file output synchronization is missing '${phrase}'`);
+}
+for (const phrase of [
+  "const defaultBrowserTestTimeoutMs = 120_000",
+  "const defaultBrowserRunTimeoutMs = 20 * 60_000",
+  "const defaultBrowserCleanupTimeoutMs = 10_000",
+  "return superviseBrowserWorker({",
+  "await exitBrowserWorker(code)",
+  ".launchServer({ headless: true, timeout: 30_000 })",
+  "await boundedBrowserOperation(context.close(), limits.cleanupTimeoutMs, \"Browser context cleanup\")",
+]) {
+  if (!browserTestRunnerSource.includes(phrase)) failures.push(`packages/cli/src/browser-test-runner.ts: browser-test lifecycle contract is missing '${phrase}'`);
+}
+for (const phrase of [
+  "detached: ownsProcessGroup",
+  "process.kill(-child.pid, signal)",
+  "process.once(\"disconnect\", parentDisconnected)",
+  "signalOwnedWorker(child, \"SIGKILL\", ownsProcessGroup, true)",
+  "await boundedBrowserOperation(server.close(), timeoutMs, \"Browser graceful cleanup\")",
+  "await boundedBrowserOperation(server.kill(), timeoutMs, \"Browser forced cleanup\")",
+]) {
+  if (!browserProcessOwnerSource.includes(phrase)) failures.push(`packages/cli/src/browser-process-owner.ts: supervised browser owner is missing '${phrase}'`);
+}
+for (const phrase of [
+  "await superviseBrowserWorker({",
+  "deadlineMs: 20 * 60_000",
+  "await exitBrowserWorker(code)",
+  "terminateBrowserServer(owner.browser, owner.server, 10_000)",
+  ".launchServer({ headless: true, timeout: 30_000 })",
+]) {
+  if (!browserAcceptanceSource.includes(phrase)) failures.push(`tests/browser.acceptance.ts: direct browser acceptance owner is missing '${phrase}'`);
+}
+if (/\b(?:chromium|firefox|webkit|browserType)\.launch\s*\(/u.test(browserTestRunnerSource + "\n" + browserAcceptanceSource)) {
+  failures.push("Browser gates use an opaque Playwright launch instead of an explicit BrowserServer owner");
 }
 const coreDeepEqualRuntimeSource = constantSource(standardModulesSource, "deepEqualRuntime", "\n\nconst listRuntime");
 const webFoundationSource = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");

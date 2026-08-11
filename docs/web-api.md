@@ -1105,6 +1105,18 @@ selected explicitly. `namespace(selector)` requires one matched node and
 returns its platform namespace URI so SVG/HTML lowering can be asserted without
 arbitrary page evaluation. Browser binaries remain an explicit Playwright
 install.
+
+The CLI executes the whole browser-test run in a dedicated supervised worker.
+One test is bounded to 120 seconds, the aggregate run to 20 minutes, and each
+browser/context cleanup to 10 seconds. Browser engines are explicit
+BrowserServer owners rather than opaque launches: cleanup closes the connection,
+closes the server, escalates to its kill operation, and finally terminates the
+dedicated process group on POSIX hosts. SIGHUP, SIGINT, and SIGTERM propagate to
+the worker and keep exit codes 129, 130, and 143; an IPC parent disconnect also
+starts cleanup. Therefore a timed-out VelarScript Promise, a stuck browser close,
+or a killed invoking CLI cannot retain a headless renderer after the supervised
+run exits.
+
 `scroll(selector,x,y)` performs one bounded element scroll with finite
 coordinates, allowing virtualized products to verify viewport transitions
 without exposing page evaluation. Its test-only page owner captures native
