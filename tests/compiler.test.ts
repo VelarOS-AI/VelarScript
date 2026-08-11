@@ -9437,10 +9437,10 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 265);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 117);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 266);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 118);
   assert.equal(api.modules["velar/collections"]?.length, 28);
-  assert.equal(api.modules["velar/text"]?.length, 18);
+  assert.equal(api.modules["velar/text"]?.length, 19);
   assert.equal(api.modules["velar/math"]?.length, 32);
   assert.deepEqual(api.modules["velar/json"], ["clone", "deepEqual", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
@@ -9461,7 +9461,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, range, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
-import {capitalize, escapeHtml, findMatch, findMatches, isBlank, lines, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, words} from "velar/text"
+import {capitalize, escapeHtml, findMatch, findMatches, isBlank, lines, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, utf8Size, words} from "velar/text"
 import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians} from "velar/math"
 import {clone as cloneJson, deepEqual, parse as parseJson, stableStringify, stringify, tryParse} from "velar/json"
 import {all as allAsync, map as asyncMap, retry, series, sleep, timeout} from "velar/async"
@@ -9508,6 +9508,7 @@ print(words("a  b").size)
 print("ABC".lower())
 print("abc".upper())
 print(isBlank("   "))
+print(utf8Size("A😀游戏"))
 print(escapeHtml("<velar>"))
 print(matches("Velar 42", "^velar [0-9]+$", {ignoreCase: true}))
 const firstPatternMatch = findMatch("ticket-42", "[0-9]+")
@@ -9598,7 +9599,7 @@ print(logLevel())
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
     "15", "10", "x", "2", "Ada", "1", "Lin", "a,b", "5", "2", "true",
-    "Velar", "Next Generation Web", "velar-web-游戏", "Velar…", "a b", "2", "2", "abc", "ABC", "true", "&lt;velar&gt;",
+    "Velar", "Next Generation Web", "velar-web-游戏", "Velar…", "a b", "2", "2", "abc", "ABC", "true", "11", "&lt;velar&gt;",
     "true", "42", "7", "2", "2", "22", "a# b#", "a|b|c", "true", "true", "null", "x$&", "a|b", "TypeError", "TypeError",
     "3.14", "10", "2", "8", "90", "6", "24",
     "Nova", "fallback", '{"a":2,"z":1}', "[1,2]", "true", "false",
@@ -10981,6 +10982,7 @@ console.log(rowList.length, rowList[0], rowList[1], rowList[2] === "", wordList.
 console.log(slug("Crème brûlée!"), truncate("A😀B", 2));
 console.log(indent("a\\nb", "-") === "-a\\n-b", dedent("  a\\n    b") === "a\\n  b");
 console.log(normalizeWhitespace("  a\\n b  "), isBlank(" \\n\\t"), escapeHtml('<a href="x">'));
+console.log(utf8Size("A😀游戏"), utf8Size("\\uD800"));
 console.log(matches("VELAR", "velar", {ignoreCase: true}));
 const one = findMatch("A😀B", "B");
 const many = findMatches("💙", "");
@@ -11004,6 +11006,7 @@ console.log(typeIdentity, rangeIdentity, poisonCalls);
     "creme-brulee A…",
     "true true",
     "a b true &lt;a href=&quot;x&quot;&gt;",
+    "11 3",
     "true",
     "B 2 true 2 0 1",
     "axbx",

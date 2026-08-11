@@ -176,8 +176,10 @@ the same substring test. Direct string indexing stays absent.
 
 The `velar/text` module keeps transformations that are not simple receiver
 operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `words`,
-`slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `isBlank`, and
-`escapeHtml`. Stateless pattern operations are `matches`, `findMatch`,
+`slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `isBlank`,
+`utf8Size`, and `escapeHtml`. `utf8Size(text)` returns the exact byte count used
+by official UTF-8 transport, JSON, and filesystem budgets, including stable
+three-byte treatment of an unpaired surrogate. Stateless pattern operations are `matches`, `findMatch`,
 `findMatches`, `replaceMatches`, and `splitPattern`.
 
 `title` treats separators as word boundaries. `truncate` reserves room for its

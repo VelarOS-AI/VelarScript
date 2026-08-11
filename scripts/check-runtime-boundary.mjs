@@ -1446,6 +1446,8 @@ for (const phrase of [
   "const nativeRegExpExec = __velarTextGetOwnPropertyDescriptor",
   "function __velarTextRegexReplace(value, pattern, replacement)",
   "function __velarTextRegexSplit(value, pattern, limit)",
+  "${VELAR_UTF8_RUNTIME}",
+  "export function utf8Size(value)",
   "return __velarTextCall(__velarTextObjectFreeze",
   "value = __velarTextCall(nativeStringReplaceAll, value",
 ]) {

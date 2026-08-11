@@ -2023,13 +2023,56 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值
   推断相关的既有 5 文件变化；未推送、未发布。
 
+- W-115 用 Lite 的真实 provider 多轮、多工具和长流链路审计资源边界。此前官方 HTTP/JSON/fs
+  限制按 UTF-8 bytes 执行，但 Vel 程序只能读取按 Unicode code point 计数的 `string.size`。产品若要
+  在 effect 前组合精确请求、流和工具输出预算，只能复制编译器内部算法，且容易把 emoji、中文和
+  unpaired surrogate 算错。这是通用文本/传输能力缺口，不属于 Agent 包。
+
+  `velar/text` 现在公开 `utf8Size(value) -> number`，直接复用 compiler-owned
+  `VELAR_UTF8_RUNTIME`；它与官方 transport 编码完全一致，unpaired surrogate 按 UTF-8 replacement
+  bytes 计算，没有第二套产品实现。标准库 interface、运行时模块、hostile ABI、packed consumer、
+  文档和 runtime boundary guard 都锁定这一单一来源。
+
+  Lite 只在自己的纯 Vel Agent/provider 层组合该能力。SSE 与 AgentStream decoder 改为保留增量
+  scan offset，不再对每个碎片反复扫描整个 pending record；LF、CRLF、CR、跨 chunk delimiter 和
+  单 event/record 上限均有回归。AgentCore 现在对所有 Provider 统一执行 1 MiB 初始输入、2 MiB
+  整轮文本和 256 KiB tool display 预算，并在 continuation 前执行 256 KiB 单工具输出与 4 MiB
+  单步聚合预算；response/call/tool identity、tool input、approval detail、failure text 和 tool
+  steps/calls 也在 Core 有独立上限，因此第三方 Provider 不能绕过 OpenAI adapter。shared Agent
+  stream 对同一批 typed event fields 二次验证。工具 disclosure 在 redaction 和 JSON
+  envelope 后按精确 UTF-8 bytes 截断到
+  256 KiB，保留 code-point 边界并显式写入 `truncated=true`，避免嵌套到下一次 provider JSON 时
+  无界膨胀。
+
+  Lite-owned tool registry 最多 64 个定义，验证 canonical ID、description、strict object schema、
+  property/required coherence 与完整 manifest bytes。OpenAI Responses adapter 在网络 effect 前限制
+  input、instructions、tool manifest、continuation outputs 和最终 JSON request；流内进一步限制
+  event 数、response/call/item ID、function name/arguments、tool-call 数、completed items、text delta
+  与 refusal parts/bytes。refusal 改存 chunk lists，到 done 才一次 join；ToolRun 也改存 bounded
+  stdout/stderr chunk lists 并限制 16,384 chunks，消除两条小 chunk 反复字符串拼接的 O(n²) 路径。
+  Lite 的 write/replace/run 参数预算也统一改用精确 UTF-8 bytes。65 calls、超长多字节 arguments、
+  257 completed items、65 refusal parts、超限初始输入、聚合工具输出和分片超长 SSE 都以真实回归
+  证明 fail closed。Agent/provider/tool/approval policy 仍只在
+  Lite；VelarScript 上游只新增通用的精确 UTF-8 计量能力。
+
+  当前最终组合证据为 `npm run check`（51 个格式化源、98 个文档示例、61 项 runtime boundary）、
+  548/548 串行 compiler/runtime/CLI/Desktop/hardening/publication rehearsal、四个生产示例 check 与
+  1+3+3+3 个纯 Vel tests、六包 packed consumer acceptance、publication rehearsal、Workbench
+  安装态验收，以及完整 dev/production/external-preview、27+6+15+6 三浏览器与 installed browser
+  project，全部 exit 0。Lite 四项目 check、35 shared + 37 server tests、package acceptance、17/17
+  Chromium、51/51 Desktop 三浏览器与 CLI/Desktop production build 也全部通过。薄包为 796,283
+  bytes（777.6 KiB）：host 235,904、renderer 521,965、capability host 37,021、metadata 1,393，外置
+  Node.js >=24，SHA-256 为
+  `1b517526260376200c94d0ffcc5b383c2b5990884f1935f3aaf34369ca69f974`；相比 W-114 增加 11,246
+  bytes，仍远低于 10 MiB。VelarOS Desktop 产品工作树保持干净；Workbench 仍只有并行函数返回值
+  推断相关的既有 5 文件变化；未推送、未发布。
+
 下一执行顺序：
 
-1. W-114 的完整 compiler/runtime、六包安装/rehearsal、Workbench 安装态、三引擎 Web 与
-   独立 Lite 全门禁均已取得当前代码的明确 exit 0。下一波继续审计 provider 多轮恢复、多个工具
-   call 的顺序/部分失败和工具长期运行；provider policy 继续由 Lite 组合
-   `velar/async` 与 typed HTTP failures，不塞进通用 HTTP 包，也不重复证明已经封闭的 Node host
-   ownership、cancel 与 aggregate quota。
+1. W-115 的完整 compiler/runtime、六包安装/rehearsal、Workbench 安装态、三引擎 Web 与独立
+   Lite 全门禁均已取得当前代码的明确 exit 0。下一波继续审计工具长期运行时的 output streaming、
+   process termination、partial failure 与 session persistence；产品策略继续留在 Lite，只把重新出现的
+   通用语言、Node/Web/Desktop API 缺口修回官方包。
 2. Lite 是从零独立重写的外部验证产品，不复用 VelarOS Desktop 的应用代码、私有包或产品架构；
    它只能像普通第三方一样消费公开的 `@velarscript/*` 包。继续扩展真实使用场景，但不得把产品
    Agent/provider/tool policy、workspace 或 approval UI 重新放回语言包。

@@ -103,15 +103,18 @@ try {
 
   await writeFile(join(directory, "main.vel"), `
 import {range, sum} from "velar/collections"
+import {utf8Size} from "velar/text"
 
 export const answer = sum(range(0, 7)) * 2
 print(answer)
+print(utf8Size("A😀游戏"))
 `.trimStart(), "utf8");
   await run(process.execPath, [installedCli, "build", "main.vel", "--out", "main.js"], directory);
   assert.match(await readFile(join(directory, "main.js"), "utf8"), /from "velar\/collections"/u);
   assert.match(await readFile(join(directory, "node_modules", "velar", "collections.js"), "utf8"), /export function range/u);
+  assert.match(await readFile(join(directory, "node_modules", "velar", "text.js"), "utf8"), /export function utf8Size/u);
   const built = await run(process.execPath, [join(directory, "main.js")], directory);
-  assert.equal(built.stdout, "42\n");
+  assert.equal(built.stdout, "42\n11\n");
 
   const api = await run(process.execPath, [
     "--input-type=module",

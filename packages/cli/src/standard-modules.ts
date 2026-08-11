@@ -25,6 +25,7 @@ import {
   VELAR_TYPE_REGISTRY_RUNTIME,
   VELAR_TYPE_VALIDATION_MODULE,
   VELAR_TYPE_VALIDATION_MODULE_SOURCE,
+  VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
 import { velarNodeCompilerExtension } from "@velarscript/node/compiler";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
@@ -153,6 +154,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["dedent", apiFunction(["value"], [stringType], stringType)],
     ["normalizeWhitespace", apiFunction(["value"], [stringType], stringType)],
     ["isBlank", apiFunction(["value"], [stringType], boolType)],
+    ["utf8Size", apiFunction(["value"], [stringType], numberType)],
     ["escapeHtml", apiFunction(["value"], [stringType], stringType)],
     ["matches", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], boolType, 2)],
     ["findMatch", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], optional(textMatchType), 2)],
@@ -683,6 +685,7 @@ export function repeat(value, count) { count = requireCount(count, "repeat count
 `.trimStart()],
   ["velar/text", String.raw`
 ${VELAR_TEXT_METHOD_RUNTIME}
+${VELAR_UTF8_RUNTIME}
 const maxTextCodeUnits = __velarMaxTextCodeUnits;
 const maxTextItems = __velarMaxTextItems;
 const __velarTextGetOwnPropertyNames = __velarTextGetOwnPropertyDescriptor(__velarTextNativeObject, "getOwnPropertyNames")?.value;
@@ -858,6 +861,7 @@ export function indent(value, prefix = "    ") {
 export function dedent(value) { const rows = lines(valueOf(value)); let width = null; for (let index = 0; index < rows.length; index += 1) { const line = rows[index]; if (__velarTextCall(__velarNativeStringTrim, line, [])) { let current = 0; while (current < line.length && (line[current] === " " || line[current] === "\t")) current += 1; width = width === null ? current : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [width, current]); } } const output = new __velarTextNativeArray(rows.length); for (let index = 0; index < rows.length; index += 1) output[index] = __velarTextCall(__velarNativeStringSlice, rows[index], [width ?? 0]); return __velarTextJoin(output, "\n"); }
 export function normalizeWhitespace(value) { return __velarTextRegexReplace(__velarTextCall(__velarNativeStringTrim, valueOf(value), []), __velarTextWhitespace, " "); }
 export function isBlank(value) { return __velarTextCall(__velarNativeStringTrim, valueOf(value), []).length === 0; }
+export function utf8Size(value) { return __velarUtf8ByteLength(valueOf(value)); }
 export function escapeHtml(value) {
   value = valueOf(value);
   if (htmlOutputUnits(value) > maxTextCodeUnits) throw new __velarTextNativeRangeError("escapeHtml output cannot exceed 16 MiB");
