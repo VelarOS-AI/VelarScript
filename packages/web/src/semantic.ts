@@ -4,8 +4,15 @@ import type {
   SemanticExtensionContext,
   Statement,
 } from "@velarscript/compiler/extension";
-
-type JsxExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
+import {
+  isWebExpression,
+  isWebJsx,
+  isWebLook,
+  isWebStatement,
+  isWebUnit,
+  type WebJsxElementExpression as JsxExpression,
+  type WebWatchDeclaration,
+} from "./ast.ts";
 
 function visitJsx(expression: JsxExpression, context: SemanticExtensionContext): void {
   if (/^[A-Z]/u.test(expression.tag)) {
@@ -18,29 +25,29 @@ function visitJsx(expression: JsxExpression, context: SemanticExtensionContext):
         attribute.name,
         { start: attribute.span.start, end: attribute.span.start + attribute.name.length },
         owner,
-        "jsx-prop",
+        "extension-property",
       );
     }
     if (attribute.value && typeof attribute.value !== "string") context.visitExpression(attribute.value);
   }
   for (const child of expression.children) {
     if (child.kind === "JSXExpressionChild") context.visitExpression(child.expression);
-    else if (child.kind === "JSXElementExpression") context.visitExpression(child);
+    else if (child.kind === "ExtensionExpression:web:jsx") context.visitExpression(child);
   }
 }
 
-function visitWatch(statement: Extract<Statement, { kind: "WatchDeclaration" }>, context: SemanticExtensionContext): void {
+function visitWatch(statement: WebWatchDeclaration, context: SemanticExtensionContext): void {
   context.visitExpression(statement.expression);
   context.enterScope(statement.span);
   let cursor = statement.expression.span.end;
   if (statement.currentName) {
     const selection = context.nameSpan(statement.span, statement.currentName, cursor);
-    context.declare({ statement, role: "current" }, statement.currentName, "watch-value", statement.span, selection);
+    context.declare({ statement, role: "current" }, statement.currentName, "extension:parameter:web-watch-value", statement.span, selection);
     cursor = selection.end;
   }
   if (statement.previousName) {
     const selection = context.nameSpan(statement.span, statement.previousName, cursor);
-    context.declare({ statement, role: "previous" }, statement.previousName, "watch-value", statement.span, selection);
+    context.declare({ statement, role: "previous" }, statement.previousName, "extension:parameter:web-watch-value", statement.span, selection);
   }
   for (const child of statement.body) context.visitStatement(child);
   context.exitScope();
@@ -48,23 +55,27 @@ function visitWatch(statement: Extract<Statement, { kind: "WatchDeclaration" }>,
 
 export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freeze({
   predeclare(statement: Statement, context: SemanticExtensionContext) {
-    if (statement.kind === "ActionDeclaration") {
-      context.declare(statement, statement.name, "action", statement.span, context.nameSpan(statement.span, statement.name), { exported: statement.exported });
+    if (!isWebStatement(statement)) return false;
+    if (statement.kind === "ExtensionStatement:web:action") {
+      context.declare(statement, statement.name, "extension:function:web-action", statement.span, context.nameSpan(statement.span, statement.name), { exported: statement.exported });
       return true;
     }
-    if (statement.kind === "ComponentDeclaration") {
-      context.declare(statement, statement.name, "component", statement.span, context.nameSpan(statement.span, statement.name), { exported: statement.exported });
+    if (statement.kind === "ExtensionStatement:web:component") {
+      context.declare(statement, statement.name, "extension:function:web-component", statement.span, context.nameSpan(statement.span, statement.name), {
+        exported: statement.exported,
+        presentationKind: "class",
+      });
       return true;
     }
     return false;
   },
 
   visitExpression(expression: Expression, context: SemanticExtensionContext) {
-    if (expression.kind === "JSXElementExpression") {
+    if (isWebJsx(expression)) {
       visitJsx(expression, context);
       return true;
     }
-    if (expression.kind === "LookExpression") {
+    if (isWebLook(expression)) {
       const visit = (entries: typeof expression.entries): void => {
         for (const entry of entries) {
           if (entry.kind === "LookProperty" || entry.kind === "LookSpread") context.visitExpression(entry.value);
@@ -78,14 +89,15 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
       visit(expression.entries);
       return true;
     }
-    return expression.kind === "UnitLiteralExpression" || expression.kind === "LookHookExpression";
+    return isWebUnit(expression) || (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook");
   },
 
   visitStatement(statement: Statement, context: SemanticExtensionContext) {
+    if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
-      case "UnsafeCssImportDeclaration":
+      case "ExtensionStatement:web:unsafe-css":
         return true;
-      case "ComponentDeclaration":
+      case "ExtensionStatement:web:component":
         context.enterScope(statement.span);
         context.typeReferences(statement.handleType);
         for (const parameter of statement.parameters) {
@@ -101,31 +113,32 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
           );
         }
         for (const item of statement.body) {
-          if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") context.visitBlock(item.body, item.span);
-          else if (item.kind === "ExposeDeclaration") context.visitExpression(item.value);
+          if (item.kind === "ExtensionStatement:web:mounted" || item.kind === "ExtensionStatement:web:cleanup") context.visitBlock(item.body, item.span);
+          else if (item.kind === "ExtensionStatement:web:expose") context.visitExpression(item.value);
           else context.visitStatement(item);
         }
         context.exitScope();
         return true;
-      case "StateDeclaration": {
+      case "ExtensionStatement:web:state": {
         context.visitExpression(statement.initializer);
         context.typeReferences(statement.type);
-        context.declare(statement, statement.name, "state", statement.span, context.nameSpan(statement.span, statement.name), {
+        context.declare(statement, statement.name, "extension:variable:web-state", statement.span, context.nameSpan(statement.span, statement.name), {
           exported: statement.exported,
           mutable: true,
+          sourceTypeHint: true,
         });
         return true;
       }
-      case "ResourceDeclaration":
+      case "ExtensionStatement:web:resource":
         context.visitExpression(statement.initializer);
         context.typeReferences(statement.type);
-        context.declare(statement, statement.name, "resource", statement.span, context.nameSpan(statement.span, statement.name));
+        context.declare(statement, statement.name, "extension:variable:web-resource", statement.span, context.nameSpan(statement.span, statement.name));
         return true;
-      case "ActionDeclaration":
-        if (!context.hasDeclaration(statement)) context.declare(statement, statement.name, "action", statement.span, context.nameSpan(statement.span, statement.name), { exported: statement.exported });
+      case "ExtensionStatement:web:action":
+        if (!context.hasDeclaration(statement)) context.declare(statement, statement.name, "extension:function:web-action", statement.span, context.nameSpan(statement.span, statement.name), { exported: statement.exported });
         context.visitFunction(statement);
         return true;
-      case "WatchDeclaration":
+      case "ExtensionStatement:web:watch":
         visitWatch(statement, context);
         return true;
       default:

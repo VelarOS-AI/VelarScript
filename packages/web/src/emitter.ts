@@ -11,13 +11,20 @@ import { cssPropertyName, LOOK_ARITHMETIC_HINT, LOOK_MEDIA_LENGTH_UNITS, LOOK_PR
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_MODULE } from "@velarscript/compiler/extension";
 import { WEB_RUNTIME_FOUNDATION, WEB_RUNTIME_FOUNDATION_SHARED_ERROR } from "./runtime-foundation.ts";
+import {
+  isWebExpression,
+  isWebJsx,
+  isWebLook,
+  isWebStatement,
+  isWebUnit,
+  type WebComponentDeclaration as ComponentDeclaration,
+  type WebJsxAttribute as JSXAttribute,
+  type WebJsxElementExpression as JSXElementExpression,
+  type WebLookEntry as LookEntry,
+  type WebLookExpression as LookExpression,
+} from "./ast.ts";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
-type ComponentDeclaration = Extract<Statement, { readonly kind: "ComponentDeclaration" }>;
-type JSXElementExpression = Extract<Expression, { readonly kind: "JSXElementExpression" }>;
-type JSXAttribute = JSXElementExpression["attributes"][number];
-type LookExpression = Extract<Expression, { readonly kind: "LookExpression" }>;
-type LookEntry = LookExpression["entries"][number];
 
 interface LookStaticAtom {
   readonly kind: "hook" | "media" | "scheme";
@@ -171,18 +178,18 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   protected override visitExtensionRuntimeExpression(expression: Expression, visitExpression: (expression: Expression) => void): boolean {
-    if (expression.kind === "UnitLiteralExpression") return true;
-    if (expression.kind === "LookExpression") {
+    if (isWebUnit(expression)) return true;
+    if (isWebLook(expression)) {
       visitLookExpressions(expression.entries, visitExpression);
       return true;
     }
-    if (expression.kind !== "JSXElementExpression") return false;
+    if (!isWebJsx(expression)) return false;
     expression.attributes.forEach((attribute) => {
       if (typeof attribute.value !== "string" && attribute.value) visitExpression(attribute.value);
     });
     expression.children.forEach((child) => {
       if (child.kind === "JSXExpressionChild") visitExpression(child.expression);
-      else if (child.kind === "JSXElementExpression") visitExpression(child);
+      else if (child.kind === "ExtensionExpression:web:jsx") visitExpression(child);
     });
     return true;
   }
@@ -192,74 +199,77 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     visitExpression: (expression: Expression) => void,
     visitStatement: (statement: Statement) => void,
   ): boolean {
-    if (statement.kind === "UnsafeCssImportDeclaration") return true;
-    if (statement.kind === "StateDeclaration" || statement.kind === "ResourceDeclaration") {
+    if (!isWebStatement(statement)) return false;
+    if (statement.kind === "ExtensionStatement:web:unsafe-css") return true;
+    if (statement.kind === "ExtensionStatement:web:state" || statement.kind === "ExtensionStatement:web:resource") {
       visitExpression(statement.initializer);
       return true;
     }
-    if (statement.kind === "ActionDeclaration") {
+    if (statement.kind === "ExtensionStatement:web:action") {
       statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
       statement.body.forEach(visitStatement);
       return true;
     }
-    if (statement.kind === "WatchDeclaration") {
+    if (statement.kind === "ExtensionStatement:web:watch") {
       visitExpression(statement.expression);
       statement.body.forEach(visitStatement);
       return true;
     }
-    if (statement.kind !== "ComponentDeclaration") return false;
+    if (statement.kind !== "ExtensionStatement:web:component") return false;
     statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
     statement.body.forEach((item) => {
-      if (item.kind === "StateDeclaration" || item.kind === "ResourceDeclaration") visitExpression(item.initializer);
-      else if (item.kind === "ActionDeclaration") {
+      if (item.kind === "ExtensionStatement:web:state" || item.kind === "ExtensionStatement:web:resource") visitExpression(item.initializer);
+      else if (item.kind === "ExtensionStatement:web:action") {
         item.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
         item.body.forEach(visitStatement);
-      } else if (item.kind === "WatchDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:watch") {
         visitExpression(item.expression);
         item.body.forEach(visitStatement);
-      } else if (item.kind === "ExposeDeclaration") visitExpression(item.value);
-      else if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") item.body.forEach(visitStatement);
+      } else if (item.kind === "ExtensionStatement:web:expose") visitExpression(item.value);
+      else if (item.kind === "ExtensionStatement:web:mounted" || item.kind === "ExtensionStatement:web:cleanup") item.body.forEach(visitStatement);
       else visitStatement(item);
     });
     return true;
   }
 
   protected override extensionExpressionContainsDirectAwait(expression: Expression): boolean | undefined {
-    if (expression.kind === "UnitLiteralExpression") return false;
-    if (expression.kind === "LookExpression") return lookExpressions(expression.entries).some((value) => this.expressionContainsDirectAwait(value));
-    if (expression.kind !== "JSXElementExpression") return undefined;
+    if (isWebUnit(expression)) return false;
+    if (isWebLook(expression)) return lookExpressions(expression.entries).some((value) => this.expressionContainsDirectAwait(value));
+    if (!isWebJsx(expression)) return undefined;
     return expression.attributes.some((attribute) => typeof attribute.value !== "string"
       && attribute.value !== null
       && this.expressionContainsDirectAwait(attribute.value))
       || expression.children.some((child) => child.kind === "JSXExpressionChild"
         ? this.expressionContainsDirectAwait(child.expression)
-        : child.kind === "JSXElementExpression" && this.expressionContainsDirectAwait(child));
+        : child.kind === "ExtensionExpression:web:jsx" && this.expressionContainsDirectAwait(child));
   }
 
   protected override emitStatement(statement: Statement, depth: number): string {
-    if (statement.kind === "UnsafeCssImportDeclaration") return "";
-    if (statement.kind === "ComponentDeclaration") return this.emitComponent(statement, depth);
-    if (statement.kind === "StateDeclaration") {
-      const indentation = "  ".repeat(depth);
-      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarState(${this.emitMappedExpression(statement.initializer)});`;
-    }
-    if (statement.kind === "ResourceDeclaration") return "";
-    if (statement.kind === "ActionDeclaration") {
-      // A module action wires the same reactive pending/error cells as a
-      // component action, but it lives in the never-destroyed global scope, so
-      // its lifetime is the module and no component disposal applies.
-      const indentation = "  ".repeat(depth);
-      const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-      const actionLines = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean);
-      if (!this.blockAlwaysReturns(statement.body)) actionLines.push(`${"  ".repeat(depth + 1)}return null;`);
-      const actionBody = actionLines.join("\n");
-      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(statement.name)});`;
-    }
-    if (statement.kind === "WatchDeclaration") {
-      const indentation = "  ".repeat(depth);
-      const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");
-      const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
-      return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope);`;
+    if (isWebStatement(statement)) {
+      if (statement.kind === "ExtensionStatement:web:unsafe-css") return "";
+      if (statement.kind === "ExtensionStatement:web:component") return this.emitComponent(statement, depth);
+      if (statement.kind === "ExtensionStatement:web:state") {
+        const indentation = "  ".repeat(depth);
+        return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarState(${this.emitMappedExpression(statement.initializer)});`;
+      }
+      if (statement.kind === "ExtensionStatement:web:resource") return "";
+      if (statement.kind === "ExtensionStatement:web:action") {
+        // A module action wires the same reactive pending/error cells as a
+        // component action, but it lives in the never-destroyed global scope, so
+        // its lifetime is the module and no component disposal applies.
+        const indentation = "  ".repeat(depth);
+        const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
+        const actionLines = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean);
+        if (!this.blockAlwaysReturns(statement.body)) actionLines.push(`${"  ".repeat(depth + 1)}return null;`);
+        const actionBody = actionLines.join("\n");
+        return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(statement.name)});`;
+      }
+      if (statement.kind === "ExtensionStatement:web:watch") {
+        const indentation = "  ".repeat(depth);
+        const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");
+        const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+        return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope);`;
+      }
     }
     if (statement.kind === "AssignmentStatement") {
       const reactive = this.emitReactiveAssignment(statement, depth);
@@ -269,11 +279,11 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   }
 
   protected override emitExpression(expression: Expression): string {
-    if (expression.kind === "UnitLiteralExpression") return JSON.stringify(expression.raw);
+    if (isWebUnit(expression)) return JSON.stringify(expression.raw);
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
-      && (expression.operand.kind === "UnitLiteralExpression"
+      && (isWebUnit(expression.operand)
         || this.hints.extensionCalls.get(spanIdentity(expression.span)) === LOOK_ARITHMETIC_HINT)) {
-      if (expression.operand.kind === "UnitLiteralExpression") {
+      if (isWebUnit(expression.operand)) {
         const value = expression.operator === "-" ? -expression.operand.value : expression.operand.value;
         return JSON.stringify(`${Object.is(value, -0) ? 0 : value}${expression.operand.unit}`);
       }
@@ -284,8 +294,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         || this.hints.extensionCalls.get(spanIdentity(expression.span)) === LOOK_ARITHMETIC_HINT)) {
       return this.emitLookArithmetic(expression);
     }
-    if (expression.kind === "LookHookExpression") return "false";
-    if (expression.kind === "LookExpression") return this.emitLook(expression);
+    if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") return "false";
+    if (isWebLook(expression)) return this.emitLook(expression);
     if (expression.kind === "IdentifierExpression") {
       if (this.hints.reactiveReferences.has(spanIdentity(expression.span))) {
         return `${expression.name}.get()`;
@@ -296,7 +306,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const controlled = this.hints.extensionLiterals.get(spanIdentity(expression.span));
       if (controlled !== undefined) return JSON.stringify(controlled);
     }
-    if (expression.kind === "JSXElementExpression") {
+    if (isWebJsx(expression)) {
       return this.emitJsx(expression, this.currentScope ?? "__velarGlobalScope", this.currentScope !== null, this.currentJsxNamespace, false);
     }
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
@@ -389,25 +399,25 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     let mountedBody: readonly Statement[] = [];
     let cleanupBody: readonly Statement[] = [];
     for (const item of statement.body) {
-      if (item.kind === "StateDeclaration") {
+      if (item.kind === "ExtensionStatement:web:state") {
         lines.push(`${bodyIndent}const ${item.name} = __velarState(${this.emitMappedExpression(item.initializer)});`);
-      } else if (item.kind === "ResourceDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:resource") {
         lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitMappedExpression(item.initializer)}, __scope, ${JSON.stringify(item.name)});`);
-      } else if (item.kind === "ActionDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:action") {
         const parameters = item.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
         const actionLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean);
         if (!this.blockAlwaysReturns(item.body)) actionLines.push(`${"  ".repeat(depth + 3)}return null;`);
         const actionBody = actionLines.join("\n");
         lines.push(`${bodyIndent}const ${item.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${bodyIndent}` : ""}}, __scope, ${JSON.stringify(item.name)});`);
-      } else if (item.kind === "WatchDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:watch") {
         const parameters = [item.currentName, item.previousName].filter((name): name is string => name !== null).join(", ");
         const watchLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
         lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __scope);`);
-      } else if (item.kind === "ExposeDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:expose") {
         expose ??= item.value;
-      } else if (item.kind === "MountedBlock") {
+      } else if (item.kind === "ExtensionStatement:web:mounted") {
         mountedBody = item.body;
-      } else if (item.kind === "CleanupBlock") {
+      } else if (item.kind === "ExtensionStatement:web:cleanup") {
         cleanupBody = item.body;
       } else if (item.kind === "ReturnStatement") {
         render = item.value;
@@ -587,7 +597,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (child.kind === "JSXText") {
         const text = normalizeJsxText(child.value);
         if (text) lines.push(this.emitMappedJavaScript(child.span, () => `__velarDomAppend(${element}, __velarDomCreateTextNode(${JSON.stringify(text)}));`));
-      } else if (child.kind === "JSXElementExpression") {
+      } else if (child.kind === "ExtensionExpression:web:jsx") {
         lines.push(this.emitMappedJavaScript(child.span, () => `__velarAppend(${element}, ${this.emitJsx(child, scope, true, childNamespace)});`));
       } else {
         lines.push(this.emitMappedJavaScript(child.expression.span, () => this.emitDynamicChild(element, child.expression, scope, childNamespace)));
@@ -599,7 +609,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   private emitJsxChildren(children: JSXElementExpression["children"], scope: string, namespace: string): string {
     const fragmentSpan = children[0]?.span ?? { start: 0, end: 0 };
-    const fragment: JSXElementExpression = { kind: "JSXElementExpression", tag: "", tagSpan: { start: fragmentSpan.start, end: fragmentSpan.start }, attributes: [], children, span: fragmentSpan };
+    const fragment: JSXElementExpression = { kind: "ExtensionExpression:web:jsx", tag: "", tagSpan: { start: fragmentSpan.start, end: fragmentSpan.start }, attributes: [], children, span: fragmentSpan };
     return this.emitJsx(fragment, scope, true, namespace);
   }
 
@@ -691,7 +701,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const visit = (value: unknown): void => {
       if (!value || typeof value !== "object") return;
       const record = value as Record<string, unknown>;
-      if (record.kind === "JSXElementExpression") {
+      if (record.kind === "ExtensionExpression:web:jsx") {
         const element = record as unknown as JSXElementExpression;
         for (const attribute of element.attributes) {
           if (!attribute.name.startsWith("look:")) continue;
@@ -702,7 +712,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
           rules.set(token, { token, property, target: "", staticAtoms: [] });
         }
       }
-      if (record.kind === "LookExpression") {
+      if (record.kind === "ExtensionExpression:web:look") {
         const collect = (entries: readonly LookEntry[], contexts: readonly LookConditionTerm[] = [EMPTY_LOOK_TERM], target = ""): void => {
           for (const entry of entries) {
             if (entry.kind === "LookProperty") {
@@ -742,7 +752,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const before: string[] = [];
     const after: string[] = [];
     for (const statement of program.body) {
-      if (statement.kind !== "UnsafeCssImportDeclaration") continue;
+      if (!isWebStatement(statement) || statement.kind !== "ExtensionStatement:web:unsafe-css") continue;
       const source = this.resourceContents.get(statement.source) ?? "";
       (statement.placement === "after" ? after : before).push(source.trim());
     }
@@ -791,7 +801,7 @@ export interface DynamicChildLeaf {
 export function jsxKeyedList(expression: Expression): JsxKeyedList | null {
   if (expression.kind !== "CallExpression" || expression.callee.kind !== "MemberExpression" || expression.callee.property !== "map") return null;
   const callback = expression.arguments[0];
-  if (!callback || callback.kind !== "ArrowFunctionExpression" || callback.asynchronous || callback.parameters.length !== 1 || callback.body.kind !== "JSXElementExpression") return null;
+  if (!callback || callback.kind !== "ArrowFunctionExpression" || callback.asynchronous || callback.parameters.length !== 1 || callback.body.kind !== "ExtensionExpression:web:jsx") return null;
   const arrow = callback as typeof callback & { readonly body: JSXElementExpression };
   const key = arrow.body.attributes.find((attribute) => attribute.name === "key") ?? null;
   return { source: expression.callee.object, arrow, key };
@@ -828,7 +838,7 @@ function lookConditionTerms(
     const right = lookConditionTerms(expression.right, negated, staticValues);
     return conjunction ? combineLookTerms(left, right) : [...left, ...right].slice(0, LOOK_CONDITION_TERM_LIMIT);
   }
-  if (expression.kind === "LookHookExpression") {
+  if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") {
     return [{ staticAtoms: [{ kind: "hook", name: expression.name, negated }], runtimeAtoms: [] }];
   }
   const media = viewportAtom(expression, negated, staticValues) ?? schemeAtom(expression, negated);
@@ -940,7 +950,7 @@ function kebab(value: string): string {
   return value.replace(/[A-Z]/gu, (character) => `-${character.toLowerCase()}`);
 }
 
-function visitLookExpressions(entries: Extract<Expression, { kind: "LookExpression" }>["entries"], visit: (expression: Expression) => void): void {
+function visitLookExpressions(entries: readonly LookEntry[], visit: (expression: Expression) => void): void {
   for (const entry of entries) {
     if (entry.kind === "LookProperty" || entry.kind === "LookSpread") visit(entry.value);
     else if (entry.kind === "LookIf") {
@@ -951,7 +961,7 @@ function visitLookExpressions(entries: Extract<Expression, { kind: "LookExpressi
   }
 }
 
-function lookExpressions(entries: Extract<Expression, { kind: "LookExpression" }>["entries"]): readonly Expression[] {
+function lookExpressions(entries: readonly LookEntry[]): readonly Expression[] {
   const output: Expression[] = [];
   visitLookExpressions(entries, (expression) => output.push(expression));
   return output;
@@ -960,7 +970,7 @@ function lookExpressions(entries: Extract<Expression, { kind: "LookExpression" }
 function containsUnitLiteral(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  if (record.kind === "UnitLiteralExpression") return true;
+  if (record.kind === "ExtensionExpression:web:unit") return true;
   for (const child of Object.values(record)) {
     if (Array.isArray(child)) {
       if (child.some(containsUnitLiteral)) return true;
@@ -972,8 +982,8 @@ function containsUnitLiteral(value: unknown): boolean {
 function containsWebSyntax(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  if (record.kind === "ComponentDeclaration" || record.kind === "ExposeDeclaration" || record.kind === "UnsafeCssImportDeclaration" || record.kind === "LookExpression" || record.kind === "JSXElementExpression"
-    || record.kind === "StateDeclaration" || record.kind === "ResourceDeclaration" || record.kind === "ActionDeclaration" || record.kind === "WatchDeclaration") return true;
+  if (record.kind === "ExtensionStatement:web:component" || record.kind === "ExtensionStatement:web:expose" || record.kind === "ExtensionStatement:web:unsafe-css" || record.kind === "ExtensionExpression:web:look" || record.kind === "ExtensionExpression:web:jsx"
+    || record.kind === "ExtensionStatement:web:state" || record.kind === "ExtensionStatement:web:resource" || record.kind === "ExtensionStatement:web:action" || record.kind === "ExtensionStatement:web:watch") return true;
   if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "computed")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
 }

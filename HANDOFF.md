@@ -2440,15 +2440,54 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   2,118 bytes，仍远低于 10 MiB。没有遗留测试进程；VelarOS Desktop 产品工作树保持干净，
   Workbench 仍只有并行函数返回值推断相关的既有 5 文件变化；未推送、未发布、未提升版本。
 
+- W-126 把 W-125 之后暴露出的目标边界从约定收敛成可执行的扩展契约。Core 现在只拥有通用
+  `CoreStatement/CoreExpression`、带命名空间的 extension AST 容器、extension type family、类型遍历/
+  替换/统一、语义类别、formatter/analysis/emitter hooks 和模块图；Core AST、parser、analyzer、types、
+  semantic 与 formatter 中不再出现 WebNode、Component、JSX、Look、mounted 等 Web 目标概念。
+  Web 自己拥有带 `web:` 前缀的 AST discriminants、WebNode/Component/Handle 类型族、类型语法解析、
+  assignability、成员表、诊断、编辑器、格式化、lowering 与 runtime。Node 仍只拥有 host capability；
+  Desktop 作为 application extension 通过公开 `composes` 明确声明 Web/Node API provenance，并逐层列出
+  Web compiler 组合，不再用对象 spread 隐式继承未来新增层。`extends` 只表示扩展依赖，`composes`
+  只表示应用目标组合，CLI 会验证 package、contract 与 API version 一致。
+
+  新增的 target-neutral Game execution probe 定义自己的 `Entity` type family、类型语法、成员和
+  `spawnEntity` runtime；同一 Core 在没有 Game extension 时给出 unknown type，加载 extension 后生成
+  JavaScript 并真实执行得到 `Ada`，证明未来 Game 不需要给 Core 增加分支。compiler lowering 的验证
+  同时覆盖 Web 诊断、模块接口、生成代码和真实执行；`runtime-abi.ts` 未改且继续是 ABI literal 单一
+  来源。边界 guard 现在永久禁止目标词汇重新进入 Core，并要求 Web type owner、通用类型 hooks、
+  Desktop 显式组合和 application-only `composes`。
+
+  编辑器同样改为通用 extension semantic categories；extension 还能独立声明 source type hint 与
+  presentation kind，因此 Web component 语义仍是 callable，同时以 class/constructor 形态展示，CLI
+  不需要识别 `web-component`。Workbench 安装态验收进一步发现大量 Look/Style 补全会把原生 SVG
+  属性挤出前 160 项；Web extension 现在优先原生 HTML/SVG 属性，`viewBox`/`stroke-width` 在有界结果
+  中保持可见。formatter 只有加载对应 extension 才保护 angle-embedded syntax；Core 单文件格式化不再
+  自带 Web void tags 或 JSX 假设。
+
+  最终证据为 `npm run check`（51 个格式化源、105 个文档示例、67 项 runtime boundary）、574 项串行
+  compiler/runtime/CLI/Desktop/hardening/publication tests 中 573 通过；唯一失败仍是并行函数返回值推断
+  工作拥有的 `empty collection inference follows runtime aliases instead of individual bindings` 基线，
+  本轮没有修改或伪造该语义。新增/相关目标测试、六包 packed consumer acceptance、publication
+  rehearsal、Workbench 对 rehearsal 六包的安装态验收、完整 Dev/Production/External Preview、
+  27+6+15+6 三浏览器和 installed browser project 全部通过。Lite 无语言缺陷补丁、无 workspace、无
+  Desktop 私有依赖，独立通过 10/22/21/29 模块 check、40 shared + 42 server tests、真实 concurrent/
+  disconnected server acceptance、package acceptance、54/54 Desktop 三浏览器与 CLI/Desktop production
+  build。薄包为 1,098,994 bytes（1.05 MiB）：host 301,792、renderer 591,161、capability host 48,638、
+  metadata 157,403，外置 Node.js >=24，SHA-256 为
+  `d5973cfcf44578db92e8223ac75e29852833b963212f7e2376236b790585eb82`。metadata 增长来自已合入的
+  155,952-byte 官方 macOS 品牌图标；Lite 的独立薄包门槛从不再真实的 1 MiB 调整为 2 MiB，仍远低于
+  Desktop 公开 10 MiB 预算。未推送、未发布、未提升版本。
+
 下一执行顺序：
 
-1. 从 W-125 已闭合的 computed failure/recovery、managed Web async host 与 schema 0.12 契约继续，
-   不得恢复 computed declaration、名字驱动 lowering、`VEL5054` alias 限制或 W-122/W-123 工作。
-2. 下一波优先审计其余“模块初始化后才执行”的 Web runtime 路径，重点是 props/Look 值构造、
-   mounted/cleanup/event Promise 观察、dynamic/lazy child 销毁与重复挂载；用 Lite reload/stop、四个官方
-   示例和 hostile post-initialization execution 找真实断裂，相同 host-operation 类别集中收敛。
+1. 以 W-126 的 target-extension contract 为新边界，后续 Web、Node、Desktop、Game 等能力只能通过
+   自有 AST/type/semantic/editor/formatter/lowering/runtime 层扩展；不得把目标名字、目标类型 variant
+   或 host/product policy 放回 Core。
+2. 回到 W-125 留下的 Web lifecycle 队列，审计 props/Look 值构造、mounted/cleanup/event Promise
+   观察、dynamic/lazy child 销毁与重复挂载；相同 host-operation 类别集中收敛，并继续用 Lite reload/
+   stop、四个官方示例和 hostile post-initialization execution 找真实断裂。
 3. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
-4. 每次 compiler lowering 改动继续同时验证诊断、生成代码和真实执行；完成一波后再跑 compiler/
-   runtime、六包、release rehearsal、Workbench 安装态、三浏览器与 Lite 全门禁。保护 Workbench 的
-   并行 5 文件和任何新出现的并行工作，只精确暂存本轮文件；只允许本地提交。
+4. 等并行函数返回值推断工作完成后，先重跑当前唯一失败的 empty-collection alias regression，再跑完整
+   compiler/runtime、六包、release rehearsal、Workbench 安装态、三浏览器与 Lite 全门禁；保护任何
+   新出现的并行工作，只精确暂存本轮文件，只允许本地提交。

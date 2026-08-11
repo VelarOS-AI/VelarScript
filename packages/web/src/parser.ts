@@ -5,7 +5,20 @@ import {
   type Expression,
   type Statement,
   type Token,
+  type TypeSyntax,
 } from "@velarscript/compiler/extension";
+import type {
+  WebActionDeclaration as ActionDeclaration,
+  WebComponentDeclaration as ComponentDeclaration,
+  WebComponentItem as ComponentItem,
+  WebExposeDeclaration as ExposeDeclaration,
+  WebJsxElementExpression as JSXElementExpression,
+  WebLookEntry as LookEntry,
+  WebResourceDeclaration as ResourceDeclaration,
+  WebStateDeclaration as StateDeclaration,
+  WebUnsafeCssImportDeclaration as UnsafeCssImportDeclaration,
+  WebWatchDeclaration as WatchDeclaration,
+} from "./ast.ts";
 import {
   WEB_JSX_TOKEN,
   WEB_LOOK_TOKEN,
@@ -14,18 +27,6 @@ import {
   type WebLookBlockSyntax,
   type WebLookLineSyntax,
 } from "./lexer.ts";
-
-type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
-type ComponentItem = ComponentDeclaration["body"][number];
-type StateDeclaration = Extract<Statement, { kind: "StateDeclaration" }>;
-type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
-type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
-type WatchDeclaration = Extract<Statement, { kind: "WatchDeclaration" }>;
-type ExposeDeclaration = Extract<ComponentItem, { kind: "ExposeDeclaration" }>;
-type UnsafeCssImportDeclaration = Extract<Statement, { kind: "UnsafeCssImportDeclaration" }>;
-type LookExpression = Extract<Expression, { kind: "LookExpression" }>;
-type LookEntry = LookExpression["entries"][number];
-type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
 
 const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
@@ -39,6 +40,19 @@ export class VelarWebParser extends Parser {
 
   protected override createNestedParser(tokens: readonly Token[]): Parser {
     return new VelarWebParser(tokens, this.lexicalExtensions);
+  }
+
+  protected override validateExtensionTypeArguments(name: string, arguments_: readonly TypeSyntax[], nameSpan: Span): boolean {
+    if (name !== "Component") return false;
+    if (arguments_.length !== 1 && arguments_.length !== 2) {
+      this.diagnostics.push(diagnostic("VEL2012", "Type 'Component' expects 1 or 2 type arguments", nameSpan));
+    }
+    return true;
+  }
+
+  protected override parseExtensionNumericLiteral(token: Token, value: number, unit: string): Expression {
+    const expression = { kind: "ExtensionExpression:web:unit", value, unit, raw: token.value, span: token.span } as const;
+    return expression;
   }
 
   protected override parseExtensionStatement(
@@ -113,7 +127,13 @@ export class VelarWebParser extends Parser {
     if ((!source.value.startsWith("./") && !source.value.startsWith("../")) || !source.value.endsWith(".css")) {
       this.diagnostics.push(diagnostic("VEL5037", "Unsafe CSS imports require an explicit relative path ending in '.css'", source.span));
     }
-    return { kind: "UnsafeCssImportDeclaration", source: source.value, placement, span: span(start, this.previous().span.end) } satisfies UnsafeCssImportDeclaration;
+    const declaration: UnsafeCssImportDeclaration = {
+      kind: "ExtensionStatement:web:unsafe-css",
+      source: source.value,
+      placement,
+      span: span(start, this.previous().span.end),
+    };
+    return declaration;
   }
 
   protected override parseExtensionExpression(token: Token): Expression | undefined {
@@ -148,7 +168,8 @@ export class VelarWebParser extends Parser {
         : this.parseNestedExpression(text, offset),
       (item) => this.diagnostics.push(item),
     ).parse();
-    return { kind: "LookExpression", entries, span: span(token.span.start, block.span.end) };
+    const expression = { kind: "ExtensionExpression:web:look", entries, span: span(token.span.start, block.span.end) } as const;
+    return expression;
   }
 
   // A '{for item in items: ...}' block inside JSX gets targeted guidance to
@@ -185,7 +206,7 @@ export class VelarWebParser extends Parser {
     const type = this.match("colon") ? this.parseTypeReference() : null;
     this.expect("assign", "Expected '=' after state name");
     const initializer = this.parseExpression();
-    return { kind: "StateDeclaration", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
+    return { kind: "ExtensionStatement:web:state", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
   }
 
   private parseResourceDeclaration(start: number, exported: boolean): ResourceDeclaration {
@@ -193,7 +214,7 @@ export class VelarWebParser extends Parser {
     const type = this.match("colon") ? this.parseTypeReference() : null;
     this.expect("assign", "Expected '=' after resource name");
     const initializer = this.parseExpression();
-    return { kind: "ResourceDeclaration", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
+    return { kind: "ExtensionStatement:web:resource", exported, name: name.value, type, initializer, span: span(start, initializer.span.end) };
   }
 
   private parseActionDeclaration(start: number, exported: boolean): ActionDeclaration {
@@ -204,7 +225,7 @@ export class VelarWebParser extends Parser {
     const body = this.parseBlock();
     const end = body.at(-1)?.span.end ?? returnType?.span.end ?? name.span.end;
     return {
-      kind: "ActionDeclaration",
+      kind: "ExtensionStatement:web:action",
       exported,
       name: name.value,
       parameters,
@@ -225,7 +246,7 @@ export class VelarWebParser extends Parser {
       previousName = this.expect("identifier", "Expected the previous watch value name").value;
     }
     const body = this.parseBlock();
-    return { kind: "WatchDeclaration", expression, currentName, previousName, body, span: span(start, body.at(-1)?.span.end ?? expression.span.end) };
+    return { kind: "ExtensionStatement:web:watch", expression, currentName, previousName, body, span: span(start, body.at(-1)?.span.end ?? expression.span.end) };
   }
 
   private parseComponent(start: number, exported: boolean): ComponentDeclaration {
@@ -253,7 +274,7 @@ export class VelarWebParser extends Parser {
       let item: ComponentItem | null = null;
       if (this.matchExtensionKeyword("expose")) {
         const value = this.parseExpression();
-        item = { kind: "ExposeDeclaration", value, span: span(itemStart, value.span.end) } satisfies ExposeDeclaration;
+        item = { kind: "ExtensionStatement:web:expose", value, span: span(itemStart, value.span.end) } satisfies ExposeDeclaration;
       } else if (this.matchExtensionKeyword("state")) {
         item = this.parseStateDeclaration(itemStart, false);
       } else if (this.matchExtensionKeyword("resource")) {
@@ -264,10 +285,10 @@ export class VelarWebParser extends Parser {
         item = this.parseWatchDeclaration(itemStart);
       } else if (this.matchExtensionKeyword("mounted")) {
         const body = this.parseBlock();
-        item = { kind: "MountedBlock", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
+        item = { kind: "ExtensionStatement:web:mounted", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
       } else if (this.matchExtensionKeyword("cleanup")) {
         const body = this.parseBlock();
-        item = { kind: "CleanupBlock", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
+        item = { kind: "ExtensionStatement:web:cleanup", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
       } else if (this.check("identifier") && renderBlockSpellings.has(this.current().value) && this.peekKind(1) === "colon") {
         const keyword = this.advance();
         this.diagnostics.push(diagnostic(
@@ -277,14 +298,14 @@ export class VelarWebParser extends Parser {
         ));
         this.skipMistypedDeclaration();
       } else {
-        item = this.parseStatement();
+        item = this.parseStatement() as ComponentItem | null;
       }
       if (item) body.push(item);
       if (this.previous().kind !== "dedent") this.expectStatementEnd();
       this.consumeNewlines();
     }
     const close = this.expect("dedent", "Expected the end of component body");
-    return { kind: "ComponentDeclaration", exported, name: name.value, parameters, handleType, body, span: span(start, body.at(-1)?.span.end ?? close.span.end) };
+    return { kind: "ExtensionStatement:web:component", exported, name: name.value, parameters, handleType, body, span: span(start, body.at(-1)?.span.end ?? close.span.end) };
   }
 }
 
@@ -342,7 +363,7 @@ function jsxExpression(
   report: (item: Diagnostic) => void,
 ): JSXElementExpression {
   return {
-    kind: "JSXElementExpression",
+    kind: "ExtensionExpression:web:jsx",
     tag: syntax.tag,
     tagSpan: syntax.tagSpan,
     attributes: syntax.attributes.map((attribute) => ({
@@ -579,7 +600,8 @@ class LookSourceParser {
 
 function replaceLookHooks(expression: Expression, hooks: ReadonlyMap<number, string>): Expression {
   if (expression.kind === "IdentifierExpression" && hooks.has(expression.span.start)) {
-    return { kind: "LookHookExpression", name: hooks.get(expression.span.start)!, span: expression.span };
+    const hook = { kind: "ExtensionExpression:web:look-hook", name: hooks.get(expression.span.start)!, span: expression.span } as const;
+    return hook;
   }
   const visit = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(visit);
@@ -588,7 +610,7 @@ function replaceLookHooks(expression: Expression, hooks: ReadonlyMap<number, str
     if (record.kind === "IdentifierExpression" && typeof record.span === "object" && record.span) {
       const sourceSpan = record.span as Span;
       const name = hooks.get(sourceSpan.start);
-      if (name) return { kind: "LookHookExpression", name, span: sourceSpan };
+      if (name) return { kind: "ExtensionExpression:web:look-hook", name, span: sourceSpan };
     }
     return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, key === "span" ? child : visit(child)]));
   };

@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatSource } from "@velarscript/compiler";
+import { velarCompilerExtension as webCompilerExtension } from "@velarscript/web/compiler";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ignoredDirectories = new Set(["node_modules", "dist", ".velar"]);
@@ -13,7 +14,8 @@ const failures = [];
 
 for (const file of files) {
   const source = await readFile(file, "utf8");
-  if (formatSource(source) !== source) failures.push(relative(root, file));
+  const webOwned = /(?:^|\n)\s*(?:component|state|resource|action|watch|mounted|cleanup)\b|<[A-Za-z][A-Za-z0-9_.:-]*(?:\s|\/?>)/u.test(source);
+  if (formatSource(source, { extensions: webOwned ? [webCompilerExtension] : [] }) !== source) failures.push(relative(root, file));
 }
 
 if (failures.length > 0) {

@@ -34,7 +34,11 @@
       "kind": "application",
       "apiVersion": "0.10",
       "manifestKey": "desktop",
-      "extends": {}
+      "extends": {},
+      "composes": {
+        "@velarscript/web": "0.10",
+        "@velarscript/node": "0.10"
+      }
     }
   },
   "dependencies": {

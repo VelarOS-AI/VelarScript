@@ -31,7 +31,7 @@ export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNa
 export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { analysisTypeIdentity, describeType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
@@ -546,6 +546,14 @@ function interfaceOf(
   for (const statement of program.body) {
     if (statement.kind === "TypeAliasDeclaration") aliasDeclarations.set(statement.name, statement);
   }
+  const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
+  const resolveRaw = (reference: TypeReference): ValueType => resolveTypeReference(reference, (syntax, nested) => {
+    for (const extension of analysisExtensions) {
+      const resolved = extension.resolveTypeSyntax?.(syntax, nested);
+      if (resolved) return resolved;
+    }
+    return undefined;
+  });
   const aliasCache = new Map<string, ValueType>();
   const expandAliases = (type: ValueType, seen: ReadonlySet<string> = new Set()): ValueType => {
     if (type.kind === "named" && aliasDeclarations.has(type.name)) {
@@ -553,7 +561,7 @@ function interfaceOf(
       const cached = aliasCache.get(type.name);
       if (cached) return type.readonlyView ? readonlyViewOf(cached) : cached;
       const declaration = aliasDeclarations.get(type.name)!;
-      const expanded = expandAliases(resolveTypeReference(declaration.target), new Set([...seen, type.name]));
+      const expanded = expandAliases(resolveRaw(declaration.target), new Set([...seen, type.name]));
       aliasCache.set(type.name, expanded);
       return type.readonlyView ? readonlyViewOf(expanded) : expanded;
     }
@@ -566,11 +574,11 @@ function interfaceOf(
     if (type.kind === "runtimeType") return { kind: "runtimeType", value: expandAliases(type.value, seen) };
     if (type.kind === "typeObject") return type.value ? { ...type, value: expandAliases(type.value, seen) } : type;
     if (type.kind === "object") return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, expandAliases(value, seen)])) };
-    if (type.kind === "component" || type.kind === "componentConstructor") {
+    if (type.kind === "extension") {
       return {
         ...type,
-        props: new Map([...type.props].map(([name, value]) => [name, expandAliases(value, seen)])),
-        handle: type.handle ? expandAliases(type.handle, seen) : null,
+        properties: new Map([...type.properties].map(([name, value]) => [name, expandAliases(value, seen)])),
+        arguments: type.arguments.map((argument) => expandAliases(argument, seen)),
       };
     }
     if (type.kind === "function" || type.kind === "action" || type.kind === "intrinsic") return {
@@ -582,7 +590,7 @@ function interfaceOf(
     if (type.kind === "union") return { kind: "union", members: type.members.map((member) => expandAliases(member, seen)) };
     return type;
   };
-  const resolve = (reference: TypeReference | null): ValueType => resolveNominals(expandAliases(reference ? resolveTypeReference(reference) : unknownType), classIdentities, enumNames, namedTypeIdentities);
+  const resolve = (reference: TypeReference | null): ValueType => resolveNominals(expandAliases(reference ? resolveRaw(reference) : unknownType), classIdentities, enumNames, namedTypeIdentities);
   const resolveAnalyzed = (type: ValueType): ValueType => resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities);
   const resolvedAnalyzedBindings = new Map([...analyzedBindings]
     .map(([name, type]) => [name, resolveNominals(expandAliases(type), classIdentities, enumNames, namedTypeIdentities)]));
@@ -871,10 +879,10 @@ function resolveNominals(
     result: resolveNominals(type.result, classIdentities, enumNames, namedTypeIdentities),
   };
   if (type.kind === "union") return { kind: "union", members: type.members.map((member) => resolveNominals(member, classIdentities, enumNames, namedTypeIdentities)) };
-  if (type.kind === "component" || type.kind === "componentConstructor") return {
+  if (type.kind === "extension") return {
     ...type,
-    props: new Map([...type.props].map(([name, value]) => [name, resolveNominals(value, classIdentities, enumNames, namedTypeIdentities)])),
-    handle: type.handle ? resolveNominals(type.handle, classIdentities, enumNames, namedTypeIdentities) : null,
+    properties: new Map([...type.properties].map(([name, value]) => [name, resolveNominals(value, classIdentities, enumNames, namedTypeIdentities)])),
+    arguments: type.arguments.map((argument) => resolveNominals(argument, classIdentities, enumNames, namedTypeIdentities)),
   };
   return type;
 }

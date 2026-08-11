@@ -6,16 +6,10 @@ export interface Program {
   readonly span: Span;
 }
 
-export type Statement =
+export type CoreStatement =
   | ImportDeclaration
   | ReExportDeclaration
-  | UnsafeCssImportDeclaration
   | ExternModuleDeclaration
-  | ComponentDeclaration
-  | StateDeclaration
-  | ResourceDeclaration
-  | ActionDeclaration
-  | WatchDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
   | EnumDeclaration
@@ -35,6 +29,19 @@ export type Statement =
   | PassStatement
   | AssignmentStatement
   | ExpressionStatement;
+
+export type Statement = CoreStatement | ExtensionStatement;
+
+/**
+ * Target and framework syntax travels through one opaque Core AST slot. The
+ * template-literal discriminator keeps extension nodes disjoint from Core
+ * node names while allowing an extension package to publish its own strongly
+ * typed node interfaces without changing this union.
+ */
+export interface ExtensionStatement {
+  readonly kind: `ExtensionStatement:${string}`;
+  readonly span: Span;
+}
 
 export interface ImportDeclaration {
   readonly kind: "ImportDeclaration";
@@ -64,13 +71,6 @@ export interface ReExportDeclaration {
 export interface ReExportSpecifier {
   readonly imported: string;
   readonly exported: string;
-  readonly span: Span;
-}
-
-export interface UnsafeCssImportDeclaration {
-  readonly kind: "UnsafeCssImportDeclaration";
-  readonly source: string;
-  readonly placement: "before" | "after";
   readonly span: Span;
 }
 
@@ -132,82 +132,6 @@ export interface AssertStatement {
   readonly kind: "AssertStatement";
   readonly condition: Expression;
   readonly message: Expression | null;
-  readonly span: Span;
-}
-
-export interface ComponentDeclaration {
-  readonly kind: "ComponentDeclaration";
-  readonly exported: boolean;
-  readonly name: string;
-  readonly parameters: readonly Parameter[];
-  readonly handleType: TypeReference | null;
-  readonly body: readonly ComponentItem[];
-  readonly span: Span;
-}
-
-export type ComponentItem =
-  | Statement
-  | StateDeclaration
-  | ResourceDeclaration
-  | ActionDeclaration
-  | WatchDeclaration
-  | ExposeDeclaration
-  | MountedBlock
-  | CleanupBlock;
-
-export interface ExposeDeclaration {
-  readonly kind: "ExposeDeclaration";
-  readonly value: Expression;
-  readonly span: Span;
-}
-
-export interface StateDeclaration {
-  readonly kind: "StateDeclaration";
-  readonly exported: boolean;
-  readonly name: string;
-  readonly type: TypeReference | null;
-  readonly initializer: Expression;
-  readonly span: Span;
-}
-
-export interface ResourceDeclaration {
-  readonly kind: "ResourceDeclaration";
-  readonly exported: boolean;
-  readonly name: string;
-  readonly type: TypeReference | null;
-  readonly initializer: Expression;
-  readonly span: Span;
-}
-
-export interface ActionDeclaration {
-  readonly kind: "ActionDeclaration";
-  readonly exported: boolean;
-  readonly name: string;
-  readonly parameters: readonly Parameter[];
-  readonly returnType: TypeReference | null;
-  readonly signatureSpan: Span;
-  readonly body: readonly Statement[];
-  readonly span: Span;
-}
-
-export interface WatchDeclaration {
-  readonly kind: "WatchDeclaration";
-  readonly expression: Expression;
-  readonly currentName: string | null;
-  readonly previousName: string | null;
-  readonly body: readonly Statement[];
-  readonly span: Span;
-}
-
-export interface MountedBlock {
-  readonly kind: "MountedBlock";
-  readonly body: readonly Statement[];
-  readonly span: Span;
-}
-
-export interface CleanupBlock {
-  readonly kind: "CleanupBlock";
-  readonly body: readonly Statement[];
   readonly span: Span;
 }
 
@@ -591,7 +515,7 @@ export interface ExpressionStatement {
   readonly span: Span;
 }
 
-export type Expression =
+export type CoreExpression =
   | LiteralExpression
   | FStringExpression
   | IdentifierExpression
@@ -609,66 +533,20 @@ export type Expression =
   | ArrowFunctionExpression
   | CallExpression
   | MemberExpression
-  | IndexExpression
-  | UnitLiteralExpression
-  | LookHookExpression
-  | LookExpression
-  | JSXElementExpression;
+  | IndexExpression;
+
+export type Expression = CoreExpression | ExtensionExpression;
+
+/** See ExtensionStatement. */
+export interface ExtensionExpression {
+  readonly kind: `ExtensionExpression:${string}`;
+  readonly span: Span;
+}
 
 export interface LiteralExpression {
   readonly kind: "LiteralExpression";
   readonly value: string | number | boolean | null;
   readonly raw: string;
-  readonly span: Span;
-}
-
-export interface UnitLiteralExpression {
-  readonly kind: "UnitLiteralExpression";
-  readonly value: number;
-  readonly unit: string;
-  readonly raw: string;
-  readonly span: Span;
-}
-
-export interface LookHookExpression {
-  readonly kind: "LookHookExpression";
-  readonly name: string;
-  readonly span: Span;
-}
-
-export interface LookExpression {
-  readonly kind: "LookExpression";
-  readonly entries: readonly LookEntry[];
-  readonly span: Span;
-}
-
-export type LookEntry = LookProperty | LookSpread | LookIf | LookTarget;
-
-export interface LookProperty {
-  readonly kind: "LookProperty";
-  readonly name: string;
-  readonly value: Expression;
-  readonly span: Span;
-}
-
-export interface LookSpread {
-  readonly kind: "LookSpread";
-  readonly value: Expression;
-  readonly span: Span;
-}
-
-export interface LookIf {
-  readonly kind: "LookIf";
-  readonly condition: Expression;
-  readonly thenEntries: readonly LookEntry[];
-  readonly elseEntries: readonly LookEntry[];
-  readonly span: Span;
-}
-
-export interface LookTarget {
-  readonly kind: "LookTarget";
-  readonly name: string;
-  readonly entries: readonly LookEntry[];
   readonly span: Span;
 }
 
@@ -814,35 +692,6 @@ export interface IndexExpression {
   readonly object: Expression;
   readonly index: Expression;
   readonly optional: boolean;
-  readonly span: Span;
-}
-
-export interface JSXElementExpression {
-  readonly kind: "JSXElementExpression";
-  readonly tag: string;
-  readonly tagSpan: Span;
-  readonly attributes: readonly JSXAttribute[];
-  readonly children: readonly JSXChild[];
-  readonly span: Span;
-}
-
-export interface JSXAttribute {
-  readonly name: string;
-  readonly value: string | Expression | null;
-  readonly span: Span;
-}
-
-export type JSXChild = JSXText | JSXExpressionChild | JSXElementExpression;
-
-export interface JSXText {
-  readonly kind: "JSXText";
-  readonly value: string;
-  readonly span: Span;
-}
-
-export interface JSXExpressionChild {
-  readonly kind: "JSXExpressionChild";
-  readonly expression: Expression;
   readonly span: Span;
 }
 

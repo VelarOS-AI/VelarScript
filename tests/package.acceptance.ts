@@ -83,13 +83,25 @@ try {
   assert.deepEqual(installedWebManifest.velar?.extension?.extends, {});
   const installedDesktopManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "desktop", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
-    velar: { extension: { kind: string; apiVersion: string; manifestKey: string; extends: Record<string, string> } };
+    velar: {
+      extension: {
+        kind: string;
+        apiVersion: string;
+        manifestKey: string;
+        extends: Record<string, string>;
+        composes: Record<string, string>;
+      };
+    };
   };
   assert.deepEqual(installedDesktopManifest.velar.extension, {
     kind: "application",
     apiVersion: "0.10",
     manifestKey: "desktop",
     extends: {},
+    composes: {
+      "@velarscript/web": "0.10",
+      "@velarscript/node": "0.10",
+    },
   });
   for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web", "@velarscript/cli"]) {
     assert.equal(installedDesktopManifest.dependencies[dependency], "0.10.0");

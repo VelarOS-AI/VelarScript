@@ -26,6 +26,7 @@ export interface ResolvedExtensionPackage {
   readonly apiVersion: string;
   readonly manifestKey: string | null;
   readonly extends: Readonly<Record<string, string>>;
+  readonly composes: Readonly<Record<string, string>>;
   readonly direct: boolean;
 }
 
@@ -106,7 +107,8 @@ export function validateLoadedExtension(
   const contract = extension.contract;
   if (!contract || contract.protocolVersion !== VELAR_EXTENSION_PROTOCOL_VERSION
     || contract.apiVersion !== package_.apiVersion || contract.kind !== package_.kind
-    || !sameStringRecord(contract.extends, package_.extends)) {
+    || !sameStringRecord(contract.extends, package_.extends)
+    || !sameStringRecord(contract.composes ?? {}, package_.composes)) {
     throw new Error(`'${package_.name}/compiler' contract does not match its package metadata`);
   }
   return extension as CompilerExtension;
@@ -138,7 +140,7 @@ async function readExtensionPackage(
     throw new Error(`${manifestPath}: extension package must declare a valid SemVer 2.0 version`);
   }
   const extension = objectField(velar.extension, "velar.extension", manifestPath);
-  knownFields(extension, new Set(["kind", "apiVersion", "manifestKey", "extends"]), "velar.extension", manifestPath);
+  knownFields(extension, new Set(["kind", "apiVersion", "manifestKey", "extends", "composes"]), "velar.extension", manifestPath);
   if (typeof extension.kind !== "string" || !kinds.has(extension.kind as VelarExtensionKind)) {
     throw new Error(`${manifestPath}: 'velar.extension.kind' must be application, capability, or language`);
   }
@@ -168,6 +170,19 @@ async function readExtensionPackage(
   if (extension.kind === "application" && Object.keys(extends_).length > 0) {
     throw new Error(`${manifestPath}: an application extension cannot extend another extension`);
   }
+  const composed = extension.composes === undefined ? {} : objectField(extension.composes, "velar.extension.composes", manifestPath);
+  if (Object.keys(composed).length > 16) throw new Error(`${manifestPath}: an extension cannot compose more than 16 official targets`);
+  const composes: Record<string, string> = {};
+  for (const [target, apiVersion] of Object.entries(composed)) {
+    if (!PACKAGE_NAME.test(target) || target === name) throw new Error(`${manifestPath}: invalid composed target '${target}'`);
+    if (typeof apiVersion !== "string" || apiVersion.length > MAX_VERSION_LENGTH || !API_VERSION.test(apiVersion)) {
+      throw new Error(`${manifestPath}: composed target '${target}' must require a major.minor API version`);
+    }
+    composes[target] = apiVersion;
+  }
+  if (extension.kind !== "application" && Object.keys(composes).length > 0) {
+    throw new Error(`${manifestPath}: only an application extension can compose other official targets`);
+  }
   const peerDependencies = manifest.peerDependencies === undefined
     ? {}
     : objectField(manifest.peerDependencies, "peerDependencies", manifestPath);
@@ -180,6 +195,7 @@ async function readExtensionPackage(
       apiVersion: extension.apiVersion,
       manifestKey: manifestKey as string | null,
       extends: Object.freeze(extends_),
+      composes: Object.freeze(composes),
       direct,
     }),
     peerDependencies,

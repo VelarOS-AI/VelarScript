@@ -1,7 +1,7 @@
 import type { CompilerExtension, ModuleInterface, ValueType } from "@velarscript/compiler";
 import { VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME } from "@velarscript/compiler/extension";
 import { velarCompilerExtension as webCompilerExtension, webModuleSource } from "@velarscript/web/compiler";
-import { nodeModuleInterfaces, VELAR_PROCESS_HOST_RUNTIME } from "@velarscript/node/compiler";
+import { nodeModuleInterfaces, VELAR_NODE_API_VERSION, VELAR_PROCESS_HOST_RUNTIME } from "@velarscript/node/compiler";
 import { VELAR_DESKTOP_API_VERSION, velarProjectExtension, type VelarDesktopConfig } from "./config.ts";
 
 const stringType: ValueType = { kind: "string" };
@@ -1054,15 +1054,31 @@ desktopModuleSources.set("velar/http", DESKTOP_HTTP_SOURCE);
 desktopModuleSources.set("velar/env", DESKTOP_ENV_SOURCE);
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({
-  ...webCompilerExtension,
   id: "@velarscript/desktop",
   contract: Object.freeze({
     protocolVersion: 1,
     apiVersion: VELAR_DESKTOP_API_VERSION,
     kind: "application",
     extends: Object.freeze({}),
+    composes: Object.freeze({
+      "@velarscript/web": webCompilerExtension.contract!.apiVersion,
+      "@velarscript/node": VELAR_NODE_API_VERSION,
+    }),
   }),
   capabilities: Object.freeze(["web", "desktop"]),
+  // Desktop is an application composition: Web owns surface syntax,
+  // reactivity, DOM lowering, and browser runtime; Desktop owns only its
+  // capability modules and host bridge. Keep each layer explicit so adding a
+  // future application target cannot inherit hidden Web behavior via spread.
+  lexical: webCompilerExtension.lexical!,
+  parser: webCompilerExtension.parser!,
+  analyzer: webCompilerExtension.analyzer!,
+  semantic: webCompilerExtension.semantic!,
+  inspection: webCompilerExtension.inspection!,
+  analysis: webCompilerExtension.analysis!,
+  editor: webCompilerExtension.editor!,
+  formatting: webCompilerExtension.formatting!,
+  createEmitter: webCompilerExtension.createEmitter!,
   modules: Object.freeze({
     apiVersion: VELAR_DESKTOP_API_VERSION,
     interfaces: desktopModuleInterfaces,

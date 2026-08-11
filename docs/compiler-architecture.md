@@ -8,12 +8,31 @@ and incremental pipeline implemented
 ```text
 .vel source
 -> one Core lexer with extension-owned structured token scanners
--> one source-spanned AST, including structured type, JSX, and Look nodes
+-> one source-spanned Core AST plus opaque extension statement/expression nodes
 -> extension-selected analysis, semantic indexing, intrinsic typing, dependency inspection, and module-interface contribution
 -> extension-selected JavaScript emitter and mapped JavaScript node IR
 -> readable ESM JavaScript and optional extension artifacts
 -> development source maps / explicitly enabled production source maps
 ```
+
+The ownership contract is target-neutral:
+
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| Core compiler | Core syntax/AST/types, generic `ExtensionStatement`/`ExtensionExpression`, extension type families, extension semantic categories, formatting/emission host seams, and the single runtime ABI literals | `WebNode`, components, JSX, Look, DOM, Node modules, Desktop bridges, or future Game names |
+| Web | component/JSX/Look AST, parser/analyzer/emitter, Web type-family compatibility and members, browser modules/runtime, and angle-bracket formatting | Node/Desktop host policy or product Agent/provider/tool/approval policy |
+| Node | typed local capability modules and their isolated host runtimes | application syntax, Web rendering, manifests, or CLI orchestration |
+| Desktop | one explicit application composition of the public Web surface and selected public Node capability contracts, plus its own permission-scoped bridge/runtime | hidden object-spread inheritance, a second source language, or private VelarOS Desktop code |
+| Future targets such as Game | their own AST/type families, analysis, semantic/editor categories, formatter/lowering, modules, runtime, and host | Core edits that merely teach the compiler a target name |
+| CLI/tooling | extension discovery/composition, project graphs, packaging, tests, and generic semantic navigation | source semantics or target runtime behavior |
+
+`VelarExtensionContract.extends` describes the cycle-free language/capability
+extension graph. `composes` separately records the official target APIs that an
+application assembles without activating a second application extension.
+Desktop therefore declares Web and Node API provenance but explicitly selects
+each Web compiler layer and replaces only its target-owned module sources.
+Adding a Game application follows the same contract; it does not add a Game
+branch to Core AST, `ValueType`, Analyzer, formatter, semantic kinds, or emitter.
 
 The [runtime and JavaScript boundary ledger](runtime-boundary.md) is the
 required map from language semantics to host inheritance, compiler lowering,
@@ -159,9 +178,13 @@ annotation immediately because they have no body to analyze.
 
 Type syntax is parsed once into named, enum-singleton, generic, optional, union, and function
 nodes. Analysis, public interfaces, semantic tooling, and emission resolve that
-same tree; no later stage reparses a formatted type string. Web lexical scanning
-likewise produces structured JSX elements, attributes, children, and Look lines
-during the Core token pass. The Web parser only sends embedded VelarScript
+same tree; no later stage reparses a formatted type string. An extension may
+resolve a named or generic syntax node to its own `ExtensionValueType` family;
+Core preserves nested types, stable identity, module-interface transport, and
+generic traversal while the owner decides assignability and runtime members.
+Web lexical scanning produces structured JSX elements, attributes, children,
+and Look lines directly into Web-owned AST nodes during the shared token pass.
+The Web parser only sends embedded VelarScript
 expression slices through the normal nested Core parser; it never receives an
 opaque JSX or Look source block to split a second time.
 
@@ -480,11 +503,12 @@ initialization therefore cannot change which case is selected.
   Web types are not active Core language features. Its extension protocol has
   explicit parser, analyzer, semantic-index, intrinsic-analysis,
   dependency-inspection, public-interface, module, emitter, lexical-editor, and
-  contextual project-editor seams;
-  extensions declare opaque primitive types and their parent relations through
-  the generic analysis contract, so Core assignability contains no Web type
-  names; primitive members are read-only unless their owning extension
-  explicitly marks a field writable;
+  contextual project-editor, target-type, member, formatting, and application-
+  composition seams. Extensions declare opaque primitive types and parent
+  relations or structured extension type families through the generic analysis
+  contract, so Core assignability and semantic kinds contain no Web type names;
+  primitive members are read-only unless their owner explicitly marks a field
+  writable, and structured target members require an owner callback;
   loading lexical keywords alone can never silently activate Web semantics.
   Its `framework-host` subpath is a platform-neutral tooling ABI containing
   only protocol types and a version constant; it does not implement HTML,

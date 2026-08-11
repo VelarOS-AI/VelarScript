@@ -9,15 +9,18 @@ import { scanWebToken } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDERS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
+import { isWebTypeAssignable, resolveWebTypeSyntax, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
+
+const webVoidElements = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
 const anyType: ValueType = { kind: "any" };
 const nullType: ValueType = { kind: "null" };
 const stringType: ValueType = { kind: "string" };
 const numberType: ValueType = { kind: "number" };
 const boolType: ValueType = { kind: "bool" };
-const nodeType: ValueType = { kind: "node" };
+const nodeType: ValueType = webNodeType;
 const elementType: ValueType = { kind: "named", name: "Element" };
 const inputElementType: ValueType = { kind: "named", name: "InputElement" };
 const canvasElementType: ValueType = { kind: "named", name: "CanvasElement" };
@@ -299,13 +302,13 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["currentRoute", namedFunction([], [], routeContextType)],
     ["announce", namedFunction(["message", "priority"], [stringType, stringType], nullType, 1)],
     ["domId", namedFunction(["prefix"], [stringType], stringType, 0)],
-    ["Head", { kind: "componentConstructor", name: "Head", props: new Map<string, ValueType>([
+    ["Head", webComponentConstructor("Head", new Map<string, ValueType>([
       ["title", stringType], ["description", stringType], ["canonical", stringType], ["robots", stringType],
       ["image", stringType], ["themeColor", stringType], ["language", stringType],
-    ]), requiredProps: new Set(["title"]), handle: null }],
-    ["Router", { kind: "componentConstructor", name: "Router", props: new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", anyType]]), requiredProps: new Set(["routes"]), handle: null, intrinsic: "web.router" }],
-    ["Link", { kind: "componentConstructor", name: "Link", props: new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]), handle: null }],
-    ["NavLink", { kind: "componentConstructor", name: "NavLink", props: new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), requiredProps: new Set(["to"]), handle: null }],
+    ]), new Set(["title"]), null)],
+    ["Router", webComponentConstructor("Router", new Map<string, ValueType>([["routes", { kind: "list", element: routeType }], ["fallback", anyType]]), new Set(["routes"]), null, "web.router")],
+    ["Link", webComponentConstructor("Link", new Map<string, ValueType>([["to", stringType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), new Set(["to"]), null)],
+    ["NavLink", webComponentConstructor("NavLink", new Map<string, ValueType>([["to", stringType], ["exact", boolType], ["replace", boolType], ["class", optional(stringType)], ["look", optional({ kind: "named", name: "Look" })], ["children", nodeType]]), new Set(["to"]), null)],
   ]), new Map(), new Map([["RouteContext", routeContextFields]]), new Map([
     ["RouteContext", "@velarscript/web:velar/web#type:RouteContext"],
   ]))],
@@ -443,6 +446,9 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   id: "@velarscript/web",
   contract: Object.freeze({ protocolVersion: 1, apiVersion: VELAR_WEB_API_VERSION, kind: "application", extends: Object.freeze({}) }),
   capabilities: Object.freeze(["web"]),
+  formatting: Object.freeze({
+    angleBracketEmbedding: Object.freeze({ voidElements: webVoidElements }),
+  }),
   lexical: Object.freeze({
     keywords: Object.freeze({
       component: "component",
@@ -503,6 +509,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["history", "Use velar/web navigation instead of the history global"],
       ["fetch", "Use velar/http instead of the raw fetch global"],
     ]),
+    resolveTypeSyntax: resolveWebTypeSyntax,
+    isTypeAssignable: isWebTypeAssignable,
     inferIntrinsic: inferWebIntrinsic,
   }),
   editor: Object.freeze({

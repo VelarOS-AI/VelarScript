@@ -35,11 +35,31 @@ import {
 } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, type LookStaticValue } from "./look-static.ts";
 import { dynamicChildLeaves } from "./emitter.ts";
-type ComponentDeclaration = Extract<Statement, { kind: "ComponentDeclaration" }>;
-type ActionDeclaration = Extract<Statement, { kind: "ActionDeclaration" }>;
-type ResourceDeclaration = Extract<Statement, { kind: "ResourceDeclaration" }>;
-type JSXElementExpression = Extract<Expression, { kind: "JSXElementExpression" }>;
-type JSXAttribute = JSXElementExpression["attributes"][number];
+import {
+  isWebExpression,
+  isWebJsx,
+  isWebLook,
+  isWebStatement,
+  isWebUnit,
+  type WebActionDeclaration as ActionDeclaration,
+  type WebComponentDeclaration as ComponentDeclaration,
+  type WebJsxAttribute as JSXAttribute,
+  type WebJsxElementExpression as JSXElementExpression,
+  type WebLookExpression,
+  type WebResourceDeclaration as ResourceDeclaration,
+} from "./ast.ts";
+import {
+  isWebComponentConstructor,
+  isWebComponentType,
+  isWebNodeType,
+  normalizeWebComponentType,
+  webComponentConstructor,
+  webComponentHandle,
+  webComponentIntrinsic,
+  webComponentName,
+  webNodeType,
+  type WebComponentType,
+} from "./types.ts";
 
 // The canonical nominal identity of the Web RouteContext record. Route checks
 // probe with this identity so they succeed in modules that use route() without
@@ -151,21 +171,21 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
         context.typeError(`Dynamically imported module has no export named '${name}'`, nameExpression?.span ?? callSpan);
         return anyType;
       }
-      if (exported.kind !== "componentConstructor") {
+      if (!isWebComponentConstructor(exported)) {
         context.typeError(`Dynamic export '${name}' is ${describeType(exported)}, not a component`, nameExpression?.span ?? callSpan);
         return anyType;
       }
       const loadingExpression = argumentAt(2);
       if (loadingExpression && !isInvalidType(loadingFallback) && loadingFallback.kind !== "null" && loadingFallback.kind !== "any") {
-        if (loadingFallback.kind !== "component" && loadingFallback.kind !== "componentConstructor") context.typeError("A lazy loading fallback must be a component", loadingExpression.span);
-        else if (loadingFallback.requiredProps.size > 0) context.typeError("A lazy loading fallback cannot require props", loadingExpression.span);
+        if (!isWebComponentType(loadingFallback)) context.typeError("A lazy loading fallback must be a component", loadingExpression.span);
+        else if (loadingFallback.requiredProperties.size > 0) context.typeError("A lazy loading fallback cannot require props", loadingExpression.span);
       }
       const failedExpression = argumentAt(3);
       if (failedExpression && !isInvalidType(failedFallback) && failedFallback.kind !== "null" && failedFallback.kind !== "any") {
-        if (failedFallback.kind !== "component" && failedFallback.kind !== "componentConstructor") context.typeError("A lazy failure fallback must be a component accepting error: Error", failedExpression.span);
+        if (!isWebComponentType(failedFallback)) context.typeError("A lazy failure fallback must be a component accepting error: Error", failedExpression.span);
         else {
-          const error = failedFallback.props.get("error");
-          if (!error || !context.isAssignable({ kind: "class", name: "Error" }, error) || [...failedFallback.requiredProps].some((prop) => prop !== "error")) {
+          const error = failedFallback.properties.get("error");
+          if (!error || !context.isAssignable({ kind: "class", name: "Error" }, error) || [...failedFallback.requiredProperties].some((prop) => prop !== "error")) {
             context.typeError("A lazy failure fallback must accept error: Error and require no other props", failedExpression.span);
           }
         }
@@ -400,13 +420,13 @@ function containsCssImport(source: string): boolean {
 
 function checkRouteComponent(type: ValueType, sourceSpan: Span, subject: string, context: CompilerIntrinsicAnalysisContext): void {
   if (isInvalidType(type)) return;
-  if (type.kind !== "component" && type.kind !== "componentConstructor") {
+  if (!isWebComponentType(type)) {
     if (type.kind !== "any") context.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
     return;
   }
-  const unsupported = [...type.requiredProps].filter((name) => name !== "route");
+  const unsupported = [...type.requiredProperties].filter((name) => name !== "route");
   if (unsupported.length > 0) context.typeError(`${subject} component cannot require props other than route: ${unsupported.join(", ")}`, sourceSpan);
-  const routeProp = type.props.get("route");
+  const routeProp = type.properties.get("route");
   if (routeProp && !context.isAssignable({ kind: "named", name: "RouteContext", identity: routeContextIdentity }, routeProp)) context.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
 }
 
@@ -463,7 +483,7 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
   const hidden = expression.attributes.find((attribute) => attribute.name === "aria-hidden");
   if (hidden?.value === "true" || (hidden?.value && typeof hidden.value !== "string"
     && hidden.value.kind === "LiteralExpression" && hidden.value.value === true)) return true;
-  return expression.children.some((child) => child.kind === "JSXElementExpression"
+  return expression.children.some((child) => child.kind === "ExtensionExpression:web:jsx"
     && child.tag === "title" && hasAccessibleJsxContent(child));
 }
 
@@ -493,18 +513,20 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override predeclareExtensionStatement(statement: Statement): boolean {
-    if (statement.kind === "UnsafeCssImportDeclaration") return true;
-    if (statement.kind !== "ComponentDeclaration") return false;
+    if (!isWebStatement(statement)) return false;
+    if (statement.kind === "ExtensionStatement:web:unsafe-css") return true;
+    if (statement.kind !== "ExtensionStatement:web:component") return false;
     this.declareBinding(statement.name, false, this.componentType(statement), statement.span);
     return true;
   }
 
   protected override analyzeExtensionStatement(statement: Statement): boolean {
+    if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
-      case "ComponentDeclaration":
+      case "ExtensionStatement:web:component":
         this.analyzeComponent(statement);
         return true;
-      case "StateDeclaration": {
+      case "ExtensionStatement:web:state": {
         const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
         const annotationContext = statement.type ? this.resolveValidatedAnnotation(statement.type) : null;
         const actual = this.inferExpression(statement.initializer, annotationContext ?? unknownType);
@@ -514,11 +536,11 @@ export class VelarWebAnalyzer extends Analyzer {
         this.markDeclaredBindingReactive(statement.name, "state");
         return true;
       }
-      case "ResourceDeclaration":
+      case "ExtensionStatement:web:resource":
         this.diagnostics.push(diagnostic("VEL3012", "'resource' is only valid at component scope; a module-scope async operation belongs in a module 'action'", statement.span));
         this.analyzeResourceDeclaration(statement);
         return true;
-      case "ActionDeclaration":
+      case "ExtensionStatement:web:action":
         // A module-scope action behaves exactly like a component action —
         // reactive pending/error fields with rejection semantics preserved —
         // but its lifetime is the module, so it never registers disposal.
@@ -527,7 +549,7 @@ export class VelarWebAnalyzer extends Analyzer {
         }
         this.analyzeActionDeclaration(statement);
         return true;
-      case "WatchDeclaration":
+      case "ExtensionStatement:web:watch":
         if (!this.isTopLevelScope()) {
           this.diagnostics.push(diagnostic("VEL3010", "'watch' is only valid at module or component scope", statement.span));
           return true;
@@ -545,11 +567,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.synchronousReactiveDepth -= 1;
         this.flowFrameDepth -= 1;
         return true;
-      case "VariableDeclaration":
-        return false;
-      case "ReturnStatement":
-        return false;
-      case "UnsafeCssImportDeclaration": {
+      case "ExtensionStatement:web:unsafe-css": {
         if (this.unsafeCssImports.has(statement.source)) {
           this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' is imported more than once; each stylesheet must have one explicit order position`, statement.span));
         }
@@ -569,12 +587,19 @@ export class VelarWebAnalyzer extends Analyzer {
     }
   }
 
+  protected override prescanExtensionScopeDeclaration(statement: Statement): { readonly name: string; readonly span: Span } | null {
+    if (!isWebStatement(statement)) return null;
+    return statement.kind === "ExtensionStatement:web:state" || statement.kind === "ExtensionStatement:web:resource"
+      ? { name: statement.name, span: statement.span }
+      : null;
+  }
+
   protected override inferExtensionExpression(expression: Expression, _contextualType: ValueType): ValueType | undefined {
     if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
       && expression.callee.name === "mount") {
       const namedNode = expression.argumentNames?.findIndex((name) => name === "node") ?? -1;
       const node = expression.arguments[namedNode >= 0 ? namedNode : 0];
-      if (node && expressionContainsDirectAwait(node, (value) => value.kind === "JSXElementExpression" ? false : undefined)) {
+      if (node && expressionContainsDirectAwait(node, (value) => value.kind === "ExtensionExpression:web:jsx" ? false : undefined)) {
         this.diagnostics.push(diagnostic(
           "VEL4007",
           "mount constructs its root synchronously; await the root in a separate module binding before calling mount",
@@ -609,16 +634,16 @@ export class VelarWebAnalyzer extends Analyzer {
         return unknownType;
       }
     }
-    if (expression.kind === "JSXElementExpression") return this.inferJsx(expression);
-    if (expression.kind === "LookExpression") {
+    if (isWebJsx(expression)) return this.inferJsx(expression);
+    if (isWebLook(expression)) {
       this.analyzeLookEntries(expression.entries, false, false, 1);
       return { kind: "named", name: "Look" };
     }
-    if (expression.kind === "LookHookExpression") {
+    if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") {
       this.diagnostics.push(diagnostic("VEL5038", `Look hook '@${expression.name}' is only valid inside a Look condition`, expression.span));
       return boolType;
     }
-    if (expression.kind === "UnitLiteralExpression") {
+    if (isWebUnit(expression)) {
       const type = LOOK_UNIT_TYPES.get(expression.unit);
       if (type) return { kind: "named", name: type };
       return unknownType;
@@ -649,6 +674,74 @@ export class VelarWebAnalyzer extends Analyzer {
     return webTypeFields(name);
   }
 
+  protected override inferExtensionCall(
+    callee: import("@velarscript/compiler/extension").ExtensionValueType,
+    arguments_: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType | undefined {
+    if (!isWebComponentType(callee)) return undefined;
+    const name = webComponentName(callee);
+    this.typeError(name ? `Render component '${name}' with JSX` : "Render a Component value with JSX", callSpan);
+    if (argumentNames?.some((argument) => argument !== null)) {
+      this.typeError("Components use JSX props rather than named call arguments", callSpan);
+    }
+    for (const argument of arguments_) this.inferExpression(argument);
+    return webNodeType;
+  }
+
+  protected override validateExtensionTypeSyntax(
+    syntax: import("@velarscript/compiler/extension").TypeSyntax,
+    validate: (syntax: import("@velarscript/compiler/extension").TypeSyntax) => boolean,
+    resolve: (reference: TypeReference) => ValueType,
+  ): boolean | undefined {
+    if (syntax.kind !== "GenericTypeSyntax" || syntax.name !== "Component") return undefined;
+    let valid = true;
+    if (syntax.arguments.length < 1 || syntax.arguments.length > 2) {
+      this.typeError("Component<Props, Handle> requires a named prop signature and at most one Handle type", syntax.span);
+      valid = false;
+    }
+    const argumentsValid = syntax.arguments.map(validate).every(Boolean);
+    const signature = syntax.arguments[0];
+    if (!signature) return false;
+    if (signature.kind !== "FunctionTypeSyntax") {
+      this.typeError("Component<Props, Handle> requires a named function signature such as Component<(title: string) -> WebNode, DialogHandle>", signature.span);
+      valid = false;
+    } else {
+      const names = new Set<string>();
+      for (const parameter of signature.parameters) {
+        if (!parameter.name) {
+          this.typeError("Every Component signature prop requires a name", parameter.span);
+          valid = false;
+        } else if (names.has(parameter.name)) {
+          this.typeError(`Component signature prop '${parameter.name}' is declared more than once`, parameter.span);
+          valid = false;
+        } else names.add(parameter.name);
+        if (parameter.rest) {
+          this.typeError("Component signatures use named props and cannot declare a rest parameter", parameter.span);
+          valid = false;
+        }
+      }
+      const result = resolve({ syntax: signature.result, span: signature.result.span });
+      if (!isWebNodeType(result)) {
+        this.typeError(`A Component signature must return WebNode, received ${describeType(result)}`, signature.result.span);
+        valid = false;
+      }
+    }
+    const handleSyntax = syntax.arguments[1];
+    if (handleSyntax && argumentsValid) {
+      const handle = this.expandAliases(resolve({ syntax: handleSyntax, span: handleSyntax.span }));
+      const fields = handle.kind === "object"
+        ? handle.fields
+        : handle.kind === "named" ? this.fieldsOf(handle.identity ?? handle.name) : null;
+      if (!fields) {
+        this.typeError(`A Component Handle must be a concrete record type, received ${describeType(handle)}`, handleSyntax.span);
+        valid = false;
+      }
+    }
+    return valid && argumentsValid;
+  }
+
   protected override invalidExtensionAwaitContext(): boolean {
     return this.synchronousReactiveDepth > 0 || this.jsxDepth > 0
       || (this.componentStates !== null && this.mountedDepth === 0);
@@ -664,13 +757,12 @@ export class VelarWebAnalyzer extends Analyzer {
     const props = new Map(statement.parameters.map((parameter) => [parameter.name, this.readonlyPropType(this.resolveValidatedAnnotation(parameter.type))]));
     if (!props.has("class")) props.set("class", optionalOf(stringType));
     if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
-    return {
-      kind: "componentConstructor",
-      name: statement.name,
+    return webComponentConstructor(
+      statement.name,
       props,
-      requiredProps: new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
-      handle: statement.handleType ? this.resolveValidatedAnnotation(statement.handleType) : null,
-    };
+      new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
+      statement.handleType ? this.resolveValidatedAnnotation(statement.handleType) : null,
+    );
   }
 
   private analyzeResourceDeclaration(statement: ResourceDeclaration): void {
@@ -722,13 +814,13 @@ export class VelarWebAnalyzer extends Analyzer {
     this.enterScope();
     this.flowFrameDepth += 1;
     const previousStates = this.componentStates;
-    this.componentStates = new Set(statement.body.filter((item) => item.kind === "StateDeclaration").map((item) => item.name));
+    this.componentStates = new Set(statement.body.filter((item) => item.kind === "ExtensionStatement:web:state").map((item) => item.name));
     // Component items are analyzed one by one rather than through
     // analyzeStatements, so the shadow prescan runs here — before the
     // parameters, whose defaults are emitted as closures inside the component
     // body where a later item's shadow would capture them.
-    this.prescanScopeDeclarations(statement.body.filter((item): item is Statement =>
-      item.kind !== "MountedBlock" && item.kind !== "CleanupBlock" && item.kind !== "ExposeDeclaration"));
+    this.prescanScopeDeclarations(statement.body.filter((item) =>
+      item.kind !== "ExtensionStatement:web:mounted" && item.kind !== "ExtensionStatement:web:cleanup" && item.kind !== "ExtensionStatement:web:expose") as readonly Statement[]);
     for (const parameter of statement.parameters) {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
@@ -747,7 +839,7 @@ export class VelarWebAnalyzer extends Analyzer {
     let cleanup = 0;
     let exposes = 0;
     for (const item of statement.body) {
-      if (item.kind === "StateDeclaration") {
+      if (item.kind === "ExtensionStatement:web:state") {
         const annotationValid = item.type ? this.validateTypeReference(item.type) : true;
         const annotationContext = item.type ? this.resolveValidatedAnnotation(item.type) : null;
         const actual = this.inferExpression(item.initializer, annotationContext ?? unknownType);
@@ -755,13 +847,13 @@ export class VelarWebAnalyzer extends Analyzer {
         if (annotationValid) this.requireAssignable(actual, declared, item.initializer.span);
         this.declareBinding(item.name, true, declared, item.span);
         this.markDeclaredBindingReactive(item.name, "state");
-      } else if (item.kind === "ResourceDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:resource") {
         this.flowFrameDepth += 1;
         this.analyzeResourceDeclaration(item);
         this.flowFrameDepth -= 1;
-      } else if (item.kind === "ActionDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:action") {
         this.analyzeActionDeclaration(item);
-      } else if (item.kind === "WatchDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:watch") {
         this.flowFrameDepth += 1;
         this.synchronousReactiveDepth += 1;
         const watched = this.inferExpression(item.expression);
@@ -772,21 +864,21 @@ export class VelarWebAnalyzer extends Analyzer {
         this.exitScope();
         this.synchronousReactiveDepth -= 1;
         this.flowFrameDepth -= 1;
-      } else if (item.kind === "ExposeDeclaration") {
+      } else if (item.kind === "ExtensionStatement:web:expose") {
         exposes += 1;
         this.flowFrameDepth += 1;
         const actual = this.inferExpression(item.value, handleType ?? unknownType);
         this.flowFrameDepth -= 1;
         if (!handleType) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' uses 'expose' without declaring 'exposes HandleType'`, item.span));
         else if (handleTypeValid) this.requireAssignable(actual, handleType, item.value.span);
-      } else if (item.kind === "MountedBlock") {
+      } else if (item.kind === "ExtensionStatement:web:mounted") {
         mounted += 1;
         this.mountedDepth += 1;
         this.flowFrameDepth += 1;
         this.analyzeBlock(item.body);
         this.flowFrameDepth -= 1;
         this.mountedDepth -= 1;
-      } else if (item.kind === "CleanupBlock") {
+      } else if (item.kind === "ExtensionStatement:web:cleanup") {
         cleanup += 1;
         this.flowFrameDepth += 1;
         this.analyzeBlock(item.body);
@@ -797,7 +889,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth += 1;
         const rendered = item.value ? this.inferExpression(item.value) : nullType;
         this.flowFrameDepth -= 1;
-        if (rendered.kind !== "node" && rendered.kind !== "any") this.typeError("A component must return JSX", item.span);
+        if (!isWebNodeType(rendered) && rendered.kind !== "any") this.typeError("A component must return JSX", item.span);
       } else {
         this.analyzeStatement(item);
       }
@@ -807,7 +899,7 @@ export class VelarWebAnalyzer extends Analyzer {
     if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
     if (exposes > 1) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' has more than one expose declaration`, statement.span));
     if (statement.handleType && exposes === 0) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' declares an exposed Handle but does not provide an expose value`, statement.handleType.span));
-    if (renderValue?.kind === "JSXElementExpression") this.validateComponentHost(renderValue, statement);
+    if (renderValue && isWebJsx(renderValue)) this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -844,11 +936,12 @@ export class VelarWebAnalyzer extends Analyzer {
       result: this.normalizeComponentContracts(type.result),
     };
     if (type.kind === "union") return { kind: "union", members: type.members.map((member) => this.normalizeComponentContracts(member)) };
-    if (type.kind !== "component" && type.kind !== "componentConstructor") return type;
-    const props = new Map([...type.props].map(([name, value]) => [name, this.readonlyPropType(this.normalizeComponentContracts(value))]));
-    if (!props.has("class")) props.set("class", optionalOf(stringType));
-    if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
-    return { ...type, props, handle: type.handle ? this.normalizeComponentContracts(type.handle) : null };
+    if (!isWebComponentType(type)) return type;
+    return normalizeWebComponentType(
+      type,
+      (value) => this.readonlyPropType(this.normalizeComponentContracts(value)),
+      (value) => this.normalizeComponentContracts(value),
+    );
   }
 
   private validateComponentHost(render: JSXElementExpression, component: ComponentDeclaration): void {
@@ -857,7 +950,7 @@ export class VelarWebAnalyzer extends Analyzer {
       if (!/^[A-Z]/u.test(element.tag)) {
         for (const attribute of element.attributes) if (attribute.name === "host") hosts.push(attribute);
       }
-      for (const child of element.children) if (child.kind === "JSXElementExpression") visit(child);
+      for (const child of element.children) if (child.kind === "ExtensionExpression:web:jsx") visit(child);
     };
     visit(render);
     if (hosts.length > 1) this.diagnostics.push(diagnostic("VEL5043", `Component '${component.name}' declares more than one host element`, hosts[1]!.span));
@@ -870,7 +963,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private analyzeLookEntries(
-    entries: Extract<Expression, { kind: "LookExpression" }>["entries"],
+    entries: WebLookExpression["entries"],
     insideTarget: boolean,
     nested: boolean,
     inheritedTerms: number,
@@ -922,7 +1015,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private inferLookCondition(expression: Expression): ValueType {
-    if (expression.kind === "LookHookExpression") {
+    if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") {
       if (!LOOK_HOOKS.has(expression.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look hook '@${expression.name}'`, expression.span));
       return boolType;
     }
@@ -992,12 +1085,12 @@ export class VelarWebAnalyzer extends Analyzer {
           this.diagnostics.push(diagnostic("VEL5047", `JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values; received ${describeType(childType)}`, child.expression.span));
         }
         this.checkKeyedInterpolation(child.expression);
-      } else if (child.kind === "JSXElementExpression") {
+      } else if (child.kind === "ExtensionExpression:web:jsx") {
         this.inferJsx(child);
       }
     }
     this.jsxDepth -= 1;
-    return { kind: "node" };
+    return webNodeType;
   }
 
   // Mirrors the emitter's keyed-children recognizer (dynamicChildLeaves): a
@@ -1023,7 +1116,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private reportIneffectiveJsxKeys(value: unknown, honored: ReadonlySet<JSXElementExpression>): void {
     if (!value || typeof value !== "object") return;
     const record = value as Record<string, unknown>;
-    if (record.kind === "JSXElementExpression") {
+    if (record.kind === "ExtensionExpression:web:jsx") {
       const element = record as unknown as JSXElementExpression;
       if (honored.has(element)) return;
       const key = element.attributes.find((attribute) => attribute.name === "key");
@@ -1044,19 +1137,19 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private analyzeComponentElement(expression: JSXElementExpression): void {
     const component = this.inferExpression({ kind: "IdentifierExpression", name: expression.tag, span: expression.tagSpan });
-    if (component.kind !== "component" && component.kind !== "componentConstructor") {
+    if (!isWebComponentType(component)) {
       this.diagnostics.push(diagnostic("VEL5011", `Unknown component '${expression.tag}'`, expression.span));
       return;
     }
     const provided = new Set(expression.attributes.filter((attribute) => attribute.name !== "key" && attribute.name !== "ref" && !removedJsxControlAttributes.has(attribute.name)).map((attribute) => attribute.name));
     const hasChildren = expression.children.some((child) => child.kind !== "JSXText" || child.value.trim().length > 0);
     if (hasChildren && provided.has("children")) this.diagnostics.push(diagnostic("VEL5014", `Component '${expression.tag}' receives children both as a prop and as JSX content`, expression.span));
-    else if (hasChildren && !component.props.has("children")) this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children`, expression.span));
+    else if (hasChildren && !component.properties.has("children")) this.diagnostics.push(diagnostic("VEL5018", `Component '${expression.tag}' does not declare JSX children`, expression.span));
     else if (hasChildren) {
       provided.add("children");
-      this.requireAssignable({ kind: "node" }, component.props.get("children")!, expression.span);
+      this.requireAssignable(webNodeType, component.properties.get("children")!, expression.span);
     }
-    for (const required of component.requiredProps) if (!provided.has(required)) this.diagnostics.push(diagnostic("VEL5012", `Component '${expression.tag}' requires prop '${required}'`, expression.span));
+    for (const required of component.requiredProperties) if (!provided.has(required)) this.diagnostics.push(diagnostic("VEL5012", `Component '${expression.tag}' requires prop '${required}'`, expression.span));
     for (const attribute of expression.attributes) {
       if (removedJsxControlAttributes.has(attribute.name)) continue;
       if (attribute.name === "key") {
@@ -1068,10 +1161,10 @@ export class VelarWebAnalyzer extends Analyzer {
         this.analyzeComponentRef(expression, attribute, component);
         continue;
       }
-      const expected = component.props.get(attribute.name);
+      const expected = component.properties.get(attribute.name);
       if (attribute.name === "look") {
         const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-        if (attribute.value && typeof attribute.value !== "string" && attribute.value.kind === "LookExpression") {
+        if (attribute.value && typeof attribute.value !== "string" && attribute.value.kind === "ExtensionExpression:web:look") {
           this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
         } else if (!this.isLookInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(actual)}`, attribute.span));
         continue;
@@ -1100,11 +1193,9 @@ export class VelarWebAnalyzer extends Analyzer {
         this.diagnostics.push(diagnostic("VEL5013", `Component '${expression.tag}' has no prop '${attribute.name}'`, attribute.span));
         continue;
       }
-      this.semanticJsxAttributeOwners.set(`${attribute.span.start}:${attribute.name}`, component.kind === "componentConstructor"
-        ? { ...component, name: expression.tag }
-        : component);
+      this.semanticJsxAttributeOwners.set(`${attribute.span.start}:${attribute.name}`, component);
       const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-      if (component.kind === "componentConstructor" && component.intrinsic === "web.router" && attribute.name === "fallback" && actual.kind !== "null" && actual.kind !== "any") {
+      if (isWebComponentConstructor(component) && webComponentIntrinsic(component) === "web.router" && attribute.name === "fallback" && actual.kind !== "null" && actual.kind !== "any") {
         this.checkWebRouteComponent(actual, attribute.span, "A Router fallback");
       }
       this.requireAssignable(actual, expected, attribute.span);
@@ -1114,7 +1205,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private analyzeComponentRef(
     expression: JSXElementExpression,
     attribute: JSXAttribute,
-    component: Extract<ValueType, { kind: "component" | "componentConstructor" }>,
+    component: WebComponentType,
   ): void {
     const value = attribute.value;
     if (!value || typeof value === "string" || value.kind !== "IdentifierExpression"
@@ -1122,18 +1213,19 @@ export class VelarWebAnalyzer extends Analyzer {
       this.diagnostics.push(diagnostic("VEL5057", "A component ref requires a mutable let binding", attribute.span));
       return;
     }
-    if (!component.handle) {
+    const handle = webComponentHandle(component);
+    if (!handle) {
       this.diagnostics.push(diagnostic("VEL5057", `Component '${expression.tag}' does not expose a Handle`, attribute.span));
       return;
     }
     const bindingType = this.lookup(value.name)!.type;
     if (bindingType.kind !== "any" && bindingType.kind !== "optional") {
-      this.diagnostics.push(diagnostic("VEL5057", `A component ref requires ${describeType(component.handle)}? so cleanup can restore null`, attribute.span));
+      this.diagnostics.push(diagnostic("VEL5057", `A component ref requires ${describeType(handle)}? so cleanup can restore null`, attribute.span));
       return;
     }
     const target = nonOptional(bindingType);
-    if (target.kind !== "any" && !isAssignable(component.handle, target, this)) {
-      this.diagnostics.push(diagnostic("VEL5057", `Component '${expression.tag}' exposes ${describeType(component.handle)}, but this ref stores ${describeType(target)}?`, attribute.span));
+    if (target.kind !== "any" && !isAssignable(handle, target, this)) {
+      this.diagnostics.push(diagnostic("VEL5057", `Component '${expression.tag}' exposes ${describeType(handle)}, but this ref stores ${describeType(target)}?`, attribute.span));
     }
   }
 
@@ -1161,7 +1253,7 @@ export class VelarWebAnalyzer extends Analyzer {
       this.analyzeInlineVisualAttribute(attribute, inferred, "style");
     } else if (attribute.name === "look") {
       if (!value || typeof value === "string") this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
-      else if (value.kind === "LookExpression") this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
+      else if (value.kind === "ExtensionExpression:web:look") this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
       else if (!this.isLookInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(inferred)}`, attribute.span));
     } else if (attribute.name.startsWith("look:")) {
       this.analyzeInlineVisualAttribute(attribute, inferred, "look");
@@ -1269,7 +1361,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private isJsxRenderable(type: ValueType): boolean {
     const expanded = this.expandAliases(type);
     if (expanded.kind === "any" || expanded.kind === "null" || expanded.kind === "string" || expanded.kind === "number"
-      || expanded.kind === "bool" || expanded.kind === "enum" || expanded.kind === "enumMember" || expanded.kind === "node") return true;
+      || expanded.kind === "bool" || expanded.kind === "enum" || expanded.kind === "enumMember" || isWebNodeType(expanded)) return true;
     if (expanded.kind === "named") return textualWebPrimitiveNames.has(expanded.name);
     if (expanded.kind === "optional") return this.isJsxRenderable(expanded.inner);
     if (expanded.kind === "list") return this.isJsxRenderable(expanded.element);
@@ -1297,13 +1389,13 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private checkWebRouteComponent(type: ValueType, sourceSpan: Span, subject: string): void {
     if (isInvalidType(type)) return;
-    if (type.kind !== "component" && type.kind !== "componentConstructor") {
+    if (!isWebComponentType(type)) {
       if (type.kind !== "any") this.typeError(`${subject} requires a component, received ${describeType(type)}`, sourceSpan);
       return;
     }
-    const unsupported = [...type.requiredProps].filter((name) => name !== "route");
+    const unsupported = [...type.requiredProperties].filter((name) => name !== "route");
     if (unsupported.length > 0) this.typeError(`${subject} component cannot require props other than route: ${unsupported.join(", ")}`, sourceSpan);
-    const routeProp = type.props.get("route");
+    const routeProp = type.properties.get("route");
     if (routeProp && !isAssignable({ kind: "named", name: "RouteContext", identity: routeContextIdentity }, routeProp, this)) this.typeError(`${subject} component's route prop must accept RouteContext, received ${describeType(routeProp)}`, sourceSpan);
   }
 

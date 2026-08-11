@@ -105,7 +105,7 @@ const comparisonOperators: Partial<Record<TokenKind, ComparisonChainExpression["
 };
 
 // An extension keyword directly followed by ':' opens an indentation-owned
-// extension block (such as the Web 'look:' block) whose capture depends on
+// extension block whose capture depends on
 // physical lines; a bracket fragment containing one keeps line-sensitive form.
 function containsExtensionBlockStart(tokens: readonly Token[]): boolean {
   return tokens.some((token, index) => token.kind === "extensionKeyword" && tokens[index + 1]?.kind === "colon");
@@ -1615,8 +1615,8 @@ export class Parser {
         this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
       }
       const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
-      if (typeName === "Component" && arguments_.length !== 1 && arguments_.length !== 2) {
-        this.diagnostics.push(diagnostic("VEL2012", "Type 'Component' expects 1 or 2 type arguments", name.span));
+      if (this.validateExtensionTypeArguments(typeName, arguments_, name.span)) {
+        // The owning extension validates its own generic surface.
       } else if (typeName === "Function" && arguments_.length === 0) {
         this.diagnostics.push(diagnostic("VEL2012", "Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result", name.span));
       } else if (expectedArguments !== null && arguments_.length !== expectedArguments) {
@@ -1625,6 +1625,10 @@ export class Parser {
       syntax = { kind: "GenericTypeSyntax", name: typeName, nameSpan: name.span, arguments: arguments_, span: span(name.span.start, close.span.end) };
     }
     return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
+  }
+
+  protected validateExtensionTypeArguments(_name: string, _arguments: readonly TypeSyntax[], _nameSpan: Span): boolean {
+    return false;
   }
 
   private finishTypeReferenceSuffix(syntax: TypeSyntax, allowTrailingOptional = true): TypeSyntax {
@@ -2072,7 +2076,14 @@ export class Parser {
         }
         const value = Number(match[1]);
         if (!Number.isFinite(value)) this.diagnostics.push(diagnostic("VEL2017", "Numeric literals must be finite", token.span));
-        return { kind: "UnitLiteralExpression", value: Number.isFinite(value) ? value : 0, unit: match[2]!, raw: token.value, span: token.span };
+        const extensionExpression = this.parseExtensionNumericLiteral(
+          token,
+          Number.isFinite(value) ? value : 0,
+          match[2]!,
+        );
+        if (extensionExpression) return extensionExpression;
+        this.diagnostics.push(diagnostic("VEL2002", `No compiler extension accepts numeric suffix '${match[2]}'`, token.span));
+        return { kind: "LiteralExpression", value: 0, raw: "0", span: token.span };
       }
       case "string":
         return { kind: "LiteralExpression", value: token.value, raw: token.value, span: token.span };
@@ -2276,10 +2287,14 @@ export class Parser {
     return undefined;
   }
 
-  // A bracket fragment (a JSX interpolation '{...}') lexes with insignificant
+  protected parseExtensionNumericLiteral(_token: Token, _value: number, _unit: string): Expression | undefined {
+    return undefined;
+  }
+
+  // An extension-owned bracket fragment lexes with insignificant
   // newlines, matching ordinary bracket continuation. An indentation-owning
   // extension expression inside the fragment — an extension keyword followed
-  // by ':' such as a Web 'look:' block — still needs physical lines, so that
+  // by ':' — still needs physical lines, so that
   // fragment falls back to the ordinary line-sensitive lex.
   protected parseNestedExpression(
     fragment: string,

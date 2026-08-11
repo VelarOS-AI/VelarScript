@@ -295,7 +295,7 @@ export async function runLanguageServer(): Promise<void> {
         const semantic = document && path && project ? projectCompletionsAt(project, path, offset) : [];
         const semanticItems = semantic.slice(0, MAX_LSP_RESULT_ITEMS).map((item) => ({
           label: clipLspText(item.label),
-          kind: lspCompletionKind(item.kind),
+          kind: lspCompletionKind(item.presentationKind ?? item.kind),
           detail: clipLspText(item.detail),
           ...(item.documentation ? { documentation: { kind: "markdown", value: clipLspText(item.documentation) } } : {}),
         }));
@@ -387,7 +387,7 @@ export async function runLanguageServer(): Promise<void> {
         respond(message.id, path && project ? projectDocumentSymbols(project, path).slice(0, MAX_LSP_RESULT_ITEMS).map((symbol) => ({
           name: clipLspText(symbol.name),
           ...(symbol.type ? { detail: clipLspText(symbol.type) } : {}),
-          kind: lspSymbolKind(symbol.kind),
+          kind: lspSymbolKind(symbol.presentationKind ?? symbol.kind),
           range: lspRange(sourceFor(project, symbol.path), symbol.span),
           selectionRange: lspRange(sourceFor(project, symbol.path), symbol.selectionSpan),
         })) : []);
@@ -440,7 +440,8 @@ export async function runLanguageServer(): Promise<void> {
           respond(message.id, []);
           break;
         }
-        const formatted = formatSource(document.text);
+        const project = await projectFor(document);
+        const formatted = formatSource(document.text, { extensions: project?.compilerExtensions ?? [] });
         respond(message.id, formatted === document.text ? [] : [{ range: fullRange(document.text), newText: formatted }]);
         break;
       }
@@ -744,16 +745,10 @@ function projectInlayHints(project: ProjectResult, path: string, text: string, r
   if (!module) return [];
   const start = range ? offsetAt(text, range.start) : 0;
   const end = range ? offsetAt(text, range.end) : text.length;
-  // Resource symbols expose the runtime handle shape, while a source-level
-  // resource annotation describes its resolved value. Showing the handle as
-  // `: { value, loading, ... }` would look like a valid source annotation but
-  // mean something different, so keep resource types in hover until the
-  // semantic index carries the source-facing resolved type separately.
-  const kinds = new Set(["variable", "state"]);
   const hints: unknown[] = [];
   for (const symbol of module.result.semanticIndex.symbols) {
     if (hints.length >= MAX_LSP_RESULT_ITEMS) break;
-    if (!kinds.has(symbol.kind) || !symbol.type || symbol.type.length > 1024) continue;
+    if (!symbol.sourceTypeHint || !symbol.type || symbol.type.length > 1024) continue;
     if (symbol.selectionSpan.end < start || symbol.selectionSpan.end > end) continue;
     const declarationEnd = lineEndAt(text, symbol.selectionSpan.end);
     const assignment = text.indexOf("=", symbol.selectionSpan.end);
@@ -770,6 +765,10 @@ function projectInlayHints(project: ProjectResult, path: string, text: string, r
 }
 
 function lspSymbolKind(kind: string): number {
+  if (kind.startsWith("extension:class:")) return 5;
+  if (kind.startsWith("extension:type:")) return 11;
+  if (kind.startsWith("extension:function:")) return 12;
+  if (kind.startsWith("extension:variable:") || kind.startsWith("extension:parameter:")) return 13;
   switch (kind) {
     case "class": return 5;
     case "method": return 6;
@@ -777,36 +776,29 @@ function lspSymbolKind(kind: string): number {
     case "enum": return 10;
     case "type": return 11;
     case "enum-member": return 22;
-    case "component": return 5;
-    case "function":
-    case "style":
-    case "action": return 12;
-    case "state":
+    case "function": return 12;
     case "variable":
     case "parameter":
     case "import":
-    case "watch-value":
     case "catch": return 13;
     default: return 13;
   }
 }
 
 function lspCompletionKind(kind: string): number {
+  if (kind.startsWith("extension:function:")) return 3;
+  if (kind.startsWith("extension:variable:") || kind.startsWith("extension:parameter:")) return 6;
+  if (kind.startsWith("extension:class:")) return 7;
+  if (kind.startsWith("extension:type:")) return 8;
   switch (kind) {
     case "method": return 2;
-    case "function":
-    case "style":
-    case "action": return 3;
+    case "function": return 3;
     case "field": return 5;
     case "variable":
     case "parameter":
-    case "state":
-    case "resource":
-    case "watch-value":
     case "catch":
     case "import": return 6;
-    case "class":
-    case "component": return 7;
+    case "class": return 7;
     case "type": return 8;
     case "enum": return 13;
     case "enum-member": return 20;

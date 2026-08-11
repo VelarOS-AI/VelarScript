@@ -1,11 +1,13 @@
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import { findInterpolatedExpressionEnd, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
+import type { CompilerExtension } from "./extension.ts";
 
 export interface FormatOptions {
   readonly indentWidth?: number;
+  readonly extensions?: readonly CompilerExtension[];
 }
 
-type InlineKind = "word" | "literal" | "string" | "operator" | "open" | "close" | "comma" | "colon" | "dot" | "at" | "jsx" | "comment";
+type InlineKind = "word" | "literal" | "string" | "operator" | "open" | "close" | "comma" | "colon" | "dot" | "at" | "embedded" | "comment";
 
 interface InlineToken {
   readonly kind: InlineKind;
@@ -27,9 +29,9 @@ const parenthesizedKeywordWords = new Set([
 
 /**
  * Formats VelarScript source without round-tripping through generated JavaScript.
- * The formatter tokenizes each logical source line so strings, comments, JSX,
- * unit literals, Look hooks, operators, named arguments, and type syntax retain
- * their meaning while whitespace and indentation become canonical.
+ * The formatter tokenizes each logical source line so strings, comments,
+ * extension-owned embeddings and literals, operators, named arguments, and
+ * type syntax retain their meaning while whitespace becomes canonical.
  */
 export function formatSource(text: string, options: FormatOptions = {}): string {
   if (text.length > MAX_VELAR_SOURCE_CODE_UNITS) throw new RangeError("A VelarScript source module cannot exceed 4 MiB");
@@ -37,12 +39,17 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
   if (!Number.isSafeInteger(indentWidth) || indentWidth < 1 || indentWidth > 16) {
     throw new RangeError("VelarScript formatter indentWidth must be an integer from 1 through 16");
   }
+  const angleOwners = (options.extensions ?? []).flatMap((extension) => extension.formatting?.angleBracketEmbedding
+    ? [extension.formatting.angleBracketEmbedding]
+    : []);
+  if (angleOwners.length > 1) throw new Error("Only one compiler extension may own angle-bracket formatting");
+  const angleEmbedding = angleOwners[0] ?? null;
 
   const protectedStrings = protectMultilineStrings(text);
   const lines = protectedStrings.text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
   const indentation = [0];
   const formatted: string[] = [];
-  let jsxDepth = 0;
+  let embeddedDepth = 0;
   let statementLevel = 0;
 
   for (const original of lines) {
@@ -58,8 +65,8 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     // A leading-dot chain continuation keeps its own canonical indentation —
     // one level past the statement it continues — without opening a block for
     // the lines that follow it.
-    if (jsxDepth === 0 && isChainContinuationLine(content) && formatted.length > 0) {
-      formatted.push(`${" ".repeat((statementLevel + 1) * indentWidth)}${formatInline(content)}`);
+    if (embeddedDepth === 0 && isChainContinuationLine(content) && formatted.length > 0) {
+      formatted.push(`${" ".repeat((statementLevel + 1) * indentWidth)}${formatInline(content, angleEmbedding)}`);
       continue;
     }
     const current = indentation.at(-1) ?? 0;
@@ -70,8 +77,8 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
       if (width !== (indentation.at(-1) ?? 0)) indentation.push(width);
     }
     statementLevel = indentation.length - 1;
-    formatted.push(`${" ".repeat(statementLevel * indentWidth)}${jsxDepth > 0 ? content : formatInline(content)}`);
-    jsxDepth = nextJsxDepth(content, jsxDepth);
+    formatted.push(`${" ".repeat(statementLevel * indentWidth)}${embeddedDepth > 0 ? content : formatInline(content, angleEmbedding)}`);
+    embeddedDepth = nextEmbeddedDepth(content, embeddedDepth, angleEmbedding);
   }
 
   while (formatted.at(-1) === "") formatted.pop();
@@ -174,11 +181,16 @@ function isChainContinuationLine(content: string): boolean {
   return /^(?:\.|\?\.)[A-Za-z_]/u.test(content);
 }
 
-function nextJsxDepth(source: string, currentDepth: number): number {
+function nextEmbeddedDepth(
+  source: string,
+  currentDepth: number,
+  embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
+): number {
+  if (!embedding) return 0;
   let depth = currentDepth;
   let index = 0;
   if (depth === 0) {
-    const start = jsxStart(source);
+    const start = embeddedStart(source);
     if (start === -1) return 0;
     index = start;
   }
@@ -216,7 +228,7 @@ function nextJsxDepth(source: string, currentDepth: number): number {
       else if (character === ">" && braces === 0) break;
     }
     const tag = source.slice(index, cursor);
-    const selfClosing = /\/\s*>$/u.test(tag) || (name === name.toLowerCase() && formatterVoidTags.has(name));
+    const selfClosing = /\/\s*>$/u.test(tag) || embedding.voidElements?.has(name) === true;
     if (closing) depth = Math.max(0, depth - 1);
     else if (!selfClosing) depth += 1;
     index = cursor;
@@ -224,7 +236,7 @@ function nextJsxDepth(source: string, currentDepth: number): number {
   return depth;
 }
 
-function jsxStart(source: string): number {
+function embeddedStart(source: string): number {
   for (let index = 0; index < source.length - 1; index += 1) {
     if (source[index] !== "<" || !/[A-Za-z>]/u.test(source[index + 1] ?? "")) continue;
     const prefix = source.slice(0, index).trimEnd();
@@ -233,10 +245,11 @@ function jsxStart(source: string): number {
   return -1;
 }
 
-const formatterVoidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-
-function formatInline(source: string): string {
-  const tokens = tokenizeInline(source);
+function formatInline(
+  source: string,
+  embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
+): string {
+  const tokens = tokenizeInline(source, embedding);
   if (tokens.length === 0) return "";
   let output = "";
   for (let index = 0; index < tokens.length; index += 1) {
@@ -249,7 +262,10 @@ function formatInline(source: string): string {
   return output;
 }
 
-function tokenizeInline(source: string): InlineToken[] {
+function tokenizeInline(
+  source: string,
+  embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
+): InlineToken[] {
   const tokens: InlineToken[] = [];
   const genericStack: boolean[] = [];
   let index = 0;
@@ -269,12 +285,12 @@ function tokenizeInline(source: string): InlineToken[] {
       index = scannedString.end;
       tokens.push({
         kind: "string",
-        text: scannedString.interpolated ? formatInterpolatedString(source, start, scannedString) : source.slice(start, index),
+        text: scannedString.interpolated ? formatInterpolatedString(source, start, scannedString, embedding) : source.slice(start, index),
       });
       continue;
     }
-    if (character === "<" && beginsJsx(tokens, source, index)) {
-      tokens.push({ kind: "jsx", text: source.slice(index).trimEnd() });
+    if (embedding && character === "<" && beginsEmbeddedAngleSyntax(tokens, source, index)) {
+      tokens.push({ kind: "embedded", text: source.slice(index).trimEnd() });
       break;
     }
     if (/[A-Za-z_]/u.test(character)) {
@@ -380,7 +396,12 @@ function beginsTypeBracket(tokens: readonly InlineToken[]): boolean {
   return typeBracketOperators.has(before.text);
 }
 
-function formatInterpolatedString(source: string, start: number, scanned: StringLiteralScan): string {
+function formatInterpolatedString(
+  source: string,
+  start: number,
+  scanned: StringLiteralScan,
+  embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
+): string {
   if (!scanned.closed) return source.slice(start, scanned.end);
   let output = source.slice(start, scanned.contentStart);
   let index = scanned.contentStart;
@@ -404,13 +425,13 @@ function formatInterpolatedString(source: string, start: number, scanned: String
     }
     const close = findInterpolatedExpressionEnd(source, index + 1, scanned.contentEnd);
     if (close < 0) return source.slice(start, scanned.end);
-    output += `{${formatInline(source.slice(index + 1, close).trim())}}`;
+    output += `{${formatInline(source.slice(index + 1, close).trim(), embedding)}}`;
     index = close + 1;
   }
   return `${output}${source.slice(scanned.contentEnd, scanned.end)}`;
 }
 
-function beginsJsx(tokens: readonly InlineToken[], source: string, index: number): boolean {
+function beginsEmbeddedAngleSyntax(tokens: readonly InlineToken[], source: string, index: number): boolean {
   if (!/[A-Za-z>]/u.test(source[index + 1] ?? "")) return false;
   const previous = tokens.at(-1);
   return !previous || previous.text === "return" || previous.text === "=>" || previous.text === "="
@@ -427,7 +448,7 @@ function needsSpace(
 ): boolean {
   if (current.kind === "comment") return true;
   if (previous.kind === "comment") return false;
-  if (current.kind === "jsx") return previous.kind !== "open" && previous.kind !== "comma" && previous.kind !== "colon";
+  if (current.kind === "embedded") return previous.kind !== "open" && previous.kind !== "comma" && previous.kind !== "colon";
   if (current.kind === "comma" || current.kind === "close" || current.kind === "dot" || current.kind === "colon") {
     if (current.kind === "colon" && isTernaryColon(tokens, index)) return true;
     return false;

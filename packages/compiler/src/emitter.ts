@@ -1179,9 +1179,7 @@ export class JavaScriptEmitter {
       case "runtimeType":
       case "enumObject":
       case "classConstructor":
-      case "component":
-      case "componentConstructor":
-      case "node":
+      case "extension":
       // Type parameters and static Type<T> carriers are erased; the analyzer
       // rejects them in any recursively runtime-checked position before
       // emission can happen.
@@ -1214,9 +1212,7 @@ export class JavaScriptEmitter {
       case "runtimeType":
       case "enumObject":
       case "classConstructor":
-      case "component":
-      case "componentConstructor":
-      case "node":
+      case "extension":
         return `${value} != null`;
       default:
         return this.emitTypeCheck(type, value, state);

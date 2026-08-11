@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
 import { VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION } from "@velarscript/compiler/framework-host";
-import { VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_VALIDATION_MODULE } from "@velarscript/compiler/extension";
+import { VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_RUNTIME_SCHEMA_VERSION, VELAR_TYPE_VALIDATION_MODULE, type ExtensionValueType, type TypeSyntax } from "@velarscript/compiler/extension";
 import { isAssignable, sameType, type ValueType } from "../packages/compiler/src/types.ts";
 import { keywordKinds } from "../packages/compiler/src/token.ts";
 import { compileProject as compileProjectCore, moduleInterfaceIdentity, type CompileProjectOptions, type ProjectResult } from "../packages/cli/src/project.ts";
@@ -43,6 +43,7 @@ import { parseDependencyArguments, runDependencyCommand } from "../packages/cli/
 import { asHostError, hostErrorCode, hostErrorMessage, hostErrorStack } from "../packages/cli/src/host-error.ts";
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
+const webFormatOptions = Object.freeze({ extensions: webCompilerExtensions });
 const unavailableOfficialParameterNames = new Set([
   ...Object.keys(keywordKinds),
   ...Object.keys(velarCompilerExtension.lexical?.keywords ?? {}),
@@ -299,6 +300,48 @@ test("keeps Web syntax outside the Core language unless the project loads the We
   const web = compile("component App:\n    return <main>Web owns this</main>\n");
   assert.deepEqual(web.diagnostics, []);
   assert.deepEqual(web.extensions, ["@velarscript/web"]);
+});
+
+test("target-owned types compose through one extension contract without Core target changes", () => {
+  const entityType: ValueType = {
+    kind: "extension",
+    extensionId: "@example/game",
+    family: "entity",
+    role: "value",
+    properties: new Map([["name", { kind: "string" }]]),
+    requiredProperties: new Set(["name"]),
+    arguments: [],
+    metadata: { semanticSymbolKind: "extension:class:game-entity" },
+    display: { kind: "named", name: "Entity" },
+  };
+  const gameExtension: CompilerExtension = Object.freeze({
+    id: "@example/game",
+    contract: Object.freeze({ protocolVersion: 1, apiVersion: "1.0", kind: "application", extends: Object.freeze({}) }),
+    capabilities: Object.freeze(["game"]),
+    analysis: Object.freeze({
+      primitiveTypes: new Set(["Entity"]),
+      globals: new Map([[
+        "spawnEntity",
+        { kind: "function", parameters: [{ kind: "string" }], requiredParameters: 1, result: entityType } satisfies ValueType,
+      ]]),
+      resolveTypeSyntax(syntax: TypeSyntax) {
+        return syntax.kind === "NamedTypeSyntax" && syntax.name === "Entity" ? entityType : undefined;
+      },
+      memberType(type: ExtensionValueType, property: string) {
+        return type.extensionId === "@example/game" ? type.properties.get(property) ?? null : undefined;
+      },
+    }),
+  });
+
+  const core = compileCore("const player: Entity = spawnEntity(\"Ada\")\nprint(player.name)\n");
+  assert.ok(core.diagnostics.some((item) => /Unknown type 'Entity'/u.test(item.message)));
+  const game = compileCore("const player: Entity = spawnEntity(\"Ada\")\nprint(player.name)\n", { extensions: [gameExtension] });
+  assert.deepEqual(game.diagnostics, []);
+  assert.deepEqual(game.extensions, ["@example/game"]);
+  assert.match(game.code ?? "", /spawnEntity\("Ada"\)/u);
+  const execution = executeModule(`globalThis.spawnEntity = name => ({name});\n${game.code ?? ""}`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "Ada\n");
 });
 
 test("else if chains preserve rejected facts, complete returns, and readable JavaScript", () => {
@@ -794,7 +837,7 @@ print(await forwardAlias(delayed))
 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.name === "forward")?.type, "(value: number) -> Promise<number>");
-  assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "save")?.type, "action () -> Promise<number>");
+  assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "extension:function:web-action" && item.name === "save")?.type, "action () -> Promise<number>");
   assert.match(result.code ?? "", /async function forward\(value\) \{\s*return __velarNormalizePromiseValue\(inner\(value\)\);/u);
   assert.match(result.code ?? "", /async load\(value\) \{\s*const self = this;\s*return __velarNormalizePromiseValue\(inner\(value\)\);/u);
   const execution = executeModule(result.code ?? "");
@@ -1341,8 +1384,8 @@ const unsafeSpread: Outer = {...aliasedOuter}
     { kind: "union", members: [{ kind: "number" }, { kind: "string" }] },
   ), true);
   assert.equal(sameType(
-    { kind: "componentConstructor", name: "Card", props: new Map([["title", { kind: "string" }]]), requiredProps: new Set(["title"]), handle: null },
-    { kind: "componentConstructor", name: "Card", props: new Map([["count", { kind: "number" }]]), requiredProps: new Set(["count"]), handle: null },
+    { kind: "extension", extensionId: "@velarscript/web", family: "component", role: "constructor", nominal: "Card", properties: new Map([["title", { kind: "string" }]]), requiredProperties: new Set(["title"]), arguments: [], display: { kind: "constructor", prefix: "component", name: "Card" } },
+    { kind: "extension", extensionId: "@velarscript/web", family: "component", role: "constructor", nominal: "Card", properties: new Map([["count", { kind: "number" }]]), requiredProperties: new Set(["count"]), arguments: [], display: { kind: "constructor", prefix: "component", name: "Card" } },
   ), false);
   assert.equal(sameType(
     { kind: "intrinsic", name: "json.stringify", parameters: [{ kind: "unknown" }], requiredParameters: 1, result: { kind: "string" } },
@@ -18726,9 +18769,9 @@ def choose(flag: bool) -> number:
 
 test("formatter is syntax-aware and idempotent", () => {
   const source = "type ChooseHandler=(string)->null  \r\ncomponent App:  \r\n\t// keep me\r\n\tresource label:string=loadLabel()   \r\n\tconst values:List<number>=[1,2,3]\r\n\tconst choose:ChooseHandler=value=>null\r\n\tconst result=ready?values[0]:null\r\n\taction refresh()->null:\r\n\t\tawait label.reload()\r\n\t\treturn null\r\n\treturn <main>{label.value}</main>\r\n";
-  const formatted = formatSource(source);
+  const formatted = formatSource(source, webFormatOptions);
   assert.equal(formatted, "type ChooseHandler = (string) -> null\ncomponent App:\n    // keep me\n    resource label: string = loadLabel()\n    const values: List<number> = [1, 2, 3]\n    const choose: ChooseHandler = value => null\n    const result = ready ? values[0] : null\n    action refresh() -> null:\n        await label.reload()\n        return null\n    return <main>{label.value}</main>\n");
-  assert.equal(formatSource(formatted), formatted);
+  assert.equal(formatSource(formatted, webFormatOptions), formatted);
 });
 
 test("formatter keeps destructuring, grouped conditions, and optional parameter types unambiguous", () => {
@@ -18781,11 +18824,11 @@ component App:
       {label}
     </button>
   </main>
-`.trimStart());
+`.trimStart(), webFormatOptions);
   assert.match(formatted, /const label = "Ready"/u);
   assert.match(formatted, /<\/button>\n    <\/main>/u);
   assert.deepEqual(compile(formatted).diagnostics, []);
-  assert.equal(formatSource(formatted), formatted);
+  assert.equal(formatSource(formatted, webFormatOptions), formatted);
 });
 
 test("CLI format supports write and check modes", async () => {
@@ -18977,8 +19020,10 @@ component Chart:
     path: validPath,
     span: { start: labelAttribute, end: labelAttribute + "label".length },
     ownerType: "Choice",
-    ownerKind: "componentConstructor",
-    syntax: "jsx-prop",
+    ownerKind: "extension",
+    ownerIdentity: "@velarscript/web:component:Choice",
+    ownerSymbolKind: "extension:function:web-component",
+    syntax: "extension-property",
     shorthand: false,
   });
   assert.equal(projectCompletionContextAt(valid, validPath, labelAttribute), "extension:@velarscript/web:component-attribute");
@@ -19014,6 +19059,7 @@ component Chart:
   const svgCompletions = projectCompletionsAt(svgProject, svgPath, svgAttribute);
   assert.ok(svgCompletions.some((item) => item.label === "viewBox" && item.detail === "native SVG attribute"));
   assert.ok(svgCompletions.some((item) => item.label === "stroke-width"));
+  assert.ok(svgCompletions.slice(0, 160).some((item) => item.label === "viewBox"), "native SVG attributes must survive bounded editor result sets");
   assert.deepEqual(projectDefinitionAt(valid, validPath, labelAttribute + 1), {
     path: itemPath,
     span: { start: labelDeclaration, end: labelDeclaration + "label".length },
@@ -23432,8 +23478,11 @@ component App:
   assert.equal(library?.semanticIndex.symbols.find((symbol) => symbol.name === "RowView")?.type,
     "Component<(label: string, compact?: bool) -> WebNode>");
   const exportedHost = library?.moduleInterface.exports.get("Host");
-  assert.equal(exportedHost?.kind, "componentConstructor");
-  assert.equal(exportedHost?.kind === "componentConstructor" ? exportedHost.props.get("View")?.kind : null, "component");
+  assert.equal(exportedHost?.kind, "extension");
+  assert.equal(exportedHost?.kind === "extension" ? exportedHost.extensionId : null, "@velarscript/web");
+  assert.equal(exportedHost?.kind === "extension" ? exportedHost.family : null, "component");
+  const viewType = exportedHost?.kind === "extension" ? exportedHost.properties.get("View") : null;
+  assert.equal(viewType?.kind === "extension" ? viewType.role : null, "contract");
 
   await writeFile(appPath, `
 import {Host} from "./views.vel"
@@ -23489,9 +23538,9 @@ component App(View: EditorView = Editor):
   assert.match(result.code ?? "", /__velarChild\(View\.get\(\), \{ class: \(\) => \("compact"\), look: \(\) => \(__velarLook/u);
   assert.match(result.code ?? "", /\(next, previous\) => \{ if \(previous === undefined \|\| editor === previous\) editor = next; \}/u);
   assert.doesNotMatch(result.code ?? "", /\{ ref: \(\) =>/u);
-  const formattedHandle = formatSource("component Control exposes Handle:\n  expose {run:run}\n  return <div />\n");
+  const formattedHandle = formatSource("component Control exposes Handle:\n  expose {run:run}\n  return <div />\n", webFormatOptions);
   assert.match(formattedHandle, /component Control exposes Handle:\n\s+expose \{run: run\}/u);
-  assert.equal(formatSource(formattedHandle), formattedHandle);
+  assert.equal(formatSource(formattedHandle, webFormatOptions), formattedHandle);
 
   const afterReturn = compile(`
 type Handle:
@@ -23635,8 +23684,9 @@ component App:
   assert.deepEqual(valid.modules.flatMap((module) => module.result.diagnostics), []);
   const library = valid.modules.find((module) => module.inputPath === libraryPath)?.result;
   const exported = library?.moduleInterface.exports.get("Dialog");
-  assert.equal(exported?.kind, "componentConstructor");
-  assert.equal(exported?.kind === "componentConstructor" ? describeType(exported.handle ?? { kind: "null" }) : null, "DialogHandle");
+  assert.equal(exported?.kind, "extension");
+  assert.equal(exported?.kind === "extension" ? exported.role : null, "constructor");
+  assert.equal(exported?.kind === "extension" ? describeType(exported.arguments[0] ?? { kind: "null" }) : null, "DialogHandle");
 
   await writeFile(appPath, `
 import {Dialog} from "./dialog.vel"
@@ -24156,7 +24206,7 @@ console.log("snapshot-cleanup:" + (snapshot.node.style.properties.get("color") ?
     "snapshot-cleanup:missing",
     "",
   ].join("\n"));
-  assert.match(formatSource("component Styled:\n    return <div style:color=\"red\" style:padding={12px}>ok</div>\n"),
+  assert.match(formatSource("component Styled:\n    return <div style:color=\"red\" style:padding={12px}>ok</div>\n", webFormatOptions),
     /style:color="red" style:padding=\{12px\}/u);
 
   const invalid = compile(`
@@ -24513,7 +24563,7 @@ component App:
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const label = __velarResource\(\(\) => __velarNormalizePromiseValue\(loadLabel\(\)\), __scope, "label"\)/u);
-  const symbol = result.semanticIndex.symbols.find((item) => item.kind === "resource" && item.name === "label");
+  const symbol = result.semanticIndex.symbols.find((item) => item.kind === "extension:variable:web-resource" && item.name === "label");
   assert.match(symbol?.type ?? "", /value: string\?/u);
   assert.match(symbol?.type ?? "", /reload: \(\) -> Promise<null>/u);
 
@@ -24688,7 +24738,7 @@ component App:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const refresh = __velarAction\(async \(\) =>/u);
   assert.equal(result.code?.match(/function __velarNormalizeError\(value\)/gu)?.length, 1);
-  const symbol = result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "refresh");
+  const symbol = result.semanticIndex.symbols.find((item) => item.kind === "extension:function:web-action" && item.name === "refresh");
   assert.match(symbol?.type ?? "", /action \(\) -> Promise<string>/u);
 
   const execution = executeModule(`${result.code ?? ""}
@@ -24784,7 +24834,7 @@ component App:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const deliver = __velarAction\(async \(text\) => \{[\s\S]*?\}, __velarGlobalScope, "deliver"\)/u);
   assert.match(result.code ?? "", /message\.set\(text\)/u);
-  const symbol = result.semanticIndex.symbols.find((item) => item.kind === "action" && item.name === "deliver");
+  const symbol = result.semanticIndex.symbols.find((item) => item.kind === "extension:function:web-action" && item.name === "deliver");
   assert.match(symbol?.type ?? "", /action \(text: string\) -> Promise<string>/u);
 
   const execution = executeModule(`${result.code ?? ""}

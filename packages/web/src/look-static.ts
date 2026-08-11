@@ -1,5 +1,6 @@
 import type { Expression, Program } from "@velarscript/compiler/extension";
 import { LOOK_UNIT_TYPES } from "./look.ts";
+import { isWebUnit } from "./ast.ts";
 
 export type LookStaticValue =
   | { readonly kind: "number"; readonly value: number }
@@ -63,7 +64,7 @@ export function evaluateLookStaticExpression(
   expression: Expression,
   values: ReadonlyMap<string, LookStaticValue>,
 ): LookStaticValue | null {
-  if (expression.kind === "UnitLiteralExpression") return staticUnit(expression.value, expression.unit);
+  if (isWebUnit(expression)) return staticUnit(expression.value, expression.unit);
   if (expression.kind === "LiteralExpression" && typeof expression.value === "number") return staticNumber(expression.value);
   if (expression.kind === "IdentifierExpression") return values.get(expression.name) ?? null;
   if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")) {

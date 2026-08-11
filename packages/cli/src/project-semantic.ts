@@ -28,6 +28,7 @@ export interface ProjectDocumentSymbol extends ProjectLocation {
   readonly kind: SemanticSymbol["kind"];
   readonly selectionSpan: Span;
   readonly type: string | null;
+  readonly presentationKind?: SemanticSymbol["presentationKind"];
 }
 
 export interface ProjectSignature {
@@ -40,6 +41,7 @@ export interface ProjectCompletion {
   readonly detail: string;
   readonly kind: SemanticSymbol["kind"];
   readonly documentation?: string;
+  readonly presentationKind?: SemanticSymbol["presentationKind"];
 }
 
 export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter";
@@ -199,6 +201,7 @@ export function projectDocumentSymbols(project: ProjectResult, path: string): re
     span: symbol.span,
     selectionSpan: symbol.selectionSpan,
     type: symbol.type,
+    ...(symbol.presentationKind ? { presentationKind: symbol.presentationKind } : {}),
   }));
 }
 
@@ -236,19 +239,20 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
 }
 
 function semanticTokenType(symbol: SemanticSymbol): ProjectSemanticTokenType {
+  if (symbol.kind.startsWith("extension:function:")) return "function";
+  if (symbol.kind.startsWith("extension:parameter:")) return "parameter";
+  if (symbol.kind.startsWith("extension:type:")) return "type";
+  if (symbol.kind.startsWith("extension:class:")) return "class";
   switch (symbol.kind) {
     case "type": return "type";
     case "class": return "class";
     case "enum": return "enum";
     case "enum-member": return "enumMember";
     case "function":
-    case "component":
-    case "style":
-    case "action": return "function";
+      return "function";
     case "method": return "method";
     case "field": return "property";
-    case "parameter":
-    case "watch-value": return "parameter";
+    case "parameter": return "parameter";
     default: return "variable";
   }
 }
@@ -333,6 +337,7 @@ export function projectCompletionsAt(project: ProjectResult, path: string, offse
       label: symbol.name,
       detail: symbol.type ?? symbol.kind,
       kind: symbol.kind,
+      ...(resolved.presentationKind ? { presentationKind: resolved.presentationKind } : {}),
       ...(resolved.documentation ? { documentation: resolved.documentation } : {}),
     };
   });
@@ -347,7 +352,9 @@ function completionOwnerTarget(
   if (ownerOffset !== null) {
     const direct = targetAt(project, module, ownerOffset, "definition");
     if (direct?.symbol.kind === "class") return { target: direct, staticMember: true };
-    if (direct?.symbol.kind === "component") return { target: direct, staticMember: false };
+    if (direct?.symbol.kind.startsWith("extension:function:") || direct?.symbol.kind.startsWith("extension:class:")) {
+      return { target: direct, staticMember: false };
+    }
   }
   if (!displayedType) return null;
   const classTarget = ownerTarget(project, module, displayedType, "class");
@@ -380,6 +387,7 @@ function extensionCompletionAt(project: ProjectResult, module: ProjectModule, of
       label: symbol.name,
       detail: symbol.type ?? symbol.kind,
       kind: symbol.kind,
+      ...(resolved.presentationKind ? { presentationKind: resolved.presentationKind } : {}),
       ...(resolved.documentation ? { documentation: resolved.documentation } : {}),
     };
   });
@@ -554,11 +562,11 @@ function accessibleMemberTargetAt(project: ProjectResult, module: ProjectModule,
 
 function memberTargetForExpression(project: ProjectResult, module: ProjectModule, expression: SemanticExpression): MemberTarget | null {
   if (!expression.memberName || !expression.ownerType || !expression.ownerKind) return null;
-  return memberTargetForOwner(project, module, expression.memberName, expression.ownerType, expression.ownerKind);
+  return memberTargetForOwner(project, module, expression.memberName, expression.ownerType, expression.ownerKind, expression.ownerIdentity, expression.ownerSymbolKind);
 }
 
 function memberTargetForReference(project: ProjectResult, module: ProjectModule, reference: SemanticMemberReference): MemberTarget | null {
-  return memberTargetForOwner(project, module, reference.name, reference.ownerType, reference.ownerKind, reference.ownerIdentity);
+  return memberTargetForOwner(project, module, reference.name, reference.ownerType, reference.ownerKind, reference.ownerIdentity, reference.ownerSymbolKind);
 }
 
 function memberTargetForOwner(
@@ -568,10 +576,12 @@ function memberTargetForOwner(
   ownerType: string,
   ownerKind: SemanticExpression["ownerKind"],
   ownerIdentity?: string,
+  ownerSymbolKind?: SemanticSymbol["kind"],
 ): MemberTarget | null {
   if (ownerKind !== "named" && ownerKind !== "class" && ownerKind !== "typeObject"
-    && ownerKind !== "classConstructor" && ownerKind !== "componentConstructor") return null;
-  const owner = ownerTarget(project, module, ownerType, ownerKind, ownerIdentity);
+    && ownerKind !== "classConstructor" && ownerKind !== "extension") return null;
+  if (ownerKind === "extension" && !ownerSymbolKind) return null;
+  const owner = ownerTarget(project, module, ownerType, ownerKind, ownerIdentity, new Set(), ownerSymbolKind);
   return owner ? findDeclaredMember(project, owner, memberName, ownerKind === "classConstructor", new Set()) : null;
 }
 
@@ -582,9 +592,10 @@ function ownerTarget(
   ownerKind: SemanticExpression["ownerKind"],
   ownerIdentity?: string,
   visited: Set<string> = new Set(),
+  ownerSymbolKind?: SemanticSymbol["kind"],
 ): MemberTarget | null {
   const expected = ownerKind === "class" || ownerKind === "classConstructor" ? "class"
-    : ownerKind === "componentConstructor" ? "component" : "type";
+    : ownerKind === "extension" && ownerSymbolKind ? ownerSymbolKind : "type";
   const key = `${module.inputPath}:${expected}:${name}`;
   if (visited.has(key)) return null;
   visited.add(key);
@@ -600,7 +611,7 @@ function ownerTarget(
     const imported = importForSymbol(module.result.semanticIndex, symbol.id);
     const exported = imported ? exportedTarget(project, module, imported) : null;
     return exported && exported.symbol.kind === expected
-      ? ownerTarget(project, exported.module, exported.symbol.name, ownerKind, ownerIdentity, visited)
+      ? ownerTarget(project, exported.module, exported.symbol.name, ownerKind, ownerIdentity, visited, ownerSymbolKind)
       : null;
   }
   if (symbol.kind === "type" && symbol.typeTarget && symbol.typeTarget !== symbol.name) {
@@ -637,7 +648,7 @@ function findDeclaredMember(
   const direct = owner.module.result.semanticIndex.symbols.find((symbol) => symbol.container === owner.symbol.name
     && symbol.name === name
     && (allowPrivate || !symbol.private)
-    && (owner.symbol.kind === "component"
+    && (owner.symbol.kind.startsWith("extension:function:") || owner.symbol.kind.startsWith("extension:class:")
       ? symbol.kind === "parameter"
       : (symbol.kind === "field" || symbol.kind === "method") && Boolean(symbol.static) === staticMember));
   if (direct) return { module: owner.module, symbol: direct };
@@ -669,7 +680,9 @@ function renameableMember(target: MemberTarget): boolean {
   if (!target.symbol.container) return false;
   if (target.symbol.kind === "method") return true;
   if (target.symbol.kind === "parameter") {
-    return target.module.result.semanticIndex.symbols.some((symbol) => symbol.kind === "component" && symbol.name === target.symbol.container);
+    return target.module.result.semanticIndex.symbols.some((symbol) =>
+      (symbol.kind.startsWith("extension:function:") || symbol.kind.startsWith("extension:class:"))
+      && symbol.name === target.symbol.container);
   }
   if (target.symbol.kind !== "field") return false;
   return target.module.result.semanticIndex.symbols.some((symbol) => (symbol.kind === "type" || symbol.kind === "class")

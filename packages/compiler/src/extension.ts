@@ -1,12 +1,12 @@
 import type { AnalysisContext, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
 import type { Analyzer } from "./analyzer.ts";
-import type { Expression, Program, Statement, TypeReference } from "./ast.ts";
+import type { CoreExpression, CoreStatement, Expression, Parameter, Program, Statement, TypeReference, TypeSyntax } from "./ast.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import type { Parser } from "./parser.ts";
 import type { SourceText, Span } from "./source.ts";
 import type { CompilerSemanticExtension, SemanticSymbol } from "./semantic.ts";
 import type { Token } from "./token.ts";
-import type { EnumInfo, ValueType } from "./types.ts";
+import type { EnumInfo, ExtensionTypeSyntaxResolver, ExtensionValueType, ValueType } from "./types.ts";
 
 export { expressionContainsDirectAwait } from "./ast.ts";
 export { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
@@ -34,14 +34,19 @@ export { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
 export { VELAR_UTF8_RUNTIME } from "./utf8-runtime.ts";
 export { Analyzer } from "./analyzer.ts";
 export type {
+  CoreExpression,
+  CoreStatement,
   Expression,
+  Parameter,
   Program,
   Statement,
   TypeReference,
+  TypeSyntax,
 } from "./ast.ts";
 export type { AnalysisContext, ClassField, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
 export { Parser } from "./parser.ts";
 export { spanIdentity } from "./source.ts";
+export type { Span } from "./source.ts";
 export type { ParseResult } from "./parser.ts";
 export type { CompilerSemanticExtension, SemanticDeclareOptions, SemanticExtensionContext, SemanticFunctionLike } from "./semantic.ts";
 export type { Token, TokenKind } from "./token.ts";
@@ -62,7 +67,7 @@ export {
   unionOf,
   unknownType,
 } from "./types.ts";
-export type { ValueType } from "./types.ts";
+export type { ExtensionTypeSyntaxResolver, ExtensionValueType, ExtensionTypeDisplay, ValueType } from "./types.ts";
 
 export const VELAR_EXTENSION_PROTOCOL_VERSION = 1 as const;
 
@@ -78,6 +83,12 @@ export interface VelarExtensionContract {
   readonly apiVersion: string;
   readonly kind: VelarExtensionKind;
   readonly extends: Readonly<Record<string, string>>;
+  /**
+   * Application targets whose public compiler/runtime layers are assembled
+   * into this extension. Composition does not activate another application
+   * extension in the project graph; it records ownership and API provenance.
+   */
+  readonly composes?: Readonly<Record<string, string>>;
 }
 
 export interface CompilerEmitter {
@@ -126,6 +137,16 @@ export interface CompilerAnalysisExtension {
   readonly globals?: ReadonlyMap<string, ValueType>;
   readonly reservedBindings?: ReadonlySet<string>;
   readonly globalGuidance?: ReadonlyMap<string, string>;
+  /** Resolve target-owned type syntax without teaching Core the target's types. */
+  readonly resolveTypeSyntax?: ExtensionTypeSyntaxResolver;
+  /** Decide compatibility inside a target-owned type family. */
+  readonly isTypeAssignable?: (
+    actual: ExtensionValueType,
+    expected: ExtensionValueType,
+    assign: (actual: ValueType, expected: ValueType) => boolean,
+  ) => boolean | undefined;
+  /** Resolve target-owned runtime members; null means the target owns the type but the member is absent. */
+  readonly memberType?: (type: ExtensionValueType, property: string) => ValueType | null | undefined;
   readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
 }
 
@@ -171,6 +192,7 @@ export interface CompilerProjectEditorCompletion {
   readonly detail: string;
   readonly kind: SemanticSymbol["kind"];
   readonly documentation?: string;
+  readonly presentationKind?: SemanticSymbol["presentationKind"];
 }
 
 export interface CompilerProjectEditorCompletionContext {
@@ -202,6 +224,13 @@ export interface CompilerEditorExtension {
   readonly typeDocumentation?: Readonly<Record<string, string>>;
   readonly completions?: readonly CompilerEditorCompletion[];
   readonly project?: CompilerProjectEditorExtension;
+}
+
+export interface CompilerFormattingExtension {
+  /** Preserve one target-owned angle-bracket embedding while formatting its host line. */
+  readonly angleBracketEmbedding?: {
+    readonly voidElements?: ReadonlySet<string>;
+  };
 }
 
 export interface CompilerDependencyContext {
@@ -276,6 +305,7 @@ export interface CompilerExtension {
   readonly analysis?: CompilerAnalysisExtension;
   readonly modules?: CompilerModuleExtension;
   readonly editor?: CompilerEditorExtension;
+  readonly formatting?: CompilerFormattingExtension;
   readonly parser?: CompilerParserFactory;
   readonly analyzer?: CompilerAnalyzerFactory;
   readonly semantic?: CompilerSemanticExtension;

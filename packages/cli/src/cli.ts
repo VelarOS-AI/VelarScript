@@ -3,7 +3,7 @@
 import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { formatDiagnostic, formatSource } from "@velarscript/compiler";
-import type { CompileResult } from "@velarscript/compiler";
+import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
 import { compileProject, projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { runDevServer } from "./dev-server.ts";
@@ -242,12 +242,14 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     const singleFile = parsed.input !== null && extname(resolve(parsed.input)) === ".vel";
     let inputs: string[];
+    let formattingExtensions: readonly CompilerExtension[] = [];
     try {
       if (singleFile) {
         inputs = [resolve(parsed.input!)];
       } else {
         const config = await resolveVelarProject(parsed.input);
         inputs = await discoverVelarSources(config);
+        formattingExtensions = config.compilerExtensions;
       }
     } catch (error) {
       process.stderr.write(`velar format: ${hostErrorMessage(error)}\n`);
@@ -261,7 +263,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       for (const input of inputs) {
         const source = await readVelarSourceFile(input);
-        const formatted = formatSource(source);
+        const formatted = formatSource(source, { extensions: formattingExtensions });
         if (formatted === source) continue;
         changed.push(input);
         if (!parsed.check) await writeFile(input, formatted, "utf8");

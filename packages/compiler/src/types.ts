@@ -5,6 +5,35 @@ export interface EnumInfo {
   readonly members: ReadonlySet<string>;
 }
 
+export type ExtensionTypeDisplay =
+  | { readonly kind: "named"; readonly name: string }
+  | { readonly kind: "constructor"; readonly prefix: string; readonly name: string }
+  | {
+      readonly kind: "properties";
+      readonly name: string;
+      readonly result: string;
+      readonly hiddenOptionalProperties?: ReadonlyMap<string, string>;
+    };
+
+/**
+ * A target-owned type family. Core traverses its nested types and owns stable
+ * identity, while the active language extension owns semantic compatibility
+ * between roles in the family (for example a framework constructor satisfying
+ * a framework contract).
+ */
+export interface ExtensionValueType {
+  readonly kind: "extension";
+  readonly extensionId: string;
+  readonly family: string;
+  readonly role: string;
+  readonly nominal?: string;
+  readonly properties: ReadonlyMap<string, ValueType>;
+  readonly requiredProperties: ReadonlySet<string>;
+  readonly arguments: readonly ValueType[];
+  readonly metadata?: Readonly<Record<string, string>>;
+  readonly display: ExtensionTypeDisplay;
+}
+
 export type ValueType =
   | { readonly kind: "unknown"; readonly restricted?: boolean }
   | { readonly kind: "any" }
@@ -34,9 +63,7 @@ export type ValueType =
   | { readonly kind: "typeObject"; readonly name: string; readonly value?: ValueType }
   | { readonly kind: "runtimeType"; readonly value: ValueType }
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
-  | { readonly kind: "node" }
-  | { readonly kind: "component"; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly handle: ValueType | null }
-  | { readonly kind: "componentConstructor"; readonly name: string; readonly props: ReadonlyMap<string, ValueType>; readonly requiredProps: ReadonlySet<string>; readonly handle: ValueType | null; readonly intrinsic?: string }
+  | ExtensionValueType
   | { readonly kind: "function"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "action"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "intrinsic"; readonly name: string; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
@@ -56,13 +83,26 @@ export interface TypeEnvironment {
   isSubclassOf(actual: string, expected: string): boolean;
   isPrimitiveType(name: string): boolean;
   isPrimitiveSubtype(actual: string, expected: string): boolean;
+  isExtensionTypeAssignable?(
+    actual: ExtensionValueType,
+    expected: ExtensionValueType,
+    assign: (actual: ValueType, expected: ValueType) => boolean,
+  ): boolean | undefined;
 }
 
-export function resolveTypeReference(reference: TypeReference): ValueType {
-  return typeFromSyntax(reference.syntax);
+export type ExtensionTypeSyntaxResolver = (
+  syntax: TypeSyntax,
+  resolve: (syntax: TypeSyntax) => ValueType,
+) => ValueType | undefined;
+
+export function resolveTypeReference(reference: TypeReference, extension?: ExtensionTypeSyntaxResolver): ValueType {
+  return typeFromSyntax(reference.syntax, extension);
 }
 
-export function typeFromSyntax(syntax: TypeSyntax): ValueType {
+export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSyntaxResolver): ValueType {
+  const nested = (value: TypeSyntax): ValueType => typeFromSyntax(value, extension);
+  const owned = extension?.(syntax, nested);
+  if (owned) return owned;
   switch (syntax.kind) {
     case "NamedTypeSyntax":
       switch (syntax.name) {
@@ -72,8 +112,6 @@ export function typeFromSyntax(syntax: TypeSyntax): ValueType {
         case "null": return nullType;
         case "unknown": return unknownType;
         case "any": return anyType;
-        case "WebNode": return { kind: "node" };
-        case "Component": return { kind: "component", props: new Map(), requiredProps: new Set(), handle: null };
         case "Promise": return { kind: "promise", value: nullType };
         case "Function": return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
         default: return { kind: "named", name: syntax.name };
@@ -81,7 +119,7 @@ export function typeFromSyntax(syntax: TypeSyntax): ValueType {
     case "EnumMemberTypeSyntax":
       return { kind: "enumMember", name: syntax.enumName, identity: syntax.enumName, member: syntax.member };
     case "GenericTypeSyntax": {
-      const arguments_ = syntax.arguments.map(typeFromSyntax);
+      const arguments_ = syntax.arguments.map(nested);
       if (syntax.name === "List") return { kind: "list", element: arguments_[0] ?? unknownType };
       if (syntax.name === "Set") return { kind: "set", element: arguments_[0] ?? unknownType };
       if (syntax.name === "Map") return { kind: "map", key: arguments_[0] ?? unknownType, value: arguments_[1] ?? unknownType };
@@ -93,37 +131,24 @@ export function typeFromSyntax(syntax: TypeSyntax): ValueType {
         const parameters = arguments_.slice(0, -1);
         return { kind: "function", parameters, requiredParameters: parameters.length, result };
       }
-      if (syntax.name === "Component") {
-        const signature = syntax.arguments[0];
-        if (signature?.kind !== "FunctionTypeSyntax" || signature.parameters.some((parameter) => !parameter.name)) {
-          return { kind: "component", props: new Map(), requiredProps: new Set(), handle: null };
-        }
-        const parameters = signature.parameters.filter((parameter) => !parameter.rest);
-        return {
-          kind: "component",
-          props: new Map(parameters.map((parameter) => [parameter.name!, typeFromSyntax(parameter.type)])),
-          requiredProps: new Set(parameters.filter((parameter) => !parameter.optional).map((parameter) => parameter.name!)),
-          handle: syntax.arguments[1] ? typeFromSyntax(syntax.arguments[1]) : null,
-        };
-      }
       return { kind: "named", name: formatTypeSyntax(syntax) };
     }
     case "ReadonlyTypeSyntax":
-      return readonlyViewOf(typeFromSyntax(syntax.inner));
+      return readonlyViewOf(nested(syntax.inner));
     case "OptionalTypeSyntax":
-      return optionalOf(typeFromSyntax(syntax.inner));
+      return optionalOf(nested(syntax.inner));
     case "UnionTypeSyntax":
-      return unionOf(syntax.members.map(typeFromSyntax));
+      return unionOf(syntax.members.map(nested));
     case "FunctionTypeSyntax": {
       const fixed = syntax.parameters.filter((parameter) => !parameter.rest);
       const rest = syntax.parameters.find((parameter) => parameter.rest);
       return {
         kind: "function",
-        parameters: fixed.map((parameter) => typeFromSyntax(parameter.type)),
+        parameters: fixed.map((parameter) => nested(parameter.type)),
         ...(fixed.some((parameter) => parameter.name) ? { parameterNames: fixed.map((parameter) => parameter.name ?? "") } : {}),
         requiredParameters: fixed.filter((parameter) => !parameter.optional).length,
-        ...(rest ? { rest: typeFromSyntax(rest.type) } : {}),
-        result: typeFromSyntax(syntax.result),
+        ...(rest ? { rest: nested(rest.type) } : {}),
+        result: nested(syntax.result),
       };
     }
   }
@@ -419,17 +444,12 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     return callableInputsAssignable(actual, expected, environment, seen)
       && isAssignable(actual.result, expected.result, environment, seen);
   }
-  if ((actual.kind === "component" || actual.kind === "componentConstructor") && expected.kind === "component") {
-    for (const required of actual.requiredProps) if (!expected.requiredProps.has(required)) return false;
-    for (const [name, supplied] of expected.props) {
-      const accepted = actual.props.get(name);
-      if (!accepted || !isAssignable(supplied, accepted, environment, new Set(seen))) return false;
-    }
-    if (expected.handle && (!actual.handle || !isAssignable(actual.handle, expected.handle, environment, new Set(seen)))) return false;
-    return true;
-  }
-  if (actual.kind === "node" && expected.kind === "node") {
-    return true;
+  if (actual.kind === "extension" && expected.kind === "extension") {
+    return environment.isExtensionTypeAssignable?.(
+      actual,
+      expected,
+      (nestedActual, nestedExpected) => isAssignable(nestedActual, nestedExpected, environment, new Set(seen)),
+    ) ?? false;
   }
   return false;
 }
@@ -450,7 +470,6 @@ function typeIdentity(type: ValueType, includeCallableParameterNames = true): st
     case "string":
     case "number":
     case "bool":
-    case "node":
       return identityNode(type.kind);
     case "class":
       return identityNode("class", [type.identity ?? type.name]);
@@ -504,20 +523,15 @@ function typeIdentity(type: ValueType, includeCallableParameterNames = true): st
         type.rest ? nested(type.rest) : "",
         nested(type.result),
       ]);
-    case "component":
-      return identityNode("component-signature", [...[...type.props]
+    case "extension":
+      return identityNode("extension", [type.extensionId, type.family, type.role, type.nominal ?? "", ...[...type.properties]
         .map(([name, value]) => [name, nested(value)] as const)
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-        .map(([name, value]) => identityNode("prop", [name, value])),
-      identityNode("required-props", [...type.requiredProps].sort()),
-      identityNode("handle", [type.handle ? nested(type.handle) : ""])]);
-    case "componentConstructor":
-      return identityNode("component-constructor", [type.intrinsic ?? "", type.name, ...[...type.props]
-        .map(([name, value]) => [name, nested(value)] as const)
-        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-        .map(([name, value]) => identityNode("prop", [name, value])),
-      identityNode("required-props", [...type.requiredProps].sort()),
-      identityNode("handle", [type.handle ? nested(type.handle) : ""])]);
+        .map(([name, value]) => identityNode("property", [name, value])),
+      identityNode("required-properties", [...type.requiredProperties].sort()),
+      identityNode("arguments", type.arguments.map(nested)),
+      identityNode("metadata", Object.entries(type.metadata ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => identityNode("entry", [name, value]))),
+    ]);
     case "union":
       return identityNode("union", type.members.map(nested).sort());
   }
@@ -569,22 +583,20 @@ export function describeType(type: ValueType): string {
       return type.name;
     case "enumObject":
       return `enum ${type.name}`;
-    case "node":
-      return "WebNode";
-    case "component": {
-      const props = [...type.props]
+    case "extension": {
+      if (type.display.kind === "named") return type.display.name;
+      if (type.display.kind === "constructor") return `${type.display.prefix} ${type.display.name}`;
+      const display = type.display;
+      const properties = [...type.properties]
         .filter(([name, value]) => {
-          if (type.requiredProps.has(name)) return true;
-          if (name === "class") return value.kind !== "optional" || value.inner.kind !== "string";
-          if (name === "look") return value.kind !== "optional" || value.inner.kind !== "named" || value.inner.name !== "Look";
-          return true;
+          if (type.requiredProperties.has(name)) return true;
+          const hidden = display.hiddenOptionalProperties?.get(name);
+          return hidden === undefined || describeType(value) !== hidden;
         })
-        .map(([name, value]) => `${name}${type.requiredProps.has(name) ? "" : "?"}: ${describeType(value)}`);
-      if (props.length === 0 && !type.handle) return "Component";
-      return `Component<(${props.join(", ")}) -> WebNode${type.handle ? `, ${describeType(type.handle)}` : ""}>`;
+        .map(([name, value]) => `${name}${type.requiredProperties.has(name) ? "" : "?"}: ${describeType(value)}`);
+      if (properties.length === 0 && type.arguments.length === 0) return display.name;
+      return `${display.name}<(${properties.join(", ")}) -> ${display.result}${type.arguments.map((argument) => `, ${describeType(argument)}`).join("")}>`;
     }
-    case "componentConstructor":
-      return `component ${type.name}`;
     case "function":
     case "action":
     case "intrinsic":
@@ -631,10 +643,8 @@ export function typeContainsParameter(
       return typeContainsParameter(type.value, matches);
     case "object":
       return [...type.fields.values()].some((field) => typeContainsParameter(field, matches));
-    case "component":
-    case "componentConstructor":
-      return [...type.props.values()].some((prop) => typeContainsParameter(prop, matches))
-        || (type.handle ? typeContainsParameter(type.handle, matches) : false);
+    case "extension":
+      return [...type.properties.values(), ...type.arguments].some((value) => typeContainsParameter(value, matches));
     case "function":
     case "action":
     case "intrinsic":
@@ -708,12 +718,11 @@ export function substituteTypeParameters(type: ValueType, bindings: readonly (Va
     }
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])) };
-    case "component":
-    case "componentConstructor":
+    case "extension":
       return {
         ...type,
-        props: new Map([...type.props].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])),
-        handle: type.handle ? substituteTypeParameters(type.handle, bindings) : null,
+        properties: new Map([...type.properties].map(([name, value]) => [name, substituteTypeParameters(value, bindings)])),
+        arguments: type.arguments.map((argument) => substituteTypeParameters(argument, bindings)),
       };
     case "function":
     case "action":
@@ -755,12 +764,11 @@ export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap
       return { kind: "runtimeType", value: bindNamedTypeParameters(type.value, parameters) };
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, bindNamedTypeParameters(value, parameters)])) };
-    case "component":
-    case "componentConstructor":
+    case "extension":
       return {
         ...type,
-        props: new Map([...type.props].map(([name, value]) => [name, bindNamedTypeParameters(value, parameters)])),
-        handle: type.handle ? bindNamedTypeParameters(type.handle, parameters) : null,
+        properties: new Map([...type.properties].map(([name, value]) => [name, bindNamedTypeParameters(value, parameters)])),
+        arguments: type.arguments.map((argument) => bindNamedTypeParameters(argument, parameters)),
       };
     case "function":
     case "action":
@@ -841,12 +849,16 @@ export function unifyTypeParameters(
     }
     return;
   }
-  if (pattern.kind === "component" && (actual.kind === "component" || actual.kind === "componentConstructor")) {
-    for (const [name, prop] of pattern.props) {
-      const provided = actual.props.get(name);
-      if (provided) unifyTypeParameters(prop, provided, bindings, fieldsOf);
+  if (pattern.kind === "extension" && actual.kind === "extension"
+    && pattern.extensionId === actual.extensionId && pattern.family === actual.family) {
+    for (const [name, property] of pattern.properties) {
+      const provided = actual.properties.get(name);
+      if (provided) unifyTypeParameters(property, provided, bindings, fieldsOf);
     }
-    if (pattern.handle && actual.handle) unifyTypeParameters(pattern.handle, actual.handle, bindings, fieldsOf);
+    for (let index = 0; index < pattern.arguments.length; index += 1) {
+      const provided = actual.arguments[index];
+      if (provided) unifyTypeParameters(pattern.arguments[index]!, provided, bindings, fieldsOf);
+    }
     return;
   }
   if ((pattern.kind === "function" || pattern.kind === "action" || pattern.kind === "intrinsic")

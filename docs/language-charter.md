@@ -21,7 +21,11 @@ The language follows five rules:
 5. Keep target capabilities in explicit extensions rather than hiding Web,
    Node, or Desktop behavior in Core. An application selects one application
    framework; capability and language extensions compose through a versioned,
-   cycle-free semantic graph backed by ordinary npm dependencies.
+   cycle-free semantic graph backed by ordinary npm dependencies. A future
+   target such as Game must register its own syntax nodes, type families,
+   semantic/editor categories, lowering, modules, runtime, and host contract
+   through the same public extension protocol; adding it must not add Game
+   names or branches to the Core AST, analyzer, formatter, or emitter.
 
 VelarScript compiles to modern JavaScript. Look compiles to readable selectors,
 CSS variables, and DOM bindings owned by the Web package. There is no VelarScript VM.

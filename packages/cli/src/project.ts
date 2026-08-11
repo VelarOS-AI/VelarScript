@@ -1121,16 +1121,12 @@ function renameType(type: ValueType, aliases: ReadonlyMap<string, string>): Valu
         ...(type.rest ? { rest: renameType(type.rest, aliases) } : {}),
         result: renameType(type.result, aliases),
       };
-    case "component":
+    case "extension":
       return {
         ...type,
-        props: new Map([...type.props].map(([name, value]) => [name, renameType(value, aliases)])),
-      };
-    case "componentConstructor":
-      return {
-        ...type,
-        name: aliases.get(type.name) ?? type.name,
-        props: new Map([...type.props].map(([name, value]) => [name, renameType(value, aliases)])),
+        ...(type.nominal ? { nominal: aliases.get(type.nominal) ?? type.nominal } : {}),
+        properties: new Map([...type.properties].map(([name, value]) => [name, renameType(value, aliases)])),
+        arguments: type.arguments.map((argument) => renameType(argument, aliases)),
       };
     case "union":
       return { kind: "union", members: type.members.map((member) => renameType(member, aliases)) };
@@ -1189,11 +1185,11 @@ function resolveKnownNominals(
         ...(type.rest ? { rest: resolveKnownNominals(type.rest, classes, enums, namedTypeIdentities) } : {}),
         result: resolveKnownNominals(type.result, classes, enums, namedTypeIdentities),
       };
-    case "component":
-    case "componentConstructor":
+    case "extension":
       return {
         ...type,
-        props: new Map([...type.props].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums, namedTypeIdentities)])),
+        properties: new Map([...type.properties].map(([name, value]) => [name, resolveKnownNominals(value, classes, enums, namedTypeIdentities)])),
+        arguments: type.arguments.map((argument) => resolveKnownNominals(argument, classes, enums, namedTypeIdentities)),
       };
     case "union":
       return { kind: "union", members: type.members.map((member) => resolveKnownNominals(member, classes, enums, namedTypeIdentities)) };
@@ -1236,9 +1232,12 @@ function expandKnownAliases(type: ValueType, aliases: ReadonlyMap<string, ValueT
         ...(type.rest ? { rest: expandKnownAliases(type.rest, aliases, seen) } : {}),
         result: expandKnownAliases(type.result, aliases, seen),
       };
-    case "component":
-    case "componentConstructor":
-      return { ...type, props: new Map([...type.props].map(([name, value]) => [name, expandKnownAliases(value, aliases, seen)])) };
+    case "extension":
+      return {
+        ...type,
+        properties: new Map([...type.properties].map(([name, value]) => [name, expandKnownAliases(value, aliases, seen)])),
+        arguments: type.arguments.map((argument) => expandKnownAliases(argument, aliases, seen)),
+      };
     case "union":
       return { kind: "union", members: type.members.map((member) => expandKnownAliases(member, aliases, seen)) };
     default:

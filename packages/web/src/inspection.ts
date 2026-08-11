@@ -10,9 +10,11 @@ import {
 import { optionalOf } from "@velarscript/compiler";
 import { LOOK_UNIT_TYPES } from "./look.ts";
 import { exportedLookStaticValues, lookStaticIdentity } from "./look-static.ts";
+import { isWebExpression, isWebJsx, isWebLook, isWebStatement, isWebUnit } from "./ast.ts";
+import { isWebComponentConstructor, webComponentConstructor, webNodeType } from "./types.ts";
 
 function visitDependencyExpression(expression: Expression, context: CompilerDependencyContext): boolean {
-  if (expression.kind === "LookExpression") {
+  if (isWebLook(expression)) {
     const visit = (entries: typeof expression.entries): void => {
       for (const entry of entries) {
         if (entry.kind === "LookProperty" || entry.kind === "LookSpread") context.visitExpression(entry.value);
@@ -26,42 +28,43 @@ function visitDependencyExpression(expression: Expression, context: CompilerDepe
     visit(expression.entries);
     return true;
   }
-  if (expression.kind === "LookHookExpression") return true;
-  if (expression.kind === "UnitLiteralExpression") return true;
-  if (expression.kind !== "JSXElementExpression") return false;
+  if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") return true;
+  if (isWebUnit(expression)) return true;
+  if (!isWebJsx(expression)) return false;
   for (const attribute of expression.attributes) {
     if (attribute.value && typeof attribute.value !== "string") context.visitExpression(attribute.value);
   }
   for (const child of expression.children) {
     if (child.kind === "JSXExpressionChild") context.visitExpression(child.expression);
-    else if (child.kind === "JSXElementExpression") context.visitExpression(child);
+    else if (child.kind === "ExtensionExpression:web:jsx") context.visitExpression(child);
   }
   return true;
 }
 
 function visitDependencyStatement(statement: Statement, context: CompilerDependencyContext): boolean {
+  if (!isWebStatement(statement)) return false;
   switch (statement.kind) {
-    case "ComponentDeclaration":
+    case "ExtensionStatement:web:component":
       for (const parameter of statement.parameters) if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
       for (const item of statement.body) {
-        if (item.kind === "MountedBlock" || item.kind === "CleanupBlock") context.visitBlock(item.body);
-        else if (item.kind === "ExposeDeclaration") context.visitExpression(item.value);
+        if (item.kind === "ExtensionStatement:web:mounted" || item.kind === "ExtensionStatement:web:cleanup") context.visitBlock(item.body);
+        else if (item.kind === "ExtensionStatement:web:expose") context.visitExpression(item.value);
         else context.visitStatement(item);
       }
       return true;
-    case "StateDeclaration":
-    case "ResourceDeclaration":
+    case "ExtensionStatement:web:state":
+    case "ExtensionStatement:web:resource":
       context.visitExpression(statement.initializer);
       return true;
-    case "ActionDeclaration":
+    case "ExtensionStatement:web:action":
       for (const parameter of statement.parameters) if (parameter.defaultValue) context.visitExpression(parameter.defaultValue);
       context.visitBlock(statement.body);
       return true;
-    case "WatchDeclaration":
+    case "ExtensionStatement:web:watch":
       context.visitExpression(statement.expression);
       context.visitBlock(statement.body);
       return true;
-    case "UnsafeCssImportDeclaration":
+    case "ExtensionStatement:web:unsafe-css":
       return true;
     default:
       return false;
@@ -69,7 +72,8 @@ function visitDependencyStatement(statement: Statement, context: CompilerDepende
 }
 
 function contributeInterface(statement: Statement, context: CompilerInterfaceContext): boolean {
-  if (statement.kind === "ActionDeclaration") {
+  if (!isWebStatement(statement)) return false;
+  if (statement.kind === "ExtensionStatement:web:action") {
     // An exported module action travels as its analyzed action type, so the
     // importing module can call it and read its reactive pending/error fields.
     // Unlike state exports it needs no reactiveExports entry: the
@@ -89,7 +93,7 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
     );
     return true;
   }
-  if (statement.kind === "StateDeclaration") {
+  if (statement.kind === "ExtensionStatement:web:state") {
     context.exports.set(
       statement.name,
       context.bindingType(statement.name, statement.span.start)
@@ -98,22 +102,21 @@ function contributeInterface(statement: Statement, context: CompilerInterfaceCon
     context.reactiveExports.set(statement.name, "state");
     return true;
   }
-  if (statement.kind === "ComponentDeclaration") {
+  if (statement.kind === "ExtensionStatement:web:component") {
     const analyzed = context.bindingType(statement.name, statement.span.start);
-    if (analyzed?.kind === "componentConstructor") {
+    if (analyzed && isWebComponentConstructor(analyzed)) {
       context.exports.set(statement.name, analyzed);
       return true;
     }
     const props = new Map(statement.parameters.map((parameter) => [parameter.name, context.resolve(parameter.type)]));
     if (!props.has("class")) props.set("class", optionalOf({ kind: "string" }));
     if (!props.has("look")) props.set("look", optionalOf({ kind: "named", name: "Look" }));
-    context.exports.set(statement.name, {
-      kind: "componentConstructor",
-      name: statement.name,
+    context.exports.set(statement.name, webComponentConstructor(
+      statement.name,
       props,
-      requiredProps: new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
-      handle: statement.handleType ? context.resolve(statement.handleType) : null,
-    });
+      new Set(statement.parameters.filter((parameter) => !parameter.defaultValue).map((parameter) => parameter.name)),
+      statement.handleType ? context.resolve(statement.handleType) : null,
+    ));
     return true;
   }
   return false;
@@ -128,16 +131,16 @@ export const velarWebInspectionExtension: CompilerInspectionExtension = Object.f
   resources(program: Program) {
     const resources: { source: string; kind: string }[] = [];
     for (const statement of program.body) {
-      if (statement.kind === "UnsafeCssImportDeclaration") {
+      if (isWebStatement(statement) && statement.kind === "ExtensionStatement:web:unsafe-css") {
         resources.push({ source: statement.source, kind: "unsafe CSS" });
       }
     }
     return resources;
   },
   inferPublicExpression(expression: Expression): ValueType | undefined {
-    if (expression.kind === "JSXElementExpression") return { kind: "node" };
-    if (expression.kind === "LookExpression") return { kind: "named", name: "Look" };
-    if (expression.kind === "UnitLiteralExpression") {
+    if (isWebJsx(expression)) return webNodeType;
+    if (isWebLook(expression)) return { kind: "named", name: "Look" };
+    if (isWebUnit(expression)) {
       const name = LOOK_UNIT_TYPES.get(expression.unit);
       return name ? { kind: "named", name } : undefined;
     }

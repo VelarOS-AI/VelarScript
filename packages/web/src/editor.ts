@@ -37,7 +37,6 @@ const jsxControlCompletions: readonly CompilerProjectEditorCompletion[] = [
 ];
 
 const nativeJsxCompletions: readonly CompilerProjectEditorCompletion[] = [
-  ...jsxControlCompletions,
   ...["id", "class", "title", "role", "aria-label", "aria-labelledby", "ref"].map((label) => ({ label, detail: "native Web attribute", kind: "field" as const })),
   ...["on:click", "on:input", "on:change", "on:keydown", "on:submit.prevent"].map((label) => ({ label, detail: "typed native Web event", kind: "field" as const })),
   { label: "look", detail: "checked Look value", kind: "field" },
@@ -45,6 +44,7 @@ const nativeJsxCompletions: readonly CompilerProjectEditorCompletion[] = [
   { label: "bind:checked", detail: "two-way boolean form binding", kind: "field" },
   { label: "class:", detail: "reactive class directive", kind: "field" },
   { label: "unsafe:html", detail: "explicit unsafe HTML boundary", kind: "field" },
+  ...jsxControlCompletions,
 ];
 
 const nativeSvgCompletions: readonly CompilerProjectEditorCompletion[] = [
@@ -62,14 +62,14 @@ export const velarWebProjectEditorExtension: CompilerProjectEditorExtension = Ob
 function completeWebProject(context: CompilerProjectEditorCompletionContext): CompilerProjectEditorCompletionResult | undefined {
   const tag = jsxTagContextAt(context.source, context.offset);
   if (tag) {
-    const components = context.visibleSymbols.filter((symbol) => symbol.kind === "component"
+    const components = context.visibleSymbols.filter((symbol) => symbol.kind === "extension:function:web-component"
       || (symbol.kind === "import" && symbol.detail.startsWith("component ")));
     return {
       context: "jsx-tag",
       completions: unique([
         ...components,
-        ...nativeJsxTags.map((label) => ({ label, detail: "native Web element", kind: "component" as const })),
-        ...nativeSvgTags.map((label) => ({ label, detail: "native SVG element", kind: "component" as const })),
+        ...nativeJsxTags.map((label) => ({ label, detail: "native Web element", kind: "extension:function:web-component" as const, presentationKind: "class" as const })),
+        ...nativeSvgTags.map((label) => ({ label, detail: "native SVG element", kind: "extension:function:web-component" as const, presentationKind: "class" as const })),
       ]).filter((item) => item.label.startsWith(tag.prefix)),
     };
   }
@@ -79,7 +79,7 @@ function completeWebProject(context: CompilerProjectEditorCompletionContext): Co
   const common = attribute.component
     ? jsxControlCompletions
     : svgElementNames.has(attribute.tag)
-      ? [...nativeJsxCompletions, ...nativeSvgCompletions]
+      ? [...nativeSvgCompletions, ...nativeJsxCompletions]
       : nativeJsxCompletions;
   const component = attribute.component ? context.membersAt(attribute.tagOffset) : [];
   return {
@@ -89,7 +89,7 @@ function completeWebProject(context: CompilerProjectEditorCompletionContext): Co
 }
 
 function protectWebRename(context: CompilerProjectEditorRenameContext): string | undefined {
-  return context.kind === "parameter" && context.containerKind === "component" && context.name === "children"
+  return context.kind === "parameter" && context.containerKind === "extension:function:web-component" && context.name === "children"
     ? "The JSX children prop cannot be renamed"
     : undefined;
 }

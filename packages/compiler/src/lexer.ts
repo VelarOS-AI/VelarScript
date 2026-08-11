@@ -68,7 +68,7 @@ export class Lexer {
   private atLineStart = true;
   private nesting = 0;
   // A bracket fragment is an expression lexed inside an enclosing bracket
-  // context, such as a JSX interpolation '{...}': newlines are insignificant
+  // context, such as an extension-owned bracket interpolation: newlines are insignificant
   // and physical-line indentation never opens or closes blocks, exactly as
   // between ordinary parentheses.
   private readonly bracketFragment: boolean;

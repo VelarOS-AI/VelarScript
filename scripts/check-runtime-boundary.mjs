@@ -162,6 +162,44 @@ const compilerTextRuntimeSource = await readFile(join(root, "packages", "compile
 const compilerTypeRegistryRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-registry-runtime.ts"), "utf8");
 const compilerTypeValidationRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-validation-runtime.ts"), "utf8");
 const compilerTypesSource = await readFile(join(root, "packages", "compiler", "src", "types.ts"), "utf8");
+const compilerAstSource = await readFile(join(root, "packages", "compiler", "src", "ast.ts"), "utf8");
+const compilerParserSource = await readFile(join(root, "packages", "compiler", "src", "parser.ts"), "utf8");
+const compilerFormatterSource = await readFile(join(root, "packages", "compiler", "src", "formatter.ts"), "utf8");
+const compilerSemanticSource = await readFile(join(root, "packages", "compiler", "src", "semantic.ts"), "utf8");
+const desktopCompilerSource = await readFile(join(root, "packages", "desktop", "src", "compiler.ts"), "utf8");
+const webTypesSource = await readFile(join(root, "packages", "web", "src", "types.ts"), "utf8");
+
+const coreTargetBoundarySources = new Map([
+  ["packages/compiler/src/ast.ts", compilerAstSource],
+  ["packages/compiler/src/types.ts", compilerTypesSource],
+  ["packages/compiler/src/analyzer.ts", compilerAnalyzerSource],
+  ["packages/compiler/src/parser.ts", compilerParserSource],
+  ["packages/compiler/src/formatter.ts", compilerFormatterSource],
+  ["packages/compiler/src/semantic.ts", compilerSemanticSource],
+]);
+for (const [path, source] of coreTargetBoundarySources) {
+  for (const targetName of ["WebNode", "ComponentDeclaration", "JSX", "LookExpression", "MountedBlock", "UnsafeCssImportDeclaration"]) {
+    if (source.includes(targetName)) failures.push(`${path}: Core embeds target-owned '${targetName}' instead of using the compiler extension contract`);
+  }
+}
+for (const phrase of ["ExtensionValueType", "resolveTypeSyntax", "isTypeAssignable", "memberType"]) {
+  const source = phrase === "ExtensionValueType" ? compilerTypesSource : compilerExtensionSource;
+  if (!source.includes(phrase)) failures.push(`packages/compiler: target type extension contract is missing '${phrase}'`);
+}
+for (const phrase of ["VELAR_WEB_TYPE_EXTENSION_ID", "resolveWebTypeSyntax", "isWebTypeAssignable", "webComponentConstructor"]) {
+  if (!webTypesSource.includes(phrase)) failures.push(`packages/web/src/types.ts: Web does not own '${phrase}'`);
+}
+if (desktopCompilerSource.includes("...webCompilerExtension")) {
+  failures.push("packages/desktop/src/compiler.ts: Desktop inherits hidden Web compiler behavior through object spread");
+}
+for (const phrase of [
+  '"@velarscript/web": webCompilerExtension.contract!.apiVersion',
+  '"@velarscript/node": VELAR_NODE_API_VERSION',
+  "formatting: webCompilerExtension.formatting!",
+  "createEmitter: webCompilerExtension.createEmitter!",
+]) {
+  if (!desktopCompilerSource.includes(phrase)) failures.push(`packages/desktop/src/compiler.ts: explicit application composition is missing '${phrase}'`);
+}
 
 for (const phrase of [
   "const __velarClassNativeObject = globalThis.Object",
@@ -365,7 +403,6 @@ for (const phrase of [
 }
 const coreDeepEqualRuntimeSource = constantSource(standardModulesSource, "deepEqualRuntime", "\n\nconst listRuntime");
 const webFoundationSource = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");
-const desktopCompilerSource = await readFile(join(root, "packages", "desktop", "src", "compiler.ts"), "utf8");
 const desktopNativeHostSource = await readFile(join(root, "packages", "desktop", "native", "macos", "VelarDesktopHost.swift"), "utf8");
 const desktopWorkerSource = await readFile(join(root, "packages", "desktop", "native", "node", "worker.js"), "utf8");
 const webPlatformModuleSource = generatedModuleSource(webRuntimeSource, "velar/web", "velar/forms");
@@ -419,7 +456,8 @@ if (!nodeCompilerSource.includes('import { VELAR_PROCESS_HOST_RUNTIME } from "./
   || !nodeCompilerSource.includes('export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts"')) {
   failures.push("packages/node/src/compiler.ts: Node process target must import and export the canonical process host ABI");
 }
-if (!desktopCompilerSource.includes('import { nodeModuleInterfaces, VELAR_PROCESS_HOST_RUNTIME } from "@velarscript/node/compiler"')
+if (!desktopCompilerSource.includes('from "@velarscript/node/compiler"')
+  || !desktopCompilerSource.includes("VELAR_PROCESS_HOST_RUNTIME")
   || desktopCompilerSource.includes("const VELAR_PROCESS_HOST_RUNTIME = String.raw")) {
   failures.push("packages/desktop/src/compiler.ts: Desktop process target must reuse, not duplicate, the Node-owned process host ABI");
 }

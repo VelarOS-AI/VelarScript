@@ -19,18 +19,13 @@ export type SemanticSymbolKind =
   | "enum"
   | "enum-member"
   | "class"
-  | "component"
-  | "style"
   | "function"
-  | "state"
-  | "resource"
-  | "action"
   | "variable"
   | "parameter"
   | "field"
   | "method"
-  | "watch-value"
-  | "catch";
+  | "catch"
+  | `extension:${"type" | "class" | "function" | "variable" | "parameter"}:${string}`;
 
 export interface SemanticSymbol {
   readonly id: string;
@@ -50,6 +45,8 @@ export interface SemanticSymbol {
   readonly typeTarget?: string;
   readonly container?: string;
   readonly static?: boolean;
+  readonly sourceTypeHint?: true;
+  readonly presentationKind?: "type" | "class" | "function" | "variable" | "parameter";
 }
 
 export interface SemanticMember {
@@ -67,6 +64,8 @@ export interface SemanticExpression {
   readonly selectionSpan?: Span;
   readonly ownerType?: string;
   readonly ownerKind?: ValueType["kind"];
+  readonly ownerIdentity?: string;
+  readonly ownerSymbolKind?: SemanticSymbolKind;
   readonly contextType?: string;
   readonly contextMembers?: readonly SemanticMember[];
 }
@@ -86,7 +85,8 @@ export interface SemanticMemberReference {
   readonly ownerType: string;
   readonly ownerKind: ValueType["kind"];
   readonly ownerIdentity?: string;
-  readonly syntax: "access" | "object-key" | "binding-key" | "jsx-prop";
+  readonly ownerSymbolKind?: SemanticSymbolKind;
+  readonly syntax: "access" | "object-key" | "binding-key" | "extension-property";
   readonly shorthand: boolean;
 }
 
@@ -133,6 +133,10 @@ export interface SemanticDeclareOptions {
   readonly static?: boolean;
   readonly documentationStart?: number;
   readonly private?: boolean;
+  /** The declared runtime type is also a valid source annotation for editor hints. */
+  readonly sourceTypeHint?: boolean;
+  /** Optional editor presentation when an extension symbol has a richer role than its semantic category. */
+  readonly presentationKind?: SemanticSymbol["presentationKind"];
 }
 
 export interface SemanticFunctionLike {
@@ -244,7 +248,13 @@ export function buildSemanticIndex(
     container?: string,
     explicitType?: string,
     staticMember = false,
-    options: { readonly documentationStart?: number; readonly private?: boolean; readonly typeTarget?: string } = {},
+    options: {
+      readonly documentationStart?: number;
+      readonly private?: boolean;
+      readonly typeTarget?: string;
+      readonly sourceTypeHint?: boolean;
+      readonly presentationKind?: SemanticSymbol["presentationKind"];
+    } = {},
   ): SemanticSymbol => {
     const existing = declarations.get(owner);
     if (existing) return existing;
@@ -270,6 +280,8 @@ export function buildSemanticIndex(
       ...(options.typeTarget ? { typeTarget: options.typeTarget } : {}),
       ...(container ? { container } : {}),
       ...(kind === "method" || kind === "field" ? { static: staticMember } : {}),
+      ...(options.sourceTypeHint ?? kind === "variable" ? { sourceTypeHint: true as const } : {}),
+      ...(options.presentationKind ? { presentationKind: options.presentationKind } : {}),
     };
     symbols.push(symbol);
     if (lexical) currentScope().bindings.set(name, symbol);
@@ -336,13 +348,20 @@ export function buildSemanticIndex(
     syntax: SemanticMemberReference["syntax"],
     shorthand = false,
   ): void => {
+    const extensionOwner = owner.kind === "extension" ? owner : null;
     memberReferences.push({
       name,
       path: source.path,
       span: referenceSpan,
-      ownerType: "name" in owner ? owner.name : describeType(owner),
+      ownerType: extensionOwner?.nominal ?? ("name" in owner ? owner.name : describeType(owner)),
       ownerKind: owner.kind,
       ...("identity" in owner && owner.identity ? { ownerIdentity: owner.identity } : {}),
+      ...(extensionOwner?.nominal
+        ? { ownerIdentity: `${extensionOwner.extensionId}:${extensionOwner.family}:${extensionOwner.nominal}` }
+        : {}),
+      ...(extensionOwner?.metadata?.semanticSymbolKind
+        ? { ownerSymbolKind: extensionOwner.metadata.semanticSymbolKind as SemanticSymbolKind }
+        : {}),
       syntax,
       shorthand,
     });
@@ -540,7 +559,18 @@ export function buildSemanticIndex(
         ...(expression.kind === "MemberExpression" ? {
           memberName: expression.property,
           selectionSpan: { start: expression.span.end - expression.property.length, end: expression.span.end },
-          ...(expressionOwner ? { ownerType: describeType(expressionOwner), ownerKind: expressionOwner.kind } : {}),
+          ...(expressionOwner ? {
+            ownerType: expressionOwner.kind === "extension" && expressionOwner.nominal
+              ? expressionOwner.nominal
+              : describeType(expressionOwner),
+            ownerKind: expressionOwner.kind,
+            ...(expressionOwner.kind === "extension" && expressionOwner.metadata?.semanticSymbolKind
+              ? { ownerSymbolKind: expressionOwner.metadata.semanticSymbolKind as SemanticSymbolKind }
+              : {}),
+            ...(expressionOwner.kind === "extension" && expressionOwner.nominal
+              ? { ownerIdentity: `${expressionOwner.extensionId}:${expressionOwner.family}:${expressionOwner.nominal}` }
+              : {}),
+          } : {}),
         } : {}),
       });
     }
@@ -832,6 +862,8 @@ export function buildSemanticIndex(
           ...(options.documentationStart === undefined ? {} : { documentationStart: options.documentationStart }),
           ...(options.private === undefined ? {} : { private: options.private }),
           ...(options.typeTarget === undefined ? {} : { typeTarget: options.typeTarget }),
+          ...(options.sourceTypeHint === undefined ? {} : { sourceTypeHint: options.sourceTypeHint }),
+          ...(options.presentationKind === undefined ? {} : { presentationKind: options.presentationKind }),
         },
       );
     },
@@ -916,10 +948,9 @@ export function semanticVisibleSymbolsAt(index: SemanticIndex, offset: number): 
   }
 
   const lexicalKinds = new Set<SemanticSymbolKind>([
-    "import", "type", "enum", "class", "component", "function", "state",
-    "resource", "action", "variable", "parameter", "watch-value", "catch",
+    "import", "type", "enum", "class", "function", "variable", "parameter", "catch",
   ]);
-  const rootHoistedKinds = new Set<SemanticSymbolKind>(["import", "type", "enum", "class", "component", "function"]);
+  const rootHoistedKinds = new Set<SemanticSymbolKind>(["import", "type", "enum", "class", "function"]);
   const names = new Set<string>();
   const output: SemanticSymbol[] = [];
   const activeSet = new Set(activeScopeIds);
@@ -932,8 +963,12 @@ export function semanticVisibleSymbolsAt(index: SemanticIndex, offset: number): 
   }
   for (const scopeId of activeScopeIds) {
     for (const symbol of symbolsByScope.get(scopeId) ?? []) {
-      if (!lexicalKinds.has(symbol.kind) || names.has(symbol.name)) continue;
-      if (symbol.selectionSpan.start > offset && !(scopeId === 0 && rootHoistedKinds.has(symbol.kind))) continue;
+      const extensionKind = symbol.kind.startsWith("extension:");
+      if ((!lexicalKinds.has(symbol.kind) && !extensionKind) || names.has(symbol.name)) continue;
+      const hoisted = rootHoistedKinds.has(symbol.kind)
+        || symbol.kind.startsWith("extension:function:")
+        || symbol.kind.startsWith("extension:class:");
+      if (symbol.selectionSpan.start > offset && !(scopeId === 0 && hoisted)) continue;
       names.add(symbol.name);
       output.push(symbol);
     }
