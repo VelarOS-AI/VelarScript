@@ -170,6 +170,28 @@
 
 ---
 
+## 搜捕 γ —— 运行期基准（执行测量，2026-08-12）：三条静态审查未发现的性能缺陷
+
+`tests/performance-runtime.test.ts` 建立基线时**测量本身撞出三个缺陷**，均为
+静态审查两条线都没看到的路径。基线机器：Apple Silicon / Node 24。
+
+**头条（好消息）**：SameValueZero 等式代价 ≈ **0.6 ns/次比较**，数字/字符串
+耗时比 **1.35**（10M 次：数字 20.9ms、字符串 15.1ms、枚举 20.4ms）。批次 A 的
+等式统一几乎免费；类型驱动消除经发射形态断言锁定。
+
+| ID | 严重度 | 位置 | 实测 | 状态 |
+|---|---|---|---|---|
+| γ-1 | **blocker(perf)** | `collection-lowering-runtime.ts:100-107`（owned 标记覆盖面） | **List 索引读在非 owned 列表上是 O(n)**：`range(0,2000)` 结果 200k 次索引读 = **39,796 ms（≈199µs/次读）**；对照 append 构建的 2000 项列表 42.8ms。根因：只有变更方法与 map/filter/slice/sorted 标记 owned，**列表字面量与 `velar/collections` 返回值都不标记**，`range()` 更是在模块内建普通数组、够不到降级运行时的 WeakSet。`for x in list` 不受影响（只验一次），但 `for i in range(n): values[i]` 是二次的 | 已确认（实测） |
+| γ-2 | major(perf) | `collection-runtime.ts:22`（`__velarIsMap`） | **`Set.has` 比 `Map.get` 慢约 13×**：以**抛异常探型**识别非 Map（调用 `Map.prototype.size` getter 再 catch），每次 Set 成员测试都付一次抛接。200k 次 A/B：`Map.has` 21.7ms、`Map.get` 26.9ms、**`Set.has` 394ms（1.97µs/次）** | 已确认（实测） |
+| γ-3 | major(perf) | `text-runtime.ts:76`（`__velarTextCodeUnitOffset`） | **`String.slice` 是 O(语料+起点)，纯 ASCII 也是**：码点位置转码单元偏移逐码点从 0 走起，无 ASCII 快路径（`__velarTextCodePointLength` 有代理对正则快路径，偏移走没有）。实测 111k 字符串上偏移 ~50k 的切片 **110µs**；222k 语料上分散切片 **~510µs/次**。**任何用切片扫描文档的代码都是二次的** —— 本轮测得最贵的值方法 | 已确认（实测） |
+| γ-4 | 观察 | 枚举成员读 | 热循环中枚举成员是冻结对象属性载入而非内联常量 —— 枚举与字符串等式那 ~5ms 差距全部来自此，与等式工作无关 | 记档 |
+
+γ-1/γ-2 的预算已按当前慢数字设定并在注释中写明根因与「修好后收紧」；
+γ-1 的极端路径（range 索引读）**故意不进门禁**（会撑爆 30 秒预算），
+provenance 规则写在注释里。
+
+---
+
 ## 验证与修复编排
 
 1. **验证波**（批次 A 落地后立即）：对 β-1..β-6 各写最小执行探针（浏览器
