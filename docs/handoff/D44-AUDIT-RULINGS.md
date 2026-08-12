@@ -98,40 +98,63 @@ print(x.upper())        // 报错：Use optional access '?.' for string?
 
 ---
 
-## 第 72 条 —— 经 readonly 到达的类实例即 readonly 类视图（CLS-U5）
+## 第 72 条 —— readonly 只能修饰纯数据（CLS-U5，2026-08-12 用户改稿）
 
-### 现状
+### 修订记录（诚实标注，初稿作废）
+
+本条初稿方案是「readonly 类视图 + `readonly def` 可调用」，依据 Lite 账本 W-75
+「resolved upstream as a Core language contract」。**该记录已过时**：
+`readonly def`/`readonly get` 后来被移除（用户记忆正确），charter §5 现文明写
+「There is no readonly class or readonly executable-member contract」，实测
+`readonly def` → VEL2021。初稿建在过时前提上，**作废**。用户随后裁决：
+**「能不能让 readonly 只能修饰数据」→ 采纳，本文即该方案。**
+
+### 现状（洞）
 
 ```
 type Holder:
-    item: P                      // P 是类
+    item: Scale                  // Scale 是类
 
 def look(h: readonly Holder) -> number:
-    h.item.x = 5                 // 被接受，且真的改了
-    return h.item.x
+    h.item.n = 5                 // 通过，且真的改了（实测输出 5）
+    return h.item.peek()         // 任意方法也可调
 ```
 
-**根因**：§5 说 readonly 对数据传递、又说类在 readonly 边界之外。两条一叠加：
-读 `h.item` 得到普通 `P`（不存在 `readonly P`），于是可任意改。
+readonly 对数据传递，但数据里藏着类成员时保护在该成员处终止。顶层
+`readonly Scale` 今天**已被拒**（"'readonly' applies only to data records,
+structural objects, List, Set, Map, and Record values"）—— 但检查只做表层。
 
-**关键背景**：W-75 为「组件所有权让不可变领域 API 不可用」加了 `readonly def` /
-`readonly get`，其记录明写「函数体透过**同一个传递性 readonly 视图**看 `self`」
-—— **「readonly 类视图」这个概念已经存在**，W-75 让类成员可调用，只是没限制
-字段写。
+### 目标语义：把既有检查从表层做到全深度
 
-### 目标语义
+**规则一句话：`readonly T` 要求 T 的全部可达结构都是纯数据**（记录、结构对象、
+List/Set/Map/Record、原始值、枚举、可选、联合）；**任何深度**出现类类型 →
+在 readonly **声明处**编译错误。
 
-- 经 readonly 数据视图**到达**的类实例，**本身就是 readonly 类视图**：
-  **字段写拒绝**，只有 `readonly def` / `readonly get` 可调用（非 readonly 的
-  方法/getter 在该视图上不可用 —— 它们可能改状态）。
-- 传递性继续：readonly 类视图的 `readonly get` 结果若是数据，仍是 readonly 数据。
-- charter §5 措辞修正：类不能被**声明**为 `readonly T`（不变），但**可以被
-  到达**为 readonly —— 这两句必须同时在场，缺一就是本缺口。
-- 诊断教正路：`readonly` 视图上写类字段 → 「该实例经 readonly 视图到达；
-  经父级要求可变契约，或把该操作做成 `readonly def`」。
-- 迁移：今天透过 readonly 视图改类字段的代码会坏 —— 那正是要修的 bug。
-- 回归：字段写被拒、`readonly def`/`get` 可调、普通方法在该视图上被拒、
-  嵌套两层（记录→类→记录）传递、W-75 的既有测试不回归。
+为什么优于「文档成文洞」（原选项 B）与「访问处拦截」（原选项 A）：B 是把漏洞
+写进文档，本方案是**有漏洞的承诺根本不让许下** —— 承诺范围与接受范围重合，
+readonly 从此不存在「保护不到的可达位置」。错误报在声明处也早于报在访问处。
+
+- 诊断教两条出路：「Holder 的成员 item: Scale 是类，readonly 只保护数据 ——
+  把它建模为数据记录，或去掉 readonly」。
+- **补完而非新规则**：顶层拒绝已存在，本条把同一检查做成传递闭包。
+- 联合任一成员含类即拒绝；递归记录类型判定须记忆化（环安全）。
+- **泛型参数 T 不受限**：裸 T 无任何成员操作（审计实测 `T has no member`），
+  不透明性等价于不可变性 —— `readonly List<T>` 保持合法，既有泛型不回归。
+- **类作为组件 prop**：**裸类 prop**（`scale: ChartScale`）保持合法，按行为值
+  原样传递，charter §15 追加限定句「props 的 readonly 承诺覆盖数据 prop；类
+  prop 是行为值，原样传递不受保护」—— 读者看得见它是类。但**藏在记录 prop 里**
+  的类与显式 readonly 同规则拒绝：埋在数据里的类是「长得像数据的谎言」，出路
+  便宜（把类提升为独立 prop）。W-75 的 ChartScale 形态是裸类 prop，不受影响。
+- `unknown`/`any` 成员放行 —— 它们本就是静态承诺终止的边界。但实施者须核实
+  「readonly 视图内的 unknown 经 `Type.parse` 后是否别名出可变视图」并呈报
+  （若别名，是同族残洞，单独立项）。
+- 迁移实测：全仓 `.vel` 仅 12 处 readonly 站点，全在 stdlib javascript.vel，
+  修饰的都是纯数据记录 —— **预期破坏面为零**。
+- charter §5 改写：删除「传递性在类成员处静默终止」的隐含状态，改为「readonly
+  类型的任何深度不得出现类；类是行为值，不进入 readonly 边界」。
+- 回归：含类成员的记录被拒（声明处，含嵌套两层与 List<类> 元素位）、联合任一
+  含类被拒、`readonly List<T>` 泛型合法、裸类 prop 合法且方法可调、记录 prop
+  含类被拒、递归记录类型不死循环、stdlib 的 12 处既有站点不回归。
 
 ---
 
@@ -192,8 +215,7 @@ charter §18 承诺「类降级为 JS 类与原型」，但发射器把每个公
   §18 说「`private` 降级为原生私有成员」—— 一并改为原生私有方法，或把该差异
   成文（实施者按可行性择一并呈报）。
 - 回归：方法引用取出后调用正确（执行级，含 `self` 绑定）、原型方法不出现在
-  `print` 输出、继承链方法查找正确、`readonly def`（第 72 条）在原型降级下
-  仍工作、内存形态断言（每实例不再每方法一个闭包 —— 以发射形态断言而非内存测量）。
+  `print` 输出、继承链方法查找正确（第 72 条落地后类不再出现于 readonly 类型内，本条与 readonly 无交互面）、内存形态断言（每实例不再每方法一个闭包 —— 以发射形态断言而非内存测量）。
 
 ---
 
@@ -205,8 +227,8 @@ charter §18 承诺「类降级为 JS 类与原型」，但发射器把每个公
 - **N-1（Core 正确性）**：第 70 条（验证器纯对象）+ 第 71 条（赋值建立事实）
   + 第 73 条（不相交作废）+ 类审计的 CLS-D1/D2/D3/D4/D5/D7/D8/D9
   + 流审计的 **FLW-U1（blocker：跨模块收窄退化，含第一批跨模块回归）**。
-- **N-2（readonly 与降级）**：第 72 条（readonly 类视图）+ 第 74 条（原型 +
-  引用点绑定）—— 两者都动类降级，必须同批。
+- **N-2（readonly 与降级）**：第 72 条（readonly 纯数据全深度检查，纯
+  analyzer）+ 第 74 条（原型 + 引用点绑定，纯 emitter）—— 同批但互不依赖。
 - **N-3（文档与消息）**：CLS-C2/C3 charter 修正、CLS-I1/I5 消息、CLS-U2/U4/
   U7/U8/U9 成文、FLW-D3/S1/S2/N2..N9 各自处置。
 
