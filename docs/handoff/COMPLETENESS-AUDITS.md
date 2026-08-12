@@ -301,3 +301,64 @@ v.a.b != null` 组合；`v.a = null` 作废子事实；`Record<T>` 读进 const 
    `x = "a"` 的作者。
 4. FLW-D3、S1、N2、N3、N6、N7 —— 小而各自可决的缺口。
 5. FLW-N8、N9 —— 成本模型与错误面打磨。
+
+
+---
+
+## 审计三 —— 枚举与 match（2026-08-12，约 130 个探针，快照构建 + 活树复验字节一致）
+
+### DEFECT（编译通过、运行静默错误，执行级证据）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **ENM-D1** | **Map/Set 键把标称不同的枚举成员合一**：`Map<A \| B, string>` 下 `set(A.x, …)` + `set(B.x, …)` → size **1**、`get(A.x)` 返回 B 的值；`Set<A \| B>` 同款。D42 关掉了 `==` 与排序，这是**同一个洞剩下的那块** —— 恰好经枚举联合键类型可达 | 修：交集规则延伸到 Map/Set 键与成员测试位（D42 第 64 条既定原则的补齐） |
+| **ENM-D2** | **match 值模式与 `==` 在 NaN 上不一致**：`0/0 == box.nan` 为 true（SameValueZero），`case box.nan:` 却落到 `case _`。emitter:1841 用 `===` 而 `==` 走 `__velarSameValueZero`。charter §8 明诺「exact-value operations agree with `==` … including on NaN」 | 修：值模式走同一 SameValueZero 路径（一行级） |
+
+### INCONSISTENT（九条）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **ENM-I1** | **`is` 是最后一个还在跨枚举洗钱的相等面**：`B.is(A.x)` 返回 true、`if v is B:`（v: A）进分支。`==` 与 `case` 都已拒绝 | 修：静态不相交枚举间 `is`/`is not` 编译错误（同交集判定） |
+| **ENM-I2** | **一个联合注解就绕过枚举-字符串例外**：`w: Status \| string` 后 `w == Status.done` 编译且为 true —— 裸字符串没经 parse 就等于成员，D42 第 65 条自己的理由被击穿。情形表「联合含交集成员 ✓」没考虑这个组合 | 修（按既定理由补齐）：枚举域与字符串域在 `==` 中**永不相遇，联合臂也不行**；诊断教先 `is Status` 收窄再比。**编排代理决定，可否决** |
+| **ENM-I3** | **成员测试词汇与相等词汇矛盾**：`A.x in ["x"]` → true、`List<string>.has(A.x)` → true、`Map<string,·>.get(A.x)` 命中 —— 同样的问题用 `==` 问是编译错误 | 修：交集规则延伸到 `in`/`has`/`index`/`count`/`remove`/`get` 实参位（与 D1 同一条规则） |
+| **ENM-I4** | `type S2 = Status` 是**半个枚举**：`S2.parse` 可用、`S2.done` 被拒（"no runtime member"——而 parse 恰是 runtime member）。§12 承诺身份跟随别名 | 修：成员访问跟随别名，与 parse/is 一致 |
+| **ENM-I5** | **括号把值模式静默重分类成类型模式并丢穷尽信用**：`case (S.a):` + `case (S.b):` 全覆盖仍报 VEL4015，但每个分支运行时真的匹配 | 修：enumMember 类的覆盖类型计入成员覆盖 |
+| **ENM-I6** | **`Status?` 主体让穷尽检查整个静默消失**：裸 `Status` 漏成员硬错误；`Status?` 漏 `case null` 或成员 → 语句位**完全静默**落空。analyzer:1909 精确匹配 `kind === "enum"` | 修：可选枚举主体同等强制（要求 case null + 全成员） |
+| **ENM-I7** | **关键字成员名：能声明、能访问、不能匹配**：`enum S: null` 合法、`S.null` 可读、`case S.null:` 七连解析级联 | 修：模式点后接受关键字成员名（与成员访问一致；记录 `pass` 例外见 I8） |
+| **ENM-I8** | **enum 体里的 `pass` 静默声明一个叫 pass 的成员**：占位符直觉（类体如此）在枚举体变成状态机多一个 `pass` 状态，零诊断 | 修：枚举体的裸 `pass` 行是占位符（与类体一致）→ 空枚举规则接管；成员名 `pass` 成为唯一不可声明的软词（体位置有占位含义），成文 |
+| **ENM-I9** | **命名空间导入无类型/模式拼写**且消息错误：`def f(u: m.User)` → "'m' is not an enum…"（对记录完全驴唇不对马嘴）。§6 承诺接口经命名空间导入保留 | 分两步：定向诊断先行（教按名导入或 `const S = m.Status`——后者实测连穷尽信用都有）；**限定类型位 `m.Type` 支持**排入后续批次（父母 Python/TS 都支持，charter 已承诺） |
+
+### CHARTER-DRIFT（两条）
+
+- **ENM-C1**：§12「identities follow … aliases」对值成立、对类型面不成立（I4/I9 修复后消解）。
+- **ENM-C2**：§8「exact-value operations agree with `==` … including on NaN」在 D42 后双向破裂（I3 与 D2 修复后消解，措辞需同步改）。
+
+### UNDEFINED（六条）
+
+| ID | 未定之处 | 处置 |
+|---|---|---|
+| **ENM-U1** | **成员枚举不存在**（疑似缺口确认）：`for s in Status`、`[...Status]`、`Status.values()` 三种尝试三种拒绝，零指引；`<select>` 选项列表只能手列且无穷尽检查 | **定案（可否决）：`Status.values() -> List<Status>`**，声明序，每次新 List（与 split 等一致）；`values` 加入保留成员名（parse/is 旁）；诊断三处全教它。完整性纠正案的直接应用（HANDOFF 已预记方向） |
+| **ENM-U2** | `case` 后能接什么没定完：裸标识符误报 "Unknown type"；`case config.max:`（一点路径）**是没文档的通用值模式**；两点路径解析级联 | 定案：**点路径值模式成文并支持任意深度**（父亲 Python 同款规则：点路径=值、裸名=其他），SameValueZero 比较（D2 之后自动一致）；裸标识符给定向教学 |
+| **ENM-U3** | `case a \| b` 七连级联零指引（逗号是既定拼写，类型模式间 `\|` 却合法） | 修：定向诊断教逗号 |
+| **ENM-U4** | **`ValidationError` charter 点名却不可拼写**：`error is ValidationError` → Unknown type；失败形只有消息可嗅 | 修（履行 charter 承诺）：三个内建错误类型（ValidationError/NarrowingError/IndexError）可命名、可 `is` 判别；ValidationError 带出错值与期望描述 |
+| **ENM-U5** | 记录字段默认值裸报 VEL2003 零指引（函数参数默认值存在，加深意外） | 修：§19 列入有意缺席 + 定向诊断 |
+| **ENM-U6** | 小角落打包：成员名 `_`/`S.S`/`constructor` 无人决定但无害；VEL4013 泄漏内部键（"number:5"）；重复枚举声明的伪级联；守卫成员的 VEL4015 不解释原因 | 修：消息打磨一批 |
+
+### DECIDED-AND-CORRECT（完整性凭证，压缩）
+
+声明 17 项（含 300 成员、双重复检测、非 ASCII 值可用/名拒绝、保留成员名、
+模块作用域）；身份与运行时 10 项（枚举→字符串单向出口全面、JSON 往返经
+unknown 降级并经 parse 重入、非联合跨枚举静态拒绝）；parse/is 10 项（wire 值
+不是成员名、大小写敏感、幂等、Type<T> 载体跨模块）；位置 10 项（单例类型全家、
+泛型推断、readonly 边界消息）；跨模块 8 项（**导入枚举陈旧收窄正确抛
+NarrowingError** —— 钉住 FLW-U1 家族「枚举正确」的断言；同名枚举标称隔离但
+str/parse 互通）；match 30+ 项（全字面量形、逗号多值+as+守卫、记录/列表模式
+全形、不可能模式精确拒绝、主体求值一次、重复/不可达/缺失三类诊断、字符串背书
+按**名**计穷尽、联合/bool/可选各形穷尽）；事实 5 项（成员路径主体收窄、case 内
+赋值作废、兄弟隔离）。**D42 核心健康**：缺陷全在规则边缘，不在核心。
+
+### 处置总结
+
+全部归**波 N-2b（枚举与 match 收口）**，排 N-2 之后（同样重改 analyzer/emitter/
+parser，必须串行）。四项编排代理按既定原则定案、用户可否决：I2 联合收紧、
+U1 `values()`、U2 点路径值模式成文、U4 内建错误类型可命名。
