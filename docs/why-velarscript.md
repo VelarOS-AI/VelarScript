@@ -19,8 +19,13 @@ VelarScript exists to solve that problem, not to be a nicer syntax.
 ## The bet
 
 Vel is built from the bones of JavaScript and Python — the two languages
-every model already knows best. A model can write Vel on prior knowledge
-alone, and the compiler owns the rest:
+every model already knows best. JavaScript is the mother: the program lives
+and runs inside her, so behavior defers to her — the runtime is the womb.
+Python is the father: the visible surface carries his name — spelling and
+readability follow him. A semantic question asks the mother; a spelling
+question follows the father — and where an inherited behavior is a trap,
+Vel removes it rather than documents it. A model can write Vel on prior
+knowledge alone, and the compiler owns the rest:
 
 - **One obvious spelling.** Where JS offers five ways, Vel keeps one. Model
   output becomes uniform: any Vel codebase reads like any other, which is
