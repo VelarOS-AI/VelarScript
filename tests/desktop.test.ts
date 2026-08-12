@@ -32,6 +32,7 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
         permissions: {
           files: ["project"],
           processes: ["git", basename(process.execPath)],
+          terminal: true,
           network: ["https://api.example.com"],
           environment: ["LANG", "VELAR_DESKTOP_GENERATION_SMOKE"],
           secrets: ["OPENAI_API_KEY"],
@@ -39,7 +40,7 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
       },
     }, null, 2), "utf8");
     await writeFile(join(projectRoot, "src", "main.vel"), `
-import {ProjectTaskCommand, ProjectTaskOutputChannel, appDataDirectory, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory, startProjectTask} from "velar/desktop"
+import {ProjectTaskCommand, ProjectTaskOutputChannel, appDataDirectory, openTerminal, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory, startProjectTask} from "velar/desktop"
 import {createText, exists, readText, watchFiles, writeText} from "velar/fs"
 import {get} from "velar/env"
 import {ProcessOutputChannel, run, start} from "velar/process"
@@ -96,11 +97,19 @@ component App:
         const result = await task.wait()
         detail = output + result.stderr
 
+    action openShell() -> null:
+        const session = await openTerminal({columns: 100, rows: 30})
+        await session.resize(120, 40)
+        await session.write("echo VelarScript terminal\\n")
+        detail = await session.next() ?? ""
+        await session.close()
+
     return <main>
         <GenerationProbe />
         <h1>VelarScript Desktop</h1>
         <button on:click={inspectHost}>Inspect host</button>
         <button on:click={checkProject}>Check project</button>
+        <button on:click={openShell}>Open shell</button>
         <p>{detail}</p>
     </main>
 
@@ -131,6 +140,7 @@ mount(<App />, "#app")
     assert.match(assets, /velar\.desktop\.bridge\.v1/u);
     assert.match(assets, /project-task/u);
     assert.match(assets, /startProjectTask/u);
+    assert.match(assets, /openTerminal/u);
 
     const packaged = spawnSync(process.execPath, [cli, "package"], { cwd: projectRoot, encoding: "utf8" });
     assert.equal(packaged.status, 0, packaged.stderr);
@@ -144,6 +154,7 @@ mount(<App />, "#app")
         languageServerBytes: number;
         projectTaskBytes: number;
         buildEngineBytes: number;
+        terminalHostBytes: number;
         toolchainBytes: number;
         totalBytes: number;
       };
@@ -171,8 +182,9 @@ mount(<App />, "#app")
     assert.ok(desktopBuild.sizes.languageServerBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.projectTaskBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.buildEngineBytes > 5 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.ok(desktopBuild.sizes.terminalHostBytes > 32 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.equal(desktopBuild.sizes.toolchainBytes,
-      desktopBuild.sizes.languageServerBytes + desktopBuild.sizes.projectTaskBytes + desktopBuild.sizes.buildEngineBytes);
+      desktopBuild.sizes.languageServerBytes + desktopBuild.sizes.projectTaskBytes + desktopBuild.sizes.buildEngineBytes + desktopBuild.sizes.terminalHostBytes);
     assert.ok(desktopBuild.sizes.totalBytes < desktopBuild.sizeBudgetBytes, JSON.stringify(desktopBuild.sizes));
     const application = join(projectRoot, "dist", "desktop", desktopBuild.applicationBundle);
     assert.ok(!(await collectNames(application)).some((name) => name === "node_modules" || name.endsWith(".map")));
@@ -184,9 +196,11 @@ mount(<App />, "#app")
     const hostConfig = JSON.parse(hostConfigText) as Record<string, unknown>;
     assert.deepEqual(hostConfig.languageServer, { path: "host/language-server.js" });
     assert.deepEqual(hostConfig.projectTask, { path: "host/project-task.js", buildEnginePath: "host/build-engine" });
+    assert.deepEqual(hostConfig.terminalHost, { path: "host/terminal-host" });
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "language-server.js"))).byteLength > 1024 * 1024);
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "project-task.js"))).byteLength > 1024 * 1024);
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "build-engine"))).byteLength > 5 * 1024 * 1024);
+    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "terminal-host"))).byteLength > 32 * 1024);
     assert.equal(hostConfig.nodeExecutableHint, undefined);
     assert.doesNotMatch(hostConfigText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
     const smokeEnvironment = { ...process.env, VELAR_DESKTOP_NODE: process.execPath, VELAR_DESKTOP_PROJECT_ROOT: projectRoot };
@@ -216,10 +230,11 @@ mount(<App />, "#app")
     generationHost.stderr.on("data", (chunk: string) => { generationHostError += chunk; });
     let generationChildPid: number | null = null;
     try {
-      const pidText = await waitForText(join(projectRoot, "generation-child.pid"), 15_000, () => generationHostError);
+      const generationDiagnostic = (): string => `${generationHostError}${generationHost.exitCode === null ? "" : ` host exit ${generationHost.exitCode}`}`;
+      const pidText = await waitForText(join(projectRoot, "generation-child.pid"), 15_000, generationDiagnostic);
       generationChildPid = Number(pidText);
       assert.ok(Number.isSafeInteger(generationChildPid) && generationChildPid > 0, pidText);
-      assert.equal(await waitForText(join(projectRoot, "generation-success.txt"), 15_000, () => generationHostError), "ready");
+      assert.equal(await waitForText(join(projectRoot, "generation-success.txt"), 15_000, generationDiagnostic), "ready");
       await waitForProcessExit(generationChildPid, 5_000);
       generationChildPid = null;
       assert.equal(generationHost.exitCode, null, generationHostError);
@@ -258,6 +273,15 @@ async def invalidCommand() -> null:
     const invalidCommand = spawnSync(process.execPath, [cli, "check", directory], { encoding: "utf8" });
     assert.equal(invalidCommand.status, 1);
     assert.match(invalidCommand.stderr, /ProjectTaskCommand/u);
+    await writeFile(sourcePath, `
+import {openTerminal} from "velar/desktop"
+
+async def invalidTerminal() -> null:
+    await openTerminal({columns: "wide", rows: 24})
+`.trimStart(), "utf8");
+    const invalidTerminal = spawnSync(process.execPath, [cli, "check", directory], { encoding: "utf8" });
+    assert.equal(invalidTerminal.status, 1);
+    assert.match(invalidTerminal.stderr, /VEL4001: Cannot assign string to number/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -291,6 +315,17 @@ test("Desktop permissions fail closed before application compilation", async () 
       },
     }), "utf8");
     await assert.rejects(resolveVelarProject(directory), /cannot also be exposed through desktop\.permissions\.environment/u);
+    await writeFile(join(directory, "velar.json"), JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      extensions: ["@velarscript/desktop"],
+      desktop: {
+        productName: "Unsafe",
+        identifier: "dev.velarscript.unsafe",
+        permissions: { terminal: "yes" },
+      },
+    }), "utf8");
+    await assert.rejects(resolveVelarProject(directory), /desktop\.permissions\.terminal.*boolean/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

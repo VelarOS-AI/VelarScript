@@ -37,6 +37,7 @@ the previous test.
     "permissions": {
       "files": ["project"],
       "processes": ["git"],
+      "terminal": true,
       "network": ["https://api.example.com"]
     }
   }
@@ -56,9 +57,10 @@ paths and versions are not embedded in the application.
 A future standalone profile must report its runtime bytes separately instead
 of hiding them from the application size budget.
 `velar package` asks the CLI package host to build the exact official language
-server, the bounded project-task launcher, and the platform build engine. They
+server, the bounded project-task launcher, the platform build engine, and the
+native PTY helper. They
 are stored under `Contents/Resources/host` and counted separately as language,
-task, and build-engine bytes. The generated tools contain the official
+task, build-engine, and terminal-host bytes. The generated tools contain the official
 Core/Web/Desktop compiler extensions and source-backed standard assets, so the
 installed application neither searches `PATH` for `velar`, resolves project npm
 packages, nor depends on the build workspace. The default Desktop size budget
@@ -88,6 +90,24 @@ at most four tasks may live, output and timeout are bounded, and callers must
 consume output before waiting. Explicit stop, timeout, document retirement,
 project replacement, Worker failure, and host shutdown reuse the same
 process-group termination and confirmed-reaping owner as `velar/process`.
+Applications with the `project` file grant and an explicit
+`desktop.permissions.terminal: true` grant may call
+`openTerminal({columns, rows}) -> Promise<TerminalSession>`. Desktop fixes the
+working directory to the current canonical project, launches only the user's
+trusted login shell, and exposes no executable, shell path, cwd, environment,
+or command-string option. The returned owner publishes the shell PID and
+bounded `write(text)`, `resize(columns, rows)`, pull-based `next()`, terminal
+`wait()`, and idempotent `close()` operations. Input chunks are capped at 1 MiB,
+the decoded output queue applies PTY backpressure at 2 MiB and fails closed
+above 4 MiB, one pull may be active, and at most four sessions may live. The
+output stream must be consumed through its final `null` before `wait()`; an
+explicit `close()` discards that requirement while still confirming cleanup. The
+package-owned native helper and the shell occupy separate process groups;
+Desktop publishes both to its native crash owner before returning the session.
+Explicit close, document retirement, project replacement, Worker failure, and
+host shutdown terminate and confirm reaping of both groups. Terminal output is
+the PTY's UTF-8 text, including control sequences emitted by interactive
+programs; presentation and session/tab orchestration remain application UX.
 Applications with the `project` file grant may call
 `selectProjectDirectory()` to open the native directory chooser. A successful
 choice atomically replaces the single project grant for subsequent relative

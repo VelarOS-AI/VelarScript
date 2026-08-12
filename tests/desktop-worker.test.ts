@@ -162,6 +162,89 @@ test("Desktop owns one packaged official language-server lifecycle without proce
   }
 });
 
+test("Desktop owns permission-scoped PTY terminals with resize and crash reaping", { timeout: 30_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-terminal-"));
+  const project = join(directory, "project");
+  const appData = join(directory, "app-data");
+  const host = join(directory, "host");
+  await Promise.all([mkdir(project), mkdir(appData), mkdir(host)]);
+  const terminalHost = join(host, "terminal-host");
+  await compileTerminalHost(terminalHost);
+  const deniedConfig = join(directory, "desktop-denied.json");
+  await writeFile(deniedConfig, JSON.stringify({
+    protocolVersion: 1,
+    permissions: { files: ["project"], processes: [], terminal: false, network: [], secrets: [] },
+    terminalHost: { path: "host/terminal-host" },
+  }), "utf8");
+  const deniedWorker = spawn(process.execPath, [workerPath, deniedConfig, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
+  const deniedClient = new WorkerClient(deniedWorker);
+  try {
+    await assert.rejects(withDeadline(deniedClient.call("terminal", "open", [{columns: 80, rows: 24}]), "denied terminal open"), /desktop\.permissions\.terminal/u);
+  } finally {
+    await deniedClient.close();
+  }
+
+  const configPath = join(directory, "desktop.json");
+  await writeFile(configPath, JSON.stringify({
+    protocolVersion: 1,
+    permissions: { files: ["project"], processes: [], terminal: true, network: [], secrets: [] },
+    terminalHost: { path: "host/terminal-host" },
+  }), "utf8");
+  const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
+  const client = new WorkerClient(worker);
+  const terminalCall = (operation: string, args: readonly unknown[]): Promise<unknown> => withDeadline(client.call("terminal", operation, args), `terminal ${operation}`);
+  const ownedPids = new Set<number>();
+  try {
+    const started = await terminalCall("open", [{columns: 80, rows: 24}]) as {handle: number; pid: number};
+    assert.ok(started.handle >= 2_000_000_000);
+    const ownership = client.lifecycle().find(event => event.hostEvent === "terminal-owned" && event.handle === started.handle);
+    assert.deepEqual(ownership?.pids?.length, 2);
+    assert.equal(ownership?.pids?.includes(started.pid), true);
+    for (const pid of ownership?.pids ?? []) ownedPids.add(pid);
+
+    assert.equal(await terminalCall("resize", [started.handle, 100, 30]), null);
+    assert.equal(await terminalCall("write", [started.handle, "echo __VELAR_PTY__:$COLUMNS:$LINES; exit 7\n"]), null);
+    let output = "";
+    let outputEnded = false;
+    for (let pulls = 0; pulls < 100; pulls += 1) {
+      const chunk = await terminalCall("next", [started.handle]) as string | null;
+      if (chunk === null) { outputEnded = true; break; }
+      output += chunk;
+    }
+    assert.match(output, /__VELAR_PTY__:100:30/u);
+    assert.equal(outputEnded, true, "the terminal output stream must reach its final null");
+    assert.deepEqual(await terminalCall("wait", [started.handle]).catch(error => { throw new Error(`first terminal wait failed: ${String(error)}`); }), {code: 7});
+    assert.ok(client.lifecycle().some(event => event.hostEvent === "terminal-settled" && event.handle === started.handle));
+    await waitForPidsToExit(ownedPids, 5_000);
+    ownedPids.clear();
+
+    const cancelled = await terminalCall("open", [{columns: 80, rows: 24}]) as {handle: number; pid: number};
+    const cancelledOwnership = client.lifecycle().find(event => event.hostEvent === "terminal-owned" && event.handle === cancelled.handle);
+    for (const pid of cancelledOwnership?.pids ?? []) ownedPids.add(pid);
+    const cancelledRead = client.beginCall("terminal", "next", [cancelled.handle]);
+    client.cancelRequest(cancelledRead.id);
+    await assert.rejects(withDeadline(cancelledRead.result, "cancelled terminal read"), /terminal pull was cancelled|request was cancelled/u);
+    await assert.rejects(terminalCall("wait", [cancelled.handle]), /output must be consumed/u);
+    assert.equal(await terminalCall("write", [cancelled.handle, "exit 0\n"]), null);
+    while (await terminalCall("next", [cancelled.handle]) !== null) {}
+    assert.deepEqual(await terminalCall("wait", [cancelled.handle]).catch(error => { throw new Error(`cancelled-read terminal wait failed: ${String(error)}`); }), {code: 0});
+    await waitForPidsToExit(ownedPids, 5_000);
+    ownedPids.clear();
+
+    const retired = await terminalCall("open", [{columns: 80, rows: 24}]) as {handle: number; pid: number};
+    const retiredOwnership = client.lifecycle().find(event => event.hostEvent === "terminal-owned" && event.handle === retired.handle);
+    for (const pid of retiredOwnership?.pids ?? []) ownedPids.add(pid);
+    assert.equal(ownedPids.size, 2);
+    client.retireOwner();
+    await waitForPidsToExit(ownedPids, 5_000);
+    ownedPids.clear();
+  } finally {
+    for (const pid of ownedPids) terminateProcessGroup(pid);
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Desktop owns bounded packaged project tasks without executable grants", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-task-"));
   const project = join(directory, "project");
@@ -841,12 +924,50 @@ function terminateProcessGroup(pid: number): void {
   catch { try { process.kill(pid, "SIGKILL"); } catch {} }
 }
 
+async function waitForPidsToExit(pids: ReadonlySet<number>, timeout: number): Promise<void> {
+  const remaining = new Set(pids);
+  const deadline = Date.now() + timeout;
+  while (remaining.size > 0 && Date.now() < deadline) {
+    for (const pid of remaining) {
+      try { process.kill(pid, 0); }
+      catch { remaining.delete(pid); }
+    }
+    if (remaining.size > 0) await new Promise(resolveWait => setTimeout(resolveWait, 20));
+  }
+  assert.deepEqual([...remaining], [], `Desktop left terminal processes alive: ${[...remaining].join(", ")}`);
+}
+
+async function compileTerminalHost(output: string): Promise<void> {
+  const child = spawn("/usr/bin/swiftc", [
+    "-Osize", "-whole-module-optimization", "-swift-version", "5",
+    resolve("packages/desktop/native/macos/VelarTerminalHost.swift"), "-o", output,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  let diagnostics = "";
+  child.stdout.on("data", chunk => { diagnostics += chunk.toString("utf8"); });
+  child.stderr.on("data", chunk => { diagnostics += chunk.toString("utf8"); });
+  const code = await new Promise<number | null>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", resolveExit);
+  });
+  assert.equal(code, 0, diagnostics);
+}
+
+function withDeadline<T>(value: Promise<T>, label: string, timeout = 5_000): Promise<T> {
+  return new Promise<T>((resolveValue, rejectValue) => {
+    const timer = setTimeout(() => rejectValue(new Error(`${label} did not settle within ${timeout} milliseconds`)), timeout);
+    void value.then(
+      result => { clearTimeout(timer); resolveValue(result); },
+      error => { clearTimeout(timer); rejectValue(error); },
+    );
+  });
+}
+
 class WorkerClient {
   private nextId = 1;
   private nextProjectRootCommandID = 1;
   private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   private readonly projectRootUpdates = new Map<number, { resolve(): void; reject(error: Error): void }>();
-  private readonly lifecycleEvents: Array<{ hostEvent: string; owner: string; handle: number; pid?: number }> = [];
+  private readonly lifecycleEvents: Array<{ hostEvent: string; owner: string; handle: number; pid?: number; pids?: number[] }> = [];
   private readonly child: ChildProcessWithoutNullStreams;
   private owner = "00000000000000000000000000000001";
 
@@ -855,7 +976,7 @@ class WorkerClient {
     this.writeHostCommand("owner-activate", this.owner);
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on("line", (line) => {
-      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown }; hostEvent?: string; owner?: string; handle?: number; pid?: number; commandID?: number };
+      const message = JSON.parse(line) as { id: number; ok: boolean; value?: unknown; error?: string | { kind?: unknown; message?: unknown; phase?: unknown }; hostEvent?: string; owner?: string; handle?: number; pid?: number; pids?: number[]; commandID?: number };
       if (message.hostEvent === "project-root-settled" && Number.isSafeInteger(message.commandID)) {
         const update = this.projectRootUpdates.get(message.commandID as number);
         if (!update) return;
@@ -865,9 +986,12 @@ class WorkerClient {
         return;
       }
       if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled"
-        || message.hostEvent === "language-server-owned" || message.hostEvent === "language-server-settled")
+        || message.hostEvent === "language-server-owned" || message.hostEvent === "language-server-settled"
+        || message.hostEvent === "terminal-owned" || message.hostEvent === "terminal-settled")
         && Number.isSafeInteger(message.handle) && typeof message.owner === "string") {
-        this.lifecycleEvents.push({ hostEvent: message.hostEvent, owner: message.owner, handle: message.handle as number, ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}) });
+        this.lifecycleEvents.push({ hostEvent: message.hostEvent, owner: message.owner, handle: message.handle as number,
+          ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}),
+          ...(Array.isArray(message.pids) && message.pids.every(Number.isSafeInteger) ? {pids: message.pids} : {}) });
         return;
       }
       const request = this.pending.get(message.id);
@@ -923,7 +1047,7 @@ class WorkerClient {
     this.writeHostCommand("owner-retire", this.owner);
   }
 
-  lifecycle(): readonly { hostEvent: string; owner: string; handle: number; pid?: number }[] {
+  lifecycle(): readonly { hostEvent: string; owner: string; handle: number; pid?: number; pids?: number[] }[] {
     return this.lifecycleEvents;
   }
 

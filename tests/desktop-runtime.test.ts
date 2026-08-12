@@ -23,6 +23,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   const calls: Array<{ capability: string; operation: string; args: readonly unknown[]; timeout: number }> = [];
   const processChunks = new Map<number, unknown[]>();
   const projectTaskChunks = new Map<number, unknown[]>();
+  const terminalChunks = new Map<number, unknown[]>();
   const httpChunks = new Map<number, unknown[]>();
   const httpResponseFailures = new Set<number>();
   const pendingRequests = new Map<number, { reject(error: Error): void }>();
@@ -42,6 +43,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   let malformedWatcherCloses = 0;
   let currentProjectDirectory = directory;
   let selectedProjectDirectory: string | null = null;
+  let nextTerminalHandle = 2_000_000_000;
   const transportFailure = (phase: "request" | "response"): Error => {
     const error = new Error(phase === "request" ? "HTTP request transport failed" : "HTTP response transport failed");
     Object.defineProperty(error, "name", { value: "VelarDesktopHttpTransportError" });
@@ -86,6 +88,15 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         result: { code: 143, signal: null, stdout: "", stderr: "" },
         error: null,
       };
+      if (capability === "terminal" && operation === "open") {
+        const handle = nextTerminalHandle++;
+        terminalChunks.set(handle, ["terminal output\n", null]);
+        return {handle, pid: 730 + handle - 2_000_000_000};
+      }
+      if (capability === "terminal" && (operation === "write" || operation === "resize")) return null;
+      if (capability === "terminal" && operation === "next") return terminalChunks.get(args[0] as number)?.shift() ?? null;
+      if (capability === "terminal" && operation === "wait") return {code: 7};
+      if (capability === "terminal" && operation === "close") return {code: 129};
       if (capability === "process" && operation === "start") {
         if (args[0] === "hostile-start") {
           return Object.defineProperty({ pid: 700 }, "handle", {
@@ -657,6 +668,15 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         wait(): Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>;
         stop(): Promise<null>;
       }>;
+      TerminalSession: { is(value: unknown): boolean; parse(value: unknown): unknown };
+      openTerminal(options?: { columns?: number; rows?: number }): Promise<{
+        pid: number;
+        write(text: string): Promise<null>;
+        resize(columns: number, rows: number): Promise<null>;
+        next(): Promise<string | null>;
+        wait(): Promise<{code: number}>;
+        close(): Promise<null>;
+      }>;
     }>(directory, "desktop", "velar/desktop");
     assert.equal(desktopRuntime.platform(), "test");
     assert.equal(desktopRuntime.packaged(), false);
@@ -691,6 +711,27 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     const projectTaskStart = calls.find((call) => call.capability === "project-task" && call.operation === "start");
     assert.deepEqual(projectTaskStart?.args, ["check", [], { timeout: 5000, maxOutputBytes: 65536 }]);
     assert.equal(calls.find((call) => call.capability === "project-task" && call.operation === "read")?.timeout, 0);
+    const terminalCallsBeforeValidation = calls.filter(call => call.capability === "terminal").length;
+    await assert.rejects(desktopRuntime.openTerminal({columns: 19}), /columns must be an integer from 20/u);
+    assert.equal(calls.filter(call => call.capability === "terminal").length, terminalCallsBeforeValidation);
+    const terminal = await desktopRuntime.openTerminal({columns: 100, rows: 30});
+    assert.equal(terminal.pid, 730);
+    assert.equal(desktopRuntime.TerminalSession.is(terminal), true);
+    assert.equal(desktopRuntime.TerminalSession.parse(terminal), terminal);
+    assert.equal(await terminal.resize(120, 40), null);
+    assert.equal(await terminal.write("echo ready\n"), null);
+    await assert.rejects(terminal.wait(), /output must be consumed/u);
+    assert.equal(await terminal.next(), "terminal output\n");
+    assert.equal(await terminal.next(), null);
+    assert.deepEqual(await terminal.wait(), {code: 7});
+    assert.equal(await terminal.wait(), await terminal.wait());
+    await assert.rejects(terminal.write("echo closed\n"), /closed/u);
+    assert.deepEqual(calls.find(call => call.capability === "terminal" && call.operation === "open")?.args, [{columns: 100, rows: 30}]);
+    assert.equal(calls.find(call => call.capability === "terminal" && call.operation === "next")?.timeout, 0);
+    const closedTerminal = await desktopRuntime.openTerminal();
+    assert.equal(await closedTerminal.close(), null);
+    assert.equal(await closedTerminal.close(), null);
+    assert.deepEqual(await closedTerminal.wait(), {code: 129});
 
     const environment = await runtime<{ get(name: string): string | null; require(name: string): string }>(directory, "env", "velar/env");
     assert.equal(environment.get("LANG"), "en_US.UTF-8");
@@ -971,7 +1012,7 @@ test("Desktop CLI test host provides deterministic manifest-scoped process handl
     productName: "Test",
     identifier: "dev.velarscript.test",
     window: { title: "Test", width: 800, height: 600, minWidth: 480, minHeight: 320 },
-    permissions: { files: ["project"], processes: ["git"], network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"] },
+    permissions: { files: ["project"], processes: ["git"], terminal: false, network: [], environment: ["PRODUCTION_MODE"], secrets: ["PROVIDER_KEY"] },
     build: { outDir: "dist/desktop", sizeBudgetBytes: 10 * 1024 * 1024 },
   })
     .replace("const maxListTextUnits = 2 * 1024 * 1024;", "const maxListTextUnits = 8;")

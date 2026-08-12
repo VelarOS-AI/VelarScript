@@ -88,11 +88,20 @@ const projectTaskOptionsType: ValueType = {
   fields: new Map<string, ValueType>([["timeout", numberType], ["maxOutputBytes", numberType]]),
   optionalFields: new Set(["timeout", "maxOutputBytes"]),
 };
+const terminalSessionIdentity = "velar/desktop#type:TerminalSession";
+const terminalSessionType: ValueType = { kind: "named", name: "TerminalSession", identity: terminalSessionIdentity };
+const terminalResultType: ValueType = { kind: "object", fields: new Map<string, ValueType>([["code", numberType]]) };
+const terminalOptionsType: ValueType = {
+  kind: "object",
+  fields: new Map<string, ValueType>([["columns", numberType], ["rows", numberType]]),
+  optionalFields: new Set(["columns", "rows"]),
+};
 const desktopModuleInterface = moduleInterface(new Map([
   ["LanguageServer", { kind: "typeObject", name: "LanguageServer" }],
   ["ProjectTask", { kind: "typeObject", name: "ProjectTask" }],
   ["ProjectTaskCommand", { kind: "enumObject", name: "ProjectTaskCommand", identity: projectTaskCommandIdentity, members: projectTaskCommands }],
   ["ProjectTaskOutputChannel", { kind: "enumObject", name: "ProjectTaskOutputChannel", identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
+  ["TerminalSession", { kind: "typeObject", name: "TerminalSession" }],
   ["platform", functionType([], stringType)],
   ["packaged", functionType([], boolType)],
   ["homeDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -102,6 +111,7 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["selectProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
   ["languageServer", functionType([], { kind: "promise", value: languageServerType })],
   ["startProjectTask", functionType([projectTaskCommandType, listStringType, projectTaskOptionsType], { kind: "promise", value: projectTaskType }, 1)],
+  ["openTerminal", functionType([terminalOptionsType], { kind: "promise", value: terminalSessionType }, 0)],
 ]), new Map([
   ["LanguageServer", new Map([
     ["send", functionType([stringType], { kind: "promise", value: nullType })],
@@ -114,9 +124,18 @@ const desktopModuleInterface = moduleInterface(new Map([
     ["wait", functionType([], { kind: "promise", value: projectTaskResultType })],
     ["stop", functionType([], { kind: "promise", value: nullType })],
   ])],
+  ["TerminalSession", new Map([
+    ["pid", numberType],
+    ["write", functionType([stringType], { kind: "promise", value: nullType })],
+    ["resize", functionType([numberType, numberType], { kind: "promise", value: nullType })],
+    ["next", functionType([], { kind: "promise", value: optionalStringType })],
+    ["wait", functionType([], { kind: "promise", value: terminalResultType })],
+    ["close", functionType([], { kind: "promise", value: nullType })],
+  ])],
 ]), new Map([
   ["LanguageServer", languageServerIdentity],
   ["ProjectTask", projectTaskIdentity],
+  ["TerminalSession", terminalSessionIdentity],
 ]), new Map([
   ["ProjectTaskCommand", { identity: projectTaskCommandIdentity, members: projectTaskCommands }],
   ["ProjectTaskOutputChannel", { identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
@@ -143,6 +162,7 @@ const desktopPlatform = __velarDesktopHostField("platform");
 const desktopPackaged = __velarDesktopHostField("packaged");
 const languageServerToken = Symbol("velar.desktop.language-server");
 const projectTaskToken = Symbol("velar.desktop.project-task");
+const terminalSessionToken = Symbol("velar.desktop.terminal-session");
 export function platform() {
   const value = desktopPlatform;
   if (typeof value !== "string" || value.length === 0) throw new TypeError("Desktop host returned an invalid platform");
@@ -387,6 +407,105 @@ export async function startProjectTask(command, arguments_ = [], options = {}) {
     throw new __velarProcessNativeTypeError("Desktop host returned an invalid project task start result");
   }
   return new ProjectTaskHandle(projectTaskToken, value.handle, value.pid, wire.maxOutputBytes);
+}
+const terminalOptionFields = new __velarProcessNativeSet(["columns", "rows"]);
+const terminalStartFields = new __velarProcessNativeSet(["handle", "pid"]);
+const terminalResultFields = new __velarProcessNativeSet(["code"]);
+function terminalDimension(value, fallback, name, minimum) {
+  value = value ?? fallback;
+  if (!__velarProcessIsSafeInteger(value) || value < minimum || value > 1000) {
+    throw new __velarProcessNativeRangeError("Terminal " + name + " must be an integer from " + minimum + " through 1000");
+  }
+  return value;
+}
+function terminalOptions(value) {
+  value = __velarProcessRecord(value == null ? {} : value, "Terminal options", terminalOptionFields);
+  return {columns: terminalDimension(value.columns, 80, "columns", 20), rows: terminalDimension(value.rows, 24, "rows", 5)};
+}
+function terminalResult(value) {
+  value = __velarProcessRecord(value, "Terminal result", terminalResultFields);
+  if (!__velarProcessIsSafeInteger(value.code) || value.code < 0 || value.code > 255) {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid terminal result");
+  }
+  return __velarProcessFreeze({code: value.code});
+}
+class TerminalSessionHandle {
+  constructor(token, handle, pid) {
+    if (token !== terminalSessionToken || !__velarProcessIsSafeInteger(handle) || handle < 1
+      || !__velarProcessIsSafeInteger(pid) || pid < 1) throw new __velarProcessNativeTypeError("TerminalSession values are created only by velar/desktop.openTerminal");
+    this.handle = handle;
+    this.pid = pid;
+    this.reading = false;
+    this.closed = false;
+    this.outputEnded = false;
+    this.result = null;
+    __velarProcessSeal(this);
+  }
+  async write(text) {
+    if (this.closed) throw new __velarProcessNativeError("TerminalSession is closed");
+    if (typeof text !== "string" || text.length === 0 || __velarUtf8ByteLength(text) > 1024 * 1024) {
+      throw new __velarProcessNativeRangeError("TerminalSession.write requires 1 byte through 1 MiB of text");
+    }
+    const value = await __velarDesktopHostCall("terminal", "write", [this.handle, text], 0);
+    if (value !== null) throw new __velarProcessNativeTypeError("Desktop host returned an invalid terminal write result");
+    return null;
+  }
+  async resize(columns, rows) {
+    if (this.closed) throw new __velarProcessNativeError("TerminalSession is closed");
+    columns = terminalDimension(columns, 80, "columns", 20);
+    rows = terminalDimension(rows, 24, "rows", 5);
+    const value = await __velarDesktopHostCall("terminal", "resize", [this.handle, columns, rows]);
+    if (value !== null) throw new __velarProcessNativeTypeError("Desktop host returned an invalid terminal resize result");
+    return null;
+  }
+  async next() {
+    if (this.reading) throw new __velarProcessNativeError("TerminalSession.next() allows only one active pull");
+    if (this.closed || this.outputEnded) return null;
+    this.reading = true;
+    try {
+      const value = await __velarDesktopHostCall("terminal", "next", [this.handle], 0);
+      if (value === null) { this.outputEnded = true; return null; }
+      if (typeof value !== "string" || value.length === 0 || __velarUtf8ByteLength(value) > 1024 * 1024) {
+        throw new __velarProcessNativeTypeError("Desktop host returned invalid terminal output");
+      }
+      return value;
+    } finally { this.reading = false; }
+  }
+  wait() {
+    if (this.result === null) {
+      if (this.reading) return __velarProcessReject(new __velarProcessNativeError("Terminal output cannot be waited while next() is pending"));
+      if (!this.outputEnded) return __velarProcessReject(new __velarProcessNativeError("Terminal output must be consumed before wait()"));
+      let pending;
+      pending = __velarProcessThen(__velarDesktopHostCall("terminal", "wait", [this.handle], 0), value => {
+        this.closed = true;
+        return terminalResult(value);
+      }, error => { if (this.result === pending) this.result = null; throw error; });
+      this.result = pending;
+    }
+    return this.result;
+  }
+  async close() {
+    if (this.closed) return null;
+    const outcome = terminalResult(await __velarDesktopHostCall("terminal", "close", [this.handle], 10000));
+    this.closed = true;
+    if (this.result === null) this.result = __velarProcessResolve(outcome);
+    return null;
+  }
+}
+export const TerminalSession = __velarProcessFreeze({
+  is(value) { return value instanceof TerminalSessionHandle; },
+  parse(value) {
+    if (!(value instanceof TerminalSessionHandle)) throw new __velarProcessNativeTypeError("Value does not match TerminalSession");
+    return value;
+  },
+});
+export async function openTerminal(options = {}) {
+  const wire = terminalOptions(options);
+  const value = __velarProcessRecord(await __velarDesktopHostCall("terminal", "open", [wire]), "Terminal start result", terminalStartFields);
+  if (!__velarProcessIsSafeInteger(value.handle) || value.handle < 1 || !__velarProcessIsSafeInteger(value.pid) || value.pid < 1) {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid terminal start result");
+  }
+  return new TerminalSessionHandle(terminalSessionToken, value.handle, value.pid);
 }
 `.trimStart();
 

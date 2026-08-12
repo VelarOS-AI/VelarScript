@@ -480,7 +480,7 @@ private final class NodeCapabilityHost {
     }
 
     private struct ProcessOwner {
-        let pid: pid_t
+        let pids: [pid_t]
         let generation: String
     }
 
@@ -697,10 +697,22 @@ private final class NodeCapabilityHost {
                 fail("Desktop Node capability host returned an invalid process owner")
                 return
             }
-            processOwners[handle] = ProcessOwner(pid: pid_t(pid), generation: generation)
+            processOwners[handle] = ProcessOwner(pids: [pid_t(pid)], generation: generation)
+        case "terminal-owned":
+            guard let values = object["pids"] as? [Int], values.count == 2,
+                  Set(values).count == values.count,
+                  values.allSatisfy({ $0 > 0 && $0 <= Int(Int32.max) }),
+                  processOwners[handle] == nil,
+                  generation == activeGeneration || pending.values.contains(where: { $0.identity.generation == generation }) else {
+                fail("Desktop Node capability host returned an invalid terminal owner")
+                return
+            }
+            processOwners[handle] = ProcessOwner(pids: values.map(pid_t.init), generation: generation)
         case "process-settled":
             fallthrough
         case "language-server-settled":
+            fallthrough
+        case "terminal-settled":
             guard let owner = processOwners[handle], owner.generation == generation else {
                 fail("Desktop Node capability host settled an unknown process owner")
                 return
@@ -741,6 +753,7 @@ private final class NodeCapabilityHost {
     private func fail(_ message: String) {
         guard failure == nil else { return }
         failure = message
+        FileHandle.standardError.write(Data(("Velar Desktop capability host: \(message)\n").utf8))
         output.fileHandleForReading.readabilityHandler = nil
         errors.fileHandleForReading.readabilityHandler = nil
         try? input.fileHandleForWriting.close()
@@ -796,7 +809,9 @@ private final class NodeCapabilityHost {
             activeIdentities.remove(request.identity)
         }
         if activeGeneration == generation { activeGeneration = nil }
-        for owner in processOwners.values where owner.generation == generation { _ = Darwin.kill(-owner.pid, SIGKILL) }
+        for owner in processOwners.values where owner.generation == generation {
+            for pid in owner.pids { _ = Darwin.kill(-pid, SIGKILL) }
+        }
         guard failure == nil, process.isRunning else { return }
         do {
             try write(["protocolVersion": 1, "hostCommand": "owner-retire", "owner": generation])
@@ -812,8 +827,8 @@ private final class NodeCapabilityHost {
             guard let self else { return }
             var settled: [Int] = []
             for (handle, owner) in self.processOwners {
-                _ = Darwin.kill(-owner.pid, SIGKILL)
-                if Darwin.kill(-owner.pid, 0) == -1 && errno == ESRCH { settled.append(handle) }
+                for pid in owner.pids { _ = Darwin.kill(-pid, SIGKILL) }
+                if owner.pids.allSatisfy({ Darwin.kill(-$0, 0) == -1 && errno == ESRCH }) { settled.append(handle) }
             }
             for handle in settled { self.processOwners.removeValue(forKey: handle) }
             if self.processOwners.isEmpty {

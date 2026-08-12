@@ -1758,7 +1758,8 @@ for (const phrase of [
   "const hostTextEncode = TextEncoder.prototype.encode",
   "process.terminationHandler =",
   'case "process-owned":',
-  "Darwin.kill(-owner.pid, SIGKILL)",
+  'case "terminal-owned":',
+  "for pid in owner.pids { _ = Darwin.kill(-pid, SIGKILL) }",
 ]) {
   if (!desktopNativeHostSource.includes(phrase)) {
     failures.push(`packages/desktop/native/macos/VelarDesktopHost.swift: missing captured bridge operation '${phrase}'`);

@@ -12,6 +12,7 @@ export interface DesktopWindowConfig {
 export interface DesktopPermissionConfig {
   readonly files: readonly ("app-data" | "project")[];
   readonly processes: readonly string[];
+  readonly terminal: boolean;
   readonly network: readonly string[];
   readonly environment: readonly string[];
   readonly secrets: readonly string[];
@@ -72,7 +73,7 @@ function windowConfig(value: unknown, productName: string, manifestPath: string)
 
 function permissionConfig(value: unknown, manifestPath: string): DesktopPermissionConfig {
   const permissions = value === undefined ? {} : objectField(value, "desktop.permissions", manifestPath);
-  knownFields(permissions, new Set(["files", "processes", "network", "environment", "secrets"]), "desktop.permissions", manifestPath);
+  knownFields(permissions, new Set(["files", "processes", "terminal", "network", "environment", "secrets"]), "desktop.permissions", manifestPath);
   const files = stringList(permissions.files, "desktop.permissions.files", 3);
   const validFileScopes = new Set(["app-data", "project"]);
   for (const scope of files) if (!validFileScopes.has(scope)) throw new Error(`${manifestPath}: unknown desktop file scope '${scope}'`);
@@ -80,6 +81,7 @@ function permissionConfig(value: unknown, manifestPath: string): DesktopPermissi
   for (const command of processes) {
     if (!/^[A-Za-z0-9._+-]{1,128}$/u.test(command)) throw new Error(`${manifestPath}: desktop process permissions must be executable names, not paths or shell text`);
   }
+  const terminal = booleanField(permissions.terminal, "desktop.permissions.terminal", false);
   const network = stringList(permissions.network, "desktop.permissions.network", 64);
   for (const origin of network) {
     let parsed: URL;
@@ -100,7 +102,7 @@ function permissionConfig(value: unknown, manifestPath: string): DesktopPermissi
     if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(name)) throw new Error(`${manifestPath}: desktop secret permissions must be uppercase variable names`);
     if (environment.includes(name)) throw new Error(`${manifestPath}: desktop secret '${name}' cannot also be exposed through desktop.permissions.environment`);
   }
-  return Object.freeze({ files: files as DesktopPermissionConfig["files"], processes, network, environment, secrets });
+  return Object.freeze({ files: files as DesktopPermissionConfig["files"], processes, terminal, network, environment, secrets });
 }
 
 function buildConfig(value: unknown, manifestPath: string): VelarDesktopConfig["build"] {
@@ -139,6 +141,12 @@ function integerField(value: unknown, field: string, fallback: number, minimum: 
     throw new Error(`'${field}' must be an integer from ${minimum} through ${maximum}`);
   }
   return value as number;
+}
+
+function booleanField(value: unknown, field: string, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw new Error(`'${field}' must be a boolean`);
+  return value;
 }
 
 function knownFields(value: Record<string, unknown>, allowed: ReadonlySet<string>, field: string, manifestPath: string): void {

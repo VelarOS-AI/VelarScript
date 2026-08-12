@@ -3005,13 +3005,51 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   sustained watcher/RSS、wide-glyph hit testing、native picker/IME、crash recovery、sustained edit memory 和正式
   release thresholds。
 
+- W-139 用 Editor 的真实交互终端场景关闭了 official Desktop PTY owner 缺口。问题不属于 Core 语法、
+  `velar/terminal` 或产品按钮：Node terminal 只拥有当前 CLI stdin/stdout，不能创建和调整子终端；Desktop
+  原先也没有 trusted login shell、PTY resize、merged output、backpressure 或 helper+shell crash ownership。
+  Editor 若自行实现只能引入产品私有 native helper、shell command 或 process bridge，因此能力进入既有
+  `velar/desktop` owner；没有新增 npm package、npm dependency 或 package identity。
+
+  `velar/desktop` 新增 `TerminalSession` 与 `openTerminal({columns, rows})`，由默认关闭的
+  `desktop.permissions.terminal` 和已有 project file grant 共同授权。公开接口只有 PID、bounded write/resize、
+  pull-based `next()`、consume-before-`wait()` 与 `close()`；不暴露 executable、shell path、command、cwd、env
+  或 process grant。macOS package 编译并计数专用 `terminal-host`，只从 `/etc/shells` 选择可信 login shell，
+  cwd 固定为当前 canonical project。Worker 最多持有四个 session，input 上限 1 MiB，output 在 2 MiB 暂停、
+  1 MiB 恢复并于 4 MiB fail closed，incremental UTF-8 decoder 与 single-reader 保证顺序；取消 pending pull
+  不关闭 session，最终 `null` 前不能 wait。
+
+  native lifecycle 在公开 open 结果前转移 helper 与 shell 两个 PID；close、project replacement、document
+  retirement、Worker/fatal/native-host failure 都终止并确认两个 process group。diagnostics/codegen/执行证据覆盖
+  `VEL4001` option mismatch、manifest permission failure、unknown/oversized frames、wait-before-drain、hostile wire
+  values、80x24→100x30 resize、cancel-pull continuation、exact exit code、normal/retirement 双 PID reap，以及生成
+  renderer 中公开 Terminal API 存在且没有 shell/cwd/env/private protocol。最终 packaged Editor `.app` 使用包内
+  helper resize 到 120x40，返回 `__PACKAGED_EDITOR_PTY__:120:40` 与 exit 9，两个 owner 场景均发布 exact
+  owned/settled pairs，结束后 Worker/helper/shell 残留为空。
+
+  Editor 只消费公开 `openTerminal`、`write`、`next` 与 `close`，产品只拥有 input/output/session UX 和 1 MiB
+  display trim；没有 native、JS/TS、PTY protocol、shell command、process grant、PID kill 或 private bridge
+  workaround。最终 `npm run check` 为 53 formatted sources、108 docs、75 boundaries，606/606 串行 tests、
+  四示例、packed consumer 与 rehearsal 通过。Editor format 6、check 3、Core 1、build/package、packaged PTY
+  probe 与受监管单 Chromium 8/8 通过；浏览器和 PTY owner 审计为空。Chromium FCP median/p95 8/48 ms，
+  input frame 约 4.8/5.4 ms，1 MiB load/input next-frame 约 32.432/2.600 ms。`.app` 为 14,942,381 bytes：
+  host 336,704、renderer 222,541、capability 89,386、language server 1,747,341、project task 1,767,524、
+  build engine 10,573,778、terminal host 87,888、metadata 117,219；renderer JS+CSS 217,563 bytes，SHA-256
+  `8ad6dac8a2d6eb47f3467fdce1da2045ec75e2e56208c3200bd303f8497312a7`。Lite 原 11-file WIP 未修改；
+  未推送、未发布、未提升版本。
+
+  仍阻止生产可用的是 multi-tab/document-session orchestration；JS/TS full cross-file module/type/package graph、
+  workspace symbols、formatter 与 official task execution；cross-process index cold start、sustained watcher/RSS、
+  precise wide-glyph terminal/editor rendering、native picker/IME、crash recovery、sustained edit memory 和正式
+  release thresholds。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
    standard-module contract 为边界，Web、Node、Desktop、Game 继续只通过自有
    AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或 host/product policy 放回 Core。
-2. 下一波优先用 Editor multi-tab/session/interactive-terminal 场景继续暴露公开 document session、terminal、
-   command concurrency 与 recovery owner 缺口；同时评估 JavaScript/TypeScript cross-file module/type graph、
+2. 下一波优先用 Editor multi-tab/session 场景继续暴露公开 document session、command concurrency 与 recovery
+   owner 缺口；同时评估 JavaScript/TypeScript cross-file module/type graph、
    workspace symbols、formatter 与 official JS/TS task execution 的正确 owner。Editor 只保留项目、标签、
    命令、索引编排和 UX。
 3. W-137 已证明单次 20k/4,096 watcher burst、overflow/rescan、增量 tree/index latency 与 RSS；下一阶段只在

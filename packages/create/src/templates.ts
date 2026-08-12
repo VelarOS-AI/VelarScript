@@ -154,7 +154,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
         productName: displayName,
         identifier: `dev.velarscript.${identifier}`,
         window: { width: 1040, height: 720, minWidth: 640, minHeight: 480 },
-        permissions: { files: [], processes: [], network: [], environment: [], secrets: [] },
+        permissions: { files: [], processes: [], terminal: false, network: [], environment: [], secrets: [] },
       },
     })],
     ["README.md", `# ${displayName}\n\nA single-project VelarScript Desktop starter backed by the system WebView.\n\n\`\`\`sh\nnpm install\nnpm run dev\nnpm run package\n\`\`\`\n\n\`npm run dev\` previews the renderer. On macOS, \`npm run package\` creates a native \`.app\` using the default VelarScript application icon.\n`],

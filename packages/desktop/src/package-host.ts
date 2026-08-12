@@ -21,7 +21,7 @@ export const velarApplicationPackageHost: ApplicationPackageHost = Object.freeze
     return Object.freeze({
       artifactPath: result.applicationBundle,
       details: Object.freeze([
-        `Size ${formatBytes(sizes.totalBytes)} / ${formatBytes(result.manifest.sizeBudgetBytes)} (host ${formatBytes(sizes.hostBytes)}, renderer ${formatBytes(sizes.rendererBytes)}, capabilities ${formatBytes(sizes.capabilityHostBytes)}, language ${formatBytes(sizes.languageServerBytes)}, tasks ${formatBytes(sizes.projectTaskBytes)}, build engine ${formatBytes(sizes.buildEngineBytes)})`,
+        `Size ${formatBytes(sizes.totalBytes)} / ${formatBytes(result.manifest.sizeBudgetBytes)} (host ${formatBytes(sizes.hostBytes)}, renderer ${formatBytes(sizes.rendererBytes)}, capabilities ${formatBytes(sizes.capabilityHostBytes)}, language ${formatBytes(sizes.languageServerBytes)}, tasks ${formatBytes(sizes.projectTaskBytes)}, build engine ${formatBytes(sizes.buildEngineBytes)}, terminal ${formatBytes(sizes.terminalHostBytes)})`,
         `Runtime external Node.js >=${result.manifest.runtime.minimumMajor} (not embedded)`,
       ]),
     });

@@ -19,6 +19,11 @@ const MAX_LANGUAGE_SERVER_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_LANGUAGE_SERVER_QUEUED_BYTES = 64 * 1024 * 1024;
 const MAX_LANGUAGE_SERVERS = 4;
 const MAX_PROJECT_TASKS = 4;
+const MAX_TERMINALS = 4;
+const MAX_TERMINAL_CHUNK_BYTES = 1024 * 1024;
+const MAX_TERMINAL_QUEUED_BYTES = 4 * 1024 * 1024;
+const TERMINAL_PAUSE_BYTES = 2 * 1024 * 1024;
+const TERMINAL_RESUME_BYTES = 1024 * 1024;
 const WATCH_DEBOUNCE_MS = 20;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
@@ -45,6 +50,8 @@ const fileWatchers = new Map();
 let nextFileWatcherHandle = 1;
 const languageServers = new Map();
 let nextLanguageServerHandle = 1_000_000_000;
+const terminals = new Map();
+let nextTerminalHandle = 2_000_000_000;
 let nextTextReplacementIdentity = 1;
 let fatalDrainStarted = false;
 let activeOwner = null;
@@ -58,6 +65,8 @@ let projectRootUpdate = Promise.resolve();
 let languageServerPath = null;
 let projectTaskPath = null;
 let buildEnginePath = null;
+let terminalHostPath = null;
+const terminalGranted = config.permissions.terminal === true;
 
 class HttpTransportFailure extends Error {
   constructor(phase) {
@@ -90,6 +99,17 @@ if (config.projectTask !== undefined) {
   }
   await access(buildEnginePath, fsConstants.X_OK);
 }
+if (config.terminalHost !== undefined) {
+  if (!config.terminalHost || typeof config.terminalHost !== "object" || Array.isArray(config.terminalHost)
+    || Object.keys(config.terminalHost).some(key => key !== "path")
+    || config.terminalHost.path !== "host/terminal-host") throw new Error("Invalid bundled terminal-host configuration");
+  const resourcesRoot = await realpath(dirname(configPath));
+  terminalHostPath = await realpath(resolve(dirname(configPath), config.terminalHost.path));
+  if (!contained(resourcesRoot, terminalHostPath) || !(await stat(terminalHostPath)).isFile()) {
+    throw new Error("Bundled terminal host must be an ordinary file inside Desktop resources");
+  }
+  await access(terminalHostPath, fsConstants.X_OK);
+}
 if (fileScopes.has("app-data")) {
   const dataRoot = resolve(appDataRoot, "data");
   await mkdir(dataRoot, { recursive: true });
@@ -107,6 +127,7 @@ reader.once("close", () => {
   if (activeOwner !== null) retireOwner(activeOwner);
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host closed"));
   for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host closed"));
+  for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop capability host closed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
 });
 reader.on("line", async (line) => {
@@ -203,6 +224,7 @@ async function dispatch(capability, operation, args, owner, activity) {
   }
   if (capability === "language-server") return languageServerOperation(operation, args, owner, activity);
   if (capability === "project-task") return projectTaskOperation(operation, args, owner, activity);
+  if (capability === "terminal") return terminalOperation(operation, args, owner, activity);
   if (capability === "http") {
     if (operation === "request") return httpRequest(args, owner, activity);
     if (operation === "read") return httpRead(args, owner);
@@ -230,6 +252,7 @@ async function replaceProjectRoot(path) {
   if (!metadata.isDirectory()) throw new TypeError("Desktop project grant must identify a directory");
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop project grant changed"));
   for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop project grant changed"));
+  for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop project grant changed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
   for (const [handle, task] of processHandles) retainRetiredProcess(handle, task);
   for (const [handle, request] of httpHandles) {
@@ -872,6 +895,283 @@ async function commitTextReplacement(path, data, mode) {
   finally { await rm(temporary, {force: true, recursive: false}); }
 }
 
+function allocateTerminalHandle() {
+  let candidate = nextTerminalHandle;
+  for (let attempts = 0; attempts <= MAX_TERMINALS; attempts += 1) {
+    if (!terminals.has(candidate)) {
+      nextTerminalHandle = candidate >= 2_000_000_003 ? 2_000_000_000 : candidate + 1;
+      return candidate;
+    }
+    candidate = candidate >= 2_000_000_003 ? 2_000_000_000 : candidate + 1;
+  }
+  throw new RangeError("Desktop terminal handle space is unavailable");
+}
+
+function ownedTerminal(value, owner) {
+  const handle = integer(value, 1, Number.MAX_SAFE_INTEGER, "Desktop terminal handle");
+  const task = terminals.get(handle);
+  if (!task) throw new Error("Desktop terminal handle is unknown or already released");
+  if (task.owner !== owner) throw new Error("Desktop terminal belongs to another document generation");
+  return task;
+}
+
+function terminalFrame(kind, payload = Buffer.alloc(0)) {
+  if (!(payload instanceof Buffer) || payload.byteLength > MAX_TERMINAL_CHUNK_BYTES) throw new RangeError("Terminal frame exceeds 1 MiB");
+  const frame = Buffer.allocUnsafe(5 + payload.byteLength);
+  frame[0] = kind;
+  frame.writeUInt32BE(payload.byteLength, 1);
+  payload.copy(frame, 5);
+  return frame;
+}
+
+function writeTerminalFrame(task, frame) {
+  if (task.failure) throw task.failure;
+  if (task.settled || task.closing || !task.child.stdin.writable) throw new Error("Desktop terminal is closed");
+  return new Promise((resolveWrite, rejectWrite) => {
+    task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite(null));
+  });
+}
+
+function settleTerminalPull(task) {
+  if (task.waiter === null) return;
+  if (task.queue.length > 0) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    const value = task.queue.shift();
+    task.queuedBytes -= Buffer.byteLength(value, "utf8");
+    if (task.paused && task.queuedBytes <= TERMINAL_RESUME_BYTES) {
+      task.paused = false;
+      task.child.stdout.resume();
+    }
+    waiter.resolve(value);
+  } else if (task.failure || task.settled) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    if (task.failure) waiter.reject(task.failure);
+    else { task.outputEnded = true; waiter.resolve(null); }
+  }
+}
+
+function enqueueTerminalText(task, value) {
+  if (value.length === 0) return;
+  const bytes = Buffer.byteLength(value, "utf8");
+  if (bytes > MAX_TERMINAL_CHUNK_BYTES || task.queuedBytes + bytes > MAX_TERMINAL_QUEUED_BYTES) {
+    failTerminal(task, new RangeError("Desktop terminal output queue exceeded 4 MiB"));
+    return;
+  }
+  if (task.waiter !== null) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    waiter.resolve(value);
+    return;
+  }
+  task.queue.push(value);
+  task.queuedBytes += bytes;
+  if (!task.paused && task.queuedBytes >= TERMINAL_PAUSE_BYTES) {
+    task.paused = true;
+    task.child.stdout.pause();
+  }
+}
+
+function signalTerminalTree(task, signal) {
+  if (task.shellPid !== null) {
+    try { process.kill(-task.shellPid, signal); }
+    catch { try { process.kill(task.shellPid, signal); } catch {} }
+  }
+  signalTree(task.child, signal);
+}
+
+function failTerminal(task, error) {
+  if (!task.failure) task.failure = error instanceof Error ? error : new Error("Desktop terminal failed");
+  settleTerminalPull(task);
+  signalTerminalTree(task, "SIGKILL");
+}
+
+async function terminalMetadata(task) {
+  const stream = task.child.stdio[3];
+  if (!stream) throw new Error("Bundled terminal host ownership channel is unavailable");
+  let text = "";
+  stream.setEncoding("utf8");
+  const metadata = await new Promise((resolveMetadata, rejectMetadata) => {
+    stream.on("data", chunk => {
+      text += chunk;
+      if (Buffer.byteLength(text, "utf8") > 256) rejectMetadata(new RangeError("Bundled terminal host metadata exceeds 256 bytes"));
+    });
+    stream.once("error", rejectMetadata);
+    stream.once("end", () => resolveMetadata(text));
+    task.child.once("error", rejectMetadata);
+    task.child.once("close", () => rejectMetadata(new Error("Bundled terminal host closed before publishing shell ownership")));
+  });
+  let value;
+  try { value = JSON.parse(metadata); }
+  catch { throw new Error("Bundled terminal host returned invalid ownership metadata"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).some(key => !["protocolVersion", "pid"].includes(key))
+    || value.protocolVersion !== 1 || !Number.isSafeInteger(value.pid) || value.pid < 1 || value.pid === task.child.pid) {
+    throw new Error("Bundled terminal host returned invalid ownership metadata");
+  }
+  return value.pid;
+}
+
+async function terminalOpen(args, owner, activity) {
+  if (!terminalGranted) throw new Error("Desktop terminal access requires desktop.permissions.terminal");
+  if (terminalHostPath === null) throw new Error("This Desktop package does not contain the official terminal host");
+  if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop terminals require the project file grant");
+  if (args.length !== 1 || !args[0] || typeof args[0] !== "object" || Array.isArray(args[0])
+    || Object.keys(args[0]).some(key => !["columns", "rows"].includes(key))) throw new TypeError("Terminal options are invalid");
+  const columns = integer(args[0].columns ?? 80, 20, 1000, "Terminal columns");
+  const rows = integer(args[0].rows ?? 24, 5, 1000, "Terminal rows");
+  if (terminals.size >= MAX_TERMINALS) throw new RangeError("Desktop cannot own more than 4 terminals");
+  if (activity.cancelled) throw new Error("Desktop host request was cancelled");
+  const handle = allocateTerminalHandle();
+  const environment = Object.create(null);
+  for (const name of ["HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"]) {
+    if (typeof process.env[name] === "string") environment[name] = process.env[name];
+  }
+  environment.TERM = "xterm-256color";
+  environment.COLORTERM = "truecolor";
+  const child = spawn(terminalHostPath, [projectLexicalRoot ?? projectRoot, String(columns), String(rows)], {
+    cwd: projectRoot,
+    env: environment,
+    shell: false,
+    windowsHide: true,
+    detached: true,
+    stdio: ["pipe", "pipe", "pipe", "pipe"],
+  });
+  let resolveResult;
+  let rejectResult;
+  const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+  result.catch(() => {});
+  const task = {
+    handle, owner, child, shellPid: null, queue: [], queuedBytes: 0, waiter: null, paused: false,
+    decoder: new StringDecoder("utf8"), failure: null, settled: false, closing: false, ownershipPublished: false, outputEnded: false,
+    result, resolveResult, rejectResult, stderr: "",
+  };
+  terminals.set(handle, task);
+  activity.cancel = () => releaseTerminal(task, new Error("Desktop terminal start was cancelled"));
+  child.stdout.on("data", chunk => enqueueTerminalText(task, task.decoder.write(chunk)));
+  child.stderr.on("data", chunk => {
+    if (task.stderr.length < 64 * 1024) task.stderr += chunk.toString("utf8").slice(0, 64 * 1024 - task.stderr.length);
+  });
+  child.once("error", error => failTerminal(task, error));
+  child.once("close", (code, signal) => {
+    enqueueTerminalText(task, task.decoder.end());
+    task.settled = true;
+    if (task.failure) task.rejectResult(task.failure);
+    else if (code === null) task.rejectResult(new Error(`Bundled terminal host exited with ${signal ?? "an unknown signal"}${task.stderr ? `: ${task.stderr}` : ""}`));
+    else task.resolveResult({code});
+    settleTerminalPull(task);
+    if (task.ownershipPublished) respond({ protocolVersion: 1, hostEvent: "terminal-settled", owner, handle });
+  });
+  try {
+    const ownership = terminalMetadata(task);
+    await new Promise((resolveStart, rejectStart) => {
+      child.once("spawn", resolveStart);
+      child.once("error", rejectStart);
+    });
+    task.shellPid = await ownership;
+  } catch (error) {
+    releaseTerminal(task, error instanceof Error ? error : new Error("Bundled terminal host failed to start"));
+    throw error;
+  }
+  activity.cancel = null;
+  task.ownershipPublished = true;
+  respond({ protocolVersion: 1, hostEvent: "terminal-owned", owner, handle, pids: [child.pid, task.shellPid] });
+  if (activity.cancelled || owner !== activeOwner) {
+    releaseTerminal(task, new Error("Desktop document generation is no longer active"));
+    throw new Error("Desktop document generation is no longer active");
+  }
+  return {handle, pid: task.shellPid};
+}
+
+function terminalWrite(args, owner) {
+  if (args.length !== 2 || typeof args[1] !== "string" || Buffer.byteLength(args[1], "utf8") < 1
+    || Buffer.byteLength(args[1], "utf8") > MAX_TERMINAL_CHUNK_BYTES) throw new RangeError("Terminal write requires 1 byte through 1 MiB of text");
+  return writeTerminalFrame(ownedTerminal(args[0], owner), terminalFrame(1, Buffer.from(args[1], "utf8")));
+}
+
+function terminalResize(args, owner) {
+  if (args.length !== 3) throw new TypeError("Terminal resize arguments are invalid");
+  const columns = integer(args[1], 20, 1000, "Terminal columns");
+  const rows = integer(args[2], 5, 1000, "Terminal rows");
+  const payload = Buffer.allocUnsafe(8);
+  payload.writeUInt32BE(columns, 0);
+  payload.writeUInt32BE(rows, 4);
+  return writeTerminalFrame(ownedTerminal(args[0], owner), terminalFrame(2, payload));
+}
+
+function terminalNext(args, owner, activity) {
+  if (args.length !== 1) throw new TypeError("Terminal next arguments are invalid");
+  const task = ownedTerminal(args[0], owner);
+  if (task.waiter !== null) throw new Error("TerminalSession.next already has an active pull");
+  if (task.queue.length > 0) {
+    const value = task.queue.shift();
+    task.queuedBytes -= Buffer.byteLength(value, "utf8");
+    if (task.paused && task.queuedBytes <= TERMINAL_RESUME_BYTES) { task.paused = false; task.child.stdout.resume(); }
+    return value;
+  }
+  if (task.failure) throw task.failure;
+  if (task.settled) { task.outputEnded = true; return null; }
+  return new Promise((resolveNext, rejectNext) => {
+    const waiter = {resolve: resolveNext, reject: rejectNext, activity};
+    task.waiter = waiter;
+    activity.cancel = () => {
+      if (task.waiter !== waiter) return;
+      task.waiter = null;
+      waiter.reject(new Error("Desktop terminal pull was cancelled"));
+    };
+  });
+}
+
+async function terminalWait(args, owner) {
+  if (args.length !== 1) throw new TypeError("Terminal wait arguments are invalid");
+  const task = ownedTerminal(args[0], owner);
+  if (!task.outputEnded) throw new Error("Terminal output must be consumed before wait()");
+  const result = await task.result;
+  terminals.delete(task.handle);
+  return result;
+}
+
+function releaseTerminal(task, error = null) {
+  if (terminals.get(task.handle) !== task || task.closing) return false;
+  task.closing = true;
+  if (error && !task.failure) task.failure = error;
+  if (task.waiter !== null) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    if (error) waiter.reject(error);
+    else if (task.queue.length === 0) waiter.resolve(null);
+  }
+  try { task.child.stdin.end(terminalFrame(3)); } catch {}
+  setTimeout(() => { if (!task.settled) signalTerminalTree(task, "SIGTERM"); }, 500).unref();
+  setTimeout(() => { if (!task.settled) signalTerminalTree(task, "SIGKILL"); }, 2500).unref();
+  if (error) void task.result.finally(() => { if (terminals.get(task.handle) === task) terminals.delete(task.handle); }).catch(() => {});
+  return true;
+}
+
+async function terminalClose(args, owner) {
+  if (args.length !== 1) throw new TypeError("Terminal close arguments are invalid");
+  const task = ownedTerminal(args[0], owner);
+  releaseTerminal(task);
+  const result = await task.result;
+  terminals.delete(task.handle);
+  return result;
+}
+
+function terminalOperation(operation, args, owner, activity) {
+  if (operation === "open") return terminalOpen(args, owner, activity);
+  if (operation === "write") return terminalWrite(args, owner);
+  if (operation === "resize") return terminalResize(args, owner);
+  if (operation === "next") return terminalNext(args, owner, activity);
+  if (operation === "wait") return terminalWait(args, owner);
+  if (operation === "close") return terminalClose(args, owner);
+  throw new Error(`Unknown terminal operation '${operation}'`);
+}
+
 async function projectTaskStart(args, owner, activity) {
   if (projectTaskPath === null || buildEnginePath === null) throw new Error("This Desktop package does not contain official project tasks");
   if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop project tasks require the project file grant");
@@ -1034,6 +1334,9 @@ function retireOwner(owner) {
   for (const task of languageServers.values()) {
     if (task.owner === owner) releaseLanguageServer(task, new Error("Desktop document generation retired"));
   }
+  for (const task of terminals.values()) {
+    if (task.owner === owner) releaseTerminal(task, new Error("Desktop document generation retired"));
+  }
   for (const [handle, task] of processHandles) {
     if (task.owner === owner) retainRetiredProcess(handle, task);
   }
@@ -1052,6 +1355,7 @@ async function fatalDrain() {
   reader.close();
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host failed"));
   for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host failed"));
+  for (const task of terminals.values()) releaseTerminal(task, new Error("Desktop capability host failed"));
   const tasks = Array.from(processHandles.values());
   for (const task of tasks) task.stop();
   for (const request of httpHandles.values()) request.controller.abort(new Error("Desktop capability host failed"));
@@ -1631,6 +1935,7 @@ function respond(value) {
 process.once("exit", () => {
   for (const task of processHandles.values()) signalTree(task.child, "SIGKILL");
   for (const task of languageServers.values()) signalTree(task.child, "SIGKILL");
+  for (const task of terminals.values()) signalTerminalTree(task, "SIGKILL");
 });
 process.on("uncaughtException", () => { void fatalDrain(); });
 process.on("unhandledRejection", () => { void fatalDrain(); });

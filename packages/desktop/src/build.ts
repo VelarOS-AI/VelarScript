@@ -29,6 +29,7 @@ export interface DesktopBuildManifest {
     readonly languageServerBytes: number;
     readonly projectTaskBytes: number;
     readonly buildEngineBytes: number;
+    readonly terminalHostBytes: number;
     readonly toolchainBytes: number;
     readonly metadataBytes: number;
     readonly totalBytes: number;
@@ -74,11 +75,13 @@ export async function buildDesktopApplication(
     const languageServerPath = join(hostResources, "language-server.js");
     const projectTaskPath = join(hostResources, "project-task.js");
     const buildEnginePath = join(hostResources, "build-engine");
+    const terminalHostPath = join(hostResources, "terminal-host");
     await Promise.all([
       buildTool({ id: "velar-language-server", outputFile: languageServerPath }),
       buildTool({ id: "velar-project-task", outputFile: projectTaskPath }),
       buildTool({ id: "velar-build-engine", outputFile: buildEnginePath }),
     ]);
+    await compileMacTerminalHost(terminalHostPath);
     await cp(fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
     const hostPath = join(executableDirectory, "VelarDesktopHost");
     await compileMacHost(hostPath);
@@ -93,6 +96,7 @@ export async function buildDesktopApplication(
       permissions: config.permissions,
       languageServer: { path: "host/language-server.js" },
       projectTask: { path: "host/project-task.js", buildEnginePath: "host/build-engine" },
+      terminalHost: { path: "host/terminal-host" },
     }, null, 2)}\n`, "utf8");
 
     const hostBytes = (await stat(hostPath)).size;
@@ -101,7 +105,8 @@ export async function buildDesktopApplication(
     const languageServerBytes = (await stat(languageServerPath)).size;
     const projectTaskBytes = (await stat(projectTaskPath)).size;
     const buildEngineBytes = (await stat(buildEnginePath)).size;
-    const toolchainBytes = languageServerBytes + projectTaskBytes + buildEngineBytes;
+    const terminalHostBytes = (await stat(terminalHostPath)).size;
+    const toolchainBytes = languageServerBytes + projectTaskBytes + buildEngineBytes + terminalHostBytes;
     const totalBytes = await treeSize(applicationBundle);
     const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes - toolchainBytes;
     if (totalBytes > config.build.sizeBudgetBytes) {
@@ -126,6 +131,7 @@ export async function buildDesktopApplication(
         languageServerBytes,
         projectTaskBytes,
         buildEngineBytes,
+        terminalHostBytes,
         toolchainBytes,
         metadataBytes,
         totalBytes,
@@ -152,6 +158,14 @@ async function compileMacHost(output: string): Promise<void> {
   await runProcess("/usr/bin/swiftc", [
     "-Osize", "-whole-module-optimization", "-swift-version", "5", "-parse-as-library",
     "-framework", "Cocoa", "-framework", "WebKit", source, "-o", output,
+  ], dirname(output));
+  await chmod(output, 0o755);
+}
+
+async function compileMacTerminalHost(output: string): Promise<void> {
+  const source = fileURLToPath(new URL("../native/macos/VelarTerminalHost.swift", import.meta.url));
+  await runProcess("/usr/bin/swiftc", [
+    "-Osize", "-whole-module-optimization", "-swift-version", "5", source, "-o", output,
   ], dirname(output));
   await chmod(output, 0o755);
 }
