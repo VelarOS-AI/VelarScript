@@ -183,7 +183,12 @@ print("done")
 });
 
 test("Web output routes a detached failure through the velar/app chain with the detached phase", () => {
+  // The browser report path belongs to modules that actually emit the Web
+  // runtime: `state` here is what makes this Web output rather than a plain
+  // Core module that merely happens to be compiled with the extension loaded.
   const result = compile(`
+state ready = true
+
 async def boom() -> null:
     throw Error("web detached failure")
 
@@ -195,23 +200,26 @@ print("web module continues")
   assert.ok(code.includes("__velarDetachedTask(__velarNormalizePromiseValue(boom()))"));
   assert.ok(code.includes('phase: "detached", detail: "", unhandled: true'));
 
-  // Execution-level: the report reaches a registered application runtime and
-  // the module keeps running.
-  const registry = [
-    "globalThis[Symbol.for(\"velar.runtime.v1\")] = {",
-    "  report(error, options) {",
-    "    console.log(\"REPORT\", options.phase, options.unhandled, error instanceof Error, error.message);",
-    "  },",
-    "};",
+  // Execution-level: the report reaches the application runtime the module
+  // itself installed -- a foreign object at that key is refused ownership --
+  // and the module keeps running. The handler is registered synchronously,
+  // before the rejection microtask drains.
+  const handler = [
+    "const runtime = globalThis[Symbol.for(\"velar.runtime.v1\")];",
+    "runtime.errorHandlers.add((report) => {",
+    "  console.log(\"REPORT\", report.phase, report.error instanceof Error, report.error.message);",
+    "});",
   ].join("\n");
-  const execution = executeModule(`${registry}\n${code}`);
+  const execution = executeModule(`${code}\n${handler}`);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "web module continues\nREPORT detached true true web detached failure\n");
+  assert.equal(execution.stdout, "web module continues\nREPORT detached true web detached failure\n");
   assert.equal(String(execution.stderr), "");
 });
 
 test("Web output without an application runtime keeps a detached failure loud", () => {
   const result = compile(`
+state ready = true
+
 async def boom() -> null:
     throw Error("pre-runtime failure")
 

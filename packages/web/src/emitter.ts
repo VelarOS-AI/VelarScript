@@ -205,6 +205,11 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   // onError handler is installed. Host operations are captured at module
   // initialization, matching the owned-callback discipline.
   protected override detachedTaskHelpers(): readonly string[] {
+    // A module with no Web syntax emits no Web runtime, so it must keep Core's
+    // host reporting: the browser path would route a detached failure through a
+    // runtime registry that never gets installed and end in a microtask throw,
+    // which under `velar test` kills the whole Node test process.
+    if (!this.webOutput) return super.detachedTaskHelpers();
     return [[
       `const __velarDetachedRegistryKey = Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)});`,
       "const __velarDetachedPromiseThen = Promise.prototype.then;",
@@ -376,9 +381,14 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       return `__velarMount(() => ${evaluated}, ${fallbackTarget})`;
     }
     const emitted = super.emitExpression(expression);
-    if (this.webOutput && emitted.includes("__velarListPop(")) return emitted.replace("__velarListPop(", "__velarWebListPop(");
-    if (this.webOutput && emitted.includes("__velarListRemoveLast(")) return emitted.replace("__velarListRemoveLast(", "__velarWebListRemoveLast(");
-    return emitted;
+    if (!this.webOutput) return emitted;
+    // One expression can lower to more than one collection call, and it can
+    // lower to both of these, so the reactive wrapper has to reach every
+    // occurrence rather than the first match of the first pattern.
+    let rewritten = emitted;
+    if (rewritten.includes("__velarListPop(")) rewritten = rewritten.replaceAll("__velarListPop(", "__velarWebListPop(");
+    if (rewritten.includes("__velarListRemoveLast(")) rewritten = rewritten.replaceAll("__velarListRemoveLast(", "__velarWebListRemoveLast(");
+    return rewritten;
   }
 
   private emitLook(expression: LookExpression): string {
@@ -625,7 +635,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       lines.push(this.emitMappedJavaScript(attribute.span, () => {
         const value = attribute.value;
         if (attribute.name === "ref" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
-          return `${value.name} = ${element}; ${scope}.cleanups.push(() => { if (${value.name} === ${element}) ${value.name} = null; });`;
+          return `${value.name} = ${element}; __velarAppendOwned(${scope}.cleanups, () => { if (${value.name} === ${element}) ${value.name} = null; });`;
         }
         if (attribute.name.startsWith("on:") && value && typeof value !== "string") {
           const [event, ...modifiers] = attribute.name.slice(3).split(".");
@@ -1130,6 +1140,9 @@ function __velarReportEvent(value, scope, detail) {
   return __velarReport(value, "event", scope, detail);
 }
 
+const __velarWebIterateKey = Symbol.for("velar.reactive.iterate.v1");
+const __velarWebNativeJson = globalThis.JSON;
+const __velarWebJsonText = Object.getOwnPropertyDescriptor(__velarWebNativeJson, "stringify")?.value;
 const __velarEventReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 const __velarEventConstructorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Event");
 const __velarEventConstructor = __velarEventConstructorDescriptor && "value" in __velarEventConstructorDescriptor ? __velarEventConstructorDescriptor.value : null;
@@ -1137,13 +1150,24 @@ const __velarEventPrototype = typeof __velarEventConstructor === "function" ? Ob
 const __velarEventTargetGetter = __velarEventPrototype && Object.getOwnPropertyDescriptor(__velarEventPrototype, "target")?.get;
 const __velarEventPreventDefault = __velarEventPrototype && Object.getOwnPropertyDescriptor(__velarEventPrototype, "preventDefault")?.value;
 const __velarEventStopPropagation = __velarEventPrototype && Object.getOwnPropertyDescriptor(__velarEventPrototype, "stopPropagation")?.value;
-const __velarEventMissingField = Object.freeze({});
+const __velarEventMissingField = __velarGraphFreeze({});
+function __velarQuotedText(value) {
+  return __velarGraphApply(__velarWebJsonText, __velarWebNativeJson, [value], "JSON.stringify");
+}
+function __velarAppendOwned(values, value) {
+  values[values.length] = value;
+  return value;
+}
+function __velarHasName(values, name) {
+  for (let index = 0; index < values.length; index += 1) if (values[index] === name) return true;
+  return false;
+}
 function __velarEventField(value, name, nativeGetter) {
   if (typeof nativeGetter === "function" && typeof __velarEventReflectApply === "function") {
     try { return __velarEventReflectApply(nativeGetter, value, []); } catch {}
   }
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return __velarEventMissingField;
-  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  const descriptor = __velarGraphOwnDescriptor(value, name);
   return descriptor?.enumerable && "value" in descriptor ? descriptor.value : __velarEventMissingField;
 }
 function __velarEventCall(value, name, nativeMethod) {
@@ -1165,10 +1189,39 @@ function __velarSchedule(observer) {
   }
 }
 
+// Both queues are drained live: an observer that re-schedules itself or another
+// observer is picked up by the same walk. Two observers that invalidate each
+// other therefore never leave this function, which froze the page with nothing
+// on the error channel. The per-flush budget gives that case the same owned
+// ending as the single-observer cap: stop the observers still queued, report
+// once through velar/app, and let the turn finish.
+function __velarFlushOverflow() {
+  const stalled = [];
+  for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) stalled[stalled.length] = observer;
+  for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) stalled[stalled.length] = observer;
+  __velarGraphSetEmpty(__velarRuntime.domQueue);
+  __velarGraphSetEmpty(__velarRuntime.watchQueue);
+  for (let index = 0; index < stalled.length; index += 1) {
+    const observer = stalled[index];
+    if (typeof observer.stop === "function") observer.stop();
+    else observer.stopped = true;
+  }
+  __velarReport(new RangeError("Reactive updates cannot run more than 100000 observers in one flush"), "update", null);
+}
+
 function __velarFlush() {
   __velarRuntime.flushPending = false;
-  for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) { __velarGraphSetRemove(__velarRuntime.domQueue, observer); observer.run(); }
-  for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) { __velarGraphSetRemove(__velarRuntime.watchQueue, observer); observer.run(); }
+  let budget = 100000;
+  for (const observer of __velarGraphSetItems(__velarRuntime.domQueue)) {
+    __velarGraphSetRemove(__velarRuntime.domQueue, observer);
+    if ((budget -= 1) < 0) { __velarFlushOverflow(); return; }
+    observer.run();
+  }
+  for (const observer of __velarGraphSetItems(__velarRuntime.watchQueue)) {
+    __velarGraphSetRemove(__velarRuntime.watchQueue, observer);
+    if ((budget -= 1) < 0) { __velarFlushOverflow(); return; }
+    observer.run();
+  }
   if (__velarGraphSetCount(__velarRuntime.domQueue) || __velarGraphSetCount(__velarRuntime.watchQueue)) __velarScheduleFlush();
 }
 
@@ -1231,7 +1284,7 @@ function __velarObserver(read, mode, scope) {
     },
     stop() { observer.stopped = true; __velarCleanupObserver(observer); },
   };
-  scope.cleanups.push(() => observer.stop());
+  __velarAppendOwned(scope.cleanups, () => observer.stop());
   observer.run();
   return observer;
 }
@@ -1314,8 +1367,8 @@ function __velarResource(load, scope, name) {
     );
   };
 
-  scope.mounts.push(() => started ? null : reload());
-  scope.cleanups.push(() => { disposed = true; generation += 1; });
+  __velarAppendOwned(scope.mounts, () => started ? null : reload());
+  __velarAppendOwned(scope.cleanups, () => { disposed = true; generation += 1; });
   return __velarGraphFreeze({
     get value() { return value.get(); },
     get loading() { return loading.get(); },
@@ -1340,7 +1393,7 @@ function __velarAction(execute, scope, name) {
     active += 1;
     pending.set(true);
     error.set(null);
-    return __velarManagedAsyncThen(__velarManagedAsyncThen(__velarManagedAsyncResolve(), () => execute(...arguments_)),
+    return __velarManagedAsyncThen(__velarManagedAsyncThen(__velarManagedAsyncResolve(), () => __velarGraphApply(execute, null, arguments_, "action body")),
       (value) => {
         active -= 1;
         if (!disposed) pending.set(active > 0);
@@ -1365,7 +1418,7 @@ function __velarAction(execute, scope, name) {
 
   __velarGraphDefine(run, "pending", { enumerable: true, get: () => pending.get() });
   __velarGraphDefine(run, "error", { enumerable: true, get: () => error.get() });
-  scope.cleanups.push(() => { disposed = true; generation += 1; });
+  __velarAppendOwned(scope.cleanups, () => { disposed = true; generation += 1; });
   return __velarGraphFreeze(run);
 }
 
@@ -1378,16 +1431,20 @@ const __velarGlobalScope = __velarScope();
 function __velarMountScope(scope) {
   if (scope.mounted) return;
   scope.mounted = true;
-  for (const mount of scope.mounts) {
+  for (let index = 0; index < scope.mounts.length; index += 1) {
     try {
-      const result = __velarUntracked(mount);
+      const result = __velarUntracked(scope.mounts[index]);
       __velarObservePromise(result, (error) => __velarReport(error, "mounted", scope));
     } catch (error) { __velarReport(error, "mounted", scope); }
   }
 }
 
 function __velarDestroyScope(scope) {
-  for (const cleanup of [...scope.cleanups].reverse()) {
+  for (let index = scope.cleanups.length - 1; index >= 0; index -= 1) {
+    // A reentrant destroy can empty the list underneath this walk; a missing
+    // slot means the step already ran and must not run again.
+    const cleanup = scope.cleanups[index];
+    if (typeof cleanup !== "function") continue;
     try {
       const result = __velarUntracked(cleanup);
       __velarObservePromise(result, (error) => __velarReport(error, "cleanup", scope));
@@ -1424,7 +1481,9 @@ function __velarComponentHandle(value, componentName) {
   if (prototype !== __velarGraphPrototype({}) && prototype !== null) throw new TypeError("Component " + componentName + " must expose an ordinary Handle record");
   const output = {};
   let active = true;
-  for (const name of __velarGraphOwnNames(value)) {
+  const names = __velarGraphOwnNames(value);
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
     const descriptor = __velarGraphOwnDescriptor(value, name);
     if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) throw new TypeError("Component " + componentName + " Handle fields must be enumerable data values");
     const member = typeof descriptor.value === "function"
@@ -1445,7 +1504,7 @@ function __velarComponent(node, scope, mounted, cleanup, handleState) {
   let destroyed = false;
   const refCleanups = [];
   const ownedNodes = node && __velarDomNodeType(node) === 11 ? __velarDomChildNodes(node) : [node];
-  if (mounted) scope.mounts.push(mounted);
+  if (mounted) __velarAppendOwned(scope.mounts, mounted);
   return {
     __velarComponent: true,
     node,
@@ -1454,7 +1513,7 @@ function __velarComponent(node, scope, mounted, cleanup, handleState) {
       const handle = handleState.value;
       let bound = true;
       setRef(handle, undefined);
-      refCleanups.push(() => {
+      __velarAppendOwned(refCleanups, () => {
         if (!bound) return;
         bound = false;
         setRef(null, handle);
@@ -1474,7 +1533,7 @@ function __velarComponent(node, scope, mounted, cleanup, handleState) {
     destroy(remove = true) {
       if (destroyed) return null;
       destroyed = true;
-      for (const clearRef of [...refCleanups].reverse()) clearRef();
+      for (let index = refCleanups.length - 1; index >= 0; index -= 1) refCleanups[index]();
       refCleanups.length = 0;
       if (handleState) handleState.revoke();
       if (cleanup) {
@@ -1484,7 +1543,7 @@ function __velarComponent(node, scope, mounted, cleanup, handleState) {
         } catch (error) { __velarReport(error, "cleanup", scope); }
       }
       __velarDestroyScope(scope);
-      if (remove) for (const owned of ownedNodes) __velarDomRemove(owned);
+      if (remove) for (let index = 0; index < ownedNodes.length; index += 1) __velarDomRemove(ownedNodes[index]);
       return null;
     },
   };
@@ -1497,14 +1556,17 @@ function __velarScopeComponentRoot(node, attribute) {
     return;
   }
   if (__velarDomNodeType(node) === 11) {
-    for (const child of __velarDomChildNodes(node)) if (__velarDomNodeType(child) === 1) __velarDomSetAttribute(child, attribute, "");
+    const children = __velarDomChildNodes(node);
+    for (let index = 0; index < children.length; index += 1) {
+      if (__velarDomNodeType(children[index]) === 1) __velarDomSetAttribute(children[index], attribute, "");
+    }
   }
 }
 
 function __velarUseComponent(instance, scope, parentStyleScope = "") {
   __velarScopeComponentRoot(instance.node, parentStyleScope);
-  scope.mounts.push(() => instance.__mount());
-  scope.cleanups.push(() => instance.destroy(false));
+  __velarAppendOwned(scope.mounts, () => instance.__mount());
+  __velarAppendOwned(scope.cleanups, () => instance.destroy(false));
   return instance.node;
 }
 
@@ -1537,7 +1599,7 @@ function __velarMount(evaluate, fallbackTarget = null) {
   try {
     if (value && value.__velarComponent) {
       const result = value.mount(parent);
-      if (Array.isArray(globalThis.__velarHotDisposers)) globalThis.__velarHotDisposers.push(() => value.destroy());
+      if (__velarGraphIsList(globalThis.__velarHotDisposers)) __velarAppendOwned(globalThis.__velarHotDisposers, () => value.destroy());
       return result;
     }
     __velarAppend(parent, value);
@@ -1562,7 +1624,7 @@ function __velarCreateElement(tag, namespace) {
 
 function __velarListSnapshot(value, name) {
   value = __velarToRaw(value);
-  __velarRuntime.collectionRead(value, Symbol.for("velar.reactive.iterate.v1"), undefined);
+  __velarRuntime.collectionRead(value, __velarWebIterateKey, undefined);
   return __velarDomListSnapshot(value, name);
 }
 
@@ -1590,7 +1652,7 @@ function __velarAppend(parent, value, state = null) {
     __velarDomSetInsert(state.active, value);
     state.depth += 1;
     try {
-      for (const item of values) __velarAppend(parent, item, state);
+      for (let index = 0; index < values.length; index += 1) __velarAppend(parent, values[index], state);
     } finally {
       state.depth -= 1;
       __velarDomSetRemove(state.active, value);
@@ -1606,7 +1668,7 @@ function __velarDynamic(parent, read, scope, rootState = null) {
   __velarDomAppend(parent, start, end);
   let nodes = [];
   let childScope = null;
-  scope.mounts.push(() => { if (childScope) __velarMountScope(childScope); });
+  __velarAppendOwned(scope.mounts, () => { if (childScope) __velarMountScope(childScope); });
   __velarObserver(() => {
     const nextScope = __velarScope(scope.component);
     const fragment = __velarDomCreateFragment();
@@ -1618,7 +1680,7 @@ function __velarDynamic(parent, read, scope, rootState = null) {
     catch (error) { __velarDestroyScope(nextScope); throw error; }
     const nextNodes = __velarDomChildNodes(fragment);
     if (childScope) __velarDestroyScope(childScope);
-    for (const node of nodes) __velarDomRemove(node);
+    for (let index = 0; index < nodes.length; index += 1) __velarDomRemove(nodes[index]);
     __velarDomBefore(end, fragment);
     childScope = nextScope;
     nodes = nextNodes;
@@ -1628,9 +1690,9 @@ function __velarDynamic(parent, read, scope, rootState = null) {
     }
     if (scope.mounted) __velarMountScope(nextScope);
   }, "dom", scope);
-  scope.cleanups.push(() => {
+  __velarAppendOwned(scope.cleanups, () => {
     if (childScope) __velarDestroyScope(childScope);
-    for (const node of nodes) __velarDomRemove(node);
+    for (let index = 0; index < nodes.length; index += 1) __velarDomRemove(nodes[index]);
     nodes = [];
     if (rootState) {
       rootState.host = null;
@@ -1651,57 +1713,67 @@ function __velarKeyed(parent, read, keyOf, render, scope) {
   const start = __velarDomCreateComment("velar:keyed-start");
   const end = __velarDomCreateComment("velar:keyed-end");
   __velarDomAppend(parent, start, end);
-  let entries = new Map();
-  scope.mounts.push(() => { for (const entry of entries.values()) __velarMountScope(entry.scope); });
+  let entries = __velarGraphCreateMap();
+  __velarAppendOwned(scope.mounts, () => { for (const entry of __velarGraphMapItems(entries)) __velarMountScope(entry.scope); });
   __velarObserver(() => {
     const source = __velarToRaw(read() ?? []);
     const values = __velarListSnapshot(source, "Keyed JSX");
-    const next = new Map();
+    const next = __velarGraphCreateMap();
     const created = [];
     try {
-      for (const value of values) {
-        const rawValue = __velarToRaw(value);
+      for (let index = 0; index < values.length; index += 1) {
+        const rawValue = __velarToRaw(values[index]);
         // The keyed source may be a fresh derived List on every render. A row
         // is observed directly by its child scope, so linking it to that
         // ephemeral container only retains dead Lists and slows later writes.
         const trackedValue = __velarReactive(rawValue);
         const key = __velarKey(keyOf(trackedValue));
-        if (next.has(key)) throw new Error("Duplicate JSX key '" + (typeof key === "string" ? key : String(key)) + "'");
-        let entry = entries.get(key);
-        if (entry && !__velarGraphSame(entry.value, rawValue)) entry = null;
+        if (__velarGraphMapContains(next, key)) throw new Error("Duplicate JSX key '" + (typeof key === "string" ? key : __velarDomString(key)) + "'");
+        let entry = __velarGraphMapRead(entries, key);
+        if (entry && !__velarGraphSame(entry.value, rawValue)) entry = undefined;
         if (!entry) {
           const childScope = __velarScope(scope.component);
           const fragment = __velarDomCreateFragment();
           try { __velarAppend(fragment, render(trackedValue, childScope)); }
           catch (error) { __velarDestroyScope(childScope); throw error; }
           entry = { value: rawValue, scope: childScope, nodes: __velarDomChildNodes(fragment), fragment };
-          created.push(entry);
+          created[created.length] = entry;
         }
-        next.set(key, entry);
+        __velarGraphMapWrite(next, key, entry);
       }
     } catch (error) {
-      for (const entry of created) __velarDestroyScope(entry.scope);
+      for (let index = 0; index < created.length; index += 1) __velarDestroyScope(created[index].scope);
       throw error;
     }
-    for (const [key, entry] of entries) {
-      if (next.get(key) === entry) continue;
+    for (const key of __velarGraphMapKeyItems(entries)) {
+      const entry = __velarGraphMapRead(entries, key);
+      if (__velarGraphMapRead(next, key) === entry) continue;
       __velarDestroyScope(entry.scope);
-      for (const node of entry.nodes) __velarDomRemove(node);
+      for (let index = 0; index < entry.nodes.length; index += 1) __velarDomRemove(entry.nodes[index]);
     }
-    for (const entry of next.values()) {
+    // A row already standing in its final position must not be detached and
+    // reattached: that moves focus off a live <input>, ends IME composition,
+    // and resets transient subtree state. The cursor walks the surviving nodes
+    // in order and only moves a node that is not already where it belongs.
+    let cursor = __velarDomNextSibling(start);
+    for (const entry of __velarGraphMapItems(next)) {
       if (entry.fragment) {
-        __velarDomBefore(end, entry.fragment);
+        __velarDomBefore(cursor === null ? end : cursor, entry.fragment);
         entry.fragment = null;
         if (scope.mounted) __velarMountScope(entry.scope);
-      } else {
-        for (const node of entry.nodes) __velarDomBefore(end, node);
+        continue;
+      }
+      for (let index = 0; index < entry.nodes.length; index += 1) {
+        const node = entry.nodes[index];
+        if (node === cursor) cursor = __velarDomNextSibling(cursor);
+        else __velarDomBefore(cursor === null ? end : cursor, node);
       }
     }
     entries = next;
   }, "dom", scope);
-  scope.cleanups.push(() => {
-    for (const entry of entries.values()) __velarDestroyScope(entry.scope);
-    entries.clear();
+  __velarAppendOwned(scope.cleanups, () => {
+    for (const entry of __velarGraphMapItems(entries)) __velarDestroyScope(entry.scope);
+    __velarGraphMapEmpty(entries);
   });
 }
 
@@ -1721,8 +1793,8 @@ function __velarAttr(element, name, read, scope) {
 function __velarAttributeValue(value, name) {
   if (value === true) return "";
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("JSX attribute '" + name + "' requires a finite number");
-    return String(value);
+    if (!__velarDomIsFinite(value)) throw new TypeError("JSX attribute '" + name + "' requires a finite number");
+    return __velarDomString(value);
   }
   if (typeof value !== "string") throw new TypeError("JSX attribute '" + name + "' requires text, a finite number, bool, an enum, or null");
   if (value.length > 1024 * 1024) throw new RangeError("JSX attribute '" + name + "' cannot exceed 1 MiB");
@@ -1731,7 +1803,7 @@ function __velarAttributeValue(value, name) {
 
 function __velarKey(value) {
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("A JSX key number must be finite");
+    if (!__velarDomIsFinite(value)) throw new TypeError("A JSX key number must be finite");
     return value;
   }
   if (typeof value !== "string") throw new TypeError("A JSX key must be a string, string-backed enum, or finite number");
@@ -1755,29 +1827,29 @@ function __velarClass(element, name, read, scope) {
   __velarClassBind(element, () => read() ? name : null, scope);
 }
 
+function __velarMergeRules(rules, source) {
+  const names = __velarGraphOwnNames(source);
+  for (let index = 0; index < names.length; index += 1) {
+    const descriptor = __velarGraphOwnDescriptor(source, names[index]);
+    if (!descriptor || !("value" in descriptor)) continue;
+    if (descriptor.value == null) delete rules[names[index]];
+    else rules[names[index]] = descriptor.value;
+  }
+}
+
 function __velarLook(parts) {
-  const rules = Object.create(null);
+  const rules = __velarGraphCreateRecord();
   const add = (part) => {
     if (part == null || part === false) return;
-    if (Array.isArray(part)) { for (const child of part) add(child); return; }
-    if (part.__velarLook === true) {
-      for (const [token, value] of Object.entries(part.rules)) {
-        if (value == null) delete rules[token];
-        else rules[token] = value;
-      }
-      return;
-    }
-    if (part.rules && typeof part.rules === "object") {
-      for (const [token, value] of Object.entries(part.rules)) {
-        if (value == null) delete rules[token];
-        else rules[token] = value;
-      }
+    if (__velarGraphIsList(part)) { for (let index = 0; index < part.length; index += 1) add(part[index]); return; }
+    if (part.__velarLook === true || (part.rules && typeof part.rules === "object")) {
+      __velarMergeRules(rules, part.rules);
       return;
     }
     throw new TypeError("look composition accepts only Look, Look?, or lists of Look values");
   };
   add(parts);
-  return Object.freeze({ __velarLook: true, rules: Object.freeze(rules) });
+  return __velarGraphFreeze({ __velarLook: true, rules: __velarGraphFreeze(rules) });
 }
 
 function __velarLookVariable(token) {
@@ -1786,12 +1858,12 @@ function __velarLookVariable(token) {
 
 function __velarLookValue(token, value) {
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("Look properties require finite numbers");
-    return String(value);
+    if (!__velarDomIsFinite(value)) throw new TypeError("Look properties require finite numbers");
+    return __velarDomString(value);
   }
   if (typeof value !== "string") throw new TypeError("Look properties require text, finite numbers, typed visual values, or null");
   if (value.length > 1024 * 1024) throw new RangeError("A Look property value cannot exceed 1 MiB");
-  if (token.endsWith(":content") && typeof value === "string" && value !== "none" && value !== "normal") return JSON.stringify(value);
+  if (token.endsWith(":content") && typeof value === "string" && value !== "none" && value !== "normal") return __velarQuotedText(value);
   return value;
 }
 
@@ -1806,7 +1878,8 @@ function __velarStyleDeclarations(value) {
   const names = __velarGraphOwnNames(value);
   if (names.length > ${LOOK_PROPERTIES.size}) throw new RangeError("An inline Style has too many properties");
   const output = {};
-  for (const property of names) {
+  for (let index = 0; index < names.length; index += 1) {
+    const property = names[index];
     if (!__velarGraphSetContains(__velarInlineStyleProperties, property)) throw new TypeError("Unknown inline Style property '" + property + "'");
     const descriptor = __velarGraphOwnDescriptor(value, property);
     if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) throw new TypeError("Inline Style declarations cannot use accessors");
@@ -1827,14 +1900,29 @@ function __velarInlineStyleState(element) {
   return state;
 }
 
+function __velarAttachSource(registry, element, source) {
+  let sources = __velarGraphWeakMapRead(registry, element);
+  if (!sources) { sources = __velarGraphCreateSet(); __velarGraphWeakMapWrite(registry, element, sources); }
+  __velarGraphSetInsert(sources, source);
+  return sources;
+}
+
+function __velarDetachSource(registry, element, source) {
+  const sources = __velarGraphWeakMapRead(registry, element);
+  if (!sources) return;
+  __velarGraphSetRemove(sources, source);
+  if (__velarGraphSetCount(sources) === 0) __velarGraphWeakMapRemove(registry, element);
+}
+
 function __velarApplyStyles(element) {
-  const sources = __velarRuntime.lookSources.get(element);
+  const sources = __velarGraphWeakMapRead(__velarRuntime.lookSources, element);
   const merged = __velarGraphCreateMap();
   if (sources) {
     for (const source of __velarGraphSetItems(sources)) {
       if (!source.styles) continue;
-      for (const property of __velarGraphOwnNames(source.styles)) {
-        __velarGraphMapWrite(merged, property, __velarGraphOwnDescriptor(source.styles, property).value);
+      const names = __velarGraphOwnNames(source.styles);
+      for (let index = 0; index < names.length; index += 1) {
+        __velarGraphMapWrite(merged, names[index], __velarGraphOwnDescriptor(source.styles, names[index]).value);
       }
     }
   }
@@ -1843,66 +1931,68 @@ function __velarApplyStyles(element) {
   for (const property of __velarGraphSetItems(next)) {
     if (__velarGraphSetContains(state.managed, property)) continue;
     __velarGraphMapWrite(state.base, property, {
-      value: element.style.getPropertyValue(property),
-      priority: element.style.getPropertyPriority(property),
+      value: __velarDomStyleValue(element, property),
+      priority: __velarDomStylePriority(element, property),
     });
   }
   for (const property of __velarGraphSetItems(state.managed)) {
     if (__velarGraphSetContains(next, property)) continue;
     const base = __velarGraphMapRead(state.base, property);
-    if (!base || (base.value === "" && base.priority === "")) element.style.removeProperty(property);
-    else element.style.setProperty(property, base.value, base.priority);
+    if (!base || (base.value === "" && base.priority === "")) __velarDomStyleClear(element, property);
+    else __velarDomStyleWrite(element, property, base.value, base.priority);
     __velarGraphMapRemove(state.base, property);
   }
   for (const property of __velarGraphSetItems(next)) {
     const value = __velarGraphMapRead(merged, property);
-    if (value == null) element.style.removeProperty(property);
-    else element.style.setProperty(property, __velarLookValue("base:" + property, value));
+    if (value == null) __velarDomStyleClear(element, property);
+    else __velarDomStyleWrite(element, property, __velarLookValue("base:" + property, value));
   }
   __velarGraphSetEmpty(state.managed);
   for (const property of __velarGraphSetItems(next)) __velarGraphSetInsert(state.managed, property);
 }
 
 function __velarStyleBind(element, read, scope) {
-  const source = { rules: Object.create(null), styles: {} };
-  let sources = __velarRuntime.lookSources.get(element);
-  if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(element, sources); }
-  sources.add(source);
+  const source = { rules: __velarGraphCreateRecord(), styles: {} };
+  __velarAttachSource(__velarRuntime.lookSources, element, source);
   __velarObserver(() => {
     source.styles = __velarStyleDeclarations(read());
     __velarApplyStyles(element);
   }, "dom", scope);
-  scope.cleanups.push(() => {
-    sources.delete(source);
-    if (sources.size === 0) __velarRuntime.lookSources.delete(element);
+  __velarAppendOwned(scope.cleanups, () => {
+    __velarDetachSource(__velarRuntime.lookSources, element, source);
     __velarApplyStyles(element);
   });
 }
 
 function __velarMoveStyleSource(source, previous, next) {
   if (previous) {
-    const sources = __velarRuntime.lookSources.get(previous);
-    if (sources) {
-      sources.delete(source);
-      if (sources.size === 0) __velarRuntime.lookSources.delete(previous);
-    }
+    __velarDetachSource(__velarRuntime.lookSources, previous, source);
     __velarApplyStyles(previous);
   }
   if (next) {
-    let sources = __velarRuntime.lookSources.get(next);
-    if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(next, sources); }
-    sources.add(source);
+    __velarAttachSource(__velarRuntime.lookSources, next, source);
     __velarApplyStyles(next);
   }
 }
 
+// The dynamic-root marker sits on a fragment the emitter created, but the
+// fragment is still a host object: a planted prototype getter would otherwise
+// hand look/class/style application a forged host element.
+function __velarDynamicRootState(root) {
+  if (root === null || root === undefined) return null;
+  const descriptor = __velarGraphOwnDescriptor(root, "__velarDynamicRoot");
+  return descriptor && "value" in descriptor && descriptor.value && typeof descriptor.value === "object"
+    ? descriptor.value
+    : null;
+}
+
 function __velarStyleBindRoot(root, read, scope) {
-  const dynamic = root?.__velarDynamicRoot;
+  const dynamic = __velarDynamicRootState(root);
   if (!dynamic) {
     __velarStyleBind(__velarRootHost(root, "style"), read, scope);
     return;
   }
-  const source = { rules: Object.create(null), styles: {} };
+  const source = { rules: __velarGraphCreateRecord(), styles: {} };
   let host = null;
   const move = (next) => {
     __velarMoveStyleSource(source, host, next);
@@ -1914,74 +2004,92 @@ function __velarStyleBindRoot(root, read, scope) {
     source.styles = __velarStyleDeclarations(read());
     if (host) __velarApplyStyles(host);
   }, "dom", scope);
-  scope.cleanups.push(() => {
+  __velarAppendOwned(scope.cleanups, () => {
     __velarGraphSetRemove(dynamic.listeners, move);
     move(null);
   });
 }
 
+// Look and class ownership lives in one non-enumerable, non-configurable data
+// property per element, discovered through the captured descriptor ABI exactly
+// like inline style ownership. An ambient expando read would let a hostile
+// prototype hand the framework a forged token set.
+function __velarElementState(element, name, create) {
+  const current = __velarGraphOwnDescriptor(element, name);
+  if (current) {
+    if (!("value" in current) || current.enumerable || current.configurable || current.writable
+      || !current.value || typeof current.value !== "object") throw new TypeError("VelarScript element ownership is invalid");
+    return current.value;
+  }
+  const state = create();
+  __velarGraphDefine(element, name, { value: state });
+  return state;
+}
+
 function __velarApplyLooks(element) {
-  const sources = __velarRuntime.lookSources.get(element);
-  const merged = Object.create(null);
+  const sources = __velarGraphWeakMapRead(__velarRuntime.lookSources, element);
+  const merged = __velarGraphCreateRecord();
   if (sources) {
-    for (const source of sources) {
-      for (const [token, value] of Object.entries(source.rules)) merged[token] = value;
+    // A null rule keeps its token: the token drives the generated selector and
+    // only the custom property behind it disappears.
+    for (const source of __velarGraphSetItems(sources)) {
+      const names = __velarGraphOwnNames(source.rules);
+      for (let index = 0; index < names.length; index += 1) {
+        const descriptor = __velarGraphOwnDescriptor(source.rules, names[index]);
+        if (descriptor && "value" in descriptor) merged[names[index]] = descriptor.value;
+      }
     }
   }
-  const previous = element.__velarLookTokens || new Set();
-  const next = new Set(Object.keys(merged));
-  for (const token of previous) if (!next.has(token)) element.style.removeProperty(__velarLookVariable(token));
-  for (const [token, value] of Object.entries(merged)) {
-    if (value == null) element.style.removeProperty(__velarLookVariable(token));
-    else element.style.setProperty(__velarLookVariable(token), __velarLookValue(token, value));
+  const state = __velarElementState(element, "__velarLookTokens", () => __velarGraphFreeze({ tokens: __velarGraphCreateSet() }));
+  const tokens = __velarGraphOwnNames(merged);
+  const next = __velarGraphCreateSet(tokens);
+  for (const token of __velarGraphSetItems(state.tokens)) {
+    if (!__velarGraphSetContains(next, token)) __velarDomStyleClear(element, __velarLookVariable(token));
   }
-  if (next.size > 0) element.setAttribute("data-velar-look", [...next].join(" "));
-  else element.removeAttribute("data-velar-look");
-  element.__velarLookTokens = next;
+  let attribute = "";
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const value = __velarGraphOwnDescriptor(merged, token)?.value;
+    if (value == null) __velarDomStyleClear(element, __velarLookVariable(token));
+    else __velarDomStyleWrite(element, __velarLookVariable(token), __velarLookValue(token, value));
+    attribute = attribute === "" ? token : attribute + " " + token;
+  }
+  if (tokens.length > 0) __velarDomSetAttribute(element, "data-velar-look", attribute);
+  else __velarDomRemoveAttribute(element, "data-velar-look");
+  __velarGraphSetEmpty(state.tokens);
+  for (let index = 0; index < tokens.length; index += 1) __velarGraphSetInsert(state.tokens, tokens[index]);
 }
 
 function __velarLookBind(element, read, scope) {
-  const source = { rules: Object.create(null) };
-  let sources = __velarRuntime.lookSources.get(element);
-  if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(element, sources); }
-  sources.add(source);
+  const source = { rules: __velarGraphCreateRecord() };
+  __velarAttachSource(__velarRuntime.lookSources, element, source);
   __velarObserver(() => {
     source.rules = __velarLook([read()]).rules;
     __velarApplyLooks(element);
   }, "dom", scope);
-  scope.cleanups.push(() => {
-    sources.delete(source);
-    if (sources.size === 0) __velarRuntime.lookSources.delete(element);
+  __velarAppendOwned(scope.cleanups, () => {
+    __velarDetachSource(__velarRuntime.lookSources, element, source);
     __velarApplyLooks(element);
   });
 }
 
 function __velarMoveLookSource(source, previous, next) {
   if (previous) {
-    const sources = __velarRuntime.lookSources.get(previous);
-    if (sources) {
-      sources.delete(source);
-      if (sources.size === 0) __velarRuntime.lookSources.delete(previous);
-    }
+    __velarDetachSource(__velarRuntime.lookSources, previous, source);
     __velarApplyLooks(previous);
   }
   if (next) {
-    let sources = __velarRuntime.lookSources.get(next);
-    if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(next, sources); }
-    sources.add(source);
+    __velarAttachSource(__velarRuntime.lookSources, next, source);
     __velarApplyLooks(next);
   }
 }
 
 function __velarApplyExternalLook(element, value) {
   const source = { rules: __velarLook([value]).rules };
-  let sources = __velarRuntime.lookSources.get(element);
-  if (!sources) { sources = new Set(); __velarRuntime.lookSources.set(element, sources); }
-  sources.add(source);
+  __velarAttachSource(__velarRuntime.lookSources, element, source);
   __velarApplyLooks(element);
   return () => {
-    sources.delete(source);
-    if (sources.size === 0) __velarRuntime.lookSources.delete(element);
+    __velarDetachSource(__velarRuntime.lookSources, element, source);
     __velarApplyLooks(element);
   };
 }
@@ -1989,9 +2097,22 @@ function __velarApplyExternalLook(element, value) {
 __velarRuntime.installLook(__velarApplyExternalLook);
 
 function __velarRootHost(root, capability) {
-  if (root?.nodeType === 1) return root;
-  const elements = [...(root?.childNodes || [])].filter((node) => node.nodeType === 1);
-  const explicit = elements.flatMap((element) => [element, ...element.querySelectorAll("*")]).filter((element) => element.__velarHost === true);
+  if (root == null) throw new TypeError("A component with multiple roots must mark exactly one native element with 'host'");
+  if (__velarDomNodeType(root) === 1) return root;
+  const elements = [];
+  const children = __velarDomChildNodes(root);
+  for (let index = 0; index < children.length; index += 1) {
+    if (__velarDomNodeType(children[index]) === 1) __velarAppendOwned(elements, children[index]);
+  }
+  const explicit = [];
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index];
+    if (__velarDomOwnData(element, "__velarHost") === true) __velarAppendOwned(explicit, element);
+    const descendants = __velarDomCollectionSnapshot(__velarDomQuerySelectorAll(element, "*"), "Element.querySelectorAll");
+    for (let child = 0; child < descendants.length; child += 1) {
+      if (__velarDomOwnData(descendants[child], "__velarHost") === true) __velarAppendOwned(explicit, descendants[child]);
+    }
+  }
   if (explicit.length === 1) return explicit[0];
   if (explicit.length > 1) throw new TypeError("A component can declare only one host element");
   if (elements.length === 1) return elements[0];
@@ -1999,12 +2120,12 @@ function __velarRootHost(root, capability) {
 }
 
 function __velarLookBindRoot(root, read, scope) {
-  const dynamic = root?.__velarDynamicRoot;
+  const dynamic = __velarDynamicRootState(root);
   if (!dynamic) {
     __velarLookBind(__velarRootHost(root, "look"), read, scope);
     return;
   }
-  const source = { rules: Object.create(null) };
+  const source = { rules: __velarGraphCreateRecord() };
   let host = null;
   const move = (next) => {
     __velarMoveLookSource(source, host, next);
@@ -2016,14 +2137,14 @@ function __velarLookBindRoot(root, read, scope) {
     source.rules = __velarLook([read()]).rules;
     if (host) __velarApplyLooks(host);
   }, "dom", scope);
-  scope.cleanups.push(() => {
+  __velarAppendOwned(scope.cleanups, () => {
     __velarGraphSetRemove(dynamic.listeners, move);
     move(null);
   });
 }
 
 function __velarClassBindRoot(root, read, scope) {
-  const dynamic = root?.__velarDynamicRoot;
+  const dynamic = __velarDynamicRootState(root);
   if (!dynamic) {
     __velarClassBind(__velarRootHost(root, "class"), read, scope);
     return;
@@ -2040,59 +2161,73 @@ function __velarClassBindRoot(root, read, scope) {
     source.names = __velarClassNames(read());
     if (host) __velarApplyClasses(host);
   }, "dom", scope);
-  scope.cleanups.push(() => {
+  __velarAppendOwned(scope.cleanups, () => {
     __velarGraphSetRemove(dynamic.listeners, move);
     move(null);
   });
 }
 
-function __velarClassNames(value) {
-  if (value == null || value === false) return [];
-  if (Array.isArray(value)) return value.flatMap(__velarClassNames);
+function __velarClassNames(value, output = []) {
+  if (value == null || value === false) return output;
+  if (__velarGraphIsList(value)) {
+    for (let index = 0; index < value.length; index += 1) __velarClassNames(value[index], output);
+    return output;
+  }
   if (typeof value !== "string") throw new TypeError("class accepts strings, string?, or lists of strings");
-  return value.split(/\s+/).filter(Boolean);
+  let name = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === " " || character === "\t" || character === "\n" || character === "\r" || character === "\f" || character === "\v") {
+      if (name !== "") __velarAppendOwned(output, name);
+      name = "";
+      continue;
+    }
+    name += character;
+  }
+  if (name !== "") __velarAppendOwned(output, name);
+  return output;
 }
 
 function __velarApplyClasses(element) {
-  const sources = __velarRuntime.classSources.get(element);
-  const next = new Set();
-  if (sources) for (const source of sources) for (const name of source.names) next.add(name);
-  const base = element.__velarBaseClasses ??= new Set(element.classList);
-  const previous = element.__velarManagedClasses ?? new Set();
-  for (const name of previous) if (!next.has(name) && !base.has(name)) element.classList.remove(name);
-  for (const name of next) element.classList.add(name);
-  element.__velarManagedClasses = next;
+  const sources = __velarGraphWeakMapRead(__velarRuntime.classSources, element);
+  const next = __velarGraphCreateSet();
+  if (sources) {
+    for (const source of __velarGraphSetItems(sources)) {
+      for (let index = 0; index < source.names.length; index += 1) __velarGraphSetInsert(next, source.names[index]);
+    }
+  }
+  const state = __velarElementState(element, "__velarClassState", () => __velarGraphFreeze({
+    base: __velarGraphCreateSet(__velarDomClassNames(element)),
+    managed: __velarGraphCreateSet(),
+  }));
+  for (const name of __velarGraphSetItems(state.managed)) {
+    if (!__velarGraphSetContains(next, name) && !__velarGraphSetContains(state.base, name)) __velarDomClassRemove(element, name);
+  }
+  for (const name of __velarGraphSetItems(next)) __velarDomClassInsert(element, name);
+  __velarGraphSetEmpty(state.managed);
+  for (const name of __velarGraphSetItems(next)) __velarGraphSetInsert(state.managed, name);
 }
 
 function __velarMoveClassSource(source, previous, next) {
   if (previous) {
-    const sources = __velarRuntime.classSources.get(previous);
-    if (sources) {
-      sources.delete(source);
-      if (sources.size === 0) __velarRuntime.classSources.delete(previous);
-    }
+    __velarDetachSource(__velarRuntime.classSources, previous, source);
     __velarApplyClasses(previous);
   }
   if (next) {
-    let sources = __velarRuntime.classSources.get(next);
-    if (!sources) { sources = new Set(); __velarRuntime.classSources.set(next, sources); }
-    sources.add(source);
+    __velarAttachSource(__velarRuntime.classSources, next, source);
     __velarApplyClasses(next);
   }
 }
 
 function __velarClassBind(element, read, scope) {
   const source = { names: [] };
-  let sources = __velarRuntime.classSources.get(element);
-  if (!sources) { sources = new Set(); __velarRuntime.classSources.set(element, sources); }
-  sources.add(source);
+  __velarAttachSource(__velarRuntime.classSources, element, source);
   __velarObserver(() => {
     source.names = __velarClassNames(read());
     __velarApplyClasses(element);
   }, "dom", scope);
-  scope.cleanups.push(() => {
-    sources.delete(source);
-    if (sources.size === 0) __velarRuntime.classSources.delete(element);
+  __velarAppendOwned(scope.cleanups, () => {
+    __velarDetachSource(__velarRuntime.classSources, element, source);
     __velarApplyClasses(element);
   });
 }
@@ -2102,23 +2237,23 @@ function __velarHtml(element, read, scope) {
     const value = read();
     if (value != null && typeof value !== "string") throw new TypeError("unsafe:html requires string or null");
     if (value?.length > 16 * 1024 * 1024) throw new RangeError("unsafe:html cannot exceed 16 MiB");
-    element.innerHTML = value ?? "";
+    __velarDomSetHtml(element, value ?? "");
   }, "dom", scope);
 }
 
 function __velarOn(element, event, read, scope, modifiers = []) {
   if (typeof __velarUntracked(read) !== "function") throw new TypeError("Event '" + event + "' requires a function");
-  const capture = modifiers.includes("capture");
-  const options = { capture, once: modifiers.includes("once") };
+  const capture = __velarHasName(modifiers, "capture");
+  const options = { capture, once: __velarHasName(modifiers, "once") };
   const listener = (value) => {
     try {
-      if (modifiers.includes("self")) {
+      if (__velarHasName(modifiers, "self")) {
         const target = __velarEventField(value, "target", __velarEventTargetGetter);
         if (target === __velarEventMissingField) throw new TypeError("DOM event does not expose a native target");
         if (target !== element) return;
       }
-      if (modifiers.includes("prevent")) __velarEventCall(value, "preventDefault", __velarEventPreventDefault);
-      if (modifiers.includes("stop")) __velarEventCall(value, "stopPropagation", __velarEventStopPropagation);
+      if (__velarHasName(modifiers, "prevent")) __velarEventCall(value, "preventDefault", __velarEventPreventDefault);
+      if (__velarHasName(modifiers, "stop")) __velarEventCall(value, "stopPropagation", __velarEventStopPropagation);
       // The handler expression is re-read per dispatch so handlers routed
       // through live props always see the current value.
       const handler = __velarUntracked(read);
@@ -2127,36 +2262,36 @@ function __velarOn(element, event, read, scope, modifiers = []) {
       __velarObservePromise(result, (error) => __velarReportEvent(error, scope, event));
     } catch (error) { __velarReportEvent(error, scope, event); }
   };
-  element.addEventListener(event, listener, options);
-  scope.cleanups.push(() => element.removeEventListener(event, listener, capture));
+  __velarDomAddListener(element, event, listener, options);
+  __velarAppendOwned(scope.cleanups, () => __velarDomRemoveListener(element, event, listener, capture));
 }
 
 function __velarBindValue(element, state, scope, numeric = false, parse = null) {
   __velarObserver(() => {
     const value = state.get();
-    if (value == null) element.value = "";
+    if (value == null) __velarDomSetFieldValue(element, "");
     else if (numeric) {
-      if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("Numeric bind:value requires a finite number");
-      element.value = String(value);
+      if (typeof value !== "number" || !__velarDomIsFinite(value)) throw new TypeError("Numeric bind:value requires a finite number");
+      __velarDomSetFieldValue(element, __velarDomString(value));
     } else {
       if (typeof value !== "string") throw new TypeError("bind:value requires text");
-      element.value = value;
+      __velarDomSetFieldValue(element, value);
     }
   }, "dom", scope);
-  const update = () => state.set(numeric ? element.valueAsNumber : parse ? parse(element.value) : element.value);
-  element.addEventListener("input", update);
-  scope.cleanups.push(() => element.removeEventListener("input", update));
+  const update = () => state.set(numeric ? __velarDomFieldNumber(element) : parse ? parse(__velarDomFieldValue(element)) : __velarDomFieldValue(element));
+  __velarDomAddListener(element, "input", update, false);
+  __velarAppendOwned(scope.cleanups, () => __velarDomRemoveListener(element, "input", update, false));
 }
 
 function __velarBindChecked(element, state, scope) {
   __velarObserver(() => {
     const value = state.get();
     if (typeof value !== "boolean") throw new TypeError("bind:checked requires bool");
-    element.checked = value;
+    __velarDomSetFieldChecked(element, value);
   }, "dom", scope);
-  const update = () => state.set(element.checked);
-  element.addEventListener("change", update);
-  scope.cleanups.push(() => element.removeEventListener("change", update));
+  const update = () => state.set(__velarDomFieldChecked(element));
+  __velarDomAddListener(element, "change", update, false);
+  __velarAppendOwned(scope.cleanups, () => __velarDomRemoveListener(element, "change", update, false));
 }
 
 // Prop handles give a component body live reads over its props store. The
@@ -2164,7 +2299,7 @@ function __velarBindChecked(element, state, scope) {
 // ahead, so state initializers can never re-run on a prop update.
 function __velarRequiredProp(props, name, component) {
   if (__velarUntracked(() => props[name]) === undefined) throw new TypeError("Component " + component + " requires prop " + name);
-  return Object.freeze({
+  return __velarGraphFreeze({
     get() {
       const value = props[name];
       if (value === undefined) throw new TypeError("Component " + component + " requires prop " + name);
@@ -2175,7 +2310,7 @@ function __velarRequiredProp(props, name, component) {
 
 function __velarProp(props, name, fallback) {
   const fallbackValue = __velarUntracked(() => props[name]) === undefined ? fallback() : undefined;
-  return Object.freeze({
+  return __velarGraphFreeze({
     get() {
       const value = props[name];
       return value === undefined ? fallbackValue : value;
@@ -2200,8 +2335,9 @@ function __velarInstantiate(component, thunks, children, scope, namespace, setRe
     // one-time plain snapshot so their strict record validation still holds.
     const snapshot = {};
     const styleRead = thunks.__velarStyle;
-    for (const name of Object.getOwnPropertyNames(thunks)) {
-      if (name !== "__velarStyle") snapshot[name] = __velarUntracked(thunks[name]);
+    const snapshotNames = __velarGraphOwnNames(thunks);
+    for (let index = 0; index < snapshotNames.length; index += 1) {
+      if (snapshotNames[index] !== "__velarStyle") snapshot[snapshotNames[index]] = __velarUntracked(thunks[snapshotNames[index]]);
     }
     if (children !== undefined) snapshot.children = __velarUntracked(children);
     const instance = __velarUntracked(() => component(snapshot, namespace));
@@ -2209,13 +2345,15 @@ function __velarInstantiate(component, thunks, children, scope, namespace, setRe
     return __velarBindComponentRef(instance, setRef);
   }
   const props = {};
-  for (const name of Object.getOwnPropertyNames(thunks)) {
+  const propNames = __velarGraphOwnNames(thunks);
+  for (let index = 0; index < propNames.length; index += 1) {
+    const name = propNames[index];
     const read = thunks[name];
     const cell = __velarState(undefined);
     __velarObserver(() => cell.set(read()), "dom", scope);
-    Object.defineProperty(props, name, { enumerable: true, get: () => cell.get() });
+    __velarGraphDefine(props, name, { enumerable: true, get: () => cell.get() });
   }
-  if (children !== undefined) Object.defineProperty(props, "children", { enumerable: true, value: __velarUntracked(children) });
+  if (children !== undefined) __velarGraphDefine(props, "children", { enumerable: true, value: __velarUntracked(children) });
   return __velarBindComponentRef(__velarUntracked(() => component(props, namespace)), setRef);
 }
 
@@ -2225,8 +2363,8 @@ function __velarInstantiate(component, thunks, children, scope, namespace, setRe
 function __velarChild(component, thunks, children, scope, namespace, setRef) {
   const childScope = __velarScope(scope.component);
   let constructed = false;
-  scope.mounts.push(() => { if (constructed) __velarMountScope(childScope); });
-  scope.cleanups.push(() => { if (constructed) __velarDestroyScope(childScope); });
+  __velarAppendOwned(scope.mounts, () => { if (constructed) __velarMountScope(childScope); });
+  __velarAppendOwned(scope.cleanups, () => { if (constructed) __velarDestroyScope(childScope); });
   try {
     const node = __velarUseComponent(__velarInstantiate(component, thunks, children, childScope, namespace, setRef), childScope);
     constructed = true;

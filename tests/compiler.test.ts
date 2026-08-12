@@ -25088,7 +25088,7 @@ component App:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /__velarStyle: \(\) => \(\{ "color": \(tone\.get\(\) \?\? null\), "padding": "12px" \}\)/u);
   assert.match(result.code ?? "", /__velarStyleBindRoot/u);
-  assert.match(result.code ?? "", /element\.style\.setProperty\(property/u);
+  assert.match(result.code ?? "", /__velarDomStyleWrite\(element, property/u);
   assert.match(result.css ?? "", /base:color/u);
   assert.doesNotMatch(result.css ?? "", /padding:var/u);
 
@@ -25339,7 +25339,7 @@ const broken = look:
   assert.notEqual(coercionExecution.status, 0);
   assert.equal(coercionExecution.stdout, "");
   assert.match(String(coercionExecution.stderr), /Color must be text/u);
-  assert.match(dynamic.code ?? "", /if \(value == null\) element\.style\.removeProperty/u);
+  assert.match(dynamic.code ?? "", /if \(value == null\) __velarDomStyleClear\(element, /u);
 });
 
 test("Look builders are named module values and units calculate outside Look", () => {
@@ -26163,7 +26163,7 @@ component DialogView:
     return <dialog ref={dialog}>Confirm</dialog>
 `.trimStart());
   assert.deepEqual(correctRef.diagnostics, []);
-  assert.match(correctRef.code ?? "", /cleanups\.push\(\(\) => \{ if \(canvas === \$velarElement\d+\) canvas = null; \}\)/u);
+  assert.match(correctRef.code ?? "", /__velarAppendOwned\(\$velarScope\.cleanups, \(\) => \{ if \(canvas === \$velarElement\d+\) canvas = null; \}\)/u);
 
   const wrongRef = compile(`
 component CanvasView:

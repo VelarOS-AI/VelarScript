@@ -269,7 +269,11 @@ Clearing a Map, Set, or Record invalidates every concrete key that has an active
 subscriber as well as its iteration and structure dependencies.
 Temporary Lists produced by `map`/`filter` do not become permanent parents of
 every item they expose, and replacing a state root detaches the old root from
-the deep parent graph. Keyed JSX rows receive reactive record items even though
+the deep parent graph together with everything only that root owned, so the
+canonical `settings = {...settings, label: next}` update releases the replaced
+value instead of leaving one dead owner per update behind every surviving
+descendant. Deep-change bubbling therefore costs the same after ten thousand
+root replacements as after the first. Keyed JSX rows receive reactive record items even though
 dense-List validation intentionally reads raw descriptors.
 
 ```velar fragment
@@ -377,7 +381,10 @@ component RuntimeStatus:
   so a failed update retains the last valid DOM and discards its incomplete
   scope. Ordinary and keyed JSX Lists both read one checked dense List snapshot;
   mutation during rendering and JavaScript iterator overrides cannot change the
-  values participating in that update.
+  values participating in that update. A keyed update moves only the rows whose
+  position actually changed: a row already standing where the new order wants it
+  is left attached, so the focused `<input>` in it keeps focus, an in-flight IME
+  composition survives, and no transient subtree state is reset.
 - Emitted JSX and runtime-implemented `velar/web` components use the same small
   DOM host ABI. A generated module captures Document/Node identity, node
   factories, mount/removal operations, bounded child collections, and the
@@ -407,6 +414,13 @@ component RuntimeStatus:
 - An automatic failure with no installed handler is surfaced through the host
   runtime rather than silently discarded. Error handlers therefore own their
   lifetime and must be removed during cleanup.
+- Reactive work is budgeted in both directions. A render or watch that
+  invalidates itself more than 100 times is stopped and reported, and one flush
+  may run at most 100,000 observers: a pair of watches that write each other's
+  state, which no single-observer cap can see, is stopped and reported through
+  the same `velar/app` chain with phase `update` instead of freezing the page.
+  Observers still queued when that budget is exhausted are stopped with it,
+  since they are the ones a runaway flush would resume.
 - An application may install at most 1,000 error handlers. Manual report phases
   are limited to 256 characters and details to 64 KiB before entering the
   shared error channel.

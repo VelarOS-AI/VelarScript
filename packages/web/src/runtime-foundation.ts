@@ -38,6 +38,14 @@ const __velarDomNativeFragment = typeof globalThis.DocumentFragment === "functio
 const __velarDomNativeCharacterData = typeof globalThis.CharacterData === "function" ? globalThis.CharacterData : null;
 const __velarDomNativeDocumentType = typeof globalThis.DocumentType === "function" ? globalThis.DocumentType : null;
 const __velarDomNativeNodeList = typeof globalThis.NodeList === "function" ? globalThis.NodeList : null;
+const __velarDomNativeEventTarget = typeof globalThis.EventTarget === "function" ? globalThis.EventTarget : null;
+const __velarDomNativeHtmlElement = typeof globalThis.HTMLElement === "function" ? globalThis.HTMLElement : null;
+const __velarDomNativeSvgElement = typeof globalThis.SVGElement === "function" ? globalThis.SVGElement : null;
+const __velarDomNativeStyleDeclaration = typeof globalThis.CSSStyleDeclaration === "function" ? globalThis.CSSStyleDeclaration : null;
+const __velarDomNativeTokenList = typeof globalThis.DOMTokenList === "function" ? globalThis.DOMTokenList : null;
+const __velarDomNativeInputElement = typeof globalThis.HTMLInputElement === "function" ? globalThis.HTMLInputElement : null;
+const __velarDomNativeTextAreaElement = typeof globalThis.HTMLTextAreaElement === "function" ? globalThis.HTMLTextAreaElement : null;
+const __velarDomNativeSelectElement = typeof globalThis.HTMLSelectElement === "function" ? globalThis.HTMLSelectElement : null;
 function __velarDomApply(operation, receiver, arguments_, label) {
   if (typeof operation !== "function" || typeof __velarDomReflectApply !== "function") {
     throw new TypeError("The browser " + label + " API is unavailable");
@@ -108,6 +116,42 @@ const __velarDomElementRemoveAttribute = __velarDomPrototypeMember(__velarDomNat
 const __velarDomElementRemoveAttributeNS = __velarDomPrototypeMember(__velarDomNativeElement, "removeAttributeNS");
 const __velarDomNodeListLength = __velarDomPrototypeMember(__velarDomNativeNodeList, "length", "get");
 const __velarDomNodeListItem = __velarDomPrototypeMember(__velarDomNativeNodeList, "item");
+const __velarDomNodeNextSibling = __velarDomPrototypeMember(__velarDomNativeNode, "nextSibling", "get");
+const __velarDomNodeAddListener = __velarDomPrototypeMember(__velarDomNativeNode, "addEventListener");
+const __velarDomNodeRemoveListener = __velarDomPrototypeMember(__velarDomNativeNode, "removeEventListener");
+const __velarDomNodeInnerHtml = __velarDomPrototypeMember(__velarDomNativeNode, "innerHTML", "set");
+const __velarDomNodeQuerySelectorAll = __velarDomPrototypeMember(__velarDomNativeNode, "querySelectorAll");
+const __velarDomNodeClassList = __velarDomPrototypeMember(__velarDomNativeNode, "classList", "get");
+const __velarDomNodeStyle = __velarDomPrototypeMember(__velarDomNativeNode, "style", "get");
+const __velarDomNodeFieldValue = __velarDomPrototypeMember(__velarDomNativeNode, "value", "get");
+const __velarDomNodeSetFieldValue = __velarDomPrototypeMember(__velarDomNativeNode, "value", "set");
+const __velarDomNodeFieldNumber = __velarDomPrototypeMember(__velarDomNativeNode, "valueAsNumber", "get");
+const __velarDomNodeFieldChecked = __velarDomPrototypeMember(__velarDomNativeNode, "checked", "get");
+const __velarDomNodeSetFieldChecked = __velarDomPrototypeMember(__velarDomNativeNode, "checked", "set");
+const __velarDomEventTargetAdd = __velarDomPrototypeMember(__velarDomNativeEventTarget, "addEventListener");
+const __velarDomEventTargetRemove = __velarDomPrototypeMember(__velarDomNativeEventTarget, "removeEventListener");
+const __velarDomElementInnerHtml = __velarDomPrototypeMember(__velarDomNativeElement, "innerHTML", "set");
+const __velarDomElementQuerySelectorAll = __velarDomPrototypeMember(__velarDomNativeElement, "querySelectorAll");
+const __velarDomElementClassList = __velarDomPrototypeMember(__velarDomNativeElement, "classList", "get");
+const __velarDomHtmlElementStyle = __velarDomPrototypeMember(__velarDomNativeHtmlElement, "style", "get");
+const __velarDomSvgElementStyle = __velarDomPrototypeMember(__velarDomNativeSvgElement, "style", "get");
+const __velarDomStyleSetProperty = __velarDomPrototypeMember(__velarDomNativeStyleDeclaration, "setProperty");
+const __velarDomStyleRemoveProperty = __velarDomPrototypeMember(__velarDomNativeStyleDeclaration, "removeProperty");
+const __velarDomStylePropertyValue = __velarDomPrototypeMember(__velarDomNativeStyleDeclaration, "getPropertyValue");
+const __velarDomStylePropertyPriority = __velarDomPrototypeMember(__velarDomNativeStyleDeclaration, "getPropertyPriority");
+const __velarDomTokenListAdd = __velarDomPrototypeMember(__velarDomNativeTokenList, "add");
+const __velarDomTokenListRemove = __velarDomPrototypeMember(__velarDomNativeTokenList, "remove");
+const __velarDomTokenListLength = __velarDomPrototypeMember(__velarDomNativeTokenList, "length", "get");
+const __velarDomTokenListItem = __velarDomPrototypeMember(__velarDomNativeTokenList, "item");
+const __velarDomInputValueGet = __velarDomPrototypeMember(__velarDomNativeInputElement, "value", "get");
+const __velarDomInputValueSet = __velarDomPrototypeMember(__velarDomNativeInputElement, "value", "set");
+const __velarDomInputNumberGet = __velarDomPrototypeMember(__velarDomNativeInputElement, "valueAsNumber", "get");
+const __velarDomInputCheckedGet = __velarDomPrototypeMember(__velarDomNativeInputElement, "checked", "get");
+const __velarDomInputCheckedSet = __velarDomPrototypeMember(__velarDomNativeInputElement, "checked", "set");
+const __velarDomTextAreaValueGet = __velarDomPrototypeMember(__velarDomNativeTextAreaElement, "value", "get");
+const __velarDomTextAreaValueSet = __velarDomPrototypeMember(__velarDomNativeTextAreaElement, "value", "set");
+const __velarDomSelectValueGet = __velarDomPrototypeMember(__velarDomNativeSelectElement, "value", "get");
+const __velarDomSelectValueSet = __velarDomPrototypeMember(__velarDomNativeSelectElement, "value", "set");
 function __velarDomOwnData(value, name) {
   const descriptor = __velarDomOwnDescriptor(value, name);
   return descriptor?.enumerable && "value" in descriptor ? descriptor.value : undefined;
@@ -175,6 +219,127 @@ function __velarDomRemoveAttribute(value, name) {
 }
 function __velarDomRemoveAttributeNS(value, namespace, name) {
   return __velarDomNodeOperation(value, "removeAttributeNS", [[__velarDomNativeElement, __velarDomElementRemoveAttributeNS]], [namespace, name]);
+}
+// Accessor twin of __velarDomNodeOperation: the framework reads and writes a
+// handful of host properties (style, classList, innerHTML, field value) whose
+// prototypes are as replaceable as the methods above, so they go through the
+// same captured-then-own-data-descriptor path instead of ambient '.' access.
+function __velarDomNodeAccessor(value, name, candidates, arguments_, write) {
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (__velarDomInstance(value, candidate[0]) && typeof candidate[1] === "function") {
+      return __velarDomApply(candidate[1], value, arguments_, "DOM " + name);
+    }
+  }
+  const descriptor = __velarDomOwnDescriptor(value, name);
+  if (!write) {
+    if (descriptor && "value" in descriptor) return descriptor.value;
+    throw new TypeError("The value does not expose native DOM " + name);
+  }
+  if (typeof __velarDomDefineProperty !== "function" || typeof __velarDomReflectApply !== "function"
+    || (descriptor && (!("value" in descriptor) || descriptor.writable !== true))) {
+    throw new TypeError("The value does not expose native DOM " + name);
+  }
+  return __velarDomReflectApply(__velarDomDefineProperty, __velarDomNativeObject, [value, name, descriptor
+    ? { ...descriptor, value: arguments_[0] }
+    : { value: arguments_[0], writable: true, enumerable: true, configurable: true }]);
+}
+function __velarDomNextSibling(value) {
+  if (__velarDomInstance(value, __velarDomNativeNode) && typeof __velarDomNodeNextSibling === "function") {
+    return __velarDomApply(__velarDomNodeNextSibling, value, [], "Node.nextSibling");
+  }
+  return null;
+}
+function __velarDomAddListener(value, name, listener, options) {
+  return __velarDomNodeOperation(value, "addEventListener", [
+    [__velarDomNativeNode, __velarDomNodeAddListener], [__velarDomNativeEventTarget, __velarDomEventTargetAdd],
+  ], [name, listener, options]);
+}
+function __velarDomRemoveListener(value, name, listener, options) {
+  return __velarDomNodeOperation(value, "removeEventListener", [
+    [__velarDomNativeNode, __velarDomNodeRemoveListener], [__velarDomNativeEventTarget, __velarDomEventTargetRemove],
+  ], [name, listener, options]);
+}
+function __velarDomSetHtml(value, next) {
+  return __velarDomNodeAccessor(value, "innerHTML", [
+    [__velarDomNativeNode, __velarDomNodeInnerHtml], [__velarDomNativeElement, __velarDomElementInnerHtml],
+  ], [next], true);
+}
+function __velarDomQuerySelectorAll(value, selector) {
+  return __velarDomNodeOperation(value, "querySelectorAll", [
+    [__velarDomNativeNode, __velarDomNodeQuerySelectorAll], [__velarDomNativeElement, __velarDomElementQuerySelectorAll],
+  ], [selector]);
+}
+function __velarDomStyle(value) {
+  return __velarDomNodeAccessor(value, "style", [
+    [__velarDomNativeNode, __velarDomNodeStyle], [__velarDomNativeHtmlElement, __velarDomHtmlElementStyle],
+    [__velarDomNativeSvgElement, __velarDomSvgElementStyle],
+  ], [], false);
+}
+function __velarDomStyleValue(value, property) {
+  return __velarDomNodeOperation(__velarDomStyle(value), "getPropertyValue", [[__velarDomNativeStyleDeclaration, __velarDomStylePropertyValue]], [property]);
+}
+function __velarDomStylePriority(value, property) {
+  return __velarDomNodeOperation(__velarDomStyle(value), "getPropertyPriority", [[__velarDomNativeStyleDeclaration, __velarDomStylePropertyPriority]], [property]);
+}
+function __velarDomStyleWrite(value, property, next, priority = "") {
+  return __velarDomNodeOperation(__velarDomStyle(value), "setProperty", [[__velarDomNativeStyleDeclaration, __velarDomStyleSetProperty]], [property, next, priority]);
+}
+function __velarDomStyleClear(value, property) {
+  return __velarDomNodeOperation(__velarDomStyle(value), "removeProperty", [[__velarDomNativeStyleDeclaration, __velarDomStyleRemoveProperty]], [property]);
+}
+function __velarDomClassList(value) {
+  return __velarDomNodeAccessor(value, "classList", [
+    [__velarDomNativeNode, __velarDomNodeClassList], [__velarDomNativeElement, __velarDomElementClassList],
+  ], [], false);
+}
+function __velarDomClassInsert(value, name) {
+  return __velarDomNodeOperation(__velarDomClassList(value), "add", [[__velarDomNativeTokenList, __velarDomTokenListAdd]], [name]);
+}
+function __velarDomClassRemove(value, name) {
+  return __velarDomNodeOperation(__velarDomClassList(value), "remove", [[__velarDomNativeTokenList, __velarDomTokenListRemove]], [name]);
+}
+function __velarDomClassNames(value) {
+  const list = __velarDomClassList(value);
+  const length = __velarDomInstance(list, __velarDomNativeTokenList) && typeof __velarDomTokenListLength === "function"
+    ? __velarDomApply(__velarDomTokenListLength, list, [], "DOMTokenList.length")
+    : __velarDomOwnData(list, "length");
+  // A data-only seam that exposes no bounded token list simply owns no base
+  // classes; only a real token list can contribute names the framework must
+  // preserve while it manages the rest.
+  if (!__velarDomIsInteger(length) || length < 0 || length > 1000000) return new __velarDomNativeArray(0);
+  const output = new __velarDomNativeArray(length);
+  for (let index = 0; index < length; index += 1) {
+    output[index] = __velarDomNodeOperation(list, "item", [[__velarDomNativeTokenList, __velarDomTokenListItem]], [index]);
+  }
+  return output;
+}
+function __velarDomFieldValue(value) {
+  return __velarDomNodeAccessor(value, "value", [
+    [__velarDomNativeNode, __velarDomNodeFieldValue], [__velarDomNativeInputElement, __velarDomInputValueGet],
+    [__velarDomNativeTextAreaElement, __velarDomTextAreaValueGet], [__velarDomNativeSelectElement, __velarDomSelectValueGet],
+  ], [], false);
+}
+function __velarDomSetFieldValue(value, next) {
+  return __velarDomNodeAccessor(value, "value", [
+    [__velarDomNativeNode, __velarDomNodeSetFieldValue], [__velarDomNativeInputElement, __velarDomInputValueSet],
+    [__velarDomNativeTextAreaElement, __velarDomTextAreaValueSet], [__velarDomNativeSelectElement, __velarDomSelectValueSet],
+  ], [next], true);
+}
+function __velarDomFieldNumber(value) {
+  return __velarDomNodeAccessor(value, "valueAsNumber", [
+    [__velarDomNativeNode, __velarDomNodeFieldNumber], [__velarDomNativeInputElement, __velarDomInputNumberGet],
+  ], [], false);
+}
+function __velarDomFieldChecked(value) {
+  return __velarDomNodeAccessor(value, "checked", [
+    [__velarDomNativeNode, __velarDomNodeFieldChecked], [__velarDomNativeInputElement, __velarDomInputCheckedGet],
+  ], [], false);
+}
+function __velarDomSetFieldChecked(value, next) {
+  return __velarDomNodeAccessor(value, "checked", [
+    [__velarDomNativeNode, __velarDomNodeSetFieldChecked], [__velarDomNativeInputElement, __velarDomInputCheckedSet],
+  ], [next], true);
 }
 function __velarDomNodeType(value) {
   if (__velarDomInstance(value, __velarDomNativeNode) && typeof __velarDomNodeNodeType === "function") {
@@ -280,6 +445,7 @@ const __velarGraphObjectIsExtensible = Object.getOwnPropertyDescriptor(Object, "
 const __velarGraphObjectGetPrototypeOf = Object.getOwnPropertyDescriptor(Object, "getPrototypeOf")?.value;
 const __velarGraphObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor(Object, "getOwnPropertyDescriptor")?.value;
 const __velarGraphObjectGetOwnPropertyNames = Object.getOwnPropertyDescriptor(Object, "getOwnPropertyNames")?.value;
+const __velarGraphObjectCreate = Object.getOwnPropertyDescriptor(Object, "create")?.value;
 const __velarGraphSetPrototype = Object.getOwnPropertyDescriptor(__velarGraphNativeSet, "prototype")?.value;
 const __velarGraphSetHas = __velarGraphSetPrototype && Object.getOwnPropertyDescriptor(__velarGraphSetPrototype, "has")?.value;
 const __velarGraphSetAdd = __velarGraphSetPrototype && Object.getOwnPropertyDescriptor(__velarGraphSetPrototype, "add")?.value;
@@ -292,6 +458,7 @@ const __velarGraphMapHas = __velarGraphMapPrototype && Object.getOwnPropertyDesc
 const __velarGraphMapGet = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "get")?.value;
 const __velarGraphMapSet = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "set")?.value;
 const __velarGraphMapDelete = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "delete")?.value;
+const __velarGraphMapClear = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "clear")?.value;
 const __velarGraphMapValues = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "values")?.value;
 const __velarGraphMapKeys = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "keys")?.value;
 const __velarGraphMapSize = __velarGraphMapPrototype && Object.getOwnPropertyDescriptor(__velarGraphMapPrototype, "size")?.get;
@@ -337,6 +504,7 @@ function __velarGraphMapRead(value, key) { return __velarGraphApply(__velarGraph
 function __velarGraphMapWrite(value, key, item) { return __velarGraphApply(__velarGraphMapSet, value, [key, item], "Map.set"); }
 function __velarGraphMapRemove(value, key) { return __velarGraphApply(__velarGraphMapDelete, value, [key], "Map.delete"); }
 function __velarGraphMapItems(value) { return __velarGraphApply(__velarGraphMapValues, value, [], "Map.values"); }
+function __velarGraphMapEmpty(value) { return __velarGraphApply(__velarGraphMapClear, value, [], "Map.clear"); }
 function __velarGraphMapKeyItems(value) { return __velarGraphApply(__velarGraphMapKeys, value, [], "Map.keys"); }
 function __velarGraphMapCount(value) { return __velarGraphApply(__velarGraphMapSize, value, [], "Map.size"); }
 function __velarGraphWeakSetContains(value, item) { return __velarGraphApply(__velarGraphWeakSetHas, value, [item], "WeakSet.has"); }
@@ -354,6 +522,7 @@ function __velarGraphIsExtensible(value) { return __velarGraphApply(__velarGraph
 function __velarGraphPrototype(value) { return __velarGraphApply(__velarGraphObjectGetPrototypeOf, __velarGraphNativeObject, [value], "Object.getPrototypeOf"); }
 function __velarGraphOwnDescriptor(value, key) { return __velarGraphApply(__velarGraphObjectGetOwnPropertyDescriptor, __velarGraphNativeObject, [value, key], "Object.getOwnPropertyDescriptor"); }
 function __velarGraphOwnNames(value) { return __velarGraphApply(__velarGraphObjectGetOwnPropertyNames, __velarGraphNativeObject, [value], "Object.getOwnPropertyNames"); }
+function __velarGraphCreateRecord() { return __velarGraphApply(__velarGraphObjectCreate, __velarGraphNativeObject, [null], "Object.create"); }
 function __velarGraphGet(value, key, receiver) { return __velarGraphApply(__velarGraphReflectGet, null, [value, key, receiver], "Reflect.get"); }
 function __velarGraphSet(value, key, item, receiver) { return __velarGraphApply(__velarGraphReflectSet, null, [value, key, item, receiver], "Reflect.set"); }
 function __velarGraphHas(value, key) { return __velarGraphApply(__velarGraphReflectHas, null, [value, key], "Reflect.has"); }
@@ -471,6 +640,7 @@ function __velarCreateRuntime() {
   const versions = Object.freeze(__velarGraphCreateWeakMap());
   const parents = Object.freeze(__velarGraphCreateWeakMap());
   const subscriptionStops = __velarGraphCreateWeakMap();
+  const collectionBrands = __velarGraphCreateWeakMap();
   const iterateKey = Symbol.for("velar.reactive.iterate.v1");
   const structureKey = Symbol.for("velar.reactive.structure.v1");
   const deepKey = Symbol.for("velar.reactive.deep.v1");
@@ -487,7 +657,12 @@ function __velarCreateRuntime() {
   };
   const runTracked = (observer, read) => {
     const previousDependencies = observer.dependencies;
-    observer.dependencies = __velarGraphCreateSet();
+    // Every run needs a second dependency set to diff against, and an observer
+    // that re-runs thousands of times per second would otherwise allocate one
+    // per run. The emptied previous set is kept as the next run's buffer.
+    const spare = observer.spareDependencies;
+    observer.spareDependencies = null;
+    observer.dependencies = spare ?? __velarGraphCreateSet();
     const previousObserver = runtime.activeObserver;
     runtime.activeObserver = observer;
     try { return read(); }
@@ -501,6 +676,8 @@ function __velarCreateRuntime() {
           if (stop) stop();
         }
       }
+      __velarGraphSetEmpty(previousDependencies);
+      observer.spareDependencies = previousDependencies;
     }
   };
   const cleanupObserver = (observer) => {
@@ -542,47 +719,128 @@ function __velarCreateRuntime() {
   const trigger = (target, key, iterate = false, structure = false, indexFrom = null, allKeys = false) => {
     target = toRaw(target);
     if ((typeof target !== "object" && typeof target !== "function") || target === null) return;
+    bump(target);
+    notify(target, key);
+    if (allKeys || indexFrom !== null) {
+      const byKey = __velarGraphWeakMapRead(dependencies, target);
+      if (byKey) for (const candidate of __velarGraphMapKeyItems(byKey)) {
+        if (candidate === key) continue;
+        if (allKeys || (typeof candidate === "number" && candidate >= indexFrom)) notify(target, candidate);
+      }
+    }
+    if (iterate) notify(target, iterateKey);
+    if (structure) notify(target, structureKey);
+    notify(target, deepKey);
+    const owners = __velarGraphWeakMapRead(parents, target);
+    // A mutation of an unowned value -- the overwhelmingly common case -- must
+    // not pay for the cycle bookkeeping that only an ancestor walk needs.
+    if (!owners) return;
     const visited = __velarGraphCreateSet();
-    const bubble = (current, direct) => {
+    __velarGraphSetInsert(visited, target);
+    const bubble = (current) => {
       if (__velarGraphSetContains(visited, current)) return;
       __velarGraphSetInsert(visited, current);
       bump(current);
-      if (direct) {
-        notify(current, key);
-        if (allKeys || indexFrom !== null) {
-          const byKey = __velarGraphWeakMapRead(dependencies, current);
-          if (byKey) for (const candidate of __velarGraphMapKeyItems(byKey)) {
-            if (candidate === key) continue;
-            if (allKeys || (typeof candidate === "number" && candidate >= indexFrom)) notify(current, candidate);
-          }
-        }
-        if (iterate) notify(current, iterateKey);
-        if (structure) notify(current, structureKey);
-      }
       notify(current, deepKey);
-      const owners = __velarGraphWeakMapRead(parents, current);
-      if (owners) for (const owner of __velarGraphSetItems(owners)) bubble(owner, false);
+      const next = __velarGraphWeakMapRead(parents, current);
+      if (next) for (const owner of __velarGraphSetItems(next)) bubble(owner);
     };
-    bubble(target, true);
+    for (const owner of __velarGraphSetItems(owners)) bubble(owner);
   };
   const link = (child, parent) => {
-    child = toRaw(child);
+    if (child === null || (typeof child !== "object" && typeof child !== "function")) return;
+    linkOwner(toRaw(child), parent);
+  };
+  const linkOwner = (child, parent) => {
     parent = toRaw(parent);
-    if (!child || (typeof child !== "object" && typeof child !== "function")
-      || !parent || (typeof parent !== "object" && typeof parent !== "function") || child === parent) return;
+    if (parent === null || (typeof parent !== "object" && typeof parent !== "function") || child === parent) return;
     let owners = __velarGraphWeakMapRead(parents, child);
     if (!owners) { owners = __velarGraphCreateSet(); __velarGraphWeakMapWrite(parents, child, owners); }
     __velarGraphSetInsert(owners, parent);
   };
+  // Removing the last owner of a value detaches everything only that value
+  // owned. Without the cascade, replacing a state root leaves every surviving
+  // descendant pointing at the dead root: the root stays strongly reachable
+  // and each later deep mutation walks one more generation.
+  const release = (root) => {
+    const pending = [root];
+    let index = 0;
+    while (index < pending.length) {
+      const current = pending[index];
+      index += 1;
+      forEachOwnedValue(current, (value) => {
+        const owners = __velarGraphWeakMapRead(parents, value);
+        if (!owners || !__velarGraphSetContains(owners, current)) return;
+        __velarGraphSetRemove(owners, current);
+        if (__velarGraphSetCount(owners) > 0) return;
+        __velarGraphWeakMapRemove(parents, value);
+        pending[pending.length] = value;
+      });
+    }
+  };
   const unlink = (child, parent) => {
     child = toRaw(child);
     parent = toRaw(parent);
-    const owners = child && (typeof child === "object" || typeof child === "function")
+    const owners = child !== null && (typeof child === "object" || typeof child === "function")
       ? __velarGraphWeakMapRead(parents, child)
       : null;
-    if (owners) {
-      __velarGraphSetRemove(owners, parent);
-      if (__velarGraphSetCount(owners) === 0) __velarGraphWeakMapRemove(parents, child);
+    if (!owners) return;
+    __velarGraphSetRemove(owners, parent);
+    if (__velarGraphSetCount(owners) > 0) return;
+    __velarGraphWeakMapRemove(parents, child);
+    release(child);
+  };
+  // Map and Set membership is decided once per value and remembered: the only
+  // cross-realm test JavaScript offers is invoking a prototype accessor and
+  // catching, and a record write must not pay two thrown exceptions per field.
+  const collectionBrand = (value) => {
+    const known = __velarGraphWeakMapRead(collectionBrands, value);
+    if (known !== undefined) return known;
+    let brand = 0;
+    try { __velarGraphMapCount(value); brand = 1; }
+    catch {
+      try { __velarGraphSetCount(value); brand = 2; }
+      catch { brand = 0; }
+    }
+    __velarGraphWeakMapWrite(collectionBrands, value, brand);
+    return brand;
+  };
+  const forEachOwnedValue = (parent, visit) => {
+    if (parent === null || (typeof parent !== "object" && typeof parent !== "function")) return;
+    if (__velarGraphIsList(parent)) {
+      for (let index = 0; index < parent.length; index += 1) {
+        const value = toRaw(__velarGraphOwnDescriptor(parent, index)?.value);
+        if (value !== null && (typeof value === "object" || typeof value === "function")) visit(value);
+      }
+      return;
+    }
+    const brand = collectionBrand(parent);
+    if (brand === 1) {
+      for (const value of __velarGraphMapItems(parent)) {
+        const owned = toRaw(value);
+        if (owned !== null && (typeof owned === "object" || typeof owned === "function")) visit(owned);
+      }
+      // A Map key is linked to its Map exactly like a value, so releasing the
+      // Map has to release object keys too.
+      for (const value of __velarGraphMapKeyItems(parent)) {
+        const owned = toRaw(value);
+        if (owned !== null && (typeof owned === "object" || typeof owned === "function")) visit(owned);
+      }
+      return;
+    }
+    if (brand === 2) {
+      for (const value of __velarGraphSetItems(parent)) {
+        const owned = toRaw(value);
+        if (owned !== null && (typeof owned === "object" || typeof owned === "function")) visit(owned);
+      }
+      return;
+    }
+    if (typeof parent !== "object") return;
+    for (const name of __velarGraphOwnNames(parent)) {
+      const descriptor = __velarGraphOwnDescriptor(parent, name);
+      if (!descriptor || !("value" in descriptor)) continue;
+      const value = toRaw(descriptor.value);
+      if (value !== null && (typeof value === "object" || typeof value === "function")) visit(value);
     }
   };
   const contains = (parent, child) => {
@@ -594,16 +852,15 @@ function __velarCreateRuntime() {
       }
       return false;
     }
-    try {
-      __velarGraphMapCount(parent);
+    const brand = collectionBrand(parent);
+    if (brand === 1) {
       for (const value of __velarGraphMapItems(parent)) if (toRaw(value) === child) return true;
       return false;
-    } catch {}
-    try {
-      __velarGraphSetCount(parent);
+    }
+    if (brand === 2) {
       for (const value of __velarGraphSetItems(parent)) if (toRaw(value) === child) return true;
       return false;
-    } catch {}
+    }
     if (!parent || typeof parent !== "object") return false;
     for (const name of __velarGraphOwnNames(parent)) {
       const descriptor = __velarGraphOwnDescriptor(parent, name);
@@ -611,10 +868,19 @@ function __velarCreateRuntime() {
     }
     return false;
   };
+  // The one guard every detach path shares: a primitive was never linked, and
+  // an object with no owners has nothing to release, so neither may reach the
+  // O(fields) containment scan.
+  const releaseChild = (parent, child) => {
+    if (child === null || (typeof child !== "object" && typeof child !== "function")
+      || !__velarGraphWeakMapContains(parents, child)) return;
+    if (!contains(parent, child)) unlink(child, parent);
+  };
   const reactive = (value, parent = null) => {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
     value = toRaw(value);
-    if (parent) link(value, parent);
-    if (!value || typeof value !== "object" || __velarGraphIsList(value) || !__velarGraphIsExtensible(value)) return value;
+    if (parent !== null) linkOwner(value, parent);
+    if (typeof value !== "object" || __velarGraphIsList(value) || !__velarGraphIsExtensible(value)) return value;
     const prototype = __velarGraphPrototype(value);
     if (prototype !== __velarGraphNativeObject.prototype && prototype !== null) return value;
     let proxy = __velarGraphWeakMapRead(rawToProxy, value);
@@ -628,11 +894,13 @@ function __velarCreateRuntime() {
         next = toRaw(next);
         const present = __velarGraphHas(target, key);
         const previous = toRaw(__velarGraphGet(target, key, target));
-        const changed = !__velarGraphSame(previous, next);
+        // Creating an absent key is a structural change even when the value
+        // written equals the absent key's 'undefined' reading.
+        const changed = !present || !__velarGraphSame(previous, next);
         const written = __velarGraphSet(target, key, next, target);
         if (!written || !changed) return written;
         link(next, target);
-        if (!contains(target, previous)) unlink(previous, target);
+        releaseChild(target, previous);
         trigger(target, key, true, !present);
         return true;
       },
@@ -642,7 +910,7 @@ function __velarCreateRuntime() {
         const previous = toRaw(__velarGraphGet(target, key, target));
         const deleted = __velarGraphDelete(target, key);
         if (deleted) {
-          if (!contains(target, previous)) unlink(previous, target);
+          releaseChild(target, previous);
           trigger(target, key, true, true);
         }
         return deleted;
@@ -670,11 +938,7 @@ function __velarCreateRuntime() {
   };
   const collectionTrigger = (value, key, iterate = true, structure = false, indexFrom = null, allKeys = false) => trigger(toRaw(value), key, iterate, structure, indexFrom, allKeys);
   const collectionUnlink = (value, child) => {
-    value = toRaw(value);
-    child = toRaw(child);
-    if (!child || (typeof child !== "object" && typeof child !== "function")
-      || !__velarGraphWeakMapContains(parents, child)) return;
-    if (!contains(value, child)) unlink(child, value);
+    releaseChild(toRaw(value), toRaw(child));
   };
   const computed = (read) => {
     if (typeof read !== "function") throw new TypeError("computed requires a function");

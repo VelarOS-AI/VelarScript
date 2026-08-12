@@ -6,6 +6,22 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Reactive state no longer retains what it replaces. Replacing a state root
+  releases its descendants transitively, so the idiomatic
+  `settings = {...settings, field: next}` no longer keeps every previous
+  version alive, and deep mutation cost stops growing with the number of
+  replacements (3200 generations: 269µs per mutation to 1.15µs). Record
+  field writes no longer probe collection identity by throwing, cutting
+  them from 4.9µs to 0.4µs. Two watches that invalidate each other are now
+  bounded and reported through the error channel instead of freezing the
+  page silently, and a keyed re-render with identical keys leaves already
+  positioned rows attached, so a focused input keeps focus and IME
+  composition survives.
+- The runtime boundary gate now covers the whole emitted Web runtime rather
+  than three slices of it, with the old slices asserted to stay inside the
+  covered span so coverage cannot silently shrink. Closing it surfaced and
+  fixed a large set of replaceable-host-member uses across keyed
+  reconciliation, look/class/style, events, form binding, and raw HTML.
 - The text-conversion whitelist now covers `str` used as a value, not only
   as a direct call: `const convert = str` stays legal, while
   `convert(record)` and `map(str)` over a non-text List are type errors, so

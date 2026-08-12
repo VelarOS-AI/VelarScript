@@ -452,9 +452,26 @@ const webOwnedCallbackRuntimeSource = constantSource(webRuntimeSource, "ownedCal
 const webDomHostRuntimeSource = constantSource(webFoundationSource, "WEB_DOM_HOST_RUNTIME", "\n\nexport const WEB_REACTIVITY_HOST_RUNTIME");
 const webReactivityHostRuntimeSource = constantSource(webFoundationSource, "WEB_REACTIVITY_HOST_RUNTIME", "\n\nexport const WEB_ERROR_HOST_RUNTIME_BODY");
 const webErrorHostRuntimeSource = constantSource(webFoundationSource, "WEB_ERROR_HOST_RUNTIME_BODY", "\n\nexport const WEB_ERROR_HOST_RUNTIME =");
+const emittedWebRuntimeSource = webEmitterSource.slice(
+  webEmitterSource.indexOf("const WEB_RUNTIME_BODY = String.raw`"),
+  webEmitterSource.indexOf("`.trim();\n\nfunction webRuntime("),
+);
 const emittedReactivityRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarSchedule"), webEmitterSource.indexOf("function __velarResource"));
 const emittedManagedAsyncRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("const __velarManagedAsyncNativePromise"), webEmitterSource.indexOf("function __velarScope"));
 const emittedDomRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarComponent"), webEmitterSource.indexOf("function __velarLook(parts)"));
+/**
+ * Every ambient host operation the emitted Web runtime is allowed to touch is
+ * captured once, at module initialization, into a `const __velar…` binding at
+ * the template's top level. Dropping exactly those lines leaves the runtime-use
+ * source: everything that executes while an application is running, which is
+ * where a replaceable global or prototype would actually be observed.
+ */
+function emittedRuntimeUseSource(template) {
+  return template.split("\n")
+    .filter((line) => !(/^const __velar[A-Za-z0-9]+ = /u.test(line) && !/=>|function\s*[(*]|function [A-Za-z_$]/u.test(line)))
+    .join("\n");
+}
+const emittedWebRuntimeUseSource = emittedRuntimeUseSource(emittedWebRuntimeSource);
 const webComponentDomRuntimeSource = webPlatformModuleSource.slice(webPlatformModuleSource.indexOf("function component("));
 const webListGuardRuntimeSource = constantSource(webRuntimeSource, "listRuntime", "\nconst optionsRuntime");
 const webOptionsGuardRuntimeSource = constantSource(webRuntimeSource, "optionsRuntime", "\nconst webHostAbiRuntime");
@@ -1199,6 +1216,57 @@ if (!webFoundationSource.includes("${WEB_REACTIVITY_HOST_RUNTIME}")
 }
 if (/\bnew (?:Set|Map|WeakSet|WeakMap)\s*\(|\b(?:Set|Map|WeakSet|WeakMap)\.prototype|\bObject\.is\s*\(|\bArray\.isArray\s*\(|\bReflect\.(?:get|set|has|deleteProperty)\s*\(/u.test(emittedReactivityRuntimeSource)) {
   failures.push("packages/web/src/emitter.ts: reactive observers, cells, or queues bypass the captured graph ABI");
+}
+// The three slices above are the historical anchors. They stay because they
+// assert that specific captured operations are *present*, but they are no
+// longer the boundary: WEB_RUNTIME_BODY is checked end to end, so a new
+// surface (keyed reconciliation, look/class/style, events, form binding)
+// cannot land outside every ABI regex the way it could before.
+for (const [name, slice] of [
+  ["reactivity", emittedReactivityRuntimeSource],
+  ["managed async", emittedManagedAsyncRuntimeSource],
+  ["DOM lifecycle", emittedDomRuntimeSource],
+]) {
+  if (slice.length === 0 || !emittedWebRuntimeSource.includes(slice)) {
+    failures.push(`packages/web/src/emitter.ts: the ${name} slice escaped the emitted Web runtime template that the ABI gate covers`);
+  }
+}
+if (!emittedWebRuntimeSource.includes("function __velarTick()")
+  || !emittedWebRuntimeSource.includes("function __velarReport(value, phase")) {
+  failures.push("packages/web/src/emitter.ts: the emitted Web runtime template boundary no longer spans the whole runtime body");
+}
+for (const [pattern, message] of [
+  [/\bnew (?:Set|Map|WeakSet|WeakMap|Proxy)\s*\(|\b(?:Set|Map|WeakSet|WeakMap|Array|Object|Number|String|Promise)\.prototype\b/u,
+    "constructs or reaches a host collection through an ambient constructor or prototype"],
+  [/\bObject\.(?:is|freeze|keys|values|entries|assign|create|defineProperty|defineProperties|getOwnPropertyNames|getOwnPropertyDescriptor|getOwnPropertySymbols|getPrototypeOf|preventExtensions|isExtensible)\s*\(/u,
+    "reaches an ambient Object static instead of the captured graph ABI"],
+  [/\bArray\.(?:isArray|from|of)\s*\(|\bReflect\.[A-Za-z]+\s*\(|\bNumber\.(?:isFinite|isInteger|isSafeInteger)\s*\(|\bJSON\.[A-Za-z]+\s*\(|\bSymbol\.for\s*\(|(?<![A-Za-z0-9_$.])String\s*\(/u,
+    "reaches an ambient Array, Reflect, Number, JSON, Symbol, or String operation instead of the captured ABI"],
+  [/__velarRuntime\.[A-Za-z]+\.(?:get|set|has|add|delete|clear|values|keys|entries|forEach|size)\b/u,
+    "uses a replaceable instance method on a runtime-owned collection"],
+  [/(?:element|node|parent|root|host|target|fallback|owned|start|end|child|instance)\.(?:append|insertBefore|replaceChildren|removeChild|appendChild|remove|before|after|setAttribute|removeAttribute|setAttributeNS|removeAttributeNS|childNodes|nodeType|nextSibling|previousSibling|parentNode|firstChild|lastChild|textContent|innerHTML|classList|style|addEventListener|removeEventListener|querySelector|querySelectorAll|valueAsNumber|checked|focus|blur)\b/u,
+    "reaches a replaceable DOM member instead of the captured DOM host ABI"],
+  [/\bdocument\.|\bglobalThis\.(?:Node|Element|Document|DocumentFragment|CharacterData)\b/u,
+    "rediscovers the document or a DOM constructor while the application runs"],
+  // Framework state parked on a host object is read through its own descriptor,
+  // never through '.': a planted prototype getter would otherwise forge look,
+  // class, style, or host-element ownership. Markers on emitter-created plain
+  // objects (__velarComponent, __velarSnapshotProps, __velarStyle, __bindRef)
+  // stay ordinary reads -- their receivers are never host objects.
+  [/\.(?:__velarHost|__velarDynamicRoot|__velarLookTokens|__velarClassState|__velarInlineStyleState|__velarBaseClasses|__velarManagedClasses)\b/u,
+    "reads framework ownership off a host object through a replaceable property path"],
+  [/for \((?:const|let) [^)]*? of (?!__velarGraphSetItems\(|__velarGraphMapItems\(|__velarGraphMapKeyItems\()/u,
+    "iterates with a replaceable iterator instead of an index walk or the captured Set/Map iterator"],
+  [/\[\.\.\./u, "copies through the replaceable array iterator"],
+  [/[A-Za-z_$][\w$]*\(\.\.\./u, "spreads through the replaceable array iterator instead of the captured apply operation"],
+  [/\.(?:flatMap|filter|map|forEach|join|reverse|concat|sort|push|pop|shift|unshift|splice|indexOf|includes)\s*\(/u,
+    "uses a replaceable Array prototype method"],
+]) {
+  const match = pattern.exec(emittedWebRuntimeUseSource);
+  if (match) {
+    const line = emittedWebRuntimeUseSource.slice(0, match.index).split("\n").length;
+    failures.push(`packages/web/src/emitter.ts: the emitted Web runtime ${message} -- '${match[0]}' (runtime-use line ${line})`);
+  }
 }
 for (const phrase of [
   "const __velarManagedAsyncNativePromise = globalThis.Promise",
