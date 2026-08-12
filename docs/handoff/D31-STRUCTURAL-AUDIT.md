@@ -146,12 +146,20 @@ const r: number = pick(1, "x")   // 错误在下游远处才爆
 
 ---
 
-## 第 28 条 —— 三个小项（消息与文档）
+## 第 28 条 —— 五个小项（消息与文档；第 4/5 项为第五轮追加，用户已批准）
 
 1. **静态方法里的 `self`**：现报裸 `VEL3001: Unknown name 'self'`。类名访问
    已可用（实测 `Counter.total += 1` 于 static def 内正常）。诊断升级：
    `'self' is not available in a static method; use the class name: 'Counter.total'`。
    charter §10 static 段落补一句。
+4. **字段初始化器里的 `self`**（同族，第五轮实测）：`let a: number = self.b + 1`
+   现报裸 `Unknown name 'self'`。设计正确（依赖初始化归构造器），消息升级：
+   `'self' is not available in a field initializer; assign the field in the
+   constructor`。与第 1 项同一发射面，同批实施。
+5. **迭代语义分裂成文**（第五轮实测）：普通 `for` 是 **live** 迭代 ——
+   `for x in items` 体内 `items.append(x)` 会被访问到（与 Python/JS 亲代一致，
+   BFS 工作队列是正当用法），而回调族（map/filter/…）是快照（charter §8 已写）。
+   charter §9 循环节补一句 live 语义与两者的分工；**不加诊断**（合法模式）。
 2. **charter §10 构造器措辞**：现文「one explicit constructor」与实测不符 ——
    全字段有初始化器的类可省构造器（`Point()` 直接可用）。改为「至多一个显式
    构造器；全字段就绪时可省略」。默认构造器行为已正确，纯措辞。

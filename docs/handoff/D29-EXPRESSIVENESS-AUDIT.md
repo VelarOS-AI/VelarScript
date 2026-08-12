@@ -296,6 +296,57 @@ type Options:
 
 ---
 
+## 附议 C —— 字符列表拼写：成文 `split("")`，不加 `chars()`（含改判记录）
+
+用户 2026-08-12 批准（「都按照你的决策来」）。**原推荐是加 `chars()`，落规格时
+改判**：实测 `"a😀b".split("")` 已按码点切出 3 段 —— 字符列表的拼写已存在，
+再加 `chars()` 即同义词，违反规则 3 与 D34「扩展加词汇不加同义词」法。
+
+真正的缺口是**未成文**：charter §7 的 `split(separator)` 行未写空分隔符行为，
+官方 stdlib 作者因此不知道，手搓了 95 行分块随机访问层
+（`packages/cli/stdlib/javascript.vel:132-226`，见 stdlib 审计）。
+
+实施：charter §7 split 行补「空分隔符按 Unicode 码点逐字符切分」；
+`"".split("")` 边界行为实测后一并成文；stdlib 的 `ScriptCharacters` 层迁移为
+`source.split("")` 直取 `List<string>`（O(1) 下标随之免费）；AI 简报的易错表
+加一行（Python 的 `list(s)` / JS 的 `[...s]` 直觉都指向它）。
+
+## 附议 D —— `List.removeLast() -> T`：严格弹尾
+
+用户 2026-08-12 批准。stdlib 审计证据：`pop()` 返回可空逼出**同一团队两种民间
+解法** —— text-buffer.vel 三处「assert 后紧跟第二个 assert」（TB:497/508/534），
+javascript.vel 三处 `slice(0, size - 1)` 整列表复制弃尾（JS:430/431/435）。
+
+实施：List 成员表加 `removeLast() -> T` —— 移除并返回末项，空列表抛错（与
+`[]` 的 strict 家族对齐；错误消息风格沿用 `List.insert` 家族）。`pop()` 保持
+可空契约不动（期望缺席的场景）。命名注记：Python 的 `list.pop()` 本就抛错，
+Vel 的 `pop()` 采了 JS 可空语义 —— `removeLast` 避开双亲歧义。回归：非空弹尾、
+空列表抛错、`pop()` 行为不回归、stdlib 六处民间解法迁移。
+
+---
+
+## 附议 E —— `string.isBlank() -> bool`：恢复被代理时代移除的可读拼写
+
+用户 2026-08-12 裁决新增。**历史必须记录**：W-127 曾移除 `velar/text.isBlank`，
+理由是「组合拼写 `text.trim().size == 0` 已覆盖」—— 与引入 `invert` 是同一批
+代理时代决定。本次恢复与 D28 第 7 条撤销 `invert` 指向同一方向：**高频单概念
+问题的可读拼写赢过组合式极简**（使命标准：`if draft.isBlank():` 对「人来读」
+显著优于三步咒语）。Kotlin / Java 11 的 `isBlank()` 是主流先例。
+
+实施：
+- string 成员表加 `isBlank() -> bool` —— 空串或纯空白为 `true`（语义恒等于
+  `trim().size == 0`，成文这个等式；注意与 Python `isspace()` 的差异 —— 空串
+  在 isspace 下是 false，本方法采 Kotlin/Java 语义）。
+- 按编译器自有值方法规矩实现（接收者受检、求值一次、可作绑定值）。
+- 若存在教「trim().size == 0」的旧指引（W-127 迁移期产物），反转或删除。
+- 迁移：Lite 当年被 W-127 迁走的站点迁回（Composer、Markdown、server config、
+  request validation、terminal input）；示例 `if draft != ""` 类站点审视语义后
+  按意图选 `!= ""`（严格非空）或 `not draft.isBlank()`（非空白）。
+- 回归：空串 / 纯空格 / 制表换行 / 混合 / 非空白五输入执行级断言。
+- 归批次 A（同一张 string 成员表）。
+
+---
+
 ## 第 12 条 —— 三套下标政策：不改语义，写成一条规则
 
 用户 2026-08-12 确认通过。**审计中改变了原结论**：原报告建议「`[]` 一律 strict」，
@@ -451,8 +502,10 @@ charter:298 只讲了 `**`、`in`、`not in`、`is`、`is not`，**全篇未提 
    **后续所有批次都等它三道门禁全绿。**
 2. **批次 A（Core 编译器）**：D28 第 4 条（`case _:` 唯一）+ D28 第 7 条（撤 `invert`）
    + 本文 10b（`isInteger()`）+ 附议 B（三处位置参数收紧）+ 本文第 14 条（丢弃纯
-   结果报错）。同族文件一次改完 —— 这四项都动数字/集合运行时与同两张 charter
-   成员表，拆批会反复改同文件。附议 A 无实施动作（决定不做），仅作拒绝理由存档。
+   结果报错）+ 附议 C（`split("")` 成文与 stdlib 迁移）+ 附议 D（`removeLast()`）
+   + 附议 E（`string.isBlank()`，W-127 反转）。
+   同族文件一次改完 —— 这些项都动数字/集合运行时与同两张 charter 成员表，
+   拆批会反复改同文件。附议 A 无实施动作（决定不做），仅作拒绝理由存档。
 3. **批次 B（Web）**：D28 第 5 条（`null` 唯一 + `WebNode?`）+ D28 第 6 条文档
    + 本文 11b（删 `ready`）。
 4. **批次 C（纯文档与账本）**：本文 8a / 8b 文档、9（charter §19 + Lite LEDGER 改判）、
