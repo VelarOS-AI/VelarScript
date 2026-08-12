@@ -16,11 +16,11 @@
 
 | ID | 严重度 | 位置 | 一句话 | 状态 |
 |---|---|---|---|---|
-| β-1 | blocker | `web/emitter.ts:1244-1256`、`runtime-foundation.ts:662-670` | 替换 state 根后，全部后代仍强引用死根：无界滞留 + 每次深层突变 O(代数) | 未验证 |
-| β-2 | blocker | `collection-lowering-runtime.ts:472` | `Set.update()` 只触发 iterate/structure，不触发成员键 —— `"x" in tags` 永不更新 | 未验证 |
-| β-3 | blocker | `collection-lowering-runtime.ts:186,191,218,221,237` | `Set()`/`Map()` 构造存入的是响应式代理，读取侧解包 → 成员身份分裂（违反 web-api.md:293 明文契约） | 未验证 |
-| β-4 | major | `web/emitter.ts:1218-1231,1168-1173` | 跨观察者互相失效无预算：两个 watch 互喂可同步冻页且无报告（#30 只修了自失效） | 未验证 |
-| β-5 | major | `web/emitter.ts:1691-1699` | keyed 渲染无「已在位」判断，每次更新重插全部行 → O(n) DOM 移动 + 焦点/IME 丢失 | 未验证 |
+| β-1 | blocker ✔已确认 | `web/emitter.ts:1244-1256`、`runtime-foundation.ts:662-670` | 替换 state 根后，全部后代仍强引用死根：无界滞留 + 每次深层突变 O(代数) | 未验证 |
+| β-2 | blocker ✔已确认 | `collection-lowering-runtime.ts:472` | `Set.update()` 只触发 iterate/structure，不触发成员键 —— `"x" in tags` 永不更新 | 未验证 |
+| β-3 | blocker ✔已确认(收窄) | `collection-lowering-runtime.ts:186,191,218,221,237` | `Set()`/`Map()` 构造存入的是响应式代理，读取侧解包 → 成员身份分裂（违反 web-api.md:293 明文契约） | 未验证 |
+| β-4 | major ✔已确认 | `web/emitter.ts:1218-1231,1168-1173` | 跨观察者互相失效无预算：两个 watch 互喂可同步冻页且无报告（#30 只修了自失效） | 未验证 |
+| β-5 | major ✔已确认(正确性) | `web/emitter.ts:1691-1699` | keyed 渲染无「已在位」判断，每次更新重插全部行 → O(n) DOM 移动 + 焦点/IME 丢失 | 未验证 |
 | β-6 | major | `web/emitter.ts` 多处（1654-1704、1593、1846-2159） | 新 Web 运行时面回退到可覆盖实例方法（Map/Array 迭代器/style/classList/事件）—— W-83..W-99 类回归 | 未验证（可利用性）／**门禁缺口已确认**，见下 |
 | β-7 | major(perf) | `runtime-foundation.ts:635,645,588-613` | 记录字段写入对**原始值**也走 `contains` → 每次写抛接 2 次异常 + O(字段) 描述符分配（bind:value 每键击） | 未验证 |
 | β-8 | major(perf) | `collection-lowering-runtime.ts:379,392,117-122` | `insert`/`pop`/`copy` 走 dense 校验而非 owned 快路径；`copy` 是全部回调操作的入口 → `map` 前 ~3n 次分配 | 未验证 |
@@ -78,14 +78,14 @@
 | ID | 严重度 | 位置 | 一句话 | 状态 |
 |---|---|---|---|---|
 | α-1 | blocker | analyzer HEAD:3927、7405、7231-7236；emitter HEAD:1448 | **`str` 作为值绕过 VEL4026** → toString 钩子洞重开 | **已确认**（见下） |
-| α-2 | blocker | `cli/project.ts:702-713`、`:320-333` | VEL3019 消失后增量缓存里 `code: null` 永不恢复 → **静默产出空 JS 模块**（`velar dev` watch 下，改动传播只到 dependents，被复用模块保持 null；下游全部 `code ?? ""`） | 未验证 |
-| α-3 | major | `compiler/emitter.ts:543-546,537-541` | detached 报告失败变成 unhandled rejection → **Node 进程死亡**，违反 B-DETACHED-ASYNC「不终止程序」（三条路径：无 console 的 `throw`、console.error 自身抛、`__velarNormalizeError` 非全函数） | 未验证 |
-| α-4 | major | `web/emitter.ts:207` | Web `detachedTaskHelpers()` **未按 `webOutput` 门控**（同族其他 helper 全都门控）→ web 项目里的纯数据模块走浏览器报告路径，`velar test`(Node) 下 `queueMicrotask` throw 杀测试进程 | 未验证 |
-| α-5 | major | `compiler/emitter.ts:1031-1036` | `async <expr>` 是唯一跳过 Promise 归一化的消费者（传 `false`）→ 外来 thenable/`undefined` 触发同步 `TypeError: Promise.prototype.then called on incompatible receiver`，未被拥有 | 未验证 |
-| α-6 | major | `compiler/analyzer.ts:7340-7347` | VEL3019 **误报**：`def` 提升为 ESM 链接期初始化，但顶层调用导入的 `def` 被判不安全（修复需模块接口携带 hoistedness —— 箭头 const 导出确实是 TDZ，仅凭绑定种类不够） | 未验证 |
-| α-7 | major | `cli/project.ts:683` | VEL3019 **漏报**：按直接 import 说明符判序，**再导出indirection 丢失真实定义模块** → 环内读判为安全，运行期正是该特性要防的 ReferenceError | 未验证 |
-| α-8 | major | `cli/project.ts:605,686-690` | VEL3019 **漏报**：跳过 `dynamic` 引用，但动态导入的 .vel 确实被加载且无 order 位置 → 整个环无检查 | 未验证 |
-| α-9 | major | `cli/project.ts:657-671`、`project-session.ts:51,240` | **VEL3019 依赖 entry 列表** → LSP（每个文件都是 entry）与 `velar check`（单 entry）判定不一致：编辑器报错、构建通过 | 未验证 |
+| α-2 | blocker ✔已确认 | `cli/project.ts:702-713`、`:320-333` | VEL3019 消失后增量缓存里 `code: null` 永不恢复 → **静默产出空 JS 模块**（`velar dev` watch 下，改动传播只到 dependents，被复用模块保持 null；下游全部 `code ?? ""`） | 未验证 |
+| α-3 | major ✔已确认 | `compiler/emitter.ts:543-546,537-541` | detached 报告失败变成 unhandled rejection → **Node 进程死亡**，违反 B-DETACHED-ASYNC「不终止程序」（三条路径：无 console 的 `throw`、console.error 自身抛、`__velarNormalizeError` 非全函数） | 未验证 |
+| α-4 | major ✔已确认 | `web/emitter.ts:207` | Web `detachedTaskHelpers()` **未按 `webOutput` 门控**（同族其他 helper 全都门控）→ web 项目里的纯数据模块走浏览器报告路径，`velar test`(Node) 下 `queueMicrotask` throw 杀测试进程 | 未验证 |
+| α-5 | major ✔已确认 | `compiler/emitter.ts:1031-1036` | `async <expr>` 是唯一跳过 Promise 归一化的消费者（传 `false`）→ 外来 thenable/`undefined` 触发同步 `TypeError: Promise.prototype.then called on incompatible receiver`，未被拥有 | 未验证 |
+| α-6 | major ✔已确认 | `compiler/analyzer.ts:7340-7347` | VEL3019 **误报**：`def` 提升为 ESM 链接期初始化，但顶层调用导入的 `def` 被判不安全（修复需模块接口携带 hoistedness —— 箭头 const 导出确实是 TDZ，仅凭绑定种类不够） | 未验证 |
+| α-7 | major ✔已确认 | `cli/project.ts:683` | VEL3019 **漏报**：按直接 import 说明符判序，**再导出indirection 丢失真实定义模块** → 环内读判为安全，运行期正是该特性要防的 ReferenceError | 未验证 |
+| α-8 | major ✔已确认 | `cli/project.ts:605,686-690` | VEL3019 **漏报**：跳过 `dynamic` 引用，但动态导入的 .vel 确实被加载且无 order 位置 → 整个环无检查 | 未验证 |
+| α-9 | major ✔已确认 | `cli/project.ts:657-671`、`project-session.ts:51,240` | **VEL3019 依赖 entry 列表** → LSP（每个文件都是 entry）与 `velar check`（单 entry）判定不一致：编辑器报错、构建通过 | 未验证 |
 | α-10 | major(perf) | `cli/project.ts:657-671,686` | `entryOrders` 无条件计算，O(entries×(V+E))：LSP 场景 4096 entry × 全图 DFS ≈ 千万级 Map 条目**每次击键**，且项目**无环也照付**（现有测试只断言零诊断、未断言跳过） | 未验证 |
 | α-11 | minor | `analyzer.ts:7355-7360` | VEL3019 无调用图传播：`const eager = read()` 顶层调用本模块函数读环内绑定 → 仍裸崩（承诺打折，作用域限制已记档） | 未验证 |
 | α-12 | minor | `analyzer.ts:2175,2241` | VEL4027/4028 教的 `await` 在非 async `def` 里非法（测试还固化了这个消息）→ 该场景只有 `async x()` 可用 | 未验证 |
@@ -133,6 +133,40 @@
   可选择加入 → 泛型 render/label 辅助函数写不出来。
 - **α-D2**：`str()` 失去逃生阀角色（`unknown`/`any` 均被拒），JS 边界值只能经
   `print`（检查用）或 `stringify` 成文本 —— 值得 charter 明写一句。
+
+---
+
+## 验证波结果（执行级，2026-08-12）：**13/13 确认，零幻影**
+
+对抗性验证（默认立场驳回）全部给出可复现执行证据。**三条的推理被修正、一条
+新缺陷被发现** —— 这些修正与确认同等重要，修复必须打在真实路径上。
+
+| ID | 判定 | 关键执行证据 |
+|---|---|---|
+| α-2 | **确认** | 增量复用后 `cycle-a` 诊断为空但 `code=NULL`；同源重编为 71 字节。dev 服务器实测返回**空模块 + 零诊断**，导入方随后 `SyntaxError: does not provide an export named` |
+| α-3 | **确认（路径被修正）** | 真实可达路径是 `emitter.ts:539` **无守卫读 `error.stack`** → 报告器内抛 → unhandled rejection → 进程死。**原列三条路径中两条被驳回**：删 `globalThis.console` / 事后替换 `console.error` 均被模块初始化捕获防住（实测存活并正常打印），只有「导入前污染」才咬 |
+| α-4 | **确认** | 无任何 web 语法的 `tasks.vel` 仍拿到 web detached helper（`queueMicrotask:true`）；`velar test` 下 detached 失败**杀死整个测试进程**（0 passed，第二个测试没跑）。反证：`extensions: []` 同源 → 2 passed 且失败上 stderr |
+| α-5 | **确认** | extern 返回外来 thenable → `TypeError: Method Promise.prototype.then called on incompatible receiver` 同步杀进程；返回 `undefined` 同样。反证：同值走 `await` → 干净可捕获的 `Expected an actual Promise` |
+| α-6 | **确认（误报）** | 导入 `def` 的顶层调用被 VEL3019 挡住（`code=NULL`，构建被阻断），但实测运行 `exit=0 stdout="helped"`；对照组 `const` 箭头确实 `ReferenceError` —— 检查器对 `def` 判错、对 `const` 判对 |
+| α-7 | **确认（漏报）** | 经桶文件再导出的环：三模块零诊断，运行 `ReferenceError: Cannot access 'value' before initialization`；去掉桶直接导入则 VEL3019 正常命中 |
+| α-8 | **确认（漏报）** | `await import("./a.vel")` 后的环：零诊断 + 运行期 ReferenceError；同环改静态导入则命中 |
+| α-9 | **确认** | 同一份磁盘项目：`VelarProjectSessions.snapshot()` 报 VEL3019，`velar check` 同目录 `exit 0` 无诊断 —— 编辑器红、构建绿 |
+| β-1 | **确认（含实测数字）** | 惯用写法 `settings = {...settings, label: next}` ×200 → `theme.parents = 201`，gc 后 **200/200 死根仍存活**；每次深层突变耗时随代数线性增长：51 代 7.66µs → 3200 代 197.73µs |
+| β-2 | **确认** | `Set.update()` 后 `'x' in tags` 为 true 但 watch 未触发（membershipRuns=0）；对照 `Set.add()` 正常触发 |
+| β-3 | **确认（范围收窄）** | `Set([...])`/`Map([...])` 构造后成员/键查找恒 false/null，`add`/`set` 对照正常。**List 那两行被驳回** —— List 读取侧两边都 raw，无缺陷 |
+| β-4 | **确认** | 两个互喂 watch：子进程 12 秒后仍在跑、宏任务定时器**从未触发**、错误通道零输出，SIGKILL 收场；对照自失效 watch 正常抛 RangeError |
+| β-5 | **确认（性能半边降级）** | Chromium 实测：相同键、相同值的重新赋值使聚焦 input **失焦**（blur 计数 1）。但性能半边测得 1000 行仅 6.6ms/帧（≈2µs/行冗余移动）—— **真正的缺陷是正确性（焦点/IME/子树瞬态），不是性能** |
+
+### NEW-1（新发现，major）—— Core detached 报告器读 `error.stack` 无守卫
+
+`compiler/emitter.ts:539` 在 rejection 处理器内读外来错误对象的 `.stack`，
+而该处理器返回的 promise 被丢弃 → 任何带抛出型/异质 `stack` 访问器的 rejection
+值都会**把报告本身变成 unhandled rejection 并杀死 Node 进程**。比 α-3 原列的
+三条路径**严格更可达**（不需要污染 console、不需要初始化顺序配合）。Web 报告器
+不读 `.stack` 且对用户处理器有 try/catch，不受影响。
+
+**修复方向**：整个报告器包 try/catch + `.stack` 读取加守卫（或改用已捕获的
+安全提取），并确保 `then` 派生 promise 不被丢弃。
 
 ---
 
