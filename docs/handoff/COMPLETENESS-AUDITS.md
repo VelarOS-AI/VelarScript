@@ -681,3 +681,52 @@ unsafe 拼写恰好三个（js/css/html，无块形式）；同源安全/不安�
 BRG-D1 + N1/N2/N4 + U2/U3/U6/U10 → **N-2b**；U4/U5/U7/U8/U9 + N3 → **N-3 成文**
 （U7 必须进 AI 简报）；**BRG-U1 → 待用户裁决**（推荐 (a) 成文只读规则）；
 BRG-D2 → 批次 F 不变。web 审计需带 `probes/w8-reactive` 复跑。
+
+
+---
+
+## 审计九 —— 组件/Web 面（2026-08-13 凌晨，~90 探针项目，Chromium 执行级）
+
+### DEFECT（执行级，浏览器证据）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **WEB-D1（blocker 级头条）** | **导入 `velar/app` 即打断全应用的被观察 computed**：12 行复现 —— `import {onError}` + 被渲染的 computed + 一个写 state 的按钮 → 点击后 DOM 永远停在旧值，浏览器栈 `ReferenceError: __velarSchedule is not defined`。机制：生成的 velar/app 模块先盖运行时注册表（ESM 序保证），而 foundation 的 `computed.notify` 调的 `__velarSchedule` **只在 emitter prelude 里定义** —— 注册表共享的 computed 解析到了错误闭包。导入顺序无法治愈（实证）。**示例全绿纯属侥幸**（flow-board 不导 velar/app；production-web 导了但 9 个测试恰好没有一个使被观察 computed 失效）。开发与生产构建同样中招 | **热修波 N-2w 首位**：调度器（或 schedule 槽）放进 foundation/注册表本身；**并补第一条 velar/app + 被观察 computed + 一次写 的浏览器回归**（现无任何门禁覆盖） |
+| **WEB-D2** | **computed 环的余波是 10 万观察者的 flush 风暴并杀死 headless 进程**：首读得到自有的递归错误（好），但环边不解除，下一个微任务两个失败 computed 互相通知打满全 flush 预算 → RangeError 无 handler → 微任务重抛 → **整个 velar test 进程死**。文档的 100 自失效上限只盖 render/watch，computed 模式观察者逃逸（自写 computed 同证：跑到 10 万而非 100 停） | N-2w：递归失败的 computed 解除其边；computed 观察者共享 100 上限 |
+| **WEB-D3** | **「无空白页」承诺三条路径只兑现一条**：setup 抛 → 可见致命态 ✓；**初始渲染中动态区抛 → 空白页**（错误只进 console）；**生产构建 mount 目标缺失 → 空白页**（dev 有 overlay，生产 console-only）。web-api.md 白纸黑字承诺 fatal state instead of a blank page | N-2w：两条路径补致命态 |
+
+### INCONSISTENT
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **WEB-N1 + N2 + U11（合并为一个设计题）** | **表单与事件的故事有洞**：`bind:value={form.name}`/`{names[0]}` 被拒（VEL5019 要裸 state 名）而 `form.name = x` 处处合法；事件对象**没有 `target`**（有意但未成文）；两者叠加 → **受控的记录字段编辑没有任何拼写**；radio 组也没有（bind:checked 要 bool）。雪上加霜：analyzer 里躺着一条**永不可能触发的**教学（它匹配的箭头形是解析错误）—— 作者得到的是裸的三连级联。事实上的做法（每字段一个 state、或提交时 velar/forms.read）零文档 | **待用户裁决**（形式与事件故事一次定）：bind 成员目标开不开、事件对象边界成不成文、radio 拼写给不给；死教学码顺带清理 |
+| WEB-N3 | action 失败报告不对称：事件路径去重、detached 路径不去重（一次失败**报两次**）；被换代的失败无 error 字段、只到 detached 相位且 detail 为空 | N-2w：恰好报一次 + 换代失败带 detail |
+| WEB-N4 | 关键字 prop（`class: string`）→ 11 连级联（parser 在参数表里进了类声明解析）；声明处 `compact?: bool` → 8 连级联无指引；D31-26 批准措辞「children: WebNode? 即可省略」与现实冲突（今天只有 `= null` 可省） | N-2b：两条定向教学 + D31-26 措辞修正 |
+| WEB-N5 | 一个坏模块杀死整个 headless 套件（flush 失败微任务重抛） | N-2w：失败归单测试不归进程 |
+
+### CHARTER-DRIFT
+
+- **WEB-C1**：静态位置的 `key="static"` 被静默忽略，charter §14 承诺「非 keyed 形态的 key 是诊断而非静默忽略」（插值位置的 VEL5050 优秀）。→ N-2b 小修。
+
+### UNDEFINED（十五条，压缩）
+
+**头条 WEB-U1 —— resource 重取契约**：prop 变化**不**重取（浏览器实证 alice→bob 后仍显示 alice 的数据、连 loading 都不进）；`reload()` 按当前输入重求值；失败的 reload 保留旧值并设 error；「变化即重取」的拼写（watch + reload）无处展示 —— **最常见的数据加载问题，charter/web-api 全静默**。→ N-3 成文 + AI 简报。
+
+其余：U2 action 并发（无限并行/pending=任一活跃/error=最新代际——实测已定，未成文）；U3 computed 纯度（回调可写 state 且静默发布）；U4 mount/tick 零契约；U5 `host` 标记（多根必需、转发 class/look —— 全文档恰好出现一次）；U6 fragments 存在但 charter 从未引入；U7 `class:name={bool}` 指令实现完好零文档；U8 事件修饰符五个无一处列出；U9 嵌套组件声明合法且**活闭包**父 cells（鉴于 CLS-D1 历史需显式决定 —— 定案可否决：祝福+成文）；U10 watch 形态与生命周期（模块级 watch 永不释放未声明；自失效消息对 watch 说 "render" 用词错）；U12 **未知元素名静默**（`<dvi>` 编译渲染零声 —— 属性表 D36-38、事件表 D37-43 都排了队，元素名两边都不在：净新缺口，归批次 I 同族）；U13 JSX 注释无拼写（两种尝试都死于无靶级联 —— 先给定向诊断，语法要不要加待用户）；U14 JSX 空白规则未成文；U15 条件渲染教学（`{cond and <el/>}` 裸拒 —— React 习惯第一撞点，需教 `{cond ? <el/> : null}`；组件 `return null` 需教包装模式）。
+
+### DECIDED-AND-CORRECT（压缩，凭证很长节选）
+
+组件声明全家诊断、四 cell 位置矩阵与定向教学、await 三处剪裁消息、模块 state
+跨组件发布、**组件内 watch 卸载即释放（安全丢弃新钉 ✓）**、render/watch 预算
+101 停含相位报告页面存活、子先挂载父后、clean 重挂载、keyless map VEL5017、
+`{null}` 渲染无物、事件按名定型 + action 直挂与包装皆合法、bind 矩阵（含
+number 定型）、Look 组合全形、路由三定向诊断 + 浏览器验证、unsafe:html（仅
+string/脚本惰性/无消毒如文档/禁 children）、SSR/hydration **已决缺席且成文**、
+**BRG-U1 复跑成立**（DOM 停 6 → Vel 侧 append 后 21 静默追认）。
+
+### 处置总结
+
+**N-2w（Web 热修波，立即）**：D1（+首条 velar/app 浏览器回归）、D2、D3 两路径、
+N3、N5。**待用户裁决**：N1+N2+U11 合并的「表单与事件故事」。N-2b：N4、C1、U15、
+U13 诊断。N-3 成文块：U1-U8、U10、U14（U1 与 U7、U8 进 AI 简报）。批次 I 追加：
+U12 元素名表（与既排队的属性表/事件表同族）。可否决：U9 嵌套组件祝福成文。
