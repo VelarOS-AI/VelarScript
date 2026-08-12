@@ -422,3 +422,65 @@ await）。
 ASY-D1 + 微裁决归**批次 K**（D35 重规 all/race 的同批）；ASY-D2/U1/U2/U3/U4
 归 **N-2b**（与枚举波同车，均不冲突 N-1 文件——test-runner 与 standard-modules
 除外，实施时注意 project.ts 让路）；ASY-U5 归 N-3。
+
+
+---
+
+## 审计五 —— 集合面（2026-08-13 凌晨，~120 探针，双快照 + 活树复验 DEFECT）
+
+### DEFECT（执行级，活树复验）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **COL-D1** | **Record 双槽 `for` 中途 remove 未访问键 → 裸 JS TypeError**（`Cannot read properties of undefined`）—— 违反「本参考拥有全部用户可观察语义」。collection-lowering-runtime.ts:166-167 读 descriptor 不判 undefined；**Map 同款探针正确跳过** | 修：descriptor undefined → continue（Map 对齐），归 N-2b |
+| **COL-D2** | **展开把开放记录的多余字段走私进 `Record<T>`**：`User.parse({name, age: 39})` 后 `{...u}` 编译进 `Record<string>`，size=2，39 在里面 —— 每次后续读都在**远离肇因处**爆炸。直接赋值 `wantRecord(u)` 被拒的理由正是这个 | 修：命名记录值展开进 `Record<T>` 上下文与直接赋值同规则拒绝（教显式字段复制），归 N-2b；顺带给 COL-I5 的拒绝消息补上这条理由 |
+
+### INCONSISTENT（五条）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **COL-I1** | **迭代中变更：三个家族三种行为，全部无文档**——List 按下标活跃（`for x in v: v.append(x)` 跑到 100 万上限）、Set/Map 活迭代器（增访删跳）、Record 键快照 + 幽灵访问 | 定案（可否决）：**照实成文各家契约**（D1 修后 Record = 快照且删除键跳过），charter §8 一段 |
+| **COL-I2** | **同一作者错误三种错误身份**：`v[i]`→IndexError、`slice(0.5)`→裸 TypeError、`insert(-1)`→裸 RangeError；且 insert 拒负下标与 §8「负下标从尾计数」邻座矛盾，0..size 契约只活在运行时消息里 | 修：List 位置错误统一 IndexError；charter insert 行写明边界 |
+| **COL-I3** | **集合 `==` 是引用身份，新建字面量做操作数恒为假**：`[1] == [1]` → false。D42 自己的理由（「恒定条件是逻辑 bug」）字面适用；**全审计盲测风险最高项**（Python 形表面就是在邀请 `[1,2] == [1,2]`） | 两半：**字面量操作数静态拒绝**（恒假可证，D42 既定理由，可否决）归 N-2b；**元素级相等要不要词汇**（`a.equals(b)`？深 `==`？还是不提供？）→ **记档待用户裁决**（行为优先 js 说引用，父亲 Python 说元素级 —— 亲代冲突，须用户拍板） |
+| **COL-I4** | 编译器教 `stringify(value)`，照写却得 `VEL3001: Unknown name` —— 两跳死胡同，两条消息都不提 `import {stringify} from "velar/json"` | 修：诊断带上导入行 |
+| **COL-I5** | 命名记录 → `Record<T>` 被无理由拒绝（匿名对象按 §8 承诺双向正确；命名记录因开放性而拒**是对的**，但消息零解释，且 `{...u}` 还「能用」= COL-D2 的洞） | 修：消息给理由 + charter 措辞消歧（与 D2 同批） |
+
+### UNDEFINED（十条，含四条决案可否决）
+
+| ID | 未定 | 处置 |
+|---|---|---|
+| **COL-U1** | 无 `flat`/`flatMap`，裸报无成员、无指引、§19 也没列 | 定案（可否决）：**加 `flatMap`**（map 家族的标准成员，边界内补完）；`flat` 不加（reduce+extend 可表达，flatMap 是常用形） |
+| **COL-U2** | **Set 代数缺席**（union/intersection/difference —— JS 2025 与 Python 都有）；Set 无函数式方法且无人教 `.values()` 桥 | 定案（可否决）：加三个代数方法（复制语义，同 sorted）；函数式走 `.values()` 桥 + 定向教学 |
+| **COL-U3** | **`filter(x => x != null)` 不收窄** `List<T?>`→`List<T>`（NaN 双胞胎有官方教法，null 这边零词汇） | 定案（可否决）：编译器特判这一个谓词形状（TS 同款能力的封闭词汇版）；不开放用户谓词类型 |
+| **COL-U4** | **冻结宿主数组是全墙**：读/求和/展开/readonly 视图/parse 全拒，库数据无进语言之路 | 定案（可否决）：先教学消息（JS 侧复制一行），接纳冻结数组延后立项 |
+| **COL-U5** | **ValidationError 零细节**：永远只有 `Value does not match {Name}` —— 无路径、无字段、无原因；这是 wire 验证语言每次 parse 失败的调试故事 | 修：带路径+字段+原因（与枚举审计 ENM-U4 内建错误类型可命名同族合并），归 N-2b |
+| **COL-U6** | **整数样字符串键重排**：`{"2":…,"1":…}` 迭代出 1,2（JS 整数键序泄漏）；数字 ID 键的 JSON 静默重排 | 修：成文陷阱 + 教序敏感场景用 Map-from-entries |
+| COL-U7 | 迭代顺序处处是插入序（含 set 保位、remove+re-add 移尾）但 charter 只说 "in order" | 成文（N-3） |
+| COL-U8 | `List()`/`Array()` 值位置裸报无指引（Set()/Map() 是真构造器 —— 对称猜测的不对称陷阱） | 修：定向教 `[]` / `List<T>` |
+| COL-U9 | `map((x, i) => …)` 裸可赋性错误，没人指两槽循环 | 修：定向教 `for value, index in v` |
+| COL-U10 | 跨集合桥拒绝全不教 `.values()`/`.entries()`/`.keys()` | 修：消息一批 |
+
+### CHARTER-DRIFT
+
+无存活项 —— §8 「structural object → Record<T>」句是歧义（I5）非漂移；其协变
+子句对匿名对象与 Record→Record 拓宽实测为真。
+
+### DECIDED-AND-CORRECT（压缩）
+
+相等/身份 5 项（跨种类 `==` 全拒且消息正确、别名身份、readonly 对比）；构造
+10 项（空推断全位置、Map 三源构造新拷贝、重复键后胜、千元素字面量）；List
+20+ 项（slice 负/夹紧、extend(self) 原子翻倍、SameValueZero 成员全家含 NaN、
+空聚合契约、NaN 聚合错误逐字符合 charter、枚举排序拒绝带定向指引、回调快照
+语义实证、VEL4029 含可选调用、join 严格 List<string>）；Map 10 项（NaN/-0 键、
+null 键可用、嵌套变更、update 合并、记录字面量进 update 有定向指引）；Set 6 项；
+**Record 敌意键探针干净**（`__proto__`/`constructor` 是普通自有字段、零污染、
+has 无视原型 —— §3/§19 兑现）；横切 12 项（解构判定、调用展开仅限 rest、
+readonly 视图消息优秀且传递、copy() 逃逸容器而元素保视图、绑定方法 + 命名实参
+全词汇）；边界 6 项（洞数组两路拒、getter 记录双向拒、子类化数组安全接纳、
+透明 Proxy 快照后操作、百万上限活迭代中强制）。
+
+### 处置总结
+
+D1/D2/I2/I4/I5/U5/U8/U9/U10 + I3 前半（字面量拒绝）→ **N-2b**；
+I1/U1/U2/U3/U4 决案可否决随 N-2b 规格走；U6/U7 → N-3 文档；
+**I3 后半（元素级相等词汇）→ 待用户裁决**（亲代冲突：JS 引用 vs Python 元素级）。
