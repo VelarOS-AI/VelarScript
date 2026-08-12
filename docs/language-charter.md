@@ -295,19 +295,29 @@ Each later operand is checked only under the facts established by every earlier
 successful link. When the complete chain is true, those facts are available in
 the controlled body.
 
-Power uses `**`. Membership uses `in`. Runtime type checks use `is`:
+Power uses `**`. Membership uses `in`, with `not in` as its direct negative.
+Runtime type checks use `is`, with `is not` as its direct negative:
 
 ```velar fragment
 if "admin" in roles:
     print("Allowed")
 
+if route not in ignoredRoutes:
+    print("Visible")
+
 if input is User:
     print(input.name)
+
+if input is not Error:
+    print("Usable")
 ```
 
 Membership evaluates the candidate first and the collection second, exactly
 once each in source order. The controlled helper uses that same source-shaped
-argument order.
+argument order. A runtime type test also evaluates its value exactly once,
+including union and structural checks. `not (value in collection)` and
+`not (value is Type)` remain ordinary logical compositions, but canonical
+source uses `value not in collection` and `value is not Type`.
 
 ## 5. Core types
 

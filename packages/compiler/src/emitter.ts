@@ -1460,9 +1460,10 @@ export class JavaScriptEmitter {
           const operator = expression.operator === "and" ? "&&" : "||";
           return `(${this.emitCondition(expression.left)} ${operator} ${this.emitCondition(expression.right)})`;
         }
-        if (expression.operator === "in") {
+        if (expression.operator === "in" || expression.operator === "not in") {
           this.needsCollectionHelpers = true;
-          return `__velarContains(${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
+          const membership = `__velarContains(${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
+          return expression.operator === "not in" ? `!(${membership})` : membership;
         }
         const operator = expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
@@ -1475,12 +1476,24 @@ export class JavaScriptEmitter {
       case "ConditionalExpression":
         return `(${this.emitCondition(expression.condition)} ? ${this.emitMappedExpression(expression.thenValue)} : ${this.emitMappedExpression(expression.elseValue)})`;
       case "IsExpression":
-        if (this.hints.classChecks.has(spanIdentity(expression.span))) {
-          return `${this.emitMappedExpression(expression.value)} instanceof ${this.typeRuntimeName(expression.type)}`;
-        }
         {
+          const value = `$velarIs${expression.span.start}`;
           const checked = resolveTypeReference(expression.type);
-          return this.emitIsCheck(checked, this.emitMappedExpression(expression.value));
+          const classCheck = this.hints.classChecks.has(spanIdentity(expression.span));
+          const test = classCheck
+            ? `${value} instanceof ${this.typeRuntimeName(expression.type)}`
+            : this.emitIsCheck(checked, value);
+          const emittedValue = this.emitMappedExpression(expression.value);
+          // Keep the common one-read checks direct. Union, optional, and
+          // structural checks that reference the value more than once capture
+          // it first so an arbitrary source expression still runs exactly once.
+          const uses = test.split(value).length - 1;
+          const result = uses === 1
+            ? classCheck
+              ? `${emittedValue} instanceof ${this.typeRuntimeName(expression.type)}`
+              : this.emitIsCheck(checked, emittedValue)
+            : `(${value} => ${test})(${emittedValue})`;
+          return expression.operator === "is not" ? `!(${result})` : result;
         }
       case "ArrowFunctionExpression": {
         const body = this.emitMappedExpression(expression.body);

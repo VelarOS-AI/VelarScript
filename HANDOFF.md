@@ -3043,6 +3043,42 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   precise wide-glyph terminal/editor rendering、native picker/IME、crash recovery、sustained edit memory 和正式
   release thresholds。
 
+- W-140 由 Editor 的目录过滤与动态 JSON-RPC id 校验真实场景补齐 Core 的自然否定运算符。原写法
+  `not (name in ignoredDirectories)` 与 `not (id is number)` 语义正确但阅读顺序绕行；用户明确批准新增语法
+  并要求同类形式统一。Core grammar/AST 现在正式拥有 `not in` 与 `is not`，没有扩展第三种同义运算符：
+  `!=` 继续独立拥有不等判断，普通 `not (...)` 仍是合法逻辑组合但不再是这些场景的规范写法。
+
+  parser 将 `not in` 作为与 `in` 同优先级的复合 membership operator，将 `is not` 作为 type-test operator；
+  AST 保留真实 operator identity，不伪装成源位置不成立的 prefix unary node。analyzer 复用同一 membership
+  类型边界，并在 `is not` truthy/falsy 分支正确反转 runtime type narrowing。emitter 生成一次
+  `!(__velarContains(left, right))`，保持 candidate→collection 各求值一次；同时修复被这次审计暴露的旧 `is`
+  lowering 缺陷：union/optional/structural check 过去可能把有副作用的 value expression 展开多次。现在
+  `is`/`is not` 都保证只求值一次；普通单检查保留直接生成代码，只有 lowering 会多次引用 value 时才捕获
+  一个 `$velarIs...` 临时值。没有 runtime ABI 或标准库变化。
+
+  diagnostics/codegen/真实执行证据覆盖 invalid `in`/`not in` operand 的同一类型错误、unknown runtime type、
+  `is not Type ? ...` 的单一 `VEL2031` parenthesization 指引、`not in` 左右效果顺序、`is not string | number`
+  的单次函数调用、assert/if 的正反流收窄、formatter 对 `is not List<T>` 与 `not in` 的幂等规范空格，以及
+  LSP 对两个新组合的零 diagnostics 和 `not`/`in`/`is` 关键词 hover。Editor 与零 npm contract tool 自动
+  删除三处 `not (... in/is ...)` workaround，只保留 `name not in ...` / `id is not number`，无产品层 parser、
+  formatter 或兼容分支。
+
+  最终 `npm run check` 为 53 formatted sources、108 docs、75 boundaries；607/607 串行 compiler/runtime/
+  CLI/Desktop tests、四示例 check/Core tests、packed consumer 与 publication rehearsal 全绿。Editor format 6、
+  check 3、Core 1、public contract、production build/package/native smoke 与受监管单 Chromium 8/8 通过；
+  Playwright/headless/Worker/PTY/native-host 残留为空。Chromium FCP median/p95 8/40 ms，input frame
+  median/p95 约 4.5/5.1 ms，input processing p95 0 ms，1 MiB load/input next-frame 约 32.532/1.300 ms。
+  `.app` 为 14,945,373 bytes（14.25 MiB）/20 MiB：host 336,704、renderer 222,782、capability 89,109、
+  language server 1,748,689、project task 1,769,204、build engine 10,573,778、terminal host 87,888、
+  metadata 117,219；renderer JS+CSS 217,804 bytes，SHA-256
+  `5be21aee1fef35aa810587dac5c828b393d366ef10b566b51686cbc8f91e9ebb`。Lite 原 11-file WIP 未修改；
+  未推送、未发布、未提升版本。
+
+  仍阻止生产可用的是 multi-tab/document-session orchestration；JS/TS full cross-file module/type/package graph、
+  workspace symbols、formatter 与 official task execution；cross-process index cold start、sustained watcher/RSS、
+  precise wide-glyph terminal/editor rendering、native picker/IME、crash recovery、sustained edit memory 和正式
+  release thresholds。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed

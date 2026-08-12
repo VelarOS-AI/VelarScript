@@ -90,6 +90,9 @@ const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
 const keywordDocumentation = new Map<string, string>([
   ["assert", "Requires a boolean or optional invariant and narrows stable values in following statements."],
   ["invert", "Reverses one writable bool binding, member, or index in place."],
+  ["not", "Negates a checked condition; use `not in` for negative membership and `is not` for a negative runtime type test."],
+  ["in", "Tests List, Set, Map, Record, or string membership; `not in` is its direct negative form."],
+  ["is", "Tests a value against a runtime type and narrows stable locations; `is not` is its direct negative form."],
   ["constructor", "Initializes class fields and calls super(...) first when the class extends another class."],
   ["type", "Declares one data shape used for static checking and runtime validation."],
   ["enum", "Declares a finite set of string-backed values for application states."],

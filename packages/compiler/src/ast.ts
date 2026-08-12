@@ -628,7 +628,7 @@ export interface UnaryExpression {
 export interface BinaryExpression {
   readonly kind: "BinaryExpression";
   readonly left: Expression;
-  readonly operator: "??" | "or" | "and" | "in" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "**" | "/" | "%";
+  readonly operator: "??" | "or" | "and" | "in" | "not in" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "**" | "/" | "%";
   readonly right: Expression;
   readonly span: Span;
 }
@@ -665,6 +665,7 @@ export interface ConditionalExpression {
 export interface IsExpression {
   readonly kind: "IsExpression";
   readonly value: Expression;
+  readonly operator: "is" | "is not";
   readonly type: TypeReference;
   readonly span: Span;
 }

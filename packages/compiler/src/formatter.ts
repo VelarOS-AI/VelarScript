@@ -395,6 +395,7 @@ function beginsTypeBracket(tokens: readonly InlineToken[]): boolean {
   const before = tokens.at(-2);
   if (!before) return false;
   if (before.kind === "word" && typeBracketDeclarationWords.has(before.text)) return true;
+  if (before.text === "not" && tokens.at(-3)?.text === "is") return true;
   return typeBracketOperators.has(before.text);
 }
 

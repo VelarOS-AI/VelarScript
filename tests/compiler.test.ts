@@ -389,7 +389,7 @@ def display(value: DisplayValue) -> string:
         return value ? "yes" : "no"
 
 def increment(value: string | number) -> number:
-    assert not (value is string) else "Expected a number"
+    assert value is not string else "Expected a number"
     return value + 1
 
 def incrementField(payload: Payload) -> number:
@@ -403,6 +403,12 @@ def optionalIncrement(value: number?) -> number:
         return 0
     else:
         return value + 1
+
+let typeTestReads = 0
+
+def dynamicValue() -> unknown:
+    typeTestReads += 1
+    return "velar"
 
 component Preview(value: DisplayValue):
     def content() -> WebNode:
@@ -421,12 +427,16 @@ print(display(true))
 print(increment(4))
 print(incrementField({value: 9}))
 print(optionalIncrement(null))
+print(dynamicValue() is not string | number)
+print(typeTestReads)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
+  assert.match(result.code ?? "", /!\(\(\$velarIs\d+ =>/u);
+  assert.match(result.code ?? "", /dynamicValue\(\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "text:velar\nnumber:5\nyes\n5\n10\n0\n");
+  assert.equal(execution.stdout, "text:velar\nnumber:5\nyes\n5\n10\n0\nfalse\n1\n");
 
   const unsafeContinuation = compile(`
 def invalid(value: string | number) -> null:
@@ -3096,7 +3106,7 @@ print("Ada" in names)
 print("web" in tags)
 print("Ada" in scores)
 print("Script" in "VelarScript")
-print(not ("missing" in names))
+print("missing" not in names)
 
 let order: List<string> = []
 
@@ -3109,6 +3119,11 @@ def haystack() -> List<string>:
     return names
 
 print(needle() in haystack())
+print(order.join(","))
+
+order.clear()
+
+print(needle() not in haystack())
 print(order.join(","))
 
 order.clear()
@@ -3131,11 +3146,12 @@ print(order.join(","))
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /__velarContains\("Ada", names\)/u);
   assert.match(result.code ?? "", /__velarContains\("Ada", scores\)/u);
+  assert.match(result.code ?? "", /!\(__velarContains\("missing", names\)\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\nneedle,haystack\ntrue\nasync needle,async haystack\n");
+  assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\nneedle,haystack\nfalse\nneedle,haystack\ntrue\nasync needle,async haystack\n");
 
-  const invalid = compile("print(1 in \"123\")\nprint(\"x\" in {x: 1})\n");
+  const invalid = compile("print(1 in \"123\")\nprint(1 not in \"123\")\nprint(\"x\" in {x: 1})\n");
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Membership requires a List, Set, Map, Record, or string/u.test(item.message)));
 
@@ -19613,6 +19629,22 @@ def find(value: Ticket?, previous: Ticket?) -> Ticket?:
   assert.equal(formatSource(formatted), formatted);
 });
 
+test("formatter preserves natural negative membership and type tests", () => {
+  const source = `const value: unknown=[]
+const names=["Ada"]
+const absent=value   is   not List < string >
+const missing="Lin"not   in names
+`;
+  const formatted = formatSource(source);
+  assert.equal(formatted, `const value: unknown = []
+const names = ["Ada"]
+const absent = value is not List<string>
+const missing = "Lin" not in names
+`);
+  assert.deepEqual(inspectModule(formatted).diagnostics, []);
+  assert.equal(formatSource(formatted), formatted);
+});
+
 test("formatter does not confuse capitalized values with generic types", () => {
   const source = `const lower = Player < score
 const bounded = Player < score and score > Limit
@@ -27041,6 +27073,14 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   await writeFile(mainPath, mainText, "utf8");
   const mainUri = pathToFileURL(mainPath).href;
   const scratchUri = pathToFileURL(join(directory, "scratch.vel")).href;
+  const operatorUri = pathToFileURL(join(directory, "operators.vel")).href;
+  const operatorText = [
+    'const names = ["Ada"]',
+    'const missing = "Lin" not in names',
+    'const value: unknown = "Ada"',
+    'const acceptable = value is not number',
+    '',
+  ].join("\n");
   const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "lsp"], {
     cwd: process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
@@ -27158,6 +27198,20 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     && (message.params as { uri?: string }).uri === unicodeUri);
   const unicodeDiagnostics = (unicodePublished.params as { diagnostics: Array<{ range: { start: { character: number } } }> }).diagnostics;
   assert.ok(unicodeDiagnostics.some((item) => item.range.start.character === [...unicodePrefix].length));
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: operatorUri, languageId: "velar", version: 1, text: operatorText } },
+  });
+  const operatorPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === operatorUri);
+  assert.deepEqual((operatorPublished.params as { diagnostics: unknown[] }).diagnostics, []);
+  send({ jsonrpc: "2.0", id: 141, method: "textDocument/hover", params: { textDocument: { uri: operatorUri }, position: { line: 1, character: 23 } } });
+  const membershipHover = await waitFor((message) => message.id === 141);
+  assert.match(JSON.stringify(membershipHover.result), /negative membership/u);
+  send({ jsonrpc: "2.0", id: 142, method: "textDocument/hover", params: { textDocument: { uri: operatorUri }, position: { line: 3, character: 25 } } });
+  const typeTestHover = await waitFor((message) => message.id === 142);
+  assert.match(JSON.stringify(typeTestHover.result), /runtime type/u);
   sendTogether([
     { jsonrpc: "2.0", id: 140, method: "textDocument/hover", params: { textDocument: { uri: scratchUri }, position: { line: 0, character: 2 } } },
     { jsonrpc: "2.0", method: "$/cancelRequest", params: { id: 140 } },

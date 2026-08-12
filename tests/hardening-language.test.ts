@@ -267,11 +267,21 @@ print(label)
   assert.equal(result.diagnostics[0]?.code, "VEL2031");
   assert.match(result.diagnostics[0]?.message ?? "", /Parenthesize.*type test/u);
 
+  const negative = compile(`
+const value: unknown = "ready"
+const label = value is not string ? "yes" : "no"
+print(label)
+`.trimStart());
+  assert.equal(negative.diagnostics.length, 1);
+  assert.equal(negative.diagnostics[0]?.code, "VEL2031");
+  assert.match(negative.diagnostics[0]?.message ?? "", /Parenthesize.*type test/u);
+
   const execution = compileAndRun(`
 const value: unknown = "ready"
 print((value is string) ? "yes" : "no")
+print((value is not number) ? "yes" : "no")
 `.trimStart());
-  assert.equal(execution.stdout, "yes\n");
+  assert.equal(execution.stdout, "yes\nyes\n");
 });
 
 test("[#41] explicit call type arguments get one inferred-arguments diagnostic without cascades", () => {

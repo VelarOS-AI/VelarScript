@@ -1754,12 +1754,18 @@ export class Parser {
 
     while (true) {
       const javaScriptInstanceof = this.check("identifier") && this.current().value === "instanceof";
-      const precedence = javaScriptInstanceof ? binaryPrecedence.is : binaryPrecedence[this.current().kind];
+      const compoundNotIn = this.check("not") && this.peekKind(1) === "in";
+      const precedence = javaScriptInstanceof
+        ? binaryPrecedence.is
+        : compoundNotIn
+          ? binaryPrecedence.in
+          : binaryPrecedence[this.current().kind];
       if (precedence === undefined || precedence < minimumPrecedence) {
         break;
       }
 
       const operator = this.advance();
+      if (compoundNotIn) this.advance();
       const comparisonOperator = comparisonOperators[operator.kind];
       if (comparisonOperator) {
         const operands: Expression[] = [left];
@@ -1795,6 +1801,7 @@ export class Parser {
             operator.span,
           ));
         }
+        const negated = this.match("not");
         const conditionalTypeTest = this.typeTestHasConditionalQuestion();
         const type = this.parseTypeReference(!conditionalTypeTest);
         if (conditionalTypeTest) {
@@ -1804,7 +1811,13 @@ export class Parser {
             span(left.span.start, this.current().span.end),
           ));
         }
-        left = { kind: "IsExpression", value: left, type, span: span(left.span.start, type.span.end) };
+        left = {
+          kind: "IsExpression",
+          value: left,
+          operator: negated ? "is not" : "is",
+          type,
+          span: span(left.span.start, type.span.end),
+        };
         continue;
       }
 
@@ -1812,7 +1825,7 @@ export class Parser {
       left = {
         kind: "BinaryExpression",
         left,
-        operator: this.binaryOperator(operator),
+        operator: compoundNotIn ? "not in" : this.binaryOperator(operator),
         right,
         span: span(left.span.start, right.span.end),
       } satisfies BinaryExpression;

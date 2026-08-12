@@ -3536,7 +3536,7 @@ export class Analyzer implements TypeEnvironment {
     }
     const right = this.inferExpression(rightExpression);
     if (isInvalidType(left) || isInvalidType(right)) return invalidType;
-    if (operator === "in") {
+    if (operator === "in" || operator === "not in") {
       if (right.kind === "list" || right.kind === "set") {
         this.requireAssignable(left, this.readonlyDataViewOf(right.element), leftExpression.span);
       } else if (right.kind === "map") {
@@ -5957,7 +5957,8 @@ export class Analyzer implements TypeEnvironment {
       if (path && type?.kind === "optional") narrowed.set(`${memberNarrowingPrefix}${path}`, truthy ? type.inner : nullType);
     } else if (expression.kind === "IsExpression") {
       const checked = this.resolveAnnotation(expression.type);
-      if (truthy) {
+      const matches = expression.operator === "is" ? truthy : !truthy;
+      if (matches) {
         const current = this.inferredExpressionTypes.get(spanIdentity(expression.value.span)) ?? unknownType;
         this.addLocationNarrowing(narrowed, expression.value, this.runtimeCheckedType(current, checked));
       } else {
