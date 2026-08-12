@@ -204,11 +204,11 @@ export component WebCapabilities:
 
     def resourceStatus() -> string:
         const current = resourceFailure()
-        return current ? current.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")
+        return current != null ? current.message : recoveryResource.value ?? (recoveryResource.loading ? "resource-loading" : "resource-empty")
 
     def actionStatus() -> string:
         const current = actionFailure()
-        return current ? current.message : recoverAction.pending ? "action-pending" : actionLabel
+        return current != null ? current.message : recoverAction.pending ? "action-pending" : actionLabel
 
     const stopOnline = watchOnline(onlineChanged)
     const stopVisibility = watchVisibility(visibilityChanged)
@@ -226,7 +226,7 @@ export component WebCapabilities:
         databaseLabel = stored?.label ?? "missing"
         await frame()
         frameReady = true
-        if panel:
+        if panel != null:
             layoutWidth = measure(panel).width
 
     async def verifyRecovery() -> null:

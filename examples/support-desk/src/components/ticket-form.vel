@@ -60,7 +60,7 @@ export component TicketForm:
     let form: Element? = null
 
     def submit() -> null:
-        if form:
+        if form != null:
             const currentForm = form
             clearErrors(currentForm)
             const draft = read(currentForm, TicketDraft)

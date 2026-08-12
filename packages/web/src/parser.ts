@@ -301,7 +301,7 @@ export class VelarWebParser extends Parser {
         item = this.parseStatement() as ComponentItem | null;
       }
       if (item) body.push(item);
-      if (this.previous().kind !== "dedent") this.expectStatementEnd();
+      if (this.previous().kind !== "dedent") this.expectStatementBoundary();
       this.consumeNewlines();
     }
     const close = this.expect("dedent", "Expected the end of component body");

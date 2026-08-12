@@ -4,6 +4,30 @@ This file records user-visible language, framework, and tooling changes. It is
 not a milestone checklist; the repository test suites and CI are the source of
 truth for acceptance status.
 
+## Unreleased
+
+- A statement now must end at its newline. Trailing tokens after a complete
+  statement — a missing operator (`price quantity`), a doubled literal
+  (`5 7`), or a second statement on the same line — are diagnosed with
+  `VEL2032` and recovery continues on the next line. In Web projects the
+  percent form gets a targeted message: `10%3` reads as the percentage
+  literal `10%`, so the diagnostic teaches `10 % 3` for the remainder
+  operator. Previously these shapes compiled silently and discarded the
+  trailing tokens.
+- Conditions judge truth, not presence. `bool` and `bool?` conditions enter
+  the branch only when the value is `true`; `false` and `null` both take the
+  else path, and a `bool?` condition lowers to an explicit `=== true` test.
+  Any other optional in bare condition position is rejected with guidance to
+  write `value != null`. Previously a bare optional condition was a
+  presence check, so `if flag:` with `flag == false` entered the true branch.
+  Comparison-based narrowing (`!= null`, `== null`) is unchanged; the true
+  branch of a `bool?` condition narrows to `bool`.
+- The null test has one spelling family: `!= null` and `== null`. `is` tests
+  runtime types, equality tests values, and `null` is a value, so `x is null`
+  and `x is not null` are removed spellings with parse-level guidance to the
+  equality forms. `x is not Error` (type test) and `x not in list`
+  (membership) are unaffected.
+
 ## 0.10.0 — 2026-08-09
 
 VelarScript 0.10.0 is the first public toolchain release: a checked, Web-first

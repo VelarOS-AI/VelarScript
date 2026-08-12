@@ -209,7 +209,7 @@ component ClassChild(box: Box, boxes: List<Box>, pending: Promise<User>):
     boxes.append(box)
     box.retitle()
     const selected = boxes.get(0)
-    if selected:
+    if selected != null:
         selected.title = "method result"
     action change() -> null:
         const user = await pending

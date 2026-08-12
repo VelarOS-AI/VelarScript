@@ -307,8 +307,7 @@ export interface LoweringHints {
   readonly optionalCalls: ReadonlySet<string>;
   readonly optionalIndexes: ReadonlySet<string>;
   readonly optionalCallees: ReadonlySet<string>;
-  readonly presenceConditions: ReadonlySet<string>;
-  readonly optionalNegations: ReadonlySet<string>;
+  readonly truthConditions: ReadonlySet<string>;
   readonly normalizedNullResults: ReadonlySet<string>;
   readonly normalizedPromiseValues: ReadonlySet<string>;
   readonly asyncResolvedValues: ReadonlySet<string>;
@@ -487,8 +486,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly optionalIndexes = new Set<string>();
   private readonly optionalCallees = new Set<string>();
   private readonly constructorFieldInitializations = new Set<number>();
-  private readonly presenceConditions = new Set<string>();
-  private readonly optionalNegations = new Set<string>();
+  private readonly truthConditions = new Set<string>();
   private readonly normalizedNullResults = new Set<string>();
   private readonly normalizedPromiseValues = new Set<string>();
   private readonly asyncResolvedValues = new Set<string>();
@@ -1015,8 +1013,7 @@ export class Analyzer implements TypeEnvironment {
       optionalCalls: this.optionalCalls,
       optionalIndexes: this.optionalIndexes,
       optionalCallees: this.optionalCallees,
-      presenceConditions: this.presenceConditions,
-      optionalNegations: this.optionalNegations,
+      truthConditions: this.truthConditions,
       normalizedNullResults: this.normalizedNullResults,
       normalizedPromiseValues: this.normalizedPromiseValues,
       asyncResolvedValues: this.asyncResolvedValues,
@@ -3349,8 +3346,7 @@ export class Analyzer implements TypeEnvironment {
         }
         if (isInvalidType(operand)) return invalidType;
         if (expression.operator === "not") {
-          if (operand.kind === "optional") this.optionalNegations.add(spanIdentity(expression.span));
-          else this.requireAssignable(operand, boolType, expression.operand.span);
+          this.requireCondition(operand, expression.operand);
           return boolType;
         }
         this.requireAssignable(operand, numberType, expression.operand.span);
@@ -5949,12 +5945,16 @@ export class Analyzer implements TypeEnvironment {
     if (expression.kind === "IdentifierExpression") {
       const type = this.lookup(expression.name)?.type;
       if (type?.kind === "optional") {
-        narrowed.set(expression.name, truthy ? type.inner : nullType);
+        const fact = this.bareConditionNarrowing(type, truthy);
+        if (fact) narrowed.set(expression.name, fact);
       }
     } else if (expression.kind === "MemberExpression" && !expression.optional) {
       const path = this.stableMemberAccessPath(expression);
       const type = knownType ?? this.inferredExpressionTypes.get(spanIdentity(expression.span));
-      if (path && type?.kind === "optional") narrowed.set(`${memberNarrowingPrefix}${path}`, truthy ? type.inner : nullType);
+      if (path && type?.kind === "optional") {
+        const fact = this.bareConditionNarrowing(type, truthy);
+        if (fact) narrowed.set(`${memberNarrowingPrefix}${path}`, fact);
+      }
     } else if (expression.kind === "IsExpression") {
       const checked = this.resolveAnnotation(expression.type);
       const matches = expression.operator === "is" ? truthy : !truthy;
@@ -5968,6 +5968,16 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return narrowed;
+  }
+
+  // A bare optional condition is legal only for 'bool?', where it judges truth:
+  // the true branch proves 'true', and the else branch learns nothing because
+  // both 'false' and an absent value reach it. Every other optional is rejected
+  // in condition position; those keep the old presence fact so one rejected
+  // line does not also cascade optional-access errors through its own body.
+  private bareConditionNarrowing(type: Extract<ValueType, { kind: "optional" }>, truthy: boolean): ValueType | null {
+    if (this.expandAliases(type.inner).kind === "bool") return truthy ? boolType : null;
+    return truthy ? type.inner : nullType;
   }
 
   private excludeCheckedType(current: ValueType, checked: ValueType): ValueType | null {
@@ -6129,12 +6139,43 @@ export class Analyzer implements TypeEnvironment {
     return new Map([...first, ...second]);
   }
 
+  // A condition judges truth, never presence. 'bool' and 'bool?' both ask
+  // whether the value is true, so 'false' and null take the same else path and
+  // 'if flag:' stays the spelling for both. Any other optional has to say which
+  // question it asks, because "holds a value" and "is true" are different
+  // tests; 'any' remains accepted as the explicit unchecked-JavaScript
+  // boundary.
   protected requireCondition(type: ValueType, condition: Expression): void {
     if (isInvalidType(type)) return;
-    if (type.kind === "optional") this.presenceConditions.add(spanIdentity(condition.span));
-    if (type.kind !== "bool" && type.kind !== "optional" && type.kind !== "any") {
-      this.typeError(`Condition must be bool or optional, received ${describeType(type)}`, condition.span);
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "bool" || expanded.kind === "any") return;
+    if (expanded.kind === "optional") {
+      if (this.expandAliases(expanded.inner).kind === "bool") {
+        this.truthConditions.add(spanIdentity(condition.span));
+        return;
+      }
+      const subject = this.conditionSubjectText(condition);
+      this.typeError(
+        subject
+          ? `A condition judges truth, not presence; write '${subject} != null' to test ${describeType(type)} for a value`
+          : `A condition judges truth, not presence; add '!= null' to test ${describeType(type)} for a value`,
+        condition.span,
+      );
+      return;
     }
+    this.typeError(`Condition must be bool, received ${describeType(type)}`, condition.span);
+  }
+
+  // Presence guidance names the exact spelling to write whenever the condition
+  // is a plain name or a plain member path; anything else is taught the
+  // operator without inventing source text for it.
+  private conditionSubjectText(condition: Expression): string | null {
+    if (condition.kind === "IdentifierExpression") return condition.name;
+    if (condition.kind === "MemberExpression" && !condition.optional) {
+      const owner = this.conditionSubjectText(condition.object);
+      return owner === null ? null : `${owner}.${condition.property}`;
+    }
+    return null;
   }
 
   protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): void {

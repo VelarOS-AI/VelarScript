@@ -111,6 +111,14 @@ function containsExtensionBlockStart(tokens: readonly Token[]): boolean {
   return tokens.some((token, index) => token.kind === "extensionKeyword" && tokens[index + 1]?.kind === "colon");
 }
 
+// Statement-boundary guidance names the leftover token as the author typed it.
+// Long literals are clipped so one runaway string cannot swamp the message.
+function describeStatementToken(token: Token): string {
+  const text = token.value;
+  if (!text) return token.kind;
+  return text.length > 24 ? `${text.slice(0, 24)}…` : text;
+}
+
 const assignmentOperators: Partial<Record<TokenKind, AssignmentStatement["operator"]>> = {
   assign: "=",
   plusAssign: "+=",
@@ -154,6 +162,7 @@ export class Parser {
       } else {
         this.synchronize();
       }
+      if (this.previous().kind !== "dedent") this.expectStatementBoundary();
       this.consumeNewlines();
     }
 
@@ -1566,7 +1575,7 @@ export class Parser {
       } else {
         this.synchronize();
       }
-      if (this.previous().kind !== "dedent") this.expectStatementEnd();
+      if (this.previous().kind !== "dedent") this.expectStatementBoundary();
       this.consumeNewlines();
     }
     this.expect("dedent", "Expected the end of an indented block");
@@ -1802,6 +1811,34 @@ export class Parser {
           ));
         }
         const negated = this.match("not");
+        // 'is' tests runtime types and 'null' is a value, so 'is [not] null'
+        // is the removed spelling of the equality test. Recovery builds the
+        // '== null' / '!= null' comparison itself, so narrowing and every
+        // later stage still run, and a '?' after the test keeps meaning '?:'
+        // instead of being read as an optional-type marker.
+        if (this.check("null") && this.peekKind(1) !== "pipe" && this.peekKind(1) !== "dot") {
+          const nullToken = this.advance();
+          // 'null?' spells the same removed test; consume the '?' only when it
+          // ends the test (an optional-type marker), never when it opens a
+          // conditional expression.
+          const question = this.check("question") && !this.questionContinuesExpression() ? this.advance() : null;
+          const end = question?.span.end ?? nullToken.span.end;
+          this.diagnostics.push(recoveredDiagnostic(
+            "VEL2033",
+            negated
+              ? "Use '!= null' to test for a value; 'is' tests runtime types"
+              : "Use '== null' to test for a value; 'is' tests runtime types",
+            span(operator.span.start, end),
+          ));
+          left = {
+            kind: "BinaryExpression",
+            left,
+            operator: negated ? "!=" : "==",
+            right: { kind: "LiteralExpression", value: null, raw: "null", span: nullToken.span },
+            span: span(left.span.start, end),
+          } satisfies BinaryExpression;
+          continue;
+        }
         const conditionalTypeTest = this.typeTestHasConditionalQuestion();
         const type = this.parseTypeReference(!conditionalTypeTest);
         if (conditionalTypeTest) {
@@ -2142,6 +2179,15 @@ export class Parser {
     return null;
   }
 
+  // True when the '?' at the current position opens a conditional expression:
+  // more of the expression follows on the logical line. A '?' that ends the
+  // line is an optional-type marker. This is the same reading
+  // typeTestHasConditionalQuestion applies to a '?' directly after a type.
+  private questionContinuesExpression(): boolean {
+    const next = this.peekKind(1);
+    return next !== "newline" && next !== "dedent" && next !== "eof";
+  }
+
   private typeTestHasConditionalQuestion(): boolean {
     let angles = 0;
     let parentheses = 0;
@@ -2470,6 +2516,31 @@ export class Parser {
       this.diagnostics.push(diagnostic("VEL2003", "Expected the end of a statement", this.current().span));
       this.synchronize();
     }
+  }
+
+  // A statement owns exactly one logical line. Once it is complete the next
+  // token must end that line, so a leftover token cannot silently open a
+  // second statement whose value is discarded. Recovery consumes the rest of
+  // the line, so one bad line reports once and every following line still
+  // parses on its own.
+  protected expectStatementBoundary(): void {
+    if (this.atStatementEnd()) return;
+    const token = this.current();
+    this.diagnostics.push(diagnostic("VEL2032", this.statementBoundaryMessage(token), token.span));
+    this.synchronize();
+  }
+
+  // A numeric unit suffix binds tighter than any operator, so '10%3' lexes as
+  // the percentage '10%' followed by a stray '3'. That reads as modulo, so the
+  // spelling difference is named directly instead of reported as a generic
+  // leftover token.
+  private statementBoundaryMessage(token: Token): string {
+    const previous = this.previous();
+    if (previous.kind === "unitNumber" && previous.value.endsWith("%") && previous.span.end === token.span.start) {
+      const amount = previous.value.slice(0, -1);
+      return `'${previous.value}' is a percentage literal, so '${token.value}' starts a second statement; write '${amount} % ${token.value}' with spaces for the remainder operator`;
+    }
+    return `A statement ends at its newline; move '${describeStatementToken(token)}' to its own line, or join it to the value before it with an operator`;
   }
 
   private synchronize(): void {

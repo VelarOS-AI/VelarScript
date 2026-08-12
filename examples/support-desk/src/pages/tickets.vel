@@ -96,7 +96,7 @@ export component TicketsPage(route: RouteContext):
 
     def failureView() -> WebNode:
         const current = loadFailure()
-        return current ? <p class="state error" look={stateLook(true)} role="alert">{current.message}<button look={retryLook} type="button" on:click={catalog.reload}>Retry</button></p> : <></>
+        return current != null ? <p class="state error" look={stateLook(true)} role="alert">{current.message}<button look={retryLook} type="button" on:click={catalog.reload}>Retry</button></p> : <></>
 
     return <main class="page" look={pageLook} data-support-desk>
         <Head title="SupportDesk · Customer issues" description="A routed support application built with VelarScript" themeColor="#f5f7fb" />

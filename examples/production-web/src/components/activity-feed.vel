@@ -31,7 +31,7 @@ export component ActivityFeed:
 
     def activityMessage() -> string:
         const current = failure()
-        return current ? current.message : message
+        return current != null ? current.message : message
 
     return <section class="activity" look={activityLook} aria-live="polite">
         <span data-activity>{activityMessage()}</span>

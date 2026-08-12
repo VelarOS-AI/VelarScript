@@ -90,7 +90,7 @@ def clear(box: Box) -> null:
     box.user = null
 
 def read(box: Box) -> string:
-    if box.user:
+    if box.user != null:
         clear(box)
         return box.user.name
     return "missing"
@@ -115,7 +115,7 @@ print(read({user: {name: "Ada"}}))
 test("erased generic narrowings recheck presence without inventing a runtime type", () => {
   const result = compile(`
 def present<T>(value: T?, callback: () -> null) -> T:
-    assert value
+    assert value != null
     callback()
     return value
 

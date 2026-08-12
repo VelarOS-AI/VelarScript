@@ -834,7 +834,7 @@ while plain assignment is checked against the declared location type and
 invalidates stale facts for that location and its descendants.
 Short-circuit `and`/`or` analysis evaluates the right operand under the facts
 that make it reachable, records only facts valid for the complete result path,
-and lowers optional conditions to explicit presence checks. `while` bodies use
+and lowers `bool?` conditions to explicit truth tests. `while` bodies use
 the same successful-condition facts rather than a separate loop rule. During
 loop analysis, reachable `break` statements are captured only by their owning
 loop; a literal-true loop with no captured break is recorded as non-fallthrough

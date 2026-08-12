@@ -317,7 +317,10 @@ once each in source order. The controlled helper uses that same source-shaped
 argument order. A runtime type test also evaluates its value exactly once,
 including union and structural checks. `not (value in collection)` and
 `not (value is Type)` remain ordinary logical compositions, but canonical
-source uses `value not in collection` and `value is not Type`.
+source uses `value not in collection` and `value is not Type`. An `is` target
+is always a concrete runtime type; `null` is a value, so a null test is
+spelled `== null` or `!= null`, and the removed `is null` / `is not null`
+spellings receive guidance to the equality form.
 
 ## 5. Core types
 
@@ -448,7 +451,7 @@ back to VelarScript `null`.
 ```velar fragment
 const user: User? = findUser(id)
 
-if user:
+if user != null:
     print(user.name)
 
 if user == null:
@@ -457,7 +460,13 @@ else:
     print(user.name)
 ```
 
-Presence checks distinguish `null` from valid `0`, `""`, and `false` values.
+A condition judges truth, never presence. `bool` and `bool?` are the only types
+a condition accepts, and both ask the same question: the branch runs when the
+value is `true`, so `false` and `null` take the same `else` path. Every other
+optional must say which question it is asking, because "holds a value" and "is
+true" are different tests: write `!= null` (or `== null`) to test for a
+value. A null test is therefore always explicit, and it distinguishes `null`
+from valid `0`, `""`, and `false` values.
 Facts narrow local names and stable record fields within the owned branch. A
 plain `=` still checks against the location's declared type, then invalidates
 the old fact for that location and its child fields. Reassigning an optional
@@ -488,7 +497,7 @@ invalidates it statically. A member write also invalidates facts reached through
 known aliases of the object; unrelated roots keep their facts.
 
 ```velar fragment
-if form:
+if form != null:
     setError(form, "email", "Required")
     focusFirstError(form)
 ```
@@ -1447,7 +1456,7 @@ component Page:
     let dialog: DialogHandle? = null
 
     mounted:
-        if dialog:
+        if dialog != null:
             dialog.open()
 
     return <Dialog ref={dialog} title="Confirm" />
@@ -1664,7 +1673,7 @@ export component CanvasPanel:
     let canvas: CanvasElement? = null
 
     mounted:
-        if canvas:
+        if canvas != null:
             startCanvas(canvas)
 
     cleanup:

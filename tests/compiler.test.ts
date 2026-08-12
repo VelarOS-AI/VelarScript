@@ -265,7 +265,7 @@ def consume(first: string, second: string) -> string:
     return first
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     return consume(second=clear(box), first=box.user.name)
 `.trimStart());
   assert.deepEqual(named.diagnostics, []);
@@ -287,7 +287,7 @@ class Host:
         return Service()
 
 def label(host: Host) -> string:
-    assert host.user
+    assert host.user != null
     return host.service.describe(name=host.user.name)
 `.trimStart());
   assert.deepEqual(getter.diagnostics, []);
@@ -399,7 +399,7 @@ def incrementField(payload: Payload) -> number:
         return payload.value + 1
 
 def optionalIncrement(value: number?) -> number:
-    if value is null:
+    if value == null:
         return 0
     else:
         return value + 1
@@ -2314,7 +2314,7 @@ class Box:
         return (left, value) => left
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     return ["value"].reduce(box.combine, box.user.name)
 `.trimStart());
 
@@ -2497,15 +2497,15 @@ def message() -> string:
     return "unused"
 
 def submit(draft: Draft) -> null:
-    assert draft.estimate else "Estimate is required"
-    assert draft.label
+    assert draft.estimate != null else "Estimate is required"
+    assert draft.label != null
     assert draft.enabled
     const estimate = draft.estimate
     const label: string = draft.label
     const enabled: bool = draft.enabled
     print(f"{estimate}:{label}:{enabled}")
 
-submit({estimate: 0, label: "", enabled: false})
+submit({estimate: 0, label: "", enabled: true})
 assert true else message()
 
 try:
@@ -2516,17 +2516,17 @@ catch error:
   const result = compile(source);
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((item) => item.kind === "variable" && item.name === "estimate")?.type, "number");
-  assert.match(result.code ?? "", /draft\.estimate \?\? null\) != null/u);
+  assert.match(result.code ?? "", /\(\(draft\.estimate \?\? null\) !== null\)/u);
   assert.match(result.code ?? "", /__velarAssertionError\.name = "AssertionError"/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "0::false\nAssertionError:Broken invariant\n");
+  assert.equal(execution.stdout, "0::true\nAssertionError:Broken invariant\n");
 
   const invalid = compile(`
 assert 1
 assert true else 42
 `);
-  assert.ok(invalid.diagnostics.some((item) => /Condition must be bool or optional/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /Condition must be bool, received number/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
 
   const messageFlow = compileCore(`
@@ -2541,7 +2541,7 @@ def clear(box: Box) -> string:
     return "failed"
 
 def keep(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     assert true else clear(box)
     return box.user.name
 
@@ -2560,7 +2560,7 @@ print(failureMessage(null))
   const scoped = compile(`
 let value: number? = 1
 if true:
-    assert value
+    assert value != null
     const inside: number = value
 const outside: number = value
 `);
@@ -2568,7 +2568,7 @@ const outside: number = value
 
   const deferred = compile(`
 let value: number? = 1
-assert value
+assert value != null
 def later() -> number:
     return value
 const callback: () -> number = () => value
@@ -2657,7 +2657,7 @@ const lookup: Map<User, string> = Map([[mutable, "u"]])
 const lookupContains = lookup.has(current)
 const copy = viewed.copy()
 const item = first(viewed)
-if item:
+if item != null:
     copy.append(item)
 print(current.id + ":" + str(copy.size))
 `.trimStart());
@@ -2685,12 +2685,12 @@ def reject(user: readonly User, users: readonly List<User>, lookup: readonly Map
     user.tags.append({label: "x"})
     users[0].tags.append({label: "x"})
     const found = lookup.get("x")
-    if found:
+    if found != null:
         found.meta.label = "x"
     const values = selected.values()
     values[0].meta.label = "x"
     const record = records.get("x")
-    if record:
+    if record != null:
         record.meta.label = "x"
     mutate(user)
 `.trimStart());
@@ -3182,7 +3182,7 @@ def clear(box: Box) -> string:
     return "Ada"
 
 def contains(box: Box) -> bool:
-    assert box.user
+    assert box.user != null
     return clear(box) in [box.user.name]
 `.trimStart());
   assert.deepEqual(effects.diagnostics, []);
@@ -3569,7 +3569,7 @@ type User:
 
 def managerName(value: User?) -> string:
     match value:
-        case User as user if user.manager:
+        case User as user if user.manager != null:
             return user.manager.name
         else:
             return "missing"
@@ -3598,7 +3598,7 @@ def absent(value: null) -> string:
 
 def managerName(value: User) -> string:
     match value:
-        case User if value.manager:
+        case User if value.manager != null:
             return value.manager.name
         else:
             return absent(value.manager)
@@ -3617,7 +3617,7 @@ type User:
 
 def invalid(value: User?) -> string:
     match value:
-        case User if value.manager:
+        case User if value.manager != null:
             return value.manager.manager?.manager == null ? "managed" : "deep"
         else:
             return value.manager == null ? "missing" : "unexpected"
@@ -3634,7 +3634,7 @@ type Box:
     user: User?
 
 def label(box: Box, kind: string) -> string:
-    assert box.user
+    assert box.user != null
     match kind:
         case "drop":
             box.user = null
@@ -3661,7 +3661,7 @@ type Box:
     user: User?
 
 def invalid(box: Box, kind: string) -> null:
-    assert box.user
+    assert box.user != null
     match kind:
         case "drop":
             box.user = null
@@ -3680,9 +3680,9 @@ type User:
 def label(user: User?, kind: string) -> string:
     match kind:
         case "first":
-            assert user
+            assert user != null
         else:
-            assert user
+            assert user != null
     return user.name
 
 print(label({name: "Ada"}, "first"))
@@ -3706,7 +3706,7 @@ def clearAndReject(box: Box) -> bool:
     return false
 
 def label(box: Box, kind: string) -> string:
-    assert box.user
+    assert box.user != null
     match kind:
         case "first" if clearAndReject(box):
             return "matched"
@@ -3733,7 +3733,7 @@ class Keys:
         return "first"
 
 def label(kind: string) -> string:
-    assert shared.user
+    assert shared.user != null
     match kind:
         case Keys.first:
             return "matched"
@@ -3751,7 +3751,7 @@ type Box:
     user: User?
 
 def label(box: Box, kind: string) -> string:
-    assert box.user
+    assert box.user != null
     match kind:
         case _:
             pass
@@ -4562,7 +4562,7 @@ test("rejects missing, non-Error, and non-numeric throw/remainder operands", () 
 test("strict number parsing returns optional finite decimals without JavaScript coercion", () => {
   const result = compile(`
 def label(value: number?) -> string:
-    if value:
+    if value != null:
         return f"value:{value}"
     return "missing"
 
@@ -5097,10 +5097,10 @@ test("enforces parameter, condition, coercion, and object-shape contracts", () =
   assert.ok(parameter.diagnostics.some((item) => item.code === "VEL3002"));
 
   const truthiness = compile("if 1:\n    print(1)\n");
-  assert.ok(truthiness.diagnostics.some((item) => /Condition must be bool or optional/.test(item.message)));
+  assert.ok(truthiness.diagnostics.some((item) => /Condition must be bool, received number/.test(item.message)));
 
   const logical = compile("const visible = 1 and true\n");
-  assert.ok(logical.diagnostics.some((item) => /Condition must be bool or optional, received number/.test(item.message)));
+  assert.ok(logical.diagnostics.some((item) => /Condition must be bool, received number/.test(item.message)));
 
   const coercion = compile("const label = \"Score: \" + 10\n");
   assert.ok(coercion.diagnostics.some((item) => /f-string or str\(value\)/.test(item.message)));
@@ -6357,7 +6357,7 @@ watch previews() as current, previous:
 
 export def appendChunk(replyId: string, chunk: string) -> null:
     const message = messages.find(item => item.id == replyId)
-    if message:
+    if message != null:
         message.text += chunk
 
 export def removeSession(id: string) -> null:
@@ -6719,7 +6719,7 @@ export async def exercise() -> null:
     print("identity:" + str(byTask.get(alias[0])) + ":set=" + str(alias[0] in selectedTasks))
     byId.set("second", alias[1])
     const stored = byId.get("second")
-    if stored:
+    if stored != null:
         stored.done = true
         selected.add("second")
         session.meta.count += 1
@@ -7930,7 +7930,7 @@ component App:
         setClipboardText(event, "copied")
 
     def inspect() -> null:
-        if form:
+        if form != null:
             const currentForm = form
             const typed = read(currentForm, FormDraft)
             const data = values(currentForm)
@@ -7956,11 +7956,11 @@ component App:
             focus(currentForm, true)
             blur(currentForm)
             announce("Checked")
-        if dialog:
+        if dialog != null:
             const currentDialog = dialog
             showDialog(currentDialog)
             closeDialog(currentDialog, dialogResult(currentDialog))
-        if editor:
+        if editor != null:
             const currentEditor = editor
             const selectedText = textSelection(currentEditor)
             setTextSelection(currentEditor, selectedText.start, selectedText.end, selectedText.direction)
@@ -10122,7 +10122,7 @@ component WrongDialog:
     let dialog: DialogElement? = null
     let form: Element? = null
     def inspect() -> null:
-        if form:
+        if form != null:
             const unsupported = read(form, UnsupportedForm)
     return <div ref={dialog}>Not a dialog</div>
 
@@ -10210,7 +10210,7 @@ import {read} from "velar/forms"
 component Signup:
     let form: Element? = null
     def submit() -> null:
-        if form:
+        if form != null:
             const draft = read(form, SignupForm)
             print(draft.name)
     return <form ref={form} on:submit.prevent={submit}><input name="name" /></form>
@@ -17106,17 +17106,17 @@ extern module "host-data":
 import js {loadValues, profile, values} from "host-data"
 
 let current: string? = "ready"
-if profile.label:
+if profile.label != null:
     const repeated: string = profile.label
 
 current = "ready"
-if current:
+if current != null:
     const first = values[0]
     const afterConstant: string = current
 
 const loaded = loadValues()
 current = "ready"
-if current:
+if current != null:
     const first = loaded[0]
     const afterResult: string = current
 `.trimStart());
@@ -18626,10 +18626,10 @@ import js {holder, readonlyValues, mutableValuesByKey} from "fixture"
 holder.nested.name = "allowed"
 holder.nested = {name: "blocked"}
 const readonlyValue = readonlyValues.get("item")
-if readonlyValue:
+if readonlyValue != null:
     readonlyValue.name = "blocked"
 const mutableValue = mutableValuesByKey.get("item")
-if mutableValue:
+if mutableValue != null:
     mutableValue.name = "allowed"
 `.trimStart(), { analysis: { imports: declarations.exports } });
   assert.deepEqual(readonlyMapAndDeepField.diagnostics.map((item) => item.message), [
@@ -19753,12 +19753,12 @@ export def clear() -> null:
 import {current, fixed, clear} from "./store.vel"
 
 def live() -> string:
-    assert current
+    assert current != null
     clear()
     return current.name
 
 def stable() -> string:
-    assert fixed
+    assert fixed != null
     clear()
     return fixed.name
 `.trimStart(), "utf8");
@@ -19779,7 +19779,7 @@ export def clear() -> null:
 import {current, clear} from "./reactive-store.vel"
 
 def live() -> string:
-    assert current
+    assert current != null
     clear()
     return current.name
 `.trimStart(), "utf8");
@@ -22417,7 +22417,7 @@ def clear(box: Box) -> number:
     return 0
 
 def keep(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     const skipped = null?.[clear(box)]
     return box.user.name
 
@@ -22435,16 +22435,16 @@ type User:
     name: string
 
 def label(user: User?) -> string:
-    return user ? user.name : "Guest"
+    return user != null ? user.name : "Guest"
 
 def inverse(user: User?) -> string:
-    return not user ? "Guest" : user.name
+    return user == null ? "Guest" : user.name
 
 def numberLabel(value: number?) -> string:
-    return value ? "present" : "null"
+    return value != null ? "present" : "null"
 
 def inverseNumberLabel(value: number?) -> string:
-    return not value ? "null" : "present"
+    return value == null ? "null" : "present"
 
 print(numberLabel(0))
 print(inverseNumberLabel(0))
@@ -22469,7 +22469,7 @@ def probe() -> bool:
     return true
 
 def managerName(user: User?) -> string:
-    if user and user.manager and user.manager.active:
+    if user != null and user.manager != null and user.manager.active:
         return user.manager.name
     return "missing"
 
@@ -22486,26 +22486,26 @@ const present: User? = {
     manager: {name: "Lin", active: true, manager: null},
 }
 
-print(absent and probe())
+print(absent != null and probe())
 print(probes)
-print(present and probe())
+print(present != null and probe())
 print(probes)
-print(present or probe())
+print(present != null or probe())
 print(probes)
-print(absent or probe())
+print(absent != null or probe())
 print(probes)
 print(managerName(present))
 print(managerName(absent))
 print(status(present))
 
 let current: User? = present
-while current:
+while current != null:
     print(current.name)
     current = null
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /\(absent \?\? null\) != null\) && probe/u);
-  assert.match(result.code ?? "", /\(present \?\? null\) != null\) \|\| probe/u);
+  assert.match(result.code ?? "", /\(\(absent \?\? null\) !== null\) && probe/u);
+  assert.match(result.code ?? "", /\(\(present \?\? null\) !== null\) \|\| probe/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "false\n0\ntrue\n1\ntrue\n1\ntrue\n2\nLin\nmissing\nAda\nAda\n");
@@ -22515,7 +22515,7 @@ type User:
     active: bool
 
 let current: User? = {active: true}
-if current and current.active:
+if current != null and current.active:
     current = null
     const invalid: User = current
 `.trimStart());
@@ -22595,7 +22595,7 @@ def inverseElseLabel(user: User?) -> string:
 
 def bindingLabel(initial: User?, change: bool) -> string:
     let user = initial
-    assert user
+    assert user != null
     if change:
         user = null
     else:
@@ -22603,7 +22603,7 @@ def bindingLabel(initial: User?, change: bool) -> string:
     return "changed"
 
 def memberLabel(box: Box, change: bool) -> string:
-    assert box.user
+    assert box.user != null
     if change:
         box.user = null
     else:
@@ -22612,7 +22612,7 @@ def memberLabel(box: Box, change: bool) -> string:
 
 def returningMutation(initial: User?, change: bool) -> string:
     let user = initial
-    assert user
+    assert user != null
     if change:
         user = null
         return "changed"
@@ -22641,7 +22641,7 @@ type User:
 
 def invalid(initial: User?, change: bool) -> null:
     let user = initial
-    assert user
+    assert user != null
     if change:
         user = null
     const stale: User = user
@@ -22670,9 +22670,9 @@ type User:
 
 def label(user: User?, alternate: bool) -> string:
     if alternate:
-        assert user
+        assert user != null
     else:
-        assert user
+        assert user != null
     return user.name
 
 print(label({name: "Ada"}, false))
@@ -22693,7 +22693,7 @@ type Box:
     user: User?
 
 def normalOrCaught(box: Box, fail: bool) -> string:
-    assert box.user
+    assert box.user != null
     try:
         if fail:
             throw Error("stop")
@@ -22707,16 +22707,16 @@ def assertedOnBothPaths(initial: User?, fail: bool) -> string:
     try:
         if fail:
             throw Error("stop")
-        assert user
+        assert user != null
     catch error:
-        assert user
+        assert user != null
     return user.name
 
 def assertedInFinally(user: User?) -> string:
     try:
         pass
     finally:
-        assert user
+        assert user != null
     return user.name
 
 print(normalOrCaught({user: {name: "Ada"}}, false))
@@ -22738,7 +22738,7 @@ type Box:
     user: User?
 
 def invalid(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     try:
         box.user = null
         throw Error("stop")
@@ -22755,7 +22755,7 @@ type Box:
     user: User?
 
 def invalid(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     try:
         pass
     finally:
@@ -22774,7 +22774,7 @@ type Box:
     user: User?
 
 def caught(box: Box, failure: Error) -> string:
-    assert box.user
+    assert box.user != null
     try:
         throw failure
         box.user = null
@@ -22782,7 +22782,7 @@ def caught(box: Box, failure: Error) -> string:
         return box.user.name
 
 def stoppedLoop(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     for value in [1]:
         break
         box.user = null
@@ -22804,7 +22804,7 @@ type Box:
     user: User?
 
 def invalid(box: Box) -> null:
-    assert box.user
+    assert box.user != null
     try:
         box.user = null
         throw Error("stop")
@@ -22823,7 +22823,7 @@ type Box:
     user: User?
 
 def firstOrOwner(box: Box, values: List<number>) -> string:
-    assert box.user
+    assert box.user != null
     for value in values:
         box.user = null
         return str(value)
@@ -22852,7 +22852,7 @@ type Box:
     user: User?
 
 def invalid(box: Box, values: List<number>) -> null:
-    assert box.user
+    assert box.user != null
     for value in values:
         box.user = null
     const stale: User = box.user
@@ -22886,7 +22886,7 @@ def observe(box: readonly Box) -> string:
     return box.user?.name ?? "missing"
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     observe(box)
     return box.user.name
 `.trimStart());
@@ -22906,12 +22906,12 @@ class Box:
         self.user = null
 
 def safe(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     box.observe()
     return box.user.name
 
 def stale(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     box.clear()
     return box.user.name
 `.trimStart());
@@ -22929,12 +22929,12 @@ type Mutator = (Box) -> null
 type Observer = (readonly Box) -> null
 
 def stale(callback: Mutator?, box: Box) -> string:
-    assert box.user
+    assert box.user != null
     callback?.(box)
     return box.user.name
 
 def safe(callback: Observer?, box: Box) -> string:
-    assert box.user
+    assert box.user != null
     callback?.(box)
     return box.user.name
 `.trimStart());
@@ -22955,12 +22955,12 @@ import js {inspect} from "host-sdk"
 import js unsafe {inspectUnknown} from "unknown-sdk"
 
 def external(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     inspect(box)
     return box.user.name
 
 def unknown(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     inspectUnknown(box)
     return box.user.name
 `.trimStart());
@@ -22978,8 +22978,8 @@ def clear(box: Box) -> null:
     box.user = null
 
 def label(left: Box, right: Box) -> string:
-    assert left.user
-    assert right.user
+    assert left.user != null
+    assert right.user != null
     clear(left)
     return right.user.name
 `.trimStart());
@@ -23000,9 +23000,9 @@ def clear(box: Box) -> null:
     box.user = null
 
 def label(holder: Holder) -> string:
-    assert holder.box
-    assert holder.box.user
-    assert holder.values
+    assert holder.box != null
+    assert holder.box.user != null
+    assert holder.values != null
     clear(holder.box)
     holder.values.clear()
     const box: Box = holder.box
@@ -23027,7 +23027,7 @@ def clear(box: Box) -> null:
     box.user = null
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     const user = box.user
     clear(box)
     return user.name
@@ -23052,7 +23052,7 @@ def clear(box: Box) -> null:
     box.user = null
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     clear(box)
     return box.user.name
 `.trimStart());
@@ -23070,7 +23070,7 @@ def label(initial: User?) -> string:
     def clear() -> null:
         user = null
 
-    assert user
+    assert user != null
     clear()
     return user.name
 `.trimStart());
@@ -23091,7 +23091,7 @@ def clear(box: Box) -> bool:
     return true
 
 def label(box: Box) -> string:
-    if box.user and clear(box):
+    if box.user != null and clear(box):
         return box.user.name
     return "missing"
 `.trimStart());
@@ -23106,7 +23106,7 @@ type Box:
     user: User?
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
 
     def clearLater() -> null:
         print("later")
@@ -23129,7 +23129,7 @@ type Box:
     user: User?
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
 
     def clearLater() -> null:
         box.user = null
@@ -23181,60 +23181,60 @@ class DerivedBuilder extends Builder:
         super()
 
 def throughDirect() -> string:
-    assert user
+    assert user != null
     clear()
     return user.name
 
 def throughForwardCall() -> string:
-    assert user
+    assert user != null
     forward()
     return user.name
 
 def throughAlias() -> string:
     const action: () -> null = clear
-    assert user
+    assert user != null
     action()
     return user.name
 
 def throughReturnedCallable() -> string:
     const action = makeClearer()
-    assert user
+    assert user != null
     action()
     return user.name
 
 def throughArrow() -> string:
     const action: () -> null = () => clear()
-    assert user
+    assert user != null
     action()
     return user.name
 
 def throughCallback() -> string:
-    assert user
+    assert user != null
     run(clear)
     return user.name
 
 def throughReadonlyMethod(worker: Worker) -> string:
-    assert user
+    assert user != null
     worker.touch()
     return user.name
 
 def throughReadonlyGetter(worker: Worker) -> string:
-    assert user
+    assert user != null
     const value = worker.value
     return user.name + value
 
 def throughConstructor() -> string:
-    assert user
+    assert user != null
     const builder = Builder()
     return user.name
 
 def throughDerivedConstructor() -> string:
-    assert user
+    assert user != null
     const builder = DerivedBuilder()
     return user.name
 
 def unrelated() -> string:
-    assert other
+    assert other != null
     clear()
     return other.name
 `.trimStart());
@@ -23268,7 +23268,7 @@ export def clearState() -> null:
   await writeFile(directPath, `
 import {user, clear} from "./store.vel"
 
-assert user
+assert user != null
 clear()
 print(user.name)
 `.trimStart(), "utf8");
@@ -23287,7 +23287,7 @@ export def clearState() -> null:
   await writeFile(namespacePath, `
 import * as store from "./namespace-store.vel"
 
-assert store.storeState.user
+assert store.storeState.user != null
 store.clearState()
 print(store.storeState.user.name)
 `.trimStart(), "utf8");
@@ -23322,8 +23322,8 @@ def touch(box: Box) -> string:
 
 async def label(box: Box, initial: User?, pending: Promise<null>, host: Host) -> string:
     let user = initial
-    assert user
-    assert box.user
+    assert user != null
+    assert box.user != null
     const afterCall = touch(box)
     const viaCall: string = box.user.name + user.name
     await pending
@@ -23346,8 +23346,8 @@ type Box:
 
 def invalid(box: Box, initial: User?) -> string:
     let user = initial
-    assert user
-    assert box.user
+    assert user != null
+    assert box.user != null
     box.user = null
     user = null
     return box.user.name + user.name
@@ -23365,7 +23365,7 @@ type Box:
 
 def invalid(box: Box) -> string:
     const alias = box
-    assert box.user
+    assert box.user != null
     alias.user = null
     return box.user.name
 `.trimStart());
@@ -23386,7 +23386,7 @@ import js {Client} from "host-sdk"
 
 def label(client: Client, initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     client.value = 1
     return user.name
 `.trimStart());
@@ -23405,7 +23405,7 @@ import js {Client} from "host-sdk"
 
 def label(client: Client, initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     client.value = user.name.length
     return user.name
 `.trimStart());
@@ -23421,7 +23421,7 @@ import js unsafe {client} from "host-sdk"
 
 def label(initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     client.value += user.name.length
     return user.name
 `.trimStart());
@@ -23440,7 +23440,7 @@ import js {Client} from "host-sdk"
 
 def label(client: Client, initial: User?) -> string:
     const user = initial
-    assert user
+    assert user != null
     client.value = 1
     return user.name
 `.trimStart());
@@ -23462,7 +23462,7 @@ import js {Client} from "host-sdk"
 
 def label(value: unknown, initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     const matches = value is Client
     return user.name
 `.trimStart());
@@ -23480,7 +23480,7 @@ import js {Client} from "host-sdk"
 
 def label(value: unknown, initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     match value:
         case Client:
             return "client"
@@ -23518,7 +23518,7 @@ def absent(value: null) -> string:
 
 def invalid(client: Client, user: User) -> string:
     match client:
-        case Client if user.manager:
+        case Client if user.manager != null:
             return "managed"
         else:
             return absent(user.manager)
@@ -23534,7 +23534,7 @@ class Client:
 
 def label(value: unknown, initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     const matches = value is Client
     return user.name
 `.trimStart());
@@ -23557,7 +23557,7 @@ import js {load} from "host-sdk"
 def label(initial: User?) -> string:
     const remote = load()
     let user = initial
-    assert user
+    assert user != null
     const matches = remote is User
     return user.name
 `);
@@ -23567,7 +23567,7 @@ def label(initial: User?) -> string:
 def label(initial: User?) -> string:
     const remote = load()
     let user = initial
-    assert user
+    assert user != null
     match remote:
         case User:
             return "remote"
@@ -23593,7 +23593,7 @@ type User:
 
 def label(value: unknown, initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     const matches = value is User
     return user.name
 `.trimStart());
@@ -23613,7 +23613,7 @@ def clear(box: Box) -> string:
     return "cleared"
 
 def choose(box: Box, changed: bool) -> string:
-    assert box.user
+    assert box.user != null
     return changed ? clear(box) : box.user.name
 
 print(choose({user: {name: "Ada"}}, false))
@@ -23638,7 +23638,7 @@ def clear(box: Box) -> string:
     return "cleared"
 
 def label(box: Box, changed: bool) -> string:
-    assert box.user
+    assert box.user != null
     const status = changed ? clear(box) : "kept"
     return box.user.name
 `.trimStart());
@@ -23661,7 +23661,7 @@ class Box:
 
 def label(box: Box) -> string:
     const current = box.current
-    if current:
+    if current != null:
         return current.name
     return "missing"
 
@@ -23686,7 +23686,7 @@ class Box:
         return result
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     const current = box.current
     return box.user.name
 `.trimStart());
@@ -23708,7 +23708,7 @@ class Box:
         return result
 
 def invalid(box: Box) -> string:
-    if box.current:
+    if box.current != null:
         return box.current.name
     return "missing"
 `.trimStart());
@@ -23725,7 +23725,7 @@ extern module "host-sdk":
 import js {Client} from "host-sdk"
 
 def read(client: Client) -> number:
-    if client.label:
+    if client.label != null:
         return client.label.size
     return 0
 `.trimStart());
@@ -23741,7 +23741,7 @@ import js {Client} from "host-sdk"
 
 def size(client: Client) -> number:
     const label = client.label
-    if label:
+    if label != null:
         return label.size
     return 0
 `.trimStart());
@@ -23760,7 +23760,7 @@ test("host and owned values narrow alike after copies, collection reads, and run
 import js {payload} from "host-sdk"
 
 const label = payload.label
-if label:
+if label != null:
     const stable: string = label
 `.trimStart(), { analysis: { imports: new Map([["payload", hostRecordType]]) } });
   assert.deepEqual(stableRecordCopy.diagnostics, []);
@@ -23769,7 +23769,7 @@ if label:
 const values = [1]
 let current: string? = "ready"
 
-if current:
+if current != null:
     const first = values[0]
     const copied = [...values, current == "" ? 0 : 1]
     const [bound] = values
@@ -23797,20 +23797,20 @@ class LocalProfile:
 import js {raw} from "host-sdk"
 
 const parsed = Profile.parse(raw)
-if parsed.label:
+if parsed.label != null:
     const narrowed: string = parsed.label
 
 if raw is Profile:
-    if raw.label:
+    if raw.label != null:
         const narrowed: string = raw.label
 
 match raw:
     case Profile as matched:
-        if matched.label:
+        if matched.label != null:
             const narrowed: string = matched.label
 
 if raw is LocalProfile:
-    if raw.label:
+    if raw.label != null:
         const narrowed: string = raw.label
 `.trimStart(), { analysis: { imports: new Map([["raw", { kind: "unknown" }]]) } });
   assert.equal(runtimeValidatedHostValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 0);
@@ -23826,11 +23826,11 @@ class LocalProfile:
         self.label = label
 
 const parsed = Profile.parse({label: "owned"})
-if parsed.label:
+if parsed.label != null:
     const repeated: string = parsed.label
 
 const local = LocalProfile("owned")
-if local.label:
+if local.label != null:
     const repeated: string = local.label
 `.trimStart());
   assert.deepEqual(runtimeValidatedOwnedValues.diagnostics, []);
@@ -23858,7 +23858,7 @@ class Mutator:
 
 def label(box: Box) -> string:
     const mutator = Mutator(box)
-    assert box.user
+    assert box.user != null
     const text = f"{mutator}"
     return box.user.name
 `.trimStart());
@@ -23870,7 +23870,7 @@ type User:
 
 def label(initial: User?) -> string:
     let user = initial
-    assert user
+    assert user != null
     const prefix = f"{1}:{true}:{null}"
     return f"{prefix}:{user.name}"
 
@@ -23897,7 +23897,7 @@ component Clear(box: Box):
     return <span>cleared</span>
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     const view = <Clear box={box} />
     return box.user.name
 `.trimStart());
@@ -23921,7 +23921,7 @@ def clear(box: Box) -> string:
     return "cleared"
 
 def label(box: Box) -> WebNode:
-    assert box.user
+    assert box.user != null
     return <Panel label={clear(box)}>{box.user.name}</Panel>
 `.trimStart());
   assert.deepEqual(propBeforeChildren.diagnostics, []);
@@ -23939,7 +23939,7 @@ component Clear(box: Box):
     return <span>cleared</span>
 
 def label(box: Box) -> string:
-    assert box.user
+    assert box.user != null
     const user = box.user
     const view = <Clear box={box} />
     return user.name
@@ -23957,7 +23957,7 @@ type Box:
     user: User?
 
 async def label(box: Box, pending: Promise<null>) -> string:
-    assert box.user
+    assert box.user != null
     const user = box.user
     await pending
     return user.name
@@ -23974,7 +23974,7 @@ type Box:
     user: User?
 
 async def label(box: Box, pending: Promise<null>) -> string:
-    assert box.user
+    assert box.user != null
     await pending
     return box.user.name
 `.trimStart());
@@ -23986,7 +23986,7 @@ type User:
 
 async def label(initial: User?, pending: Promise<null>) -> string:
     let user = initial
-    assert user
+    assert user != null
     await pending
     return user.name
 `.trimStart());
@@ -24019,7 +24019,7 @@ print(Runner().run(value=3))
   assert.doesNotMatch(result.code ?? "", /new Vault\(\) \?\? null/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\nAda\n3\n");
+  assert.equal(execution.stdout, "false\nAda\n3\n");
 });
 
 test("explicit null comparisons narrow blocks, inline expressions, assertions, and JSX sequences", () => {
@@ -24100,15 +24100,15 @@ type Fault:
     error: Error?
 
 def label(contact: Contact) -> string:
-    if contact.manager:
+    if contact.manager != null:
         print(contact.manager.email ?? "manager")
-    if contact.email:
+    if contact.email != null:
         const address: string = contact.email
         return address
     return "missing"
 
 def inverse(contact: Contact) -> string:
-    return not contact.email ? "missing" : contact.email
+    return contact.email == null ? "missing" : contact.email
 
 def errorMessage(fault: Fault) -> string:
     if fault.error is Error:
@@ -24117,7 +24117,7 @@ def errorMessage(fault: Fault) -> string:
 
 component ContactLink(contact: Contact):
     def content() -> WebNode:
-        if contact.email:
+        if contact.email != null:
             return <a href={contact.email}>{contact.email}</a>
         return <span>Missing</span>
 
@@ -24139,7 +24139,7 @@ type Contact:
 
 const contact: Contact = {email: null}
 const address: string = contact.email
-if contact.email:
+if contact.email != null:
     const contact: Contact = {email: null}
     const shadowed: string = contact.email
 `.trimStart());
@@ -24154,21 +24154,21 @@ type Contact:
 let name: string? = "Ada"
 let contact: Contact = {email: "ada@example.com"}
 
-if name:
+if name != null:
     name = null
     print(name == null)
 
-if contact.email:
+if contact.email != null:
     contact.email = null
     print(contact.email == null)
 
 contact.email = "restored@example.com"
-assert contact.email
+assert contact.email != null
 contact = {email: null}
 print(contact.email == null)
 
 let count: number? = 1
-if count:
+if count != null:
     count += 1
     const current: number = count
     print(current)
@@ -24185,16 +24185,16 @@ type Contact:
 let name: string? = "Ada"
 let contact: Contact = {email: "ada@example.com"}
 
-if name:
+if name != null:
     name = null
     const staleName: string = name
 
-if contact.email:
+if contact.email != null:
     contact.email = null
     const staleField: string = contact.email
 
 contact.email = "restored@example.com"
-assert contact.email
+assert contact.email != null
 contact = {email: null}
 const staleBase: string = contact.email
 `.trimStart());
@@ -24204,11 +24204,11 @@ const staleBase: string = contact.email
 let mutableName: string? = "Ada"
 const fixedName: string? = "Lin"
 
-if mutableName:
+if mutableName != null:
     mutableName = 42
     const stillNarrowed: string = mutableName
 
-if fixedName:
+if fixedName != null:
     fixedName = null
     const stillFixed: string = fixedName
 `.trimStart());
@@ -24689,7 +24689,7 @@ component Host(View: CounterView):
 
 component App:
     mounted:
-        if conditionalCounter:
+        if conditionalCounter != null:
             print("parent-mounted")
             conditionalCounter.increment()
 
@@ -25490,9 +25490,9 @@ component App:
     def content() -> WebNode:
         const failure = label.error
         const value = label.value
-        if failure:
+        if failure != null:
             return <p role="alert">{failure.message}</p>
-        if value:
+        if value != null:
             return <p>{value}</p>
         return <p>Loading…</p>
 
@@ -25670,7 +25670,7 @@ component App:
 
     const failure = computed(() => refresh.error)
 
-    return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure() ? <p role="alert">{failure()?.message}</p> : null}</main>
+    return <main><button type="button" disabled={refresh.pending} on:click={runRefresh}>Refresh</button>{failure() != null ? <p role="alert">{failure()?.message}</p> : null}</main>
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
@@ -26173,9 +26173,9 @@ component Profile(user: User?, failed: Error?, loading: bool):
     def content() -> WebNode:
         if loading:
             return <p aria-busy="true">Loading…</p>
-        else if failed:
+        else if failed != null:
             return <p role="alert">{failed.message}</p>
-        else if user:
+        else if user != null:
             return <Badge label={user.name} />
         else:
             return <p>Guest</p>
@@ -26187,8 +26187,8 @@ component Profile(user: User?, failed: Error?, loading: bool):
   // Prop reads route through the live prop handle, so narrowed branch reads
   // lower through .get() like state reads.
   assert.match(result.code ?? "", /if \(loading\.get\(\)\)/u);
-  assert.match(result.code ?? "", /\(failed\.get\(\) \?\? null\) != null/u);
-  assert.match(result.code ?? "", /\(user\.get\(\) \?\? null\) != null/u);
+  assert.match(result.code ?? "", /\(\(failed\.get\(\) \?\? null\) !== null\)/u);
+  assert.match(result.code ?? "", /\(\(user\.get\(\) \?\? null\) !== null\)/u);
   assert.doesNotMatch(result.code ?? "", /__velarStaticAttr\([^\n]+"(?:if|else-if|else)"/u);
 
   const invalid = compile(`
@@ -26206,7 +26206,7 @@ component Broken:
   assert.ok(invalid.diagnostics.filter((item) => item.code === "VEL5029").length >= 5);
 
   const badCondition = compile("component Broken:\n    def content() -> WebNode:\n        if \"yes\":\n            return <p>Wrong</p>\n        return <p>Fallback</p>\n\n    return <main>{content()}</main>\n");
-  assert.ok(badCondition.diagnostics.some((item) => /Condition must be bool or optional/u.test(item.message)));
+  assert.ok(badCondition.diagnostics.some((item) => /Condition must be bool, received string/u.test(item.message)));
 });
 
 test("native JSX events provide checked browser payloads without wrappers", () => {

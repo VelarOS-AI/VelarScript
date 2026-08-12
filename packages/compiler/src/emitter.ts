@@ -1451,9 +1451,7 @@ export class JavaScriptEmitter {
           return `await ${this.emitMappedExpression(expression.operand)}`;
         }
         return expression.operator === "not"
-          ? this.hints.optionalNegations.has(spanIdentity(expression.span))
-            ? `(${this.emitMappedExpression(expression.operand)} == null)`
-            : `!(${this.emitMappedExpression(expression.operand)})`
+          ? `!(${this.emitCondition(expression.operand)})`
           : `${expression.operator}(${this.emitMappedExpression(expression.operand)})`;
       case "BinaryExpression": {
         if (expression.operator === "and" || expression.operator === "or") {
@@ -1651,9 +1649,12 @@ export class JavaScriptEmitter {
     }
   }
 
+  // A 'bool?' condition asks whether the value is true, so it lowers to an
+  // explicit '=== true'. Both 'false' and an absent value then take the same
+  // else path instead of riding on JavaScript truthiness.
   protected emitCondition(expression: Expression): string {
     const value = this.emitMappedExpression(expression);
-    return this.hints.presenceConditions.has(spanIdentity(expression.span)) ? `(${value} != null)` : value;
+    return this.hints.truthConditions.has(spanIdentity(expression.span)) ? `(${value} === true)` : value;
   }
 
   private emitBinaryOperand(expression: Expression): string {

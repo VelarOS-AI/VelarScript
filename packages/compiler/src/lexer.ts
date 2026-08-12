@@ -456,7 +456,14 @@ export class Lexer {
       span: span(start, this.index),
       payload,
     });
-    if (scanned.recoverAtLineStart) this.atLineStart = true;
+    // An unterminated layout string swallows its line breaks, so recovery also
+    // closes the logical line. Without this the next physical line would be
+    // read as a leftover token on the broken line, and the statement-boundary
+    // rule would report it instead of letting it declare its own names.
+    if (scanned.recoverAtLineStart) {
+      this.atLineStart = true;
+      this.tokens.push({ kind: "newline", value: "", span: span(this.index, this.index) });
+    }
   }
 
   private diagnoseUnknownStringEscapes(scanned: StringLiteralScan): void {
