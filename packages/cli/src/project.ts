@@ -21,6 +21,7 @@ import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
+import { canonicalizePotentialPath } from "./canonical-path.ts";
 
 export interface ProjectModule {
   readonly inputPath: string;
@@ -144,6 +145,15 @@ export async function compileProjectEntries(
   const velarPackages = new Map<string, VelarSourcePackage>();
   const velarImports = new Map<string, string>();
   const unsafeCssOwners = new Map<string, string>();
+  const canonicalBoundaries = new Map<string, Promise<string>>();
+  const canonicalBoundary = (boundary: string): Promise<string> => {
+    let pending = canonicalBoundaries.get(boundary);
+    if (!pending) {
+      pending = canonicalizePotentialPath(boundary);
+      canonicalBoundaries.set(boundary, pending);
+    }
+    return pending;
+  };
   if (initialEntries.length > MAX_VELAR_PROJECT_MODULES) {
     failures.push({ path: entryPath, message: `A VelarScript project cannot contain more than ${MAX_VELAR_PROJECT_MODULES} source modules` });
   }
@@ -167,6 +177,27 @@ export async function compileProjectEntries(
     }
     visited.add(inputPath);
 
+    const boundary = pendingModule.package?.root ?? sourceRoot;
+    const pathWithinBoundary = relative(boundary, inputPath);
+    if (escapesRoot(pathWithinBoundary)) {
+      failures.push({ path: inputPath, message: pendingModule.package
+        ? `VelarScript package '${pendingModule.package.name}' cannot load source outside its package root`
+        : "Relative VelarScript imports cannot escape the entry source directory" });
+      continue;
+    }
+    let escapesCanonicalBoundary = false;
+    try {
+      escapesCanonicalBoundary = escapesRoot(relative(await canonicalBoundary(boundary), await canonicalizePotentialPath(inputPath)));
+    } catch (error) {
+      failures.push({ path: inputPath, message: hostErrorMessage(error) });
+      continue;
+    }
+    if (escapesCanonicalBoundary) {
+      failures.push({ path: inputPath, message: pendingModule.package
+        ? `VelarScript package '${pendingModule.package.name}' cannot load source outside its package root`
+        : "Relative VelarScript imports cannot escape the entry source directory" });
+      continue;
+    }
     let text: string;
     try {
       const overridden = overrides.get(inputPath);
@@ -175,15 +206,6 @@ export async function compileProjectEntries(
         : validateVelarSourceText(overridden, inputPath);
     } catch (error) {
       failures.push({ path: inputPath, message: hostErrorMessage(error) });
-      continue;
-    }
-
-    const boundary = pendingModule.package?.root ?? sourceRoot;
-    const pathWithinBoundary = relative(boundary, inputPath);
-    if (escapesRoot(pathWithinBoundary)) {
-      failures.push({ path: inputPath, message: pendingModule.package
-        ? `VelarScript package '${pendingModule.package.name}' cannot load source outside its package root`
-        : "Relative VelarScript imports cannot escape the entry source directory" });
       continue;
     }
     const relativePath = normalizeModulePath(pendingModule.package
@@ -198,6 +220,19 @@ export async function compileProjectEntries(
       }
       const target = resolve(dirname(inputPath), resource.source);
       if (escapesRoot(relative(boundary, target))) {
+        failures.push({ path: inputPath, message: pendingModule.package
+          ? `Resource '${resource.source}' cannot escape VelarScript package '${pendingModule.package.name}'`
+          : `Resource '${resource.source}' cannot escape the entry source directory` });
+        continue;
+      }
+      let resourceEscapesCanonicalBoundary = false;
+      try {
+        resourceEscapesCanonicalBoundary = escapesRoot(relative(await canonicalBoundary(boundary), await canonicalizePotentialPath(target)));
+      } catch (error) {
+        failures.push({ path: inputPath, message: `Cannot authorize ${resource.kind} resource '${resource.source}': ${hostErrorMessage(error)}` });
+        continue;
+      }
+      if (resourceEscapesCanonicalBoundary) {
         failures.push({ path: inputPath, message: pendingModule.package
           ? `Resource '${resource.source}' cannot escape VelarScript package '${pendingModule.package.name}'`
           : `Resource '${resource.source}' cannot escape the entry source directory` });

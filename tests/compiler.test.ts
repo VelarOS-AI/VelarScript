@@ -42,6 +42,7 @@ import { verifyRemoteDeployment, type DeploymentFetch } from "../packages/cli/sr
 import { parseDependencyArguments, runDependencyCommand } from "../packages/cli/src/package-manager.ts";
 import { asHostError, hostErrorCode, hostErrorMessage, hostErrorStack } from "../packages/cli/src/host-error.ts";
 import { validateApplicationPackageResult } from "../packages/cli/src/application-package-host.ts";
+import { WorkspaceIndexCancelledError, WorkspaceTextIndex } from "../packages/cli/src/workspace-index.ts";
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
 const webFormatOptions = Object.freeze({ extensions: webCompilerExtensions });
@@ -14127,6 +14128,22 @@ test("VelarScript source packages cannot escape their package root", async () =>
   assert.ok(project.failures.some((failure) => /cannot escape VelarScript package 'unsafe-package'/u.test(failure.message)));
 });
 
+test("project compilation rejects source symlinks that escape the lexical project root", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-project-source-symlink-"));
+  const projectRoot = join(directory, "project");
+  await mkdir(projectRoot);
+  const outside = join(directory, "outside.vel");
+  await writeFile(outside, "export const secret = 1\n", "utf8");
+  await symlink(outside, join(projectRoot, "leak.vel"));
+  const mainPath = join(projectRoot, "main.vel");
+  await writeFile(mainPath, "import {secret} from \"./leak.vel\"\nprint(secret)\n", "utf8");
+
+  const project = await compileProjectCore(mainPath, new Map(), { sourceRoot: projectRoot, projectRoot });
+  assert.ok(project.failures.some((failure) => failure.path === join(projectRoot, "leak.vel")
+    && /cannot escape the entry source directory/u.test(failure.message)), JSON.stringify(project.failures));
+  assert.ok(!project.modules.some((module) => module.inputPath === join(projectRoot, "leak.vel")));
+});
+
 test("local state creates one lexical cell per function execution", () => {
   const nested = compile(`
 def counter(start: number) -> () -> number:
@@ -26943,6 +26960,64 @@ test("CLI emits complete Web application assets", async () => {
   assert.ok(manifest.assets.some((asset) => asset.path === `assets/${trafficChunk}.map` && asset.role === "source-map"));
 });
 
+test("workspace text index retains bounded sources and applies exact changes and open overlays", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-workspace-index-"));
+  const sourceDirectory = join(directory, "src");
+  const mainPath = join(sourceDirectory, "main.vel");
+  const scriptPath = join(sourceDirectory, "feature.ts");
+  const readmePath = join(directory, "README.md");
+  await mkdir(sourceDirectory, { recursive: true });
+  await mkdir(join(directory, "node_modules", "hidden"), { recursive: true });
+  await mkdir(join(directory, "dist"), { recursive: true });
+  await writeFile(mainPath, "const emoji = \"😀\"\r\nprint(emoji)\r\n", "utf8");
+  await writeFile(scriptPath, "export const diskNeedle = 1\n", "utf8");
+  await writeFile(readmePath, "Workspace guide\n", "utf8");
+  await writeFile(join(directory, "node_modules", "hidden", "ignored.ts"), "const diskNeedle = 2\n", "utf8");
+  await writeFile(join(directory, "dist", "ignored.js"), "const diskNeedle = 3\n", "utf8");
+
+  const index = new WorkspaceTextIndex();
+  index.configure([sourceDirectory, directory]);
+  assert.deepEqual(index.workspaceRoots(), [directory]);
+  const initial = await index.rescan();
+  assert.equal(initial.strategy, "rescan");
+  assert.equal(initial.indexedFiles, 3);
+  assert.equal(initial.filesRead, 3);
+  assert.equal((await index.search("Workspace", { maximumResults: 10 })).coverageComplete, true);
+  const insensitive = await index.search("PRINT", { maximumResults: 10 });
+  assert.equal(insensitive.matches.length, 1);
+  assert.equal(insensitive.matches[0]?.path, mainPath);
+  assert.deepEqual(insensitive.matches[0]?.start, { line: 1, utf16Character: 0, utf32Character: 0 });
+  const unicode = await index.search("😀", { maximumResults: 10 });
+  const unicodeMatch = unicode.matches[0]!;
+  assert.equal(unicodeMatch.end.utf16Character - unicodeMatch.start.utf16Character, 2);
+  assert.equal(unicodeMatch.end.utf32Character - unicodeMatch.start.utf32Character, 1);
+
+  index.openDocument(scriptPath, "export const unsavedNeedle = 2\n");
+  assert.equal((await index.search("unsavedNeedle", { maximumResults: 10 })).matches.length, 1);
+  assert.equal((await index.search("diskNeedle", { maximumResults: 10 })).matches.length, 0);
+  const closed = await index.closeDocument(scriptPath);
+  assert.equal(closed.strategy, "known-changes");
+  assert.equal(closed.filesRead, 1);
+  assert.equal((await index.search("diskNeedle", { maximumResults: 10 })).matches.length, 1);
+
+  index.openDocument(scriptPath, `oversizedNeedle${"x".repeat(4 * 1024 * 1024)}`);
+  const boundedOverlay = await index.search("Needle", { maximumResults: 10 });
+  assert.equal(boundedOverlay.matches.some((match) => match.path === scriptPath), false);
+  assert.equal(boundedOverlay.coverageComplete, false);
+  const restored = await index.closeDocument(scriptPath);
+  assert.equal(restored.skippedLargeFiles, 0);
+  assert.equal((await index.search("diskNeedle", { maximumResults: 10 })).matches.length, 1);
+
+  await writeFile(scriptPath, "export const watchedNeedle = 3\n", "utf8");
+  const changed = await index.update(new Set([scriptPath]));
+  assert.equal(changed.filesRead, 1);
+  assert.equal((await index.search("diskNeedle", { maximumResults: 10 })).matches.length, 0);
+  assert.equal((await index.search("watchedNeedle", { maximumResults: 10 })).matches.length, 1);
+  await assert.rejects(index.search("needle", { cancelled: () => true }), WorkspaceIndexCancelledError);
+  await assert.rejects(index.search("", {}), /cannot be empty/u);
+  await assert.rejects(index.search("needle", { maximumResults: 10_001 }), /1 through 10000/u);
+});
+
 test("language server publishes diagnostics, hover, and completion", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "velar-lsp-project-"));
   const modelsPath = join(directory, "models.vel");
@@ -27012,7 +27087,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     && (message.error as { code?: number } | undefined)?.code === -32700);
   assert.match(JSON.stringify(parseFailure), /Invalid JSON/u);
 
-  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: { general: { positionEncodings: ["utf-32", "utf-16"] } } } });
+  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { rootUri: pathToFileURL(directory).href, capabilities: { general: { positionEncodings: ["utf-32", "utf-16"] } } } });
   const initialized = await waitFor((message) => message.id === 1);
   const initializeResult = initialized.result as {
     capabilities: {
@@ -27024,13 +27099,14 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       renameProvider: { prepareProvider: boolean };
       semanticTokensProvider: { legend: { tokenTypes: string[]; tokenModifiers: string[] }; full: boolean };
       codeActionProvider: { codeActionKinds: string[] };
-      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean } };
+      workspaceSymbolProvider: boolean;
+      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number } };
     };
     serverInfo: { name: string };
   };
   assert.equal(initializeResult.serverInfo.name, "VelarScript Language Server");
   assert.equal(initializeResult.capabilities.positionEncoding, "utf-32");
-  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 2);
+  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 3);
   assert.equal(initializeResult.capabilities.experimental.velar.incrementalSessions, true);
   assert.equal(initializeResult.capabilities.experimental.velar.watchedFiles, true);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceRescan, true);
@@ -27038,6 +27114,12 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.deepEqual(initializeResult.capabilities.experimental.velar.scriptLanguages, ["javascript", "typescript"]);
   assert.equal(initializeResult.capabilities.experimental.velar.scriptImplementation, "velarscript");
   assert.equal(initializeResult.capabilities.experimental.velar.incrementalScriptLexing, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.workspaceSearch, true);
+  assert.deepEqual(initializeResult.capabilities.experimental.velar.workspaceTextExtensions,
+    [".vel", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".json", ".md", ".css"]);
+  assert.equal(initializeResult.capabilities.experimental.velar.workspaceTextFileLimit, 50_000);
+  assert.equal(initializeResult.capabilities.experimental.velar.workspaceSearchResultLimit, 10_000);
+  assert.equal(initializeResult.capabilities.workspaceSymbolProvider, true);
   assert.equal(initializeResult.capabilities.definitionProvider, true);
   assert.deepEqual(initializeResult.capabilities.completionProvider.triggerCharacters, [".", "<", " ", "{", ",", ":"]);
   assert.equal(initializeResult.capabilities.documentHighlightProvider, true);
@@ -27049,6 +27131,11 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     ["declaration", "readonly", "static"]);
   assert.equal(initializeResult.capabilities.semanticTokensProvider.full, true);
   assert.deepEqual(initializeResult.capabilities.codeActionProvider.codeActionKinds, ["quickfix"]);
+  send({ jsonrpc: "2.0", method: "initialized", params: {} });
+  send({ jsonrpc: "2.0", id: 303, method: "workspace/symbol", params: { query: "greet" } });
+  const unopenedWorkspaceSymbols = await waitFor((message) => message.id === 303);
+  assert.ok((unopenedWorkspaceSymbols.result as Array<{ name: string; location: { uri: string } }>).some((symbol) =>
+    symbol.name === "greet" && symbol.location.uri === pathToFileURL(modelsPath).href));
   send({
     jsonrpc: "2.0",
     method: "textDocument/didOpen",
@@ -27363,6 +27450,36 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   send({ jsonrpc: "2.0", id: 136, method: "textDocument/hover", params: { textDocument: { uri: mainUri }, position: { line: 1, character: greetColumn } } });
   const watchedHover = await waitFor((message) => message.id === 136);
   assert.match(JSON.stringify(watchedHover.result), /watched-file refresh/u);
+  send({ jsonrpc: "2.0", id: 300, method: "velar/workspaceSearch", params: { query: "watched-file refresh", maximumResults: 10 } });
+  const workspaceSearch = await waitFor((message) => message.id === 300);
+  const workspaceSearchResult = workspaceSearch.result as {
+    items: Array<{ uri: string; preview: string; range: { start: { line: number; character: number } } }>;
+    limitReached: boolean;
+    indexedFiles: number;
+    indexedBytes: number;
+    revision: number;
+    coverageComplete: boolean;
+  };
+  assert.equal(workspaceSearchResult.items.length, 1);
+  assert.equal(workspaceSearchResult.items[0]?.uri, pathToFileURL(modelsPath).href);
+  assert.match(workspaceSearchResult.items[0]?.preview ?? "", /watched-file refresh/u);
+  assert.deepEqual(workspaceSearchResult.items[0]?.range.start, {
+    line: 0,
+    character: "/// Greets one visible user after a watched-file refresh.".indexOf("watched-file refresh"),
+  });
+  assert.equal(workspaceSearchResult.limitReached, false);
+  assert.ok(workspaceSearchResult.indexedFiles >= 2);
+  assert.ok(workspaceSearchResult.indexedBytes > 0);
+  assert.ok(workspaceSearchResult.revision > 0);
+  assert.equal(workspaceSearchResult.coverageComplete, true);
+  send({ jsonrpc: "2.0", id: 301, method: "workspace/symbol", params: { query: "greet" } });
+  const workspaceSymbols = await waitFor((message) => message.id === 301);
+  assert.ok(Array.isArray(workspaceSymbols.result), JSON.stringify(workspaceSymbols));
+  assert.ok((workspaceSymbols.result as Array<{ name: string; location: { uri: string } }>).some((symbol) =>
+    symbol.name === "greet" && symbol.location.uri === pathToFileURL(modelsPath).href));
+  send({ jsonrpc: "2.0", id: 302, method: "velar/workspaceSearch", params: { query: "", maximumResults: 10 } });
+  const invalidWorkspaceSearch = await waitFor((message) => message.id === 302);
+  assert.equal((invalidWorkspaceSearch.error as { code: number }).code, -32602);
   send({ jsonrpc: "2.0", id: 32, method: "textDocument/hover", params: { textDocument: { uri: mainUri }, position: { line: 1, character: greetColumn } } });
   const documentedHover = await waitFor((message) => message.id === 32);
   assert.match(JSON.stringify(documentedHover.result), /Greets one visible user/u);

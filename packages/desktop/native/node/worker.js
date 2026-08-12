@@ -471,6 +471,8 @@ async function startLanguageServer(args, owner, activity) {
   for (const name of ["HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"]) {
     if (typeof process.env[name] === "string") environment[name] = process.env[name];
   }
+  environment.VELAR_LANGUAGE_SERVER_WORKSPACE_ROOT = projectLexicalRoot ?? projectRoot;
+  environment.VELAR_LANGUAGE_SERVER_CANONICAL_ROOT = projectRoot;
   const child = spawn(process.execPath, [languageServerPath], {
     cwd: projectRoot,
     env: environment,

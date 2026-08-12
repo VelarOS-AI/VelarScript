@@ -35,6 +35,15 @@ export interface ProjectDocumentSymbol extends ProjectLocation {
   readonly presentationKind?: SemanticSymbol["presentationKind"];
 }
 
+export interface ProjectWorkspaceSymbol extends ProjectLocation {
+  readonly name: string;
+  readonly kind: SemanticSymbol["kind"];
+  readonly selectionSpan: Span;
+  readonly type: string | null;
+  readonly containerName?: string;
+  readonly presentationKind?: SemanticSymbol["presentationKind"];
+}
+
 export interface ProjectSignature {
   readonly label: string;
   readonly activeParameter: number;
@@ -234,6 +243,41 @@ export function projectDocumentSymbols(project: ProjectResult, path: string): re
     type: symbol.type,
     ...(symbol.presentationKind ? { presentationKind: symbol.presentationKind } : {}),
   }));
+}
+
+export function projectWorkspaceSymbols(
+  project: ProjectResult,
+  query: string,
+  maximum = 10_000,
+): readonly ProjectWorkspaceSymbol[] {
+  const normalized = query.toLowerCase();
+  const symbols: Array<ProjectWorkspaceSymbol & { readonly score: number }> = [];
+  for (const module of project.modules) {
+    for (const symbol of module.result.semanticIndex.symbols) {
+      if (symbol.kind === "import" || symbol.kind === "parameter" || symbol.kind === "catch") continue;
+      if (symbol.scopeId !== 0 && !symbol.container) continue;
+      const name = symbol.name.toLowerCase();
+      const match = normalized === "" ? 0 : name.indexOf(normalized);
+      if (match < 0) continue;
+      symbols.push({
+        name: symbol.name,
+        kind: symbol.kind,
+        path: symbol.path,
+        span: symbol.span,
+        selectionSpan: symbol.selectionSpan,
+        type: symbol.type,
+        ...(symbol.container ? { containerName: symbol.container } : {}),
+        ...(symbol.presentationKind ? { presentationKind: symbol.presentationKind } : {}),
+        score: match === 0 ? name.length === normalized.length ? 0 : 1 : 2,
+      });
+      if (symbols.length >= maximum) break;
+    }
+    if (symbols.length >= maximum) break;
+  }
+  return symbols
+    .sort((left, right) => left.score - right.score || left.name.localeCompare(right.name)
+      || left.path.localeCompare(right.path) || left.selectionSpan.start - right.selectionSpan.start)
+    .map(({ score: _score, ...symbol }) => symbol);
 }
 
 export function projectSemanticTokens(project: ProjectResult, path: string): readonly ProjectSemanticToken[] {

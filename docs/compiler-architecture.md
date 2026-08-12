@@ -80,6 +80,10 @@ Manifest-backed editor sessions key reuse by the SHA-256 identity of the exact
 bounded `velar.json` source. They do not serialize extension-owned runtime
 configuration to guess whether it changed, so `Map`, `Set`, and other validated
 extension config representations cannot collapse to an accidental shared key.
+Project source and compiler-resource containment is proved against both lexical
+paths and canonical filesystem targets before content is read. A source or
+resource symlink therefore cannot turn an in-project import into a read outside
+the project or installed VelarScript package root.
 
 The stdio language server publishes only the final compiler diagnostics and
 semantic index from that session. It negotiates UTF-32/code-point positions when
@@ -90,6 +94,34 @@ notifications use the known-change path, and `velar/workspaceRescan` explicitly
 requests an authoritative refresh after watcher overflow. `$/cancelRequest` is
 handled while framed input is still arriving, so a queued semantic request can
 return LSP cancellation code `-32800` without waiting behind unrelated analysis.
+
+The compiler remains the sole owner of per-module semantic facts. The CLI/LSP
+projects those facts through standard `workspace/symbol` without reparsing
+VelarScript or creating a second semantic model. Invalid project roots retain
+their own document diagnostics and cannot poison symbol results from healthy
+roots.
+
+The LSP process separately owns one session-persistent workspace text index for
+`.vel`, JavaScript, TypeScript, JSON, Markdown, and CSS sources. Initialize roots
+establish its authority; open-document text overlays disk, exact watcher paths
+update only affected files, and `velar/workspaceRescan` rebuilds after watcher
+overflow. `velar/workspaceSearch` is literal, case-configurable, capped at 10,000
+results, and returns both negotiated LSP coordinates and bounded line previews.
+The index admits at most 50,000 files, 4 MiB per file, and 128 MiB of aggregate
+source text while ignoring `.git`, `.velar`, `dist`, and `node_modules`. It yields
+between bounded file batches so framed `$/cancelRequest` messages can interrupt
+an active scan or search. Line-coordinate tables are computed only for a file
+that actually matches, preventing newline-dense workspaces from multiplying the
+retained source budget into an unbounded RSS cost. Search responses explicitly
+report whether resource ceilings left index coverage incomplete. An unsaved
+overlay that exceeds either text ceiling replaces any older searchable disk
+snapshot with a reason-only exclusion marker; the index does not retain the
+rejected body, and close restores disk through the same bounded read path. This
+is an in-process LSP session cache, not a disk cache or an Editor-owned
+filesystem scanner. A
+packaged Desktop host privately confines the same process to its current project
+grant; renderer-supplied initialize roots and document URIs cannot widen that
+filesystem authority.
 
 JavaScript and TypeScript documents use a separate protocol-neutral provider
 whose implementation is the pure source-backed `velar/javascript` module.

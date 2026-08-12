@@ -1,9 +1,11 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isAbsolute, relative, resolve } from "node:path";
 import { collectionMemberGuidance, compile, formatSource, isSourceIdentifierPart, sourceTypeNameGuidance, type CollectionKind, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
 import type { ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
+import { canonicalPathWithin } from "./canonical-path.ts";
 import {
   createScriptLanguageDocument,
   scriptLanguageFor,
@@ -27,7 +29,17 @@ import {
   projectSemanticTokens,
   projectSignatureAt,
   projectSymbolAt,
+  projectWorkspaceSymbols,
 } from "./project-semantic.ts";
+import {
+  MAX_WORKSPACE_SEARCH_RESULTS,
+  MAX_WORKSPACE_TEXT_FILES,
+  WORKSPACE_TEXT_EXTENSIONS,
+  WorkspaceIndexCancelledError,
+  WorkspaceTextIndex,
+  type WorkspaceIndexActivity,
+  type WorkspaceIndexPosition,
+} from "./workspace-index.ts";
 
 interface RpcMessage {
   readonly jsonrpc: "2.0";
@@ -58,9 +70,11 @@ interface ContentChange {
   readonly text: string;
 }
 
-export const VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION = 2;
+export const VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION = 3;
 type PositionEncoding = "utf-16" | "utf-32";
 let activePositionEncoding: PositionEncoding = "utf-16";
+let confinedWorkspaceRoot: string | null = null;
+let confinedCanonicalRoot: string | null = null;
 const MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_LSP_RESULT_ITEMS = 10_000;
 const MAX_LSP_TEXT_CHARS = 64 * 1024;
@@ -146,15 +160,20 @@ function extensionDocumentation(
 
 export async function runLanguageServer(): Promise<void> {
   activePositionEncoding = "utf-16";
+  confinedWorkspaceRoot = configuredWorkspaceRoot();
+  confinedCanonicalRoot = configuredCanonicalRoot() ?? confinedWorkspaceRoot;
   const documents = new Map<string, TextDocument>();
   const scriptDocuments = new Map<string, ScriptDocumentOwner>();
   const sessions = new VelarProjectSessions();
+  const workspaceIndex = new WorkspaceTextIndex();
   const pendingRequests = new Set<string>();
   const cancelledRequests = new Set<string>();
   const diagnosticUris = new Set<string>();
   let buffer = Buffer.alloc(0);
   let queue = Promise.resolve();
   let diagnosticTask: Promise<void> | null = null;
+  let workspaceIndexTask: Promise<void> = Promise.resolve();
+  let workspaceIndexFailure: string | null = null;
   let shuttingDown = false;
   let finish: () => void = () => {};
   const exitRequested = new Promise<void>((resolve) => { finish = resolve; });
@@ -186,6 +205,27 @@ export async function runLanguageServer(): Promise<void> {
     const path = pathOf(document.uri);
     if (!path) return null;
     return (await sessions.update(path, new Set(), overrides())).project;
+  };
+  const queueWorkspaceIndex = (operation: () => Promise<WorkspaceIndexActivity>): Promise<WorkspaceIndexActivity> => {
+    const result = workspaceIndexTask.then(operation);
+    workspaceIndexTask = result.then(
+      () => { workspaceIndexFailure = null; },
+      (error) => { workspaceIndexFailure = hostErrorMessage(error); },
+    );
+    return result;
+  };
+  const waitForWorkspaceIndex = async (id: RpcMessage["id"]): Promise<void> => {
+    while (true) {
+      if (id !== undefined && cancelledRequests.has(requestKey(id))) throw new WorkspaceIndexCancelledError();
+      const task = workspaceIndexTask;
+      let settled = false;
+      await Promise.race([
+        task.then(() => { settled = true; }),
+        new Promise<void>((resolveWait) => setImmediate(resolveWait)),
+      ]);
+      if (settled && task === workspaceIndexTask) break;
+    }
+    if (workspaceIndexFailure) throw new Error(`Workspace index unavailable: ${workspaceIndexFailure}`);
   };
 
   const publish = async (document: TextDocument): Promise<void> => {
@@ -301,6 +341,12 @@ export async function runLanguageServer(): Promise<void> {
     switch (message.method) {
       case "initialize":
         activePositionEncoding = requestedPositionEncoding(params);
+        try {
+          workspaceIndex.configure(requestedWorkspaceRoots(params));
+        } catch (error) {
+          respondError(message.id, hostErrorMessage(error), -32602);
+          break;
+        }
         respond(message.id, {
           capabilities: {
             positionEncoding: activePositionEncoding,
@@ -313,6 +359,7 @@ export async function runLanguageServer(): Promise<void> {
             documentHighlightProvider: true,
             renameProvider: { prepareProvider: true },
             documentSymbolProvider: true,
+            workspaceSymbolProvider: true,
             signatureHelpProvider: { triggerCharacters: ["(", ","] },
             inlayHintProvider: true,
             semanticTokensProvider: {
@@ -330,10 +377,19 @@ export async function runLanguageServer(): Promise<void> {
                 scriptLanguages: ["javascript", "typescript"],
                 scriptImplementation: "velarscript",
                 incrementalScriptLexing: true,
+                workspaceSearch: true,
+                workspaceTextExtensions: WORKSPACE_TEXT_EXTENSIONS,
+                workspaceTextFileLimit: MAX_WORKSPACE_TEXT_FILES,
+                workspaceSearchResultLimit: MAX_WORKSPACE_SEARCH_RESULTS,
               },
             },
           },
           serverInfo: { name: "VelarScript Language Server", version: VELAR_VERSION },
+        });
+        break;
+      case "initialized":
+        void queueWorkspaceIndex(() => workspaceIndex.rescan()).catch(() => {
+          // The next explicit search reports the retained indexing failure through its request response.
         });
         break;
       case "shutdown":
@@ -349,8 +405,13 @@ export async function runLanguageServer(): Promise<void> {
         break;
       case "textDocument/didOpen": {
         const value = params?.textDocument as TextDocument;
+        const path = await authorizedPathOf(value.uri);
+        if ((confinedWorkspaceRoot || confinedCanonicalRoot) && !path) {
+          send({ jsonrpc: "2.0", method: "window/logMessage", params: { type: 2, message: "Ignored a document outside the Desktop project grant" } });
+          break;
+        }
         documents.set(value.uri, value);
-        const path = pathOf(value.uri);
+        if (path) workspaceIndex.openDocument(path, value.text);
         const scriptLanguage = scriptLanguageFor(path ?? value.uri, value.languageId);
         const script = scriptLanguage ? createScriptLanguageDocument(scriptLanguage, value.text) : null;
         if (script) scriptDocuments.set(value.uri, script);
@@ -369,6 +430,8 @@ export async function runLanguageServer(): Promise<void> {
         if (!Array.isArray(changes)) break;
         const next = { ...current, version: descriptor.version, text: applyContentChanges(current.text, changes) };
         documents.set(next.uri, next);
+        const nextPath = pathOf(next.uri);
+        if (nextPath) workspaceIndex.changeDocument(nextPath, next.text);
         const script = scriptDocuments.get(next.uri);
         const edit = script ? scriptTextEdit(current.text, next.text) : null;
         if (script && edit) script.apply([edit]);
@@ -388,6 +451,7 @@ export async function runLanguageServer(): Promise<void> {
         scriptDocuments.delete(descriptor.uri);
         diagnosticUris.delete(descriptor.uri);
         const path = pathOf(descriptor.uri);
+        if (path) await queueWorkspaceIndex(() => workspaceIndex.closeDocument(path));
         if (path && !script) await sessions.update(path, new Set([path]), overrides());
         send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri: descriptor.uri, diagnostics: [] } });
         break;
@@ -395,11 +459,13 @@ export async function runLanguageServer(): Promise<void> {
       case "workspace/didChangeWatchedFiles": {
         const changes = params?.changes as readonly { readonly uri?: unknown }[] | undefined;
         if (!Array.isArray(changes)) break;
-        const changedPaths = new Set(changes.flatMap((change) => {
-          const path = typeof change?.uri === "string" ? pathOf(change.uri) : null;
-          return path ? [path] : [];
-        }));
+        const changedPaths = new Set<string>();
+        for (const change of changes) {
+          const path = typeof change?.uri === "string" ? await authorizedPathOf(change.uri) : null;
+          if (path) changedPaths.add(path);
+        }
         if (changedPaths.size === 0) break;
+        await queueWorkspaceIndex(() => workspaceIndex.update(changedPaths));
         const currentOverrides = overrides();
         const roots = new Map<string, string>();
         for (const document of documents.values()) {
@@ -413,6 +479,9 @@ export async function runLanguageServer(): Promise<void> {
         break;
       }
       case "velar/workspaceRescan": {
+        const activity = await queueWorkspaceIndex(() => workspaceIndex.rescan(
+          () => message.id !== undefined && cancelledRequests.has(requestKey(message.id)),
+        ));
         const currentOverrides = overrides();
         const roots = new Map<string, string>();
         for (const document of documents.values()) {
@@ -423,6 +492,99 @@ export async function runLanguageServer(): Promise<void> {
         }
         for (const documentPath of roots.values()) await sessions.snapshot(documentPath, currentOverrides);
         for (const document of documents.values()) schedulePublish(document.uri);
+        if (message.id !== undefined) respond(message.id, activity);
+        break;
+      }
+      case "velar/workspaceSearch": {
+        const query = params?.query;
+        const caseSensitive = params?.caseSensitive;
+        const maximumResults = params?.maximumResults;
+        if (typeof query !== "string"
+          || (caseSensitive !== undefined && typeof caseSensitive !== "boolean")
+          || (maximumResults !== undefined && typeof maximumResults !== "number")) {
+          respondError(message.id, "velar/workspaceSearch requires a string query and optional boolean caseSensitive and numeric maximumResults", -32602);
+          break;
+        }
+        if (query.length === 0 || query.length > 1_024
+          || (maximumResults !== undefined && (!Number.isSafeInteger(maximumResults)
+            || maximumResults < 1 || maximumResults > MAX_WORKSPACE_SEARCH_RESULTS))) {
+          respondError(message.id, `velar/workspaceSearch query must contain 1 through 1024 UTF-16 code units and maximumResults must be an integer from 1 through ${MAX_WORKSPACE_SEARCH_RESULTS}`, -32602);
+          break;
+        }
+        await waitForWorkspaceIndex(message.id);
+        const result = await workspaceIndex.search(query, {
+          ...(caseSensitive === undefined ? {} : { caseSensitive }),
+          ...(maximumResults === undefined ? {} : { maximumResults }),
+          cancelled: () => message.id !== undefined && cancelledRequests.has(requestKey(message.id)),
+        });
+        respond(message.id, {
+          items: result.matches.map((match) => ({
+            uri: pathToFileURL(match.path).href,
+            range: {
+              start: workspacePosition(match.start),
+              end: workspacePosition(match.end),
+            },
+            preview: match.preview,
+          })),
+          limitReached: result.limitReached,
+          filesSearched: result.filesSearched,
+          indexedFiles: result.indexedFiles,
+          indexedBytes: result.indexedBytes,
+          revision: result.revision,
+          durationMs: result.durationMs,
+          coverageComplete: result.coverageComplete,
+        });
+        break;
+      }
+      case "workspace/symbol": {
+        const query = params?.query;
+        if (typeof query !== "string") {
+          respondError(message.id, "workspace/symbol requires a string query", -32602);
+          break;
+        }
+        if (query.length > 1_024) {
+          respondError(message.id, "workspace/symbol query cannot exceed 1024 UTF-16 code units", -32602);
+          break;
+        }
+        await waitForWorkspaceIndex(message.id);
+        const projects = new Map<string, ProjectResult>();
+        for (const document of documents.values()) {
+          if (scriptDocuments.has(document.uri)) continue;
+          const path = pathOf(document.uri);
+          if (!path) continue;
+          try {
+            const snapshot = await sessions.update(path, new Set(), overrides());
+            projects.set(snapshot.config.root, snapshot.project);
+          } catch {
+            // Invalid projects already own document diagnostics and cannot poison symbols from healthy workspace roots.
+          }
+        }
+        let indexedVelarPaths = 0;
+        for (const path of workspaceIndex.paths(".vel")) {
+          if (message.id !== undefined && cancelledRequests.has(requestKey(message.id))) throw new WorkspaceIndexCancelledError();
+          indexedVelarPaths += 1;
+          if (indexedVelarPaths % 128 === 0) await new Promise<void>((resolveYield) => setImmediate(resolveYield));
+          try {
+            const snapshot = await sessions.update(path, new Set(), overrides());
+            projects.set(snapshot.config.root, snapshot.project);
+            if (projects.size > 64) throw new RangeError("workspace/symbol cannot span more than 64 VelarScript project roots");
+          } catch (error) {
+            if (error instanceof RangeError && /more than 64 VelarScript project roots/u.test(error.message)) throw error;
+            // Broken project roots retain their document diagnostics and do not suppress symbols from healthy roots.
+          }
+        }
+        const symbols: unknown[] = [];
+        for (const project of projects.values()) {
+          const remaining = MAX_LSP_RESULT_ITEMS - symbols.length;
+          if (remaining === 0) break;
+          symbols.push(...projectWorkspaceSymbols(project, query, remaining).map((symbol) => ({
+              name: clipLspText(symbol.name),
+              kind: lspSymbolKind(symbol.presentationKind ?? symbol.kind),
+              location: lspLocation(project, symbol.path, symbol.selectionSpan),
+              ...(symbol.containerName ? { containerName: clipLspText(symbol.containerName) } : {}),
+            })));
+        }
+        respond(message.id, symbols);
         break;
       }
       case "textDocument/completion": {
@@ -1139,7 +1301,22 @@ function lspCompletionKind(kind: string): number {
 }
 
 function pathOf(uri: string): string | null {
+  const path = rawPathOf(uri);
+  return path && (!confinedWorkspaceRoot || withinWorkspaceRoot(confinedWorkspaceRoot, path)) ? path : null;
+}
+
+function rawPathOf(uri: string): string | null {
   try { return uri.startsWith("file:") ? fileURLToPath(uri) : null; } catch { return null; }
+}
+
+async function authorizedPathOf(uri: string): Promise<string | null> {
+  const path = pathOf(uri);
+  if (!path || !confinedCanonicalRoot) return path;
+  try {
+    return await canonicalPathWithin(confinedCanonicalRoot, path) ? path : null;
+  } catch {
+    return null;
+  }
 }
 
 function applyContentChanges(text: string, changes: readonly ContentChange[]): string {
@@ -1279,6 +1456,56 @@ function requestedPositionEncoding(params: Record<string, unknown> | undefined):
   if (!general || typeof general !== "object" || Array.isArray(general)) return "utf-16";
   const encodings = (general as Record<string, unknown>).positionEncodings;
   return Array.isArray(encodings) && encodings.includes("utf-32") ? "utf-32" : "utf-16";
+}
+
+function requestedWorkspaceRoots(params: Record<string, unknown> | undefined): readonly string[] {
+  const roots: string[] = [];
+  const folders = params?.workspaceFolders;
+  if (Array.isArray(folders)) {
+    for (const folder of folders) {
+      if (!folder || typeof folder !== "object" || Array.isArray(folder)) continue;
+      const uri = (folder as Record<string, unknown>).uri;
+      if (typeof uri !== "string") continue;
+      const path = rawPathOf(uri);
+      if (!path) throw new TypeError("LSP workspace folders must use file URLs");
+      roots.push(path);
+    }
+  }
+  if (roots.length === 0 && typeof params?.rootUri === "string") {
+    const path = rawPathOf(params.rootUri);
+    if (!path) throw new TypeError("LSP rootUri must use a file URL");
+    roots.push(path);
+  }
+  if (roots.length === 0 && typeof params?.rootPath === "string" && params.rootPath !== "") roots.push(params.rootPath);
+  if (confinedWorkspaceRoot) {
+    if (roots.some((root) => !withinWorkspaceRoot(confinedWorkspaceRoot!, resolve(root)))) {
+      throw new RangeError("LSP workspace roots must remain inside the Desktop project grant");
+    }
+    return [confinedWorkspaceRoot];
+  }
+  return [...new Set(roots)];
+}
+
+function configuredWorkspaceRoot(): string | null {
+  const value = process.env.VELAR_LANGUAGE_SERVER_WORKSPACE_ROOT;
+  return typeof value === "string" && value !== "" ? resolve(value) : null;
+}
+
+function configuredCanonicalRoot(): string | null {
+  const value = process.env.VELAR_LANGUAGE_SERVER_CANONICAL_ROOT;
+  return typeof value === "string" && value !== "" ? resolve(value) : null;
+}
+
+function withinWorkspaceRoot(root: string, path: string): boolean {
+  const value = relative(root, resolve(path));
+  return value === "" || (!value.startsWith("..") && !isAbsolute(value));
+}
+
+function workspacePosition(position: WorkspaceIndexPosition): Position {
+  return {
+    line: position.line,
+    character: activePositionEncoding === "utf-16" ? position.utf16Character : position.utf32Character,
+  };
 }
 
 function lspSourcePosition(source: SourceText, offset: number): Position {

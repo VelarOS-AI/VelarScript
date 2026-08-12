@@ -2875,19 +2875,68 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   大 workspace watcher/index burst 与 RSS、wide-glyph hit testing、native picker/IME automation、
   crash-in-the-middle recovery、cold-start/sustained-edit memory 和正式性能/体积阈值仍未完成。
 
+- W-136 用 Editor 的真实全文搜索和工作区跳转场景关闭了 official semantic/search owner 缺口。compiler
+  已有单模块 `SemanticIndex`，因此没有复制或改变语义事实；CLI/LSP 现在通过标准 `workspace/symbol`
+  投影 compiler facts，并能在未打开文档时从 initialized workspace 建立 project session。损坏项目继续只
+  产生自己的 `VEL9001` diagnostics，不会污染健康 root 的 symbol result。
+
+  独立的全文能力归 CLI/LSP：protocol 3 建立一个进程 session 内持久的 workspace text index，覆盖
+  `.vel/.js/.mjs/.cjs/.jsx/.ts/.mts/.cts/.tsx/.json/.md/.css`。initialize roots 是 authority，didOpen/change
+  是未保存 overlay，watcher exact paths 是增量更新，`velar/workspaceRescan` 是 overflow 后的 authoritative
+  rebuild；`velar/workspaceSearch` 发布 literal/case option、negotiated UTF-16/UTF-32 coordinates、bounded
+  preview、revision/latency/coverage evidence。它最多保留 50,000 files、4 MiB/file、128 MiB aggregate text，
+  query 1,024 UTF-16 units、10,000 results、64 directory levels、64 VelarScript roots。每 128 files yield，
+  framed `$/cancelRequest` 可中断正在运行的 scan/search。newline coordinate table 只为命中文件临时建立，
+  避免 128 MiB text budget 被 dense newlines 放大成数百 MiB retained RSS；超限会显式报告 coverage incomplete。
+  提交前资源审计进一步发现，超限的 unsaved overlay 原先仍可能持有全文并留下旧磁盘命中；现在索引只保留
+  exclusion reason，删除 stale searchable snapshot，close 再通过相同 bounded reader 恢复磁盘内容。永久测试
+  锁定超限正文和旧内容均不可查询，资源上限因此约束实际持有状态，而不只是 reported indexed bytes。
+
+  真实打包同时暴露 Desktop grant 缺陷：package-owned LSP 虽从 project cwd 启动，但 renderer 原先仍可提交
+  任意 root/document URI；递归 index 会把它放大成 host read authority。Desktop Worker 现在私下注入当前
+  lexical/canonical project roots，LSP 在 retain/compile/index 前拒绝 root 外和 symlink escape 的 initialize、
+  document、watcher input。进一步审计发现 project compiler 对 source/resource 只做 lexical containment，且
+  曾先 read 再检查；现在每个 project/package source 和 compiler resource 在读 bytes 前同时通过 lexical 与
+  canonical containment。永久测试覆盖 out-of-grant initialize/document、project 内 symlink 指向外部、打包
+  child lifecycle 与 process-group reap。没有新增语法、npm 包、依赖或公开 Desktop 权限 API。
+
+  Editor 只新增公开消费：initialize 发送选择的 project root，搜索先请求 1 result 再请求 bounded 500 results，
+  新查询取消旧 request，状态展示 latency/coverage，点击结果复用 public file URL + code-point navigation。
+  Editor 没有 content scanner、matcher、semantic parser、coordinate converter 或 retained workspace text；既有
+  filesystem walk 只继续拥有 product project tree orchestration，不是语言 workaround。
+
+  diagnostics/codegen/真实执行证据覆盖 `VEL9001` isolation、JSON-RPC `-32602` invalid params/grant failure、
+  `-32800` cancellation、Unicode/CRLF ranges、open overlay、exact watcher update、standard workspace symbol、
+  canonical source refusal、generated Editor public requests、packaged LSP search/symbol/shutdown。20,000-file permanent
+  gate 锁定 first result <300 ms、complete 100 results <3 s；本次 direct fixture 约 0.26/3.23 ms。最终 `.app`
+  official LSP 对 11 files coverage complete，4 matches 约 0.76 ms，并返回 `App` symbol。
+
+  完整证据为 `npm run check`（53 formatted sources、108 docs examples、75 runtime boundaries）、全部 serial
+  compiler/runtime/CLI/Desktop tests、四示例 check/Core gates、packed consumer、publication rehearsal。Editor
+  format 6 files、3-module check、1 Core test、contract run、build/package/native smoke、exact packaged LSP probe 与
+  单 Chromium 8/8 全绿；前后均审计 Playwright/headless/browser-worker/LSP，零残留。Chromium FCP median/p95
+  8/44 ms，input frame median/p95 3.5/4.5 ms，1 MiB load/input next-frame 44.798/8.366 ms。`.app` 为
+  2,451,829 bytes：host 334,704、renderer 202,607、capability 69,544、toolchain 1,727,938、metadata 117,036；
+  renderer JS+CSS 197,629 bytes，SHA-256
+  `69aa4a1a3b8f3fb92fda97d1115d487328a04f66bc60dd01b3a85819cf35dc9a`。Lite 原有 11-file WIP 未修改。
+  未推送、未发布、未提升版本。
+
+  仍阻止生产可用的是：JS/TS 仍无 full cross-file module/type/package graph、workspace symbols 和 formatter；
+  当前 text/semantic cache 是 LSP-session persistence，不是经过冷启动/RSS 证明的 cross-process disk index；
+  multi-tab、tasks/test/build/terminal、真实大 workspace watcher/index burst 与 RSS、wide-glyph hit testing、
+  native picker/IME automation、crash-in-the-middle recovery、sustained-edit memory 与正式 release thresholds 未完成。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
-   standard-module contract 为边界，
-   Web、Node、Desktop、Game
-   继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
-   host/product policy 放回 Core。
-2. 下一波优先建立持久 semantic-index/search 契约，并评估 JavaScript/TypeScript cross-file module/type graph
-   与 formatter 的正确 owner；Editor 只消费公开 diagnostics/navigation/formatting/index 能力并保留项目、
-   标签、命令、索引编排与 UX，不复制 filesystem、text、language-service 或 host policy。
-3. 用 synthetic 和真实大 workspace 测量 W-132 watcher burst、overflow/rescan、增量 tree 延迟与 RSS，
-   将足够通用的调度、索引和背压能力收敛到既有 owner；若需要新语法，按提案流程暂停确认。
+   standard-module contract 为边界，Web、Node、Desktop、Game 继续只通过自有
+   AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或 host/product policy 放回 Core。
+2. 下一波优先用 Editor multi-tab/task/test/build 场景继续暴露公开 session、command、process、terminal 与
+   recovery owner 缺口；同时评估 JavaScript/TypeScript cross-file module/type graph、workspace symbols 与
+   formatter 的正确 owner。Editor 只保留项目、标签、命令、索引编排和 UX。
+3. 用 synthetic 和真实大 workspace 测量 W-132 watcher burst、overflow/rescan、增量 tree/index latency、
+   cold start 与 RSS；只有证据证明 session index 重建不足时，才设计跨进程 disk snapshot contract。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
 5. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release
-   rehearsal、Workbench 安装态、三浏览器和 Lite 门禁；只精确暂存本轮文件，只允许本地提交。
+   rehearsal、Workbench 安装态、单引擎安全浏览器和 Lite 门禁；只精确暂存本轮文件，只允许本地提交。

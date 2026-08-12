@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { buildLanguageServerTool } from "../packages/cli/src/language-server-tool.ts";
 
 const workerPath = resolve("packages/desktop/native/node/worker.js");
@@ -19,6 +20,12 @@ test("Desktop owns one packaged official language-server lifecycle without proce
   await writeFile(join(project, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
   const mainPath = join(project, "main.vel");
   await writeFile(mainPath, "const value = 1\n", "utf8");
+  const readmePath = join(project, "README.md");
+  await writeFile(readmePath, "Packaged workspace search needle\n", "utf8");
+  const outsidePath = join(directory, "outside.vel");
+  await writeFile(outsidePath, "const privateOutsideProject = 1\n", "utf8");
+  const escapedLinkPath = join(project, "escaped-link.vel");
+  await symlink(outsidePath, escapedLinkPath);
   await buildLanguageServerTool(join(host, "language-server.js"));
   const configPath = join(directory, "desktop.json");
   await writeFile(configPath, JSON.stringify({
@@ -30,16 +37,62 @@ test("Desktop owns one packaged official language-server lifecycle without proce
   const client = new WorkerClient(worker);
   let serverPid: number | null = null;
   try {
+    const rejectedHandle = await client.call("language-server", "start", []) as number;
+    await client.call("language-server", "send", [rejectedHandle, JSON.stringify({
+      jsonrpc: "2.0",
+      id: 90,
+      method: "initialize",
+      params: { rootUri: pathToFileURL(directory).href },
+    })]);
+    const rejectedInitialize = JSON.parse(await client.call("language-server", "next", [rejectedHandle]) as string) as { id: number; error: { code: number; message: string } };
+    assert.equal(rejectedInitialize.id, 90);
+    assert.equal(rejectedInitialize.error.code, -32602);
+    assert.match(rejectedInitialize.error.message, /Desktop project grant/u);
+    await client.call("language-server", "close", [rejectedHandle]);
+
     const handle = await client.call("language-server", "start", []) as number;
     assert.ok(handle >= 1_000_000_000);
     const ownership = client.lifecycle().find((event) => event.hostEvent === "language-server-owned" && event.handle === handle);
     assert.ok(ownership?.pid);
     serverPid = ownership.pid as number;
 
-    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })]), null);
+    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { rootUri: pathToFileURL(project).href, capabilities: { general: { positionEncodings: ["utf-32"] } } },
+    })]), null);
     const initialized = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: { serverInfo: { name: string } } };
     assert.equal(initialized.id, 1);
-    assert.equal(initialized.result.serverInfo.name, "VelarScript Language Server");
+    assert.equal(initialized.result?.serverInfo.name, "VelarScript Language Server", JSON.stringify(initialized));
+    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })]);
+
+    const outsideUri = pathToFileURL(outsidePath).href;
+    await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: { textDocument: { uri: outsideUri, languageId: "velar", version: 1, text: "const privateOutsideProject =\n" } },
+    })]);
+    const outsideLog = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { message: string } };
+    assert.equal(outsideLog.method, "window/logMessage");
+    assert.match(outsideLog.params.message, /outside the Desktop project grant/u);
+    await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      id: 9,
+      method: "textDocument/definition",
+      params: { textDocument: { uri: outsideUri }, position: { line: 0, character: 6 } },
+    })]);
+    const outsideDefinition = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: unknown };
+    assert.equal(outsideDefinition.id, 9);
+    assert.equal(outsideDefinition.result, null);
+    await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: { textDocument: { uri: pathToFileURL(escapedLinkPath).href, languageId: "velar", version: 1, text: "const privateOutsideProject =\n" } },
+    })]);
+    const escapedLinkLog = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { message: string } };
+    assert.equal(escapedLinkLog.method, "window/logMessage");
+    assert.match(escapedLinkLog.params.message, /outside the Desktop project grant/u);
 
     const cancelledPull = client.beginCall("language-server", "next", [handle]);
     client.cancelRequest(cancelledPull.id);
@@ -72,6 +125,21 @@ test("Desktop owns one packaged official language-server lifecycle without proce
     const scriptDefinition = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: { range: { start: { line: number } } } };
     assert.equal(scriptDefinition.id, 2);
     assert.equal(scriptDefinition.result.range.start.line, 0);
+
+    await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "velar/workspaceSearch",
+      params: { query: "workspace search needle", maximumResults: 10 },
+    })]);
+    const workspaceSearch = JSON.parse(await client.call("language-server", "next", [handle]) as string) as {
+      id: number;
+      result: { items: Array<{ uri: string; preview: string }>; indexedFiles: number };
+    };
+    assert.equal(workspaceSearch.id, 4);
+    assert.deepEqual(workspaceSearch.result.items.map((item) => item.uri), [pathToFileURL(readmePath).href]);
+    assert.match(workspaceSearch.result.items[0]?.preview ?? "", /Packaged workspace search needle/u);
+    assert.ok(workspaceSearch.result.indexedFiles >= 2);
 
     await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", id: 3, method: "shutdown", params: null })]);
     const shutdown = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number };

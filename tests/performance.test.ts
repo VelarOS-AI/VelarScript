@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
+import { WorkspaceIndexCancelledError, WorkspaceTextIndex } from "../packages/cli/src/workspace-index.ts";
 
 test("application-scale incremental budget recompiles only the reverse dependency closure", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-scale-"));
@@ -52,6 +53,36 @@ test("application-scale incremental budget recompiles only the reverse dependenc
   assert.equal(rebuilt.project.stats.reusedModules, 80);
   assert.equal(rebuilt.project.stats.affectedModules, 41);
   assert.ok(rebuilt.project.stats.durationMs < 2_000, `incremental compile took ${rebuilt.project.stats.durationMs}ms`);
+});
+
+test("session-persistent workspace search meets the 20k-file first and complete-result budgets", async () => {
+  const root = join(tmpdir(), "velar-workspace-search-20k");
+  const index = new WorkspaceTextIndex();
+  index.configure([root]);
+  for (let file = 0; file < 20_000; file += 1) {
+    const marker = file % 200 === 0 ? `\nconst searchNeedle${file} = true` : "";
+    index.openDocument(join(root, `source-${String(file).padStart(5, "0")}.ts`), `export const value${file} = ${file}${marker}\n`);
+  }
+
+  const firstStarted = performance.now();
+  const first = await index.search("searchNeedle", { maximumResults: 1 });
+  const firstElapsed = performance.now() - firstStarted;
+  assert.equal(first.matches.length, 1);
+  assert.equal(first.limitReached, true);
+  assert.ok(firstElapsed < 300, `20k-file first result took ${firstElapsed}ms`);
+
+  const completeStarted = performance.now();
+  const complete = await index.search("searchNeedle", { maximumResults: 1_000 });
+  const completeElapsed = performance.now() - completeStarted;
+  assert.equal(complete.matches.length, 100);
+  assert.equal(complete.filesSearched, 20_000);
+  assert.equal(complete.limitReached, false);
+  assert.ok(completeElapsed < 3_000, `20k-file complete search took ${completeElapsed}ms`);
+
+  let cancelled = false;
+  const cancelledSearch = index.search("absentNeedle", { maximumResults: 1_000, cancelled: () => cancelled });
+  setImmediate(() => { cancelled = true; });
+  await assert.rejects(cancelledSearch, WorkspaceIndexCancelledError);
 });
 
 test("pure VelarScript script service bounds 1 MiB initial and tail-update work", async () => {
