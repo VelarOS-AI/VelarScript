@@ -362,3 +362,63 @@ str/parse 互通）；match 30+ 项（全字面量形、逗号多值+as+守卫�
 全部归**波 N-2b（枚举与 match 收口）**，排 N-2 之后（同样重改 analyzer/emitter/
 parser，必须串行）。四项编排代理按既定原则定案、用户可否决：I2 联合收紧、
 U1 `values()`、U2 点路径值模式成文、U4 内建错误类型可命名。
+
+
+---
+
+## 审计四 —— 异步面（2026-08-12，60+ 探针，快照构建 + 活树复验）
+
+本面的判定基准：**失败被丢 = 最坏缺陷类**（charter 自己的杆：「A detached task
+never floats … reports it through the host error channel」）。
+
+### DEFECT —— 失败被丢（执行级证据，活树复验）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **ASY-D1（本面最重）** | **组合子的「输家」失败静默蒸发**：`race([quick(), slowFail()])` 赢家结算后，slowFail 55ms 后的 rejection 无 stderr、无通道、exit 0；`timeout(lateFail(), 10)` 同款；`all` 捕获首败后其余输家的失败消失；`map` 在拒绝后**继续执行剩余项**（副作用无主继续跑）且第二个 worker 失败也丢 | 修（按既定「失败必有主」原则）：输家结算后交给现成的 `__velarDetachedTask` 观察者 —— 输家的失败走 detached 通道上报。**编排代理决定，可否决**。归批次 K（D35 本就重规 all/race） |
+| **ASY-D2** | **测试内的 detached 失败让套件照样全绿**：`async boom()` 在 test 里 stderr 打了报告，但测试 ✓、"2 passed, 0 failed"、exit 0 —— **CI 里失败等于丢了**。test-runner.ts 对 detached 零立场 | 修：测试运行期间的 detached 失败计入该测试的失败（async `def test_*` 被 await 的部分已正确） |
+
+### UNDEFINED（五条）
+
+| ID | 未定之处 | 处置 |
+|---|---|---|
+| **ASY-U1** | **运行时空列表的 `race` 永不结算**：编译期空字面量已拦，但运行时空的 `List<Promise<null>>` → 永挂（模块顶层 Node 退出码 13 + Node 腔调警告；detached 内**完全静默停摆**） | 修：运行时 `RangeError("race requires at least one Promise")`，镜像 requireTimer |
+| **ASY-U2** | **`await` 一个 `any` 收养外来 thenable 并漏出裸 `undefined`**：执行敌意 `then` 钩子、跳过 undefined→null 归一化 —— `value == null` 打印 **false** 而值是 `undefined`，空值守卫看不见它。与 D32 第 29 条（f-string 拒 any，理由「unsafe 域正是钩子藏身处」）不一致 | 修：`Cannot await any; validate first`（与既有 `Cannot await unknown` 对称）。**编排代理决定，可否决** |
+| **ASY-U3** | **`error.cause` charter 承诺却不可达**：§11 说非 Error rejection「remain available as the JavaScript `cause`」，实测 `error.cause` → VEL4001 no member | 修（履行承诺）：checked Error 契约加 `cause: unknown` 只读成员。**可否决** |
+| **ASY-U4** | 组件内 `async submit()`（分离一个 action 调用）编译通过，按代码走读失败会**报两次**（action 的 web 链 + detached 相位）——没丢但翻倍 | 修：恰好报一次契约（action 自有报告优先，detached 观察者跳过已报告者），实施者落细节 |
+| **ASY-U5** | 文档缺口打包：模块级 await 已实现被依赖但 charter 从未声明存在；`velar/browser` 的 `after`/`every` 有良好失败故事（同步抛与 rejection 都归一化、timer 相位、响亮兜底）却零文档、§16 自动清理清单缺 timer 条目 | N-3 文档波 |
+
+### 已确认的规格缺口无碰撞
+
+`Promise.all` 今天 = VEL3001 无指引；异构 `all` 仍发 D35 引用的自相矛盾诊断；
+`sleep(2s)` → VEL1007；`try await` 通用解析错。**今天没人能写出依赖这些的代码
+—— D35/D39 可干净落地**（这正是要的答案）。
+
+### 微裁决一条（随波带走）
+
+Error 子类的 `.name` 停在 "Error"（JS 默认）—— 类降级时构造器把 `.name` 设为
+声明的类名（子类惯例，同时改善 detached 报告头）。
+
+### DECIDED-AND-CORRECT（完整性凭证，压缩）
+
+async def 全形（值/无返回/嵌套/方法/静态/箭头/extern 双拼写；VEL4018 禁
+`-> Promise<T>` 于 async def 含 extern；async getter/构造器定向拒）；await 位置
+矩阵（if/f-string/match/list/args/binary/assert/while 头/catch/finally 合法，
+非 Promise/null/联合/unknown 全拒；`Promise<Promise<T>>` 可拼写、一次 await
+深展平、检查器与运行时一致）；**detached 语句全家健康**（`Promise<null>` 门精确、
+六种位置可用、失败所有权对 Error 子类/extern 字符串/双并发失败/晚失败/外来
+thenable/undefined 返回/同步抛全部成立、进程存活、web 链 detached 相位 + 前
+运行时响亮兜底、**修复波 1 的闭合保持闭合 11/11**）；async for（拉取契约、break
+不再拉且不自动释放（与 D43 using 注记一致）、中流 rejection 传播且源可续、
+thenable 拉取结果失败有主）；跨 await 错误（子类字段 + is 收窄存活、finally
+顺序、非 Error 对象稳定通用消息、extern 回调抛有主）；宿主边界（thenable 永不
+能变 checked Promise —— extern 调用点急切归一化、`Type.parse` 拒 thenable 收
+真 Promise、**跨 realm 真 Promise 通过**、resolve(undefined)→null、双 await 无害、
+then 冲突 VEL4024 双处触发）；计时（sleep 范围错误有主可捕、async 测试被运行器
+await）。
+
+### 处置总结
+
+ASY-D1 + 微裁决归**批次 K**（D35 重规 all/race 的同批）；ASY-D2/U1/U2/U3/U4
+归 **N-2b**（与枚举波同车，均不冲突 N-1 文件——test-runner 与 standard-modules
+除外，实施时注意 project.ts 让路）；ASY-U5 归 N-3。
