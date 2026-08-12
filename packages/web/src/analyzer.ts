@@ -842,6 +842,19 @@ export class VelarWebAnalyzer extends Analyzer {
       const type = this.resolveAnnotation(parameter.type);
       const valid = parameter.type ? this.validateTypeReference(parameter.type) : true;
       if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
+      // D44 rule 72: props are readonly data views. A bare class prop stays
+      // legal — it is visibly behavioral and passes through unprotected — but
+      // a class buried inside a data prop is rejected like explicit readonly.
+      if (valid) {
+        const buried = this.buriedClassInPropData(type);
+        if (buried) {
+          this.diagnostics.push(diagnostic(
+            "VEL4001",
+            `A component prop is a readonly data view; '${parameter.name}${buried.suffix}' is class '${buried.className}' — lift the class into its own prop, or model it as a data record`,
+            parameter.span,
+          ));
+        }
+      }
       this.declareBinding(parameter.name, false, this.readonlyPropType(valid ? type : this.resolveValidatedAnnotation(parameter.type)), parameter.span);
       this.markDeclaredBindingReactive(parameter.name, "prop");
       if (parameter.name === "ref") this.diagnostics.push(diagnostic("VEL5056", "'ref' is a compiler-owned JSX directive and cannot be declared as a component prop", parameter.span));
@@ -925,6 +938,25 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private readonlyPropType(type: ValueType): ValueType {
     return this.readonlyDataViewOf(type);
+  }
+
+  /**
+   * A class visible at the top of a prop annotation (through optionals and
+   * unions) is a behavioral value the reader can see; a class below a data
+   * node hides behind the readonly promise and is rejected (D44 rule 72).
+   */
+  private buriedClassInPropData(type: ValueType): { readonly suffix: string; readonly className: string } | null {
+    const resolved = this.expandAliases(type);
+    if (resolved.kind === "class" || resolved.kind === "classConstructor") return null;
+    if (resolved.kind === "optional") return this.buriedClassInPropData(resolved.inner);
+    if (resolved.kind === "union") {
+      for (const member of resolved.members) {
+        const found = this.buriedClassInPropData(member);
+        if (found) return found;
+      }
+      return null;
+    }
+    return this.findClassInReadonlyData(resolved);
   }
 
   private validateComponentHandleType(type: ValueType, sourceSpan: Span): void {

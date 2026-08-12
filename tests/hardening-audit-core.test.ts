@@ -253,10 +253,14 @@ print(Derived().tag)
 // CLS-D5: `new` binds around a wrapped (recheck-guarded) callee.
 // ---------------------------------------------------------------------------
 
-test("[CLS-D5] a narrowed constructor value constructs through the recheck wrapper", () => {
+test("[CLS-D5] a narrowed factory value constructs through the recheck wrapper", () => {
   // The callee read is wrapped in a narrowing recheck IIFE after the opaque
-  // call; `new (arrow)(x)()` used to construct the arrow and throw
-  // "(intermediate value) is not a constructor".
+  // call; the misparenthesized form used to construct the wrapper and throw
+  // "(intermediate value) is not a constructor". D45 rule 75 (N-2) made the
+  // original spelling — storing the class name itself in the Map — illegal,
+  // so the stored entry is the arrow factory the diagnostic teaches; the
+  // recheck-wrapped callee still constructs correctly through it, and the
+  // emitter keeps its callee-boundary parentheses as defense in depth.
   const output = run(`
 class P:
     const n: number = 1
@@ -265,7 +269,7 @@ def touch() -> null:
     return null
 
 const registry = Map()
-registry.set("p", P)
+registry.set("p", () => P())
 const factory = registry.get("p")
 if factory != null:
     touch()

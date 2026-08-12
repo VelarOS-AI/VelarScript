@@ -458,10 +458,21 @@ cannot insert a wider value. Mutable collections remain invariant.
 
 `readonly` applies only to named record types, structural object data, `List`,
 `Set`, `Map`, and `Record`. Aliases, optionals, and unions preserve it when their
-contained values are data. Classes, functions, methods, getters, promises,
+contained values are data. Functions, methods, getters, promises,
 host/capability objects, primitives, and unconstrained type parameters are
 deliberately outside the boundary. Those values have behavior or authority that
 a data qualifier cannot describe honestly.
+
+Classes never appear inside readonly types, at any depth. A readonly view
+promises that everything reachable through it is protected data, and a class
+member is behavior that promise cannot cover, so `readonly` over a type that
+contains a class anywhere — a record field, a collection element, a union arm,
+however deeply nested — is a compile-time error at the declaration site. The
+diagnostic teaches the two ways out: model the member as a data record, or drop
+`readonly`. A bare unconstrained type parameter element such as
+`readonly List<T>` stays legal because an opaque element offers no member to
+mutate, and `unknown`/`any` members pass because they are already where static
+promises end.
 
 A field declaration such as `readonly details: Details` forbids replacing the
 field and projects nested data through the same transitive read-only view. This
@@ -1199,7 +1210,13 @@ write in one case cannot erase a fact used only by a sibling, but facts
 invalidated by a case that reaches the code after `match` stay invalidated.
 Facts established by every continuing
 case remain available after an exhaustive match. Guarded cases do not count as
-exhaustive because the guard may be false. Complete enum matches, an unguarded
+exhaustive because the guard may be false. A match whose subject's static type
+is a class — or a union containing one — must be provably exhaustive, exactly
+as strict as the enum rule: class hierarchies are open, so the match ends with
+the subject's own class or a base of it, with `case _:`, or covers every union
+member (a subclass instance still satisfies its base pattern). An extern class
+check may fail at runtime, so only `case _:` proves an extern subject.
+Complete enum matches, an unguarded
 wildcard, exhaustive List length patterns, and irrefutable patterns over
 required typed record fields participate in required-return analysis. `match`
 remains a statement; branches use ordinary `return` or assignments instead of
@@ -1236,7 +1253,9 @@ loop; three slots are rejected.
 
 `async for value in source` consumes one explicit Velar pull contract:
 `source.next()` must have the checked type `() -> Promise<T?>`. The source and
-its own data-valued `next` method are captured once. Each pull must return an
+its data-valued `next` method are captured once; the capture reads a plain
+function — through the prototype for class sources — and never invokes an
+accessor. Each pull must return an
 actual Promise; a resolved `null` ends the loop, a resolved `T` enters the body,
 and rejection leaves the loop unchanged. The optional second slot is a
 zero-based pull index. It advances before the body, so `continue` cannot repeat
@@ -1360,6 +1379,23 @@ derived constructor, method, getter, or field initializer and remains available
 inside a nested arrow. A nested `def` creates a new function boundary and does
 not inherit `super`; name the base class explicitly when that is the intended
 call.
+
+A class name is not a value. It is used directly: called to construct
+(`Session("session-1")`), read for static members, extended, named in type
+positions, matched with `is` and `case`, and carried by export declarations.
+Aliasing a class name, passing it as an argument, storing it in a collection,
+returning it, or printing it is a compile-time error whose diagnostic teaches
+the factory spelling — wrap the construction in an arrow:
+
+```velar fragment
+const openSession = () => Session("session-1")
+```
+
+Factories, registries, and injected constructors are arrows with ordinary
+function types, so the class surface stays nominal while behavior passes
+through values the type system already owns. Abstract and extern classes
+follow the same rule. A `match` over a class hierarchy must be provably
+exhaustive (section 9).
 
 VelarScript preserves JavaScript prototype and reference semantics at runtime,
 but source cannot read or mutate `prototype` or `__proto__` as object-model
@@ -1797,7 +1833,12 @@ ordinary functions and module interfaces. A helper that only reads a prop must
 declare a `readonly` parameter; a helper that requires a mutable parameter
 cannot receive the prop. A child may call a callback supplied by its parent to
 request a mutation, but it may not assign through the prop or invoke a mutating
-collection method on it.
+collection method on it. The readonly promise of props covers data props. A
+bare class prop is a behavioral value: it is visibly a class at the prop
+declaration, passes to the child as-is, and receives no readonly protection. A
+class buried inside a record or collection prop is rejected at the prop
+declaration exactly like explicit `readonly` (section 5) — lift the class into
+its own prop, or model it as a data record.
 
 A resource exposes `value`, `loading`, `ready`, `error`, and `reload`. It owns
 stale-result and component-destruction handling. Its Promise and Object host
@@ -2129,8 +2170,14 @@ VelarScript preserves the JavaScript runtime where it matters:
 
 - Objects and class instances are references.
 - Primitive strings, numbers, booleans, and `null` behave as JavaScript values.
-- Classes lower to JavaScript classes and prototypes.
-- `private` lowers to native private members.
+- Classes lower to JavaScript classes and prototypes. Instance methods live on
+  the prototype: one method object serves every instance, and inspecting an
+  instance shows data fields only. Reading a method as a value
+  (`const close = session.close`) evaluates the receiver once and binds it at
+  the reference site — the same rule collection method values follow
+  (section 8).
+- `private` lowers to native private members; private methods are native
+  private methods.
 - Async functions and actions use Promises and the host event loop.
 - Map and Set use JavaScript key/value identity.
 - Garbage collection belongs to the host JavaScript engine.

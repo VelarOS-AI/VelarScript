@@ -6,6 +6,28 @@ truth for acceptance status.
 
 ## Unreleased
 
+- `readonly` accepts only pure data, at every depth. A class type anywhere
+  inside a readonly-annotated shape rejects the declaration itself with
+  the two ways out, so a readonly view can no longer hand back a freely
+  mutable class instance — the promise never exceeds the enforcement.
+  Component props follow the same rule: a bare class prop stays legal as a
+  visibly behavioral value, while a class buried inside a data-shaped
+  record prop is rejected. All twelve existing readonly sites were already
+  pure data.
+- Class methods live on the prototype, matching the documented lowering:
+  instances no longer carry one bound closure per method, `print` shows
+  data fields only, and reading a method as a value (`const f = a.read`)
+  binds the receiver at the reference site exactly like collection
+  methods. Private methods lower to native `#name()` methods.
+- A class name is not a value. Calling it, reading statics, extending,
+  type positions, `is`/`case` patterns, and re-exports stay legal;
+  aliasing or passing the name itself is rejected with the arrow-factory
+  spelling (`() => P()`) taught — aligning every class with the rules
+  abstract classes already had.
+- A match over a class hierarchy must be provably exhaustive, like an enum
+  match: end with the subject's type, a base of it, or `case _:` — an open
+  hierarchy can never be enumerated, so a silently skipped subject is now
+  a compile error instead of nothing happening at runtime.
 - The runtime narrowing guard for an imported record type is now the real
   validator instead of a presence check, so a fact staled across a module
   boundary throws `NarrowingError` at the read instead of silently

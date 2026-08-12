@@ -192,18 +192,27 @@ export class JavaScriptEmitter {
     if (this.hints.asyncForStatements.size > 0) {
       helpers.push([
         "const __velarAsyncPullGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;",
+        "const __velarAsyncPullGetPrototypeOf = Object.getPrototypeOf;",
         "const __velarAsyncPullApply = Reflect.apply;",
         "const __velarAsyncPullArguments = [];",
         "const __velarAsyncPullTypeError = TypeError;",
+        // Class methods live on the prototype (charter section 18), so the
+        // capture walks the chain with descriptor reads. The first level that
+        // declares 'next' decides: only a data-valued function is accepted,
+        // and an accessor is rejected without ever being invoked.
         "function __velarAsyncPullNext(source) {",
         "  if ((typeof source !== \"object\" && typeof source !== \"function\") || source === null) {",
         "    throw new __velarAsyncPullTypeError(\"async for requires a data-valued next method\");",
         "  }",
-        "  const descriptor = __velarAsyncPullGetOwnPropertyDescriptor(source, \"next\");",
-        "  if (!descriptor || !(\"value\" in descriptor) || typeof descriptor.value !== \"function\") {",
-        "    throw new __velarAsyncPullTypeError(\"async for requires a data-valued next method\");",
+        "  for (let owner = source; owner !== null; owner = __velarAsyncPullGetPrototypeOf(owner)) {",
+        "    const descriptor = __velarAsyncPullGetOwnPropertyDescriptor(owner, \"next\");",
+        "    if (!descriptor) continue;",
+        "    if (!(\"value\" in descriptor) || typeof descriptor.value !== \"function\") {",
+        "      throw new __velarAsyncPullTypeError(\"async for requires a data-valued next method\");",
+        "    }",
+        "    return descriptor.value;",
         "  }",
-        "  return descriptor.value;",
+        "  throw new __velarAsyncPullTypeError(\"async for requires a data-valued next method\");",
         "}",
         "function __velarAsyncPullCall(source, next) {",
         "  return __velarAsyncPullApply(next, source, __velarAsyncPullArguments);",
@@ -1325,10 +1334,6 @@ export class JavaScriptEmitter {
     for (const field of statement.fields) {
       if (!field.static && field.initializer) constructorLines.push(`${indentation}    this.${field.private ? "#" : ""}${field.name} = ${this.emitMappedExpression(field.initializer)};`);
     }
-    for (const method of statement.methods) {
-      if (method.static || method.abstract || method.private) continue;
-      constructorLines.push(`${indentation}    this.${method.name} = this.${method.name}.bind(this);`);
-    }
     if (statement.initialization) {
       constructorLines.push(`${indentation}    const self = this;`);
       constructorLines.push(...constructorBody.map((child) => this.emitMappedStatement(child, depth + 2)).filter(Boolean));
@@ -1348,17 +1353,14 @@ export class JavaScriptEmitter {
       if (!method.abstract && !this.blockAlwaysReturns(method.body)) lines.push(`${"  ".repeat(methodDepth)}return null;`);
       return lines;
     };
-    const methods = statement.methods.filter((method) => !method.private || method.static).map((method) => {
+    // Methods — public, static, and private alike — live on the class body as
+    // native (private) methods, so instances carry data fields only and one
+    // method object serves every instance (charter section 18).
+    const methods = statement.methods.map((method) => {
       const methodParameters = method.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
       const lines = methodBody(method, depth + 2);
       const body = lines.join("\n");
       return `${indentation}  ${method.static ? "static " : ""}${method.asynchronous ? "async " : ""}${method.private ? "#" : ""}${method.name}(${methodParameters}) {${body.length > 0 ? `\n${body}\n${indentation}  ` : ""}}`;
-    });
-    const privateMethods = statement.methods.filter((method) => method.private && !method.static).map((method) => {
-      const methodParameters = method.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-      const lines = methodBody(method, depth + 2);
-      const body = lines.join("\n");
-      return `${indentation}  #${method.name} = ${method.asynchronous ? "async " : ""}(${methodParameters}) => {${body.length > 0 ? `\n${body}\n${indentation}  ` : ""}};`;
     });
     const getters = statement.getters.map((getter) => {
       const lines = methodBody(getter, depth + 2);
@@ -1373,7 +1375,7 @@ export class JavaScriptEmitter {
       .filter((field) => field.static)
       .map((field) => `${indentation}  static ${field.private ? "#" : ""}${field.name} = ${field.initializer ? this.emitMappedExpression(field.initializer) : "null"};`);
     const extension = statement.base ? ` extends ${statement.base.name}` : "";
-    return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...privateMethods, ...staticFields, constructor, ...getters, ...methods].join("\n\n")}\n${indentation}}`;
+    return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods].join("\n\n")}\n${indentation}}`;
   }
 
   protected emitParameter(name: string, defaultValue: Expression | null, rest = false): string {
@@ -1675,6 +1677,21 @@ export class JavaScriptEmitter {
             return `($velarValue => $velarValue == null ? null : ${read})(${object})`;
           }
           return `__velarReadPrivateField(${this.emitPostfixReceiver(expression.object)}.#${expression.property}, ${JSON.stringify(expression.property)})`;
+        }
+        if (this.hints.classMethodReferences.has(spanIdentity(expression.span))) {
+          // Methods live on the prototype, so a method read as a value
+          // evaluates its receiver once and binds at the reference site —
+          // the collection-method rule of charter section 8. `super` cannot
+          // be captured by a temporary; it binds `this` directly.
+          const property = `${this.hints.privateMembers.has(spanIdentity(expression.span)) ? "#" : ""}${expression.property}`;
+          if (expression.object.kind === "SuperExpression") {
+            return `super.${property}.bind(this)`;
+          }
+          const object = this.emitMappedExpression(expression.object);
+          const bound = `$velarValue.${property}.bind($velarValue)`;
+          return expression.optional
+            ? `($velarValue => $velarValue == null ? null : ${bound})(${object})`
+            : `($velarValue => ${bound})(${object})`;
         }
         const publicProperty = expression.property;
         const property = `${this.hints.privateMembers.has(spanIdentity(expression.span)) ? "#" : ""}${publicProperty}`;

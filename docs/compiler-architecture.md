@@ -350,8 +350,10 @@ Visibility is one bit rather than a hierarchy. Public members remain in the
 module `ClassInfo`; `private` constructor/body fields, getters, and concrete methods stay
 in analyzer-owned class maps, so consumers and subclasses cannot accidentally
 observe them. Private member-expression spans carry a lowering hint to native
-JavaScript `#` access. Instance private methods lower to private arrow fields so
-they retain VelarScript's stable callback receiver; static private methods remain
+JavaScript `#` access. Instance private methods lower to native private
+methods; every method read as a value — private ones included — binds its
+receiver at the reference site, so the stable callback receiver survives
+without a per-instance closure. Static private methods remain
 native class methods. The semantic index marks private declarations, exposes
 them only to expressions analyzed inside the owner class, and prevents
 project-wide inheritance rename from absorbing them.
@@ -530,8 +532,9 @@ pattern lowering.
 An `async for` node carries an explicit AST bit instead of desugaring to a
 JavaScript loop. Analysis requires a zero-required-argument `next` function
 whose result is `Promise<T?>`; module interfaces preserve that structural or
-class method contract. Emission captures the source and own data method once,
-invokes it with its original receiver, accepts only an actual Promise through
+class method contract. Emission captures the source and its data-valued method
+once — a descriptor walk that reaches prototype methods without invoking
+accessors — applies it with its original receiver, accepts only an actual Promise through
 the shared normalization helper, and stops only on normalized `null`. A
 compiler-owned counter supplies the optional second slot. The emitted `while`
 increments before the source body so `continue` advances, while ordinary

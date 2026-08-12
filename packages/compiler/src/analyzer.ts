@@ -279,6 +279,12 @@ export interface LoweringHints {
   readonly instanceFieldReads: ReadonlySet<string>;
   readonly privateInstanceFieldReads: ReadonlySet<string>;
   readonly staticFieldReads: ReadonlyMap<string, number>;
+  /**
+   * Member spans that read a class method as a value rather than calling it.
+   * Methods live on the prototype, so these emit as receiver-evaluated-once
+   * plus a bind at the reference site (charter sections 8 and 18).
+   */
+  readonly classMethodReferences: ReadonlySet<string>;
   readonly optionalBindingEntries: ReadonlySet<number>;
   readonly reactiveReferences: ReadonlyMap<string, "state" | "prop">;
   readonly enumValueBindings: ReadonlyMap<number, string>;
@@ -489,6 +495,19 @@ export class Analyzer implements TypeEnvironment {
   private readonly instanceFieldReads = new Set<string>();
   private readonly privateInstanceFieldReads = new Set<string>();
   private readonly staticFieldReads = new Map<string, number>();
+  // D44 rule 74: member spans that read a class method as a value (not as a
+  // call's callee). The emitter binds these at the reference site, the same
+  // rule collection method values follow (charter section 8).
+  private readonly classMethodReferences = new Set<string>();
+  // D45 rule 75: the only expression positions where a class name may appear —
+  // as the callee of a direct call and as the receiver of a member access.
+  // Everything else rejects the class name as a value.
+  private readonly callExpressionCallees = new Set<string>();
+  private readonly memberAccessReceivers = new Set<string>();
+  // D44 rule 72: memoized per-identity verdicts for the deep readonly class
+  // scan. Only cycle-free computations are cached; a verdict found through a
+  // cycle cut stays local to that traversal.
+  private readonly readonlyClassScanVerdicts = new Map<string, { readonly suffix: string; readonly className: string } | null>();
   private readonly optionalBindingEntries = new Set<number>();
   protected readonly reactiveBindings = new Map<string, "state">();
   private readonly reactiveReferences = new Map<string, "state" | "prop">();
@@ -693,6 +712,20 @@ export class Analyzer implements TypeEnvironment {
             "Type<T> is a static runtime-Type carrier and cannot be embedded in a runtime-validated 'type'; keep it in a function, class, or ordinary value instead",
             reference.span,
           ));
+          valid = false;
+        }
+      }
+      // D44 rule 72: a `readonly` field modifier makes the same deep promise
+      // as a `readonly T` annotation, so it obeys the same pure-data rule.
+      if (valid && declaration.kind === "TypeDeclaration") {
+        for (const field of declaration.fields) {
+          if (!field.readonly) continue;
+          const violation = this.findClassInReadonlyData(this.resolveAnnotation(field.type));
+          if (!violation) continue;
+          this.typeError(
+            `'readonly' accepts only pure data at every depth; '${declaration.name}.${field.name}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
+            field.span,
+          );
           valid = false;
         }
       }
@@ -1040,6 +1073,7 @@ export class Analyzer implements TypeEnvironment {
       instanceFieldReads: this.instanceFieldReads,
       privateInstanceFieldReads: this.privateInstanceFieldReads,
       staticFieldReads: this.staticFieldReads,
+      classMethodReferences: this.classMethodReferences,
       optionalBindingEntries: this.optionalBindingEntries,
       reactiveReferences: this.reactiveReferences,
       enumValueBindings: this.enumValueBindings,
@@ -1128,6 +1162,91 @@ export class Analyzer implements TypeEnvironment {
 
   readonlyFieldsOf(identity: string): ReadonlySet<string> | null {
     return this.namedTypeReadonlyFields.get(identity) ?? null;
+  }
+
+  /**
+   * D44 rule 72: `readonly T` promises that everything reachable through the
+   * view is protected data, so a class type at any depth is rejected at the
+   * declaration site — otherwise the promise would silently end at the class
+   * member. Bare type parameters stay legal (opacity is as good as
+   * immutability), `unknown`/`any` are already where static promises end, and
+   * function types are behavior boundaries whose signatures are not data.
+   * Named records are memoized per identity; a verdict computed through a
+   * recursion cut stays local to that traversal so shared types keep sound
+   * cached answers.
+   */
+  protected findClassInReadonlyData(
+    type: ValueType,
+    seen: Set<string> = new Set(),
+    sawCycle: { cut: boolean } = { cut: false },
+  ): { readonly suffix: string; readonly className: string } | null {
+    const resolved = this.expandAliases(type);
+    switch (resolved.kind) {
+      case "class":
+      case "classConstructor":
+        return { suffix: "", className: resolved.name };
+      case "optional":
+        return this.findClassInReadonlyData(resolved.inner, seen, sawCycle);
+      case "union": {
+        for (const member of resolved.members) {
+          const found = this.findClassInReadonlyData(member, seen, sawCycle);
+          if (found) return found;
+        }
+        return null;
+      }
+      case "list":
+      case "set": {
+        const found = this.findClassInReadonlyData(resolved.element, seen, sawCycle);
+        return found ? { suffix: `[element]${found.suffix}`, className: found.className } : null;
+      }
+      case "map": {
+        const key = this.findClassInReadonlyData(resolved.key, seen, sawCycle);
+        if (key) return { suffix: `[key]${key.suffix}`, className: key.className };
+        const value = this.findClassInReadonlyData(resolved.value, seen, sawCycle);
+        return value ? { suffix: `[value]${value.suffix}`, className: value.className } : null;
+      }
+      case "record":
+      case "promise": {
+        const found = this.findClassInReadonlyData(resolved.value, seen, sawCycle);
+        return found ? { suffix: `[value]${found.suffix}`, className: found.className } : null;
+      }
+      case "object": {
+        for (const [name, field] of resolved.fields) {
+          const found = this.findClassInReadonlyData(field, seen, sawCycle);
+          if (found) return { suffix: `.${name}${found.suffix}`, className: found.className };
+        }
+        return null;
+      }
+      case "named": {
+        const identity = resolved.identity ?? resolved.name;
+        const cached = this.readonlyClassScanVerdicts.get(identity);
+        if (cached !== undefined) return cached;
+        if (seen.has(identity)) {
+          sawCycle.cut = true;
+          return null;
+        }
+        const fields = this.fieldsOf(identity);
+        if (!fields) return null;
+        seen.add(identity);
+        const innerCycle = { cut: false };
+        let verdict: { readonly suffix: string; readonly className: string } | null = null;
+        for (const [name, field] of fields) {
+          const found = this.findClassInReadonlyData(field, seen, innerCycle);
+          if (found) {
+            verdict = { suffix: `.${name}${found.suffix}`, className: found.className };
+            break;
+          }
+        }
+        seen.delete(identity);
+        if (innerCycle.cut) sawCycle.cut = true;
+        // A found class is constructive and always cacheable; a clean verdict
+        // is cacheable only when no recursion cut hid part of the type.
+        if (verdict !== null || !innerCycle.cut) this.readonlyClassScanVerdicts.set(identity, verdict);
+        return verdict;
+      }
+      default:
+        return null;
+    }
   }
 
   protected predeclareExtensionStatement(_statement: Statement): boolean {
@@ -1980,6 +2099,26 @@ export class Analyzer implements TypeEnvironment {
             .filter((member) => !coveredEnumMembers.has(this.enumMemberCoverageKey(matched.identity, member)));
           if (missing.length > 0) {
             this.diagnostics.push(diagnostic("VEL4015", `Match on ${matched.name} is missing: ${missing.join(", ")}`, statement.span));
+          }
+        } else if (!isInvalidType(matched)) {
+          // D45 rule 77: a match over a class (or a union containing one) must
+          // be provably exhaustive, exactly as strict as the enum rule. A
+          // subclass instance still satisfies its base pattern, so a base (or
+          // wildcard) tail proves it; an extern class check may fail at
+          // runtime, so only the wildcard proves an extern subject.
+          const expandedSubject = this.expandAliases(matched);
+          const classArms = this.classArmsOf(expandedSubject);
+          if (classArms.length > 0) {
+            const closing = expandedSubject.kind === "class" && !(expandedSubject.identity ?? expandedSubject.name).startsWith("js:")
+              ? `end with 'case ${expandedSubject.name}:' or 'case _:'`
+              : expandedSubject.kind === "class"
+                ? "end with 'case _:'"
+                : "cover every member or end with 'case _:'";
+            this.diagnostics.push(diagnostic(
+              "VEL4015",
+              `Match on ${describeType(matched)} is missing a fallback; class hierarchies are open — ${closing}`,
+              statement.span,
+            ));
           }
         }
         if (!exhaustive) {
@@ -3239,7 +3378,23 @@ export class Analyzer implements TypeEnvironment {
   }
 
   protected inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
-    const type = this.inferExpressionType(expression, contextualType);
+    let type = this.inferExpressionType(expression, contextualType);
+    // D45 rule 75: a class name is not a value. It may be called directly and
+    // its statics may be read; every other expression position — aliasing,
+    // argument passing, collections, returning, printing — rejects with the
+    // arrow-factory teaching. Type positions, `extends`, `is`/`case` patterns,
+    // and export declarations never reach expression inference.
+    if (type.kind === "classConstructor"
+      && (expression.kind === "IdentifierExpression" || expression.kind === "MemberExpression")) {
+      const key = spanIdentity(expression.span);
+      if (!this.callExpressionCallees.has(key) && !this.memberAccessReceivers.has(key)) {
+        this.typeError(
+          `A class name is not a value; call '${type.name}()' directly, or wrap a factory as an arrow '() => ${type.name}()'`,
+          expression.span,
+        );
+        type = invalidType;
+      }
+    }
     this.inferredExpressionTypes.set(spanIdentity(expression.span), type);
     const expanded = this.expandAliases(type);
     if (expanded.kind === "promise") {
@@ -4262,6 +4417,10 @@ export class Analyzer implements TypeEnvironment {
     }
 
     if (calleeExpression.kind === "MemberExpression" && calleeExpression.object.kind !== "SuperExpression") {
+      // The collection/primitive call paths infer the receiver before
+      // inferMember can sanction it, so a class-name receiver (`P.make(...)`)
+      // is sanctioned here first (D45 rule 75).
+      this.memberAccessReceivers.add(spanIdentity(calleeExpression.object.span));
       const primitiveResult = this.inferPrimitiveCall(calleeExpression, arguments_, argumentNames, callSpan);
       if (primitiveResult) return primitiveResult;
       const collectionResult = this.inferCollectionCall(calleeExpression, arguments_, argumentNames, callSpan);
@@ -4271,6 +4430,10 @@ export class Analyzer implements TypeEnvironment {
       }
     }
 
+    // A direct call is a sanctioned class-name position (D45 rule 75), and a
+    // member callee is a method call rather than a method-value read (D44
+    // rule 74). Both facts are recorded before the callee is inferred.
+    this.callExpressionCallees.add(spanIdentity(calleeExpression.span));
     const diagnosticsBeforeCallee = this.diagnostics.length;
     const inferredCallee = this.inferExpression(calleeExpression);
     const callee = this.expandAliases(inferredCallee);
@@ -5564,8 +5727,17 @@ export class Analyzer implements TypeEnvironment {
         `${memberSpan.start}:${memberSpan.end}`,
         staticMember ? { kind: "classConstructor", name: base } : { kind: "class", name: base },
       );
+      // D44 rule 74: reading a base method as a value binds at the reference
+      // site. `super` cannot be captured by a receiver temporary, so the
+      // emitter binds it to `this` directly.
+      if (method && !getter && !field && readValue
+        && !this.callExpressionCallees.has(spanIdentity(memberSpan))) {
+        this.classMethodReferences.add(spanIdentity(memberSpan));
+      }
       return methodType ?? getterType ?? field!.type;
     }
+    // A member access is a sanctioned class-name position (D45 rule 75).
+    this.memberAccessReceivers.add(spanIdentity(objectExpression.span));
     const original = this.inferredOrAnalyze(objectExpression);
     this.semanticExpressionOwners.set(`${memberSpan.start}:${memberSpan.end}`, nonOptional(original));
     const resolvedOriginal = this.expandAliases(original);
@@ -5691,6 +5863,13 @@ export class Analyzer implements TypeEnvironment {
         && !(this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false)) {
         this.privateInstanceFieldReads.add(spanIdentity(memberSpan));
       }
+      // D44 rule 74: methods live on the prototype, so reading one as a value
+      // (`const read = a.read`) evaluates the receiver once and binds at the
+      // reference site — the collection-method rule of charter section 8.
+      if (readValue && (method || privateMethod) && !field && !getter && !privateField
+        && !this.callExpressionCallees.has(spanIdentity(memberSpan))) {
+        this.classMethodReferences.add(spanIdentity(memberSpan));
+      }
       // CLS-D9: while a constructor runs, derived state does not exist yet,
       // so a constructor body may only observe members its own class fully
       // owns. An abstract member always resolves to a derived implementation,
@@ -5747,6 +5926,12 @@ export class Analyzer implements TypeEnvironment {
         if (field && fieldOwner && !key.startsWith("js:")) {
           this.staticFieldReads.set(spanIdentity(memberSpan), fieldOwner.depth);
         }
+      }
+      // D44 rule 74: a static method read as a value binds its class at the
+      // reference site, the same rule instance method references follow.
+      if (readValue && (method || privateMethod) && !field && !getter && !privateField
+        && !this.callExpressionCallees.has(spanIdentity(memberSpan))) {
+        this.classMethodReferences.add(spanIdentity(memberSpan));
       }
     } else if (object.kind === "enumObject") {
       if (object.members.has(property)) {
@@ -7118,7 +7303,19 @@ export class Analyzer implements TypeEnvironment {
           const containsData = (type: ValueType): boolean => type.kind === "optional" ? containsData(type.inner)
             : type.kind === "union" ? type.members.some(containsData)
               : isReadonlyView(type);
-          if (supported(resolved) && containsData(resolved)) return true;
+          if (supported(resolved) && containsData(resolved)) {
+            // D44 rule 72: the surface check above admits only data shapes;
+            // this closes the same boundary at every reachable depth.
+            const violation = this.findClassInReadonlyData(resolved);
+            if (violation) {
+              this.typeError(
+                `'readonly' accepts only pure data at every depth; '${describeType(mutableViewOf(resolved))}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
+                syntax.span,
+              );
+              return false;
+            }
+            return true;
+          }
           this.typeError(`'readonly' applies only to data records, structural objects, List, Set, Map, and Record values; ${describeType(resolved)} is outside that boundary`, syntax.span);
           return false;
         }
@@ -7504,6 +7701,14 @@ export class Analyzer implements TypeEnvironment {
 
   private enumMemberCoverageKey(identity: string, member: string): string {
     return `${identity}\u0000${member}`;
+  }
+
+  /** The class arms of a match subject: the type itself, or the class members of its optional/union spellings. */
+  private classArmsOf(expanded: ValueType): Extract<ValueType, { kind: "class" }>[] {
+    if (expanded.kind === "class") return [expanded];
+    if (expanded.kind === "optional") return this.classArmsOf(this.expandAliases(expanded.inner));
+    if (expanded.kind === "union") return expanded.members.flatMap((member) => this.classArmsOf(this.expandAliases(member)));
+    return [];
   }
 
   private blockAlwaysReturns(statements: readonly Statement[]): boolean {

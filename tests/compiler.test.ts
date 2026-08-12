@@ -2781,6 +2781,9 @@ def inspect<T>(items: readonly List<T>, visit: (T) -> null) -> null:
 `.trimStart());
   assert.equal(generic.diagnostics.filter((item) => /T is outside that boundary/u.test(item.message)).length, 4);
 
+  // D44 rule 72: a class at any depth of a readonly type is rejected at the
+  // declaration site. The old view compiled these declarations and silently
+  // stopped protecting at the class member (`boxes[0].title = ...` mutated).
   const classBoundary = compile(`
 class Box:
     let title: string
@@ -2799,7 +2802,10 @@ def allowed(boxes: readonly List<Box>, wrapper: readonly Wrapper) -> null:
     boxes[0].retitle()
     wrapper.box.title = "nested"
 `.trimStart());
-  assert.deepEqual(classBoundary.diagnostics, []);
+  assert.deepEqual(classBoundary.diagnostics.map((item) => item.message), [
+    "'readonly' accepts only pure data at every depth; 'List<Box>[element]' is class 'Box' — model it as a data record, or drop 'readonly'",
+    "'readonly' accepts only pure data at every depth; 'Wrapper.box' is class 'Box' — model it as a data record, or drop 'readonly'",
+  ]);
 
   const directClass = compile("class Box:\n    pass\nconst box: readonly Box = Box()\n");
   assert.ok(directClass.diagnostics.some((item) => /Box is outside that boundary/u.test(item.message)));
@@ -2822,45 +2828,35 @@ holder.inner = {name: "blocked"}
 });
 
 test("readonly collection views are covariant while mutable collections remain invariant", () => {
+  // D44 rule 72 removed classes from readonly types, so covariance is pinned
+  // through union widening — the same element-subtype relation, pure data.
   const accepted = compile(`
-class Animal:
-    pass
+const names: List<string> = ["Ada"]
+const nameSet: Set<string> = Set(names)
+const nameMap: Map<string, string> = Map([["Ada", "Lin"]])
+const nameRecord: Record<string> = {favorite: "Ada"}
+const readonlyNames: readonly List<string> = names
 
-class Dog extends Animal:
-    pass
-
-const dogs: List<Dog> = [Dog()]
-const dogSet: Set<Dog> = Set(dogs)
-const dogMap: Map<Dog, Dog> = Map([[Dog(), Dog()]])
-const dogRecord: Record<Dog> = {favorite: Dog()}
-const readonlyDogs: readonly List<Dog> = dogs
-
-const animals: readonly List<Animal> = dogs
-const readonlyAnimals: readonly List<Animal> = readonlyDogs
-const animalSet: readonly Set<Animal> = dogSet
-const animalMap: readonly Map<Animal, Animal> = dogMap
-const animalRecord: readonly Record<Animal> = dogRecord
+const widened: readonly List<string | number> = names
+const readonlyWidened: readonly List<string | number> = readonlyNames
+const widenedSet: readonly Set<string | number> = nameSet
+const widenedMap: readonly Map<string | number, string | number> = nameMap
+const widenedRecord: readonly Record<string | number> = nameRecord
 `.trimStart());
   assert.deepEqual(accepted.diagnostics, []);
 
   const rejected = compile(`
-class Animal:
-    pass
+const names: List<string> = ["Ada"]
+const nameSet: Set<string> = Set(names)
+const nameMap: Map<string, string> = Map([["Ada", "Lin"]])
+const nameRecord: Record<string> = {favorite: "Ada"}
+const widenedNames: List<string | number> = names
+const widenedSet: Set<string | number> = nameSet
+const widenedMap: Map<string | number, string | number> = nameMap
+const widenedRecord: Record<string | number> = nameRecord
 
-class Dog extends Animal:
-    pass
-
-const dogs: List<Dog> = [Dog()]
-const dogSet: Set<Dog> = Set(dogs)
-const dogMap: Map<Dog, Dog> = Map([[Dog(), Dog()]])
-const dogRecord: Record<Dog> = {favorite: Dog()}
-const animals: List<Animal> = dogs
-const animalSet: Set<Animal> = dogSet
-const animalMap: Map<Animal, Animal> = dogMap
-const animalRecord: Record<Animal> = dogRecord
-
-const wide: readonly List<Animal> = [Animal()]
-const narrowed: readonly List<Dog> = wide
+const wide: readonly List<string | number> = ["Ada", 1]
+const narrowed: readonly List<string> = wide
 `.trimStart());
   assert.equal(rejected.diagnostics.filter((item) => /Cannot assign/u.test(item.message)).length, 5);
 });
@@ -21536,10 +21532,12 @@ print(vault.matches(Vault("safe")))
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /#secret;/u);
   assert.match(result.code ?? "", /#prefix;/u);
-  assert.match(result.code ?? "", /#reveal = \(suffix\) =>/u);
+  // D44 rule 74: private instance methods are native private methods, not
+  // per-instance arrow fields.
+  assert.match(result.code ?? "", /#reveal\(suffix\) \{/u);
   assert.match(result.code ?? "", /static #category = "vault";/u);
   assert.match(result.code ?? "", /static #label\(\)/u);
-  assert.match(result.code ?? "", /#revealLater = async \(\) =>/u);
+  assert.match(result.code ?? "", /async #revealLater\(\) \{/u);
   assert.match(result.code ?? "", /static async #labelLater\(\)/u);
   assert.doesNotMatch(result.code ?? "", /this\.secret/u);
   const info = result.moduleInterface.classes.get("Vault");

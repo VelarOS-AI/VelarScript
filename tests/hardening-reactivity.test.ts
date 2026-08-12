@@ -182,7 +182,7 @@ mount(<App />, "#app")
   assert.doesNotMatch(keyed.code, /__velarReactive\(value, source\)/u);
 });
 
-test("component readonly data stops at class and Promise capability boundaries", () => {
+test("component readonly data protects data props while bare class and Promise props stay behavioral", () => {
   const result = compile(`
 type User:
     name: string
@@ -217,9 +217,14 @@ component ClassChild(box: Box, boxes: List<Box>, pending: Promise<User>):
     return <span>{box.label()}</span>
 `.trimStart());
 
-  assert.equal(result.diagnostics.length, 1, result.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+  // D44 rule 72: the bare `box: Box` prop stays legal — it is visibly
+  // behavioral and passes through unprotected — while the class buried in
+  // the `boxes: List<Box>` data prop is rejected at the prop declaration.
+  // The Promise prop remains a capability boundary and resolves mutable data.
+  assert.equal(result.diagnostics.length, 2, result.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
   assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "VEL3002").length, 0);
-  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "VEL4001").length, 1);
+  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "VEL4001").length, 2);
+  assert.ok(result.diagnostics.some((diagnostic) => /A component prop is a readonly data view; 'boxes\[element\]' is class 'Box' — lift the class into its own prop, or model it as a data record/u.test(diagnostic.message)));
   assert.ok(result.diagnostics.some((diagnostic) => /mutating method 'append' through readonly List<Box>/u.test(diagnostic.message)));
 
   const hostAnnotation = compile(`
