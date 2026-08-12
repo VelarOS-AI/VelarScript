@@ -6,6 +6,30 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The text-conversion whitelist now covers `str` used as a value, not only
+  as a direct call: `const convert = str` stays legal, while
+  `convert(record)` and `map(str)` over a non-text List are type errors, so
+  a record can no longer reach JavaScript string coercion and execute a
+  `toString` hook. `Set.update()` publishes each added member, and `Set()`
+  and `Map()` construction unwrap reactive values, so membership and key
+  lookup agree with the documented contract instead of splitting on
+  identity. A detached task whose failure report itself fails, and an
+  `async` statement handed a foreign thenable, are both reported through the
+  owned channel instead of ending the process.
+- Module cycle diagnostics are corrected and entry-independent: a top-level
+  call of an imported `def` is legal (functions are hoisted at link time), a
+  cycle hidden behind a re-export barrel or a dynamic import is now caught,
+  the language server and `velar check` give the same verdict on the same
+  sources, and a module that leaves a cycle recovers its emitted output
+  under incremental reuse instead of silently serving an empty module.
+- Large speedups in emitted code, all covered by the new runtime gate: index
+  reads on a list the compiler produced are now O(1) after one validation
+  instead of O(n) per read (200,000 reads of a `range(0, 2000)` result:
+  39.8s to 42ms), `Set` membership no longer pays a thrown-and-caught
+  exception per call (190ms to 12ms per 200,000), `string.slice` takes the
+  ASCII fast path its length counterpart already had (300 slices over a
+  222,000 code-point corpus: 154ms to under 1ms), and `map`/`filter`/
+  `sorted` drop roughly 40% of their per-element overhead.
 - Equality is SameValueZero. `NaN == NaN` is now `true` and `x == x` always
   holds, so equality agrees with `Set`, `Map`, and `List` membership instead
   of contradicting them; `-0 == 0` stays true. Operands whose static types

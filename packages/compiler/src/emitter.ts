@@ -527,21 +527,41 @@ export class JavaScriptEmitter {
   // rejection is normalized to Error and reported on the host error channel
   // without ending the process. Hosts with their own error chain override
   // this (the Web emitter routes the report through the velar/app chain).
+  //
+  // The reporter itself must never fail outward: a rejection value carries a
+  // foreign error object whose 'stack' or 'message' may be a throwing getter,
+  // and a throw inside a rejection handler becomes an unhandled rejection that
+  // ends the Node process — the exact program termination this boundary
+  // forbids. Every foreign read is therefore guarded, and the Promise derived
+  // from adopting the task is observed rather than discarded.
   protected detachedTaskHelpers(): readonly string[] {
     return [[
       "const __velarDetachedPromiseThen = Promise.prototype.then;",
       "const __velarDetachedApply = Reflect.apply;",
       "const __velarDetachedConsole = globalThis.console;",
       "const __velarDetachedConsoleError = __velarDetachedConsole ? __velarDetachedConsole.error : null;",
+      "function __velarDetachedTrace(error) {",
+      "  try { const trace = error.stack; if (typeof trace === \"string\" && trace !== \"\") return trace; } catch {}",
+      "  try { const message = error.message; if (typeof message === \"string\" && message !== \"\") return message; } catch {}",
+      "  return \"A detached task failed\";",
+      "}",
       "function __velarDetachedReport(failure) {",
-      "  const error = __velarNormalizeError(failure);",
-      "  if (typeof __velarDetachedConsoleError !== \"function\") throw error;",
-      "  const trace = typeof error.stack === \"string\" && error.stack !== \"\" ? error.stack",
-      "    : typeof error.message === \"string\" ? error.message : \"A detached task failed\";",
-      "  __velarDetachedApply(__velarDetachedConsoleError, __velarDetachedConsole, [\"Detached async task failed: \" + trace]);",
+      "  try {",
+      "    if (typeof __velarDetachedConsoleError !== \"function\") return null;",
+      "    let error = null;",
+      "    try { error = __velarNormalizeError(failure); } catch {}",
+      "    const trace = error === null ? \"A detached task failed\" : __velarDetachedTrace(error);",
+      "    __velarDetachedApply(__velarDetachedConsoleError, __velarDetachedConsole, [\"Detached async task failed: \" + trace]);",
+      "  } catch {}",
+      "  return null;",
       "}",
       "function __velarDetachedTask(task) {",
-      "  __velarDetachedApply(__velarDetachedPromiseThen, task, [null, __velarDetachedReport]);",
+      "  try {",
+      "    const observed = __velarDetachedApply(__velarDetachedPromiseThen, task, [null, __velarDetachedReport]);",
+      "    __velarDetachedApply(__velarDetachedPromiseThen, observed, [null, __velarDetachedReport]);",
+      "  } catch (failure) {",
+      "    __velarDetachedReport(failure);",
+      "  }",
       "  return null;",
       "}",
     ].join("\n")];
@@ -1032,8 +1052,12 @@ export class JavaScriptEmitter {
         // Detached execution never floats: the compiler-owned observer
         // adopts the Promise, normalizes rejection to Error, and reports it
         // through the host error channel (see docs/runtime-boundary.md,
-        // B-DETACHED-ASYNC).
-        return `${indentation}__velarDetachedTask(${this.emitMappedExpression(statement.expression, false)});`;
+        // B-DETACHED-ASYNC). The expression takes the same Promise
+        // normalization every other Promise consumer applies, so a foreign
+        // thenable or an `undefined` from an extern boundary fails as an owned
+        // 'Expected an actual Promise' instead of a host-voiced
+        // 'Promise.prototype.then called on incompatible receiver'.
+        return `${indentation}__velarDetachedTask(${this.emitMappedExpression(statement.expression)});`;
       default:
         return "";
     }

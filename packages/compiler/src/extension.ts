@@ -286,6 +286,14 @@ export interface ModuleInterface {
   readonly reactiveExports: ReadonlyMap<string, "state">;
   /** Named re-exports (`export {name} from "source"`), keyed by the exported alias. */
   readonly reExports: ReadonlyMap<string, { readonly source: string; readonly imported: string }>;
+  /**
+   * Exports whose emitted binding is hoisted and initialized when the module is
+   * linked rather than when its body runs — function declarations only. A
+   * cycle member may read one of these before the defining module evaluates;
+   * every other export shape is in its temporal dead zone until then (D31
+   * item 23).
+   */
+  readonly hoistedExports?: ReadonlySet<string>;
   readonly namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>>;
   readonly namedTypeReadonlyFields?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly namedTypeIdentities: ReadonlyMap<string, string>;

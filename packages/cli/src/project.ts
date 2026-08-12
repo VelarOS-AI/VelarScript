@@ -2,6 +2,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path
 import {
   analysisTypeIdentity,
   compile,
+  diagnostic,
   inspectModule,
   optionalOf,
   readonlyViewOf,
@@ -28,6 +29,13 @@ export interface ProjectModule {
   readonly inputPath: string;
   readonly relativePath: string;
   readonly result: CompileResult;
+  /**
+   * The module's own compile output, before the project-level cycle check
+   * overlaid its diagnostics. `result` is derived from this on every compile,
+   * so a module whose cycle diagnostic disappears recovers its emitted code
+   * even when incremental reuse hands the previous entry straight back.
+   */
+  readonly compiledResult?: CompileResult;
 }
 
 export interface ProjectFailure {
@@ -384,7 +392,7 @@ export async function compileProjectEntries(
     modules.push(...group.map((module) => passResults.get(module.inputPath)!));
   }
 
-  appendInitializationCycleDiagnostics(modules, loaded, velarImports, initialEntries);
+  appendInitializationCycleDiagnostics(modules, loaded, velarImports, entryPath);
   modules.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
   if (framework?.host.validateProject) {
     try {
@@ -581,11 +589,19 @@ const INITIALIZATION_CYCLE_DIAGNOSTIC = "VEL3019";
 // so the defect is diagnosed on the reading line instead. Reads inside
 // function bodies stay legal — pure function cycles are a proper shape — and
 // cross-module mutually recursive record types never read a binding at all.
+//
+// The verdict is a property of the sources alone: it is computed from one
+// evaluation order over the whole loaded graph, seeded by the project's own
+// entry and then by every remaining evaluation root, never from the caller's
+// entry list. `velar check` (one entry) and the language server (every file is
+// an entry) therefore agree on the same project, and modules a build reaches
+// only through `await import(...)` — additional roots the host does evaluate —
+// are ordered instead of skipped.
 function appendInitializationCycleDiagnostics(
   modules: ProjectModule[],
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
-  entries: readonly string[],
+  entryPath: string,
 ): void {
   const resolveDependency = (importerPath: string, source: string): string | null => {
     const target = source.startsWith(".") && extname(source) === ".vel"
@@ -594,17 +610,29 @@ function appendInitializationCycleDiagnostics(
     return target !== null && loaded.has(target) ? target : null;
   };
 
+  const carriesCycleDiagnostic = (module: ProjectModule): boolean =>
+    module.result.diagnostics.some((item) => item.code === INITIALIZATION_CYCLE_DIAGNOSTIC);
+  // Nothing to decide and nothing stale to clear: the common project pays only
+  // this scan. Every other exit still recomputes from the module's own compile
+  // output, so a diagnostic never outlives the cycle that produced it.
+  if (modules.every((module) => module.result.initializationImportReads.length === 0 && !carriesCycleDiagnostic(module))) return;
+
   // Static evaluation edges in source order: import and re-export
   // declarations, excluding dynamic imports (they defer evaluation) and
   // JavaScript or standard modules (they are not .vel graph members).
   const staticDependencies = new Map<string, readonly string[]>();
+  const dynamicRoots: string[] = [];
   for (const [path, module] of loaded) {
     const output: string[] = [];
     const seen = new Set<string>();
     for (const reference of module.inspection.semanticIndex.moduleReferences) {
-      if (reference.dynamic) continue;
       const target = resolveDependency(path, reference.source);
-      if (target === null || seen.has(target)) continue;
+      if (target === null) continue;
+      if (reference.dynamic) {
+        dynamicRoots.push(target);
+        continue;
+      }
+      if (seen.has(target)) continue;
       seen.add(target);
       output.push(target);
     }
@@ -648,16 +676,15 @@ function appendInitializationCycleDiagnostics(
   }
   const componentSizes = new Map<number, number>();
   for (const component of componentOf.values()) componentSizes.set(component, (componentSizes.get(component) ?? 0) + 1);
-  const inCycle = (path: string): boolean =>
-    (componentSizes.get(componentOf.get(path) ?? -1) ?? 0) > 1 || (staticDependencies.get(path) ?? []).includes(path);
+  const cyclic = [...componentSizes.values()].some((size) => size > 1);
 
-  // The ESM evaluation order per entry: dependency-first post-order following
+  // The ESM evaluation order: dependency-first post-order following
   // declaration order, with in-progress modules skipped exactly as the host
-  // module loader skips cycle back-edges.
-  const entryOrders: ReadonlyMap<string, number>[] = [];
-  for (const entry of entries) {
-    if (!loaded.has(entry)) continue;
-    const order = new Map<string, number>();
+  // module loader skips cycle back-edges. Roots are visited entry first, then
+  // dynamic-import targets, then anything else the graph holds, each in a
+  // stable order so the same sources always produce the same order.
+  const order = new Map<string, number>();
+  if (cyclic) {
     const visiting = new Set<string>();
     const visit = (path: string): void => {
       if (order.has(path) || visiting.has(path)) return;
@@ -666,52 +693,89 @@ function appendInitializationCycleDiagnostics(
       visiting.delete(path);
       order.set(path, order.size);
     };
-    visit(entry);
-    entryOrders.push(order);
+    const roots = [entryPath, ...[...new Set(dynamicRoots)].sort(), ...[...loaded.keys()].sort()];
+    for (const root of roots) if (loaded.has(root)) visit(root);
   }
 
   for (let index = 0; index < modules.length; index += 1) {
     const module = modules[index]!;
     const path = module.inputPath;
-    // Idempotent under incremental reuse: previously appended cycle
-    // diagnostics are recomputed from the current graph, never duplicated.
-    const baseDiagnostics = module.result.diagnostics.filter((item) => item.code !== INITIALIZATION_CYCLE_DIAGNOSTIC);
+    // The overlay is rebuilt from the module's own compile output every time,
+    // so it is idempotent under incremental reuse in both directions: a
+    // diagnostic is never duplicated, and a module that leaves a cycle gets its
+    // emitted code back.
+    const compiled = module.compiledResult ?? module.result;
     const additions: Diagnostic[] = [];
-    if (inCycle(path)) {
-      const reported = new Set<string>();
-      for (const read of module.result.initializationImportReads) {
-        const target = resolveDependency(path, read.source);
+    if (cyclic && (componentSizes.get(componentOf.get(path) ?? -1) ?? 0) > 1) {
+      for (const read of compiled.initializationImportReads) {
+        const target = originModule(resolveDependency(path, read.source), read.imported, loaded, resolveDependency);
         if (target === null || target === path) continue;
         if (componentOf.get(target) !== componentOf.get(path)) continue;
-        const unsafe = entryOrders.some((order) => {
-          const modulePosition = order.get(path);
-          const targetPosition = order.get(target);
-          return modulePosition !== undefined && targetPosition !== undefined && targetPosition > modulePosition;
-        });
-        if (!unsafe) continue;
-        const key = `${read.span.start}:${read.span.end}`;
-        if (reported.has(key)) continue;
-        reported.add(key);
-        additions.push({
-          code: INITIALIZATION_CYCLE_DIAGNOSTIC,
-          message: `Move this read into a function, or extract the shared value into a third module; '${read.source}' has not initialized when this line runs`,
-          span: read.span,
-        });
+        // A `def` emits a hoisted function declaration that the host
+        // initializes at link time, so a cycle member may call one before the
+        // defining module evaluates. Every other export shape is in its
+        // temporal dead zone until then.
+        if (read.imported !== null && loaded.get(target)?.inspection.moduleInterface.hoistedExports?.has(read.imported)) continue;
+        const modulePosition = order.get(path);
+        const targetPosition = order.get(target);
+        if (modulePosition === undefined || targetPosition === undefined || targetPosition < modulePosition) continue;
+        additions.push(diagnostic(
+          INITIALIZATION_CYCLE_DIAGNOSTIC,
+          `Move this read into a function, or extract the shared value into a third module; '${read.source}' has not initialized when this line runs`,
+          read.span,
+        ));
       }
     }
-    if (additions.length === 0 && baseDiagnostics.length === module.result.diagnostics.length) continue;
-    additions.sort((left, right) => left.span.start - right.span.start);
+    if (additions.length === 0) {
+      if (module.compiledResult === undefined) continue;
+      modules[index] = { inputPath: module.inputPath, relativePath: module.relativePath, result: compiled };
+      continue;
+    }
     modules[index] = {
       ...module,
+      compiledResult: compiled,
       result: {
-        ...module.result,
-        diagnostics: [...baseDiagnostics, ...additions],
+        ...compiled,
+        // The compile() contract keeps diagnostics ordered by span.
+        diagnostics: [...compiled.diagnostics, ...additions]
+          .sort((left, right) => left.span.start - right.span.start || left.code.localeCompare(right.code)),
         // The zero-diagnostics gate for code generation holds after the
         // project-level check as well.
-        ...(additions.length > 0 ? { code: null, sourceMap: null, css: null, styleSegments: null, runtimeModules: [] } : {}),
+        code: null,
+        sourceMap: null,
+        css: null,
+        styleSegments: null,
+        runtimeModules: [],
       },
     };
   }
+}
+
+/**
+ * The module that declares an imported name, following `export {name} from
+ * "source"` barrels. Judging a cycle read by the module the import names would
+ * let a barrel hide the defining module, whose binding is the one that is
+ * actually uninitialized at run time.
+ */
+function originModule(
+  target: string | null,
+  imported: string | null,
+  loaded: ReadonlyMap<string, LoadedModule>,
+  resolveDependency: (importerPath: string, source: string) => string | null,
+): string | null {
+  let current = target;
+  let name = imported;
+  const seen = new Set<string>();
+  while (current !== null && name !== null && !seen.has(`${current}\0${name}`)) {
+    seen.add(`${current}\0${name}`);
+    const reExport = loaded.get(current)?.inspection.moduleInterface.reExports.get(name);
+    if (reExport === undefined) return current;
+    const next = resolveDependency(current, reExport.source);
+    if (next === null) return current;
+    current = next;
+    name = reExport.imported;
+  }
+  return current;
 }
 
 export function moduleInterfaceIdentity(

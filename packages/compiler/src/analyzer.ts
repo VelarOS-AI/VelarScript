@@ -34,6 +34,7 @@ import {
   isInvalidType,
   isAssignable,
   isReadonlyView,
+  isTextConvertibleType,
   mergeTypes,
   mutableViewOf,
   nullType,
@@ -48,6 +49,7 @@ import {
   sameTypeIgnoringCallableParameterNames,
   stringType,
   substituteTypeParameters,
+  textConvertibleType,
   typeContainsParameter,
   typeContainsRuntimeTypeCheck,
   unifyTypeParameters,
@@ -302,6 +304,13 @@ export interface AnalysisContext {
 export interface InitializationImportRead {
   readonly local: string;
   readonly source: string;
+  /**
+   * The name the source module exports, which may differ from `local`. The
+   * project driver follows it through re-export barrels to the module that
+   * actually declares the binding; a namespace import has no single name and
+   * records null.
+   */
+  readonly imported: string | null;
   readonly span: Span;
 }
 
@@ -517,7 +526,7 @@ export class Analyzer implements TypeEnvironment {
   // bodies such as components render after module evaluation).
   private instanceFieldInitializerDepth = 0;
   protected deferredExecutionDepth = 0;
-  private readonly importedBindingSources = new Map<Binding, string>();
+  private readonly importedBindingSources = new Map<Binding, { readonly source: string; readonly imported: string | null }>();
   private readonly initializationImportReadSites = new Map<string, InitializationImportRead>();
   private staticFieldInitialization: {
     readonly className: string;
@@ -755,7 +764,7 @@ export class Analyzer implements TypeEnvironment {
             specifier.span,
             false,
           );
-          this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local);
+          this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
           const reactive = this.reactiveBindings.get(specifier.local);
           if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
         }
@@ -1431,7 +1440,7 @@ export class Analyzer implements TypeEnvironment {
               specifier.span,
               false,
             );
-            this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local);
+            this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
             const reactive = this.reactiveBindings.get(specifier.local);
             if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
           }
@@ -7201,7 +7210,13 @@ export class Analyzer implements TypeEnvironment {
   private builtin(name: string): Binding | null {
     const functions = new Map<string, ValueType>([
       ["number", { kind: "function", parameterNames: ["text"], parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) }],
-      ["str", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: stringType }],
+      // D32 item 29: `str` is compiler-owned text conversion, so its parameter
+      // carries the conversion domain rather than `any`. A bare `str` stays a
+      // legal first-class value, and every indirect call site — `const c = str`,
+      // `values.map(str)` — is checked against the same whitelist the direct
+      // call form uses instead of executing a 'toString' hook.
+      ["str", { kind: "function", parameterNames: ["value"], parameters: [textConvertibleType], requiredParameters: 1, result: stringType }],
+      // `print` inspects any value by contract and keeps the `any` domain.
       ["print", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: nullType }],
     ]);
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
@@ -7331,18 +7346,18 @@ export class Analyzer implements TypeEnvironment {
   // Imported bindings remember their module specifier so identifier reads can
   // be classified against the project module graph (D31 item 23). JavaScript
   // imports never participate: only .vel modules join initialization cycles.
-  private recordImportedBindingSource(javascript: boolean, source: string, local: string): void {
+  private recordImportedBindingSource(javascript: boolean, source: string, local: string, imported: string | null): void {
     if (javascript) return;
     const binding = this.scopes.at(-1)?.get(local);
-    if (binding) this.importedBindingSources.set(binding, source);
+    if (binding) this.importedBindingSources.set(binding, { source, imported });
   }
 
   private recordInitializationImportRead(binding: Binding, local: string, span: Span): void {
-    const source = this.importedBindingSources.get(binding);
-    if (source === undefined || !this.inModuleInitializationPosition()) return;
+    const origin = this.importedBindingSources.get(binding);
+    if (origin === undefined || !this.inModuleInitializationPosition()) return;
     const key = spanIdentity(span);
     if (!this.initializationImportReadSites.has(key)) {
-      this.initializationImportReadSites.set(key, { local, source, span });
+      this.initializationImportReadSites.set(key, { local, source: origin.source, imported: origin.imported, span });
     }
   }
 
@@ -7383,13 +7398,16 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private isTextConvertible(type: ValueType): boolean {
-    const expanded = this.expandAliases(type);
-    if (isInvalidType(expanded)) return true;
-    if (expanded.kind === "string" || expanded.kind === "number" || expanded.kind === "bool"
-      || expanded.kind === "null" || expanded.kind === "enum" || expanded.kind === "enumMember") return true;
-    if (expanded.kind === "optional") return this.isTextConvertible(expanded.inner);
-    if (expanded.kind === "union") return expanded.members.every((member) => this.isTextConvertible(member));
-    return false;
+    return isTextConvertibleType(type, this);
+  }
+
+  /**
+   * The `TypeEnvironment` view of alias expansion. Assignability needs it to
+   * decide the text-conversion parameter domain on the expanded shape, exactly
+   * as the direct `str()` check does.
+   */
+  expandTypeAliases(type: ValueType): ValueType {
+    return this.expandAliases(type);
   }
 
   // A reactive state declaration owns its resolved lexical binding identity,

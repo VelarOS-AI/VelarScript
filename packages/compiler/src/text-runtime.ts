@@ -73,12 +73,25 @@ function __velarTextCodePointLength(value) {
   return length;
 }
 function __velarTextCodePointPrefix(value, count) { return __velarTextCall(__velarNativeStringSlice, value, [0, __velarTextCodeUnitOffset(value, count)]); }
-function __velarTextCodeUnitOffset(value, position) {
+// A string whose code-point count equals its code-unit count carries no
+// surrogate pair, so a code-point position is already a code-unit offset.
+// The codePointLength argument lets a caller that has already measured the string reuse
+// that measurement; without it the surrogate probe answers the same question
+// in one native scan. Walking code points from zero instead made every offset
+// conversion O(corpus + position), which is what turned slice-based document
+// scanning quadratic.
+function __velarTextOneUnitPerCodePoint(value, codePointLength) {
+  if (codePointLength >= 0) return codePointLength === value.length;
+  return __velarTextCall(__velarTextSurrogateExec, __velarTextSurrogatePattern, [value]) === null;
+}
+function __velarTextCodeUnitOffset(value, position, codePointLength = -1) {
+  if (__velarTextOneUnitPerCodePoint(value, codePointLength)) return position < value.length ? position : value.length;
   let offset = 0, current = 0;
   while (offset < value.length && current < position) { offset = __velarTextNextCodePointOffset(value, offset); current += 1; }
   return offset;
 }
-function __velarTextCodePointIndex(value, unitOffset) {
+function __velarTextCodePointIndex(value, unitOffset, codePointLength = -1) {
+  if (__velarTextOneUnitPerCodePoint(value, codePointLength)) return unitOffset <= value.length ? unitOffset : null;
   let offset = 0, position = 0;
   while (offset < unitOffset && offset < value.length) { offset = __velarTextNextCodePointOffset(value, offset); position += 1; }
   return offset === unitOffset ? position : null;
@@ -119,7 +132,7 @@ function __velarStringSlice(value, start = 0, end = null) {
   if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start]) || !__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [end])) throw new __velarTextNativeTypeError("String.slice positions must be integers");
   const first = start < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + start, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [start, total]);
   const last = end < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + end, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [end, total]);
-  return __velarTextCall(__velarNativeStringSlice, value, [__velarTextCodeUnitOffset(value, first), __velarTextCodeUnitOffset(value, last)]);
+  return __velarTextCall(__velarNativeStringSlice, value, [__velarTextCodeUnitOffset(value, first, total), __velarTextCodeUnitOffset(value, last, total)]);
 }
 function __velarStringChar(value, index) {
   value = __velarTextValue(value);
@@ -128,7 +141,7 @@ function __velarStringChar(value, index) {
   if (index < 0) index += total;
   if (index < 0) return null;
   if (index >= total) return null;
-  const start = __velarTextCodeUnitOffset(value, index);
+  const start = __velarTextCodeUnitOffset(value, index, total);
   return __velarTextCall(__velarNativeStringSlice, value, [start, __velarTextNextCodePointOffset(value, start)]);
 }
 function __velarStringHas(value, text) { return __velarTextCall(__velarNativeStringIndexOf, __velarTextValue(value), [__velarTextArgument(text, "String.has text")]) >= 0; }
@@ -137,13 +150,13 @@ function __velarStringIndex(value, text, start = 0) {
   if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start])) throw new __velarTextNativeTypeError("String.index start must be an integer");
   const total = __velarTextCodePointLength(value);
   const first = start < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + start, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [start, total]);
-  let cursor = __velarTextCodeUnitOffset(value, first);
+  let cursor = __velarTextCodeUnitOffset(value, first, total);
   if (text === "") return first;
   while (cursor <= value.length) {
     const found = __velarTextCall(__velarNativeStringIndexOf, value, [text, cursor]);
     if (found < 0) return null;
-    const position = __velarTextCodePointIndex(value, found);
-    if (position !== null && __velarTextCodePointIndex(value, found + text.length) !== null) return position;
+    const position = __velarTextCodePointIndex(value, found, total);
+    if (position !== null && __velarTextCodePointIndex(value, found + text.length, total) !== null) return position;
     cursor = found + 1;
   }
   return null;

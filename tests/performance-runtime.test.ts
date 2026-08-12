@@ -229,8 +229,11 @@ test("emitted equality holds the SameValueZero hot-loop budget", { timeout: 180_
 
 const collectionProgram = `
 import {monotonic} from "velar/time"
+import {range} from "velar/collections"
 
 const size = 100000
+const rangeSize = 2000
+const rangeReads = 200000
 
 def buildList(count: number) -> List<number>:
     const output: List<number> = []
@@ -281,6 +284,14 @@ def readSet(values: Set<number>, reads: number) -> number:
         index += 1
     return total
 
+def readProvided(values: List<number>, reads: number) -> number:
+    let total = 0
+    let index = 0
+    while index < reads:
+        total += values[index % values.size]
+        index += 1
+    return total
+
 let sink = 0
 let appendSamples = ""
 let indexSamples = ""
@@ -291,6 +302,7 @@ let mapInsertSamples = ""
 let mapLookupSamples = ""
 let setInsertSamples = ""
 let setLookupSamples = ""
+let rangeIndexSamples = ""
 
 def warmUp() -> null:
     const values = buildList(size)
@@ -302,6 +314,7 @@ def warmUp() -> null:
     sink += readMap(pairs, size)
     const members = buildSet(size)
     sink += readSet(members, size)
+    sink += readProvided(range(0, rangeSize), rangeReads)
 
 warmUp()
 
@@ -334,6 +347,9 @@ while round < 5:
     start = monotonic()
     sink += readSet(members, size)
     setLookupSamples += f"{str(monotonic() - start)},"
+    start = monotonic()
+    sink += readProvided(range(0, rangeSize), rangeReads)
+    rangeIndexSamples += f"{str(monotonic() - start)},"
     sink += mapped.size + filtered.size + ordered.size + pairs.size + members.size
     round += 1
 
@@ -346,6 +362,7 @@ print(f"mapInsert={mapInsertSamples}")
 print(f"mapLookup={mapLookupSamples}")
 print(f"setInsert={setInsertSamples}")
 print(f"setLookup={setLookupSamples}")
+print(f"rangeIndex={rangeIndexSamples}")
 print(f"sink={str(sink)},")
 `.trimStart();
 
@@ -363,35 +380,53 @@ test("emitted collection operations hold their large-List and Map/Set budgets", 
   const mapLookup = dimension(samples, "mapLookup");
   const setInsert = dimension(samples, "setInsert");
   const setLookup = dimension(samples, "setLookup");
+  const rangeIndex = dimension(samples, "rangeIndex");
   const context = `over ${size.toLocaleString("en-US")} items: append ${append.toFixed(1)}ms, index ${index.toFixed(1)}ms, `
     + `map ${mapped.toFixed(1)}ms, filter ${filtered.toFixed(1)}ms, sorted ${sorted.toFixed(1)}ms, `
-    + `Map.set ${mapInsert.toFixed(1)}ms, Map.get ${mapLookup.toFixed(1)}ms, Set.add ${setInsert.toFixed(1)}ms, Set.has ${setLookup.toFixed(1)}ms`;
+    + `Map.set ${mapInsert.toFixed(1)}ms, Map.get ${mapLookup.toFixed(1)}ms, Set.add ${setInsert.toFixed(1)}ms, Set.has ${setLookup.toFixed(1)}ms, `
+    + `200,000 index reads of a 2,000-item range() ${rangeIndex.toFixed(1)}ms`;
   t.diagnostic(context);
 
   // Baselines 2026-08-12, all over a 100,000-item List built by `append`.
-  // Provenance matters here: a List that has passed through a mutating method
-  // is owned and takes the cheap validation path, while a List that has not
-  // -- a literal, or anything velar/collections returns -- revalidates every
-  // element on every single index read.
+  // Provenance is settled by validation, not by construction site: the first
+  // operation that proves a List dense records its element count, and every
+  // later operation takes the cheap path until a foreign length change breaks
+  // the match. A List the compiler did not build therefore pays full
+  // validation once instead of on every read.
   // append 29.4ms (294ns/item)
   assert.ok(append < 90, `List.append exceeded its budget -- ${context}`);
   // index 22.8ms (228ns/read)
   assert.ok(index < 70, `List index reads exceeded their budget -- ${context}`);
-  // map 16.6ms, filter 15.9ms, sorted 24.0ms
-  assert.ok(mapped < 51, `List.map exceeded its budget -- ${context}`);
-  assert.ok(filtered < 48, `List.filter exceeded its budget -- ${context}`);
-  assert.ok(sorted < 75, `List.sorted exceeded its budget -- ${context}`);
+  // map 9.7ms, filter 8.8ms, sorted 15.9ms, measured 2026-08-12 after every
+  // callback operation's snapshot (__velarCopyList) took the owned fast path.
+  // Before that the snapshot revalidated the whole List and then re-read every
+  // element through a second descriptor, so `map` paid roughly three
+  // allocations per element before the first callback ran: map 16.6ms,
+  // filter 15.9ms, sorted 24.0ms.
+  assert.ok(mapped < 30, `List.map exceeded its budget -- ${context}`);
+  assert.ok(filtered < 27, `List.filter exceeded its budget -- ${context}`);
+  assert.ok(sorted < 48, `List.sorted exceeded its budget -- ${context}`);
   // Map.set 22.0ms (220ns/insert), Map.get 14.2ms (142ns/lookup)
   assert.ok(mapInsert < 70, `Map.set exceeded its budget -- ${context}`);
   assert.ok(mapLookup < 45, `Map.get exceeded its budget -- ${context}`);
   // Set.add 14.2ms (142ns/insert)
   assert.ok(setInsert < 45, `Set.add exceeded its budget -- ${context}`);
-  // Set.has 190.0ms (1.90us/lookup) -- roughly thirteen times Map.get for the
-  // same work. __velarCollectionHas probes __velarIsMap first, and that probe
-  // identifies a non-Map by calling the Map `size` getter and catching the
-  // TypeError it throws, so every Set membership test pays for one thrown and
-  // caught exception. Tighten this budget once the probe stops throwing.
-  assert.ok(setLookup < 575, `Set.has exceeded its budget -- ${context}`);
+  // Set.has 11.3ms (113ns/lookup), measured 2026-08-12 after the Map/Set brand
+  // probe stopped identifying a non-Map by catching the TypeError the Map
+  // `size` getter throws. The probe is still the only unforgeable, cross-realm
+  // test JavaScript offers, but its verdict can never change for a given
+  // object, so it runs once per object and is answered from a WeakMap after
+  // that. Before the fix this dimension measured 190.0ms (1.90us/lookup),
+  // roughly thirteen times Map.get for the same work.
+  assert.ok(setLookup < 34, `Set.has exceeded its budget -- ${context}`);
+  // rangeIndex 42.9ms for 200,000 index reads of the 2,000-item List `range()`
+  // returns (214ns/read), measured 2026-08-12. This case used to be left out
+  // of the gate deliberately: only mutating methods and map/filter/slice/sorted
+  // marked a List owned, so a List that reached VelarScript from the standard
+  // library revalidated all 2,000 elements on every single read and the same
+  // 200,000 reads took 39,796ms (199us/read) -- quadratic document scanning
+  // hiding behind an ordinary index expression.
+  assert.ok(rangeIndex < 130, `index reads of a standard-library List exceeded their budget -- ${context}`);
 
   assert.ok(performance.now() - started < BENCHMARK_WALL_CLOCK_BUDGET_MS,
     `the collection benchmark took ${(performance.now() - started).toFixed(0)}ms end to end`);
@@ -494,15 +529,16 @@ test("emitted string and value methods hold their large-corpus budgets", { timeo
   t.diagnostic(context);
 
   // Baselines 2026-08-12.
-  // slice 153.8ms for 300 slices spread evenly across the corpus (~510us
-  // each). These are compiler-owned checked methods, so the overhead is ours:
-  // String.slice measures the corpus in code points and then walks it one
-  // code point at a time to turn the start position into a code-unit offset,
-  // making a slice cost O(corpus + start offset) even for pure ASCII text.
-  // String.size has a surrogate fast path; the offset walk does not. This is
-  // by far the most expensive value method measured -- tighten this budget
-  // once the offset walk gains the same fast path.
-  assert.ok(slice < 465, `String.slice exceeded its budget -- ${context}`);
+  // slice 0.1ms for 300 slices spread evenly across the corpus (~0.3us each),
+  // measured after the code-point-to-code-unit conversion gained the fast path
+  // String.size already had: a string whose code-point count equals its
+  // code-unit count carries no surrogate pair, so the position is already the
+  // offset. Before that, the conversion walked code points from zero, making
+  // every slice cost O(corpus + start offset) even for pure ASCII -- 153.8ms
+  // for the same 300 slices (~510us each), which made any code that scans a
+  // document by slicing quadratic. The budget stays well above the measured
+  // value because the dimension is now dominated by fixed per-call overhead.
+  assert.ok(slice < 12, `String.slice exceeded its budget -- ${context}`);
   // search 31.6ms for 4,000 String.has calls (~7.9us each, half of them a
   // full scan for an absent needle). Delegates to native indexOf, and is the
   // noisiest dimension in this file (25.9ms to 35.2ms across runs).

@@ -26,7 +26,7 @@ import {
   type ValueType,
 } from "./types.ts";
 
-export { formatDiagnostic, type Diagnostic } from "./diagnostic.ts";
+export { diagnostic, formatDiagnostic, type Diagnostic } from "./diagnostic.ts";
 export { formatSource } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
 export { SourceText, type Span } from "./source.ts";
@@ -610,6 +610,7 @@ function interfaceOf(
   const enums = new Map<string, EnumInfo>();
   const classes = new Map<string, ClassInfo>();
   const exports = new Map<string, ValueType>();
+  const hoistedExports = new Set<string>();
   const mutableExports = new Set<string>();
   const reactiveExports = new Map<string, "state">();
   const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
@@ -769,6 +770,11 @@ function interfaceOf(
       exports.set(statement.name, { kind: "classConstructor", name: statement.name, identity: classIdentities.get(statement.name)! });
     } else if (statement.kind === "FunctionDeclaration") {
       exports.set(statement.name, resolvedAnalyzedBindings.get(`${statement.span.start}:${statement.name}`) ?? functionSignature(statement, resolve));
+      // `def` emits a JavaScript function declaration, which the host
+      // initializes at link time; `class`, `enum`, and `const`/`let` all emit
+      // bindings that stay in their temporal dead zone until the module body
+      // reaches them.
+      hoistedExports.add(statement.name);
     } else if (statement.kind === "VariableDeclaration") {
       exportPattern(
         statement.pattern,
@@ -805,6 +811,7 @@ function interfaceOf(
 
   return {
     exports,
+    hoistedExports,
     mutableExports,
     reactiveExports,
     reExports,

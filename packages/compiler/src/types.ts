@@ -36,7 +36,13 @@ export interface ExtensionValueType {
 
 export type ValueType =
   | { readonly kind: "unknown"; readonly restricted?: boolean }
-  | { readonly kind: "any" }
+  /**
+   * `textConvertible` marks the compiler-owned text-conversion domain (charter
+   * section 14). It is not spellable in source: only the built-in `str`
+   * declares it, so a bare `str` stays a first-class value while assignability
+   * still admits exactly the conversion whitelist at every call site.
+   */
+  | { readonly kind: "any"; readonly textConvertible?: true }
   | { readonly kind: "null" }
   | { readonly kind: "string" }
   | { readonly kind: "number" }
@@ -72,6 +78,8 @@ export type ValueType =
 export const unknownType: ValueType = { kind: "unknown" };
 export const invalidType: ValueType = Object.freeze({ kind: "unknown" });
 export const anyType: ValueType = { kind: "any" };
+/** The declared parameter domain of the built-in `str`; see `isTextConvertibleType`. */
+export const textConvertibleType: ValueType = Object.freeze({ kind: "any", textConvertible: true });
 export const nullType: ValueType = { kind: "null" };
 export const stringType: ValueType = { kind: "string" };
 export const numberType: ValueType = { kind: "number" };
@@ -88,6 +96,35 @@ export interface TypeEnvironment {
     expected: ExtensionValueType,
     assign: (actual: ValueType, expected: ValueType) => boolean,
   ): boolean | undefined;
+  /** Expands declared type aliases; the text-conversion domain checks the expanded shape. */
+  expandTypeAliases?(type: ValueType): ValueType;
+}
+
+/**
+ * The text-conversion whitelist (charter section 14): values whose text form is
+ * total and hook-free. This is the single authority behind both the direct
+ * `str(value)` / f-string check and the assignability of the `textConvertible`
+ * parameter domain, so `str` used as a value cannot admit anything a direct
+ * call rejects.
+ */
+export function isTextConvertibleType(type: ValueType, environment: TypeEnvironment): boolean {
+  const expanded = environment.expandTypeAliases?.(type) ?? type;
+  if (isInvalidType(expanded)) return true;
+  switch (expanded.kind) {
+    case "string":
+    case "number":
+    case "bool":
+    case "null":
+    case "enum":
+    case "enumMember":
+      return true;
+    case "optional":
+      return isTextConvertibleType(expanded.inner, environment);
+    case "union":
+      return expanded.members.every((member) => isTextConvertibleType(member, environment));
+    default:
+      return false;
+  }
 }
 
 export type ExtensionTypeSyntaxResolver = (
@@ -298,6 +335,12 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
   if (isInvalidType(actual) || isInvalidType(expected)) {
     return true;
   }
+  // The text-conversion domain is narrower than `any` and must be decided
+  // before the `any` shortcut, so `str` passed as a value keeps the whitelist
+  // at every indirect call site (`const c = str`, `values.map(str)`).
+  if (expected.kind === "any" && expected.textConvertible) {
+    return isTextConvertibleType(actual, environment);
+  }
   if (actual.kind === "any" || expected.kind === "any") {
     return true;
   }
@@ -466,6 +509,9 @@ function typeIdentity(type: ValueType, includeCallableParameterNames = true): st
     case "unknown":
       return identityNode("unknown", [isInvalidType(type) ? "diagnosed" : type.restricted ? "restricted" : ""]);
     case "any":
+      // The text-conversion domain is a distinct contract from `any`; sharing
+      // an identity would let `sameType` short-circuit the whitelist.
+      return identityNode("any", [type.textConvertible ? "text" : ""]);
     case "null":
     case "string":
     case "number":
@@ -547,8 +593,9 @@ export function isInvalidType(type: ValueType): boolean {
 
 export function describeType(type: ValueType): string {
   switch (type.kind) {
-    case "unknown":
     case "any":
+      return type.textConvertible ? "string | number | bool | enum | null" : "any";
+    case "unknown":
     case "null":
     case "string":
     case "number":

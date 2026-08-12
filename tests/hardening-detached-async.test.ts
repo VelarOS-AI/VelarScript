@@ -85,7 +85,9 @@ async def sequence() -> null:
     async boom()
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.ok(result.code?.includes("__velarDetachedTask(boom())"));
+  // The detached Promise takes the same normalization every other Promise
+  // consumer applies, so a foreign thenable cannot reach Promise.prototype.then.
+  assert.ok(result.code?.includes("__velarDetachedTask(__velarNormalizePromiseValue(boom()))"));
 });
 
 test("a detached task must resolve null: the result would be lost", () => {
@@ -190,7 +192,7 @@ print("web module continues")
 `.trimStart(), { extensions: [velarCompilerExtension] });
   assert.deepEqual(result.diagnostics, []);
   const code = result.code ?? "";
-  assert.ok(code.includes("__velarDetachedTask(boom())"));
+  assert.ok(code.includes("__velarDetachedTask(__velarNormalizePromiseValue(boom()))"));
   assert.ok(code.includes('phase: "detached", detail: "", unhandled: true'));
 
   // Execution-level: the report reaches a registered application runtime and
