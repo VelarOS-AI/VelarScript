@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
@@ -28,6 +28,7 @@ try {
   assert.ok(cli.files.some((file) => file.path === "dist/preview-server.js"));
   assert.ok(cli.files.some((file) => file.path === "dist/deployment-verifier.js"));
   assert.ok(cli.files.some((file) => file.path === "stdlib/text-buffer.vel"));
+  assert.ok(cli.files.some((file) => file.path === "stdlib/javascript.vel"));
   assert.ok(compiler.files.some((file) => file.path === "dist/framework-host.js"));
   assert.ok(compiler.files.some((file) => file.path === "dist/application-package-host.js"));
   assert.ok(node.files.some((file) => file.path === "dist/compiler.js"));
@@ -124,6 +125,7 @@ try {
 import {range, sum} from "velar/collections"
 import {chunks, utf8Size} from "velar/text"
 import {TextBuffer} from "velar/text-buffer"
+import {ScriptDocument, ScriptLanguage} from "velar/javascript"
 
 export const answer = sum(range(0, 7)) * 2
 const buffer = TextBuffer("A😀\\nB")
@@ -132,14 +134,19 @@ print(answer)
 print(utf8Size("A😀游戏"))
 print(chunks("A😀游戏", 2).join("|"))
 print(f"{str(buffer.size)}:{buffer.lineText(1)}")
+const scriptSource = "const answer = 42\\nprint(answer)\\n"
+const script = ScriptDocument(ScriptLanguage.typescript, scriptSource)
+const reference = (scriptSource.index("print(answer)") ?? 0) + "print(".size
+print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(reference).size)}")
 `.trimStart(), "utf8");
   await run(process.execPath, [installedCli, "build", "main.vel", "--out", "main.js"], directory);
   assert.match(await readFile(join(directory, "main.js"), "utf8"), /from "velar\/collections"/u);
   assert.match(await readFile(join(directory, "node_modules", "velar", "collections.js"), "utf8"), /export function range/u);
   assert.match(await readFile(join(directory, "node_modules", "velar", "text.js"), "utf8"), /export function chunks/u);
   assert.match(await readFile(join(directory, "node_modules", "velar", "text-buffer.js"), "utf8"), /class TextBuffer/u);
+  assert.match(await readFile(join(directory, "node_modules", "velar", "javascript.js"), "utf8"), /class ScriptDocument/u);
   const built = await run(process.execPath, [join(directory, "main.js")], directory);
-  assert.equal(built.stdout, "42\n11\nA😀|游戏\n5:B!\n");
+  assert.equal(built.stdout, "42\n11\nA😀|游戏\n5:B!\n0:2\n");
 
   const api = await run(process.execPath, [
     "--input-type=module",
@@ -464,12 +471,37 @@ async function probeLanguageServer(entry: string, cwd: string): Promise<void> {
     }
     throw new Error(`Installed language server did not respond to ${id}: ${stderr}`);
   };
+  const waitForDiagnostics = async (uri: string): Promise<Record<string, unknown>> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const message = messages.find((candidate) => candidate.method === "textDocument/publishDiagnostics"
+        && (candidate.params as { uri?: string } | undefined)?.uri === uri);
+      if (message) return message;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    throw new Error(`Installed language server did not publish script diagnostics: ${stderr}`);
+  };
   try {
     send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
     const initialized = await waitForId(1);
     assert.equal((initialized.result as { serverInfo: { name: string } }).serverInfo.name, "VelarScript Language Server");
-    send({ jsonrpc: "2.0", id: 2, method: "shutdown", params: null });
-    await waitForId(2);
+    assert.equal((initialized.result as { capabilities: { experimental: { velar: { scriptImplementation: string } } } }).capabilities.experimental.velar.scriptImplementation, "velarscript");
+    send({ jsonrpc: "2.0", method: "initialized", params: {} });
+    const uri = pathToFileURL(join(cwd, "packed-probe.ts")).href;
+    const text = "interface User { name: string }\nconst user: User = { name: 'Ada' }\nconst name = user.name\n";
+    send({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "typescript", version: 1, text } } });
+    const diagnostics = await waitForDiagnostics(uri);
+    assert.deepEqual((diagnostics.params as { diagnostics: unknown[] }).diagnostics, []);
+    send({ jsonrpc: "2.0", id: 2, method: "textDocument/definition", params: { textDocument: { uri }, position: { line: 2, character: 14 } } });
+    const definition = await waitForId(2);
+    assert.equal((definition.result as { range: { start: { line: number } } }).range.start.line, 1);
+    send({ jsonrpc: "2.0", id: 3, method: "textDocument/semanticTokens/full", params: { textDocument: { uri } } });
+    const semantic = await waitForId(3);
+    assert.ok((semantic.result as { data: number[] }).data.length > 0);
+    send({ jsonrpc: "2.0", id: 4, method: "textDocument/formatting", params: { textDocument: { uri }, options: { tabSize: 2, insertSpaces: true } } });
+    assert.deepEqual((await waitForId(4)).result, []);
+    send({ jsonrpc: "2.0", id: 5, method: "shutdown", params: null });
+    await waitForId(5);
     send({ jsonrpc: "2.0", method: "exit", params: null });
     child.stdin.end();
     const code = await new Promise<number | null>((resolveExit, rejectExit) => {

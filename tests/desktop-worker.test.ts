@@ -53,9 +53,29 @@ test("Desktop owns one packaged official language-server lifecycle without proce
     assert.equal(diagnostics.method, "textDocument/publishDiagnostics");
     assert.ok(diagnostics.params.diagnostics.length > 0);
 
-    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", id: 2, method: "shutdown", params: null })]);
+    const scriptPath = join(project, "probe.ts");
+    const scriptUri = new URL(`file://${scriptPath}`).href;
+    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: { textDocument: { uri: scriptUri, languageId: "typescript", version: 1, text: "const value = 1\nconst next = value + 1\n" } },
+    })]), null);
+    const scriptDiagnostics = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { diagnostics: unknown[] } };
+    assert.equal(scriptDiagnostics.method, "textDocument/publishDiagnostics");
+    assert.deepEqual(scriptDiagnostics.params.diagnostics, []);
+    await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/definition",
+      params: { textDocument: { uri: scriptUri }, position: { line: 1, character: 13 } },
+    })]);
+    const scriptDefinition = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: { range: { start: { line: number } } } };
+    assert.equal(scriptDefinition.id, 2);
+    assert.equal(scriptDefinition.result.range.start.line, 0);
+
+    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", id: 3, method: "shutdown", params: null })]);
     const shutdown = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number };
-    assert.equal(shutdown.id, 2);
+    assert.equal(shutdown.id, 3);
     await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", method: "exit", params: null })]);
     assert.equal(await client.call("language-server", "close", [handle]), null);
     await assert.rejects(client.call("language-server", "next", [handle]), /unknown or already released/u);

@@ -91,6 +91,31 @@ requests an authoritative refresh after watcher overflow. `$/cancelRequest` is
 handled while framed input is still arriving, so a queued semantic request can
 return LSP cancellation code `-32800` without waiting behind unrelated analysis.
 
+JavaScript and TypeScript documents use a separate protocol-neutral provider
+whose implementation is the pure source-backed `velar/javascript` module.
+The CLI owns extension/language-id routing and LSP coordinate conversion; the
+Standard module owns only tokenization, structural diagnostics, local symbols,
+references, navigation, completion, rename, and semantic-token inputs. The
+provider applies the smallest code-point edit derived from a full-text LSP
+change and keeps one `ScriptDocument` per open document. It advertises this
+bounded local service explicitly and returns no formatter edits, because a full
+TypeScript checker, module resolver, and JavaScript/TypeScript formatter have
+not been published. Desktop packages the same official tool and owns its child
+process lifecycle; editors remain clients and do not embed either protocol
+framing or language semantics.
+
+Script diagnostics and semantic tokens convert their required code-point
+offsets to the negotiated LSP encoding with one monotonic text scan per response.
+They never restart at the beginning for every token; the 10,000-result transport
+ceiling therefore remains linear even for a 1 MiB document.
+
+Source-backed Standard assets compile dependency-first before their public
+interfaces are exposed to another asset. Their static named-import graph must
+be acyclic, and the loader passes the dependency's complete analyzer-derived
+named types, enums, classes, and functions into the consumer compile. This is
+the same checked project/runtime ABI used by application modules, not a shallow
+bootstrap interface or a second source evaluator.
+
 Project modules compile dependency-first. The public interface returned by a
 successful compilation is built from that same analyzer's binding types rather
 than a second expression guesser. Strongly connected module groups run bounded

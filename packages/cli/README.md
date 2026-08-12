@@ -6,6 +6,13 @@ server for VelarScript. The language server and project graph are compiler-owned
 editors, including the injected VelarOS Workbench contribution, consume them as
 independent clients. Requires Node.js 24 or later.
 
+The same server routes JavaScript and TypeScript documents to the official pure
+VelarScript `velar/javascript` service. That service publishes bounded lexical
+and local structural diagnostics, symbols, hover, definition, references,
+rename, completion, and semantic tokens with incremental lexical updates. It is
+not the TypeScript compiler: cross-file/package type checking and JavaScript/
+TypeScript formatting remain unsupported and are never synthesized by the CLI.
+
 Application framework behavior is injected. For each project extension the CLI
 loads its compiler entry and optional host entry, validates the versioned host
 protocol, then supplies generic filesystem, bundling, development transport,
@@ -79,3 +86,9 @@ Use `velar help <command>` or `velar <command> --help` for command-specific
 usage and defaults. Project creation is transactional, manifests reject unknown
 fields, and production/release verification fails closed rather than serving or
 accepting undeclared output.
+
+`velar format path/to/file.vel` resolves the file's nearest project before
+formatting and uses that project's official compiler extensions. A Web or
+Desktop file therefore keeps its extension-owned angle syntax even when the
+caller names one file instead of the project root; a malformed project is not
+silently retried as standalone Core source.

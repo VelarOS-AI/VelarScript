@@ -5,6 +5,15 @@ import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import {
+  createScriptLanguageDocument,
+  scriptLanguageFor,
+  type ScriptAnalysis,
+  type ScriptDocumentOwner,
+  type ScriptEdit,
+  type ScriptSpan,
+  type ScriptSymbolKind,
+} from "./script-language-service.ts";
+import {
   type ProjectSemanticToken,
   projectDefinitionAt,
   projectCompletionsAt,
@@ -49,13 +58,16 @@ interface ContentChange {
   readonly text: string;
 }
 
-export const VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION = 1;
+export const VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION = 2;
 type PositionEncoding = "utf-16" | "utf-32";
 let activePositionEncoding: PositionEncoding = "utf-16";
 const MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_LSP_RESULT_ITEMS = 10_000;
 const MAX_LSP_TEXT_CHARS = 64 * 1024;
-const semanticTokenTypes = ["type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter"] as const;
+const semanticTokenTypes = [
+  "type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter",
+  "interface", "comment", "string", "keyword", "number", "regexp", "operator",
+] as const;
 const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
 
 const keywordDocumentation = new Map<string, string>([
@@ -135,6 +147,7 @@ function extensionDocumentation(
 export async function runLanguageServer(): Promise<void> {
   activePositionEncoding = "utf-16";
   const documents = new Map<string, TextDocument>();
+  const scriptDocuments = new Map<string, ScriptDocumentOwner>();
   const sessions = new VelarProjectSessions();
   const pendingRequests = new Set<string>();
   const cancelledRequests = new Set<string>();
@@ -164,10 +177,12 @@ export async function runLanguageServer(): Promise<void> {
   };
 
   const overrides = (): Map<string, string> => new Map([...documents.values()].flatMap((item) => {
+    if (scriptDocuments.has(item.uri)) return [];
     const itemPath = pathOf(item.uri);
     return itemPath ? [[itemPath, item.text] as const] : [];
   }));
   const projectFor = async (document: TextDocument): Promise<ProjectResult | null> => {
+    if (scriptDocuments.has(document.uri)) return null;
     const path = pathOf(document.uri);
     if (!path) return null;
     return (await sessions.update(path, new Set(), overrides())).project;
@@ -176,6 +191,19 @@ export async function runLanguageServer(): Promise<void> {
   const publish = async (document: TextDocument): Promise<void> => {
     const current = documents.get(document.uri);
     if (!current || current.version !== document.version) return;
+    const script = scriptDocuments.get(document.uri);
+    if (script) {
+      send({
+        jsonrpc: "2.0",
+        method: "textDocument/publishDiagnostics",
+        params: {
+          uri: document.uri,
+          version: document.version,
+          diagnostics: boundedScriptDiagnostics(document.text, script.analysis()),
+        },
+      });
+      return;
+    }
     let diagnostics: readonly Diagnostic[] = [];
     let notices: readonly string[] = [];
     let source: SourceText;
@@ -299,6 +327,9 @@ export async function runLanguageServer(): Promise<void> {
                 watchedFiles: true,
                 workspaceRescan: true,
                 cancellation: true,
+                scriptLanguages: ["javascript", "typescript"],
+                scriptImplementation: "velarscript",
+                incrementalScriptLexing: true,
               },
             },
           },
@@ -320,7 +351,10 @@ export async function runLanguageServer(): Promise<void> {
         const value = params?.textDocument as TextDocument;
         documents.set(value.uri, value);
         const path = pathOf(value.uri);
-        if (path) {
+        const scriptLanguage = scriptLanguageFor(path ?? value.uri, value.languageId);
+        const script = scriptLanguage ? createScriptLanguageDocument(scriptLanguage, value.text) : null;
+        if (script) scriptDocuments.set(value.uri, script);
+        if (path && !script) {
           try { await sessions.snapshot(path, overrides()); }
           catch { /* publish converts project/config failures into document diagnostics. */ }
         }
@@ -335,6 +369,9 @@ export async function runLanguageServer(): Promise<void> {
         if (!Array.isArray(changes)) break;
         const next = { ...current, version: descriptor.version, text: applyContentChanges(current.text, changes) };
         documents.set(next.uri, next);
+        const script = scriptDocuments.get(next.uri);
+        const edit = script ? scriptTextEdit(current.text, next.text) : null;
+        if (script && edit) script.apply([edit]);
         schedulePublish(next.uri);
         break;
       }
@@ -347,9 +384,11 @@ export async function runLanguageServer(): Promise<void> {
       case "textDocument/didClose": {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         documents.delete(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        scriptDocuments.delete(descriptor.uri);
         diagnosticUris.delete(descriptor.uri);
         const path = pathOf(descriptor.uri);
-        if (path) await sessions.update(path, new Set([path]), overrides());
+        if (path && !script) await sessions.update(path, new Set([path]), overrides());
         send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri: descriptor.uri, diagnostics: [] } });
         break;
       }
@@ -364,6 +403,7 @@ export async function runLanguageServer(): Promise<void> {
         const currentOverrides = overrides();
         const roots = new Map<string, string>();
         for (const document of documents.values()) {
+          if (scriptDocuments.has(document.uri)) continue;
           const documentPath = pathOf(document.uri);
           if (!documentPath) continue;
           roots.set(sessions.rootFor(documentPath) ?? documentPath, documentPath);
@@ -376,6 +416,7 @@ export async function runLanguageServer(): Promise<void> {
         const currentOverrides = overrides();
         const roots = new Map<string, string>();
         for (const document of documents.values()) {
+          if (scriptDocuments.has(document.uri)) continue;
           const documentPath = pathOf(document.uri);
           if (!documentPath) continue;
           roots.set(sessions.rootFor(documentPath) ?? documentPath, documentPath);
@@ -388,6 +429,16 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const position = params?.position as Position;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          const items = script.completionsAt(scriptOffsetAt(document.text, position)).slice(0, MAX_LSP_RESULT_ITEMS).map((item) => ({
+            label: clipLspText(item.label),
+            kind: lspCompletionKind(item.kind),
+            detail: clipLspText(item.detail),
+          }));
+          respond(message.id, { isIncomplete: false, items });
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const offset = document ? offsetAt(document.text, position) : 0;
@@ -410,6 +461,15 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const position = params?.position as Position;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          const result = script.hoverAt(scriptOffsetAt(document.text, position));
+          respond(message.id, result ? {
+            contents: { kind: "markdown", value: `\`\`${clipLspText(result.contents)}\`\`` },
+            range: scriptRange(document.text, result),
+          } : null);
+          break;
+        }
         respond(message.id, document ? await hover(document, position, await projectFor(document)) : null);
         break;
       }
@@ -417,6 +477,12 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const position = params?.position as Position;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          const location = script.definitionAt(scriptOffsetAt(document.text, position));
+          respond(message.id, location ? { uri: descriptor.uri, range: scriptRange(document.text, location) } : null);
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const location = document && path && project ? projectDefinitionAt(project, path, offsetAt(document.text, position)) : null;
@@ -428,6 +494,14 @@ export async function runLanguageServer(): Promise<void> {
         const position = params?.position as Position;
         const context = params?.context as { readonly includeDeclaration?: boolean } | undefined;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          const locations = script.referencesAt(scriptOffsetAt(document.text, position), context?.includeDeclaration ?? false)
+            .slice(0, MAX_LSP_RESULT_ITEMS)
+            .map((span) => ({ uri: descriptor.uri, range: scriptRange(document.text, span) }));
+          respond(message.id, locations);
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const locations = document && path && project
@@ -441,6 +515,14 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const position = params?.position as Position;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          const locations = script.referencesAt(scriptOffsetAt(document.text, position), true)
+            .slice(0, MAX_LSP_RESULT_ITEMS)
+            .map((span) => ({ range: scriptRange(document.text, span), kind: 1 }));
+          respond(message.id, locations);
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const locations = document && path && project
@@ -458,6 +540,12 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const position = params?.position as Position;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          const symbol = script.symbolAt(scriptOffsetAt(document.text, position));
+          respond(message.id, symbol ? { range: scriptRange(document.text, symbol), placeholder: symbol.name } : null);
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const prepared = document && path && project ? projectPrepareRenameAt(project, path, offsetAt(document.text, position)) : null;
@@ -470,6 +558,16 @@ export async function runLanguageServer(): Promise<void> {
         const position = params?.position as Position;
         const newName = params?.newName as string;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          const renamed = script.renameAt(scriptOffsetAt(document.text, position), newName);
+          if (renamed.error) respondError(message.id, renamed.error);
+          else if (renamed.edits.length > MAX_LSP_RESULT_ITEMS) respondError(message.id, `Rename affects more than ${MAX_LSP_RESULT_ITEMS} locations`);
+          else respond(message.id, {
+            changes: { [descriptor.uri]: renamed.edits.map((edit) => ({ range: scriptRange(document.text, edit), newText: edit.replacement })) },
+          });
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const renamed = document && path && project ? projectRenameAt(project, path, offsetAt(document.text, position), newName) : "No renameable VelarScript symbol at this position";
@@ -481,6 +579,17 @@ export async function runLanguageServer(): Promise<void> {
       case "textDocument/documentSymbol": {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          respond(message.id, script.analysis().symbols.slice(0, MAX_LSP_RESULT_ITEMS).map((symbol) => ({
+            name: clipLspText(symbol.name),
+            detail: clipLspText(symbol.type),
+            kind: lspSymbolKind(symbol.kind),
+            range: scriptRange(document.text, symbol),
+            selectionRange: scriptRange(document.text, symbol),
+          })));
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         respond(message.id, path && project ? projectDocumentSymbols(project, path).slice(0, MAX_LSP_RESULT_ITEMS).map((symbol) => ({
@@ -496,6 +605,10 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const position = params?.position as Position;
         const document = documents.get(descriptor.uri);
+        if (scriptDocuments.has(descriptor.uri)) {
+          respond(message.id, null);
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const signature = document && path && project ? projectSignatureAt(project, path, offsetAt(document.text, position)) : null;
@@ -510,6 +623,10 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const range = params?.range as Range | undefined;
         const document = documents.get(descriptor.uri);
+        if (scriptDocuments.has(descriptor.uri)) {
+          respond(message.id, []);
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         respond(message.id, document && path && project ? projectInlayHints(project, path, document.text, range) : []);
@@ -518,6 +635,11 @@ export async function runLanguageServer(): Promise<void> {
       case "textDocument/semanticTokens/full": {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const document = documents.get(descriptor.uri);
+        const script = scriptDocuments.get(descriptor.uri);
+        if (document && script) {
+          respond(message.id, { data: scriptSemanticTokenData(document.text, script.analysis()) });
+          break;
+        }
         const path = pathOf(descriptor.uri);
         const project = document ? await projectFor(document) : null;
         const tokens = path && project ? projectSemanticTokens(project, path).slice(0, MAX_LSP_RESULT_ITEMS) : [];
@@ -528,6 +650,10 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const context = params?.context as { readonly diagnostics?: readonly unknown[]; readonly only?: readonly string[] } | undefined;
         const document = documents.get(descriptor.uri);
+        if (scriptDocuments.has(descriptor.uri)) {
+          respond(message.id, []);
+          break;
+        }
         const acceptsQuickFix = !context?.only || context.only.some((kind) => kind === "quickfix" || kind.startsWith("quickfix."));
         respond(message.id, document && acceptsQuickFix ? quickFixes(document, context?.diagnostics ?? []) : []);
         break;
@@ -536,6 +662,10 @@ export async function runLanguageServer(): Promise<void> {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const document = documents.get(descriptor.uri);
         if (!document) {
+          respond(message.id, []);
+          break;
+        }
+        if (scriptDocuments.has(descriptor.uri)) {
           respond(message.id, []);
           break;
         }
@@ -638,6 +768,30 @@ function boundedDiagnostics(
   if (diagnostics.length + notices.length > MAX_LSP_RESULT_ITEMS) {
     if (output.length >= MAX_LSP_RESULT_ITEMS) output.pop();
     output.push(lspNotice(source, `Diagnostics were truncated to ${MAX_LSP_RESULT_ITEMS} items`));
+  }
+  return output;
+}
+
+function boundedScriptDiagnostics(text: string, analysis: ScriptAnalysis): unknown[] {
+  const diagnostics = analysis.diagnostics.slice(0, MAX_LSP_RESULT_ITEMS);
+  const ends = diagnostics.map((diagnostic) => Math.max(diagnostic.start + 1, diagnostic.end));
+  const positions = scriptPositionsAt(text, diagnostics.flatMap((diagnostic, index) => [diagnostic.start, ends[index]!]));
+  const output = diagnostics.map((diagnostic, index) => ({
+    range: scriptRangeFromPositions(positions, diagnostic.start, ends[index]!),
+    severity: diagnostic.severity === "error" ? 1 : 2,
+    code: diagnostic.code,
+    source: "velar-script",
+    message: clipLspText(diagnostic.message),
+  }));
+  if (analysis.diagnostics.length > MAX_LSP_RESULT_ITEMS) {
+    if (output.length >= MAX_LSP_RESULT_ITEMS) output.pop();
+    output.push({
+      range: scriptRange(text, { start: 0, end: Math.min(1, codePointCount(text, 0, text.length)) }),
+      severity: 2,
+      code: "SCRIPT9001",
+      source: "velar-script",
+      message: `Script diagnostics were truncated to ${MAX_LSP_RESULT_ITEMS} items`,
+    });
   }
   return output;
 }
@@ -773,6 +927,63 @@ function semanticTokenData(source: SourceText, tokens: readonly ProjectSemanticT
   return data;
 }
 
+function scriptSemanticTokenData(text: string, analysis: ScriptAnalysis): number[] {
+  const tokens = analysis.tokens.slice(0, MAX_LSP_RESULT_ITEMS);
+  const positions = scriptPositionsAt(text, tokens.flatMap((token) => [token.start, token.end]));
+  const declarations = new Map<string, ScriptAnalysis["symbols"][number]>(analysis.symbols.map((symbol) => [`${symbol.start}:${symbol.end}`, symbol]));
+  const references = new Map<string, ScriptAnalysis["references"][number]>(analysis.references.map((reference) => [`${reference.start}:${reference.end}`, reference]));
+  const symbols = new Map(analysis.symbols.map((symbol) => [symbol.id, symbol] as const));
+  const data: number[] = [];
+  let previousLine = 0;
+  let previousCharacter = 0;
+  for (const token of tokens) {
+    const key = `${token.start}:${token.end}`;
+    const declaration = declarations.get(key);
+    const reference = references.get(key);
+    const symbol = declaration ?? (reference ? symbols.get(reference.symbolId) : undefined);
+    const type = symbol ? scriptSemanticSymbolType(symbol.kind) : scriptLexicalTokenType(token.kind);
+    if (!type) continue;
+    const range = scriptRangeFromPositions(positions, token.start, token.end);
+    if (range.start.line !== range.end.line || range.end.character <= range.start.character) continue;
+    const deltaLine = range.start.line - previousLine;
+    const deltaCharacter = deltaLine === 0 ? range.start.character - previousCharacter : range.start.character;
+    const tokenType = semanticTokenTypes.indexOf(type);
+    if (tokenType < 0 || deltaLine < 0 || deltaCharacter < 0) continue;
+    const modifiers = (declaration ? 1 << semanticTokenModifiers.indexOf("declaration") : 0)
+      | (symbol && (symbol.kind === "constant" || symbol.kind === "import") ? 1 << semanticTokenModifiers.indexOf("readonly") : 0);
+    data.push(deltaLine, deltaCharacter, range.end.character - range.start.character, tokenType, modifiers);
+    previousLine = range.start.line;
+    previousCharacter = range.start.character;
+  }
+  return data;
+}
+
+function scriptSemanticSymbolType(kind: ScriptSymbolKind): typeof semanticTokenTypes[number] {
+  switch (kind) {
+    case "class": return "class";
+    case "interface": return "interface";
+    case "type": return "type";
+    case "enum": return "enum";
+    case "function": return "function";
+    case "parameter": return "parameter";
+    default: return "variable";
+  }
+}
+
+function scriptLexicalTokenType(kind: ScriptAnalysis["tokens"][number]["kind"]): typeof semanticTokenTypes[number] | null {
+  switch (kind) {
+    case "comment": return "comment";
+    case "string":
+    case "template": return "string";
+    case "keyword": return "keyword";
+    case "number": return "number";
+    case "regexp": return "regexp";
+    case "operator": return "operator";
+    case "identifier": return "variable";
+    default: return null;
+  }
+}
+
 function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): unknown[] {
   const actions: unknown[] = [];
   for (const value of diagnostics.slice(0, MAX_LSP_RESULT_ITEMS)) {
@@ -889,6 +1100,7 @@ function lspSymbolKind(kind: string): number {
   if (kind.startsWith("extension:variable:") || kind.startsWith("extension:parameter:")) return 13;
   switch (kind) {
     case "class": return 5;
+    case "interface": return 11;
     case "method": return 6;
     case "field": return 8;
     case "enum": return 10;
@@ -917,6 +1129,8 @@ function lspCompletionKind(kind: string): number {
     case "catch":
     case "import": return 6;
     case "class": return 7;
+    case "interface": return 8;
+    case "constant": return 6;
     case "type": return 8;
     case "enum": return 13;
     case "enum-member": return 20;
@@ -941,6 +1155,22 @@ function applyContentChanges(text: string, changes: readonly ContentChange[]): s
   return result;
 }
 
+function scriptTextEdit(previous: string, next: string): ScriptEdit | null {
+  if (previous === next) return null;
+  const before = Array.from(previous);
+  const after = Array.from(next);
+  const limit = Math.min(before.length, after.length);
+  let prefix = 0;
+  while (prefix < limit && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  while (suffix < limit - prefix && before[before.length - suffix - 1] === after[after.length - suffix - 1]) suffix += 1;
+  return {
+    start: prefix,
+    end: before.length - suffix,
+    replacement: after.slice(prefix, after.length - suffix).join(""),
+  };
+}
+
 function offsetAt(text: string, position: Position): number {
   const requestedLine = Number.isSafeInteger(position?.line) && position.line >= 0
     ? position.line
@@ -957,6 +1187,69 @@ function offsetAt(text: string, position: Position): number {
   return activePositionEncoding === "utf-16"
     ? Math.min(end, offset + requestedCharacter)
     : codeUnitOffsetAt(text, offset, end, requestedCharacter);
+}
+
+function scriptOffsetAt(text: string, position: Position): number {
+  return codePointCount(text, 0, offsetAt(text, position));
+}
+
+function scriptRange(text: string, span: ScriptSpan): Range {
+  const positions = scriptPositionsAt(text, [span.start, span.end]);
+  return scriptRangeFromPositions(positions, span.start, span.end);
+}
+
+function scriptRangeFromPositions(positions: ReadonlyMap<number, Position>, start: number, end: number): Range {
+  const startPosition = positions.get(start);
+  const endPosition = positions.get(end);
+  if (!startPosition || !endPosition) throw new Error("Script coordinate map is incomplete");
+  return { start: startPosition, end: endPosition };
+}
+
+function scriptPositionsAt(text: string, offsets: readonly number[]): ReadonlyMap<number, Position> {
+  const requested = [...new Set(offsets.map((offset) => Math.max(0, offset)))].sort((left, right) => left - right);
+  const output = new Map<number, Position>();
+  let codeUnit = 0;
+  let codePoint = 0;
+  let line = 0;
+  let lineCodeUnit = 0;
+  let lineCodePoint = 0;
+  let pendingCarriageReturn = false;
+  for (const requestedOffset of requested) {
+    while (codePoint < requestedOffset && codeUnit < text.length) {
+      const value = text.codePointAt(codeUnit)!;
+      const width = value > 0xffff ? 2 : 1;
+      const character = text[codeUnit]!;
+      codeUnit += width;
+      codePoint += 1;
+      if (pendingCarriageReturn) {
+        pendingCarriageReturn = false;
+        if (character === "\n") {
+          line += 1;
+          lineCodeUnit = codeUnit;
+          lineCodePoint = codePoint;
+          continue;
+        }
+      }
+      if (character === "\r") {
+        if (text[codeUnit] === "\n") pendingCarriageReturn = true;
+        else {
+          line += 1;
+          lineCodeUnit = codeUnit;
+          lineCodePoint = codePoint;
+        }
+      } else if (character === "\n") {
+        line += 1;
+        lineCodeUnit = codeUnit;
+        lineCodePoint = codePoint;
+      }
+    }
+    const boundedOffset = Math.min(requestedOffset, codePoint);
+    output.set(requestedOffset, {
+      line,
+      character: activePositionEncoding === "utf-16" ? codeUnit - lineCodeUnit : boundedOffset - lineCodePoint,
+    });
+  }
+  return output;
 }
 
 function positionAt(text: string, requestedOffset: number): Position {

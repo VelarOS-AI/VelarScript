@@ -2,13 +2,14 @@
 
 import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { formatDiagnostic, formatSource } from "@velarscript/compiler";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
 import { compileProject, projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { runDevServer } from "./dev-server.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
-import { runLanguageServer } from "./language-server.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
 import { standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
@@ -108,7 +109,14 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stderr.write("velar lsp: this command does not accept arguments\n");
       return 2;
     }
-    await runLanguageServer();
+    const temporary = await mkdtemp(join(tmpdir(), "velar-language-server-"));
+    const tool = join(temporary, "language-server.mjs");
+    try {
+      await buildLanguageServerTool(tool);
+      await import(pathToFileURL(tool).href);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
     return 0;
   }
 
@@ -248,6 +256,8 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       if (singleFile) {
         inputs = [resolve(parsed.input!)];
+        const config = await resolveVelarProject(parsed.input);
+        formattingExtensions = config.compilerExtensions;
       } else {
         const config = await resolveVelarProject(parsed.input);
         inputs = await discoverVelarSources(config);

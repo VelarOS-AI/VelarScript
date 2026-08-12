@@ -305,6 +305,52 @@ print(text.lineText(1))
 print(f"{str(change.beforeRevision)}:{str(change.afterRevision)}")
 ```
 
+## `velar/javascript`
+
+`ScriptDocument(language, text="")` is the Standard owner for JavaScript and
+TypeScript lexical and local structural semantics. It is implemented in pure
+VelarScript on top of `velar/text-buffer`; it does not embed the TypeScript
+compiler, `tsserver`, an npm dependency, or a host-language parser. All spans
+and edits are half-open Unicode code-point ranges.
+
+The exported vocabulary is `ScriptLanguage`, `ScriptTokenKind`,
+`ScriptDiagnosticSeverity`, `ScriptSymbolKind`, `ScriptSpan`, `ScriptToken`,
+`ScriptDiagnostic`, `ScriptSymbol`, `ScriptReference`, `ScriptCompletion`,
+`ScriptHover`, `ScriptEdit`, `ScriptRename`, `ScriptAnalysis`,
+`ScriptActivity`, and `ScriptDocument`. A document publishes bounded tokens,
+delimiter and language-mode diagnostics, lexical scopes and declarations,
+local references, hover, definition, completion, rename, and semantic-token
+inputs. JavaScript files reject TypeScript-only declaration forms with
+`SCRIPT1201` rather than silently accepting the wrong language mode.
+Analysis, activity, token, symbol, navigation, completion, and rename results
+cross the public API as transitive `readonly` data views; callers cannot mutate
+the document's cached semantic state, and the runtime does not copy hundreds of
+thousands of tokens merely to enforce ownership.
+
+`update(text)` derives one bounded replacement from the previous revision.
+`apply(edits)` accepts ordered, non-overlapping pre-revision edits atomically.
+Both restart lexical work at a safe token boundary and report observable work
+through `ScriptActivity`: revision, whether the update was incremental, restart
+offset, code points read, tokens reused, and total tokens. Source characters
+are stored in bounded 4,096-code-point Lists so a document may use the full
+16 MiB `TextBuffer` budget without violating the one-million-item List ceiling.
+
+This service deliberately does not claim full JavaScript or TypeScript program
+semantics. It does not resolve packages, construct a cross-file module graph,
+perform TypeScript type checking, infer imported declarations, execute code,
+or format JavaScript/TypeScript. Consumers must keep those capabilities visibly
+unsupported until an official owner publishes them; local lexical information
+must not be presented as TypeScript compiler proof.
+
+```velar
+import {ScriptDocument, ScriptLanguage} from "velar/javascript"
+
+const script = ScriptDocument(ScriptLanguage.typescript, "const answer = 42\nprint(answer)")
+const references = script.referencesAt(26)
+const activity = script.apply([{start: 15, end: 17, replacement: "43"}])
+print(f"{str(script.analysis().diagnostics.size)}:{str(references.size)}:{str(activity.codePointsRead)}")
+```
+
 ## `velar/math`
 
 The module exposes JavaScript Number mathematics without claiming Python

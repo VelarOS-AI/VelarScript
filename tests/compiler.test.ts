@@ -10365,9 +10365,9 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
-    "velar/test", "velar/text-buffer", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
+    "velar/test", "velar/text-buffer", "velar/javascript", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 288);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 304);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 20);
@@ -10378,6 +10378,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
+  assert.deepEqual(api.modules["velar/javascript"], ["ScriptActivity", "ScriptAnalysis", "ScriptCompletion", "ScriptDiagnostic", "ScriptDiagnosticSeverity", "ScriptDocument", "ScriptEdit", "ScriptHover", "ScriptLanguage", "ScriptReference", "ScriptRename", "ScriptSpan", "ScriptSymbol", "ScriptSymbolKind", "ScriptToken", "ScriptTokenKind"]);
   assert.deepEqual(api.modules["velar/text-buffer"], ["TextBuffer", "TextChange", "TextEdit", "TextHistory", "TextLineSlice", "TextPosition", "TextSelection", "TextTransaction"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
   assert.deepEqual(api.modules["velar/fs"], ["Blob", "FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readBlob", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeText"]);
@@ -10709,6 +10710,95 @@ print(buffer.pieces)
   assert.match(diagnostics, /Cannot assign number to string/u);
   assert.match(diagnostics, /Class 'TextBuffer' has no member 'compact'/u);
   assert.match(diagnostics, /Class 'TextBuffer' has no member 'pieces'/u);
+});
+
+test("pure VelarScript JavaScript service owns incremental lexing and local semantics", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-javascript-service-"));
+  const entry = join(directory, "main.vel");
+  const output = join(directory, "dist");
+  await writeFile(entry, `
+import {ScriptDocument, ScriptLanguage} from "velar/javascript"
+
+const source = "interface User { name: string }\\nconst count: number = 1\\nfunction greet(name: string): string {\\n    const message = ` + "`" + `Hello \${name}` + "`" + `\\n    return message\\n}\\nconst result = greet(\\\"Velar\\\")\\n"
+const service = ScriptDocument(ScriptLanguage.typescript, source)
+const first = service.analysis()
+print(first.diagnostics.size)
+print(first.symbols.map(symbol => symbol.name).join(","))
+const referenceOffset = (source.index("return message") ?? 0) + "return ".size
+const definition = service.definitionAt(referenceOffset)
+print(definition == null ? "missing" : source.slice(definition.start, definition.end))
+print(service.referencesAt(referenceOffset).size)
+print(service.hoverAt(referenceOffset)?.contents ?? "missing")
+print(service.completionsAt(referenceOffset).map(item => item.label).join(","))
+print(str(service.symbolAt(referenceOffset + "message".size) == null))
+const renamed = service.renameAt(referenceOffset, "label")
+print(f"{renamed.placeholder}|{str(renamed.edits.size)}|{renamed.error ?? \"ok\"}")
+
+const next = source.replace("return message", "return message + name")
+const activity = service.update(next)
+print(f"{activity.incremental}|{str(activity.restartOffset)}|{str(activity.tokensReused)}|{str(activity.codePointsRead < next.size)}")
+print(service.analysis().diagnostics.size)
+const tail = service.apply([{start: next.size, end: next.size, replacement: "// tail\\n"}])
+print(f"{tail.incremental}|{str(tail.restartOffset)}|{str(tail.codePointsRead)}")
+
+const javascript = ScriptDocument(ScriptLanguage.javascript, "interface User {}")
+print(javascript.analysis().diagnostics[0].code)
+const broken = ScriptDocument(ScriptLanguage.typescript, "const value = \\"missing")
+print(broken.analysis().diagnostics[0].code)
+`.trimStart(), "utf8");
+
+  const project = await compileProjectCore(entry);
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const build = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "build", entry, "--out-dir", output], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(build.status, 0, String(build.stderr));
+  const generated = await readFile(join(output, "node_modules", "velar", "javascript.js"), "utf8");
+  assert.match(generated, /class ScriptDocument/u);
+  assert.match(generated, /function lexScript/u);
+  assert.doesNotMatch(generated, /from ["']typescript|tsserver|node_modules\/typescript/u);
+  const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8" });
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, [
+    "0",
+    "User,count,greet,name,message,result",
+    "message",
+    "2",
+    "constant message: string",
+    "User,count,greet,message,name,result",
+    "true",
+    "message|2|ok",
+    "true|142|28|true",
+    "0",
+    "true|189|8",
+    "SCRIPT1201",
+    "SCRIPT1002",
+    "",
+  ].join("\n"));
+
+  const invalidEntry = join(directory, "invalid.vel");
+  await writeFile(invalidEntry, `
+import {ScriptDocument, ScriptLanguage} from "velar/javascript"
+
+const service = ScriptDocument("typescript", "const value = 1")
+service.update(1)
+service.apply([{start: 0, end: 0, replacement: 1}])
+service.renameAt("0", "value")
+const analysis = service.analysis()
+analysis.tokens.clear()
+analysis.symbols[0].name = "changed"
+service.activity().revision = 2
+`.trimStart(), "utf8");
+  const invalid = await compileProjectCore(invalidEntry);
+  const diagnostics = invalid.modules.flatMap((module) => module.result.diagnostics).map((diagnostic) => diagnostic.message).join("\n");
+  assert.match(diagnostics, /Cannot assign string to ScriptLanguage/u);
+  assert.match(diagnostics, /Cannot assign number to string/u);
+  assert.match(diagnostics, /Cannot assign string to number/u);
+  assert.match(diagnostics, /Cannot call mutating method 'clear' through readonly List<ScriptToken>/u);
+  assert.match(diagnostics, /Cannot assign through readonly ScriptSymbol/u);
+  assert.match(diagnostics, /Cannot assign through readonly ScriptActivity/u);
 });
 
 test("TextBuffer keeps repeated 1 MiB middle edits below the piece-table regression budget", async () => {
@@ -15411,6 +15501,10 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.match(unformatted.stderr, /src[/\\]app\.vel is not formatted/u);
   const formatted = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "format", projectRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(formatted.status, 0, formatted.stderr);
+  assert.equal(await readFile(join(projectRoot, "src", "app.vel"), "utf8"), generatedApp);
+  await writeFile(join(projectRoot, "src", "app.vel"), generatedApp.replace("\n", "  \n"), "utf8");
+  const singleFileFormatted = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "format", join(projectRoot, "src", "app.vel")], { cwd: directory, encoding: "utf8" });
+  assert.equal(singleFileFormatted.status, 0, singleFileFormatted.stderr);
   assert.equal(await readFile(join(projectRoot, "src", "app.vel"), "utf8"), generatedApp);
 
   await mkdir(join(projectRoot, "public"), { recursive: true });
@@ -26930,24 +27024,27 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       renameProvider: { prepareProvider: boolean };
       semanticTokensProvider: { legend: { tokenTypes: string[]; tokenModifiers: string[] }; full: boolean };
       codeActionProvider: { codeActionKinds: string[] };
-      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean } };
+      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean } };
     };
     serverInfo: { name: string };
   };
   assert.equal(initializeResult.serverInfo.name, "VelarScript Language Server");
   assert.equal(initializeResult.capabilities.positionEncoding, "utf-32");
-  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 1);
+  assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 2);
   assert.equal(initializeResult.capabilities.experimental.velar.incrementalSessions, true);
   assert.equal(initializeResult.capabilities.experimental.velar.watchedFiles, true);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceRescan, true);
   assert.equal(initializeResult.capabilities.experimental.velar.cancellation, true);
+  assert.deepEqual(initializeResult.capabilities.experimental.velar.scriptLanguages, ["javascript", "typescript"]);
+  assert.equal(initializeResult.capabilities.experimental.velar.scriptImplementation, "velarscript");
+  assert.equal(initializeResult.capabilities.experimental.velar.incrementalScriptLexing, true);
   assert.equal(initializeResult.capabilities.definitionProvider, true);
   assert.deepEqual(initializeResult.capabilities.completionProvider.triggerCharacters, [".", "<", " ", "{", ",", ":"]);
   assert.equal(initializeResult.capabilities.documentHighlightProvider, true);
   assert.equal(initializeResult.capabilities.inlayHintProvider, true);
   assert.equal(initializeResult.capabilities.renameProvider.prepareProvider, true);
   assert.deepEqual(initializeResult.capabilities.semanticTokensProvider.legend.tokenTypes,
-    ["type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter"]);
+    ["type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter", "interface", "comment", "string", "keyword", "number", "regexp", "operator"]);
   assert.deepEqual(initializeResult.capabilities.semanticTokensProvider.legend.tokenModifiers,
     ["declaration", "readonly", "static"]);
   assert.equal(initializeResult.capabilities.semanticTokensProvider.full, true);
@@ -27392,6 +27489,83 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   send({ jsonrpc: "2.0", id: 24, method: "textDocument/rename", params: { textDocument: { uri: mainUri }, position: { line: 0, character: 7 }, newName: "nextValue" } });
   const boundedRename = await waitFor((message) => message.id === 24);
   assert.match(String((boundedRename.error as { message?: string }).message), /more than 10000 locations/u);
+
+  const scriptPath = join(directory, "feature.ts");
+  const scriptUri = pathToFileURL(scriptPath).href;
+  const scriptText = [
+    "interface User { name: string }",
+    "const count: number = 1",
+    "function greet(name: string): string {",
+    "    const message = `Hello ${name}`",
+    "    return message",
+    "}",
+    "const result = greet(\"Velar\")",
+    "",
+  ].join("\n");
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: scriptUri, languageId: "typescript", version: 1, text: scriptText } },
+  });
+  const scriptPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string; version?: number }).uri === scriptUri
+    && (message.params as { version?: number }).version === 1);
+  assert.deepEqual((scriptPublished.params as { diagnostics: unknown[] }).diagnostics, []);
+  const messagePosition = { line: 4, character: "    return ".length + 1 };
+  send({ jsonrpc: "2.0", id: 200, method: "textDocument/definition", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
+  const scriptDefinition = await waitFor((message) => message.id === 200);
+  assert.deepEqual((scriptDefinition.result as { range: { start: { line: number; character: number } } }).range.start, { line: 3, character: 10 });
+  send({ jsonrpc: "2.0", id: 201, method: "textDocument/hover", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
+  const scriptHover = await waitFor((message) => message.id === 201);
+  assert.match(JSON.stringify(scriptHover.result), /constant message: string/u);
+  send({ jsonrpc: "2.0", id: 202, method: "textDocument/references", params: { textDocument: { uri: scriptUri }, position: messagePosition, context: { includeDeclaration: true } } });
+  const scriptReferences = await waitFor((message) => message.id === 202);
+  assert.equal((scriptReferences.result as unknown[]).length, 2);
+  send({ jsonrpc: "2.0", id: 203, method: "textDocument/prepareRename", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
+  const scriptPrepareRename = await waitFor((message) => message.id === 203);
+  assert.equal((scriptPrepareRename.result as { placeholder: string }).placeholder, "message");
+  send({ jsonrpc: "2.0", id: 204, method: "textDocument/rename", params: { textDocument: { uri: scriptUri }, position: messagePosition, newName: "label" } });
+  const scriptRename = await waitFor((message) => message.id === 204);
+  assert.equal((scriptRename.result as { changes: Record<string, unknown[]> }).changes[scriptUri]?.length, 2);
+  send({ jsonrpc: "2.0", id: 205, method: "textDocument/documentSymbol", params: { textDocument: { uri: scriptUri } } });
+  const scriptSymbols = await waitFor((message) => message.id === 205);
+  assert.match(JSON.stringify(scriptSymbols.result), /"name":"User".*"name":"greet".*"name":"message"/u);
+  send({ jsonrpc: "2.0", id: 206, method: "textDocument/completion", params: { textDocument: { uri: scriptUri }, position: messagePosition } });
+  const scriptCompletion = await waitFor((message) => message.id === 206);
+  const scriptItems = (scriptCompletion.result as { items: Array<{ label: string }> }).items;
+  assert.ok(scriptItems.some((item) => item.label === "message"));
+  assert.ok(scriptItems.some((item) => item.label === "name"));
+  send({ jsonrpc: "2.0", id: 207, method: "textDocument/semanticTokens/full", params: { textDocument: { uri: scriptUri } } });
+  const scriptSemantic = await waitFor((message) => message.id === 207);
+  const scriptSemanticData = (scriptSemantic.result as { data: number[] }).data;
+  assert.equal(scriptSemanticData.length % 5, 0);
+  assert.ok(scriptSemanticData.some((value, index) => index % 5 === 3 && value === 9), "TypeScript interface tokens must come from the pure VelarScript service");
+  assert.ok(scriptSemanticData.some((value, index) => index % 5 === 3 && value === 12), "JavaScript keywords must be semantically decorated");
+  send({ jsonrpc: "2.0", id: 208, method: "textDocument/formatting", params: { textDocument: { uri: scriptUri }, options: { tabSize: 2, insertSpaces: true } } });
+  const scriptFormatting = await waitFor((message) => message.id === 208);
+  assert.deepEqual(scriptFormatting.result, [], "The server must not pretend that a JS/TS formatter exists yet");
+
+  const javascriptUri = pathToFileURL(join(directory, "feature.js")).href;
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: javascriptUri, languageId: "javascript", version: 1, text: "interface User {}\n" } },
+  });
+  const javascriptPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === javascriptUri);
+  assert.equal(((javascriptPublished.params as { diagnostics: Array<{ code: string }> }).diagnostics)[0]?.code, "SCRIPT1201");
+
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didChange",
+    params: { textDocument: { uri: scriptUri, version: 2 }, contentChanges: [{ text: `${scriptText}const broken = \"😀\n` }] },
+  });
+  const changedScriptPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string; version?: number }).uri === scriptUri
+    && (message.params as { version?: number }).version === 2);
+  const changedScriptDiagnostics = (changedScriptPublished.params as { diagnostics: Array<{ code: string; range: { start: { character: number } } }> }).diagnostics;
+  assert.equal(changedScriptDiagnostics[0]?.code, "SCRIPT1002");
+  assert.equal(changedScriptDiagnostics[0]?.range.start.character, "const broken = ".length);
 
   send({ jsonrpc: "2.0", id: 9, method: "shutdown", params: null });
   await waitFor((message) => message.id === 9);

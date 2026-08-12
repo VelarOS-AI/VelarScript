@@ -2812,6 +2812,69 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   picker/IME automation、crash-in-the-middle recovery、cold-start/sustained-edit memory 和正式性能/体积阈值
   尚未完成。
 
+- W-135 用 Editor 的真实 JavaScript/TypeScript 文件切换、diagnostics、definition、semantic-token 与 formatter
+  边界关闭了官方 script language-service owner 缺口。问题不属于 Core 语法或 Editor 产品层：CLI/Standard
+  现在拥有纯 VelarScript `velar/javascript`，在既有 `velar/text-buffer` 上发布 JS/TS lexer、结构 diagnostics、
+  lexical scope、local symbols/references、hover、definition、completion、rename 与 semantic-token inputs。
+  所有范围均为 Unicode code point；`ScriptDocument.update/apply` 以安全 token 边界增量重启并发布 revision、
+  restart offset、read/reuse 数量。JavaScript 模式对 TS-only declaration 发布 `SCRIPT1201`。它明确不是
+  TypeScript compiler/tsserver：cross-file/module/package type checking、执行与 JS/TS formatter 仍不存在，
+  没有通过 host parser、npm 包或产品补丁伪造。analysis/activity/token/symbol/navigation/completion/rename
+  结果是 transitive readonly data views，caller 不能修改 cached semantic state，也不需要复制数十万 token。
+
+  真实 1 MiB 场景同时暴露两个更底层缺陷。compiler List runtime 过去在每次 `.size`、index、append、slice
+  时全量扫描 dense descriptors，使纯 VelarScript 的普通 indexed scan 退化为 O(n²)，11 KiB 脚本曾约
+  42 秒、1 MiB 超过 30 秒。现在完整 foreign/boundary validation 保留；captured runtime 自己创建并维护的
+  List 由私有 WeakSet 证明 ownership，受控 size/index/write/append/slice/transform 与 Record/Map/Set snapshot
+  复用证明并检查当前 element/length，sparse/accessor/extended/frozen 外来数组仍 fail closed。LSP 的 JS/TS
+  diagnostics/semantic token 坐标原先也会为每个 token 从文档开头重扫；现在每个 bounded response 只做一次
+  monotonic coordinate pass，1 MiB semantic-token 永久门禁锁定该线性契约。
+
+  source-backed Standard loader 的 shallow bootstrap interface 也被真实依赖链击穿：`velar/javascript` 需要
+  `velar/text-buffer` 的完整 class members。CLI 现在先编译 cycle-free source dependency，传递 analyzer
+  产生的完整 functions/types/enums/classes interface，再编译 consumer，并将全部 source/runtime dependency
+  闭包嵌入 official LSP bundle。CLI LSP 注册同一纯 VelarScript provider，按 JS/TS extension/languageId 路由
+  didOpen/change/close 与 completion/hover/definition/references/highlight/rename/symbol/semantic tokens；signature、
+  inlay、code action 和 formatting 对 script 文档显式返回 null/empty。Desktop 继续只拥有 packaged child、
+  framing、backpressure 和 teardown，没有出现第二个语言实现。
+
+  本波还由 Editor 的单文件 format 真实命令暴露 CLI formatter context 缺陷：旧路径跳过项目 resolution，
+  会把 Web/Desktop JSX 的 `<div>` 重写为 `< div >`。单文件 format 现在解析最近项目并消费相同 official
+  compiler extensions；永久 lifecycle regression 锁定 exact-file Web formatting。没有修改 formatter 语义，
+  没有新增语言语法、npm 包或依赖。
+
+  diagnostics/codegen/真实执行证据覆盖：纯 `.vel` consumer clean compile，生成 `javascript.js` 含
+  `ScriptDocument`/lexer 且不含 TypeScript/tsserver import；运行时覆盖 local symbol queries、rename、JS-mode
+  和 unterminated-string diagnostics、full-text diff 与原子 edit。1 MiB fixture 为至少 1,048,576 code points、
+  超过 300,000 tokens，initial <5 秒、tail update <2 秒；LSP 对同一规模文档在 <8 秒发布 diagnostics，并在
+  <2 秒完成 bounded semantic-coordinate response。完整 List hostile ABI、UTF-32 LSP、installed CLI consumer、
+  packed Desktop worker initialize/TS diagnostics/definition/shutdown/PID reap 均通过。
+
+  Editor 删除了“非 `.vel` 一律 unsupported”和固定 `languageId=velar` 的产品假设；`.js/.mjs/.cjs/.jsx` 与
+  `.ts/.mts/.cts/.tsx` 通过同一公开 LanguageServer 消费官方服务，definition 复用公开 file URL/code-point
+  contract。JS/TS Format 按钮明确报告没有 official formatter，不返回伪造 edit。浏览器内存 Desktop test
+  host 不拥有 privileged language-server 进程，因此浏览器 gate 验证明确 unavailable/formatter 降级；最终
+  `.app` 内实际 `host/language-server.js` 另行完成 initialize、TS diagnostics、definition、semantic tokens、
+  empty formatter、shutdown/exit。没有 Editor lexer、semantic index、npm resolution 或 private bridge workaround。
+
+  完整证据为 `npm run check`（53 formatted sources、108 docs examples、74 runtime boundaries）、600/600、
+  四示例检查与 1+3+3+3 Core tests、六包 installed consumer 和 publication rehearsal。Editor format 6 files、
+  3-module check、1 Core test、contract check/run、production build/package/native smoke、最终 packaged JS/TS
+  probe 与单 Chromium 8/8 全绿。仅运行单引擎/单并发；一次新增断言把 browser-only test host 错当 packaged
+  LSP 而失败，失败路径与最终通过路径之后均独立核查，零 Playwright/headless 残留。
+
+  最终 Chromium FCP median/p95 为 8/44 ms，input frame median/p95 为 4.7/5.3 ms，1 MiB load/input
+  next-frame 为 32.332/11.266 ms，仍只是证据而非 release threshold。`.app` 为 2,431,588 bytes（2.32 MiB）：
+  host 334,704、renderer 195,719、capability 69,390、official toolchain 1,714,739、metadata 117,036；renderer
+  JS+CSS 190,741 bytes，build SHA-256
+  `4fcf369132a94158d00f33d44e71b351a375a36daf6e60bd0e607554d3aa0c09`。Lite 既有 11 文件 WIP 完全未修改。
+  未推送、未发布、未提升版本。
+
+  仍阻止生产可用的是：当前 JS/TS 只有 lexical/local structural semantics，full TypeScript type/module/package
+  graph 与 official JS/TS formatter 尚未建立；全文搜索和持久 semantic index、multi-tab、tasks/terminal、
+  大 workspace watcher/index burst 与 RSS、wide-glyph hit testing、native picker/IME automation、
+  crash-in-the-middle recovery、cold-start/sustained-edit memory 和正式性能/体积阈值仍未完成。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
@@ -2819,9 +2882,9 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
    Web、Node、Desktop、Game
    继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
    host/product policy 放回 Core。
-2. 下一波优先建立 JavaScript/TypeScript 官方 language-service owner 与持久 semantic-index/search 契约；
-   Editor 只消费公开 diagnostics/navigation/formatting/index 能力并保留项目、标签、命令、索引编排与 UX，
-   不复制 filesystem、text、language-service 或 host policy。
+2. 下一波优先建立持久 semantic-index/search 契约，并评估 JavaScript/TypeScript cross-file module/type graph
+   与 formatter 的正确 owner；Editor 只消费公开 diagnostics/navigation/formatting/index 能力并保留项目、
+   标签、命令、索引编排与 UX，不复制 filesystem、text、language-service 或 host policy。
 3. 用 synthetic 和真实大 workspace 测量 W-132 watcher burst、overflow/rescan、增量 tree 延迟与 RSS，
    将足够通用的调度、索引和背压能力收敛到既有 owner；若需要新语法，按提案流程暂停确认。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`

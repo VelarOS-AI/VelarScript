@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { compile, formatDiagnostic, inspectModule, optionalOf as optional, type ClassInfo, type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
+import { compile, formatDiagnostic, inspectModule, optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import {
   VELAR_CLASS_FIELD_MODULE,
   VELAR_CLASS_FIELD_MODULE_SOURCE,
@@ -265,7 +265,7 @@ function moduleInterface(
 
 interface VelarSourceStandardModule {
   readonly source: string;
-  readonly interface: ModuleInterface;
+  interface: ModuleInterface;
   readonly sourceDependencies: readonly string[];
   compiled: { readonly code: string; readonly dependencies: readonly string[] } | null;
 }
@@ -291,35 +291,93 @@ function loadVelarSourceStandardModule(source: string, asset: string): VelarSour
 
 const velarSourceStandardModules = new Map<string, VelarSourceStandardModule>([
   ["velar/text-buffer", loadVelarSourceStandardModule("velar/text-buffer", "text-buffer.vel")],
+  ["velar/javascript", loadVelarSourceStandardModule("velar/javascript", "javascript.vel")],
 ]);
 
-for (const [source, module] of velarSourceStandardModules) coreModuleInterfaces.set(source, module.interface);
+const compilingVelarSourceStandardModules = new Set<string>();
 
 function compiledVelarSourceStandardModule(source: string, module: VelarSourceStandardModule): { readonly code: string; readonly dependencies: readonly string[] } {
   if (module.compiled) return module.compiled;
-  const inspection = inspectModule(module.source, { path: source });
-  const imports = new Map<string, ValueType>();
-  for (const dependency of inspection.dependencies) {
-    const dependencyInterface = coreModuleInterfaces.get(dependency.source);
-    if (!dependencyInterface || velarSourceStandardModules.has(dependency.source)) {
-      throw new Error(`VelarScript source standard module '${source}' depends on unavailable bootstrap module '${dependency.source}'`);
-    }
-    for (const specifier of dependency.specifiers) {
-      const type = dependencyInterface.exports.get(specifier.imported);
-      if (!type) throw new Error(`VelarScript source standard module '${source}' imports missing export '${specifier.imported}' from '${dependency.source}'`);
-      imports.set(specifier.local, type);
-    }
+  if (compilingVelarSourceStandardModules.has(source)) {
+    throw new Error(`VelarScript source standard module dependency cycle includes '${source}'`);
   }
-  const result = compile(module.source, { path: source, analysis: { imports }, sharedRuntimeModules: true });
-  if (result.diagnostics.length > 0 || result.code === null) {
-    throw new Error(result.diagnostics.map((diagnostic) => formatDiagnostic(result.source, diagnostic)).join("\n\n"));
+  compilingVelarSourceStandardModules.add(source);
+  try {
+    const inspection = inspectModule(module.source, { path: source });
+    const imports = new Map<string, ValueType>();
+    const namedTypes = new Map<string, ReadonlyMap<string, ValueType>>();
+    const namedTypeReadonlyFields = new Map<string, ReadonlySet<string>>();
+    const namedTypeIdentities = new Map<string, string>();
+    const typeAliases = new Map<string, ValueType>();
+    const enums = new Map<string, EnumInfo>();
+    const classes = new Map<string, ClassInfo>();
+    for (const dependency of inspection.dependencies) {
+      const sourceDependency = velarSourceStandardModules.get(dependency.source);
+      if (sourceDependency) compiledVelarSourceStandardModule(dependency.source, sourceDependency);
+      const dependencyInterface = coreModuleInterfaces.get(dependency.source);
+      if (!dependencyInterface) {
+        throw new Error(`VelarScript source standard module '${source}' depends on unavailable bootstrap module '${dependency.source}'`);
+      }
+      const aliases = new Map(dependency.specifiers
+        .filter((specifier) => !specifier.namespace && specifier.imported !== "default")
+        .map((specifier) => [specifier.imported, specifier.local]));
+      for (const [name, info] of dependencyInterface.classes) {
+        classes.set(name, info);
+        if (info.identity) classes.set(info.identity, info);
+        const localName = aliases.get(name);
+        if (localName && dependencyInterface.exports.get(name)?.kind === "classConstructor") classes.set(localName, info);
+      }
+      for (const [name, info] of dependencyInterface.enums) {
+        enums.set(info.identity, info);
+        const localName = aliases.get(name);
+        if (localName && dependencyInterface.exports.get(name)?.kind === "enumObject") enums.set(localName, info);
+      }
+      const identities = new Set(dependencyInterface.namedTypeIdentities.values());
+      for (const [name, fields] of dependencyInterface.namedTypes) {
+        const identity = dependencyInterface.namedTypeIdentities.get(name) ?? (identities.has(name) ? name : null);
+        if (!identity) continue;
+        namedTypes.set(name, fields);
+        namedTypes.set(identity, fields);
+        const readonlyFields = dependencyInterface.namedTypeReadonlyFields?.get(name) ?? dependencyInterface.namedTypeReadonlyFields?.get(identity);
+        if (readonlyFields) namedTypeReadonlyFields.set(identity, readonlyFields);
+        const localName = aliases.get(name);
+        if (localName && dependencyInterface.exports.get(name)?.kind === "typeObject") {
+          namedTypes.set(localName, fields);
+          if (readonlyFields) namedTypeReadonlyFields.set(localName, readonlyFields);
+          namedTypeIdentities.set(localName, identity);
+        }
+      }
+      for (const [name, type] of dependencyInterface.typeAliases) {
+        const localName = aliases.get(name);
+        if (localName && dependencyInterface.exports.get(name)?.kind === "typeObject") typeAliases.set(localName, type);
+      }
+      for (const specifier of dependency.specifiers) {
+        const type = dependencyInterface.exports.get(specifier.imported);
+        if (!type) throw new Error(`VelarScript source standard module '${source}' imports missing export '${specifier.imported}' from '${dependency.source}'`);
+        imports.set(specifier.local, type);
+      }
+    }
+    const result = compile(module.source, {
+      path: source,
+      analysis: { imports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, typeAliases, enums, classes },
+      sharedRuntimeModules: true,
+    });
+    if (result.diagnostics.length > 0 || result.code === null) {
+      throw new Error(result.diagnostics.map((diagnostic) => formatDiagnostic(result.source, diagnostic)).join("\n\n"));
+    }
+    module.interface = result.moduleInterface;
+    coreModuleInterfaces.set(source, module.interface);
+    module.compiled = {
+      code: result.code,
+      dependencies: [...new Set([...module.sourceDependencies, ...result.runtimeModules])],
+    };
+    return module.compiled;
+  } finally {
+    compilingVelarSourceStandardModules.delete(source);
   }
-  module.compiled = {
-    code: result.code,
-    dependencies: [...new Set([...module.sourceDependencies, ...result.runtimeModules])],
-  };
-  return module.compiled;
 }
+
+for (const [source, module] of velarSourceStandardModules) compiledVelarSourceStandardModule(source, module);
 
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {
   const activeExtensions = standardExtensions(extensions);
