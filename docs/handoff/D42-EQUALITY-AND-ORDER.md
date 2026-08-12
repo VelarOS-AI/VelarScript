@@ -91,16 +91,17 @@ List<A | string>.sorted()                   → ['raw','x'] （枚举与裸字�
 
    实施注意：交集判定不能只调 `isAssignable`，必须先排除「一侧是枚举/枚举
    成员、另一侧是 `string`」这一组合。
-2. **枚举不进 `Comparable`**（D41 第 61 条的完整词汇据此定案）：
+
+3. **枚举不进 `Comparable`**（D41 第 61 条的完整词汇据此定案）：
    - `sorted()` / `sorted(by=)` / `sortBy` / `minBy` / `maxBy` 的键类型收紧为
      **`number` 或 `string`，且同类别**（即统一到最严的 `isCollectionOrderKey`）。
    - 直接 `<` `>` `<=` `>=` 维持拒绝枚举（现状已正确）。
    - `min()` / `max()` 维持拒绝枚举（现状已正确 —— ORD-2 因此**不是**误拒，
      而是三谓词中唯一正确的那个）。
    - **`Comparable` = {`number`, `string`, 同类别联合}**。
-3. **业务排序的显式出路**（诊断必须教）：`sorted(by=rank)` 给显式序，或用
+4. **业务排序的显式出路**（诊断必须教）：`sorted(by=rank)` 给显式序，或用
    字符串背书枚举把序编进运行时值（`enum P: low = "1-low"` 之类）。
-4. 破坏性变更诚实标注：今天能跑的 `List<Status>.sorted()` 会开始报错 ——
+5. 破坏性变更诚实标注：今天能跑的 `List<Status>.sorted()` 会开始报错 ——
    **但它本来就在给字母序，即错序**。CHANGELOG 必须写明这一点。
 
 ### 顺带关闭的三条排序谓词不一致（账本 ORD-1/2/3）
