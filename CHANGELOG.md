@@ -72,8 +72,7 @@ truth for acceptance status.
   result.
 - `case _:` is the only `match` fallback; `else:` inside `match` receives
   guidance. `invert x` is retired — write the ordinary `x = not x`, which is
-  now legal and publishes reactive updates. Strings gain `isBlank()`, Lists
-  gain `removeLast()` (throws on empty, unlike the optional `pop()`), and
+  now legal and publishes reactive updates. Strings gain `isBlank()`, and
   `split("")` is documented as the per-code-point character split.
 - Non-integer indexes are rejected by `List.get`, `List.pop`, and
   `string.char`, matching the strict siblings that already threw;
@@ -81,8 +80,8 @@ truth for acceptance status.
   from the end. `Map` keys are unaffected.
 - Discarding the result of a compiler-owned pure value or collection method
   is an error (`VEL4029`): `values.sorted()` as a statement did nothing and
-  said nothing. Mutating members that return a value — `pop`, `removeLast`,
-  `remove` — remain valid statements.
+  said nothing. Mutating members that return a value — `pop` and `remove` —
+  remain valid statements.
 - The toolchain now ships the AI skill brief. `velar skill` prints the
   agent-agnostic language brief to stdout; every generated project scaffolds
   an `AGENTS.md` pointing agents at it, the project gates, and the escape
