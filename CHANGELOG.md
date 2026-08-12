@@ -6,6 +6,36 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The runtime narrowing guard for an imported record type is now the real
+  validator instead of a presence check, so a fact staled across a module
+  boundary throws `NarrowingError` at the read instead of silently
+  delivering wrong-typed data or leaking a bare `TypeError`. The first
+  multi-module narrowing regressions pin this — the entire previous suite
+  was single-module, which is why the hole survived.
+- Record validation accepts only plain data objects: a class instance, an
+  `Error`, or any prototyped host object no longer satisfies `Type.is` or
+  `Type.parse` (cross-realm plain objects still pass), so a validated
+  record view can no longer alias a live class instance and write through
+  its `const` fields. The failure hint teaches projecting the fields into
+  a record.
+- Assignment now establishes a narrowing fact: after
+  `const x: string? = "a"` or `x = "a"`, the value is usable as a string
+  without a redundant check, including when every branch of an
+  `if`/`match`/`try` assigns one. Assigned facts refine reads but never
+  make a later test constant, so `value == null` after a literal
+  assignment stays legal. A member write invalidates only facts whose
+  roots could alias the written path — writing an unrelated variable of a
+  disjoint type no longer destroys narrowing.
+- Classes close eight compile-to-crash holes: a `class` or `type` in a
+  block is rejected at module scope (previously analyzed against the wrong
+  shape — a `-> number` function could return a string with zero
+  diagnostics, and a block `export class` emitted invalid JavaScript);
+  constructor rest parameters are rejected (one spelling was uncallable,
+  the other silently wrong); a `super(...)` call anywhere but the first
+  statement is rejected; `new` through a narrowed callee parenthesizes
+  correctly; a self-instantiating field initializer, a class name used
+  before its declaration, and a base constructor observing an abstract or
+  overridden member are all compile errors instead of runtime crashes.
 - Equality requires the operand types to intersect. `1 == "1"`, a record
   against a string, and two members of different enums no longer compile —
   each was permanently false, which is a silent logical bug rather than the

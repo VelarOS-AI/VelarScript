@@ -2564,8 +2564,13 @@ print(failureMessage(null))
   assert.equal(messageExecution.status, 0, String(messageExecution.stderr));
   assert.equal(messageExecution.stdout, "Ada\nempty\n");
 
+  // D44 rule 71: a literal initializer would itself establish the fact, so
+  // the initializer stays opaque to isolate the assert's block scoping.
   const scoped = compile(`
-let value: number? = 1
+def maybe() -> number?:
+    return 1
+
+let value: number? = maybe()
 if true:
     assert value != null
     const inside: number = value
@@ -4270,6 +4275,9 @@ type Missing:
 `.trimStart());
   assert.ok(malformed.diagnostics.some((item) => /has no member 'missing'/u.test(item.message)));
 
+  // D44 rule 71: a literal initializer proves the variant, so the write is
+  // rejected with the precise singleton mismatch; an opaque union owner keeps
+  // the union-mutation guidance.
   const unsafeMutation = compile(`
 enum EventKind:
     text
@@ -4285,10 +4293,15 @@ type ToolEvent:
 
 type Event = TextEvent | ToolEvent
 
-let event: Event = {kind: EventKind.text, text: "hello"}
-event.kind = EventKind.tool
+def flip(event: Event) -> null:
+    event.kind = EventKind.tool
+    return null
+
+let known: Event = {kind: EventKind.text, text: "hello"}
+known.kind = EventKind.tool
 `.trimStart());
   assert.ok(unsafeMutation.diagnostics.some((item) => /Cannot assign field 'kind' through.*variants require different field types/u.test(item.message)));
+  assert.ok(unsafeMutation.diagnostics.some((item) => /Cannot assign EventKind\.tool to EventKind\.text/u.test(item.message)));
 
   const widening = compile(`
 enum Status:
@@ -17853,8 +17866,12 @@ print(Entry.parse({dependency: {value: 7}}).dependency.value)
     "validationFreeze",
     "validationIsArray",
     "validationIsInstance",
+    // D44 rule 70: records accept only plain data objects; the check and the
+    // parse-failure teaching hint ride the shared validation runtime.
+    "validationIsPlainObject",
     "validationIsPromise",
     "validationOwnDescriptor",
+    "validationRejectionHint",
     "validationSet",
     "validationSetAdd",
     "validationSetDelete",
@@ -20901,7 +20918,9 @@ class Invalid:
 `.trimStart());
   assert.ok(invalid.diagnostics.some((item) => item.code === "VEL2021" && /private constructor parameter must declare a field/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => item.code === "VEL2021" && /parameter fields require an explicit type/u.test(item.message)));
-  assert.ok(invalid.diagnostics.some((item) => item.code === "VEL2016" && /rest parameter cannot declare a class field/u.test(item.message)));
+  // CLS-D3: source constructors reject rest outright (both spellings were
+  // broken at runtime), so the field-specific rest diagnostic is gone.
+  assert.ok(invalid.diagnostics.some((item) => item.code === "VEL2016" && /Class constructors do not support rest parameters/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => item.code === "VEL2021" && /parameters cannot be static/u.test(item.message)));
 });
 
@@ -21195,6 +21214,9 @@ Vault()
   assert.notEqual(privateFailure.status, 0);
   assert.match(String(privateFailure.stderr), /Private field 'secret' was read before initialization/u);
 
+  // CLS-D9: the dynamic-dispatch leak is now rejected at compile time — a
+  // base constructor cannot use a member a visible subclass overrides, so the
+  // partially initialized read never reaches the runtime guard.
   const dynamicDispatch = compile(`
 class Base:
     constructor():
@@ -21215,10 +21237,9 @@ class Child extends Base:
 
 Child()
 `.trimStart());
-  assert.deepEqual(dynamicDispatch.diagnostics, []);
-  const dispatchFailure = executeModule(dynamicDispatch.code ?? "");
-  assert.notEqual(dispatchFailure.status, 0);
-  assert.match(String(dispatchFailure.stderr), /Field 'name' was read before initialization/u);
+  assert.equal(dynamicDispatch.code, null);
+  assert.ok(dynamicDispatch.diagnostics.some((item) => item.code === "VEL4001"
+    && /Constructor of 'Base' cannot use 'validate': 'Child' overrides it/u.test(item.message)));
 
   const valid = compile(`
 class Score:

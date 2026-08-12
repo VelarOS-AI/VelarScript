@@ -857,7 +857,6 @@ export class Parser {
   private parseClassConstructorParameters(): readonly ClassParameter[] {
     this.expect("leftParen", "Expected '('");
     const parameters: ClassParameter[] = [];
-    let sawRest = false;
     let sawDefault = false;
     if (!this.check("rightParen")) {
       do {
@@ -879,19 +878,14 @@ export class Parser {
         if (binding && !type) {
           this.diagnostics.push(diagnostic("VEL2021", "Constructor parameter fields require an explicit type", parameterSpan));
         }
-        if (sawRest) {
-          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter must be the final parameter", parameterSpan));
+        // Source constructors lower to `constructor(...)` parameter lists that
+        // the class shape counts as fixed arity, so a rest spelling is either
+        // uncallable or silently wrong at runtime. Extern class declarations
+        // keep rest support: they describe existing JavaScript constructors.
+        if (rest) {
+          this.diagnostics.push(diagnostic("VEL2016", "Class constructors do not support rest parameters", name.span));
         }
-        if (rest && !type) {
-          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter requires an element type", parameterSpan));
-        }
-        if (rest && defaultValue) {
-          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot have a default value", parameterSpan));
-        }
-        if (rest && binding) {
-          this.diagnostics.push(diagnostic("VEL2016", "A rest parameter cannot declare a class field", parameterSpan));
-        }
-        if (!rest && !defaultValue && sawDefault && !sawRest) {
+        if (!rest && !defaultValue && sawDefault) {
           this.diagnostics.push(diagnostic("VEL2016", "A required parameter cannot follow a parameter with a default value", parameterSpan));
         }
         parameters.push({
@@ -904,7 +898,6 @@ export class Parser {
           span: parameterSpan,
         });
         if (!rest && defaultValue) sawDefault = true;
-        sawRest ||= rest;
       } while (this.match("comma") && !this.check("rightParen"));
     }
     this.expect("rightParen", "Expected ')' after constructor parameters");

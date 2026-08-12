@@ -242,7 +242,9 @@ export class JavaScriptEmitter {
           ["validationWeakMapGet", "__velarValidationWeakMapGet"], ["validationWeakMapSet", "__velarValidationWeakMapSet"], ["validationWeakMapDelete", "__velarValidationWeakMapDelete"],
           ["validationSetHas", "__velarValidationSetHas"], ["validationSetAdd", "__velarValidationSetAdd"], ["validationSetDelete", "__velarValidationSetDelete"], ["validationSetSize", "__velarValidationSetSize"],
           ["validationIsArray", "__velarValidationIsArray"], ["validationOwnDescriptor", "__velarValidationOwnDescriptor"],
-          ["validationIsInstance", "__velarValidationIsInstance"], ["validationIsPromise", "__velarValidationIsPromise"], ["validationFreeze", "__velarValidationFreeze"],
+          ["validationIsInstance", "__velarValidationIsInstance"], ["validationIsPromise", "__velarValidationIsPromise"],
+          ["validationIsPlainObject", "__velarValidationIsPlainObject"], ["validationRejectionHint", "__velarValidationRejectionHint"],
+          ["validationFreeze", "__velarValidationFreeze"],
           ["listTypeIs", "__velarListTypeIs"], ["setTypeIs", "__velarSetTypeIs"], ["mapTypeIs", "__velarMapTypeIs"], ["recordTypeIs", "__velarRecordTypeIs"],
         ].filter(([, local]) => usesGeneratedName(local!));
         helpers.push(`import { ${imports.map(([exported, local]) => `${exported} as ${local}`).join(", ")} } from ${JSON.stringify(VELAR_TYPE_VALIDATION_MODULE)};`);
@@ -1115,7 +1117,10 @@ export class JavaScriptEmitter {
     const exportPrefix = statement.exported ? "export " : "";
     return [
       `${indentation}function ${checkName}(value, __state = __velarValidationState()) {`,
-      `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || __state.depth >= 1000) return false;`,
+      // D44 rule 70: a record contract accepts only plain data objects, so a
+      // class instance can never satisfy it — otherwise the validated record
+      // view would alias the live instance and write through its const fields.
+      `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value) || __state.depth >= 1000) return false;`,
       `${indentation}  let __active = __velarValidationWeakMapGet(__state.active, value);`,
       `${indentation}  if (__active && __velarValidationSetHas(__active, ${checkName})) return false;`,
       `${indentation}  if (!__active) {`,
@@ -1140,7 +1145,7 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
-      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)} + __velarValidationRejectionHint(value));`,
       `${indentation}    }`,
       `${indentation}    return value;`,
       `${indentation}  },`,
@@ -1272,9 +1277,16 @@ export class JavaScriptEmitter {
       case "union":
         return `(${type.members.map((member) => this.emitNarrowingCheck(member, value, state)).join(" || ")})`;
       case "named":
+        // FLW-U1: an imported record type (or alias) is not in this module's
+        // typeDeclarations, but its runtime Type object is an in-scope
+        // binding, so the recheck routes through `Name.is(value)` exactly as
+        // `is` tests already do. Only names with no runtime Type binding at
+        // all — extension host types such as DOM interfaces — degrade to the
+        // presence-only check.
         if (!this.hints.enumNames.has(type.name)
           && !this.hints.classNames.has(type.name)
-          && !this.typeDeclarations.has(type.name)) return `${value} != null`;
+          && !this.typeDeclarations.has(type.name)
+          && !this.hints.runtimeTypeObjectNames.has(type.name)) return `${value} != null`;
         return this.emitTypeCheck(type, value, state);
       case "parameter":
       case "typeObject":
@@ -1588,9 +1600,20 @@ export class JavaScriptEmitter {
           this.needsCollectionHelpers = true;
           callee = expression.callee.name === "Map" ? "__velarCreateMap" : "__velarCreateSet";
         } else {
-          callee = this.hints.constructorCalls.has(spanIdentity(expression.span))
-            ? `new ${this.emitMappedExpression(expression.callee)}`
-            : this.emitPostfixReceiver(expression.callee);
+          if (this.hints.constructorCalls.has(spanIdentity(expression.span))) {
+            // A callee that is not a plain name path may be wrapped (for
+            // example by a narrowing recheck IIFE), and `new (arrow)(x)(args)`
+            // binds `(x)` as the construction arguments — the wrapper, not
+            // the class, gets constructed. Parentheses restore the callee
+            // boundary; plain name paths skip them to keep output readable.
+            // Source-map markers are invisible in final output and ignored.
+            const constructed = this.emitMappedExpression(expression.callee);
+            callee = /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)*$/u.test(constructed.replaceAll(javaScriptNodeMarker, ""))
+              ? `new ${constructed}`
+              : `new (${constructed})`;
+          } else {
+            callee = this.emitPostfixReceiver(expression.callee);
+          }
         }
         const formRead = this.hints.formReads.get(spanIdentity(expression.span));
         if (formRead) arguments_.push(JSON.stringify(formRead));

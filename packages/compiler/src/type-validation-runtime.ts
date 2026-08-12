@@ -39,6 +39,21 @@ function __velarValidationOwnDescriptor(value, key) { return __velarCollectionHo
 function __velarValidationIsInstance(value, constructor) { return __velarCollectionHostCall(__velarValidationFunctionHasInstanceOperation, constructor, [value]); }
 function __velarValidationIsPromise(value) { return __velarValidationIsInstance(value, __velarValidationNativePromise); }
 function __velarValidationFreeze(value) { return __velarCollectionHostCall(__velarValidationFreezeOperation, __velarCollectionNativeObject, [value]); }
+// A record contract accepts only plain data objects: prototype null, or a
+// prototype that itself has none (some realm's Object.prototype). The check
+// is structural rather than an identity comparison so plain values from other
+// realms validate, while class instances, Error values, and host objects are
+// rejected — their prototypes always chain through another object.
+function __velarValidationIsPlainObject(value) {
+  const prototype = __velarCollectionHostCall(__velarCollectionGetPrototypeOf, __velarCollectionNativeObject, [value]);
+  if (prototype === null) return true;
+  return __velarCollectionHostCall(__velarCollectionGetPrototypeOf, __velarCollectionNativeObject, [prototype]) === null;
+}
+// Teaching suffix for record parse failures caused by the plain-object rule.
+function __velarValidationRejectionHint(value) {
+  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || __velarValidationIsPlainObject(value)) return "";
+  return "; a record accepts only plain data objects — project the fields into a record first, for example {x: instance.x}";
+}
 `.trimStart();
 
 /** Stateless traversal for collection-shaped runtime Types. */
@@ -120,6 +135,8 @@ export {
   __velarValidationOwnDescriptor as validationOwnDescriptor,
   __velarValidationIsInstance as validationIsInstance,
   __velarValidationIsPromise as validationIsPromise,
+  __velarValidationIsPlainObject as validationIsPlainObject,
+  __velarValidationRejectionHint as validationRejectionHint,
   __velarValidationFreeze as validationFreeze,
   __velarListTypeIs as listTypeIs,
   __velarSetTypeIs as setTypeIs,

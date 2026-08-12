@@ -527,6 +527,18 @@ value to `null` is therefore valid, and later reads must prove presence again.
 Compound assignment uses the current fact because the operation itself requires
 and preserves the checked non-null value.
 
+An assignment also establishes a fact: after `=` (including a declaration
+initializer), the location holds the assigned expression's type, so
+`const x: string? = "a"` reads as `string` without a further check, a member
+assignment establishes the fact for its own path after invalidating aliases,
+and branches that each assign a value of the same refined type merge that fact
+past the branch. Assigning a value whose type is the declared type establishes
+nothing — `x = maybeNull()` leaves `string?` open — and assigning `null`
+leaves the declared question open rather than pinning the location to `null`.
+An assignment-established fact refines reads; it never turns a later test into
+a constant. `x == null` after `x = "a"` is still the declared `string?`
+question — only facts established by checks make a repeated check an error.
+
 Mutually exclusive branches are analyzed independently. A write in one branch
 does not contaminate a sibling that cannot execute it, while any write that can
 reach the following statement invalidates the merged fact. Facts established
@@ -546,8 +558,11 @@ Narrowing is flow-based and deliberately practical. A fact established by a
 check persists across calls, getters, callbacks, `await`, and string
 interpolation. A known assignment to that location (including destructuring or
 a compound target), or a reachable branch merge containing such a write,
-invalidates it statically. A member write also invalidates facts reached through
-known aliases of the object; unrelated roots keep their facts.
+invalidates it statically. A member write invalidates facts between roots
+whose types could alias — two roots with no values in common cannot be the
+same object, so their facts survive each other's writes, while same-type
+roots (including every visible alias of the written object) still invalidate
+each other.
 
 ```velar fragment
 if form != null:
@@ -1295,6 +1310,10 @@ class Session:
 ```
 
 - Fields are `const` or `let` and require a type.
+- A `const` field's protection is compile-time. Runtime validation provides no
+  extra guard for it — and needs none, because a class instance never
+  satisfies a record contract (section 12), so no validated record view can
+  alias an instance and write through its fields.
 - A field initializer is optional.
 - A constructor parameter prefixed with `const` or `let` declares a public
   instance field and initializes it from that argument. Prefix the parameter
@@ -1447,6 +1466,13 @@ member; consumers still refer to the nominal member name.
 Every runtime `Type.is(value)` and `Type.parse(value)` record check requires its
 non-optional fields to be present own enumerable data properties. Optional
 fields may be absent; when present they must follow the same owned-data rule.
+A record also accepts only plain data objects: the value's prototype must be
+`null` or a prototype that itself has none (some realm's `Object.prototype`,
+checked structurally so plain values from other realms validate). Class
+instances, `Error` values, and host objects never satisfy a record contract —
+at the top level and in every nested field position — so a validated record
+view can never alias a live instance; project the fields into a record
+(`{x: instance.x}`) to convert deliberately.
 Inherited fields and accessors do not satisfy a record contract, and validation
 never invokes a getter. This is the same owned-record invariant used by
 structural `match`.

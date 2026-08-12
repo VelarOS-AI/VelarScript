@@ -69,6 +69,13 @@ interface Binding {
   readonly storageBinding?: Binding;
   readonly span: Span;
   narrowingFrame: number | null;
+  /**
+   * D44 rule 71: true while the active narrowing was established by an
+   * assignment (or a declaration initializer) rather than a check. Only
+   * meaningful when narrowingFrame is not null. Assigned facts refine reads;
+   * equality tests still judge the declared domain (storageType).
+   */
+  assignedFact?: boolean;
   // Exact reactive identity belongs to the resolved lexical binding, not to
   // its spelling. Lowering records each resolved read/write span so local
   // state can shadow (and be shadowed by) ordinary bindings safely.
@@ -84,6 +91,15 @@ interface CollectionInferenceGroup {
 interface MemberNarrowing {
   readonly type: ValueType;
   readonly frame: number;
+  /**
+   * D44 rule 71: true when the fact was established by an assignment rather
+   * than a check. Assigned facts refine reads, but an equality test still
+   * asks about the declared domain, so `x == null` after `x = "a"` stays a
+   * real question instead of a rejected constant.
+   */
+  readonly assigned?: boolean;
+  /** The declared type of the location an assigned fact refines (its test-domain). */
+  readonly domain?: ValueType;
 }
 
 interface PendingScopeDeclaration {
@@ -96,6 +112,7 @@ interface FlowFactsSnapshot {
     readonly type: ValueType;
     readonly storageType: ValueType;
     readonly frame: number | null;
+    readonly assigned: boolean;
   }>;
   readonly members: readonly ReadonlyMap<string, MemberNarrowing>[];
 }
@@ -240,6 +257,15 @@ export interface LoweringHints {
   readonly privateMembers: ReadonlySet<string>;
   readonly classNames: ReadonlySet<string>;
   readonly enumNames: ReadonlySet<string>;
+  /**
+   * Module-scope bindings that hold runtime Type objects: local `type`
+   * declarations and aliases, plus imported ones. A narrowing recheck for any
+   * of these names may call `Name.is(value)` — the exporting module always
+   * emits the validator object for an exported type. Names outside this set
+   * (erased generics, extension host types such as DOM interfaces) have no
+   * such binding and keep the presence-only recheck.
+   */
+  readonly runtimeTypeObjectNames: ReadonlySet<string>;
   readonly optionalMembers: ReadonlySet<string>;
   readonly optionalCalls: ReadonlySet<string>;
   readonly optionalIndexes: ReadonlySet<string>;
@@ -528,11 +554,21 @@ export class Analyzer implements TypeEnvironment {
   protected deferredExecutionDepth = 0;
   private readonly importedBindingSources = new Map<Binding, { readonly source: string; readonly imported: string | null }>();
   private readonly initializationImportReadSites = new Map<string, InitializationImportRead>();
+  /** Local class bindings mapped to the source offset where their `class` statement evaluates (CLS-D8). */
+  private readonly hoistedClassDeclarations = new Map<Binding, number>();
+  /** Module-scope names bound to runtime Type objects (local and imported); see LoweringHints.runtimeTypeObjectNames. */
+  private readonly runtimeTypeObjectNames = new Set<string>();
   private staticFieldInitialization: {
     readonly className: string;
     readonly initialized: ReadonlySet<string>;
   } | null = null;
   protected constructorDepth = 0;
+  // The one `super(...)` call a derived constructor may make: the span
+  // identity of its first top-level statement's call expression. Any other
+  // super call — a second one, or one nested in a branch or loop — would
+  // crash at runtime ("Super constructor may only be called once" or
+  // "must call super before accessing 'this'"), so it is rejected here.
+  private allowedSuperCall: string | null = null;
   protected flowFrameDepth = 0;
   private readonly primitiveNames = new Set(corePrimitiveNames);
   private readonly primitiveParents = new Map<string, Set<string>>();
@@ -778,6 +814,13 @@ export class Analyzer implements TypeEnvironment {
         this.predeclared.add(statement);
       } else if (statement.kind === "ClassDeclaration") {
         this.declareBinding(statement.name, false, { kind: "classConstructor", name: statement.name }, statement.span);
+        // The name is hoisted for analysis so deferred bodies may reference
+        // classes declared later, but the emitted `class` statement is not
+        // hoisted at runtime. Remember where the declaration evaluates so an
+        // immediate earlier use is rejected instead of loading into a raw
+        // ReferenceError.
+        const hoisted = this.scopes.at(-1)?.get(statement.name);
+        if (hoisted) this.hoistedClassDeclarations.set(hoisted, statement.span.start);
         this.predeclared.add(statement);
       } else if (statement.kind === "FunctionDeclaration") {
         this.declareBinding(statement.name, false, this.functionType(statement), statement.span);
@@ -983,6 +1026,7 @@ export class Analyzer implements TypeEnvironment {
       privateMembers: this.privateMembers,
       classNames: new Set([...this.classes.keys(), ...this.classDisplayNames.values()]),
       enumNames: new Set(this.enums.keys()),
+      runtimeTypeObjectNames: this.runtimeTypeObjectNames,
       optionalMembers: this.optionalMembers,
       optionalCalls: this.optionalCalls,
       optionalIndexes: this.optionalIndexes,
@@ -1581,9 +1625,18 @@ export class Analyzer implements TypeEnvironment {
         }
         break;
       case "TypeDeclaration":
+        // Shapes are only registered from module scope (registerTypeShapes
+        // walks program.body), so a nested declaration would analyze against
+        // a missing — or worse, a same-named module-level — shape.
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Types can only be declared at module scope", statement.span));
+        }
         this.analyzeTypeDeclaration(statement);
         break;
       case "TypeAliasDeclaration":
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Types can only be declared at module scope", statement.span));
+        }
         this.analyzeTypeAliasDeclaration(statement);
         break;
       case "EnumDeclaration": {
@@ -1617,6 +1670,13 @@ export class Analyzer implements TypeEnvironment {
         break;
       }
       case "ClassDeclaration":
+        // registerClassShapes only walks program.body, so a nested class body
+        // would be analyzed against the module-level shape of the same name
+        // (silent wrong types) and `export class` in a block emits invalid
+        // JavaScript.
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Classes can only be declared at module scope", statement.span));
+        }
         this.analyzeClassDeclaration(statement);
         break;
       case "VariableDeclaration": {
@@ -1626,14 +1686,23 @@ export class Analyzer implements TypeEnvironment {
           ? this.lookup(statement.initializer.name)
           : null;
         const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
+        // D44 rule 71: an unannotated alias of an assignment-established fact
+        // declares the source's domain and re-establishes the fact below, so
+        // the alias keeps the declared question testable (`taken != null`
+        // stays a real check) while reads still see the refined type.
+        const aliasSource = !annotated ? this.assignedFactDomain(statement.initializer, actual) : actual;
         const inferredStorage = statement.binding === "let" && !annotated
-          ? this.widenAggregateSingleton(actual)
-          : actual;
+          ? this.widenAggregateSingleton(aliasSource)
+          : aliasSource;
         const declared = annotationValid ? annotated ?? inferredStorage : invalidType;
         const contract = annotationValid ? annotated ?? inferredStorage : invalidType;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
         this.declarePattern(statement.pattern, statement.binding === "let", declared, contract);
         this.validateKnownBindingShape(statement.pattern, statement.initializer);
+        // D44 rule 71: the initializer's type is a fact for each declared
+        // binding — `const x: string? = "a"` reads as string until a write
+        // says otherwise.
+        if (annotationValid) this.establishAssignedPatternFacts(statement.pattern, actual);
         if (statement.pattern.kind === "NameBindingPattern") {
           const binding = this.scopes.at(-1)?.get(statement.pattern.name);
           if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
@@ -2271,7 +2340,9 @@ export class Analyzer implements TypeEnvironment {
     const outerConstructorDepth = this.constructorDepth;
     const outerClass = this.currentClass;
     const outerSuperMemberContext = this.superMemberContext;
+    const outerAllowedSuperCall = this.allowedSuperCall;
     this.constructorDepth = 0;
+    this.allowedSuperCall = null;
     this.currentClass = statement.name;
     this.superMemberContext = null;
     for (const member of [...statement.fields, ...statement.getters, ...statement.methods]) {
@@ -2285,6 +2356,17 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Unknown base class '${baseName}'`, statement.base!.span);
       } else if (baseName === statement.name || this.isSubclassOf(baseName, statement.name)) {
         this.typeError(`Class '${statement.name}' has a cyclic inheritance relationship`, statement.base!.span);
+      } else {
+        // `extends` evaluates the base when this class statement runs, so a
+        // base declared later in the module would fail to load (CLS-D8).
+        const baseDeclaredAt = this.hoistedClassDeclarations.get(baseBinding.storageBinding ?? baseBinding);
+        if (baseDeclaredAt !== undefined && baseDeclaredAt > statement.span.start) {
+          this.diagnostics.push(diagnostic(
+            "VEL3001",
+            `Class '${statement.name}' extends '${baseName}' before it is declared; move '${baseName}' above this class`,
+            statement.base!.span,
+          ));
+        }
       }
     }
 
@@ -2517,6 +2599,7 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     this.constructorDepth = outerConstructorDepth;
+    this.allowedSuperCall = outerAllowedSuperCall;
     this.currentClass = outerClass;
     this.superMemberContext = outerSuperMemberContext;
   }
@@ -2549,8 +2632,16 @@ export class Analyzer implements TypeEnvironment {
     this.asynchronousFunctions.push(false);
     this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
     this.constructorDepth += 1;
+    const outerAllowedSuperCall = this.allowedSuperCall;
+    const first = initialization.body[0];
+    this.allowedSuperCall = first?.kind === "ExpressionStatement"
+      && first.expression.kind === "CallExpression"
+      && first.expression.callee.kind === "SuperExpression"
+      ? spanIdentity(first.expression.span)
+      : null;
     this.declareBinding("self", false, { kind: "class", name: statement.name }, initialization.span, true);
     this.analyzeStatements(initialization.body);
+    this.allowedSuperCall = outerAllowedSuperCall;
     this.constructorDepth -= 1;
     this.returnContexts.pop();
     this.asynchronousFunctions.pop();
@@ -3109,7 +3200,10 @@ export class Analyzer implements TypeEnvironment {
     this.requireAssignable(valueType, targetType, statement.value.span);
     if (targetWritable && assignmentValid) {
       if (statement.target.kind === "MemberExpression") {
-        this.invalidateCurrentMemberNarrowings();
+        // D44 rules 71 and 73: invalidate first, then establish, so the new
+        // fact for the written path survives its own invalidation.
+        this.invalidateAliasableMemberNarrowings(statement.target);
+        if (operator === "=") this.establishAssignedMemberFact(statement.target, valueType, targetType);
       } else if (operator === "=") {
         this.invalidateAssignmentNarrowings(statement.target, targetBinding);
         if (targetBinding?.mutable) {
@@ -3120,6 +3214,12 @@ export class Analyzer implements TypeEnvironment {
           targetBinding.storageType = rebound;
           targetBinding.type = rebound;
           this.rebindCollectionInference(statement.target.kind === "IdentifierExpression" ? statement.target.name : "", targetBinding, statement.value, valueType);
+        }
+        // D44 rule 71: the assignment establishes the right-hand side's type
+        // as the location's fact (`x = maybeNull()` establishes nothing —
+        // the assigned type must actually refine the declared one).
+        if (statement.target.kind === "IdentifierExpression") {
+          this.establishAssignedFact(statement.target.name, valueType);
         }
       }
     }
@@ -3216,6 +3316,21 @@ export class Analyzer implements TypeEnvironment {
         }
         this.checkShadowedRead(expression.name, expression.span);
         this.recordInitializationImportRead(binding, expression.name, expression.span);
+        {
+          // The class name is hoisted for analysis, but the emitted `class`
+          // statement evaluates in place. A read that runs during module
+          // evaluation before that point would load into a raw
+          // ReferenceError; deferred positions (function and method bodies,
+          // arrows, field initializers, parameter defaults) stay legal.
+          const declaredAt = this.hoistedClassDeclarations.get(binding.storageBinding ?? binding);
+          if (declaredAt !== undefined && expression.span.start < declaredAt && this.inModuleInitializationPosition()) {
+            this.diagnostics.push(diagnostic(
+              "VEL3001",
+              `Class '${expression.name}' is used before its declaration; move this line after the class, or into a function that runs after the module loads`,
+              expression.span,
+            ));
+          }
+        }
         if (binding.reactiveKind) this.reactiveReferences.set(spanIdentity(expression.span), binding.reactiveKind);
         if (binding.narrowingFrame !== null) {
           this.runtimeNarrowings.set(spanIdentity(expression.span), {
@@ -3553,8 +3668,14 @@ export class Analyzer implements TypeEnvironment {
         fallbackContext,
       );
       if (isInvalidType(left) || isInvalidType(right)) return invalidType;
-      if (expandedLeft.kind !== "optional" && expandedLeft.kind !== "null" && expandedLeft.kind !== "any") {
-        this.typeError(`Left side of '??' is not optional: ${describeType(left)}`, leftExpression.span);
+      // D44 rule 71: `??` is a presence test, so an assignment-established
+      // fact never makes it a rejected constant — the operand is judged (and
+      // runtime-guarded) as its declared domain, exactly like `== null`.
+      const domainLeft = this.assignedFactDomain(leftExpression, left);
+      const expandedDomain = domainLeft === left ? expandedLeft : this.expandAliases(domainLeft);
+      if (domainLeft !== left) this.runtimeNarrowings.delete(spanIdentity(leftExpression.span));
+      if (expandedDomain.kind !== "optional" && expandedDomain.kind !== "null" && expandedDomain.kind !== "any") {
+        this.typeError(`Left side of '??' is not optional: ${describeType(domainLeft)}`, leftExpression.span);
       }
       return mergeTypes(nonOptional(expandedLeft), right);
     }
@@ -3610,12 +3731,46 @@ export class Analyzer implements TypeEnvironment {
     rightExpression: Expression,
     operationSpan: Span,
   ): void {
-    if (this.equalityTypesIntersect(leftType, rightType)) return;
+    // D44 rule 71: an assignment-established fact refines reads, but it never
+    // turns a later test into a constant — `const x: string? = "a"` followed
+    // by `x == null` is still the declared question about string?, not a
+    // rejected string-versus-null comparison. Checked (condition) facts keep
+    // participating: re-testing something the flow just proved stays an error.
+    const left = this.assignedFactDomain(leftExpression, leftType);
+    const right = this.assignedFactDomain(rightExpression, rightType);
+    // The equality itself re-asks the question at runtime and is total over
+    // its domain, so an assigned-fact operand must not carry a read guard —
+    // the guard would throw on the stale value the test is there to detect.
+    if (left !== leftType) this.runtimeNarrowings.delete(spanIdentity(leftExpression.span));
+    if (right !== rightType) this.runtimeNarrowings.delete(spanIdentity(rightExpression.span));
+    if (this.equalityTypesIntersect(left, right)) return;
     const constant = operator === "==" ? "false" : "true";
     this.typeError(
-      `${describeType(leftType)} and ${describeType(rightType)} have no values in common, so '${operator}' is always ${constant}${this.equalityGuidance(leftType, rightType)}`,
+      `${describeType(left)} and ${describeType(right)} have no values in common, so '${operator}' is always ${constant}${this.equalityGuidance(left, right)}`,
       { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) },
     );
+  }
+
+  /**
+   * The declared domain behind an assignment-established fact: what a test
+   * (`== null`, `??`) judges, and what an unannotated alias declares. Returns
+   * the inferred type unchanged when the expression's narrowing came from a
+   * check (or from nothing).
+   */
+  private assignedFactDomain(expression: Expression, inferred: ValueType): ValueType {
+    if (expression.kind === "IdentifierExpression") {
+      const binding = this.lookup(expression.name);
+      if (binding && binding.narrowingFrame !== null && binding.assignedFact === true) {
+        return (binding.storageBinding ?? binding).storageType;
+      }
+      return inferred;
+    }
+    if (expression.kind === "MemberExpression") {
+      const path = this.stableMemberAccessPath(expression);
+      const narrowing = path ? this.lookupMemberNarrowingEntry(path) : null;
+      if (narrowing?.assigned === true && narrowing.domain) return narrowing.domain;
+    }
+    return inferred;
   }
 
   // Intersection is decided by assignability in either direction, never by
@@ -3973,7 +4128,7 @@ export class Analyzer implements TypeEnvironment {
     if (calleeExpression.kind === "SuperExpression") {
       if (optionalCall) this.typeError("A base constructor call cannot be optional", callSpan);
       const baseName = this.currentClass ? this.classes.get(this.currentClass)?.base ?? null : null;
-      if (this.constructorDepth === 0 || !baseName) {
+      if (this.constructorDepth === 0 || !baseName || spanIdentity(callSpan) !== this.allowedSuperCall) {
         this.typeError("'super(...)' is only available as the first statement of a derived constructor", callSpan);
         for (const argument of arguments_) this.inferExpression(argument);
         return nullType;
@@ -4124,6 +4279,18 @@ export class Analyzer implements TypeEnvironment {
       this.constructorCalls.add(spanIdentity(callSpan));
       const info = this.classes.get(callee.identity ?? callee.name) ?? this.classes.get(callee.name);
       if (info?.abstract) this.typeError(`Cannot instantiate abstract class '${callee.name}'`, callSpan);
+      // A field initializer runs on every construction, so constructing the
+      // declaring class (or one of its subclasses, whose construction runs
+      // these same initializers) can never finish — it overflows the stack at
+      // the first construction. Arrows inside the initializer stay legal:
+      // they defer the construction (classFieldInitializerDepth is zeroed).
+      if (this.classFieldInitializerDepth > 0 && this.instanceFieldInitializerDepth > 0 && this.currentClass
+        && (callee.name === this.currentClass || this.isSubclassOf(callee.name, this.currentClass))) {
+        this.typeError(
+          `Field initializer constructs '${callee.name}' on every '${this.currentClass}' construction and can never finish; assign it in the constructor from a parameter, or create it lazily`,
+          callSpan,
+        );
+      }
       this.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
       return {
         kind: "class",
@@ -5523,6 +5690,32 @@ export class Analyzer implements TypeEnvironment {
       if (readValue && privateField
         && !(this.privateGetters.get(this.currentClass ?? "")?.has(property) ?? false)) {
         this.privateInstanceFieldReads.add(spanIdentity(memberSpan));
+      }
+      // CLS-D9: while a constructor runs, derived state does not exist yet,
+      // so a constructor body may only observe members its own class fully
+      // owns. An abstract member always resolves to a derived implementation,
+      // and a member some visible subclass overrides may — either observes
+      // fields that are not initialized until the derived constructor runs.
+      if (this.constructorDepth > 0
+        && objectExpression.kind === "IdentifierExpression" && objectExpression.name === "self"
+        && this.currentClass && classKey === this.currentClass) {
+        const abstractMember = (getter?.abstract ?? false) || (method?.abstract ?? false);
+        const overrider = !abstractMember && (getter || method)
+          ? [...this.classes.keys()].find((candidate) => candidate !== classKey
+            && this.isSubclassOf(candidate, classKey)
+            && (this.classes.get(candidate)?.methods.has(property) || this.classes.get(candidate)?.getters.has(property)))
+          : undefined;
+        if (abstractMember) {
+          this.typeError(
+            `Constructor of '${object.name}' cannot use abstract member '${property}': the derived implementation would run before the derived constructor initializes its state. Move this use into the derived constructor`,
+            memberSpan,
+          );
+        } else if (overrider !== undefined) {
+          this.typeError(
+            `Constructor of '${object.name}' cannot use '${property}': '${overrider}' overrides it, so the override would run before '${overrider}' initializes its state. Move this use into the derived constructor`,
+            memberSpan,
+          );
+        }
       }
     } else if (object.kind === "classConstructor") {
       const key = object.identity ?? object.name;
@@ -7483,6 +7676,7 @@ export class Analyzer implements TypeEnvironment {
       narrowingFrame: null,
     };
     scope.set(name, binding);
+    if (this.scopes.length === 1 && type.kind === "typeObject") this.runtimeTypeObjectNames.add(name);
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
   }
 
@@ -7973,6 +8167,8 @@ export class Analyzer implements TypeEnvironment {
       if (local) {
         local.type = type;
         local.narrowingFrame = this.flowFrameDepth;
+        // A persisted (checked or merged) fact is not assignment-established.
+        local.assignedFact = false;
       } else {
         scope.set(key, {
           mutable: binding.mutable,
@@ -7985,6 +8181,101 @@ export class Analyzer implements TypeEnvironment {
           ...(binding.reactiveKind ? { reactiveKind: binding.reactiveKind } : {}),
         });
       }
+    }
+  }
+
+  // D44 rule 71: an assignment (including a declaration initializer)
+  // establishes the right-hand side's type as a fact for the assigned
+  // location — after an assignment the value there is the assigned value, so
+  // this is the most reliable fact the system carries. The fact is spelled as
+  // the declared arm the value inhabits when exactly one arm fits, so reads
+  // keep the declared vocabulary. No fact is established when the assignment
+  // adds nothing (`x = maybeNull()` keeps `string?`), when the declared type
+  // is not a refinable domain (only optionals, unions, and `unknown` are),
+  // when the value is `null` (the declaration `let x: string? = null` leaves
+  // the declared question open), or when either side is an escape hatch.
+  private assignedFactType(assigned: ValueType, storage: ValueType): ValueType | null {
+    if (isInvalidType(assigned) || isInvalidType(storage)) return null;
+    if (assigned.kind === "any" || assigned.kind === "null") return null;
+    if (containsInferredResultPlaceholder(assigned)) return null;
+    const expandedStorage = this.expandAliases(storage);
+    if (expandedStorage.kind !== "optional" && expandedStorage.kind !== "union" && expandedStorage.kind !== "unknown") return null;
+    if (expandedStorage.kind === "unknown" && expandedStorage.restricted) return null;
+    if (!isAssignable(assigned, storage, this)) return null;
+    if (isAssignable(storage, assigned, this)) return null;
+    if (expandedStorage.kind === "unknown") return assigned;
+    const arms = expandedStorage.kind === "optional" ? [expandedStorage.inner] : expandedStorage.members;
+    const matching = arms.filter((arm) => isAssignable(assigned, arm, this));
+    return matching.length === 1 ? matching[0]! : null;
+  }
+
+  private establishAssignedFact(name: string, assigned: ValueType): void {
+    const binding = this.lookup(name);
+    if (!binding) return;
+    const fact = this.assignedFactType(assigned, (binding.storageBinding ?? binding).storageType);
+    if (fact === null) return;
+    const scope = this.scopes.at(-1)!;
+    const local = scope.get(name);
+    if (local) {
+      local.type = fact;
+      local.narrowingFrame = this.flowFrameDepth;
+      local.assignedFact = true;
+    } else {
+      scope.set(name, {
+        mutable: binding.mutable,
+        type: fact,
+        declaredType: binding.declaredType,
+        storageType: binding.storageType,
+        storageBinding: binding.storageBinding ?? binding,
+        span: binding.span,
+        narrowingFrame: this.flowFrameDepth,
+        assignedFact: true,
+        ...(binding.reactiveKind ? { reactiveKind: binding.reactiveKind } : {}),
+      });
+    }
+  }
+
+  /** Rule 71 for member targets: establish after invalidation so the new fact survives its own write. */
+  private establishAssignedMemberFact(
+    target: Extract<Expression, { kind: "MemberExpression" }>,
+    assigned: ValueType,
+    declaredMemberType: ValueType,
+  ): void {
+    const fact = this.assignedFactType(assigned, declaredMemberType);
+    if (fact === null) return;
+    const path = this.stableMemberAccessPath(target);
+    if (!path) return;
+    this.memberNarrowings.at(-1)!.set(path, {
+      type: fact,
+      frame: this.flowFrameDepth,
+      assigned: true,
+      domain: declaredMemberType,
+    });
+  }
+
+  /** Rule 71 for destructuring declarations: each binding learns its own initializer piece. */
+  private establishAssignedPatternFacts(pattern: BindingPattern, assigned: ValueType): void {
+    if (pattern.kind === "NameBindingPattern") {
+      this.establishAssignedFact(pattern.name, assigned);
+      return;
+    }
+    const expanded = this.expandAliases(assigned);
+    if (pattern.kind === "ListBindingPattern") {
+      if (expanded.kind !== "list") return;
+      const element = expanded.readonlyView ? this.readonlyDataViewOf(expanded.element) : expanded.element;
+      for (const child of pattern.elements) if (child) this.establishAssignedPatternFacts(child, element);
+      return;
+    }
+    const fields = expanded.kind === "object" ? expanded.fields
+      : expanded.kind === "named" ? this.fieldsOf(expanded.identity ?? expanded.name) : null;
+    if (!fields) return;
+    for (const entry of pattern.entries) {
+      const field = fields.get(entry.property);
+      if (!field) continue;
+      const piece = expanded.kind === "object" && expanded.optionalFields?.has(entry.property)
+        ? optionalOf(field)
+        : field;
+      this.establishAssignedPatternFacts(entry.pattern, piece);
     }
   }
 
@@ -8060,9 +8351,13 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private lookupMemberNarrowing(path: string): ValueType | null {
+    return this.lookupMemberNarrowingEntry(path)?.type ?? null;
+  }
+
+  private lookupMemberNarrowingEntry(path: string): MemberNarrowing | null {
     for (let index = this.memberNarrowings.length - 1; index >= 0; index -= 1) {
       const narrowing = this.memberNarrowings[index]?.get(path);
-      if (narrowing && narrowing.frame === this.flowFrameDepth) return narrowing.type;
+      if (narrowing && narrowing.frame === this.flowFrameDepth) return narrowing;
     }
     return null;
   }
@@ -8072,6 +8367,7 @@ export class Analyzer implements TypeEnvironment {
       if (binding && binding.narrowingFrame !== null) {
         binding.type = binding.storageType;
         binding.narrowingFrame = null;
+        binding.assignedFact = false;
       }
       if (binding) this.invalidateMemberNarrowings(`${binding.span.start}:${target.name}`);
       return;
@@ -8119,6 +8415,54 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  // D44 rule 73: a member write invalidates the facts whose root could alias
+  // an object the write mutates. Two roots whose types have no values in
+  // common cannot be the same object, so unrelated roots keep their facts;
+  // same-type roots still invalidate each other. Every receiver along the
+  // written path is compared — `outer.inner.value = x` mutates the object at
+  // `outer.inner`, which a fact root of that type may alias even when the
+  // outermost roots' types are unrelated.
+  private invalidateAliasableMemberNarrowings(target: Extract<Expression, { kind: "MemberExpression" }>): void {
+    const receiverTypes: ValueType[] = [];
+    let receiver: Expression = target.object;
+    for (;;) {
+      const inferred = this.inferredExpressionTypes.get(spanIdentity(receiver.span))
+        ?? (receiver.kind === "IdentifierExpression" ? this.lookup(receiver.name)?.type ?? null : null);
+      if (!inferred) {
+        // An unresolvable receiver keeps the previous conservative behavior.
+        this.invalidateCurrentMemberNarrowings();
+        return;
+      }
+      receiverTypes.push(inferred);
+      if (receiver.kind !== "MemberExpression") break;
+      receiver = receiver.object;
+    }
+    for (const scope of this.memberNarrowings) {
+      for (const [path, narrowing] of scope) {
+        if (narrowing.frame !== this.flowFrameDepth) continue;
+        const rootType = this.memberNarrowingRootType(path);
+        if (rootType !== null
+          && !receiverTypes.some((receiverType) => this.equalityTypesIntersect(receiverType, rootType))) continue;
+        scope.delete(path);
+      }
+    }
+  }
+
+  /** The current type of the binding a member-narrowing path is rooted at, or null when it cannot be resolved. */
+  private memberNarrowingRootType(path: string): ValueType | null {
+    const dot = path.indexOf(".");
+    const root = dot === -1 ? path : path.slice(0, dot);
+    const colon = root.indexOf(":");
+    if (colon === -1) return null;
+    const start = Number(root.slice(0, colon));
+    const name = root.slice(colon + 1);
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      const binding = this.scopes[index]?.get(name);
+      if (binding && binding.span.start === start) return binding.type;
+    }
+    return null;
+  }
+
   private runtimeCheckedType(input: ValueType, checked: ValueType): ValueType {
     const source = this.expandAliases(input);
     const candidates = source.kind === "union" ? source.members
@@ -8162,6 +8506,7 @@ export class Analyzer implements TypeEnvironment {
       readonly type: ValueType;
       readonly storageType: ValueType;
       readonly frame: number | null;
+      readonly assigned: boolean;
     }>();
     for (const scope of this.scopes) {
       for (const binding of scope.values()) {
@@ -8169,6 +8514,7 @@ export class Analyzer implements TypeEnvironment {
           type: binding.type,
           storageType: binding.storageType,
           frame: binding.narrowingFrame,
+          assigned: binding.assignedFact === true,
         });
       }
     }
@@ -8183,6 +8529,7 @@ export class Analyzer implements TypeEnvironment {
       binding.type = state.type;
       binding.storageType = state.storageType;
       binding.narrowingFrame = state.frame;
+      binding.assignedFact = state.assigned;
     }
     snapshot.members.forEach((source, index) => {
       const target = this.memberNarrowings[index];
@@ -8280,6 +8627,14 @@ export class Analyzer implements TypeEnvironment {
     for (const key of this.logicalConditionNarrowings.keys()) {
       if (insideBody(key)) this.logicalConditionNarrowings.delete(key);
     }
+    // Runtime narrowing guards recorded by the first pass are re-derived by
+    // the reanalysis. A guard kept from the first pass while the second pass
+    // no longer proves its fact would throw NarrowingError on later loop
+    // iterations of perfectly legal code (the fact holds on iteration one,
+    // the back edge invalidates it, and the stale guard still expects it).
+    for (const key of this.runtimeNarrowings.keys()) {
+      if (insideBody(key)) this.runtimeNarrowings.delete(key);
+    }
   }
 
   private flowSnapshotAfterInvalidations(
@@ -8362,6 +8717,7 @@ export class Analyzer implements TypeEnvironment {
       for (const binding of branch.bindings) {
         binding.type = binding.storageType;
         binding.narrowingFrame = null;
+        binding.assignedFact = false;
       }
       for (const [index, paths] of branch.members) {
         const scope = this.memberNarrowings[index];
