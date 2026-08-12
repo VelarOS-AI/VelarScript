@@ -30,6 +30,7 @@ import {
 } from "@velarscript/compiler/extension";
 import { velarNodeCompilerExtension } from "@velarscript/node/compiler";
 import { VELAR_STANDARD_API_VERSION } from "./version.ts";
+import { embeddedStandardAsset } from "./embedded-standard-assets.ts";
 
 const anyType: ValueType = { kind: "any" };
 const nullType: ValueType = { kind: "null" };
@@ -270,7 +271,7 @@ interface VelarSourceStandardModule {
 }
 
 function loadVelarSourceStandardModule(source: string, asset: string): VelarSourceStandardModule {
-  const text = readFileSync(new URL(`../stdlib/${asset}`, import.meta.url), "utf8");
+  const text = embeddedStandardAsset(asset) ?? readFileSync(new URL(`../stdlib/${asset}`, import.meta.url), "utf8");
   const inspection = inspectModule(text, { path: source });
   if (inspection.diagnostics.length > 0) {
     throw new Error(inspection.diagnostics.map((diagnostic) => formatDiagnostic(inspection.source, diagnostic)).join("\n\n"));

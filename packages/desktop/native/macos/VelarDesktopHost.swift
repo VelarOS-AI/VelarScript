@@ -689,6 +689,8 @@ private final class NodeCapabilityHost {
         }
         switch event {
         case "process-owned":
+            fallthrough
+        case "language-server-owned":
             guard let pid = object["pid"] as? Int, pid > 0, pid <= Int(Int32.max),
                   processOwners[handle] == nil,
                   generation == activeGeneration || pending.values.contains(where: { $0.identity.generation == generation }) else {
@@ -697,6 +699,8 @@ private final class NodeCapabilityHost {
             }
             processOwners[handle] = ProcessOwner(pid: pid_t(pid), generation: generation)
         case "process-settled":
+            fallthrough
+        case "language-server-settled":
             guard let owner = processOwners[handle], owner.generation == generation else {
                 fail("Desktop Node capability host settled an unknown process owner")
                 return

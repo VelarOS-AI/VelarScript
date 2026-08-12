@@ -196,9 +196,10 @@ mount(<App />, "#app")
     await run(process.execPath, [installedCli, "check", desktopProject], directory);
     await run(process.execPath, [installedCli, "package", desktopProject], directory);
     const builtDesktop = JSON.parse(await readFile(join(desktopProject, "dist", "desktop", "velar-desktop-build.json"), "utf8")) as {
+      formatVersion: number;
       kind: string;
       applicationBundle: string;
-      sizes: { totalBytes: number };
+      sizes: { toolchainBytes: number; totalBytes: number };
       sizeBudgetBytes: number;
       runtime: {
         kind: string;
@@ -209,8 +210,10 @@ mount(<App />, "#app")
         executableHint?: unknown;
       };
     };
+    assert.equal(builtDesktop.formatVersion, 2);
     assert.equal(builtDesktop.kind, "velar-desktop-build");
     assert.ok(builtDesktop.sizes.totalBytes < builtDesktop.sizeBudgetBytes);
+    assert.ok(builtDesktop.sizes.toolchainBytes > 1024 * 1024);
     assert.deepEqual(builtDesktop.runtime, {
       kind: "external-node",
       minimumMajor: 24,
@@ -226,6 +229,10 @@ mount(<App />, "#app")
     assert.equal(applicationIcon.subarray(0, 4).toString("ascii"), "icns");
     const hostConfigurationText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfiguration = JSON.parse(hostConfigurationText) as Record<string, unknown>;
+    assert.deepEqual(hostConfiguration.languageServer, { path: "host/language-server.js" });
+    const packagedLanguageServer = join(application, "Contents", "Resources", "host", "language-server.js");
+    assert.ok((await readFile(packagedLanguageServer)).byteLength > 1024 * 1024);
+    await probeLanguageServer(packagedLanguageServer, desktopProject);
     assert.equal(hostConfiguration.nodeExecutableHint, undefined);
     assert.ok(!hostConfigurationText.includes(process.execPath));
     const smoke = await run(join(application, "Contents", "MacOS", "VelarDesktopHost"), ["--smoke"], desktopProject, {
@@ -422,4 +429,56 @@ async function run(
   });
   if (code !== 0) throw new Error(`${command} ${arguments_.join(" ")} failed (${code})\n${stdout}\n${stderr}`);
   return { stdout, stderr };
+}
+
+async function probeLanguageServer(entry: string, cwd: string): Promise<void> {
+  const child = spawn(process.execPath, [entry], { cwd, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+  let buffer = Buffer.alloc(0);
+  let stderr = "";
+  const messages: Array<Record<string, unknown>> = [];
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (true) {
+      const boundary = buffer.indexOf("\r\n\r\n");
+      if (boundary < 0) return;
+      const match = /Content-Length:\s*(\d+)/iu.exec(buffer.subarray(0, boundary).toString("ascii"));
+      if (!match) return;
+      const size = Number(match[1]);
+      const end = boundary + 4 + size;
+      if (buffer.byteLength < end) return;
+      messages.push(JSON.parse(buffer.subarray(boundary + 4, end).toString("utf8")) as Record<string, unknown>);
+      buffer = buffer.subarray(end);
+    }
+  });
+  const send = (message: unknown): void => {
+    const body = JSON.stringify(message);
+    child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+  };
+  const waitForId = async (id: number): Promise<Record<string, unknown>> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const message = messages.find((candidate) => candidate.id === id);
+      if (message) return message;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    throw new Error(`Installed language server did not respond to ${id}: ${stderr}`);
+  };
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    const initialized = await waitForId(1);
+    assert.equal((initialized.result as { serverInfo: { name: string } }).serverInfo.name, "VelarScript Language Server");
+    send({ jsonrpc: "2.0", id: 2, method: "shutdown", params: null });
+    await waitForId(2);
+    send({ jsonrpc: "2.0", method: "exit", params: null });
+    child.stdin.end();
+    const code = await new Promise<number | null>((resolveExit, rejectExit) => {
+      const timer = setTimeout(() => rejectExit(new Error("Installed language server did not exit within 5 seconds")), 5_000);
+      child.once("error", (error) => { clearTimeout(timer); rejectExit(error); });
+      child.once("exit", (exitCode) => { clearTimeout(timer); resolveExit(exitCode); });
+    });
+    assert.equal(code, 0, stderr);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
 }

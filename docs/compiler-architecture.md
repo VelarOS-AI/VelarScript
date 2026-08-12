@@ -62,6 +62,16 @@ manifest and bounded `.d.ts` graph used by each safe JavaScript import. Editor
 sessions track those files with the same content snapshots as VelarScript
 sources and resources, so a declaration change invalidates its importer and the
 importer's reverse dependency closure without requiring an unrelated source edit.
+An authoritative session refresh resolves the nearest manifest, walks the owned
+workspace, and rereads its tracked inputs. Once a watcher supplies exact changed
+paths, the session instead reuses that manifest identity, performs no workspace
+walk, and reads only changed source/resource/declaration inputs before invoking
+the same reverse-dependency compiler. Its activity record exposes refresh versus
+known-change strategy, workspace scans, file reads, and complete project reuse so
+performance tests verify the contract rather than infer it from elapsed time.
+Nested manifest roots are separate owners: an outer workspace neither discovers
+their sources nor consumes their open-document overrides. Switching documents in
+one project never changes the manifest entry or extension configuration.
 Opening an explicit `.vel` file still discovers its nearest manifest. Missing
 manifests intentionally select standalone Core mode; an existing malformed,
 legacy, or unloadable manifest is a project error and is never hidden by
@@ -70,6 +80,16 @@ Manifest-backed editor sessions key reuse by the SHA-256 identity of the exact
 bounded `velar.json` source. They do not serialize extension-owned runtime
 configuration to guess whether it changed, so `Map`, `Set`, and other validated
 extension config representations cannot collapse to an accidental shared key.
+
+The stdio language server publishes only the final compiler diagnostics and
+semantic index from that session. It negotiates UTF-32/code-point positions when
+the client offers them, otherwise preserving the LSP UTF-16 default; diagnostics,
+navigation, semantic tokens, inlay hints, and formatter edits all use the selected
+encoding. Full-text changes are coalesced by document version, watched-file
+notifications use the known-change path, and `velar/workspaceRescan` explicitly
+requests an authoritative refresh after watcher overflow. `$/cancelRequest` is
+handled while framed input is still arriving, so a queued semantic request can
+return LSP cancellation code `-32800` without waiting behind unrelated analysis.
 
 Project modules compile dependency-first. The public interface returned by a
 successful compilation is built from that same analyzer's binding types rather

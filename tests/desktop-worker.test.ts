@@ -6,8 +6,71 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
+import { buildLanguageServerTool } from "../packages/cli/src/language-server-tool.ts";
 
 const workerPath = resolve("packages/desktop/native/node/worker.js");
+
+test("Desktop owns one packaged official language-server lifecycle without process grants", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-language-server-"));
+  const project = join(directory, "project");
+  const appData = join(directory, "app-data");
+  const host = join(directory, "host");
+  await Promise.all([mkdir(project), mkdir(appData), mkdir(host)]);
+  await writeFile(join(project, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
+  const mainPath = join(project, "main.vel");
+  await writeFile(mainPath, "const value = 1\n", "utf8");
+  await buildLanguageServerTool(join(host, "language-server.js"));
+  const configPath = join(directory, "desktop.json");
+  await writeFile(configPath, JSON.stringify({
+    protocolVersion: 1,
+    permissions: { files: ["project"], processes: [], network: [], secrets: [] },
+    languageServer: { path: "host/language-server.js" },
+  }), "utf8");
+  const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
+  const client = new WorkerClient(worker);
+  let serverPid: number | null = null;
+  try {
+    const handle = await client.call("language-server", "start", []) as number;
+    assert.ok(handle >= 1_000_000_000);
+    const ownership = client.lifecycle().find((event) => event.hostEvent === "language-server-owned" && event.handle === handle);
+    assert.ok(ownership?.pid);
+    serverPid = ownership.pid as number;
+
+    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })]), null);
+    const initialized = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number; result: { serverInfo: { name: string } } };
+    assert.equal(initialized.id, 1);
+    assert.equal(initialized.result.serverInfo.name, "VelarScript Language Server");
+
+    const cancelledPull = client.beginCall("language-server", "next", [handle]);
+    client.cancelRequest(cancelledPull.id);
+    await assert.rejects(cancelledPull.result, /pull was cancelled|request was cancelled/u);
+    assert.equal(await client.call("language-server", "send", [handle, JSON.stringify({
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: { textDocument: { uri: new URL(`file://${mainPath}`).href, languageId: "velar", version: 1, text: "const value =\n" } },
+    })]), null);
+    const diagnostics = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { method: string; params: { diagnostics: unknown[] } };
+    assert.equal(diagnostics.method, "textDocument/publishDiagnostics");
+    assert.ok(diagnostics.params.diagnostics.length > 0);
+
+    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", id: 2, method: "shutdown", params: null })]);
+    const shutdown = JSON.parse(await client.call("language-server", "next", [handle]) as string) as { id: number };
+    assert.equal(shutdown.id, 2);
+    await client.call("language-server", "send", [handle, JSON.stringify({ jsonrpc: "2.0", method: "exit", params: null })]);
+    assert.equal(await client.call("language-server", "close", [handle]), null);
+    await assert.rejects(client.call("language-server", "next", [handle]), /unknown or already released/u);
+    assert.ok(client.lifecycle().some((event) => event.hostEvent === "language-server-settled" && event.handle === handle));
+    for (let attempt = 0; attempt < 100 && serverPid !== null; attempt += 1) {
+      try { process.kill(serverPid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+      catch { serverPid = null; }
+    }
+    assert.equal(serverPid, null, "closing the Desktop language server must reap its process group");
+  } finally {
+    if (serverPid !== null) terminateProcessGroup(serverPid);
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("Desktop Node capability host enforces filesystem, process, and network grants", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-worker-"));
@@ -402,7 +465,7 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     }
     assert.equal(cancelledRunExists, false, "cancelling an in-flight process run must reap its hidden process owner");
   } finally {
-    client.close();
+    await client.close();
     await Promise.all([server, redirectServer, ungrantedServer].map(closeServer));
     await rm(directory, { recursive: true, force: true });
   }
@@ -565,7 +628,7 @@ setInterval(() => {}, 1000);
     }
   } finally {
     if (escapedPid !== null) terminateProcessGroup(escapedPid);
-    client.close();
+    await client.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -607,7 +670,7 @@ test("Desktop capability host drains transferred process ownership before a fata
     assert.equal(ownedPid, null, "the Desktop worker must reap its child before fatal exit");
   } finally {
     if (ownedPid !== null) terminateProcessGroup(ownedPid);
-    client.close();
+    await client.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -640,7 +703,9 @@ class WorkerClient {
         else update.reject(new Error(typeof message.error === "string" ? message.error : "Desktop project-root update failed"));
         return;
       }
-      if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled") && Number.isSafeInteger(message.handle) && typeof message.owner === "string") {
+      if ((message.hostEvent === "process-owned" || message.hostEvent === "process-settled"
+        || message.hostEvent === "language-server-owned" || message.hostEvent === "language-server-settled")
+        && Number.isSafeInteger(message.handle) && typeof message.owner === "string") {
         this.lifecycleEvents.push({ hostEvent: message.hostEvent, owner: message.owner, handle: message.handle as number, ...(Number.isSafeInteger(message.pid) ? {pid: message.pid} : {}) });
         return;
       }
@@ -705,9 +770,28 @@ class WorkerClient {
     this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, hostCommand, owner })}\n`);
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.child.stdin.end();
-    if (!this.child.killed) this.child.kill("SIGTERM");
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+    this.child.kill("SIGTERM");
+    if (await this.waitForExit(2_000)) return;
+    this.child.kill("SIGKILL");
+    if (!await this.waitForExit(2_000)) throw new Error("Desktop worker did not exit after SIGKILL");
+  }
+
+  private waitForExit(timeout: number): Promise<boolean> {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return Promise.resolve(true);
+    return new Promise((resolveExit) => {
+      const onExit = (): void => {
+        clearTimeout(timer);
+        resolveExit(true);
+      };
+      const timer = setTimeout(() => {
+        this.child.off("exit", onExit);
+        resolveExit(false);
+      }, timeout);
+      this.child.once("exit", onExit);
+    });
   }
 }
 

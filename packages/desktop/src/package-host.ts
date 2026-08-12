@@ -15,12 +15,13 @@ export const velarApplicationPackageHost: ApplicationPackageHost = Object.freeze
       input.projectRoot,
       input.config as VelarDesktopConfig,
       input.buildFramework,
+      input.buildTool,
     );
     const sizes = result.manifest.sizes;
     return Object.freeze({
       artifactPath: result.applicationBundle,
       details: Object.freeze([
-        `Size ${formatBytes(sizes.totalBytes)} / ${formatBytes(result.manifest.sizeBudgetBytes)} (host ${formatBytes(sizes.hostBytes)}, renderer ${formatBytes(sizes.rendererBytes)}, capabilities ${formatBytes(sizes.capabilityHostBytes)})`,
+        `Size ${formatBytes(sizes.totalBytes)} / ${formatBytes(result.manifest.sizeBudgetBytes)} (host ${formatBytes(sizes.hostBytes)}, renderer ${formatBytes(sizes.rendererBytes)}, capabilities ${formatBytes(sizes.capabilityHostBytes)}, toolchain ${formatBytes(sizes.toolchainBytes)})`,
         `Runtime external Node.js >=${result.manifest.runtime.minimumMajor} (not embedded)`,
       ]),
     });

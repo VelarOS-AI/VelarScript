@@ -73,7 +73,7 @@ function registerRuntimeType<T extends object>(value: T): T {
 
 test("Node path, filesystem, process, terminal, and HTTP modules expose typed Core contracts while Web owns its HTTP target", async () => {
   const api = standardModuleApi();
-  assert.deepEqual(api.modules["velar/path"], ["basename", "contains", "dirname", "extension", "isAbsolute", "join", "normalize", "relative", "resolve"]);
+  assert.deepEqual(api.modules["velar/path"], ["basename", "contains", "dirname", "extension", "fromFileUrl", "isAbsolute", "join", "normalize", "relative", "resolve", "toFileUrl"]);
   assert.deepEqual(api.modules["velar/process"], ["Process", "ProcessOutputChannel", "run", "start"]);
   assert.deepEqual(api.modules["velar/terminal"], ["terminal"]);
   assert.deepEqual(api.modules["velar/http"], ["HttpAbortError", "HttpError", "HttpTransportError", "HttpTransportPhase", "http", "secretHeader"]);
@@ -1087,11 +1087,18 @@ test("Node filesystem and path runtimes keep destructive operations bounded and 
   }>("velar/fs");
   const path = await runtime<{
     contains(root: string, target: string): boolean;
+    fromFileUrl(url: string): string;
     join(parts?: readonly string[]): string;
     resolve(parts?: readonly string[]): string;
+    toFileUrl(path: string): string;
   }>("velar/path");
   const directory = await mkdtemp(join(tmpdir(), "velar-node-fs-"));
   try {
+    const encodedPath = path.join([directory, "space and 雪#100%.vel"]);
+    const encodedUrl = path.toFileUrl(encodedPath);
+    assert.equal(encodedUrl, pathToFileURL(encodedPath).href);
+    assert.equal(path.fromFileUrl(encodedUrl), encodedPath);
+    assert.throws(() => path.fromFileUrl("https://example.test/main.vel"), /requires a file URL/u);
     const nested = path.join([directory, "nested", "one", "two"]);
     const first = path.join([nested, "first.txt"]);
     const copy = path.join([nested, "copy.txt"]);

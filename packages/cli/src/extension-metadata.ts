@@ -8,6 +8,7 @@ import {
 } from "@velarscript/compiler";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { isReservedExtensionManifestKey } from "./project-format.ts";
+import { bundledExtension } from "./bundled-extension-registry.ts";
 
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_EXTENSION_GRAPH_SIZE = 64;
@@ -33,7 +34,7 @@ export interface ResolvedExtensionPackage {
   readonly extends: Readonly<Record<string, string>>;
   readonly composes: Readonly<Record<string, string>>;
   readonly direct: boolean;
-  readonly resolution: "project" | "toolchain";
+  readonly resolution: "project" | "toolchain" | "bundled";
 }
 
 export async function resolveInstalledExtensionPackage(
@@ -132,6 +133,24 @@ async function readExtensionPackage(
   if (!manifestPath && allowToolchain && toolchainExtensionPackages.has(name)) {
     manifestPath = await installedPackageManifest(toolchainRequire, name);
     resolution = "toolchain";
+  }
+  const bundled = !manifestPath && allowToolchain ? bundledExtension(name) : null;
+  if (bundled) {
+    return {
+      package: Object.freeze({
+        name,
+        version: bundled.version,
+        manifestPath: import.meta.url,
+        kind: bundled.kind,
+        apiVersion: bundled.apiVersion,
+        manifestKey: bundled.manifestKey,
+        extends: bundled.extends,
+        composes: bundled.composes,
+        direct,
+        resolution: "bundled",
+      }),
+      peerDependencies: bundled.extends,
+    };
   }
   if (!manifestPath) throw new Error(`cannot resolve installed package '${name}'`);
   const information = await stat(manifestPath);

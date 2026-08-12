@@ -55,9 +55,25 @@ without a shell, then verifies the runtime version. Build-machine executable
 paths and versions are not embedded in the application.
 A future standalone profile must report its runtime bytes separately instead
 of hiding them from the application size budget.
+`velar package` asks the CLI package host to build the exact official language
+server and stores it at `Contents/Resources/host/language-server.js`. The bundle
+contains the official Core/Web/Desktop compiler extensions and source-backed
+standard assets, so the installed application neither searches `PATH` for
+`velar`, resolves project npm packages, nor depends on the build workspace.
+Toolchain bytes are reported separately and remain part of the application size
+budget and tree hash.
 
 Desktop owns `velar/desktop` and permission-scoped target implementations of
 `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`.
+Packaged applications may call `languageServer() -> Promise<LanguageServer>`.
+The returned owner sends and pulls bounded JSON message bodies through
+`send(message)`, `next()`, and idempotent `close()`; Content-Length framing,
+the exact official executable, and child-process ownership remain private to
+Desktop. Only one pull may be pending, at most four servers may be live, and
+document-generation retirement, project-grant replacement, Worker failure, or
+host shutdown reaps the corresponding process group. This exact official tool
+does not require a general process permission and cannot launch an arbitrary
+command.
 Applications with the `project` file grant may call
 `selectProjectDirectory()` to open the native directory chooser. A successful
 choice atomically replaces the single project grant for subsequent relative

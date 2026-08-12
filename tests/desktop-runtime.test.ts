@@ -26,6 +26,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   const httpResponseFailures = new Set<number>();
   const pendingRequests = new Map<number, { reject(error: Error): void }>();
   const pendingProcessRead = { resolve: null as ((value: unknown) => void) | null };
+  const languageServerMessages = ['{"jsonrpc":"2.0","id":1,"result":null}'];
   const stopWaitRace = { reject: null as ((error: Error) => void) | null };
   let pendingProcessReadDelivered = false;
   let hostileResponseReads = 0;
@@ -64,6 +65,11 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
           currentProjectDirectory = selectedProjectDirectory;
           return selectedProjectDirectory;
         }
+      }
+      if (capability === "language-server") {
+        if (operation === "start") return 1_000_000_000;
+        if (operation === "send" || operation === "close") return null;
+        if (operation === "next") return languageServerMessages.shift() ?? null;
       }
       if (capability === "process" && operation === "start") {
         if (args[0] === "hostile-start") {
@@ -485,13 +491,22 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       contains(root: string, target: string): boolean;
       dirname(path: string): string;
       extension(path: string): string;
+      fromFileUrl(url: string): string;
       isAbsolute(path: string): boolean;
       join(parts?: readonly string[]): string;
       normalize(path: string): string;
       relative(from: string, to: string): string;
       resolve(parts?: readonly string[]): string;
+      toFileUrl(path: string): string;
     }>(directory, "path", "velar/path");
     assert.equal(pathRuntime.resolve(["src", "main.vel"]), `${directory}/src/main.vel`);
+    const encodedPath = `${directory}/space and 雪#100%.vel`;
+    const encodedUrl = pathRuntime.toFileUrl(encodedPath);
+    assert.equal(encodedUrl, pathToFileURL(encodedPath).href);
+    assert.equal(pathRuntime.fromFileUrl(encodedUrl), encodedPath);
+    assert.equal(pathRuntime.fromFileUrl(`file://localhost${pathToFileURL(encodedPath).pathname}`), encodedPath);
+    assert.throws(() => pathRuntime.fromFileUrl("https://example.test/main.vel"), /requires a local file URL/u);
+    assert.throws(() => pathRuntime.fromFileUrl("file:///project%2Fescape.vel"), /requires a local file URL/u);
     assert.equal(pathRuntime.join(["src", "main.vel"]), "src/main.vel");
     assert.equal(pathRuntime.contains(directory, `${directory}/src/main.vel`), true);
     assert.equal(pathRuntime.contains(`${directory}/src`, directory), false);
@@ -572,6 +587,9 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     const defineProperty = Object.defineProperty;
     const stringIndexOf = Object.getOwnPropertyDescriptor(String.prototype, "indexOf")!;
     const stringSlice = Object.getOwnPropertyDescriptor(String.prototype, "slice")!;
+    const stringToLowerCase = Object.getOwnPropertyDescriptor(String.prototype, "toLowerCase")!;
+    const urlPathname = Object.getOwnPropertyDescriptor(URL.prototype, "pathname")!;
+    const urlProtocol = Object.getOwnPropertyDescriptor(URL.prototype, "protocol")!;
     const arrayJoin = Object.getOwnPropertyDescriptor(Array.prototype, "join")!;
     const arrayIsArray = Object.getOwnPropertyDescriptor(Array, "isArray")!;
     const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor(Object, "getOwnPropertyDescriptor")!;
@@ -581,15 +599,22 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     try {
       defineProperty(String.prototype, "indexOf", { ...stringIndexOf, value: () => { throw new Error("poisoned indexOf"); } });
       defineProperty(String.prototype, "slice", { ...stringSlice, value: () => { throw new Error("poisoned slice"); } });
+      defineProperty(String.prototype, "toLowerCase", { ...stringToLowerCase, value: () => { throw new Error("poisoned toLowerCase"); } });
+      defineProperty(URL.prototype, "pathname", { ...urlPathname, get: () => { throw new Error("poisoned URL pathname"); } });
+      defineProperty(URL.prototype, "protocol", { ...urlProtocol, get: () => { throw new Error("poisoned URL protocol"); } });
       defineProperty(Array.prototype, "join", { ...arrayJoin, value: () => { throw new Error("poisoned join"); } });
       defineProperty(Array, "isArray", { ...arrayIsArray, value: () => { throw new Error("poisoned isArray"); } });
       defineProperty(Object, "getOwnPropertyDescriptor", { ...getOwnPropertyDescriptor, value: () => { throw new Error("poisoned descriptor"); } });
       capturedJoin = pathRuntime.join(["alpha", "..", "stable.txt"]);
       capturedExtension = pathRuntime.extension("archive.tar.gz");
       capturedContains = pathRuntime.contains(directory, `${directory}/stable.txt`);
+      assert.equal(pathRuntime.fromFileUrl(pathRuntime.toFileUrl(`${directory}/stable.txt`)), `${directory}/stable.txt`);
     } finally {
       defineProperty(String.prototype, "indexOf", stringIndexOf);
       defineProperty(String.prototype, "slice", stringSlice);
+      defineProperty(String.prototype, "toLowerCase", stringToLowerCase);
+      defineProperty(URL.prototype, "pathname", urlPathname);
+      defineProperty(URL.prototype, "protocol", urlProtocol);
       defineProperty(Array.prototype, "join", arrayJoin);
       defineProperty(Array, "isArray", arrayIsArray);
       defineProperty(Object, "getOwnPropertyDescriptor", getOwnPropertyDescriptor);
@@ -606,6 +631,8 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       projectDirectory(): Promise<string>;
       selectedProjectDirectory(): Promise<string | null>;
       selectProjectDirectory(): Promise<string | null>;
+      LanguageServer: { is(value: unknown): boolean; parse(value: unknown): unknown };
+      languageServer(): Promise<{ send(message: string): Promise<null>; next(): Promise<string | null>; close(): Promise<null> }>;
     }>(directory, "desktop", "velar/desktop");
     assert.equal(desktopRuntime.platform(), "test");
     assert.equal(desktopRuntime.packaged(), false);
@@ -618,6 +645,14 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.equal(await desktopRuntime.selectedProjectDirectory(), join(directory, "selected"));
     assert.equal(await desktopRuntime.projectDirectory(), join(directory, "selected"));
     assert.equal(pathRuntime.resolve(["dynamic.vel"]), join(directory, "selected", "dynamic.vel"));
+    const languageServer = await desktopRuntime.languageServer();
+    assert.equal(desktopRuntime.LanguageServer.is(languageServer), true);
+    assert.equal(desktopRuntime.LanguageServer.parse(languageServer), languageServer);
+    assert.equal(await languageServer.send('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'), null);
+    assert.equal(await languageServer.next(), '{"jsonrpc":"2.0","id":1,"result":null}');
+    assert.equal(calls.find((call) => call.capability === "language-server" && call.operation === "next")?.timeout, 0);
+    assert.equal(await languageServer.close(), null);
+    assert.equal(await languageServer.next(), null);
 
     const environment = await runtime<{ get(name: string): string | null; require(name: string): string }>(directory, "env", "velar/env");
     assert.equal(environment.get("LANG"), "en_US.UTF-8");

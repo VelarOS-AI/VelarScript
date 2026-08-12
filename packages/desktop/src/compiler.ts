@@ -13,14 +13,18 @@ function functionType(parameters: readonly ValueType[], result: ValueType): Valu
   return { kind: "function", parameters, requiredParameters: parameters.length, result };
 }
 
-function moduleInterface(exports: ReadonlyMap<string, ValueType>): ModuleInterface {
+function moduleInterface(
+  exports: ReadonlyMap<string, ValueType>,
+  namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
+  namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
+): ModuleInterface {
   return {
     exports,
     mutableExports: new Set(),
     reactiveExports: new Map(),
     reExports: new Map(),
-    namedTypes: new Map(),
-    namedTypeIdentities: new Map(),
+    namedTypes,
+    namedTypeIdentities,
     typeAliases: new Map(),
     enums: new Map(),
     classes: new Map(),
@@ -55,7 +59,10 @@ function __velarDesktopHostCall(capability, operation, args, timeout = 30000) {
 }
 `.trim();
 
+const languageServerIdentity = "velar/desktop#type:LanguageServer";
+const languageServerType: ValueType = { kind: "named", name: "LanguageServer", identity: languageServerIdentity };
 const desktopModuleInterface = moduleInterface(new Map([
+  ["LanguageServer", { kind: "typeObject", name: "LanguageServer" }],
   ["platform", functionType([], stringType)],
   ["packaged", functionType([], boolType)],
   ["homeDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -63,7 +70,14 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["projectDirectory", functionType([], { kind: "promise", value: stringType })],
   ["selectedProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
   ["selectProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
-]));
+  ["languageServer", functionType([], { kind: "promise", value: languageServerType })],
+]), new Map([
+  ["LanguageServer", new Map([
+    ["send", functionType([stringType], { kind: "promise", value: nullType })],
+    ["next", functionType([], { kind: "promise", value: optionalStringType })],
+    ["close", functionType([], { kind: "promise", value: nullType })],
+  ])],
+]), new Map([["LanguageServer", languageServerIdentity]]));
 
 const desktopTestModuleInterface = moduleInterface(new Map([
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -81,6 +95,7 @@ const DESKTOP_MODULE_SOURCE = String.raw`
 ${DESKTOP_HOST_ABI_RUNTIME}
 const desktopPlatform = __velarDesktopHostField("platform");
 const desktopPackaged = __velarDesktopHostField("packaged");
+const languageServerToken = Symbol("velar.desktop.language-server");
 export function platform() {
   const value = desktopPlatform;
   if (typeof value !== "string" || value.length === 0) throw new TypeError("Desktop host returned an invalid platform");
@@ -107,6 +122,49 @@ export async function appDataDirectory() { return path("appDataDirectory"); }
 export async function projectDirectory() { return path("projectDirectory"); }
 export async function selectedProjectDirectory() { return optionalPath("selectedProjectDirectory"); }
 export async function selectProjectDirectory() { return optionalPath("selectProjectDirectory", 0); }
+class LanguageServerHandle {
+  constructor(token, handle) {
+    if (token !== languageServerToken || !Number.isSafeInteger(handle) || handle < 1) throw new TypeError("LanguageServer values are created only by velar/desktop.languageServer");
+    this.handle = handle;
+    this.closed = false;
+    this.reading = false;
+  }
+  async send(message) {
+    if (this.closed) throw new Error("LanguageServer is closed");
+    if (typeof message !== "string" || message.length === 0 || message.length > 16 * 1024 * 1024) throw new RangeError("LanguageServer.send requires bounded JSON text");
+    const value = await __velarDesktopHostCall("language-server", "send", [this.handle, message]);
+    if (value !== null) throw new TypeError("Desktop host returned an invalid language-server send result");
+    return null;
+  }
+  async next() {
+    if (this.closed) return null;
+    if (this.reading) throw new Error("LanguageServer.next already has an active pull");
+    this.reading = true;
+    try {
+      const value = await __velarDesktopHostCall("language-server", "next", [this.handle], 0);
+      if (value === null) { this.closed = true; return null; }
+      if (typeof value !== "string" || value.length === 0 || value.length > 16 * 1024 * 1024) throw new TypeError("Desktop host returned invalid language-server JSON text");
+      return value;
+    } finally {
+      this.reading = false;
+    }
+  }
+  async close() {
+    if (this.closed) return null;
+    const value = await __velarDesktopHostCall("language-server", "close", [this.handle], 10000);
+    if (value !== null) throw new TypeError("Desktop host returned an invalid language-server close result");
+    this.closed = true;
+    return null;
+  }
+}
+export const LanguageServer = Object.freeze({
+  is(value) { return value instanceof LanguageServerHandle; },
+  parse(value) { if (!(value instanceof LanguageServerHandle)) throw new TypeError("Value does not match LanguageServer"); return value; },
+});
+export async function languageServer() {
+  const handle = await __velarDesktopHostCall("language-server", "start", []);
+  return new LanguageServerHandle(languageServerToken, handle);
+}
 `.trimStart();
 
 const DESKTOP_TEST_SOURCE = String.raw`
@@ -175,10 +233,29 @@ const pathArrayJoin = Array.prototype.join;
 const pathGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const pathStringIndexOf = String.prototype.indexOf;
 const pathStringSlice = String.prototype.slice;
+const pathStringToLowerCase = String.prototype.toLowerCase;
+const pathEncodeURIComponent = encodeURIComponent;
+const pathDecodeURIComponent = decodeURIComponent;
+const pathNativeURL = URL;
+const pathURLProtocol = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "protocol")?.get;
+const pathURLUsername = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "username")?.get;
+const pathURLPassword = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "password")?.get;
+const pathURLPort = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "port")?.get;
+const pathURLSearch = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "search")?.get;
+const pathURLHash = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "hash")?.get;
+const pathURLHostname = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "hostname")?.get;
+const pathURLPathname = pathGetOwnPropertyDescriptor(pathNativeURL.prototype, "pathname")?.get;
+if (typeof pathURLProtocol !== "function" || typeof pathURLUsername !== "function" || typeof pathURLPassword !== "function"
+  || typeof pathURLPort !== "function" || typeof pathURLSearch !== "function" || typeof pathURLHash !== "function"
+  || typeof pathURLHostname !== "function" || typeof pathURLPathname !== "function") {
+  throw new TypeError("Desktop path URL runtime is unavailable");
+}
 const desktopProjectDirectoryValue = __velarDesktopHostField("projectDirectoryValue");
 function stringIndexOf(value, search) { return pathApply(pathStringIndexOf, value, [search]); }
 function stringSlice(value, start, end) { return pathApply(pathStringSlice, value, end === undefined ? [start] : [start, end]); }
+function stringToLowerCase(value) { return pathApply(pathStringToLowerCase, value, []); }
 function arrayJoin(value, separator) { return pathApply(pathArrayJoin, value, [separator]); }
+function urlValue(value, getter) { return pathApply(getter, value, []); }
 function checked(value, operation) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(operation + " requires a non-empty path string");
   if (value.length > maxPathCodeUnits || stringIndexOf(value, "\0") !== -1) throw new RangeError(operation + " path is outside the supported bounds");
@@ -326,6 +403,27 @@ export function basename(path) { return basenamePath(checked(path, "basename"));
 export function extension(path) { return extensionPath(checked(path, "extension")); }
 export function isAbsolute(path) { return checked(path, "isAbsolute")[0] === "/"; }
 export function contains(root, target) { const value = relativeValue(root, target); return value === "" || (value !== ".." && stringIndexOf(value, "../") !== 0 && value[0] !== "/"); }
+export function toFileUrl(path) {
+  const segments = pathSegments(resolved([checked(path, "toFileUrl")], "toFileUrl"));
+  const encoded = [];
+  for (let index = 0; index < segments.length; index += 1) encoded[index] = pathEncodeURIComponent(segments[index]);
+  return "file:///" + arrayJoin(encoded, "/");
+}
+export function fromFileUrl(value) {
+  value = checked(value, "fromFileUrl");
+  let url;
+  try { url = new pathNativeURL(value); } catch { throw new TypeError("fromFileUrl requires a valid file URL"); }
+  const pathname = urlValue(url, pathURLPathname);
+  const lowercasePathname = stringToLowerCase(pathname);
+  const encodedSeparator = stringIndexOf(lowercasePathname, "%2f") !== -1 || stringIndexOf(lowercasePathname, "%5c") !== -1;
+  const hostname = urlValue(url, pathURLHostname);
+  if (urlValue(url, pathURLProtocol) !== "file:" || urlValue(url, pathURLUsername) !== "" || urlValue(url, pathURLPassword) !== ""
+    || urlValue(url, pathURLPort) !== "" || urlValue(url, pathURLSearch) !== "" || urlValue(url, pathURLHash) !== ""
+    || hostname !== "" && hostname !== "localhost" || encodedSeparator) throw new TypeError("fromFileUrl requires a local file URL");
+  let path;
+  try { path = pathDecodeURIComponent(pathname); } catch { throw new TypeError("fromFileUrl requires a valid encoded file URL"); }
+  return bounded(normalizePath(path), "fromFileUrl");
+}
 `.trimStart();
 
 const DESKTOP_FS_SOURCE = String.raw`

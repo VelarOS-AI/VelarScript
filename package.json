@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build:packages": "npm run build --workspace @velarscript/compiler && npm run build --workspace @velarscript/node && npm run build --workspace @velarscript/web && npm run build --workspace create-velar && npm run build --workspace @velarscript/cli && npm run build --workspace @velarscript/desktop",
+    "build:packages": "npm run build --workspace @velarscript/compiler && npm run build --workspace @velarscript/node && npm run build --workspace @velarscript/web && npm run build --workspace create-velar && npm run build --workspace @velarscript/desktop && npm run build --workspace @velarscript/cli",
     "check": "npm run build:packages && npm run check:format && npm run check:docs && npm run check:boundaries && tsc -p tsconfig.json",
     "check:boundaries": "node scripts/check-runtime-boundary.mjs",
     "check:format": "node scripts/check-velar-format.mjs",

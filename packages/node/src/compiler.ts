@@ -325,6 +325,8 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     ["extension", functionType(["path"], [stringType], stringType)],
     ["isAbsolute", functionType(["path"], [stringType], boolType)],
     ["contains", functionType(["root", "target"], [stringType, stringType], boolType)],
+    ["toFileUrl", functionType(["path"], [stringType], stringType)],
+    ["fromFileUrl", functionType(["url"], [stringType], stringType)],
   ]))],
   ["velar/process", moduleInterface(
     new Map([
@@ -375,6 +377,7 @@ ${VELAR_NODE_FILESYSTEM_RUNTIME}
 `.trimStart()],
   ["velar/path", String.raw`
 import { basename as nodeBasename, dirname as nodeDirname, extname, isAbsolute as nodeIsAbsolute, join as nodeJoin, normalize as nodeNormalize, relative as nodeRelative, resolve as nodeResolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const maxPathCodeUnits = 4096;
 const pathApply = Reflect.apply;
@@ -418,6 +421,12 @@ export function contains(root, target) {
   target = nodeResolve(pathValue(target, "contains"));
   const path = nodeRelative(root, target);
   return path === "" || (path !== ".." && !stringStartsWith(path, ".." + pathSeparator) && !nodeIsAbsolute(path));
+}
+export function toFileUrl(path) { return pathToFileURL(nodeResolve(pathValue(path, "toFileUrl"))).href; }
+export function fromFileUrl(url) {
+  url = pathValue(url, "fromFileUrl");
+  if (!stringStartsWith(url, "file:")) throw new TypeError("fromFileUrl requires a file URL");
+  return bounded(fileURLToPath(url), "fromFileUrl");
 }
 `.trimStart()],
   ["velar/process", String.raw`

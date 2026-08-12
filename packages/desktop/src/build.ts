@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { VelarDesktopConfig } from "./config.ts";
 
 export interface DesktopBuildManifest {
-  readonly formatVersion: 1;
+  readonly formatVersion: 2;
   readonly kind: "velar-desktop-build";
   readonly productName: string;
   readonly identifier: string;
@@ -26,6 +26,7 @@ export interface DesktopBuildManifest {
     readonly hostBytes: number;
     readonly rendererBytes: number;
     readonly capabilityHostBytes: number;
+    readonly toolchainBytes: number;
     readonly metadataBytes: number;
     readonly totalBytes: number;
   };
@@ -43,6 +44,7 @@ export async function buildDesktopApplication(
   projectRoot: string,
   config: VelarDesktopConfig,
   buildRenderer: (outputDirectory: string) => Promise<void>,
+  buildTool: (tool: { readonly id: string; readonly outputFile: string }) => Promise<void>,
 ): Promise<DesktopBuildResult> {
   if (process.platform !== "darwin") throw new Error("@velarscript/desktop 0.10 currently builds only the macOS system-WebView host");
   projectRoot = resolve(projectRoot);
@@ -66,6 +68,8 @@ export async function buildDesktopApplication(
     await mkdir(hostResources);
     const workerPath = join(hostResources, "worker.js");
     await cp(fileURLToPath(new URL("../native/node/worker.js", import.meta.url)), workerPath);
+    const languageServerPath = join(hostResources, "language-server.js");
+    await buildTool({ id: "velar-language-server", outputFile: languageServerPath });
     await cp(fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
     const hostPath = join(executableDirectory, "VelarDesktopHost");
     await compileMacHost(hostPath);
@@ -78,18 +82,20 @@ export async function buildDesktopApplication(
       nodeMinimumMajor: 24,
       window: config.window,
       permissions: config.permissions,
+      languageServer: { path: "host/language-server.js" },
     }, null, 2)}\n`, "utf8");
 
     const hostBytes = (await stat(hostPath)).size;
     const rendererBytes = await treeSize(renderer);
     const capabilityHostBytes = (await stat(workerPath)).size;
+    const toolchainBytes = (await stat(languageServerPath)).size;
     const totalBytes = await treeSize(applicationBundle);
-    const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes;
+    const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes - toolchainBytes;
     if (totalBytes > config.build.sizeBudgetBytes) {
       throw new Error(`Desktop bundle is ${totalBytes} bytes, exceeding the ${config.build.sizeBudgetBytes}-byte size budget`);
     }
     const manifest: DesktopBuildManifest = Object.freeze({
-      formatVersion: 1,
+      formatVersion: 2,
       kind: "velar-desktop-build",
       productName: config.productName,
       identifier: config.identifier,
@@ -100,7 +106,7 @@ export async function buildDesktopApplication(
       runtime: Object.freeze({ kind: "external-node", minimumMajor: 24 as const, discovery: "environment-and-system-paths" as const, embedded: false }),
       applicationBundle: applicationName,
       sizeBudgetBytes: config.build.sizeBudgetBytes,
-      sizes: Object.freeze({ hostBytes, rendererBytes, capabilityHostBytes, metadataBytes, totalBytes }),
+      sizes: Object.freeze({ hostBytes, rendererBytes, capabilityHostBytes, toolchainBytes, metadataBytes, totalBytes }),
       sha256: await hashTree(applicationBundle),
     });
     await writeFile(join(staging, "velar-desktop-build.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");

@@ -2758,6 +2758,60 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   wide-glyph hit testing、native picker/IME automation、crash-in-the-middle recovery，以及 cold-start/RSS/
   sustained-edit 和正式 performance/package threshold 尚未完成。
 
+- W-134 用 Editor 的真实 diagnostics、formatting、definition、文件切换与 watcher 场景关闭了官方增量语言
+  服务链的 owner 缺陷。project session 过去会随活动文档改变 manifest entry，对已知变化仍重扫并重读整个
+  workspace，还会让外层项目吞入嵌套项目和 open-document override。现在 authoritative refresh 与
+  known-change update 是明确契约：后者保持 manifest/config identity、零 workspace scan、只读取变化的
+  source/resource/declaration，再由 compiler reverse dependency closure 决定重编译；嵌套 manifest root
+  是独立 owner。121-module 永久证据为首次 scan/read `1/121`、无变化 `0/0`、单 leaf `0/1`，并重编译
+  41 个 reverse dependents、复用 80 个模块。
+
+  LSP owner 现在协商 UTF-32/code-point position 并保留默认 UTF-16，diagnostics/navigation/semantic tokens/
+  inlay hints/formatter 共用同一坐标；full-text change 只发布最新 version，`$/cancelRequest` 从 framing 路径
+  直接生效并返回 `-32800`，精确 watched paths 走增量 session，watcher overflow 通过
+  `velar/workspaceRescan` 显式请求 authoritative refresh。永久测试覆盖 stable entry、nested ownership、
+  scan/read activity、coalescing tail race、取消、watched files、capabilities 和 astral-text UTF-32 diagnostics。
+
+  application-package host ABI 升至 v2 并可请求精确官方 tool；CLI 生成一个 minified Node ESM language
+  server，静态注册官方 Web/Desktop extensions 并嵌入 source-backed standard assets。Desktop 把它固定打包
+  为 `host/language-server.js`，toolchain bytes 进入总预算与 tree hash；公开 `languageServer()` 只返回有界
+  JSON body 的 `send/next/close`。Content-Length framing、one-pull backpressure、4-owner/消息/队列上限、精确
+  child/process-group 与 graceful/SIGTERM/SIGKILL 收敛均由 Desktop Worker 私有拥有；owner retire、project
+  grant change、Worker/native failure、EOF、close 和 hidden start failure 都释放资源。它不授予 process
+  permission、任意 executable、npm resolution 或 PATH tool lookup。native ledger、真实 packaged LSP 的
+  initialize/diagnostics/cancellation/shutdown/exit 和 PID disappearance 已锁定生命周期；测试 client cleanup
+  也改为有界等待并升级 SIGKILL，修复了本波暴露的完整套件空闲 Worker 挂起。
+
+  Node/Desktop `velar/path` 同时发布 `toFileUrl/fromFileUrl`；Desktop 捕获 URL/String intrinsics 并拒绝
+  非本地 scheme、credentials、port、query/hash、host 和 encoded separator。生成 API 与真实执行覆盖
+  Unicode/space/`#`/`%` round trip 及 hostile prototype。没有新增或修改语言语法，也没有新增 npm 包或
+  依赖。
+
+  Editor 删除了 CLI/package lookup、process grant、私有 bridge、LSP byte framing、UTF-16 converter、
+  first-edit formatter shortcut 和 full-document formatter 假设。每个选中项目只拥有一个公开 LanguageServer；
+  watcher 精确路径或 rescan 直接失效 session，文本变化按 frame+30 ms 合并，diagnostics 可见，formatter
+  完整 edit list 经公开 TextBuffer/TextHistory 排序并原子应用，definition 只用公开 file URL 和 code-point
+  offset。JS/TS/JSON/Markdown/CSS 尚无官方服务时明确保持 unsupported，不伪装成 VelarScript。
+
+  完整证据为 `npm run check`（52 formatted sources、107 docs examples、73 runtime boundaries）、597/597、
+  四示例与 1+3+3+3 Core tests、六包 installed consumer、publication rehearsal、Dev/Production 三引擎、
+  External Preview Chromium、27+6+15+6 官方三浏览器和 installed browser consumer。Editor format 6 files、
+  3-module check、1 Core test、24/24 三浏览器、contract check/run、production build/package/native smoke 全绿。
+  Workbench 对本波 rehearsal tarballs 的 installed-toolchain acceptance 通过；Lite 保留既有 11 文件 WIP，
+  当前 10/22/21/29 module public CLI checks 通过。所有 browser gate 后均复核，无 Playwright/headless test
+  残留进程。
+
+  Editor 本波三引擎 FCP median/p95、input frame median/p95、1 MiB load/input next-frame 分别为 Chromium
+  8/44、4.7/6.4、32.432/5.266 ms；Firefox 21/27、3.94/5.18、157.4/57.7 ms；WebKit 16/23、12/13、
+  144/34 ms，仍只是证据而非正式阈值。`.app` 为 2,313,386 bytes（2.21 MiB）：host 334,704、renderer
+  194,634、capability 69,390、official toolchain 1,597,622、metadata 117,036；renderer JS+CSS 189,656 bytes，
+  SHA-256 `26c92e3b8d596b5d3d301ee5e2a67e35c0ff80b6c4aad463ae5e2b5f2d10b9e5`。未推送、未发布、未提升版本。
+
+  仍阻止生产可用的是：JavaScript/TypeScript 尚无官方 language-service owner；全文搜索与持久 semantic
+  index、multi-tab、tasks/terminal、大 workspace watcher/index burst 与 RSS、wide-glyph hit testing、native
+  picker/IME automation、crash-in-the-middle recovery、cold-start/sustained-edit memory 和正式性能/体积阈值
+  尚未完成。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
@@ -2765,9 +2819,9 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
    Web、Node、Desktop、Game
    继续只通过自有 AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或
    host/product policy 放回 Core。
-2. 下一波接通现有 semantic index、LSP 与 formatter 的公开 project-session 增量契约，验证 VelarScript、
-   JavaScript 和 TypeScript 的 diagnostics/navigation/formatting；Editor 只保留项目、标签、命令、索引
-   编排与 UX，不复制 filesystem、text、language-service 或 host policy。
+2. 下一波优先建立 JavaScript/TypeScript 官方 language-service owner 与持久 semantic-index/search 契约；
+   Editor 只消费公开 diagnostics/navigation/formatting/index 能力并保留项目、标签、命令、索引编排与 UX，
+   不复制 filesystem、text、language-service 或 host policy。
 3. 用 synthetic 和真实大 workspace 测量 W-132 watcher burst、overflow/rescan、增量 tree 延迟与 RSS，
    将足够通用的调度、索引和背压能力收敛到既有 owner；若需要新语法，按提案流程暂停确认。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`

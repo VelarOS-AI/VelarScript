@@ -123,13 +123,15 @@ mount(<App />, "#app")
     const packaged = spawnSync(process.execPath, [cli, "package"], { cwd: projectRoot, encoding: "utf8" });
     assert.equal(packaged.status, 0, packaged.stderr);
     const desktopBuild = JSON.parse(await readFile(join(projectRoot, "dist", "desktop", "velar-desktop-build.json"), "utf8")) as {
+      formatVersion: number;
       kind: string;
       version: string;
-      sizes: { hostBytes: number; rendererBytes: number; totalBytes: number };
+      sizes: { hostBytes: number; rendererBytes: number; toolchainBytes: number; totalBytes: number };
       sizeBudgetBytes: number;
       applicationBundle: string;
       runtime: { kind: string; minimumMajor: number; discovery: string; embedded: boolean; version?: unknown; executableHint?: unknown };
     };
+    assert.equal(desktopBuild.formatVersion, 2);
     assert.equal(desktopBuild.kind, "velar-desktop-build");
     assert.equal(desktopBuild.version, "0.1.0");
     assert.deepEqual({
@@ -146,6 +148,7 @@ mount(<App />, "#app")
     assert.equal(desktopBuild.runtime.version, undefined);
     assert.equal(desktopBuild.runtime.executableHint, undefined);
     assert.ok(desktopBuild.sizes.hostBytes < 512 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.ok(desktopBuild.sizes.toolchainBytes > 1024 * 1024 && desktopBuild.sizes.toolchainBytes < 5 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
     assert.ok(desktopBuild.sizes.totalBytes < desktopBuild.sizeBudgetBytes, JSON.stringify(desktopBuild.sizes));
     const application = join(projectRoot, "dist", "desktop", desktopBuild.applicationBundle);
     assert.ok(!(await collectNames(application)).some((name) => name === "node_modules" || name.endsWith(".map")));
@@ -155,6 +158,8 @@ mount(<App />, "#app")
     assert.equal(applicationIcon.subarray(0, 4).toString("ascii"), "icns");
     const hostConfigText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfig = JSON.parse(hostConfigText) as Record<string, unknown>;
+    assert.deepEqual(hostConfig.languageServer, { path: "host/language-server.js" });
+    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "language-server.js"))).byteLength > 1024 * 1024);
     assert.equal(hostConfig.nodeExecutableHint, undefined);
     assert.doesNotMatch(hostConfigText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
     const smokeEnvironment = { ...process.env, VELAR_DESKTOP_NODE: process.execPath, VELAR_DESKTOP_PROJECT_ROOT: projectRoot };

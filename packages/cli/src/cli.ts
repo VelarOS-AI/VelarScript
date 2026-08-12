@@ -24,6 +24,7 @@ import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile } from "./source-limits.
 import { parseDependencyArguments, runDependencyCommand, type DependencyAction } from "./package-manager.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { loadApplicationPackageHost, validateApplicationPackageResult } from "./application-package-host.ts";
+import { buildLanguageServerTool, VELAR_LANGUAGE_SERVER_TOOL_ID } from "./language-server-tool.ts";
 
 
 interface CommandArguments {
@@ -377,6 +378,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       const packageHost = await loadApplicationPackageHost(projectConfig);
       let buildRequests = 0;
+      const toolRequests = new Set<string>();
       let frameworkBuild: Promise<void> | null = null;
       const packageResult = await packageHost.packageApplication({
         projectRoot: projectConfig.root,
@@ -387,6 +389,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
           const outputDirectory = packageFrameworkOutput(projectConfig.root, requestedOutput);
           frameworkBuild = writeFrameworkProductionApplication(project, outputDirectory);
           await frameworkBuild;
+        },
+        buildTool: async (tool) => {
+          if (!tool || tool.id !== VELAR_LANGUAGE_SERVER_TOOL_ID || typeof tool.outputFile !== "string") {
+            throw new Error(`application package host requested unknown official tool '${String(tool?.id ?? "")}'`);
+          }
+          if (toolRequests.has(tool.id)) throw new Error(`application package host requested official tool '${tool.id}' more than once`);
+          toolRequests.add(tool.id);
+          const outputFile = packageFrameworkOutput(projectConfig.root, tool.outputFile);
+          await buildLanguageServerTool(outputFile);
         },
       });
       if (buildRequests !== 1 || !frameworkBuild) throw new Error("application package host did not request exactly one checked framework build");

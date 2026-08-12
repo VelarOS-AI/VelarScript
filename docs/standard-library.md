@@ -778,6 +778,12 @@ absolute paths, and relative pairs.
 lexical containment check suitable for the first gate of a workspace policy;
 code that crosses symbolic-link authority also checks `velar/fs.canonical`
 before granting access.
+`toFileUrl(path) -> string` resolves a path and returns its encoded local `file:`
+URL. `fromFileUrl(url) -> string` performs the inverse operation for a local file
+URL and rejects other schemes; Desktop additionally rejects credentials, ports,
+queries, fragments, non-local hosts, and encoded path separators. These functions
+are the public boundary between filesystem paths and LSP/document identifiers, so
+applications do not reproduce percent encoding or platform URL rules.
 
 ### `velar/process`
 

@@ -15,6 +15,9 @@ const MAX_PATH_UNITS = 4096;
 const MAX_FILE_WATCHERS = 128;
 const MAX_WATCH_PATHS = 4096;
 const MAX_WATCH_TEXT_UNITS = 2 * 1024 * 1024;
+const MAX_LANGUAGE_SERVER_MESSAGE_BYTES = 16 * 1024 * 1024;
+const MAX_LANGUAGE_SERVER_QUEUED_BYTES = 64 * 1024 * 1024;
+const MAX_LANGUAGE_SERVERS = 4;
 const WATCH_DEBOUNCE_MS = 20;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
@@ -39,6 +42,8 @@ const activeRequests = new Map();
 const fileMutationTails = new Map();
 const fileWatchers = new Map();
 let nextFileWatcherHandle = 1;
+const languageServers = new Map();
+let nextLanguageServerHandle = 1_000_000_000;
 let nextTextReplacementIdentity = 1;
 let fatalDrainStarted = false;
 let activeOwner = null;
@@ -49,6 +54,7 @@ let appDataLexicalRoot = null;
 let projectRoot = null;
 let projectLexicalRoot = null;
 let projectRootUpdate = Promise.resolve();
+let languageServerPath = null;
 
 class HttpTransportFailure extends Error {
   constructor(phase) {
@@ -58,6 +64,14 @@ class HttpTransportFailure extends Error {
   }
 }
 const launchDirectory = await realpath(launchRoot);
+if (config.languageServer !== undefined) {
+  if (!config.languageServer || typeof config.languageServer !== "object" || Array.isArray(config.languageServer)
+    || Object.keys(config.languageServer).some(key => key !== "path")
+    || config.languageServer.path !== "host/language-server.js") throw new Error("Invalid bundled language-server configuration");
+  const candidate = resolve(dirname(configPath), config.languageServer.path);
+  languageServerPath = await realpath(candidate);
+  if (!(await stat(languageServerPath)).isFile()) throw new Error("Bundled language server must be an ordinary file");
+}
 if (fileScopes.has("app-data")) {
   const dataRoot = resolve(appDataRoot, "data");
   await mkdir(dataRoot, { recursive: true });
@@ -74,6 +88,7 @@ const reader = createInterface({ input: process.stdin, crlfDelay: Infinity, term
 reader.once("close", () => {
   if (activeOwner !== null) retireOwner(activeOwner);
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host closed"));
+  for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host closed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
 });
 reader.on("line", async (line) => {
@@ -168,6 +183,7 @@ async function dispatch(capability, operation, args, owner, activity) {
     if (operation === "wait") return processWait(args, owner);
     if (operation === "stop") return processStop(args, owner);
   }
+  if (capability === "language-server") return languageServerOperation(operation, args, owner, activity);
   if (capability === "http") {
     if (operation === "request") return httpRequest(args, owner, activity);
     if (operation === "read") return httpRead(args, owner);
@@ -194,6 +210,7 @@ async function replaceProjectRoot(path) {
   const metadata = await stat(canonical);
   if (!metadata.isDirectory()) throw new TypeError("Desktop project grant must identify a directory");
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop project grant changed"));
+  for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop project grant changed"));
   for (const activity of activeRequests.values()) cancelActivity(activity);
   for (const [handle, task] of processHandles) retainRetiredProcess(handle, task);
   for (const [handle, request] of httpHandles) {
@@ -350,6 +367,233 @@ function closeFileWatchHandle(args, owner) {
   if (!task) return false;
   if (task.owner !== owner) throw new Error("Desktop file watcher belongs to another document generation");
   return releaseFileWatcher(task);
+}
+
+function allocateLanguageServerHandle() {
+  let candidate = nextLanguageServerHandle;
+  for (let attempts = 0; attempts <= MAX_LANGUAGE_SERVERS; attempts += 1) {
+    if (!languageServers.has(candidate)) {
+      nextLanguageServerHandle = candidate >= 1_000_000_003 ? 1_000_000_000 : candidate + 1;
+      return candidate;
+    }
+    candidate = candidate >= 1_000_000_003 ? 1_000_000_000 : candidate + 1;
+  }
+  throw new RangeError("Desktop language-server handle space is unavailable");
+}
+
+function ownedLanguageServer(value, owner) {
+  const handle = integer(value, 1, Number.MAX_SAFE_INTEGER, "Desktop language-server handle");
+  const task = languageServers.get(handle);
+  if (!task) throw new Error("Desktop language-server handle is unknown or already released");
+  if (task.owner !== owner) throw new Error("Desktop language server belongs to another document generation");
+  return task;
+}
+
+function settleLanguageServerPull(task) {
+  if (task.waiter === null) return;
+  if (task.queue.length > 0) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    const value = task.queue.shift();
+    task.queuedBytes -= Buffer.byteLength(value, "utf8");
+    waiter.resolve(value);
+  } else if (task.failure || task.settled) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    if (task.failure) waiter.reject(task.failure);
+    else waiter.resolve(null);
+  }
+}
+
+function failLanguageServer(task, error) {
+  if (!task.failure) task.failure = error instanceof Error ? error : new Error("Bundled language server failed");
+  settleLanguageServerPull(task);
+  signalTree(task.child, "SIGKILL");
+}
+
+function enqueueLanguageServerMessage(task, body) {
+  const bytes = Buffer.byteLength(body, "utf8");
+  if (bytes < 1 || bytes > MAX_LANGUAGE_SERVER_MESSAGE_BYTES) {
+    failLanguageServer(task, new RangeError("Bundled language-server message exceeds 16 MiB"));
+    return;
+  }
+  if (task.waiter !== null) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    waiter.resolve(body);
+    return;
+  }
+  if (task.queuedBytes + bytes > MAX_LANGUAGE_SERVER_QUEUED_BYTES) {
+    failLanguageServer(task, new RangeError("Bundled language-server queue exceeds 64 MiB"));
+    return;
+  }
+  task.queue.push(body);
+  task.queuedBytes += bytes;
+}
+
+function parseLanguageServerOutput(task, chunk) {
+  task.buffer = Buffer.concat([task.buffer, chunk]);
+  while (!task.failure) {
+    const boundary = task.buffer.indexOf("\r\n\r\n");
+    if (boundary === -1) {
+      if (task.buffer.byteLength > 64 * 1024) failLanguageServer(task, new RangeError("Bundled language-server header exceeds 64 KiB"));
+      return;
+    }
+    if (boundary > 64 * 1024) { failLanguageServer(task, new RangeError("Bundled language-server header exceeds 64 KiB")); return; }
+    const header = task.buffer.subarray(0, boundary).toString("ascii");
+    const match = /(?:^|\r\n)Content-Length:\s*(\d+)/iu.exec(header);
+    if (!match) { failLanguageServer(task, new Error("Bundled language server emitted an invalid frame")); return; }
+    const size = Number(match[1]);
+    if (!Number.isSafeInteger(size) || size < 1 || size > MAX_LANGUAGE_SERVER_MESSAGE_BYTES) {
+      failLanguageServer(task, new RangeError("Bundled language-server message exceeds 16 MiB"));
+      return;
+    }
+    const end = boundary + 4 + size;
+    if (task.buffer.byteLength < end) return;
+    const body = task.buffer.subarray(boundary + 4, end).toString("utf8");
+    task.buffer = task.buffer.subarray(end);
+    try { JSON.parse(body); }
+    catch { failLanguageServer(task, new Error("Bundled language server emitted invalid JSON")); return; }
+    enqueueLanguageServerMessage(task, body);
+  }
+}
+
+async function startLanguageServer(args, owner, activity) {
+  if (args.length !== 0) throw new TypeError("languageServer start arguments are invalid");
+  if (languageServerPath === null) throw new Error("This Desktop package does not contain an official language server");
+  if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop language services require the project file grant");
+  if (languageServers.size >= MAX_LANGUAGE_SERVERS) throw new RangeError("Desktop cannot own more than 4 language servers");
+  const handle = allocateLanguageServerHandle();
+  const environment = Object.create(null);
+  for (const name of ["HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"]) {
+    if (typeof process.env[name] === "string") environment[name] = process.env[name];
+  }
+  const child = spawn(process.execPath, [languageServerPath], {
+    cwd: projectRoot,
+    env: environment,
+    shell: false,
+    windowsHide: true,
+    detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let resolveClosed;
+  const closed = new Promise(resolve => { resolveClosed = resolve; });
+  const task = { handle, owner, child, buffer: Buffer.alloc(0), queue: [], queuedBytes: 0, waiter: null, stderr: "", settled: false, failure: null, ownershipPublished: false, closed, resolveClosed };
+  languageServers.set(handle, task);
+  activity.cancel = () => releaseLanguageServer(task, new Error("Desktop language-server start was cancelled"));
+  child.stdout.on("data", chunk => parseLanguageServerOutput(task, chunk));
+  child.stderr.on("data", chunk => {
+    if (task.stderr.length < 64 * 1024) task.stderr += chunk.toString("utf8").slice(0, 64 * 1024 - task.stderr.length);
+  });
+  child.once("error", error => failLanguageServer(task, error));
+  child.once("close", (code, signal) => {
+    task.settled = true;
+    task.resolveClosed();
+    if (!task.failure && code !== 0) task.failure = new Error(`Bundled language server exited with ${code === null ? signal ?? "an unknown signal" : `code ${code}`}${task.stderr ? `: ${task.stderr}` : ""}`);
+    settleLanguageServerPull(task);
+    if (task.ownershipPublished) respond({ protocolVersion: 1, hostEvent: "language-server-settled", owner, handle });
+  });
+  try {
+    await new Promise((resolveStart, rejectStart) => {
+      child.once("spawn", resolveStart);
+      child.once("error", rejectStart);
+    });
+  } catch (error) {
+    releaseLanguageServer(task, error instanceof Error ? error : new Error("Bundled language server failed to start"));
+    throw error;
+  }
+  activity.cancel = null;
+  task.ownershipPublished = true;
+  respond({ protocolVersion: 1, hostEvent: "language-server-owned", owner, handle, pid: child.pid });
+  if (activity.cancelled || owner !== activeOwner) {
+    releaseLanguageServer(task, new Error("Desktop document generation is no longer active"));
+    throw new Error("Desktop document generation is no longer active");
+  }
+  return handle;
+}
+
+async function sendLanguageServer(args, owner) {
+  if (args.length !== 2 || typeof args[1] !== "string") throw new TypeError("languageServer send arguments are invalid");
+  const task = ownedLanguageServer(args[0], owner);
+  if (task.failure) throw task.failure;
+  if (task.settled || !task.child.stdin.writable) throw new Error("Bundled language server is closed");
+  const bytes = Buffer.byteLength(args[1], "utf8");
+  if (bytes < 1 || bytes > MAX_LANGUAGE_SERVER_MESSAGE_BYTES) throw new RangeError("Language-server request exceeds 16 MiB");
+  try { JSON.parse(args[1]); }
+  catch { throw new TypeError("Language-server request must contain valid JSON"); }
+  const frame = `Content-Length: ${bytes}\r\n\r\n${args[1]}`;
+  await new Promise((resolveWrite, rejectWrite) => task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite()));
+  return null;
+}
+
+function nextLanguageServer(args, owner, activity) {
+  if (args.length !== 1) throw new TypeError("languageServer next arguments are invalid");
+  const task = ownedLanguageServer(args[0], owner);
+  if (task.waiter !== null) throw new Error("LanguageServer.next already has an active pull");
+  if (task.queue.length > 0) {
+    const value = task.queue.shift();
+    task.queuedBytes -= Buffer.byteLength(value, "utf8");
+    return value;
+  }
+  if (task.failure) throw task.failure;
+  if (task.settled) return null;
+  return new Promise((resolveNext, rejectNext) => {
+    const waiter = { resolve: resolveNext, reject: rejectNext, activity };
+    task.waiter = waiter;
+    activity.cancel = () => {
+      if (task.waiter !== waiter) return;
+      task.waiter = null;
+      waiter.reject(new Error("Desktop language-server pull was cancelled"));
+    };
+  });
+}
+
+function releaseLanguageServer(task, error = null) {
+  if (languageServers.get(task.handle) !== task) return false;
+  languageServers.delete(task.handle);
+  if (task.waiter !== null) {
+    const waiter = task.waiter;
+    task.waiter = null;
+    waiter.activity.cancel = null;
+    if (error) waiter.reject(error);
+    else waiter.resolve(null);
+  }
+  try { task.child.stdin.end(); } catch {}
+  if (error) signalTree(task.child, "SIGTERM");
+  else setTimeout(() => { if (!task.settled) signalTree(task.child, "SIGTERM"); }, 500).unref();
+  setTimeout(() => { if (!task.settled) signalTree(task.child, "SIGKILL"); }, 2500).unref();
+  return true;
+}
+
+async function closeLanguageServer(args, owner) {
+  if (args.length !== 1) throw new TypeError("languageServer close arguments are invalid");
+  const task = ownedLanguageServer(args[0], owner);
+  releaseLanguageServer(task);
+  let timer = null;
+  try {
+    const closed = await Promise.race([
+      task.closed.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 5000); }),
+    ]);
+    if (!closed) {
+      signalTree(task.child, "SIGKILL");
+      throw new Error("Bundled language server did not close within 5000 milliseconds");
+    }
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+  return null;
+}
+
+function languageServerOperation(operation, args, owner, activity) {
+  if (operation === "start") return startLanguageServer(args, owner, activity);
+  if (operation === "send") return sendLanguageServer(args, owner);
+  if (operation === "next") return nextLanguageServer(args, owner, activity);
+  if (operation === "close") return closeLanguageServer(args, owner);
+  throw new Error(`Unknown language-server operation '${operation}'`);
 }
 
 async function fsOperation(operation, args, owner, activity) {
@@ -705,6 +949,9 @@ function retireOwner(owner) {
     if (task.owner === owner) releaseFileWatcher(task, new Error("Desktop document generation retired"));
   }
   for (const activity of activeRequests.values()) if (activity.owner === owner) cancelActivity(activity);
+  for (const task of languageServers.values()) {
+    if (task.owner === owner) releaseLanguageServer(task, new Error("Desktop document generation retired"));
+  }
   for (const [handle, task] of processHandles) {
     if (task.owner === owner) retainRetiredProcess(handle, task);
   }
@@ -722,6 +969,7 @@ async function fatalDrain() {
   reader.removeAllListeners("line");
   reader.close();
   for (const task of fileWatchers.values()) releaseFileWatcher(task, new Error("Desktop capability host failed"));
+  for (const task of languageServers.values()) releaseLanguageServer(task, new Error("Desktop capability host failed"));
   const tasks = Array.from(processHandles.values());
   for (const task of tasks) task.stop();
   for (const request of httpHandles.values()) request.controller.abort(new Error("Desktop capability host failed"));
@@ -1295,6 +1543,7 @@ function respond(value) {
 
 process.once("exit", () => {
   for (const task of processHandles.values()) signalTree(task.child, "SIGKILL");
+  for (const task of languageServers.values()) signalTree(task.child, "SIGKILL");
 });
 process.on("uncaughtException", () => { void fatalDrain(); });
 process.on("unhandledRejection", () => { void fatalDrain(); });

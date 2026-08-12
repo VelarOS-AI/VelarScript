@@ -7632,6 +7632,10 @@ test("project sessions reuse unaffected modules and invalidate reverse dependenc
 
   const sessions = new VelarProjectSessions();
   const first = await sessions.snapshot(mainPath);
+  assert.equal(first.activity.strategy, "refresh");
+  assert.equal(first.activity.workspaceScans, 1);
+  assert.equal(first.activity.filesRead, 3);
+  assert.equal(first.activity.projectReused, false);
   assert.deepEqual(first.project.stats, {
     moduleCount: 3,
     compiledModules: 3,
@@ -7641,29 +7645,73 @@ test("project sessions reuse unaffected modules and invalidate reverse dependenc
   });
   const second = await sessions.snapshot(mainPath);
   assert.equal(second.project, first.project);
+  assert.deepEqual(second.activity, {
+    strategy: "refresh",
+    workspaceScans: 1,
+    filesRead: 3,
+    projectReused: true,
+  });
   const firstOther = first.project.modules.find((module) => module.inputPath === otherPath)?.result;
   const firstMain = first.project.modules.find((module) => module.inputPath === mainPath)?.result;
-  await writeFile(storePath, "export const value = 3\n", "utf8");
-  const third = await sessions.snapshot(mainPath);
+  const third = await sessions.update(
+    mainPath,
+    new Set([storePath]),
+    new Map([[storePath, "export const value = 3\n"]]),
+  );
   assert.deepEqual([...third.changedPaths], [storePath]);
+  assert.deepEqual(third.activity, {
+    strategy: "known-changes",
+    workspaceScans: 0,
+    filesRead: 0,
+    projectReused: false,
+  });
   assert.equal(third.project.modules.find((module) => module.inputPath === otherPath)?.result, firstOther);
   assert.notEqual(third.project.modules.find((module) => module.inputPath === mainPath)?.result, firstMain);
   assert.equal(third.project.stats.compiledModules, 2);
   assert.equal(third.project.stats.reusedModules, 1);
   assert.equal(third.project.stats.affectedModules, 2);
 
+  const unchanged = await sessions.update(mainPath, new Set(), new Map([[storePath, "export const value = 3\n"]]));
+  assert.equal(unchanged.project, third.project);
+  assert.deepEqual(unchanged.activity, {
+    strategy: "known-changes",
+    workspaceScans: 0,
+    filesRead: 0,
+    projectReused: true,
+  });
+
   await unlink(storePath);
-  const missing = await sessions.snapshot(mainPath);
+  const missing = await sessions.update(mainPath, new Set([storePath]));
   assert.ok(missing.project.failures.some((failure) => failure.path === storePath && /ENOENT|no such file/u.test(failure.message)));
+  assert.equal(missing.activity.workspaceScans, 0);
+  assert.equal(missing.activity.filesRead, 1);
   assert.equal(missing.project.modules.find((module) => module.inputPath === otherPath)?.result, firstOther);
   assert.equal(missing.project.modules.some((module) => module.inputPath === storePath), false);
 
   await writeFile(storePath, "export const value = 4\n", "utf8");
-  const restored = await sessions.snapshot(mainPath);
+  const restored = await sessions.update(mainPath, new Set([storePath]));
   assert.deepEqual(restored.project.failures, []);
   assert.deepEqual(restored.project.modules.flatMap((module) => module.result.diagnostics), []);
   assert.equal(restored.project.modules.find((module) => module.inputPath === otherPath)?.result, firstOther);
   assert.match(restored.project.modules.find((module) => module.inputPath === storePath)?.result.code ?? "", /const value = 4/u);
+});
+
+test("project sessions keep the manifest entry stable across multiple documents", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-session-documents-"));
+  const manifestPath = join(directory, "velar.json");
+  const mainPath = join(directory, "main.vel");
+  const featurePath = join(directory, "feature.vel");
+  await writeFile(manifestPath, JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
+  await writeFile(mainPath, "import {value} from \"./feature.vel\"\nprint(value)\n", "utf8");
+  await writeFile(featurePath, "export const value = 1\n", "utf8");
+
+  const sessions = new VelarProjectSessions();
+  const main = await sessions.snapshot(mainPath);
+  const feature = await sessions.snapshot(featurePath);
+  assert.equal(main.config.entryPath, mainPath);
+  assert.equal(feature.config.entryPath, mainPath);
+  assert.equal(feature.project, main.project);
+  assert.equal(feature.activity.projectReused, true);
 });
 
 test("project sessions invalidate safe JavaScript imports when declaration graphs change", async () => {
@@ -7728,6 +7776,37 @@ test("project sessions key reuse by the exact manifest identity", async () => {
   assert.notEqual(refreshed.project, first.project);
   assert.notEqual(refreshed.config.manifestIdentity, first.config.manifestIdentity);
   assert.equal(refreshed.project.stats.compiledModules, 1);
+});
+
+test("project sessions keep nested manifest sources under their nearest owner", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-session-nested-"));
+  const mainPath = join(directory, "main.vel");
+  const nestedRoot = join(directory, "nested");
+  const nestedPath = join(nestedRoot, "main.vel");
+  await mkdir(nestedRoot, { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
+  await writeFile(mainPath, "export const outer = 1\n", "utf8");
+  await writeFile(join(nestedRoot, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
+  await writeFile(nestedPath, "export const nested = 1\n", "utf8");
+
+  const sessions = new VelarProjectSessions();
+  const outer = await sessions.snapshot(mainPath);
+  assert.equal(sessions.rootFor(mainPath), directory);
+  assert.equal(sessions.rootFor(nestedPath), null);
+  assert.deepEqual(outer.project.modules.map((module) => module.inputPath), [mainPath]);
+  const ignored = await sessions.update(
+    mainPath,
+    new Set([nestedPath]),
+    new Map([[nestedPath, "export const nested = 2\n"]]),
+  );
+  assert.equal(ignored.project, outer.project);
+  assert.deepEqual(ignored.changedPaths, new Set());
+  assert.deepEqual(ignored.activity, { strategy: "known-changes", workspaceScans: 0, filesRead: 0, projectReused: true });
+
+  const nested = await sessions.snapshot(nestedPath, new Map([[nestedPath, "export const nested = 2\n"]]));
+  assert.equal(sessions.rootFor(nestedPath), nestedRoot);
+  assert.deepEqual(nested.project.modules.map((module) => module.inputPath), [nestedPath]);
+  assert.equal(nested.project.modules[0]?.result.source.text, "export const nested = 2\n");
 });
 
 test("0.10 Web APIs have one versioned typed compiler/runtime contract", async () => {
@@ -10288,7 +10367,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/text-buffer", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 286);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 288);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 20);
@@ -10305,7 +10384,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
   assert.deepEqual(api.modules["velar/host"], ["exit", "onShutdown"]);
   assert.deepEqual(api.modules["velar/terminal"], ["terminal"]);
-  assert.deepEqual(api.modules["velar/path"], ["basename", "contains", "dirname", "extension", "isAbsolute", "join", "normalize", "relative", "resolve"]);
+  assert.deepEqual(api.modules["velar/path"], ["basename", "contains", "dirname", "extension", "fromFileUrl", "isAbsolute", "join", "normalize", "relative", "resolve", "toFileUrl"]);
   assert.deepEqual(api.modules["velar/process"], ["Process", "ProcessOutputChannel", "run", "start"]);
 
   const directory = await mkdtemp(join(tmpdir(), "velar-standard-library-"));
@@ -26818,10 +26897,12 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       output = output.subarray(end);
     }
   });
-  const send = (message: unknown): void => {
+  const frame = (message: unknown): string => {
     const body = JSON.stringify(message);
-    child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+    return `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
   };
+  const send = (message: unknown): void => { child.stdin.write(frame(message)); };
+  const sendTogether = (batch: readonly unknown[]): void => { child.stdin.write(batch.map(frame).join("")); };
   const waitFor = async (predicate: (message: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> => {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
@@ -26837,23 +26918,29 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     && (message.error as { code?: number } | undefined)?.code === -32700);
   assert.match(JSON.stringify(parseFailure), /Invalid JSON/u);
 
-  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: { general: { positionEncodings: ["utf-32", "utf-16"] } } } });
   const initialized = await waitFor((message) => message.id === 1);
   const initializeResult = initialized.result as {
     capabilities: {
       definitionProvider: boolean;
+      positionEncoding: string;
       completionProvider: { triggerCharacters: string[] };
       documentHighlightProvider: boolean;
       inlayHintProvider: boolean;
       renameProvider: { prepareProvider: boolean };
       semanticTokensProvider: { legend: { tokenTypes: string[]; tokenModifiers: string[] }; full: boolean };
       codeActionProvider: { codeActionKinds: string[] };
-      experimental: { velar: { protocolVersion: number } };
+      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean } };
     };
     serverInfo: { name: string };
   };
   assert.equal(initializeResult.serverInfo.name, "VelarScript Language Server");
+  assert.equal(initializeResult.capabilities.positionEncoding, "utf-32");
   assert.equal(initializeResult.capabilities.experimental.velar.protocolVersion, 1);
+  assert.equal(initializeResult.capabilities.experimental.velar.incrementalSessions, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.watchedFiles, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.workspaceRescan, true);
+  assert.equal(initializeResult.capabilities.experimental.velar.cancellation, true);
   assert.equal(initializeResult.capabilities.definitionProvider, true);
   assert.deepEqual(initializeResult.capabilities.completionProvider.triggerCharacters, [".", "<", " ", "{", ",", ":"]);
   assert.equal(initializeResult.capabilities.documentHighlightProvider, true);
@@ -26873,6 +26960,23 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const published = await waitFor((message) => message.method === "textDocument/publishDiagnostics");
   const diagnostics = (published.params as { diagnostics: Array<{ code: string }> }).diagnostics;
   assert.ok(diagnostics.some((item) => item.code === "VEL5016"));
+  const unicodeUri = pathToFileURL(join(directory, "unicode.vel")).href;
+  const unicodePrefix = 'print("😀" + ';
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri: unicodeUri, languageId: "velar", version: 1, text: `${unicodePrefix}missing)\n` } },
+  });
+  const unicodePublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === unicodeUri);
+  const unicodeDiagnostics = (unicodePublished.params as { diagnostics: Array<{ range: { start: { character: number } } }> }).diagnostics;
+  assert.ok(unicodeDiagnostics.some((item) => item.range.start.character === [...unicodePrefix].length));
+  sendTogether([
+    { jsonrpc: "2.0", id: 140, method: "textDocument/hover", params: { textDocument: { uri: scratchUri }, position: { line: 0, character: 2 } } },
+    { jsonrpc: "2.0", method: "$/cancelRequest", params: { id: 140 } },
+  ]);
+  const cancelled = await waitFor((message) => message.id === 140);
+  assert.equal((cancelled.error as { code: number }).code, -32800);
 
   const fixUri = pathToFileURL(join(directory, "fix.vel")).href;
   const fixText = "const same = 1 === 1\n\tprint(same)\nconst enabled = True && !False\n";
@@ -27128,6 +27232,22 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.equal((carriageReturnDefinition.result as { uri: string; range: { start: { line: number; character: number } } }).uri, coreUri);
   assert.deepEqual((carriageReturnDefinition.result as { range: { start: { line: number; character: number } } }).range.start, { line: 0, character: 6 });
 
+  const beforeRapidChanges = messages.length;
+  sendTogether([3, 4, 5].map((version) => ({
+    jsonrpc: "2.0",
+    method: "textDocument/didChange",
+    params: { textDocument: { uri: coreUri, version }, contentChanges: [{ text: carriageReturnText }] },
+  })));
+  await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string; version?: number }).uri === coreUri
+    && (message.params as { version?: number }).version === 5);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const rapidVersions = messages.slice(beforeRapidChanges)
+    .filter((message) => message.method === "textDocument/publishDiagnostics"
+      && (message.params as { uri?: string }).uri === coreUri)
+    .map((message) => (message.params as { version?: number }).version);
+  assert.deepEqual(rapidVersions, [5]);
+
   send({
     jsonrpc: "2.0",
     method: "textDocument/didOpen",
@@ -27137,6 +27257,15 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     && (message.params as { uri?: string }).uri === mainUri);
   const greetColumn = mainText.split("\n")[1]!.indexOf("greet") + 1;
   const callColumn = mainText.split("\n")[1]!.indexOf("greet(") + "greet(".length;
+  await writeFile(modelsPath, "/// Greets one visible user after a watched-file refresh.\nexport def greet(name: string) -> string:\n    return name\n", "utf8");
+  send({
+    jsonrpc: "2.0",
+    method: "workspace/didChangeWatchedFiles",
+    params: { changes: [{ uri: pathToFileURL(modelsPath).href, type: 2 }] },
+  });
+  send({ jsonrpc: "2.0", id: 136, method: "textDocument/hover", params: { textDocument: { uri: mainUri }, position: { line: 1, character: greetColumn } } });
+  const watchedHover = await waitFor((message) => message.id === 136);
+  assert.match(JSON.stringify(watchedHover.result), /watched-file refresh/u);
   send({ jsonrpc: "2.0", id: 32, method: "textDocument/hover", params: { textDocument: { uri: mainUri }, position: { line: 1, character: greetColumn } } });
   const documentedHover = await waitFor((message) => message.id === 32);
   assert.match(JSON.stringify(documentedHover.result), /Greets one visible user/u);

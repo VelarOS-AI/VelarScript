@@ -1,10 +1,17 @@
-export const VELAR_APPLICATION_PACKAGE_HOST_PROTOCOL_VERSION = 1 as const;
+export const VELAR_APPLICATION_PACKAGE_HOST_PROTOCOL_VERSION = 2 as const;
+
+export interface ApplicationPackageToolInput {
+  readonly id: string;
+  readonly outputFile: string;
+}
 
 export interface ApplicationPackageInput {
   readonly projectRoot: string;
   readonly config: unknown;
   /** Writes the already checked framework application to one package-owned staging directory. */
   readonly buildFramework: (outputDirectory: string) => Promise<void>;
+  /** Writes one exact-version official tool requested by the application target. */
+  readonly buildTool: (tool: ApplicationPackageToolInput) => Promise<void>;
 }
 
 export interface ApplicationPackageResult {

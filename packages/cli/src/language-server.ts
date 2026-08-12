@@ -50,6 +50,8 @@ interface ContentChange {
 }
 
 export const VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION = 1;
+type PositionEncoding = "utf-16" | "utf-32";
+let activePositionEncoding: PositionEncoding = "utf-16";
 const MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_LSP_RESULT_ITEMS = 10_000;
 const MAX_LSP_TEXT_CHARS = 64 * 1024;
@@ -131,10 +133,15 @@ function extensionDocumentation(
 }
 
 export async function runLanguageServer(): Promise<void> {
+  activePositionEncoding = "utf-16";
   const documents = new Map<string, TextDocument>();
   const sessions = new VelarProjectSessions();
+  const pendingRequests = new Set<string>();
+  const cancelledRequests = new Set<string>();
+  const diagnosticUris = new Set<string>();
   let buffer = Buffer.alloc(0);
   let queue = Promise.resolve();
+  let diagnosticTask: Promise<void> | null = null;
   let shuttingDown = false;
   let finish: () => void = () => {};
   const exitRequested = new Promise<void>((resolve) => { finish = resolve; });
@@ -163,7 +170,7 @@ export async function runLanguageServer(): Promise<void> {
   const projectFor = async (document: TextDocument): Promise<ProjectResult | null> => {
     const path = pathOf(document.uri);
     if (!path) return null;
-    return (await sessions.snapshot(path, overrides())).project;
+    return (await sessions.update(path, new Set(), overrides())).project;
   };
 
   const publish = async (document: TextDocument): Promise<void> => {
@@ -213,9 +220,51 @@ export async function runLanguageServer(): Promise<void> {
     });
   };
 
-  const respond = (id: RpcMessage["id"], result: unknown): void => send({ jsonrpc: "2.0", id: id ?? null, result });
-  const respondError = (id: RpcMessage["id"], message: string, code = -32803): void => send({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
+  const schedulePublish = (uri: string): void => {
+    diagnosticUris.add(uri);
+    if (diagnosticTask) return;
+    diagnosticTask = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(async () => {
+        while (diagnosticUris.size > 0) {
+          const uris = [...diagnosticUris];
+          diagnosticUris.clear();
+          for (const pendingUri of uris) {
+            const document = documents.get(pendingUri);
+            if (document) await publish(document);
+          }
+        }
+      })
+      .finally(() => {
+        diagnosticTask = null;
+        if (diagnosticUris.size > 0) schedulePublish([...diagnosticUris][0]!);
+      });
+  };
+
+  const finishRequest = (id: RpcMessage["id"]): boolean => {
+    if (id === undefined) return false;
+    const key = requestKey(id);
+    pendingRequests.delete(key);
+    return cancelledRequests.delete(key);
+  };
+  const respond = (id: RpcMessage["id"], result: unknown): void => {
+    if (finishRequest(id)) {
+      send({ jsonrpc: "2.0", id: id ?? null, error: { code: -32800, message: "Request cancelled" } });
+      return;
+    }
+    send({ jsonrpc: "2.0", id: id ?? null, result });
+  };
+  const respondError = (id: RpcMessage["id"], message: string, code = -32803): void => {
+    if (finishRequest(id)) {
+      send({ jsonrpc: "2.0", id: id ?? null, error: { code: -32800, message: "Request cancelled" } });
+      return;
+    }
+    send({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
+  };
   const handle = async (message: RpcMessage): Promise<void> => {
+    if (message.id !== undefined && cancelledRequests.has(requestKey(message.id))) {
+      respondError(message.id, "Request cancelled", -32800);
+      return;
+    }
     if (shuttingDown && message.method !== "exit") {
       if (message.id !== undefined) respondError(message.id, "VelarScript Language Server is shutting down", -32600);
       return;
@@ -223,8 +272,10 @@ export async function runLanguageServer(): Promise<void> {
     const params = message.params as Record<string, unknown> | undefined;
     switch (message.method) {
       case "initialize":
+        activePositionEncoding = requestedPositionEncoding(params);
         respond(message.id, {
           capabilities: {
+            positionEncoding: activePositionEncoding,
             textDocumentSync: { openClose: true, change: 2, save: { includeText: true } },
             completionProvider: { triggerCharacters: [".", "<", " ", "{", ",", ":"] },
             hoverProvider: true,
@@ -242,7 +293,13 @@ export async function runLanguageServer(): Promise<void> {
             },
             codeActionProvider: { codeActionKinds: ["quickfix"] },
             experimental: {
-              velar: { protocolVersion: VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION },
+              velar: {
+                protocolVersion: VELAR_LANGUAGE_SERVER_PROTOCOL_VERSION,
+                incrementalSessions: true,
+                watchedFiles: true,
+                workspaceRescan: true,
+                cancellation: true,
+              },
             },
           },
           serverInfo: { name: "VelarScript Language Server", version: VELAR_VERSION },
@@ -257,9 +314,16 @@ export async function runLanguageServer(): Promise<void> {
         process.stdin.pause();
         finish();
         break;
+      case "$/cancelRequest":
+        break;
       case "textDocument/didOpen": {
         const value = params?.textDocument as TextDocument;
         documents.set(value.uri, value);
+        const path = pathOf(value.uri);
+        if (path) {
+          try { await sessions.snapshot(path, overrides()); }
+          catch { /* publish converts project/config failures into document diagnostics. */ }
+        }
         await publish(value);
         break;
       }
@@ -271,19 +335,53 @@ export async function runLanguageServer(): Promise<void> {
         if (!Array.isArray(changes)) break;
         const next = { ...current, version: descriptor.version, text: applyContentChanges(current.text, changes) };
         documents.set(next.uri, next);
-        await publish(next);
+        schedulePublish(next.uri);
         break;
       }
       case "textDocument/didSave": {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         const current = documents.get(descriptor.uri);
-        if (current) await publish(current);
+        if (current) schedulePublish(current.uri);
         break;
       }
       case "textDocument/didClose": {
         const descriptor = params?.textDocument as Pick<TextDocument, "uri">;
         documents.delete(descriptor.uri);
+        diagnosticUris.delete(descriptor.uri);
+        const path = pathOf(descriptor.uri);
+        if (path) await sessions.update(path, new Set([path]), overrides());
         send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri: descriptor.uri, diagnostics: [] } });
+        break;
+      }
+      case "workspace/didChangeWatchedFiles": {
+        const changes = params?.changes as readonly { readonly uri?: unknown }[] | undefined;
+        if (!Array.isArray(changes)) break;
+        const changedPaths = new Set(changes.flatMap((change) => {
+          const path = typeof change?.uri === "string" ? pathOf(change.uri) : null;
+          return path ? [path] : [];
+        }));
+        if (changedPaths.size === 0) break;
+        const currentOverrides = overrides();
+        const roots = new Map<string, string>();
+        for (const document of documents.values()) {
+          const documentPath = pathOf(document.uri);
+          if (!documentPath) continue;
+          roots.set(sessions.rootFor(documentPath) ?? documentPath, documentPath);
+        }
+        for (const documentPath of roots.values()) await sessions.update(documentPath, changedPaths, currentOverrides);
+        for (const document of documents.values()) schedulePublish(document.uri);
+        break;
+      }
+      case "velar/workspaceRescan": {
+        const currentOverrides = overrides();
+        const roots = new Map<string, string>();
+        for (const document of documents.values()) {
+          const documentPath = pathOf(document.uri);
+          if (!documentPath) continue;
+          roots.set(sessions.rootFor(documentPath) ?? documentPath, documentPath);
+        }
+        for (const documentPath of roots.values()) await sessions.snapshot(documentPath, currentOverrides);
+        for (const document of documents.values()) schedulePublish(document.uri);
         break;
       }
       case "textDocument/completion": {
@@ -447,7 +545,7 @@ export async function runLanguageServer(): Promise<void> {
         break;
       }
       default:
-        if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `Method not found: ${message.method ?? ""}` } });
+        if (message.id !== undefined) respondError(message.id, `Method not found: ${message.method ?? ""}`, -32601);
     }
   };
 
@@ -488,13 +586,27 @@ export async function runLanguageServer(): Promise<void> {
         continue;
       }
       const message = parsed;
+      if (message.method === "$/cancelRequest") {
+        const cancelId = (message.params as { readonly id?: unknown } | undefined)?.id;
+        if (cancelId === null || typeof cancelId === "string" || (typeof cancelId === "number" && Number.isFinite(cancelId))) {
+          const key = requestKey(cancelId);
+          if (pendingRequests.has(key)) cancelledRequests.add(key);
+        }
+      } else if (message.id !== undefined) {
+        pendingRequests.add(requestKey(message.id));
+      }
       queue = queue.then(() => handle(message)).catch((error) => {
-        if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: hostErrorMessage(error) } });
+        if (message.id !== undefined) respondError(message.id, hostErrorMessage(error), -32603);
       });
     }
   });
   await Promise.race([new Promise<void>((resolve) => process.stdin.once("end", resolve)), exitRequested]);
   await queue;
+  if (diagnosticTask) await diagnosticTask;
+}
+
+function requestKey(id: number | string | null): string {
+  return `${typeof id}:${String(id)}`;
 }
 
 function isRpcMessage(value: unknown): value is RpcMessage {
@@ -552,12 +664,12 @@ function oversizedDiagnosticsFallback(params: unknown): unknown {
 }
 
 function lspDiagnostic(source: SourceText, item: Diagnostic): unknown {
-  const start = source.location(item.span.start);
-  const end = source.location(Math.max(item.span.start + 1, item.span.end));
+  const start = lspSourcePosition(source, item.span.start);
+  const end = lspSourcePosition(source, Math.max(item.span.start + 1, item.span.end));
   return {
     range: {
-      start: { line: start.line - 1, character: start.column - 1 },
-      end: { line: end.line - 1, character: end.column - 1 },
+      start,
+      end,
     },
     severity: 1,
     code: item.code,
@@ -567,12 +679,12 @@ function lspDiagnostic(source: SourceText, item: Diagnostic): unknown {
 }
 
 function lspNotice(source: SourceText, message: string): unknown {
-  const start = source.location(0);
-  const end = source.location(Math.min(1, source.text.length));
+  const start = lspSourcePosition(source, 0);
+  const end = lspSourcePosition(source, Math.min(1, source.text.length));
   return {
     range: {
-      start: { line: start.line - 1, character: start.column - 1 },
-      end: { line: end.line - 1, character: end.column - 1 },
+      start,
+      end,
     },
     severity: 3,
     code: "VEL9002",
@@ -618,12 +730,7 @@ function lspLocation(project: ProjectResult, path: string, span: Span): unknown 
 }
 
 function lspRange(source: SourceText, span: Span): Range {
-  const start = source.location(span.start);
-  const end = source.location(span.end);
-  return {
-    start: { line: start.line - 1, character: start.column - 1 },
-    end: { line: end.line - 1, character: end.column - 1 },
-  };
+  return { start: lspSourcePosition(source, span.start), end: lspSourcePosition(source, span.end) };
 }
 
 function sourceFor(project: ProjectResult, path: string): SourceText {
@@ -646,11 +753,11 @@ function semanticTokenData(source: SourceText, tokens: readonly ProjectSemanticT
   let previousLine = 0;
   let previousCharacter = 0;
   for (const token of tokens) {
-    const start = source.location(token.span.start);
-    const end = source.location(token.span.end);
-    if (start.line !== end.line || end.column <= start.column) continue;
-    const line = start.line - 1;
-    const character = start.column - 1;
+    const start = lspSourcePosition(source, token.span.start);
+    const end = lspSourcePosition(source, token.span.end);
+    if (start.line !== end.line || end.character <= start.character) continue;
+    const line = start.line;
+    const character = start.character;
     const deltaLine = line - previousLine;
     const deltaCharacter = deltaLine === 0 ? character - previousCharacter : character;
     const tokenType = semanticTokenTypes.indexOf(token.type);
@@ -659,7 +766,7 @@ function semanticTokenData(source: SourceText, tokens: readonly ProjectSemanticT
       const index = semanticTokenModifiers.indexOf(modifier);
       return index < 0 ? bits : bits | (1 << index);
     }, 0);
-    data.push(deltaLine, deltaCharacter, end.column - start.column, tokenType, modifiers);
+    data.push(deltaLine, deltaCharacter, end.character - start.character, tokenType, modifiers);
     previousLine = line;
     previousCharacter = character;
   }
@@ -764,9 +871,9 @@ function projectInlayHints(project: ProjectResult, path: string, text: string, r
     const declarationEnd = lineEndAt(text, symbol.selectionSpan.end);
     const assignment = text.indexOf("=", symbol.selectionSpan.end);
     if (assignment !== -1 && assignment < declarationEnd && text.slice(symbol.selectionSpan.end, assignment).includes(":")) continue;
-    const location = module.result.source.location(symbol.selectionSpan.end);
+    const location = lspSourcePosition(module.result.source, symbol.selectionSpan.end);
     hints.push({
-      position: { line: location.line - 1, character: location.column - 1 },
+      position: location,
       label: `: ${symbol.type}`,
       kind: 1,
       paddingRight: true,
@@ -846,7 +953,10 @@ function offsetAt(text: string, position: Position): number {
     const next = nextLineStart(text, offset);
     offset = next === null ? text.length : next;
   }
-  return Math.min(lineEndAt(text, offset), offset + requestedCharacter);
+  const end = lineEndAt(text, offset);
+  return activePositionEncoding === "utf-16"
+    ? Math.min(end, offset + requestedCharacter)
+    : codeUnitOffsetAt(text, offset, end, requestedCharacter);
 }
 
 function positionAt(text: string, requestedOffset: number): Position {
@@ -866,7 +976,45 @@ function positionAt(text: string, requestedOffset: number): Position {
       lineStart = index + 1;
     }
   }
-  return { line, character: offset - lineStart };
+  return { line, character: activePositionEncoding === "utf-16" ? offset - lineStart : codePointCount(text, lineStart, offset) };
+}
+
+function requestedPositionEncoding(params: Record<string, unknown> | undefined): PositionEncoding {
+  const capabilities = params?.capabilities;
+  if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) return "utf-16";
+  const general = (capabilities as Record<string, unknown>).general;
+  if (!general || typeof general !== "object" || Array.isArray(general)) return "utf-16";
+  const encodings = (general as Record<string, unknown>).positionEncodings;
+  return Array.isArray(encodings) && encodings.includes("utf-32") ? "utf-32" : "utf-16";
+}
+
+function lspSourcePosition(source: SourceText, offset: number): Position {
+  const location = source.location(offset);
+  const line = location.line - 1;
+  const start = source.lineStarts[line] ?? 0;
+  const bounded = Math.max(start, Math.min(offset, source.text.length));
+  return {
+    line,
+    character: activePositionEncoding === "utf-16" ? bounded - start : codePointCount(source.text, start, bounded),
+  };
+}
+
+function codePointCount(text: string, start: number, end: number): number {
+  let count = 0;
+  for (let index = start; index < end; count += 1) {
+    const point = text.codePointAt(index);
+    index += point !== undefined && point > 0xffff ? 2 : 1;
+  }
+  return count;
+}
+
+function codeUnitOffsetAt(text: string, start: number, end: number, requested: number): number {
+  let index = start;
+  for (let count = 0; count < requested && index < end; count += 1) {
+    const point = text.codePointAt(index);
+    index += point !== undefined && point > 0xffff ? 2 : 1;
+  }
+  return index;
 }
 
 function nextLineStart(text: string, start: number): number | null {

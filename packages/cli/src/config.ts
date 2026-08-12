@@ -18,6 +18,7 @@ import {
   CORE_PROJECT_MANIFEST_FIELDS,
   CURRENT_PROJECT_FORMAT_VERSION,
 } from "./project-format.ts";
+import { bundledExtension } from "./bundled-extension-registry.ts";
 
 export { CURRENT_PROJECT_FORMAT_VERSION } from "./project-format.ts";
 
@@ -86,7 +87,7 @@ export async function resolveVelarProject(input: string | null, cwd = process.cw
 export async function resolveVelarProjectForDocument(path: string): Promise<VelarProjectConfig> {
   const documentPath = resolve(path);
   const manifestPath = await findManifest(dirname(documentPath));
-  return manifestPath ? loadManifest(manifestPath, documentPath) : standaloneProject(documentPath);
+  return manifestPath ? loadManifest(manifestPath) : standaloneProject(documentPath);
 }
 
 async function loadManifest(manifestPath: string, entryOverride: string | null = null): Promise<VelarProjectConfig> {
@@ -184,6 +185,23 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
   const hosts: FrameworkHostExtension[] = [];
   for (const package_ of packages) {
     const name = package_.name;
+    if (package_.resolution === "bundled") {
+      const bundled = bundledExtension(name);
+      if (!bundled) throw new Error(`${manifestPath}: bundled compiler extension '${name}' is unavailable`);
+      const extension = validateLoadedExtension(package_, bundled.compiler);
+      compiler.push(extension);
+      if (package_.manifestKey !== null) {
+        const projectExtension = bundled.project;
+        if (!projectExtension || projectExtension.id !== name || projectExtension.manifestKey !== package_.manifestKey || typeof projectExtension.parse !== "function") {
+          throw new Error(`'${name}/compiler' exports an invalid velarProjectExtension`);
+        }
+        project.push(projectExtension);
+      } else if (bundled.project !== null) {
+        throw new Error(`'${name}/compiler' exports velarProjectExtension without declaring manifestKey metadata`);
+      }
+      if (bundled.host) hosts.push(validateFrameworkHost(bundled.host, extension, name));
+      continue;
+    }
     const require = createRequire(package_.manifestPath);
     try {
       const entry = require.resolve(`${name}/compiler`);
