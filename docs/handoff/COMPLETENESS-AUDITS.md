@@ -1,0 +1,303 @@
+# 完整性审计账本（2026-08-12 起）
+
+用户方法论纠正（「尽可能考虑到所有情况，在边界设计之内」）后立项：对每个特性面
+做 **charter 承诺 vs 编译器行为 vs 作者合理预期** 的逐条对照，目标不是找 bug 而是
+**消灭未定义**。
+
+分类：**DEFECT**（编译通过后崩溃/静默错误）· **CHARTER-DRIFT**（文档与实现不符）
+· **INCONSISTENT**（两条相关规则互相矛盾）· **UNDEFINED**（charter 沉默、行为偶然）
+· **DECIDED-AND-CORRECT**（探过且正确 —— 完整性凭证，必须记录）。
+
+处置二分：**实现缺陷 → 代理直接修**；**语义设计 → 记录待用户裁决**（马拉松协议
+第 1 条）。
+
+---
+
+## 审计一 —— 类系统（2026-08-12，约 140 个探针）
+
+方法学记录：A′ 波并发改写 `analyzer.ts`/`emitter.ts`，审计代理用
+`git archive HEAD` 冻结自洽快照单独构建，全部头条发现再回实时工作树复验一致。
+
+### DEFECT —— 编译通过后崩溃或静默错误（8 条，实现层，代理可直接修）
+
+| ID | 位置 | 现象 |
+|---|---|---|
+| **CLS-D1** | `analyzer.ts:1349` `registerClassShapes` 只遍历 `program.body`；`:1619` 无作用域守卫（`EnumDeclaration` 在 `:1590` 有 VEL3011） | **块内 class 被解析分析但形状永不注册** → 最坏形态：函数内同名类遮蔽顶层类且形状不同，`-> number` 的函数**返回字符串**，零诊断（实测输出 `not a number1`）。无遮蔽时成员全不可见；缺字段时崩 `TypeError`。**`type` 别名在函数体内同款** |
+| **CLS-D2** | 同上 | 块内 `export class` **发射出 Node 无法解析的 JS**（`SyntaxError: Unexpected token 'export'`）—— 随 D1 修复消解 |
+| **CLS-D3** | `analyzer.ts:1415` `requiredParameters` 未排除 rest；`constructorRest` **只为 extern 类设置**（`:934`） | 构造器 rest 参数被接受后**两种拼写各错一种**：`...values: number` 使构造器**不可调用**；`...values: List<number>` 类型通过但**运行时静默错**（`total` 得 1 而非 3，因发射为 `constructor(...values)`）。extern 声明同形态**正确** —— 两者不一致。**parser 已有现成诊断 VEL2016**（`parser.ts:1043`）只是没接进 `parseClassConstructorParameters` |
+| **CLS-D4** | `analyzer.ts:3949-3956` 只查 `constructorDepth === 0` | 构造器**非顶层**位置的第二次 `super(...)` 被接受 → 运行时 `ReferenceError: Super constructor may only be called once`（`if flag: super("b")`、`for` 内同样）。箭头与方法内正确拒绝；`validateConstructorShape` 已算出哪条是首语句，只是没用于嵌套 super |
+| **CLS-D5** | `emitter.ts:1592` `` `new ${…}` `` | `new` + 收窄 IIFE 时**括号错位** → `TypeError: (intermediate value) is not a constructor`（发射成 `new (arrow)(x)()`）。修法：`new (${…})` |
+| **CLS-D7** | 实例字段初始化器无自引用检查 | `let child: A? = A()` 编译通过，模块加载即 `RangeError: 栈溢出`。**静态字段有对应检查**（`VEL4001: Static field is read before it is initialized`），实例没有 |
+| **CLS-D8** | 类名对 analyzer 提升、但 `class` 无运行时提升 | 声明前使用类名被接受 → 裸 `ReferenceError: Cannot access 'Later' before initialization`。**值绑定有检查**（`VEL3001`），类名没有。最坏形态：`class Derived extends Base` 写在 `Base` 之前 → 模块加载失败且错误不指明修法 |
+| **CLS-D9** | 基类构造器可调用抽象/被覆盖成员 | 编译通过、**必然崩溃**（`TypeError: Field 'score' was read before initialization`）。运行时守卫让它响亮失败（好），但消息是编译器内部术语、不指源码位置，且 charter 从未提及此危险或该守卫。**编译器静态可知基类构造器只能观察基类状态** |
+
+### 待用户裁决（语义设计，不擅动）
+
+- **CLS-D6（最深的洞）**：`Type.is`/`Type.parse` **接受类实例** —— 静态是标称的
+  （`const p: Point = P()` 被拒），运行时是结构的。实测：`Point.parse(instance)`
+  成功、返回的记录视图**别名活实例**，`point.x = 99` **写穿了类的 `const` 字段**
+  （`instance.read()` 输出 99），全程零诊断。两条规则互相矛盾。可选修法：记录验证
+  拒绝原型非 `Object.prototype` 的值；或 charter 明写「验证过的记录视图可能别名
+  类实例，且类 `const` 字段无运行时保护」。
+- **CLS-U6**：**类值是半个一等值** —— `const factory = P` 可用、`print(P)` 可用、
+  别名读静态可用；但 `List<P> = [P]` 被拒（消息还把 `classConstructor P` 与
+  `class P` 用同一显示名对比）、`(() -> P)` 参数位被拒、`[P, Q]` 元素类型成
+  `P | Q` 后不可调用、经 null 检查后间接调用触发 CLS-D5。需裁决：给构造器值一个
+  可拼写类型（`Class<P>` 之类），还是把 class-as-value 限制为直接引用与静态访问。
+- **CLS-U3**：override **签名严格不变**（`-> number` 覆盖 `-> number?` 被拒）。
+  结果协变是多数作者的预期，禁止它是有意还是偶然？charter 只说「`abstract` 与
+  `override` 被检查」。
+- **CLS-U5（readonly 所有权故事最大的洞）**：`readonly` 传递性**在类类型成员处
+  终止** —— `def look(h: readonly Holder)` 内 `h.item.x = 5` **被接受并真的改了**
+  （`item` 是类实例）。这是 §5 两条规则（传递性 + 类在边界外）叠加的必然结果，
+  但从未有人陈述该交互。
+- **CLS-C1**：§18 承诺「类降级为 JS 类与原型」，但**实例方法不走原型** ——
+  发射器把每个公开非静态方法 `bind` 到实例上。可观察后果：`print(instance)`
+  显示方法；**带函数字段的记录类型在运行时被类实例满足**（`Runner.is(P())` 为
+  true，而走原型则应为 false —— §12 明写「继承字段与访问器不满足记录契约」，
+  该规则的答案取决于一个未文档化的降级选择）；方法引用（`const f = a.read`）
+  能用**只因为**这个降级。需裁决：改用原型（破坏方法引用），还是把绑定降级
+  成文并修正 §12 的答案。
+- **CLS-U1（setters）**：`set x(v)` 得到三连级联通用错误，从不说「Vel 没有
+  setter」；§19 有意缺席清单也**没列它**。需裁决：加 §19 条目 + 定向诊断
+  （我倾向如此，`get` 是软关键字有专门解析路径，`set` 应同款）。
+
+### CHARTER-DRIFT（文档修正，代理可直接改）
+
+- **CLS-C2**：§10 说 `super.member`，但只有**方法与 getter** 可用；读基类字段
+  被拒（诊断本身正确，charter 的「member」措辞不对）。`super` 单独出现的诊断
+  也漏了 getter。
+- **CLS-C3**：§9 的穷尽性清单**漏了不可反驳的类模式** —— `match value: case Base:`
+  确实参与非空返回分析，但清单没写。
+
+### INCONSISTENT（实现层，代理可修）
+
+- **CLS-I1**：字段初始化器里 `super.seed()` 可用（`this` 已绑定）但 `self`
+  **未声明** → `VEL3001: Unknown name 'self'` + 两条级联。静态方法内 `self.n`
+  同款弱诊断。charter 只说「`self` 在方法体内显式」，从未说它在哪些位置**不存在**。
+- **CLS-I2**：enum 有模块作用域规则、class 与 type 别名没有（= CLS-D1）。
+- **CLS-I3**：match 穷尽性对 enum 强制、对**类层级不强制**（缺少分支静默什么都
+  不打印；enum 同形态给 `VEL4015`）。类层级 match 能否/是否必须穷尽 —— 未定。
+- **CLS-I4**：`extends Error` 完全可用，`extends <extern class>` 被拒
+  （`Unknown base class`），而 §10 与 javascript-bridge.md 都没说不能继承 extern 类。
+- **CLS-I5**：`readonly def` 的拒绝消息建议「用 `const` 声明只读字段」——
+  对方法/getter 是无意义的建议（拒绝本身正确）。
+
+### UNDEFINED（charter 沉默处，需成文；代理可按下述答案补文档）
+
+| ID | 未定之处 | 实测行为（即应成文的答案） |
+|---|---|---|
+| CLS-U2 | 「一次直接 `self.field =` 赋值」的**边界** | 仅构造器体**语法顶层**、仅 `=`、仅字面 `self` 接收者。if 两分支各赋一次 / for 内 / try-catch 两分支 / `+=` / 经别名 / 被调方法内 —— **全部拒绝**（规则自洽且强制确定赋值，但 charter 未说「直接」= 语法顶层，诊断也没说） |
+| CLS-U4 | **基类**初始化顺序 | 参数属性默认值 → 参数属性赋值 → 体字段初始化器 → 方法绑定 → 构造器体（§10 只文档化了派生类顺序） |
+| CLS-U7 | 可选字段语法 | `let x?: number = 1` → 错误消息说「字段需要显式类型」（**措辞错误**，类型是显式的）。无可选字段概念；工作形态是 `let x: number? = null` —— 无任何指引指向它 |
+| CLS-U8 | **注入的运行时守卫** | 每个公开实例字段读降级为 `__velarReadInstanceField`，抛 `TypeError: Field '<name>' was read before initialization`；静态用 `__velarReadStaticField` 带 owner 深度遍历。它们是 D1/D9 与静态间接前向引用的失败面。charter 从未提及守卫、消息、或哪些读会抛；§11「只有 Error 可被抛出」也没承认编译器注入的 `TypeError` |
+| CLS-U9 | 类字段可命名 `self` | `let self: number = 7` 被接受、`self.self` 可读（保留名检查覆盖绑定与参数、不覆盖成员名）。当前降级下无害，但没人决定过 |
+
+### DECIDED-AND-CORRECT（完整性凭证，压缩记录）
+
+**字段 14 项**：let/const 初始化器有无、`const` 仅构造器内可赋一次、`private const`、
+缺初始化器需一次直接赋值、静态需初始化器、显式类型必需、初始化器可读自类/他类/
+私有/后声明静态并可调静态方法、`private static const` 外部不可见、`static let/const`
+可变性、重名拒绝（含参数属性 vs 体字段）、每实例独立、静态共享、直接静态前向引用
+编译期捕获、`readonly T` 作字段类型双向强制、`readonly` 作成员修饰符对 let/def/get
+均拒、`readonly ClassInstance` 精确边界消息。
+
+**构造器 9 项**：参数属性三种前缀 + 默认值 + 显式类型 + private 不可见、参数属性
+rest 拒绝（VEL2016）、仅一个构造器、无 `new`（VEL1005）、无类头构造器、无 `init:`、
+无构造器修饰符、无 `await`、无 `return`、初始化器 XOR 赋值、派生须先 `super(...)`、
+基类有必需参数而派生无构造器时拒绝、`self` 在四种位置保留。
+
+**继承 13 项**：3-4 层链 + `super.m()` 链式、抽象类四种途径均不可实例化、未实现
+抽象成员（含经抽象中间类与再抽象）被捕获、`abstract`+`static`/`override`、
+`private`+`abstract`/`override` 对方法与 getter 均拒、`override` 必需性与签名检查、
+覆盖参数标签行为符合 §7、静态方法与静态 getter 覆盖、继承静态字段重声明拒绝、
+私有静态按类隔离、继承字段须保持 let/const + 类型契约、循环继承拒绝、`super.member`
+在五种位置可用、嵌套 `def` 内与非派生类中拒绝、抽象 getter。
+
+**成员 9 项**：getter 作属性/无参/无类型参数/无 async/显式结果/可变；私有方法与
+getter 与静态内部可用外部拒绝且消息各异；`#field` 拒绝并给 charter 的确切修法；
+完整重名冲突矩阵（六种）各有不同消息；静态与实例同名允许（字段/方法/getter）；
+`constructor`/`prototype`/`__proto__` 作成员名拒绝（含静态）；泛型方法可用、
+泛型类拒绝（VEL2025）；方法引用可用；`self` 在嵌套箭头与嵌套 def 内。
+
+**身份与类型 6 项**：类是标称的（同形状不可互换、不满足记录、跨模块同名类各自
+独立且都能运行）；`is` 与 `match case Class:` 遵循层级、`as` 绑定、无关模式拒绝
+（`can never match`）；`stringify`/`str()`/f-string/对象展开**全部拒绝类实例**并
+给具体指引；`print(instance)` 可用；实例可进 List/Set/Map；基类模式参与非空返回分析。
+
+**错误 6 项**：`extends Error` + `super(message)`、自定义字段、throw/catch、
+两级错误层级的 `is` 收窄、抽象错误基类 + `override`、非 Error 类不可抛
+（`Only Error values can be thrown, received Boom`）、非 Error 内建不可继承、
+`message` 不可重声明。
+
+**降级 4 项**：`private` 是原生 `#` 且不出现在检查输出中；实例字段初始化器在
+`super()` 后、构造器体前按 charter 文档化顺序运行；extern 类的 rest 构造器正确；
+跨模块同名类运行时共存。
+
+### 修复优先序（审计代理建议，编排代理认可）
+
+1. **CLS-D1/D2** —— 一行作用域守卫同时消灭健全性破坏、运行时崩溃、非法 JS 发射。
+2. **CLS-D6** —— 记录/类标称性分裂是最深的洞，静默击穿 `const` 字段（**待裁决**）。
+3. **CLS-D3** —— 复用现成 VEL2016；今天一种拼写不可调用、另一种静默错。
+4. **CLS-D4/D5/D8** —— 三个小而局部的修复，各自把「干净编译」变成「裸 JS 错误」。
+5. **CLS-D9** —— 基类构造器静态不可能观察派生状态，应拒绝而非依赖运行时守卫。
+6. **CLS-U2/U5/U8 + I1** —— charter 的沉默（而非编译器的行为）才是缺口。
+7. **CLS-U6** —— 决定类构造器是否为值（**待裁决**）。
+8. **CLS-U1（setters）/U7/I5 + `self` 级联** —— 规则存在但消息没传达。
+
+
+---
+
+## 审计二 —— 收窄与流分析（2026-08-12，约 190 个探针）
+
+**历史 blocker #1（循环回边不作废事实）确认仍然关闭**，且在能构造的全部变体下
+都关闭：成员路径、别名、嵌套 if、continue 臂、三层嵌套、`async for`、try、
+finally、循环内 match、`while` 头部重建。
+
+### UNSOUND —— 1 条，blocker 级（实现层，最高优先）
+
+**FLW-U1：导入的记录类型，其运行时收窄守卫退化为「仅存在性」检查**
+—— 陈旧事实静默交付错误数据，或漏出裸 JS `TypeError`。
+
+charter §5（527-533 行）承诺：记录与集合用**深度验证器**；证据陈旧时读操作抛
+`NarrowingError` 带源码偏移与期望类型，「不会静默漏出 JavaScript `TypeError`」。
+
+完全类型化的复现（无 `unknown`、无强转、无宿主边界）：跨模块导入 `User`/`Slot`，
+`if s.value is User:` 后经不透明跨模块调用把 `s.value` 改成 `Error("boom")`，
+随后 `print(s.value.name)` —— **check 干净、run 输出 `Error` 与 `name is Error`、
+退出码 0**。字符串 `"Error"` 流进 `string` 类型的读与 f-string。
+
+对照组（同样字节但 `User`/`Slot`/`replace` 本地声明）正确抛出：
+`__VelarNarrowingError: Flow narrowing for '.value' no longer holds: expected User
+at source offset 215`。
+
+另一形态漏出**裸 TypeError**：导入 `User` + 跨模块 `h.payload = 5` + `.name.upper()`
+→ `TypeError: String methods require a string receiver` —— 正是 charter 说该设计
+消除掉的结果。
+
+**机制**：`emitter.ts` 的 `emitNarrowingCheck` 在 `case "named"` 下，若名字不在
+`hints.enumNames`/`hints.classNames`/发射器自有 `typeDeclarations` 中，就退化为
+`` `${value} != null` ``。而 `typeDeclarations` **只**由本地 `TypeDeclaration`
+填充，`classNames`/`enumNames` 来自 analyzer 的 map **却包含导入项** —— 所以
+导入的类与枚举正确、导入的记录退化。同文件的 `emitIsCheck` 已经在发射
+`` `${type.name}.is(${value})` `` 且跨模块可用，收窄路径只是没去用它。
+
+**受影响面已确认**：从 `unknown` 收窄的导入记录（输出 `undefined` / `5`）、
+联合中的导入记录、`List<导入记录>` 元素检查退化为 `item != null`、
+**导入记录的本地别名**（`type U2 = User`）也不恢复。
+**不受影响**：导入的类与枚举（均正确抛出）、全部本地声明类型、`is` 测试本身
+（始终用真验证器）。
+
+**覆盖缺口**：现有全部收窄测试都用单模块 `compile()` API，**跨模块 recheck
+零回归覆盖**；`WebJavaScriptEmitter` 继承同一方法。
+
+**修法**：`emitNarrowingCheck` 的 `named` 分支改走 `emitIsCheck`（或让导入记录
+验证器对发射器可见），并补第一批跨模块收窄回归。
+
+### CHARTER-DRIFT —— 2 条
+
+**FLW-D2：任何成员写作废帧内**全部**成员路径事实**。charter §5（518 行）明写
+「无关的根保持其事实」，但实测：写一个**不同类型的不同变量**的成员
+（`other.count = 2`）会杀掉 `box.value` 的事实；写兄弟字段同样。analyzer 对
+**任何** `MemberExpression` 赋值目标都调 `invalidateCurrentMemberNarrowings()`
+—— 一把大锤，使别名作废平凡地健全（六个别名探针全过），代价是 charter 承诺
+的保证不成立。局部**绑定**事实不受影响。**这句话和这段代码不能同时成立**：
+要么改代码、要么改 charter；修代码时不得丢掉别名情形。
+
+**FLW-D3：比较链的事实不流入后续链节**。charter §4（315-317 行）两句话，
+第二句成立（完整链为真时事实在受控体内可用），**第一句不成立**：
+`if null != x < 100:` 中 `null != x` 建立的存在性，`x < 100` 看不到 →
+报错。`assert null != x <= 100` 与 `number | string` 联合同款。
+（诊断文本属在途的有序比较工作，落地后需复验；但事实流的缺口与操作数定型正交。）
+
+### OVER-STRICT —— 2 条
+
+**FLW-S1：不可 break 的循环之后，`while` 条件的否定事实被丢弃**。charter §9
+（1222-1223 行）说「可 break 的循环可能在条件仍成立时退出，故否定事实不持续
+到循环后」—— 暗示不可 break 时应持续。实测 `while w is number: w = "s"` 之后
+`w.upper()` 报错。代码路径存在但被 `blockAlwaysReturns(body) && !sawBreak` 门控
+—— 体是裸 `return` 时可用。**最常见形态（体不返回、无 break）丢失事实**。
+
+**FLW-S2：无用的 getter 检查被静默接受，且诊断把作者指向错误方向**。
+getter 不是稳定位置这条实现正确，但检查本身**不给诊断**，读操作说
+「Use optional access '?.'」—— 照做（`self.label?.upper()`）会**静默двойное求值
+getter**，而正路是 `const snapshot = self.label`。
+
+### UNDEFINED —— 9 条（charter 沉默，行为偶然）
+
+| ID | 未定之处 | 实测行为 |
+|---|---|---|
+| **FLW-N1**（本类最重） | **赋值/声明从不建立事实**，即使值可证非空 | `const x: string? = "a"` 后 `x.upper()` **报错**；`x = "a"` 后同样；if/else 两臂都赋非空、全部 match 分支都赋、try/catch 两臂都赋 —— 合并后事实仍缺席。charter §5 只说 `=` **作废**，从未说它是否**建立**。看起来**有意**（同一代码路径使作废规则成立），但**这是本子系统最大的人体工学悬崖** —— 带字面量初始化器的 `const` 失败很难辩护 |
+| FLW-N2 | 可选链不是事实主体，且**不蕴含自身接收者的存在性** | `if v.a?.b != null:` 后 `v.a.b` 报两条错 —— 而 `v.a?.b != null` 逻辑上蕴含 `v.a != null` |
+| FLW-N3 | **`Type.is(value)` 不收窄** | 而 §6（628 行）正指引作者「调用具体验证器的 `is(value)` 方法」当验证器需被存储时 —— 指引通向一条不收窄的路 |
+| FLW-N4 | 成员测试既非存在性测试也非收窄手段 | `x in allowed`（`x: string?`）在运算符处报**可赋性**消息而非成员消息；`List<string?>` 则编译且不收窄（正确，null 可能是元素）。行为可辩护，未定的是诊断与沉默 |
+| FLW-N5 | 下标与 `Map.get()` 读不是事实主体 | `r["k"]`、`m.get("k")`、`items[0]` 第二次读失败；先读进 `const` 可用。健全且与稳定路径规则一致，未成文 |
+| FLW-N6 | 事实不跨 `break` 边传播，只有作废跨 | `while true:` 内 `if x == null: return` 后 `break`，循环后 `x.upper()` 报错 —— 而该 break 被守卫支配，事实可证 |
+| FLW-N7 | `flag == true` **不收窄** `bool?` | 而 §6（691 行）说相等把枚举单例事实带回所有者；布尔字面量的对应事实缺席。真值判断（`if flag:`）确实收窄。（邻近在途的相等工作，需复验） |
+| FLW-N8 | recheck 是**每次收窄读的完整深度重验证**，无成本模型、无成文规避 | 收窄的 2 万元素 `List<string>` 读 2000 次：**守卫 3.17s / 无守卫 0.29s / 先读进 const 0.34s** —— **约 10×**，O(读次数 × 规模)。一行 `const` 的缓解手段 §5 没提 |
+| FLW-N9 | 守卫诊断泄漏内部并欠标识位置 | 成员读的 description 是 `.property` **无根名** —— 多个根都有 `value` 字段时歧义；未捕获时打印内部构造器名 `__VelarNarrowingError`（因 `this.name` 在 `super(message)` 之后赋值，V8 已冻结栈头）；位置是**裸字符偏移**（`215`）而紧下一帧已经打印 `file.vel:10:11` |
+
+### DECIDED-AND-CORRECT（完整性凭证，压缩）
+
+**建立事实 13 项**：`!= null`、`== null` + 早返回、`assert x != null`、assert 与
+`and` 组合、`is Type`、`is not Type` 双臂、and/or 短路流、or-否定与
+`not (a and b)`、`not (x == null)`、三元条件、`while` 条件、比较链在受控体内、
+f-string 读保持事实。
+
+**`bool?` 真值语义（批次 A）10 项**：`if flag:` 收窄为 bool、**else 臂什么都不学**
+（false 与 null 都到达）、`not flag` 收窄 else、`a and b` 双臂收窄、`a or b` 双臂
+不收窄、`while flag:` 收窄体、`assert flag`、bool? 记录字段、`flag ? flag : false`、
+`match flag: case true/false/null`。
+
+**作废 14 项**：直接赋值、复合赋值**保持**事实（§5:495）、同根成员写、经检查前
+声明与检查后声明的别名、链式别名、函数返回的别名、List 元素、反向别名、
+`self.field`、循环回边（11 种形态）、无条件 break 之后的写**正确地不**作废、
+下标赋值**正确地不**作废（是槽替换非别名）、无关接收者的可变集合方法调用不作废、
+参数是 const（消除重赋值风险）。**附带发现**：解构**赋值**根本不是语句形态
+（`{left: a} = p` 是 VEL2005），故 charter「including destructuring」一句目前**空转**。
+
+**调用不作废、运行时 recheck 触发 12 项**：普通不透明调用、`await`、分离
+`async f()`、嵌套 def 改成员、嵌套 def 改模块级 let（标识符守卫）、
+`extern module`/`import js` 宿主边界；且**写侧路径全部有守卫**（成员赋值、
+复合成员赋值、陈旧接收者上的方法调用、下标赋值、可变集合方法）。
+**证据强度与 §5 完全一致**：记录存在性、记录深层字段类型、集合深层元素、
+类标称身份、原始值运行时种类；擦除泛型/`Type<T>` 载体按设计只发存在性。
+Velar `catch` 能捕获并读 `.message`。循环值被验证器拒绝而非爆栈。
+
+**合并 16 项**：每条继续分支都建立的事实存活；终止守卫（return/throw/break/
+continue）在落空路径留下否定事实；if/else 兄弟独立性（绑定**与**成员路径）；
+match 分支互斥性（绑定**与**成员路径）；到达 match 之后代码的分支确实作废；
+模式失败把事实带给后续分支；带守卫的分支正确地不算穷尽；`else if` 链；
+try 的突变在 catch 内可见；返回的 catch 不能擦除 try 续体的事实；到达正常续体
+的 try 写确实作废；finally 效应应用于全部路径并逃出语句；finally 效应**不**在
+更早的 catch 内可见；try 内或 match 内的 break 仍带出其写；循环后状态；
+带可达 break 的 `while true` 之后作废；无可达 break 的满足非空结果；嵌套循环
+break 归属；只能 return 的体不泄漏写到被跳过路径；**全部零迭代情形健全**
+（守卫/assert/成员路径守卫在可能零次执行的循环内均不逃出）。
+
+**边界 10 项**：收窄不进入箭头体、嵌套 def、方法内嵌套 def、内联 map 回调；
+只**读**的箭头不作废外层事实；嵌套函数自己的检查可用；成文的 `const` 规避在
+闭包内可用；getter 不是稳定位置；getter 读进 const 收窄；收窄对象上的 getter
+收窄；遮蔽的箭头参数取得收窄后的元素类型。
+
+**成员路径 7 项**：`a.b.c` 收窄；替换 `a.b` 或 `a` 作废；`v.a != null and
+v.a.b != null` 组合；`v.a = null` 作废子事实；`Record<T>` 读进 const 收窄；
+持有旧成员值的 const 在成员被覆写后**正确保持**其事实。
+
+**其他 8 项**：枚举单例事实经 `==` 与经 match 记录模式；`case X as u` 同时收窄
+别名与原值；match List 模式收窄原可选值；readonly 视图收窄；可选下标与可选调用
+的接收者存在性在下标/实参表达式内可用（§5:567-569，其中可选调用探针甚至被判为
+**冗余检查**，反证事实确实在）；`Record` 双槽迭代；带守卫的通配 `case _ if …`；
+`throw` 作终止臂。
+
+### 修复优先序（审计代理建议，编排代理认可）
+
+1. **FLW-U1** —— blocker，与当年循环回边缺陷同类。改 `emitNarrowingCheck` 的
+   `named` 分支走 `emitIsCheck`，并补**第一批跨模块收窄回归**（现有测试全是单模块，
+   这个面零覆盖是缺陷能存活的原因）。
+2. **FLW-D2** —— **待用户裁决**：「无关的根保持其事实」是契约、还是大锤是契约？
+   这句话与这段代码不能同时成立。
+3. **FLW-N1** —— **待用户裁决**：赋值是否建立事实？沉默的代价是每个写
+   `x = "a"` 的作者。
+4. FLW-D3、S1、N2、N3、N6、N7 —— 小而各自可决的缺口。
+5. FLW-N8、N9 —— 成本模型与错误面打磨。
