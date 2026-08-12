@@ -484,3 +484,65 @@ readonly 视图消息优秀且传递、copy() 逃逸容器而元素保视图、�
 D1/D2/I2/I4/I5/U5/U8/U9/U10 + I3 前半（字面量拒绝）→ **N-2b**；
 I1/U1/U2/U3/U4 决案可否决随 N-2b 规格走；U6/U7 → N-3 文档；
 **I3 后半（元素级相等词汇）→ 待用户裁决**（亲代冲突：JS 引用 vs Python 元素级）。
+
+
+---
+
+## 审计六 —— 文本面（2026-08-13 凌晨，快照 + 活树全复验）
+
+### DEFECT（单位混用，执行级）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **TXT-D1** | **字符串排序是 UTF-16 码元序，其余全语言是码点序** —— 全表面唯一混单位处：`"\uFFFD" < "🔥"` → false（码点真值 true）；`sorted()` 输出 `z,🔥,�`（码点序应 `z,�,🔥`）。传播到 `< <= > >=`、min/max、sorted、sorted(by=)、sortBy/minBy/maxBy 六个面。**违反 runtime-boundary.md B-RUNTIME-TEXT 明文**（「UTF-16 offsets remain internal implementation details」）；Python/Rust/Go 全按码点 | 修（charter 合规，非新设计）：有序比较按码点序（= UTF-8 二进制序）；text-runtime 现成的无代理快路径让代价只落在含代理对的字符串上。归 N-2b |
+
+### 待用户裁决（morning queue，一项两半）
+
+**TXT-U1 + TXT-U2 —— `\u{...}` 转义 + 隐形字符政策（一个设计的两半）**：
+- 现状 A：**无数字转义** —— 转义集只有 `\\ \" \n \r \t`，写异域码点只能裸贴不可见字符。
+  **仓库自己已付此代价**：stdlib javascript.vel:163 的 `value < ""` 里藏着裸贴的
+  **不可见 U+0080**（hexdump 实证 c2 80）。
+- 现状 B：**字面量内隐形/双向控制字符零诊断**（裸 NUL、DEL、U+202E RTL-override
+  全部静默接受）—— 木马源（CVE-2021-42574）的真实载体在字面量，标识符已拒 ZWSP，
+  D36 第 39 条当年只裁了「字符串之外」。本语言使命是人可审计的 AI 代码。
+- **推荐**：加 `\u{...}`（拒 D800-DFFF 保住无孤代理字面量保证）→ 隐形与双向
+  控制字符须转义书写、裸贴给诊断。两半互为前提，D36 的理由直接延伸。
+  **表面新增，等用户批**。
+
+### UNDEFINED（其余，决案可否决或归文档）
+
+| ID | 未定 | 处置 |
+|---|---|---|
+| **TXT-U3** | **规范化陷阱无文档无工具**：NFC "café" vs NFD "café" —— `==` false、size 4 vs 5、Set/Map 互不认；渲染完全相同；macOS 文件名就是 NFD 来的。`slug` 内部有去音符机制却不暴露 | 定案（可否决）：velar/text 加 `normalize(text, form="NFC")` + charter 一句「相等是码点序列身份，规范等价不相等」 |
+| **TXT-U4** | **码点↔数字无桥**（ord/chr 缺席零指引）：stdlib 自己的 JS 词法器被迫**热循环里每字符建一个新正则**（javascript.vel:173-194 实证） | 定案（可否决）：velar/text 加 `codePoint(char) -> number?` / `fromCodePoint(number) -> string`（代理半拒收） |
+| TXT-U5 | `number(text)` 全 charter 零出现（唯一入向转换拼写！），且实测**吞前后空白**而 standard-library.md 写 "strictly" | 文档：charter 一段钉死文法含 trim（母亲 JS 的 Number() 同款 trim） |
+| TXT-U6 | `str(-0)`→"0"、`str(1e21)`→"1e+21" 等边缘全由 JS 继承决定 | 文档一句 |
+| TXT-U7 | **charter 表从未说 `replace` 只换第一处**（Python 的 replace 是全换 —— 主要作者群体误期待） | 文档两格（行为随母亲 JS 不变） |
+| TXT-U8 | 字符串值空间（孤代理、NUL）charter 未定义 —— 机制已在 runtime-boundary 决定且全方法不崩（实测），charter 缺一句 | 文档一句 |
+| TXT-U9 | 大小写不敏感比较无受祝福惯用法（lower() 不是 folding："STRASSE" vs "straße" 实证）；locale 排序未文档化缺席 | 文档：教 lower() 近似 + locale 排序列有意缺席 |
+
+### INCONSISTENT（诊断层，全归 N-2b）
+
+| ID | 现象 |
+|---|---|
+| **TXT-I1** | **拼写指引教 JS 不教 Python** —— 11 条现有条目全是 JS 拼写；`strip`/`startswith`/`find`/`splitlines`/`casefold`/`format`/**`len(`（最常见的 Python 调用！）**全裸报；`title`/`capitalize` **在 velar/text 里存在**却不指路（而 trimStart 指）；`parseInt`/`parseFloat` 裸报而 Number(/String(/int( 有教学；`"ab".toString()` 裸报而 `(5).toString()` 有教学 —— 同规则不同接收者。**对盲测 KPI 是最高杠杆的廉价修复** |
+| **TXT-I2** | `f"{x:.2f}"` → 误导级联（VEL2006 + "Unknown numeric unit 'f'"）—— Python f-string 肌肉记忆必撞；修：插值顶层 `:` 一条定向诊断教真实拼写（实施者核实 toFixed 是否存在，否则教受祝福的舍入惯用法） |
+| **TXT-I3** | `"don\'t"` 硬错误且修法指错方向（真修法是删反斜杠）—— 双亲都接受 `\'`，生成代码必然含有 | 修：接受 `\'`（双亲一致、零陷阱） |
+
+**顺带核对**：`1_000` 数字分隔符被拒 —— **非新发现**，D30 已批准、归批次 E/F 待实施。
+
+### DECIDED-AND-CORRECT（压缩）
+
+**单位契约除排序外处处成立**（🔥/👨‍👩‍👧/🇨🇳/👍🏽 全套过 size/slice/char/index/count/
+split("")/padStart（**pad 宽度按码点计** —— JS 原生会错）/repeat/for-in/truncate）；
+charter 18 成员表全实现无暗成员；velar/text 20 导出全符合文档；索引访问全家
+（s[0] 定向教 char、空串边缘全理智、clamp 契约）；f-string 全家（同引号嵌套、
+{{}}、await/三元、布局 rf、相邻字面量拒绝带指引）；字面量（未知转义硬 VEL1008
+永不静吞、""" 教布局串、布局串精确保白）；转换（"a"+1 教 f-string、named-arg）；
+不可变性（全方法复制、VEL4029、+= 是重绑定）；宿主边界（String 包装对象与
+Symbol 关死不强转不执行钩子、16MiB/1M 预算先于分配触发、绑定方法与可选接收者）。
+
+### 处置总结
+
+TXT-D1 + I1/I2/I3 → **N-2b**；U3/U4 决案可否决随 N-2b；U5-U9 → N-3 文档；
+**U1+U2（\u{...} 转义 + 隐形字符政策）→ 待用户裁决**（表面新增）。
