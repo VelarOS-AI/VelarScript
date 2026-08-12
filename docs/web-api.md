@@ -333,7 +333,9 @@ component RuntimeStatus:
   cannot redirect either manual reports or managed asynchronous failures.
 - The compiler reports failures from initial `mount`, reactive `render` and
   synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
-  and `cleanup`.
+  and `cleanup`. A detached `async` statement reports its rejection through
+  this same chain under the distinct `detached` phase; with no handler
+  installed the failure surfaces through the host runtime, never silently.
 - Event handlers and lifecycle callbacks are non-tracking execution boundaries.
   Reads performed by `mounted` or `cleanup` cannot become dependencies of an
   enclosing conditional/keyed render that happened to mount or destroy the
@@ -343,7 +345,10 @@ component RuntimeStatus:
   belongs in `resource`; explicit UI operations belong in `action`, declared in
   the component that triggers them or at module scope when a shared store owns
   the operation and its `pending`/`error` surface; setup that must finish after
-  insertion belongs in `mounted`.
+  insertion belongs in `mounted`. Process- and page-lifetime work with no UI
+  surface uses the `async` statement, which runs a checked `Promise<null>`
+  expression detached and reports failure through the `velar/app` chain with
+  the `detached` phase.
 - A `computed` failure is cached as part of the derived result state and is
   rethrown to its managed consumer. Recovery from failure to a value is a real
   result transition even when that value equals the last successful value, so
@@ -709,7 +714,7 @@ component PreferencesPanel:
         await cache.set("settings", settings, 262144)
 
     mounted:
-        save()
+        await save()
 
     cleanup:
         stopWatching()

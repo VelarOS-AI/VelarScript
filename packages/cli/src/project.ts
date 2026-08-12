@@ -10,6 +10,7 @@ import {
   type ClassInfo,
   type CompilerExtension,
   type CompileResult,
+  type Diagnostic,
   type EnumInfo,
   type ModuleInspection,
   type ValueType,
@@ -383,6 +384,7 @@ export async function compileProjectEntries(
     modules.push(...group.map((module) => passResults.get(module.inputPath)!));
   }
 
+  appendInitializationCycleDiagnostics(modules, loaded, velarImports, initialEntries);
   modules.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
   if (framework?.host.validateProject) {
     try {
@@ -567,6 +569,149 @@ function moduleDependencies(
     if (target && loaded.has(target)) output.add(target);
   }
   return [...output].sort();
+}
+
+const INITIALIZATION_CYCLE_DIAGNOSTIC = "VEL3019";
+
+// D31 item 23: module initialization cycles are rejected at compile time.
+// The modules of a static import cycle evaluate in the emitted ESM
+// post-order, so a module-initialization-position read of a binding whose
+// source module evaluates later observes an uninitialized live binding and
+// crashes with a bare ReferenceError. The module graph is fully known here,
+// so the defect is diagnosed on the reading line instead. Reads inside
+// function bodies stay legal — pure function cycles are a proper shape — and
+// cross-module mutually recursive record types never read a binding at all.
+function appendInitializationCycleDiagnostics(
+  modules: ProjectModule[],
+  loaded: ReadonlyMap<string, LoadedModule>,
+  velarImports: ReadonlyMap<string, string>,
+  entries: readonly string[],
+): void {
+  const resolveDependency = (importerPath: string, source: string): string | null => {
+    const target = source.startsWith(".") && extname(source) === ".vel"
+      ? resolve(dirname(importerPath), source)
+      : velarImports.get(projectImportKey(importerPath, source)) ?? null;
+    return target !== null && loaded.has(target) ? target : null;
+  };
+
+  // Static evaluation edges in source order: import and re-export
+  // declarations, excluding dynamic imports (they defer evaluation) and
+  // JavaScript or standard modules (they are not .vel graph members).
+  const staticDependencies = new Map<string, readonly string[]>();
+  for (const [path, module] of loaded) {
+    const output: string[] = [];
+    const seen = new Set<string>();
+    for (const reference of module.inspection.semanticIndex.moduleReferences) {
+      if (reference.dynamic) continue;
+      const target = resolveDependency(path, reference.source);
+      if (target === null || seen.has(target)) continue;
+      seen.add(target);
+      output.push(target);
+    }
+    staticDependencies.set(path, output);
+  }
+
+  // Tarjan over the static edges: only strongly connected members can read a
+  // later-evaluating module, so everything else is skipped immediately.
+  const componentOf = new Map<string, number>();
+  {
+    let nextIndex = 0;
+    let componentCount = 0;
+    const indexes = new Map<string, number>();
+    const lowLinks = new Map<string, number>();
+    const stack: string[] = [];
+    const active = new Set<string>();
+    const visit = (path: string): void => {
+      const index = nextIndex++;
+      indexes.set(path, index);
+      lowLinks.set(path, index);
+      stack.push(path);
+      active.add(path);
+      for (const dependency of staticDependencies.get(path) ?? []) {
+        if (!indexes.has(dependency)) {
+          visit(dependency);
+          lowLinks.set(path, Math.min(lowLinks.get(path)!, lowLinks.get(dependency)!));
+        } else if (active.has(dependency)) {
+          lowLinks.set(path, Math.min(lowLinks.get(path)!, indexes.get(dependency)!));
+        }
+      }
+      if (lowLinks.get(path) !== index) return;
+      const component = componentCount++;
+      while (stack.length > 0) {
+        const member = stack.pop()!;
+        active.delete(member);
+        componentOf.set(member, component);
+        if (member === path) break;
+      }
+    };
+    for (const path of loaded.keys()) if (!indexes.has(path)) visit(path);
+  }
+  const componentSizes = new Map<number, number>();
+  for (const component of componentOf.values()) componentSizes.set(component, (componentSizes.get(component) ?? 0) + 1);
+  const inCycle = (path: string): boolean =>
+    (componentSizes.get(componentOf.get(path) ?? -1) ?? 0) > 1 || (staticDependencies.get(path) ?? []).includes(path);
+
+  // The ESM evaluation order per entry: dependency-first post-order following
+  // declaration order, with in-progress modules skipped exactly as the host
+  // module loader skips cycle back-edges.
+  const entryOrders: ReadonlyMap<string, number>[] = [];
+  for (const entry of entries) {
+    if (!loaded.has(entry)) continue;
+    const order = new Map<string, number>();
+    const visiting = new Set<string>();
+    const visit = (path: string): void => {
+      if (order.has(path) || visiting.has(path)) return;
+      visiting.add(path);
+      for (const dependency of staticDependencies.get(path) ?? []) visit(dependency);
+      visiting.delete(path);
+      order.set(path, order.size);
+    };
+    visit(entry);
+    entryOrders.push(order);
+  }
+
+  for (let index = 0; index < modules.length; index += 1) {
+    const module = modules[index]!;
+    const path = module.inputPath;
+    // Idempotent under incremental reuse: previously appended cycle
+    // diagnostics are recomputed from the current graph, never duplicated.
+    const baseDiagnostics = module.result.diagnostics.filter((item) => item.code !== INITIALIZATION_CYCLE_DIAGNOSTIC);
+    const additions: Diagnostic[] = [];
+    if (inCycle(path)) {
+      const reported = new Set<string>();
+      for (const read of module.result.initializationImportReads) {
+        const target = resolveDependency(path, read.source);
+        if (target === null || target === path) continue;
+        if (componentOf.get(target) !== componentOf.get(path)) continue;
+        const unsafe = entryOrders.some((order) => {
+          const modulePosition = order.get(path);
+          const targetPosition = order.get(target);
+          return modulePosition !== undefined && targetPosition !== undefined && targetPosition > modulePosition;
+        });
+        if (!unsafe) continue;
+        const key = `${read.span.start}:${read.span.end}`;
+        if (reported.has(key)) continue;
+        reported.add(key);
+        additions.push({
+          code: INITIALIZATION_CYCLE_DIAGNOSTIC,
+          message: `Move this read into a function, or extract the shared value into a third module; '${read.source}' has not initialized when this line runs`,
+          span: read.span,
+        });
+      }
+    }
+    if (additions.length === 0 && baseDiagnostics.length === module.result.diagnostics.length) continue;
+    additions.sort((left, right) => left.span.start - right.span.start);
+    modules[index] = {
+      ...module,
+      result: {
+        ...module.result,
+        diagnostics: [...baseDiagnostics, ...additions],
+        // The zero-diagnostics gate for code generation holds after the
+        // project-level check as well.
+        ...(additions.length > 0 ? { code: null, sourceMap: null, css: null, styleSegments: null, runtimeModules: [] } : {}),
+      },
+    };
+  }
 }
 
 export function moduleInterfaceIdentity(

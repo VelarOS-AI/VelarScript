@@ -6,6 +6,32 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Module initialization cycles are rejected at compile time (`VEL3019`). An
+  initializer-position read of an import whose module has not evaluated yet
+  under the project's module order — previously a clean compile followed by a
+  raw `ReferenceError` at runtime — now diagnoses on the reading line with
+  guidance to defer the read into a function or extract a third module.
+  Function-body reads across module cycles and mutually recursive record
+  types remain legal.
+- F-strings and `str()` accept only text-convertible values: strings,
+  numbers, bools, enums, and `null`, plus optionals and unions of those
+  (`VEL4026`). Records, collections, functions, class instances, `unknown`,
+  and `any` are rejected with guidance — `print(value)` to inspect,
+  `stringify(value)` for data text. Previously a record interpolated as
+  `[object Object]` and an own callable `toString` field was silently
+  invoked, violating the conversion-hook ban that the rest of the runtime
+  already enforces.
+- A Promise-typed expression statement is now an error (`VEL4027`): `await`
+  it, or run it detached with the new `async` statement. `async task()`
+  requires a `Promise<null>` expression (`VEL4028` otherwise), executes
+  detached, and owns its failure — the rejection is normalized and reported
+  through the host error channel (stderr on Node without crashing the
+  process; the `velar/app` error chain with a `detached` phase in the
+  browser). Previously a forgotten `await` compiled silently and a rejection
+  crashed the process as a raw unhandled rejection.
+- Mixing `??` with `and`/`or` in one unparenthesized chain is now a parse
+  error (`VEL2034`), matching JavaScript's rule for `??` with `||`/`&&`:
+  the two groupings read differently, so the parentheses are required.
 - A statement now must end at its newline. Trailing tokens after a complete
   statement — a missing operator (`price quantity`), a doubled literal
   (`5 7`), or a second statement on the same line — are diagnosed with

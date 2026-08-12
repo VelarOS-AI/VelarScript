@@ -1,4 +1,4 @@
-import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo } from "./analyzer.ts";
+import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo, type InitializationImportRead } from "./analyzer.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
@@ -36,7 +36,7 @@ export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { analysisTypeIdentity, describeType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "./types.ts";
-export type { AnalysisContext, ClassField, ClassInfo } from "./analyzer.ts";
+export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead } from "./analyzer.ts";
 
 export interface CompileOptions {
   readonly path?: string;
@@ -60,6 +60,8 @@ export interface CompileResult {
   readonly resources: readonly CompilerResourceDependency[];
   readonly moduleInterface: ModuleInterface;
   readonly semanticIndex: SemanticIndex;
+  /** Initialization-position reads of imported bindings; the project driver checks them against module cycles. */
+  readonly initializationImportReads: readonly InitializationImportRead[];
 }
 
 export interface ModuleDependencySpecifier {
@@ -217,6 +219,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
       analyzer.analyzedClasses(),
     ),
     semanticIndex,
+    initializationImportReads: analyzer.moduleInitializationImportReads(),
   };
 }
 
@@ -238,6 +241,7 @@ function complexityFailureResult(text: string, options: CompileOptions): Compile
     resources: [],
     moduleInterface: interfaceOf(program, path, extensions),
     semanticIndex: buildSemanticIndex(program, source),
+    initializationImportReads: [],
   };
 }
 
@@ -507,6 +511,7 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
       case "InvertStatement": visitExpression(statement.target); break;
       case "ExpressionStatement": visitExpression(statement.expression); break;
+      case "AsyncStatement": visitExpression(statement.expression); break;
       case "ImportDeclaration":
       case "ReExportDeclaration":
       case "ExternModuleDeclaration":

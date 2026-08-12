@@ -9,7 +9,7 @@ import type {
 } from "@velarscript/compiler/extension";
 import { cssPropertyName, LOOK_ARITHMETIC_HINT, LOOK_MEDIA_LENGTH_UNITS, LOOK_PROPERTIES } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
-import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_MODULE } from "@velarscript/compiler/extension";
+import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_RUNTIME_REGISTRY_KEY } from "@velarscript/compiler/extension";
 import { WEB_RUNTIME_FOUNDATION, WEB_RUNTIME_FOUNDATION_SHARED_ERROR } from "./runtime-foundation.ts";
 import {
   isWebExpression,
@@ -196,6 +196,35 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   protected override includesErrorNormalizationRuntime(): boolean {
     return this.webOutput;
+  }
+
+  // Web detached tasks report through the velar/app error chain with the
+  // distinct "detached" phase. The runtime registry is looked up at report
+  // time (module-level tasks can finish before or after the application
+  // runtime installs); the captured microtask throw keeps a failure loud when
+  // no runtime exists yet, and 'unhandled: true' keeps it loud when no
+  // onError handler is installed. Host operations are captured at module
+  // initialization, matching the owned-callback discipline.
+  protected override detachedTaskHelpers(): readonly string[] {
+    return [[
+      `const __velarDetachedRegistryKey = Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)});`,
+      "const __velarDetachedPromiseThen = Promise.prototype.then;",
+      "const __velarDetachedApply = Reflect.apply;",
+      "const __velarDetachedEnqueue = queueMicrotask;",
+      "function __velarDetachedReport(failure) {",
+      "  const error = __velarNormalizeError(failure);",
+      "  const runtime = globalThis[__velarDetachedRegistryKey];",
+      "  if (runtime && typeof runtime.report === \"function\") {",
+      "    runtime.report(error, { phase: \"detached\", detail: \"\", unhandled: true });",
+      "    return;",
+      "  }",
+      "  __velarDetachedApply(__velarDetachedEnqueue, globalThis, [() => { throw error; }]);",
+      "}",
+      "function __velarDetachedTask(task) {",
+      "  __velarDetachedApply(__velarDetachedPromiseThen, task, [null, __velarDetachedReport]);",
+      "  return null;",
+      "}",
+    ].join("\n")];
   }
 
   protected override visitExtensionRuntimeExpression(expression: Expression, visitExpression: (expression: Expression) => void): boolean {

@@ -243,8 +243,18 @@ export class Parser {
     }
 
     if (asynchronous) {
-      this.diagnostics.push(diagnostic("VEL2001", "'async' must be followed by 'def' or 'for'", this.previous().span));
-      return null;
+      // The detached-execution statement: 'async <expression>'. 'def' and
+      // 'for' consumed their spellings above, so any remaining continuation
+      // is the expression form; the analyzer requires its checked type to be
+      // Promise<null>.
+      if (exported) this.diagnostics.push(diagnostic("VEL2001", "An 'async' statement cannot be exported", this.previous().span));
+      if (abstract) this.diagnostics.push(diagnostic("VEL2001", "'abstract' cannot prefix an 'async' statement", this.previous().span));
+      if (this.check("newline") || this.check("dedent") || this.check("eof")) {
+        this.diagnostics.push(diagnostic("VEL2001", "'async' must be followed by 'def', 'for', or a call to run detached", this.previous().span));
+        return null;
+      }
+      const expression = this.parseExpression();
+      return { kind: "AsyncStatement", expression, span: span(start, expression.span.end) };
     }
 
     if (abstract && !this.check("class")) {
@@ -1859,10 +1869,12 @@ export class Parser {
       }
 
       const right = this.parseExpression(precedence + 1);
+      const spelledOperator = compoundNotIn ? "not in" : this.binaryOperator(operator);
+      this.checkNullishBooleanMixing(spelledOperator, left, right, operator.span);
       left = {
         kind: "BinaryExpression",
         left,
-        operator: compoundNotIn ? "not in" : this.binaryOperator(operator),
+        operator: spelledOperator,
         right,
         span: span(left.span.start, right.span.end),
       } satisfies BinaryExpression;
@@ -2284,7 +2296,10 @@ export class Parser {
       case "leftParen": {
         const expression = this.parseExpression();
         this.expect("rightParen", "Expected ')' after expression");
-        return expression;
+        // Explicit parentheses are the author's grouping decision. Binary
+        // nodes carry that fact so the '??' / 'and' / 'or' mixing rule can
+        // tell a deliberate grouping from a bare chain.
+        return expression.kind === "BinaryExpression" ? { ...expression, parenthesized: true } : expression;
       }
       case "leftBracket": {
         const elements: Expression[] = [];
@@ -2505,6 +2520,36 @@ export class Parser {
       percent: "%",
     };
     return operators[token.kind] ?? "+";
+  }
+
+  // '??' never shares a bare binary chain with 'and'/'or': the two groupings
+  // read differently, so the mix requires explicit parentheses. '??' binds
+  // loosest, so every unparenthesized mix surfaces as an 'and'/'or' node
+  // becoming a direct operand of a '??' node; the symmetric test also covers
+  // recovered shapes. One diagnostic marks each mixing operator, and the node
+  // is still built with the current grouping so later stages keep running.
+  private checkNullishBooleanMixing(
+    operator: BinaryExpression["operator"],
+    left: Expression,
+    right: Expression,
+    operatorSpan: Span,
+  ): void {
+    const nullish = operator === "??";
+    const boolean = operator === "and" || operator === "or";
+    if (!nullish && !boolean) return;
+    const conflicting = (operand: Expression): BinaryExpression["operator"] | null =>
+      operand.kind === "BinaryExpression" && !operand.parenthesized
+        && (nullish ? operand.operator === "and" || operand.operator === "or" : operand.operator === "??")
+        ? operand.operator
+        : null;
+    const adjacent = conflicting(left) ?? conflicting(right);
+    if (!adjacent) return;
+    const booleanOperator = nullish ? adjacent : operator;
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL2034",
+      `Parenthesize the mix of '??' and '${booleanOperator}'; the two groupings read differently`,
+      operatorSpan,
+    ));
   }
 
   private atStatementEnd(): boolean {

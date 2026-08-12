@@ -68,6 +68,7 @@ export class JavaScriptEmitter {
   private needsRuntimeTypeHelpers = false;
   private needsNumberHelper = false;
   private needsThrownValueHelper = false;
+  private needsDetachedTaskHelper = false;
   private suppressPromiseNormalization = 0;
   private nextJavaScriptNodeId = 0;
   private readonly javaScriptNodeSpans = new Map<number, Span>();
@@ -207,6 +208,9 @@ export class JavaScriptEmitter {
         "  return __velarAsyncPullApply(next, source, __velarAsyncPullArguments);",
         "}",
       ].join("\n"));
+    }
+    if (this.needsDetachedTaskHelper) {
+      helpers.push(...this.detachedTaskHelpers());
     }
     if (this.needsThrownValueHelper && !this.includesErrorNormalizationRuntime()) {
       if (this.sharedRuntimeModules) {
@@ -516,6 +520,32 @@ export class JavaScriptEmitter {
     return this.sharedRuntimeModules;
   }
 
+  // The compiler-owned observer behind the 'async <expression>' statement
+  // (docs/runtime-boundary.md, B-DETACHED-ASYNC). The Promise and Reflect
+  // operations and the console channel are captured at module initialization;
+  // rejection is normalized to Error and reported on the host error channel
+  // without ending the process. Hosts with their own error chain override
+  // this (the Web emitter routes the report through the velar/app chain).
+  protected detachedTaskHelpers(): readonly string[] {
+    return [[
+      "const __velarDetachedPromiseThen = Promise.prototype.then;",
+      "const __velarDetachedApply = Reflect.apply;",
+      "const __velarDetachedConsole = globalThis.console;",
+      "const __velarDetachedConsoleError = __velarDetachedConsole ? __velarDetachedConsole.error : null;",
+      "function __velarDetachedReport(failure) {",
+      "  const error = __velarNormalizeError(failure);",
+      "  if (typeof __velarDetachedConsoleError !== \"function\") throw error;",
+      "  const trace = typeof error.stack === \"string\" && error.stack !== \"\" ? error.stack",
+      "    : typeof error.message === \"string\" ? error.message : \"A detached task failed\";",
+      "  __velarDetachedApply(__velarDetachedConsoleError, __velarDetachedConsole, [\"Detached async task failed: \" + trace]);",
+      "}",
+      "function __velarDetachedTask(task) {",
+      "  __velarDetachedApply(__velarDetachedPromiseThen, task, [null, __velarDetachedReport]);",
+      "  return null;",
+      "}",
+    ].join("\n")];
+  }
+
   protected requireRuntimeModule(source: string): void {
     this.requiredRuntimeModules.add(source);
   }
@@ -668,6 +698,13 @@ export class JavaScriptEmitter {
         case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
         case "InvertStatement": visitExpression(statement.target); break;
         case "ExpressionStatement": visitExpression(statement.expression); break;
+        case "AsyncStatement":
+          // The detached-task observer normalizes rejection values, so the
+          // error-normalization runtime travels with it.
+          this.needsDetachedTaskHelper = true;
+          this.needsThrownValueHelper = true;
+          visitExpression(statement.expression);
+          break;
         case "ImportDeclaration":
         case "ReExportDeclaration":
         case "ExternModuleDeclaration":
@@ -999,6 +1036,12 @@ export class JavaScriptEmitter {
         return this.emitInvertStatement(statement, depth);
       case "ExpressionStatement":
         return `${indentation}${this.emitMappedExpression(statement.expression, false)};`;
+      case "AsyncStatement":
+        // Detached execution never floats: the compiler-owned observer
+        // adopts the Promise, normalizes rejection to Error, and reports it
+        // through the host error channel (see docs/runtime-boundary.md,
+        // B-DETACHED-ASYNC).
+        return `${indentation}__velarDetachedTask(${this.emitMappedExpression(statement.expression, false)});`;
       default:
         return "";
     }

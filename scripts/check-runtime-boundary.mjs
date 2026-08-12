@@ -1038,6 +1038,22 @@ for (const phrase of [
 ]) {
   if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: missing captured async-pull operation '${phrase}'`);
 }
+for (const phrase of [
+  "const __velarDetachedPromiseThen = Promise.prototype.then",
+  "const __velarDetachedApply = Reflect.apply",
+  "function __velarDetachedReport(failure)",
+  "function __velarDetachedTask(task)",
+]) {
+  if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: missing captured detached-task operation '${phrase}' (B-DETACHED-ASYNC)`);
+}
+for (const phrase of [
+  "const __velarDetachedRegistryKey = Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)})",
+  "const __velarDetachedPromiseThen = Promise.prototype.then",
+  'phase: \\"detached\\", detail: \\"\\", unhandled: true',
+  "function __velarDetachedTask(task)",
+]) {
+  if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: missing Web detached-task report contract '${phrase}' (B-DETACHED-ASYNC)`);
+}
 if (/\bevent\.(?:data|lastEventId|code|reason|matches|defaultPrevented|button|metaKey|ctrlKey|shiftKey|altKey|preventDefault|stopPropagation)\b/u.test(webRuntimeSource)) {
   failures.push("packages/web/src/runtime.ts: reads framework-owned host event fields outside captured native/data-descriptor adapters");
 }

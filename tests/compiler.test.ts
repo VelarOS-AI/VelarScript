@@ -6487,7 +6487,7 @@ async def sideEffect() -> null:
     return null
 
 def label(value: string) -> string:
-    sideEffect()
+    async sideEffect()
     return shout(value)
 
 state items: List<string> = []
@@ -23328,7 +23328,7 @@ async def label(box: Box, initial: User?, pending: Promise<null>, host: Host) ->
     const viaCall: string = box.user.name + user.name
     await pending
     const viaAwait: string = box.user.name + user.name
-    const text = f"{box}"
+    const text = f"{touch(box)}"
     const viaInterpolation: string = box.user.name + user.name
     const status = host.status
     const viaGetter: string = box.user.name + user.name

@@ -29,7 +29,8 @@ export type CoreStatement =
   | PassStatement
   | AssignmentStatement
   | InvertStatement
-  | ExpressionStatement;
+  | ExpressionStatement
+  | AsyncStatement;
 
 export type Statement = CoreStatement | ExtensionStatement;
 
@@ -522,6 +523,18 @@ export interface ExpressionStatement {
   readonly span: Span;
 }
 
+/**
+ * `async <expression>` runs a `Promise<null>` expression detached: the
+ * statement does not wait, and the emitter hands the Promise to a
+ * compiler-owned observer that reports rejection through the host error
+ * channel instead of letting it float.
+ */
+export interface AsyncStatement {
+  readonly kind: "AsyncStatement";
+  readonly expression: Expression;
+  readonly span: Span;
+}
+
 export type CoreExpression =
   | LiteralExpression
   | FStringExpression
@@ -630,6 +643,12 @@ export interface BinaryExpression {
   readonly left: Expression;
   readonly operator: "??" | "or" | "and" | "in" | "not in" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "**" | "/" | "%";
   readonly right: Expression;
+  /**
+   * Present when the author wrote explicit parentheses around this binary
+   * expression. The parser uses it to tell a deliberate grouping from a bare
+   * chain when `??` mixes with `and`/`or`; emission is unaffected.
+   */
+  readonly parenthesized?: true;
   readonly span: Span;
 }
 

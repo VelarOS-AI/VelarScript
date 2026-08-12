@@ -1,6 +1,7 @@
 import type {
   ArrowFunctionExpression,
   AssignmentStatement,
+  AsyncStatement,
   BindingPattern,
   ClassDeclaration,
   Expression,
@@ -351,6 +352,19 @@ export interface AnalysisContext {
   readonly finalizeFunctionResultInference?: boolean;
 }
 
+/**
+ * A direct read of an imported binding from a module-initialization position
+ * (top-level initializers and expression statements, static class fields,
+ * extension top-level initializers). The project driver combines these with
+ * the module graph to reject import cycles whose source module has not
+ * evaluated when the read runs (D31 item 23).
+ */
+export interface InitializationImportRead {
+  readonly local: string;
+  readonly source: string;
+  readonly span: Span;
+}
+
 // A distinct unknown-like value lets recursive result inference remain
 // fail-closed without confusing an unresolved call with an explicitly unknown
 // result. It may cross an in-memory module interface during project SCC passes.
@@ -555,6 +569,15 @@ export class Analyzer implements TypeEnvironment {
   private currentClass: string | null = null;
   private superMemberContext: "instance" | "static" | null = null;
   private classFieldInitializerDepth = 0;
+  // Module-initialization-position classification (D31 item 23): a read is
+  // eager when it runs while the module itself evaluates. Function bodies
+  // bump functionDepth; the two extra counters cover deferred positions that
+  // do not (instance field initializers run at construction, and extension
+  // bodies such as components render after module evaluation).
+  private instanceFieldInitializerDepth = 0;
+  protected deferredExecutionDepth = 0;
+  private readonly importedBindingSources = new Map<Binding, string>();
+  private readonly initializationImportReadSites = new Map<string, InitializationImportRead>();
   private staticFieldInitialization: {
     readonly className: string;
     readonly initialized: ReadonlySet<string>;
@@ -791,6 +814,7 @@ export class Analyzer implements TypeEnvironment {
             specifier.span,
             false,
           );
+          this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local);
           const reactive = this.reactiveBindings.get(specifier.local);
           if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
         }
@@ -1465,6 +1489,7 @@ export class Analyzer implements TypeEnvironment {
               specifier.span,
               false,
             );
+            this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local);
             const reactive = this.reactiveBindings.get(specifier.local);
             if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
           }
@@ -2203,9 +2228,75 @@ export class Analyzer implements TypeEnvironment {
         this.analyzeAssignment(statement);
         break;
       case "ExpressionStatement":
-        this.inferExpression(statement.expression);
+        this.checkFloatingPromiseStatement(this.inferExpression(statement.expression), statement.expression);
+        break;
+      case "AsyncStatement":
+        this.analyzeAsyncStatement(statement);
         break;
     }
+  }
+
+  // D32 item 30: a Promise-typed expression statement is a floating promise —
+  // nothing waits for it and nothing owns its failure. The diagnostic teaches
+  // both current spellings: 'await' waits, the 'async' statement detaches.
+  private checkFloatingPromiseStatement(type: ValueType, expression: Expression): void {
+    if (isInvalidType(type)) return;
+    if (!this.carriesPromise(this.expandAliases(type))) return;
+    const spelling = this.callSpelling(expression);
+    this.diagnostics.push(diagnostic(
+      "VEL4027",
+      spelling
+        ? `This call returns ${describeType(type)}; 'await ${spelling}' to wait for it, or 'async ${spelling}' to run it detached`
+        : `This expression is ${describeType(type)}; 'await' it to wait for it, or prefix it with 'async' to run it detached`,
+      expression.span,
+    ));
+  }
+
+  private carriesPromise(type: ValueType): boolean {
+    if (type.kind === "promise") return true;
+    if (type.kind === "optional") return this.carriesPromise(this.expandAliases(type.inner));
+    if (type.kind === "union") return type.members.some((member) => this.carriesPromise(this.expandAliases(member)));
+    return false;
+  }
+
+  // Reconstructs a call spelling such as "boom()" or "user.save(...)" for the
+  // floating-promise teaching message; complex callees use generic phrasing.
+  private callSpelling(expression: Expression): string | null {
+    if (expression.kind !== "CallExpression") return null;
+    const path = (value: Expression): string | null => {
+      if (value.kind === "IdentifierExpression") return value.name;
+      if (value.kind === "MemberExpression") {
+        const object = path(value.object);
+        return object === null ? null : `${object}${value.optional ? "?." : "."}${value.property}`;
+      }
+      return null;
+    };
+    const callee = path(expression.callee);
+    return callee === null ? null : `${callee}(${expression.arguments.length > 0 ? "..." : ""})`;
+  }
+
+  // D32 item 30: 'async <expression>' runs detached, so only Promise<null>
+  // may detach — a non-null resolved value would be lost silently, and a
+  // non-Promise value has nothing to detach.
+  private analyzeAsyncStatement(statement: AsyncStatement): void {
+    const type = this.inferExpression(statement.expression);
+    if (isInvalidType(type)) return;
+    const expanded = this.expandAliases(type);
+    if (expanded.kind !== "promise") {
+      this.diagnostics.push(diagnostic(
+        "VEL4028",
+        `'async' runs a Promise<null> expression detached; this expression is ${describeType(type)}`,
+        statement.expression.span,
+      ));
+      return;
+    }
+    const resolved = this.expandAliases(expanded.value);
+    if (resolved.kind === "null" || isInvalidType(resolved)) return;
+    this.diagnostics.push(diagnostic(
+      "VEL4028",
+      "The result would be lost; await it, or discard it explicitly in an async def",
+      statement.expression.span,
+    ));
   }
 
   private analyzeTypeDeclaration(statement: TypeDeclaration): void {
@@ -2265,7 +2356,11 @@ export class Analyzer implements TypeEnvironment {
       const valid = this.validateTypeReference(field.type);
       if (field.initializer) {
         this.classFieldInitializerDepth += 1;
+        // Instance field initializers run per construction, not while the
+        // module evaluates, so they are not module-initialization positions.
+        this.instanceFieldInitializerDepth += 1;
         const actual = this.inferExpression(field.initializer, valid ? declared : invalidType);
+        this.instanceFieldInitializerDepth -= 1;
         this.classFieldInitializerDepth -= 1;
         if (valid) this.requireAssignable(actual, declared, field.initializer.span);
       }
@@ -3179,7 +3274,8 @@ export class Analyzer implements TypeEnvironment {
         return expression.value === null ? nullType : typeof expression.value === "string" ? stringType : typeof expression.value === "number" ? numberType : boolType;
       case "FStringExpression":
         for (const part of expression.parts) {
-          if (part.kind === "expression") this.inferExpression(part.value);
+          if (part.kind !== "expression") continue;
+          this.requireTextConvertible(this.inferExpression(part.value), part.value.span, "f-string");
         }
         return stringType;
       case "IdentifierExpression": {
@@ -3190,6 +3286,7 @@ export class Analyzer implements TypeEnvironment {
           return unknownType;
         }
         this.checkShadowedRead(expression.name, expression.span);
+        this.recordInitializationImportRead(binding, expression.name, expression.span);
         if (binding.reactiveKind) this.reactiveReferences.set(spanIdentity(expression.span), binding.reactiveKind);
         if (binding.narrowingFrame !== null) {
           this.runtimeNarrowings.set(spanIdentity(expression.span), {
@@ -3822,6 +3919,18 @@ export class Analyzer implements TypeEnvironment {
       this.typeError(`Optional call requires a function, received ${describeType(original)}`, callSpan);
       for (const argument of arguments_) this.inferExpression(argument);
       return unknownType;
+    }
+    // The built-in str() shares the f-string text-conversion contract: its
+    // argument is checked against the conversion whitelist instead of the
+    // declared 'any' parameter. A user binding named 'str' shadows the
+    // builtin and keeps its own declared parameter checking.
+    if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "str"
+      && !this.lookup("str") && arguments_.length === 1
+      && arguments_[0]!.kind !== "SpreadExpression"
+      && (argumentNames?.[0] == null || argumentNames[0] === "value")) {
+      const argument = arguments_[0]!;
+      this.requireTextConvertible(this.inferExpression(argument), argument.span, "str");
+      return stringType;
     }
     if (calleeExpression.kind === "IdentifierExpression" && calleeExpression.name === "Map") {
       const collectionContext = this.contextualCollectionType(contextualType);
@@ -7247,6 +7356,70 @@ export class Analyzer implements TypeEnvironment {
     };
     scope.set(name, binding);
     this.recordSemanticBinding(`${declarationSpan.start}:${name}`, type);
+  }
+
+  // Imported bindings remember their module specifier so identifier reads can
+  // be classified against the project module graph (D31 item 23). JavaScript
+  // imports never participate: only .vel modules join initialization cycles.
+  private recordImportedBindingSource(javascript: boolean, source: string, local: string): void {
+    if (javascript) return;
+    const binding = this.scopes.at(-1)?.get(local);
+    if (binding) this.importedBindingSources.set(binding, source);
+  }
+
+  private recordInitializationImportRead(binding: Binding, local: string, span: Span): void {
+    const source = this.importedBindingSources.get(binding);
+    if (source === undefined || !this.inModuleInitializationPosition()) return;
+    const key = spanIdentity(span);
+    if (!this.initializationImportReadSites.has(key)) {
+      this.initializationImportReadSites.set(key, { local, source, span });
+    }
+  }
+
+  // True while code at this point runs during module evaluation itself:
+  // top-level initializers and expression statements (including nested
+  // top-level blocks), static class fields, and extension top-level
+  // initializers. Function, action, method, arrow, constructor, and component
+  // bodies — and per-construction positions such as parameter defaults and
+  // instance field initializers — are deferred.
+  protected inModuleInitializationPosition(): boolean {
+    return this.functionDepth === 0
+      && this.parameterDefaultDepth === 0
+      && this.instanceFieldInitializerDepth === 0
+      && this.deferredExecutionDepth === 0;
+  }
+
+  /** Initialization-position reads of imported bindings, for the project module-cycle check. */
+  moduleInitializationImportReads(): readonly InitializationImportRead[] {
+    return [...this.initializationImportReadSites.values()];
+  }
+
+  // D32 item 29: the language-wide text-conversion contract (charter
+  // section 14) shared by f-strings, str(), and target-owned render sites.
+  // Text conversion accepts only values whose text form is total and
+  // hook-free — string, number, bool, enums, and null, plus optionals and
+  // unions of those. Everything else (records, collections, functions, class
+  // instances, unknown, any) is rejected at compile time so a data value
+  // never reaches JavaScript string coercion, which would execute 'toString'
+  // conversion hooks.
+  private requireTextConvertible(type: ValueType, span: Span, site: "f-string" | "str"): void {
+    if (isInvalidType(type) || this.isTextConvertible(type)) return;
+    const lead = site === "f-string" ? "An f-string renders" : "str() converts";
+    this.diagnostics.push(diagnostic(
+      "VEL4026",
+      `${lead} strings, numbers, bools, enums, and null; format ${describeType(type)} explicitly — print(value) to inspect it, stringify(value) for data text`,
+      span,
+    ));
+  }
+
+  private isTextConvertible(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    if (isInvalidType(expanded)) return true;
+    if (expanded.kind === "string" || expanded.kind === "number" || expanded.kind === "bool"
+      || expanded.kind === "null" || expanded.kind === "enum" || expanded.kind === "enumMember") return true;
+    if (expanded.kind === "optional") return this.isTextConvertible(expanded.inner);
+    if (expanded.kind === "union") return expanded.members.every((member) => this.isTextConvertible(member));
+    return false;
   }
 
   // A reactive state declaration owns its resolved lexical binding identity,

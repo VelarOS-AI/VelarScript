@@ -265,6 +265,12 @@ optional conditions; they are not general value-selection operators. `and` and
 by the path that reaches it, so `user and user.active` and
 `user == null or not user.active` need no optional-access workaround.
 
+`??` never shares one bare chain with `and` or `or`: the two possible
+groupings read differently, so the mix requires explicit parentheses.
+`(flag or name) ?? fallback` and `flag or (name ?? fallback)` are both legal
+spellings; the unparenthesized mix is rejected with guidance. Pure `??`
+chains and pure `and`/`or` chains are unaffected.
+
 Use `invert target` when a writable `bool` must be reversed in place:
 
 ```velar fragment
@@ -522,8 +528,17 @@ Two boundaries remain because they are visible in source:
 - A getter is a computed value, not a stable location. Read it into a `const`
   to narrow the result.
 
-An f-string converts each embedded value at its source position. Primitive and
-enum conversion is inert.
+An f-string converts each embedded value at its source position under the
+language's one text-conversion contract: conversion accepts `string`,
+`number`, `bool`, enums, and `null` — plus optionals and unions of those —
+and is inert. A `bool` renders `true` or `false`, `null` renders `null`,
+enums render their runtime string value, and non-finite numbers print
+honestly. Records, collections, functions, class instances, `unknown`, and
+`any` never convert implicitly: JavaScript string coercion would execute
+conversion hooks such as a `toString` field, so those values are rejected at
+compile time — `print(value)` inspects a value, and `stringify(value)` from
+`velar/json` builds data text. `str(value)` and JSX text positions apply this
+same contract.
 
 Optional access is explicit at each optional continuation:
 
@@ -757,7 +772,10 @@ expected result.
 
 Number members are `abs()`, `round()`, `floor()`, `ceil()`, and
 `toFixed(digits) -> string`. Conversion still has one spelling: use
-`str(value)` or an f-string, never `.toString()`.
+`str(value)` or an f-string, never `.toString()`. Both enforce the section 5
+text-conversion contract — values outside strings, numbers, bools, enums, and
+`null` (with their optionals and unions) are rejected, and data is formatted
+explicitly.
 
 Rest parameters use `...values`. A rest parameter is always final and may
 follow defaulted fixed parameters.
@@ -792,6 +810,27 @@ such as `then: string` is valid,
 as is a nested value such as `Promise<List<Box>>`; Promise resolution does not
 inspect List elements. Rename a conflicting top-level member or keep that value
 outside the resolved result.
+
+A Promise-typed expression statement is rejected: nothing waits for it and
+nothing owns its failure. The two current spellings state the intent
+explicitly — `await` waits, and the `async` statement runs detached:
+
+```velar fragment
+await save()
+async save()
+```
+
+`async <expression>` is statement-position only and requires a checked
+`Promise<null>`. A non-null resolved value would be lost silently, so a
+result is awaited, or discarded explicitly inside an async def, before the
+task detaches. A detached task never floats: the compiler hands its Promise
+to a compiler-owned observer that normalizes rejection to `Error` and reports
+it through the host error channel without ending the program — the console
+error channel on Node output, and the `velar/app` error chain with the
+distinct `detached` phase on web output. Inside components, UI-owned async
+work still belongs to `action`, which carries reactive pending/error state
+and the component lifecycle; the `async` statement serves process- and
+page-lifetime work.
 
 ### Type parameters
 
@@ -1495,6 +1534,9 @@ export component TicketBadge(count: number):
 JSX children render strings, finite numbers, booleans, enums, `WebNode` values,
 or Lists containing those values. `null` and booleans render no text. Native
 attributes accept strings, finite numbers, booleans, enums, or `null`.
+These are the language's section 5 text-conversion contract — the same one
+f-strings and `str()` enforce — plus the render-only `WebNode` and List
+shapes and a finite-only runtime constraint that UI keeps for numbers.
 VelarScript never calls an object's conversion hooks to invent text or an
 attribute value: format an object explicitly before rendering it. Raw HTML is
 an explicit string-only boundary, written as `unsafe:html={trustedMarkup}`; it

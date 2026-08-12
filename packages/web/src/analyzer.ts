@@ -525,7 +525,15 @@ export class VelarWebAnalyzer extends Analyzer {
     if (!isWebStatement(statement)) return false;
     switch (statement.kind) {
       case "ExtensionStatement:web:component":
-        this.analyzeComponent(statement);
+        // A component body renders after module evaluation, so its reads are
+        // deferred for the module-initialization-cycle classification even
+        // though component analysis itself runs without a function frame.
+        this.deferredExecutionDepth += 1;
+        try {
+          this.analyzeComponent(statement);
+        } finally {
+          this.deferredExecutionDepth -= 1;
+        }
         return true;
       case "ExtensionStatement:web:state": {
         const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
@@ -558,11 +566,19 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth += 1;
         this.synchronousReactiveDepth += 1;
         {
+          // The watched expression evaluates while the module initializes;
+          // the body only runs on a later change, so its reads are deferred
+          // for the module-initialization-cycle classification.
           const watched = this.inferExpression(statement.expression);
           this.enterScope();
           if (statement.currentName) this.declareBinding(statement.currentName, false, watched, statement.span);
           if (statement.previousName) this.declareBinding(statement.previousName, false, watched, statement.span);
-          this.analyzeStatements(statement.body);
+          this.deferredExecutionDepth += 1;
+          try {
+            this.analyzeStatements(statement.body);
+          } finally {
+            this.deferredExecutionDepth -= 1;
+          }
           this.exitScope();
         }
         this.synchronousReactiveDepth -= 1;
