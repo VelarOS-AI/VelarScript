@@ -5,7 +5,7 @@ import type { ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
-import { canonicalPathWithin } from "./canonical-path.ts";
+import { canonicalizePotentialPath, canonicalPathWithinCanonicalRoot } from "./canonical-path.ts";
 import {
   createScriptLanguageDocument,
   scriptLanguageFor,
@@ -34,6 +34,9 @@ import {
 import {
   MAX_WORKSPACE_SEARCH_RESULTS,
   MAX_WORKSPACE_TEXT_FILES,
+  MAX_WORKSPACE_CHANGE_PATHS,
+  MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS,
+  MAX_WORKSPACE_CHANGE_TEXT_CODE_UNITS,
   WORKSPACE_TEXT_EXTENSIONS,
   WorkspaceIndexCancelledError,
   WorkspaceTextIndex,
@@ -161,7 +164,8 @@ function extensionDocumentation(
 export async function runLanguageServer(): Promise<void> {
   activePositionEncoding = "utf-16";
   confinedWorkspaceRoot = configuredWorkspaceRoot();
-  confinedCanonicalRoot = configuredCanonicalRoot() ?? confinedWorkspaceRoot;
+  const configuredCanonical = configuredCanonicalRoot() ?? confinedWorkspaceRoot;
+  confinedCanonicalRoot = configuredCanonical ? await canonicalizePotentialPath(configuredCanonical) : null;
   const documents = new Map<string, TextDocument>();
   const scriptDocuments = new Map<string, ScriptDocumentOwner>();
   const sessions = new VelarProjectSessions();
@@ -308,6 +312,22 @@ export async function runLanguageServer(): Promise<void> {
       });
   };
 
+  const refreshWorkspaceProjects = async (changedPaths: ReadonlySet<string> | null): Promise<void> => {
+    const currentOverrides = overrides();
+    const roots = new Map<string, string>();
+    for (const document of documents.values()) {
+      if (scriptDocuments.has(document.uri)) continue;
+      const documentPath = pathOf(document.uri);
+      if (!documentPath) continue;
+      roots.set(sessions.rootFor(documentPath) ?? documentPath, documentPath);
+    }
+    for (const documentPath of roots.values()) {
+      if (changedPaths) await sessions.update(documentPath, changedPaths, currentOverrides);
+      else await sessions.snapshot(documentPath, currentOverrides);
+    }
+    for (const document of documents.values()) schedulePublish(document.uri);
+  };
+
   const finishRequest = (id: RpcMessage["id"]): boolean => {
     if (id === undefined) return false;
     const key = requestKey(id);
@@ -381,6 +401,9 @@ export async function runLanguageServer(): Promise<void> {
                 workspaceTextExtensions: WORKSPACE_TEXT_EXTENSIONS,
                 workspaceTextFileLimit: MAX_WORKSPACE_TEXT_FILES,
                 workspaceSearchResultLimit: MAX_WORKSPACE_SEARCH_RESULTS,
+                workspaceWatchPathLimit: MAX_WORKSPACE_CHANGE_PATHS,
+                workspaceWatchPathCodeUnitLimit: MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS,
+                workspaceWatchTextCodeUnitLimit: MAX_WORKSPACE_CHANGE_TEXT_CODE_UNITS,
               },
             },
           },
@@ -459,39 +482,57 @@ export async function runLanguageServer(): Promise<void> {
       case "workspace/didChangeWatchedFiles": {
         const changes = params?.changes as readonly { readonly uri?: unknown }[] | undefined;
         if (!Array.isArray(changes)) break;
+        let fidelityLost = changes.length > MAX_WORKSPACE_CHANGE_PATHS;
+        let pathUnits = 0;
+        const urisByPath = new Map<string, string>();
+        if (!fidelityLost) {
+          for (const change of changes) {
+            const uri = change?.uri;
+            if (typeof uri !== "string" || uri.length > MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS * 3 + 32) {
+              fidelityLost = true;
+              break;
+            }
+            const rawPath = rawPathOf(uri);
+            if (!rawPath || rawPath.length > MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS) {
+              fidelityLost = true;
+              break;
+            }
+            if (!urisByPath.has(rawPath)) {
+              pathUnits += rawPath.length;
+              if (pathUnits > MAX_WORKSPACE_CHANGE_TEXT_CODE_UNITS) {
+                fidelityLost = true;
+                break;
+              }
+              urisByPath.set(rawPath, uri);
+            }
+          }
+        }
+        if (fidelityLost) {
+          send({ jsonrpc: "2.0", method: "window/logMessage", params: { type: 2, message: "Watcher batch exceeded the official bounds; rebuilt the initialized workspace index" } });
+          await queueWorkspaceIndex(() => workspaceIndex.rescan());
+          await refreshWorkspaceProjects(null);
+          break;
+        }
         const changedPaths = new Set<string>();
-        for (const change of changes) {
-          const path = typeof change?.uri === "string" ? await authorizedPathOf(change.uri) : null;
+        const uris = [...urisByPath.values()];
+        const authorizedPaths = await mapBounded(uris, 16, authorizedPathOf);
+        for (let index = 0; index < uris.length; index += 1) {
+          const path = authorizedPaths[index];
           if (path) changedPaths.add(path);
+          else if (confinedWorkspaceRoot || confinedCanonicalRoot) {
+            send({ jsonrpc: "2.0", method: "window/logMessage", params: { type: 2, message: "Ignored a watcher path outside the Desktop project grant" } });
+          }
         }
         if (changedPaths.size === 0) break;
         await queueWorkspaceIndex(() => workspaceIndex.update(changedPaths));
-        const currentOverrides = overrides();
-        const roots = new Map<string, string>();
-        for (const document of documents.values()) {
-          if (scriptDocuments.has(document.uri)) continue;
-          const documentPath = pathOf(document.uri);
-          if (!documentPath) continue;
-          roots.set(sessions.rootFor(documentPath) ?? documentPath, documentPath);
-        }
-        for (const documentPath of roots.values()) await sessions.update(documentPath, changedPaths, currentOverrides);
-        for (const document of documents.values()) schedulePublish(document.uri);
+        await refreshWorkspaceProjects(changedPaths);
         break;
       }
       case "velar/workspaceRescan": {
         const activity = await queueWorkspaceIndex(() => workspaceIndex.rescan(
           () => message.id !== undefined && cancelledRequests.has(requestKey(message.id)),
         ));
-        const currentOverrides = overrides();
-        const roots = new Map<string, string>();
-        for (const document of documents.values()) {
-          if (scriptDocuments.has(document.uri)) continue;
-          const documentPath = pathOf(document.uri);
-          if (!documentPath) continue;
-          roots.set(sessions.rootFor(documentPath) ?? documentPath, documentPath);
-        }
-        for (const documentPath of roots.values()) await sessions.snapshot(documentPath, currentOverrides);
-        for (const document of documents.values()) schedulePublish(document.uri);
+        await refreshWorkspaceProjects(null);
         if (message.id !== undefined) respond(message.id, activity);
         break;
       }
@@ -1313,7 +1354,7 @@ async function authorizedPathOf(uri: string): Promise<string | null> {
   const path = pathOf(uri);
   if (!path || !confinedCanonicalRoot) return path;
   try {
-    return await canonicalPathWithin(confinedCanonicalRoot, path) ? path : null;
+    return await canonicalPathWithinCanonicalRoot(confinedCanonicalRoot, path) ? path : null;
   } catch {
     return null;
   }
@@ -1506,6 +1547,20 @@ function workspacePosition(position: WorkspaceIndexPosition): Position {
     line: position.line,
     character: activePositionEncoding === "utf-16" ? position.utf16Character : position.utf32Character,
   };
+}
+
+async function mapBounded<T, R>(values: readonly T[], concurrency: number, operation: (value: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await operation(values[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function lspSourcePosition(source: SourceText, offset: number): Position {

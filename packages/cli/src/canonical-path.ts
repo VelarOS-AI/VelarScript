@@ -19,11 +19,11 @@ export async function canonicalizePotentialPath(path: string): Promise<string> {
   throw new RangeError("Filesystem authorization path exceeds 64 unresolved levels");
 }
 
-export async function canonicalPathWithin(root: string, path: string): Promise<boolean> {
-  const [canonicalRoot, canonicalPath] = await Promise.all([
-    realpath(resolve(root)),
-    canonicalizePotentialPath(path),
-  ]);
+export async function canonicalPathWithinCanonicalRoot(canonicalRoot: string, path: string): Promise<boolean> {
+  return pathWithinCanonicalRoot(resolve(canonicalRoot), await canonicalizePotentialPath(path));
+}
+
+function pathWithinCanonicalRoot(canonicalRoot: string, canonicalPath: string): boolean {
   const value = relative(canonicalRoot, canonicalPath);
   return value === "" || (!value.startsWith("..") && !isAbsolute(value));
 }

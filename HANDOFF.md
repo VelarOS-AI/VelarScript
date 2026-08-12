@@ -2926,6 +2926,47 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   multi-tab、tasks/test/build/terminal、真实大 workspace watcher/index burst 与 RSS、wide-glyph hit testing、
   native picker/IME automation、crash-in-the-middle recovery、sustained-edit memory 与正式 release thresholds 未完成。
 
+- W-137 用 Editor 在 50,000-file tree ceiling 下接收最多 4,096 个 watcher paths 的真实场景关闭了
+  workspace invalidation burst 缺陷。问题不属于语言语法、Node watcher 或 Editor 搜索 UI：Node/Desktop
+  已正式保证 4,096 distinct paths、4,096 code units/path 和 2 MiB path text，但 CLI workspace index 原先
+  对每个 change 都复制并扫描最多 50,000 records，最坏约两亿次比较并制造大量短命数组；LSP 入口也未
+  固化上游批次上限。project session 还会为每个 non-source change 重建 resource path set，Desktop grant
+  则会为每个 watcher target 重复解析 canonical root。
+
+  CLI index 现在先按 initialized root 与祖先关系把 batch 收敛为 change roots，再对 retained records 做一次
+  最大 65 层的祖先集合查询，每 128 records yield；activity 永久发布 changesReceived/changeRoots/
+  recordsRemoved。LSP capability 公开 watcher 三项上限，malformed、4,097th path、过长单路径或超过 2 MiB
+  的通知不会局部应用，而是完整 rescan initialized roots；合法 entry envelope 内的重复 decoded paths 在
+  filesystem authorization 前去重。Desktop canonical grant 只解析一次，target
+  canonicalization 以最多 16 路并发受控执行。project session 每批只建立一次 module/resource ownership
+  sets。没有新增语法、npm 包、依赖或新包身份。
+
+  20,000 retained files + 4,096 exact changes 的永久 gate 锁定 <3 s、RSS 增量 <64 MiB 和 host heartbeat；
+  本次内存 fixture 实测 138.85 ms、42 次 yield、RSS +16,285,696 bytes。一次完成即删除的真实 20,000-file
+  磁盘 fixture 实测 create 1.00 s、rescan 2.25 s、first result 0.31 ms、4,096-file update 322.98 ms、
+  153 次 heartbeat、RSS +23,396,352 bytes；filesRead/removed/matches 均为 4,096，coverage complete。
+  packaged `.app` LSP 对合法 4,096-entry duplicate batch 约 17.37 ms，4,097 entries 发布 bounded-rescan log，
+  重建后查询 coverage complete，并以 exit 0 释放 child。
+
+  Editor 删除了 product tree 对每个 path 重复 filter 全部 workspaceFiles 的实现。它现在只拥有 Set-based
+  ancestor normalization、一次 retained tree filter、受控 changed-root recollection，再原样向 public LSP
+  转发 watcher batch 或 rescan；没有复制 LSP index、canonical authorization 或 semantic invalidation。
+  生成 JavaScript 证明 helper 只使用公开 `velar/path`、Set/List 与 `velar/fs`。单 Chromium 8/8 的目录+
+  子文件合批场景、clean reload/tree update/dirty preservation 全绿。
+
+  完整证据为 `npm run check`（53 formatted sources、108 docs examples、75 runtime boundaries）、603/603、
+  四示例 check 与 1+3+3+3 Core tests、packed six-package consumer、publication rehearsal。Editor format 6、
+  check 3 modules、1 Core、contract run、build/package/native smoke、packaged burst probe 与单 Chromium 8/8
+  通过；所有 browser/LSP 结束后进程审计为空。Chromium FCP median/p95 8/40 ms，input frame median/p95
+  约 4.8/6.0 ms，1 MiB load/input next-frame 30.132/8.466 ms。`.app` 为 2,454,991 bytes：host 334,704、
+  renderer 203,251、capability 69,544、toolchain 1,730,456、metadata 117,036，SHA-256
+  `880067cdca2c0c4532efe91c767cfcc3e51b767f6d6e9bc433525078b8a51350`。Lite 原 11-file WIP 未修改；
+  未推送、未发布、未提升版本。
+
+  仍阻止生产可用的是：JS/TS full cross-file module/type/package graph、workspace symbols 和 formatter；
+  cross-process disk index/cold start、重复长时间 watcher burst 与 sustained RSS；multi-tab、tasks/test/build/
+  terminal、wide-glyph hit testing、native picker/IME、crash recovery 和正式 release thresholds 尚未完成。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
@@ -2934,8 +2975,8 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
 2. 下一波优先用 Editor multi-tab/task/test/build 场景继续暴露公开 session、command、process、terminal 与
    recovery owner 缺口；同时评估 JavaScript/TypeScript cross-file module/type graph、workspace symbols 与
    formatter 的正确 owner。Editor 只保留项目、标签、命令、索引编排和 UX。
-3. 用 synthetic 和真实大 workspace 测量 W-132 watcher burst、overflow/rescan、增量 tree/index latency、
-   cold start 与 RSS；只有证据证明 session index 重建不足时，才设计跨进程 disk snapshot contract。
+3. W-137 已证明单次 20k/4,096 watcher burst、overflow/rescan、增量 tree/index latency 与 RSS；下一阶段只在
+   重复长时间 burst、进程 cold start 或真实重启证据证明 session index 不足时设计 cross-process disk snapshot。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
 5. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release

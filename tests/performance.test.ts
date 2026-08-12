@@ -83,6 +83,31 @@ test("session-persistent workspace search meets the 20k-file first and complete-
   const cancelledSearch = index.search("absentNeedle", { maximumResults: 1_000, cancelled: () => cancelled });
   setImmediate(() => { cancelled = true; });
   await assert.rejects(cancelledSearch, WorkspaceIndexCancelledError);
+
+  const changedPaths = new Set<string>();
+  for (let file = 0; file < 4_096; file += 1) {
+    changedPaths.add(join(root, `source-${String(file).padStart(5, "0")}.ts`));
+  }
+  let heartbeat = 0;
+  const rssBefore = process.memoryUsage().rss;
+  let peakRss = rssBefore;
+  const sampler = setInterval(() => {
+    heartbeat += 1;
+    peakRss = Math.max(peakRss, process.memoryUsage().rss);
+  }, 1);
+  const updateStarted = performance.now();
+  const update = await index.update(changedPaths).finally(() => clearInterval(sampler));
+  const updateElapsed = performance.now() - updateStarted;
+  assert.equal(update.changesReceived, 4_096);
+  assert.equal(update.changeRoots, 4_096);
+  assert.equal(update.recordsRemoved, 4_096);
+  assert.equal(update.indexedFiles, 20_000);
+  assert.ok(heartbeat > 0, "20k/4096 workspace invalidation did not yield to the host");
+  assert.ok(updateElapsed < 3_000, `20k/4096 workspace invalidation took ${updateElapsed}ms`);
+  assert.ok(peakRss - rssBefore < 64 * 1024 * 1024,
+    `20k/4096 workspace invalidation grew RSS by ${peakRss - rssBefore} bytes`);
+  await assert.rejects(index.update(new Set(Array.from({ length: 4_097 }, (_, item) => join(root, `overflow-${item}.ts`)))),
+    /cannot contain more than 4096 changed paths/u);
 });
 
 test("pure VelarScript script service bounds 1 MiB initial and tail-update work", async () => {

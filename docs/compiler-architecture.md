@@ -107,6 +107,14 @@ establish its authority; open-document text overlays disk, exact watcher paths
 update only affected files, and `velar/workspaceRescan` rebuilds after watcher
 overflow. `velar/workspaceSearch` is literal, case-configurable, capped at 10,000
 results, and returns both negotiated LSP coordinates and bounded line previews.
+Watcher notifications accept the same first-party ceiling as `velar/fs`: 4,096
+paths, 4,096 code units per decoded path, and 2 MiB of decoded path text. A
+malformed or larger batch is never partially applied; it becomes one
+authoritative initialized-root rescan. Repeated decoded paths inside a legal
+entry envelope are collapsed before canonical authorization. Known changes are ancestor-normalized,
+then invalidate retained records in one depth-bounded pass instead of rescanning
+all records once per event. Activity reports received paths, normalized roots,
+and removed records, and the pass yields every 128 records.
 The index admits at most 50,000 files, 4 MiB per file, and 128 MiB of aggregate
 source text while ignoring `.git`, `.velar`, `dist`, and `node_modules`. It yields
 between bounded file batches so framed `$/cancelRequest` messages can interrupt
@@ -121,7 +129,9 @@ is an in-process LSP session cache, not a disk cache or an Editor-owned
 filesystem scanner. A
 packaged Desktop host privately confines the same process to its current project
 grant; renderer-supplied initialize roots and document URIs cannot widen that
-filesystem authority.
+filesystem authority. Its canonical grant root is resolved once and watcher
+targets are authorized with at most 16 concurrent filesystem operations, so a
+maximum legal batch cannot multiply root resolution or create unbounded I/O.
 
 JavaScript and TypeScript documents use a separate protocol-neutral provider
 whose implementation is the pure source-backed `velar/javascript` module.

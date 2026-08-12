@@ -27100,7 +27100,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       semanticTokensProvider: { legend: { tokenTypes: string[]; tokenModifiers: string[] }; full: boolean };
       codeActionProvider: { codeActionKinds: string[] };
       workspaceSymbolProvider: boolean;
-      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number } };
+      experimental: { velar: { protocolVersion: number; incrementalSessions: boolean; watchedFiles: boolean; workspaceRescan: boolean; cancellation: boolean; scriptLanguages: string[]; scriptImplementation: string; incrementalScriptLexing: boolean; workspaceSearch: boolean; workspaceTextExtensions: string[]; workspaceTextFileLimit: number; workspaceSearchResultLimit: number; workspaceWatchPathLimit: number; workspaceWatchPathCodeUnitLimit: number; workspaceWatchTextCodeUnitLimit: number } };
     };
     serverInfo: { name: string };
   };
@@ -27119,6 +27119,9 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     [".vel", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".json", ".md", ".css"]);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceTextFileLimit, 50_000);
   assert.equal(initializeResult.capabilities.experimental.velar.workspaceSearchResultLimit, 10_000);
+  assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchPathLimit, 4_096);
+  assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchPathCodeUnitLimit, 4_096);
+  assert.equal(initializeResult.capabilities.experimental.velar.workspaceWatchTextCodeUnitLimit, 2 * 1024 * 1024);
   assert.equal(initializeResult.capabilities.workspaceSymbolProvider, true);
   assert.equal(initializeResult.capabilities.definitionProvider, true);
   assert.deepEqual(initializeResult.capabilities.completionProvider.triggerCharacters, [".", "<", " ", "{", ",", ":"]);
@@ -27472,6 +27475,17 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.ok(workspaceSearchResult.indexedBytes > 0);
   assert.ok(workspaceSearchResult.revision > 0);
   assert.equal(workspaceSearchResult.coverageComplete, true);
+  send({
+    jsonrpc: "2.0",
+    method: "workspace/didChangeWatchedFiles",
+    params: { changes: Array.from({ length: 4_097 }, () => ({ uri: pathToFileURL(modelsPath).href, type: 2 })) },
+  });
+  const boundedWatcherLog = await waitFor((message) => message.method === "window/logMessage"
+    && /Watcher batch exceeded the official bounds/u.test(String((message.params as { message?: unknown }).message)));
+  assert.match(String((boundedWatcherLog.params as { message: string }).message), /rebuilt the initialized workspace index/u);
+  send({ jsonrpc: "2.0", id: 304, method: "velar/workspaceSearch", params: { query: "watched-file refresh", maximumResults: 10 } });
+  const rebuiltWorkspaceSearch = await waitFor((message) => message.id === 304);
+  assert.equal((rebuiltWorkspaceSearch.result as { items: unknown[] }).items.length, 1);
   send({ jsonrpc: "2.0", id: 301, method: "workspace/symbol", params: { query: "greet" } });
   const workspaceSymbols = await waitFor((message) => message.id === 301);
   assert.ok(Array.isArray(workspaceSymbols.result), JSON.stringify(workspaceSymbols));

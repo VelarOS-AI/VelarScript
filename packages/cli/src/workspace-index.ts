@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { readBoundedText } from "./bounded-text.ts";
 import { isHostErrorCode } from "./host-error.ts";
 
@@ -12,6 +12,9 @@ export const MAX_WORKSPACE_TEXT_BYTES = 128 * 1024 * 1024;
 export const MAX_WORKSPACE_SEARCH_QUERY_CODE_UNITS = 1_024;
 export const MAX_WORKSPACE_SEARCH_RESULTS = 10_000;
 export const MAX_WORKSPACE_SEARCH_PREVIEW_CODE_UNITS = 256;
+export const MAX_WORKSPACE_CHANGE_PATHS = 4_096;
+export const MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS = 4_096;
+export const MAX_WORKSPACE_CHANGE_TEXT_CODE_UNITS = 2 * 1024 * 1024;
 
 const extensions = new Set<string>(WORKSPACE_TEXT_EXTENSIONS);
 const ignoredDirectories = new Set([".git", ".velar", "dist", "node_modules"]);
@@ -53,6 +56,9 @@ export interface WorkspaceIndexActivity {
   readonly indexedBytes: number;
   readonly skippedLargeFiles: number;
   readonly skippedByAggregateBudget: number;
+  readonly changesReceived: number;
+  readonly changeRoots: number;
+  readonly recordsRemoved: number;
   readonly revision: number;
 }
 
@@ -71,6 +77,9 @@ interface MutableActivity {
   filesRead: number;
   skippedLargeFiles: number;
   skippedByAggregateBudget: number;
+  changesReceived: number;
+  changeRoots: number;
+  recordsRemoved: number;
 }
 
 export class WorkspaceTextIndex {
@@ -131,7 +140,7 @@ export class WorkspaceTextIndex {
 
   async rescan(cancelled: () => boolean = () => false): Promise<WorkspaceIndexActivity> {
     const next = new Map<string, IndexedDocument>();
-    const activity: MutableActivity = { filesRead: 0, skippedLargeFiles: 0, skippedByAggregateBudget: 0 };
+    const activity = emptyActivity();
     const visitedPaths = new Set<string>();
     let bytes = 0;
     let visited = 0;
@@ -181,14 +190,36 @@ export class WorkspaceTextIndex {
   }
 
   async update(changedPaths: ReadonlySet<string>): Promise<WorkspaceIndexActivity> {
+    if (changedPaths.size > MAX_WORKSPACE_CHANGE_PATHS) {
+      throw new RangeError(`A workspace index update cannot contain more than ${MAX_WORKSPACE_CHANGE_PATHS} changed paths`);
+    }
+    const resolvedChanges = [...changedPaths].map((path) => resolve(path));
+    if (resolvedChanges.some((path) => path.length > MAX_WORKSPACE_CHANGE_PATH_CODE_UNITS)
+      || resolvedChanges.reduce((total, path) => total + path.length, 0) > MAX_WORKSPACE_CHANGE_TEXT_CODE_UNITS) {
+      throw new RangeError("A workspace index update exceeds its changed-path text budget");
+    }
     const next = new Map(this.documents);
-    const activity: MutableActivity = { filesRead: 0, skippedLargeFiles: 0, skippedByAggregateBudget: 0 };
+    const activity = emptyActivity();
+    activity.changesReceived = resolvedChanges.length;
+    const normalizedChanges = new Set<string>();
+    for (const value of resolvedChanges.sort((left, right) => left.length - right.length || left.localeCompare(right))) {
+      const root = this.workspaceRootFor(value);
+      if (!root || changedBy(value, normalizedChanges, root)) continue;
+      normalizedChanges.add(value);
+    }
+    activity.changeRoots = normalizedChanges.size;
     let visited = 0;
-    for (const value of [...changedPaths].map((path) => resolve(path)).sort()) {
-      if (!this.withinWorkspace(value)) continue;
-      for (const path of [...next.keys()]) {
-        if (path === value || within(value, path)) next.delete(path);
+    let examined = 0;
+    for (const path of next.keys()) {
+      const root = this.workspaceRootFor(path);
+      if (root && changedBy(path, normalizedChanges, root)) {
+        next.delete(path);
+        activity.recordsRemoved += 1;
       }
+      examined += 1;
+      if (examined % 128 === 0) await yieldToHost();
+    }
+    for (const value of [...normalizedChanges].sort()) {
       const overlay = this.overlays.get(value);
       if (overlay && this.accepts(value)) {
         if (overlay.text === null) {
@@ -389,7 +420,11 @@ export class WorkspaceTextIndex {
   }
 
   private withinWorkspace(path: string): boolean {
-    return this.roots.some((root) => within(root, path));
+    return this.workspaceRootFor(path) !== null;
+  }
+
+  private workspaceRootFor(path: string): string | null {
+    return this.roots.find((root) => within(root, path)) ?? null;
   }
 
   private ignored(path: string): boolean {
@@ -417,6 +452,29 @@ function indexedDocument(path: string, text: string): IndexedDocument | null {
 function recordOverlayExclusion(activity: MutableActivity, exclusion: OpenDocumentOverlay["exclusion"]): void {
   if (exclusion === "large-file") activity.skippedLargeFiles += 1;
   else if (exclusion === "aggregate-budget") activity.skippedByAggregateBudget += 1;
+}
+
+function emptyActivity(): MutableActivity {
+  return {
+    filesRead: 0,
+    skippedLargeFiles: 0,
+    skippedByAggregateBudget: 0,
+    changesReceived: 0,
+    changeRoots: 0,
+    recordsRemoved: 0,
+  };
+}
+
+function changedBy(path: string, changes: ReadonlySet<string>, root: string): boolean {
+  let current = path;
+  for (let depth = 0; depth <= 65; depth += 1) {
+    if (changes.has(current)) return true;
+    if (current === root) return false;
+    const parent = dirname(current);
+    if (parent === current || !within(root, parent)) return false;
+    current = parent;
+  }
+  throw new RangeError("A workspace index change cannot exceed 64 directory levels");
 }
 
 function lineStartsFor(text: string): readonly number[] {

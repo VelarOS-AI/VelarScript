@@ -142,6 +142,8 @@ export class VelarProjectSessions {
     const contents = new Map(state.contents);
     const files = new Set(state.files);
     const changed = new Set<string>();
+    const modulePaths = new Set((state.project?.modules ?? []).map((module) => module.inputPath));
+    const resources = resourcePaths(state.project);
     let filesRead = 0;
 
     for (const [overridePath, source] of overrides) {
@@ -156,7 +158,7 @@ export class VelarProjectSessions {
 
     for (const target of normalizedChanges) {
       if (!this.ownedBy(state, target) || overrides.has(target)) continue;
-      const kind = inputKind(state, target);
+      const kind = inputKind(state, target, modulePaths, resources);
       if (!kind) continue;
       try {
         const text = kind === "source"
@@ -167,7 +169,7 @@ export class VelarProjectSessions {
         if (kind === "source" && withinRoot(state.config.root, target)) files.add(target);
       } catch (error) {
         if (!isHostErrorCode(error, "ENOENT") && !isHostErrorCode(error, "ENOTDIR")) throw error;
-        if (contents.has(target) || files.has(target) || state.project?.modules.some((module) => module.inputPath === target)) changed.add(target);
+        if (contents.has(target) || files.has(target) || modulePaths.has(target)) changed.add(target);
         contents.delete(target);
         files.delete(target);
       }
@@ -290,11 +292,16 @@ function resourcePaths(project: ProjectResult | null): Set<string> {
   return paths;
 }
 
-function inputKind(state: SessionState, path: string): "source" | "resource" | "external type dependency" | null {
+function inputKind(
+  state: SessionState,
+  path: string,
+  modulePaths: ReadonlySet<string>,
+  resources: ReadonlySet<string>,
+): "source" | "resource" | "external type dependency" | null {
   if (extname(path) === ".vel" && (withinRoot(state.config.root, path)
     || state.contents.has(path)
-    || state.project?.modules.some((module) => module.inputPath === path))) return "source";
-  if (resourcePaths(state.project).has(path)) return "resource";
+    || modulePaths.has(path))) return "source";
+  if (resources.has(path)) return "resource";
   if (state.project?.externalTypeDependencies.has(path)) return "external type dependency";
   return null;
 }
