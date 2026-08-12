@@ -609,3 +609,75 @@ TXT-D1 + I1/I2/I3 → **N-2b**；U3/U4 决案可否决随 N-2b；U5-U9 → N-3 �
 
 D1/D2/D3 + I1 → **N-2b**（I1 两个管道修复独立先落）；I3/I4/I5/U2/U5/U6 → N-2b
 消息批；I2/U4/U8 决案可否决；U1/U9 → N-3 成文；U7 → 桥审计；U10 → 批次 L。
+
+
+---
+
+## 审计八 —— JS 桥（2026-08-13 凌晨，34 个探针项目，cb3c271 + 3765497 双验）
+
+判定基准：产品承诺「逃生通道产品级 —— 项目永不死于 Vel 缺陷」。
+
+### DEFECT
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **BRG-D1** | **import 语句诊断黑洞**（MOD-I1 同族更多实例）：`import unsafe {x}`（忘写 js）、Core 项目里贴 web 的 `import css unsafe`、`import type`（D38 待实施）—— 三种自然错误全部只见 `invalid package name ''`，解析诊断被吞。web parser 证明正确形状存在（`import css` 缺 unsafe 会教学） | 修（与 MOD-I1 同一双管道修复，N-2b 首位）|
+| **BRG-D2** | D38 第 47 条在 HEAD 执行级确认仍活着（extern 无类型参数成员静默降级）；同族 extern def 带体 / extern const 带初始化器只报裸 VEL2003 | 归批次 F 不变；const 初始化器教学措辞搭车 |
+
+### 待用户裁决（一条，本审计最强发现）
+
+**BRG-U1 —— extern JS 变更响应式状态：不发布、然后被静默追认。**
+Chromium 实测：DOM 显示 6 → JS 侧 `items.push(10)` → **仍显示 6** → Vel 侧
+`append(5)` → **跳到 21**（外来的 10 追溯出现）。headless 测试里立即显示 16
+（无活订阅者 → 读时重算）—— **危害只在挂载的应用里可见，测试抓不到**。
+raw 身份转换是文档化的；变更语义零文字。选项：
+(a) **成文规则**「外来变更在下一次 Vel 触发的失效前不可见 —— extern 实参视为
+只读」+ 教学（推荐：与既有 raw 转换设计一致，零成本零魔法）；
+(b) 防御性快照（破坏身份、代价大）；(c) extern 调用后自动发布（魔法，无法知道
+碰了什么）。**编排代理推荐 (a)，等用户批** —— AI 写的应用今天会以使命明令禁止
+的方式坏掉。
+
+### INCONSISTENT
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **BRG-N1** | **未声明的名字绕过 extern 契约**：extern 只声明 `version`，`import js {version, mystery}` 过检查、mystery 静默成 unknown —— 而 .vel 模块硬错误、文档明说「手写声明拥有整个源契约」。打错字的导入名静默变 unknown | 修：extern 块管辖的源，导入未声明名字 → 检查期错误 |
+| **BRG-N2** | VEL2010 拒绝消息漏列合法的 `export class` | 修：消息 |
+| **BRG-N3** | 同一错误（导入不存在的导出）两种失败形：extern 声明的 → 自有教学；未声明的 → 原生 ESM SyntaxError（已 source-map 但无主） | 成文一句 |
+| **BRG-N4（从 U4 升格）** | **`if anyval:` 用裸 JS 真值性** —— `0`/`""` 走 else 分支。**这不是未定义，是与用户已裁决的「if 只判断 bool」直接冲突**：any 不是 bool，却溜进了条件位 | 修（既有裁决的执行）：any 在条件位拒绝，教先验证；与 f-string 拒 any 同构 |
+
+### UNDEFINED
+
+| ID | 未定 | 处置 |
+|---|---|---|
+| **BRG-U2** | `import js` 包存在性检查期不查：拼错包名过检查、运行裸 ERR_MODULE_NOT_FOUND 指向发射产物；**Vel 包经 import js 导入**也裸崩（而镜像错误有自有教学）—— 编译器为 d.ts 探测本就读 package.json，知识在手 | 修：检查期解析 bare specifier + 反向教学 |
+| **BRG-U3** | `types` 条目指向缺失文件静默降级（无 VEL9002）—— 文档承诺不支持的*形状*有通知，坏掉的*路径*却零声 | 修：VEL9002 |
+| **BRG-U4** | **`any` 操作契约真实存在但全未成文**：允许（成员读写/调用/算术/match/is/**赋进一切类型位零验证**）、拒绝（f-string/字符串拼接）、不归一化（undefined 过 any 骗过 `== null`）；一个泄漏洗白一切（`const s: string = obj` 后 `s + "!"` → `[object Object]!` —— charter §5 承诺编译期拒绝的隐式转换复活） | 成文（N-3，charter §12 + bridge 文档一段）：(1) any 操作是裸 JS 语义、无 undefined 归一化；(2) any 可赋一切类型**无运行时检查** —— 验证只发生在本就验证的操作处；(3) 故 `Type.parse` 于导入点是唯一正确性边界。escape-hatches 的建议升格为语义模型 |
+| **BRG-U5** | npm 包 CSS 无上桥路（相对路径限定是既定规则，但组件库都带样式表，复制工作流零文档） | 成文 copy-in 工作流（escape-hatches §3）；bless 包路径延后立项 |
+| **BRG-U6** | extern 形状边缘无教学：泛型 extern class 裸解析错（泛型 extern def 合法、d.ts 桥对泛型类还有礼貌的 VEL9002）；`extends` 继承成员**不继承构造器**（arity 0，与 JS 相反，诊断不教重声明）；`async def` 合法但语法文档不载 | 修：两条教学 + 文档 |
+| **BRG-U7** | **适配器模块模式是承重墙但零文档**：extern 声明一次、re-export 全套可用（checked 调用/new 降级/类型注解）—— naive 作者会把 extern 块贴满每个模块 | 成文（bridge 文档 + **AI 简报**必须收录 —— 直接影响盲测） |
+| BRG-U8 | 活迭代中 extern 变更静默截断（живая length 重读，密集则 fail-closed 不触发） | 与 COL-I1 同批成文 |
+| BRG-U9 | `import js` 合法 specifier 空间未定义（node:/data: 都能用且第一方测试依赖） | 成文 |
+| BRG-U10 | 顶层未捕获的 extern 同步非 Error 抛出是最后一个无主失败形（异步路径全有主） | 归 N-2b 小修 |
+
+### DECIDED-AND-CORRECT（压缩，产品承诺的凭证）
+
+**extern 形状接纳全家**（const/def/async def/泛型 def/类全家/继承/pass，拒绝各有
+教学）；**存在性检查優秀**（自有、source-map、点名源+导出+可能的修法，还抓到了
+审计者自己的 Node 内建遮蔽）；**说谎签名遵循文档化的信任 ABI 立场**（收据验证
+操作兜底，异步谎言在 await 点硬抓）；字段谎言被收窄守卫抓住（source-map，消息
+可改行列）；失败所有权（非 Error 抛出按 §11 归一化、晚回调抛出宿主报告带 .vel
+帧）；**出境**（记录=纯对象、集合=裸原生、枚举=裸字符串、null→null、类实例带
+预绑定方法与原生私有不可见）；**入境**（undefined→null 于 extern 返回/字段/回调
+三处、JS 增长的 List 保持密集可见、打洞 fail-closed、Proxy 透明、冻结实例写
+可捕、Date 全可用）；d.ts 桥（typed 使用正常、重载礼貌降级 VEL9002 三要素）；
+unsafe 拼写恰好三个（js/css/html，无块形式）；同源安全/不安全可共存；
+**eject 故事实测达标** —— `velar build` 产物逐字可读（函数名/纯记录/console.log
+/.map 齐全，生成的 runtime 自身也是带注释的普通 JS），escape-hatches 的声明
+逐字兑现，standalone 验收门禁在位。
+
+### 处置总结
+
+BRG-D1 + N1/N2/N4 + U2/U3/U6/U10 → **N-2b**；U4/U5/U7/U8/U9 + N3 → **N-3 成文**
+（U7 必须进 AI 简报）；**BRG-U1 → 待用户裁决**（推荐 (a) 成文只读规则）；
+BRG-D2 → 批次 F 不变。web 审计需带 `probes/w8-reactive` 复跑。
