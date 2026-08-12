@@ -546,3 +546,57 @@ Symbol 关死不强转不执行钩子、16MiB/1M 预算先于分配触发、绑�
 
 TXT-D1 + I1/I2/I3 → **N-2b**；U3/U4 决案可否决随 N-2b；U5-U9 → N-3 文档；
 **U1+U2（\u{...} 转义 + 隐形字符政策）→ 待用户裁决**（表面新增）。
+
+
+---
+
+## 审计七 —— 模块系统（2026-08-13 凌晨，快照探针 + 在途 diff 对照）
+
+### DEFECT（过检查 → 裸崩溃/静默错误）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **MOD-D1** | **块内模块边界语句发射非法 JS —— 是整个家族，不止 class**：`if true:` 内的 `export const`/`export def`/`import {a}`/`export {a} from`/`import js {x}` 全部过检查、运行裸 `SyntaxError`；函数体内 `import` 不崩但把名字绑成 `unknown`（错层报错）。N-1 在途 diff 只给 type/class 加了 VEL3011 | 修（N-2b）：**import/全部 export 形态/re-export/extern module 都是模块顶层限定语句**，一条位置诊断（VEL3011 模式延伸到全家族）。N-1 落地后复验 |
+| **MOD-D2** | **大小写分歧路径静默双实例化（macOS）**：`./store.vel` 与 `./Store.vel` 各自实例化 —— "store init" 打两次、模块状态静默分裂（count=0 而 bumped=true）；check 对 3 个文件报 "Checked 4 modules" 零诊断。project.ts 用裸 `resolve()` 作模块键 | 修：模块键经文件系统真实大小写规范化（或图内仅大小写不同即拒绝） |
+| **MOD-D3** | **自导入绕过初始化环检查器**：`import {a as b} from "./self3.vel"` + 声明前顶层读 → check 干净、运行裸 `ReferenceError`。D31 第 23 条的字面（「求值顺序在本模块之后」）套不住自边 | 修：自导入绑定按本地声明序规则检查（或直接禁自导入 —— 其唯一用途皆可不用它表达） |
+
+### INCONSISTENT（五条）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **MOD-I1（毒化全局的那条）** | **check 在存在解析失败时吞掉全部模块诊断**（run 却两者都打）；叠加 parser 恢复路径捏造空 source 依赖 → 荒谬的 `invalid package name ''` 是作者唯一能看见的东西，而**真正优秀的解析诊断被生成后藏起来**。`import type`（D38 待实施）今天的体验因此极度恶劣 | 修（两个小管道修复，独立于 D38 先落）：恢复路径不发空 source 依赖；check 与 run 一样并打失败与诊断 |
+| MOD-I2 | **副作用导入无既定拼写且两候选形互相矛盾**：`import "./fx.vel"` 误析成默认导入（报 nonsense）；`import {} from` 却合法、跑副作用、格式化器祝福 | 定案（可否决，双亲一致）：祝福裸字符串形 `import "./x.vel"`（父 Python `import x`、母 JS `import "./x"` 同款），`import {}` 拒绝并教学 |
+| MOD-I3 | 只读导入教学只有 `state` 有：普通 `let` 导入赋值报 **事实错误的** "Cannot assign to const binding" | 修：导入绑定统一措辞 |
+| MOD-I4 | 导入/本地冲突永远怪 `const` 且不点名导入来源（后声明者在 1 行时错误指向写它时还没错的行） | 修：怪后声明者、点名先声明者来源 |
+| MOD-I5 | **模块失败通道无码无位置**：整层解析消息（.vel 扩展名、no export named、ENOENT…）全是 `path: message` 裸打 —— 全语言其余处处有码有 span | 修：解析失败获得诊断码 + import 语句 span |
+
+### UNDEFINED（十条）
+
+| ID | 未定 | 处置 |
+|---|---|---|
+| **MOD-U1** | **模块初始化语义全未成文**：钻石一次性 init、文本导入序、**import 前的语句在依赖 init 之后才跑**（Python 读者陷阱，格式化器还祝福中置导入）、顶层 await 只悬置自身 —— 行为全部理智，charter 零字 | 成文一段（N-3）：行为随母亲 ESM，明写那个陷阱 |
+| MOD-U2 | 默认导入/导出：`import lib from` 死在解析层且消息暗示 .vel 模块可能有 default；`export default` 通用错误 + 级联 | 修：双向专用教学「Vel 模块无默认导出；按名导出导入」 |
+| MOD-U3 | `import type`（D38 第 49 条）**确认未实施**，今天体验被 MOD-I1 放大 | 归批次 F 不变；I1 先行独立落地 |
+| MOD-U4 | 未使用导入静默（副作用仍执行） | 定案（可否决）：保持静默 + 未来 `velar fix` 清除 + 成文（无警告级别的语言里 error 会在编辑中途尖叫，不可取） |
+| MOD-U5 | 找不到模块的诊断生猛或错路由：ENOENT 裸打（旁边就有近似名不提示）、绝对路径掉进包解析、裸 `lib.vel` 不教 `./` | 修：自有措辞 + 近似名建议 + 两种形态各自教学 |
+| MOD-U6 | 未知 `velar/*` 回答 npm 子路径噪音（`velar/collectons` 打错字得到 "package subpaths are not supported"）—— 标准模块清单有界却从不列出 | 修：`velar/` 是自有前缀，未知名列出可用模块 |
+| MOD-U7 | JS 包上桥岔口零教学：普通导入 JS-only 包不指 `import js`/extern；`import js` 无 extern 无 typings 时静默全 unknown、缺成员运行裸 SyntaxError | **移交桥审计账本**（下一个审计面） |
+| MOD-U8 | 重命名本地导出无拼写，自 re-export 是意外惯用法 | 修（可否决）：拒自 re-export + 教「按导出名声明」 |
+| MOD-U9 | 动态导入存在且行为理智（类型化成员访问、失败可捕、确定性缓存）但 charter 只在 §18 空值归一化里提过一次 | 成文一节（N-3）：形态/结果类型/失败类型/缓存 |
+| MOD-U10 | 未捕获 init/入口错误打 Node 原味栈（.vel 帧已 source-map 但混着 ModuleJob 帧和 Node 版本横幅） | 归批次 L（CLI 呈现打磨） |
+
+### DECIDED-AND-CORRECT（压缩）
+
+命名/重命名/命名空间导入值侧完整（成员调用/常量/一等值/写保护/f-string 教学）；
+`.vel` 扩展名强制、目录导入双向拒、逃逸根目录拒、多版本守卫、模块数上限；
+`export * from` 拒绝匹配 charter 有意缺席；重复导出/双源 re-export → VEL3016
+点名修法；**`export let` 是活绑定**（导入方观察到导出方变更 —— ESM 语义实证）；
+4 层 re-export 链保值/保类型/保枚举身份/保穷尽性（中链重命名照样）；跨模块互递归
+记录类型合法运行（D31 不可谈判项保持）；函数体读跨环合法；同名记录跨模块结构
+互通；本地 `./json.vel` 与 `velar/json` 共存；入口契约（空文件/纯导入/目录模式
+要 velar.json 消息清晰）；遮蔽按 charter 词法规则。
+
+### 处置总结
+
+D1/D2/D3 + I1 → **N-2b**（I1 两个管道修复独立先落）；I3/I4/I5/U2/U5/U6 → N-2b
+消息批；I2/U4/U8 决案可否决；U1/U9 → N-3 成文；U7 → 桥审计；U10 → 批次 L。
