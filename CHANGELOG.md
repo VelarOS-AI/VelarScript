@@ -6,6 +6,23 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Equality requires the operand types to intersect. `1 == "1"`, a record
+  against a string, and two members of different enums no longer compile —
+  each was permanently false, which is a silent logical bug rather than the
+  coercion bug strict equality was meant to remove. `value == null` on an
+  optional is unaffected; enum against raw string is rejected too, so
+  compare with `Kind.parse(raw) == Kind.textDelta` or drop to strings
+  explicitly with `str(...)`.
+- Enums are not ordered. `sorted()` on a List of enums returned members in
+  alphabetical order of their runtime values — silently wrong for the common
+  `low`/`normal`/`high` shape — so the sort paths now agree with direct
+  comparison and reject enums and mixed-category unions. State the order
+  explicitly with `sorted(by=rank)`, or use a string-backed enum whose
+  values encode it. The four mechanisms that gave three different answers to
+  "is this ordered" are now one.
+- `pop(index=-1)` throws on an empty List or an out-of-range index, matching
+  `[]` and Python, and `removeLast()` is removed as its duplicate. Drain a
+  List with `while items.size > 0:` instead of testing the result for null.
 - Reactive state no longer retains what it replaces. Replacing a state root
   releases its descendants transitively, so the idiomatic
   `settings = {...settings, field: next}` no longer keeps every previous

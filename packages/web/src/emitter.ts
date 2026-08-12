@@ -382,13 +382,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     const emitted = super.emitExpression(expression);
     if (!this.webOutput) return emitted;
-    // One expression can lower to more than one collection call, and it can
-    // lower to both of these, so the reactive wrapper has to reach every
-    // occurrence rather than the first match of the first pattern.
-    let rewritten = emitted;
-    if (rewritten.includes("__velarListPop(")) rewritten = rewritten.replaceAll("__velarListPop(", "__velarWebListPop(");
-    if (rewritten.includes("__velarListRemoveLast(")) rewritten = rewritten.replaceAll("__velarListRemoveLast(", "__velarWebListRemoveLast(");
-    return rewritten;
+    // One expression can lower to more than one pop, so the reactive wrapper
+    // has to reach every occurrence rather than the first match.
+    if (!emitted.includes("__velarListPop(")) return emitted;
+    return emitted.replaceAll("__velarListPop(", "__velarWebListPop(");
   }
 
   private emitLook(expression: LookExpression): string {
@@ -1238,10 +1235,6 @@ function __velarReactive(value, parent = null) { return __velarRuntime.reactive(
 
 function __velarWebListPop(value, requested = -1) {
   return __velarReactive(__velarListPop(value, requested));
-}
-
-function __velarWebListRemoveLast(value) {
-  return __velarReactive(__velarListRemoveLast(value));
 }
 
 function __velarUntracked(read) {

@@ -32,7 +32,6 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarListInsert",
   "__velarListRemove",
   "__velarListPop",
-  "__velarListRemoveLast",
   "__velarListCopy",
   "__velarListCount",
   "__velarListIndex",
@@ -408,7 +407,8 @@ function __velarListPop(value, requested = -1) {
   value = __velarValidateOwnedList(value, "List.pop");
   if (!__velarCollectionListIsInteger(requested)) throw new __VelarIndexError("List.pop index must be an integer");
   const index = requested < 0 ? value.length + requested : requested;
-  if (index < 0 || index >= value.length) return null;
+  if (value.length === 0) throw new __VelarIndexError("List.pop requires a non-empty List");
+  if (index < 0 || index >= value.length) throw new __VelarIndexError("List.pop index must be an in-range integer");
   const item = __velarOwnedListElement(value, index, "List.pop");
   for (let cursor = index; cursor < value.length - 1; cursor += 1) value[cursor] = __velarOwnedListElement(value, cursor + 1, "List.pop");
   value.length -= 1;
@@ -416,11 +416,6 @@ function __velarListPop(value, requested = -1) {
   __velarReactiveCollectionUnlink(value, item);
   __velarReactiveCollectionTrigger(value, index, true, true, index);
   return item;
-}
-function __velarListRemoveLast(value) {
-  value = __velarValidateOwnedList(value, "List.removeLast");
-  if (value.length === 0) throw new __VelarIndexError("List.removeLast requires a non-empty List");
-  return __velarListPop(value, -1);
 }
 function __velarListRemove(value, item) { value = __velarValidateOwnedList(value, "List.remove"); item = __velarReactiveRaw(item); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(__velarOwnedListElement(value, index, "List.remove")), item)) { __velarListPop(value, index); return true; } return false; }
 function __velarListCopy(value) { __velarReactiveCollectionTrack(value); return __velarCopyList(value, "List.copy"); }

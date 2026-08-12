@@ -1739,7 +1739,6 @@ export class JavaScriptEmitter {
       case "listInsert": return "__velarListInsert";
       case "listRemove": return "__velarListRemove";
       case "listPop": return "__velarListPop";
-      case "listRemoveLast": return "__velarListRemoveLast";
       case "listCopy": return "__velarListCopy";
       case "listCount": return "__velarListCount";
       case "listFind": return "__velarListFind";

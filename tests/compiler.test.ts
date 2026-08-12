@@ -2340,11 +2340,13 @@ test("break and continue guards narrow the loop fall-through path like return", 
   const pullLoop = compileCore(`
 def drain(chunks: List<string>) -> string:
     let assembled = ""
+    let cursor = 0
     while true:
-        const chunk = chunks.pop(0)
+        const chunk = chunks.get(cursor)
         if chunk == null:
             break
         assembled += chunk
+        cursor += 1
     return assembled
 
 print(drain(["stream", "ing", " works"]))

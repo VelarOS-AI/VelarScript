@@ -64,6 +64,9 @@ def measure(text: string) -> TextMeasure:
 One spelling per job. Test presence with `!= null`, provide a default with
 `??`, reach through maybes with `?.`, and narrow once — then use the value
 directly. Do not re-wrap optionals or copy them into extra locals.
+Equality requires the two sides to share possible values, so compare an
+enum against an enum — `Kind.parse(raw) == Kind.textDelta` — rather than
+against a raw string.
 
 ```velar fragment
 if ticket.assignee != null:
@@ -74,7 +77,9 @@ const city = account?.profile?.city
 ```
 
 Use `[]` when the index must exist (it throws on a bug) and `.get()` when
-absence is an expected answer. That difference is the reader's signal.
+absence is an expected answer. That difference is the reader's signal. The
+same split governs removal: `pop(index=-1)` throws on an empty List, so
+drain with `while items.size > 0:` rather than testing a result for null.
 
 ## 3. Chains over cursors
 

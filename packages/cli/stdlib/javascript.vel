@@ -429,12 +429,12 @@ def buildStructure(sourceSize: number, tokens: List<ScriptToken>, diagnostics: L
                 else if delimiterValues[-1] != expected:
                     appendDiagnostic(diagnostics, "SCRIPT1102", f"Expected '{matchingClose(delimiterValues[-1])}' before '{value}'", token.start, token.end)
                 else:
-                    const openingIndex = delimiterTokens.removeLast()
+                    const openingIndex = delimiterTokens.pop()
                     pairs.set(openingIndex, tokenIndex)
                     pairs.set(tokenIndex, openingIndex)
-                    delimiterValues.removeLast()
+                    delimiterValues.pop()
                     if value == "}" and scopeStack.size > 1:
-                        const scopeId = scopeStack.removeLast()
+                        const scopeId = scopeStack.pop()
                         scopes[scopeId].end = token.start
         tokenIndex += 1
     for openingIndex in delimiterTokens:

@@ -59,43 +59,37 @@ print("".split("").size)
   assert.equal(output, "3\na\n😀\nb\n0\n");
 });
 
-test("[D29 附议 D] removeLast() strictly pops the tail while pop() keeps its optional contract", () => {
+// D41 item 62 replaced this pair: `removeLast` was a second name for `pop`,
+// so `pop` absorbed the strict contract and `removeLast` is gone. The
+// regressions live in tests/hardening-value-semantics.test.ts.
+test("[D41 62] pop is the only tail mutator and it is strict", () => {
   const output = run(`
 let items = ["a", "b", "c"]
-const last = items.removeLast()
+const last = items.pop()
 print(last)
 print(items.size)
 print(items.has("c"))
 
 let numbers = [1, 2, 3]
-print(numbers.pop())
-print(numbers.pop(0))
-print(numbers.pop(9))
-print(numbers.size)
-
-let emptied: List<string> = []
-try:
-    const missing = emptied.removeLast()
-    print(missing)
-catch error:
-    print(error.name)
-    print(error.message)
+print(str(numbers.pop()))
+print(str(numbers.pop(0)))
+print(str(numbers.size))
 `);
-  assert.equal(output, [
-    "c", "2", "false",
-    "3", "1", "null", "1",
-    "IndexError", "List.removeLast requires a non-empty List",
-  ].join("\n") + "\n");
+  assert.equal(output, ["c", "2", "false", "3", "1", "1"].join("\n") + "\n");
+
+  const gone = compile("let items = [\"a\"]\nprint(items.removeLast())\n");
+  assert.equal(gone.code, null);
+  assert.ok(gone.diagnostics.some((item) => /List has no member 'removeLast'/u.test(item.message)));
 });
 
-test("[D29 附议 D] removeLast is fenced off readonly views like the other mutators", () => {
+test("[D41 62] pop is fenced off readonly views like the other mutators", () => {
   const result = compile(`
 def steal(values: readonly List<string>) -> string:
-    return values.removeLast()
+    return values.pop()
 `.trimStart());
   assert.equal(result.code, null);
   assert.ok(result.diagnostics.some((item) =>
-    /mutating method 'removeLast' through readonly List<string>/u.test(item.message)));
+    /mutating method 'pop' through readonly List<string>/u.test(item.message)));
 });
 
 test("[D29 附议 B] List.get, List.pop, and string.char throw on non-integer indexes", () => {
@@ -129,21 +123,22 @@ catch error:
 
 test("[D29 附议 B] out-of-range integers still answer null and negatives count from the end", () => {
   // The tightening rejects only non-integers; the []-strict/.get-optional
-  // division of labor is unchanged for every integer input.
+  // division of labor is unchanged for every integer input. `pop` moved to the
+  // strict side in D41 item 62, so its out-of-range behavior lives with the
+  // other throwing reads.
   const output = run(`
 const items = [10, 20, 30]
 print(items.get(99))
 print(items.get(-1))
 print(items.get(-99))
 let poppable = [10, 20, 30]
-print(poppable.pop(99))
-print(poppable.pop(-1))
-print(poppable.size)
+print(str(poppable.pop(-1)))
+print(str(poppable.size))
 print("hi".char(9))
 print("hi".char(-1))
 print("hi".char(-9))
 `);
-  assert.equal(output, "null\n30\nnull\nnull\n30\n2\nnull\ni\nnull\n");
+  assert.equal(output, "null\n30\nnull\n30\n2\nnull\ni\nnull\n");
 });
 
 test("[D29 附议 B] Map keys are identity values, so fractional keys stay legal", () => {
@@ -193,7 +188,6 @@ test("[D29 14] mutate-and-return, null-returning mutators, user calls, and async
   const legal = compile(`
 let values = [3, 1, 2]
 values.pop()
-values.removeLast()
 values.remove(3)
 values.append(9)
 values.extend([4])

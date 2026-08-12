@@ -62,7 +62,9 @@ them; the first row is the **one silent trap** in the list — read it twice.
 | `[...text]` or `list(text)` for characters | `text.split("")` — the empty separator splits per Unicode code point. |
 | `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |
 | `text.trim().size == 0` blank test | `text.isBlank()` — `true` for empty or whitespace-only text. |
-| `pop()` plus a null dance when emptiness is a bug | `items.removeLast()` removes and returns the last item, throwing on empty; `pop()` stays the optional read. |
+| `while true:` plus a `pop()` null check to drain a List | `pop(index=-1)` returns `T` and throws `IndexError` when empty or out of range, so drain with `while items.size > 0:`. |
+| `1 == "1"`, `user == "a"`, `A.member == B.member`, `raw == Kind.member` | `==`/`!=` require the operand types to intersect. Compare enums with `Kind.parse(raw) == Kind.member`, or strings with `raw == str(Kind.member)`. `value == null` on an optional is always fine. |
+| `sorted()`, `min()`, or `sorted(by=)` over enums | Only `number`, `string`, and single-category unions are ordered. Give the order explicitly with `sorted(by=row => row.rank)` or a string-backed enum (`low = "1-low"`). |
 
 The long tail is deliberately not in this table: the diagnostic will name
 the current spelling when you hit it.

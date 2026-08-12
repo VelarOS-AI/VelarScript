@@ -168,13 +168,13 @@ export interface ClassInfo {
   readonly staticMethods: ReadonlyMap<string, ValueType>;
 }
 
-export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listRemoveLast" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "recordSet" | "recordCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
+export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "recordSet" | "recordCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
 
 export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
 const listCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "get"], ["slice", "slice"], ["append", "listAppend"], ["extend", "listExtend"],
-  ["insert", "listInsert"], ["remove", "listRemove"], ["pop", "listPop"], ["removeLast", "listRemoveLast"],
+  ["insert", "listInsert"], ["remove", "listRemove"], ["pop", "listPop"],
   ["clear", "clear"], ["copy", "listCopy"], ["has", "has"], ["count", "listCount"],
   ["index", "listIndex"], ["find", "listFind"], ["some", "listSome"], ["every", "listEvery"],
   ["map", "listMap"], ["filter", "listFilter"], ["reduce", "listReduce"], ["join", "listJoin"],
@@ -207,7 +207,7 @@ const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
 // D29 item 14: compiler-owned value/collection methods that return a fresh
 // value without mutating their receiver. An expression statement that calls
 // one of these and drops the result is always a bug. Mutate-and-return
-// operations (pop/removeLast/remove) and null-returning mutators stay legal,
+// operations (pop/remove) and null-returning mutators stay legal,
 // and user-function purity is deliberately never analyzed (D26 retired that).
 const discardedPureCollectionOperations = new Set<CollectionOperation>([
   "get", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
@@ -3575,6 +3575,7 @@ export class Analyzer implements TypeEnvironment {
       return boolType;
     }
     if (operator === "==" || operator === "!=") {
+      this.requireIntersectingEquality(left, right, operator, leftExpression, rightExpression, operationSpan);
       if (this.equalityOperandMayBeNaN(leftExpression, left) && this.equalityOperandMayBeNaN(rightExpression, right)) {
         this.sameValueZeroEqualities.add(spanIdentity(operationSpan));
       }
@@ -3595,6 +3596,104 @@ export class Analyzer implements TypeEnvironment {
     this.requireAssignable(left, numberType, leftExpression.span);
     this.requireAssignable(right, numberType, rightExpression.span);
     return numberType;
+  }
+
+  // D42 item 64: `==`/`!=` require the operand types to intersect. Strict
+  // equality between two types that no single value inhabits is constant, so
+  // the tightening converts a silent logic bug into a compile error. Runtime
+  // lowering is untouched — this is purely static.
+  private requireIntersectingEquality(
+    leftType: ValueType,
+    rightType: ValueType,
+    operator: string,
+    leftExpression: Expression,
+    rightExpression: Expression,
+    operationSpan: Span,
+  ): void {
+    if (this.equalityTypesIntersect(leftType, rightType)) return;
+    const constant = operator === "==" ? "false" : "true";
+    this.typeError(
+      `${describeType(leftType)} and ${describeType(rightType)} have no values in common, so '${operator}' is always ${constant}${this.equalityGuidance(leftType, rightType)}`,
+      { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) },
+    );
+  }
+
+  // Intersection is decided by assignability in either direction, never by
+  // name, so structurally identical records declared in different modules
+  // still compare. Aliases, optionals, and unions are opened first so a
+  // partial overlap (`(string | number) == string`) is enough.
+  private equalityTypesIntersect(leftSource: ValueType, rightSource: ValueType): boolean {
+    const left = this.resolveNamedClasses(this.expandAliases(leftSource));
+    const right = this.resolveNamedClasses(this.expandAliases(rightSource));
+    if (isInvalidType(left) || isInvalidType(right)) return true;
+    // Unchecked boundary values and unresolved type parameters carry no domain
+    // this rule could contradict, so they keep their existing freedom.
+    if (left.kind === "any" || right.kind === "any") return true;
+    if (left.kind === "unknown" || right.kind === "unknown") return true;
+    if (left.kind === "parameter" || right.kind === "parameter") return true;
+    if (left.kind === "union") return left.members.some((member) => this.equalityTypesIntersect(member, right));
+    if (right.kind === "union") return right.members.some((member) => this.equalityTypesIntersect(left, member));
+    if (left.kind === "optional") {
+      return this.equalityTypesIntersect(left.inner, right) || this.equalityTypesIntersect(nullType, right);
+    }
+    if (right.kind === "optional") {
+      return this.equalityTypesIntersect(left, right.inner) || this.equalityTypesIntersect(left, nullType);
+    }
+    // D42 item 65's one documented exception to "assignability decides
+    // intersection": enum -> `string` assignability is a one-way exit that
+    // exists so a wire value can be sent out. Equality is symmetric, so
+    // honoring it here would open a read path around `Enum.parse` and undo
+    // charter section 6's promise that an open string never silently becomes
+    // an enum member.
+    if (this.isEnumAgainstString(left, right)) return false;
+    return isAssignable(left, right, this) || isAssignable(right, left, this);
+  }
+
+  private isEnumAgainstString(left: ValueType, right: ValueType): boolean {
+    const nominal = (type: ValueType): boolean => type.kind === "enum" || type.kind === "enumMember";
+    return (nominal(left) && right.kind === "string") || (left.kind === "string" && nominal(right));
+  }
+
+  private equalityGuidance(leftSource: ValueType, rightSource: ValueType): string {
+    const left = this.resolveNamedClasses(this.expandAliases(leftSource));
+    const right = this.resolveNamedClasses(this.expandAliases(rightSource));
+    const leftEnum = this.valueLevelEnum(left);
+    const rightEnum = this.valueLevelEnum(right);
+    const enumSide = leftEnum ?? rightEnum;
+    // The rejection itself needs an exact enum-versus-string pair, but the
+    // guidance is worth giving whenever one side can hold a bare string and
+    // the other an enum member — that is the mistake, wrapped or not.
+    if (enumSide !== null && this.hasValueLevelString(leftEnum === null ? left : right)) {
+      const member = enumSide.kind === "enumMember" ? `${enumSide.name}.${enumSide.member}` : `${enumSide.name}.member`;
+      return `; an enum member converts to string only as a one-way wire exit, so validate first with ${enumSide.name}.parse(text) == ${member},`
+        + ` or write str(${member}) == text to compare strings deliberately`;
+    }
+    if (left.kind === "null" || right.kind === "null") {
+      const value = left.kind === "null" ? right : left;
+      return `; ${describeType(value)} is never null — drop the check, or declare the value ${describeType(value)}? if absence is real`;
+    }
+    return "";
+  }
+
+  private valueLevelEnum(source: ValueType): Extract<ValueType, { kind: "enum" | "enumMember" }> | null {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    if (type.kind === "enum" || type.kind === "enumMember") return type;
+    if (type.kind === "optional") return this.valueLevelEnum(type.inner);
+    if (type.kind === "union") {
+      for (const member of type.members) {
+        const found = this.valueLevelEnum(member);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  private hasValueLevelString(source: ValueType): boolean {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    if (type.kind === "string") return true;
+    if (type.kind === "optional") return this.hasValueLevelString(type.inner);
+    if (type.kind === "union") return type.members.some((member) => this.hasValueLevelString(member));
+    return false;
   }
 
   // D36 item 41: `==`/`!=` are SameValueZero, but the repair only matters
@@ -3649,12 +3748,31 @@ export class Analyzer implements TypeEnvironment {
     const right = this.expandAliases(rightType);
     if (isInvalidType(left) || isInvalidType(right)) return;
     if (left.kind === "any" || right.kind === "any") return;
-    if ((left.kind === "number" && right.kind === "number")
-      || (left.kind === "string" && right.kind === "string")) return;
+    const category = this.orderedTypeCategory(left);
+    if (category !== null && category !== "dynamic" && category === this.orderedTypeCategory(right)) return;
     this.typeError(
-      `Ordered comparison requires two numbers or two strings, received ${describeType(leftType)} and ${describeType(rightType)}`,
+      `Ordered comparison requires two numbers or two strings, received ${describeType(leftType)} and ${describeType(rightType)}${this.unorderedTypeGuidance(left, right)}`,
       { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) },
     );
+  }
+
+  // Diagnostic-only companion to `orderedTypeCategory`: an enum reaching an
+  // ordering site is the one rejection with a non-obvious way out, because the
+  // runtime value is a bare string and the order the author means is never the
+  // member-name alphabet (D42 item 65).
+  private unorderedTypeGuidance(...types: readonly ValueType[]): string {
+    return types.some((type) => this.mentionsEnumType(type))
+      ? "; an enum carries no runtime order, so state the order explicitly with sorted(by=rank) or a string-backed enum whose values encode it"
+      : "";
+  }
+
+  private mentionsEnumType(source: ValueType): boolean {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    if (type.kind === "enum" || type.kind === "enumMember") return true;
+    if (type.kind === "optional") return this.mentionsEnumType(type.inner);
+    if (type.kind === "union") return type.members.some((member) => this.mentionsEnumType(member));
+    if (type.kind === "list" || type.kind === "set") return this.mentionsEnumType(type.element);
+    return false;
   }
 
   protected inferParameterDefault(expression: Expression, contextualType: ValueType = unknownType): ValueType {
@@ -4394,8 +4512,8 @@ export class Analyzer implements TypeEnvironment {
         const element = arrayAt(0).element;
         const key = callbackResult(callbackAt(1, [element], unknownType));
         const keyArgument = argumentAt(1);
-        if (!this.isCollectionOrderKey(key) && keyArgument) {
-          this.typeError(`sortBy key must return only string or only number, received ${describeType(key)}`, keyArgument.span);
+        if (this.orderedTypeCategory(key) === null && keyArgument) {
+          this.typeError(`sortBy key must return only string or only number, received ${describeType(key)}${this.unorderedTypeGuidance(key)}`, keyArgument.span);
         }
         inferAt(2, boolType);
         return { kind: "list", element };
@@ -4437,8 +4555,8 @@ export class Analyzer implements TypeEnvironment {
         const element = arrayAt(0).element;
         const key = callbackResult(callbackAt(1, [element], unknownType));
         const keyArgument = argumentAt(1);
-        if (!this.isCollectionOrderKey(key) && keyArgument) {
-          this.typeError(`${intrinsic.name === "collections.minBy" ? "minBy" : "maxBy"} key must return only string or only number, received ${describeType(key)}`, keyArgument.span);
+        if (this.orderedTypeCategory(key) === null && keyArgument) {
+          this.typeError(`${intrinsic.name === "collections.minBy" ? "minBy" : "maxBy"} key must return only string or only number, received ${describeType(key)}${this.unorderedTypeGuidance(key)}`, keyArgument.span);
         }
         return optionalOf(element);
       }
@@ -4657,7 +4775,7 @@ export class Analyzer implements TypeEnvironment {
     const object = this.inferredOrAnalyze(member.object);
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set" && object.kind !== "record") return null;
     const mutating = object.kind === "list"
-      ? new Set(["append", "extend", "insert", "remove", "pop", "removeLast", "clear"])
+      ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
       : object.kind === "map" ? new Set(["set", "update", "remove", "clear"])
         : object.kind === "set" ? new Set(["add", "update", "remove", "clear"])
           : new Set(["set", "remove", "clear"]);
@@ -4757,7 +4875,7 @@ export class Analyzer implements TypeEnvironment {
       if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
     };
     const lowered = object.kind === "list"
-      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "removeLast", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
+      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
       : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property)
         : object.kind === "set" ? ["add", "update", "has", "remove", "clear", "copy", "values"].includes(member.property)
           : object.kind === "record" ? ["get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property) : false;
@@ -4842,11 +4960,6 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "pop") {
         this.collectionCalls.set(member.span.end, "listPop");
         checkCollectionArguments([numberType], 0);
-        return optionalOf(object.element);
-      }
-      if (member.property === "removeLast") {
-        this.collectionCalls.set(member.span.end, "listRemoveLast");
-        checkCollectionArguments([]);
         return object.element;
       }
       if (member.property === "clear" || member.property === "copy" || member.property === "reversed") {
@@ -4869,16 +4982,41 @@ export class Analyzer implements TypeEnvironment {
           && compareArgument?.kind === "ArrowFunctionExpression"
           && compareArgument.parameters.length === 1
           && !argumentNames?.some((name) => name !== null);
+        let byType: ValueType | null = null;
         if (!namedPreanalyzed) {
           if (compareArgument) this.requireAssignable(inferArgument(0, positionalSelector ? selector : comparator), positionalSelector ? selector : comparator, compareArgument.span);
-          if (byArgument) this.requireAssignable(inferArgument(1, selector), selector, byArgument.span);
+          if (byArgument) {
+            byType = inferArgument(1, selector);
+            this.requireAssignable(byType, selector, byArgument.span);
+          }
           if (arguments_.length > 2) {
             for (const extra of arguments_.slice(2)) this.inferExpression(extra);
             this.typeError(`Expected 0-2 arguments but received ${arguments_.length}`, callSpan);
           }
         } else {
           if (compareArgument) this.requireAssignable(this.inferredExpressionType(compareArgument), comparator, compareArgument.span);
-          if (byArgument) this.requireAssignable(this.inferredExpressionType(byArgument), selector, byArgument.span);
+          if (byArgument) {
+            byType = this.inferredExpressionType(byArgument);
+            this.requireAssignable(byType, selector, byArgument.span);
+          }
+        }
+        // ORD-3: assignability admits an enum key, because an enum member is
+        // assignable to `string`, so the ordered-key question has to be asked
+        // separately at the one decision point. A literal selector reports the
+        // contextual `number | string` rather than its own key type once the
+        // body checks out, so the body's recorded type is the honest source
+        // for an inline arrow.
+        const byCallable = byType === null ? null : this.expandAliases(byType);
+        const byKey = byArgument?.kind === "ArrowFunctionExpression"
+          ? this.inferredExpressionType(byArgument.body)
+          : byCallable !== null && (byCallable.kind === "function" || byCallable.kind === "action" || byCallable.kind === "intrinsic")
+            ? byCallable.result
+            : null;
+        if (byArgument && byKey !== null && isAssignable(byType!, selector, this) && this.orderedTypeCategory(byKey) === null) {
+          this.typeError(
+            `sorted(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
+            byArgument.span,
+          );
         }
         if (byArgument && !argumentNames?.includes("by")) {
           this.typeError("Use 'sorted(by=selector)'; the key-function alternative is named", byArgument.span);
@@ -4887,8 +5025,11 @@ export class Analyzer implements TypeEnvironment {
         if (compareArgument && byArgument) {
           this.typeError("sorted accepts either a comparator or 'by=selector', not both", callSpan);
         }
-        if (!compareArgument && !byArgument && !this.defaultSortableType(object.element)) {
-          this.typeError(`List<${describeType(object.element)}>.sorted() requires an explicit comparator`, callSpan);
+        if (!compareArgument && !byArgument && this.orderedTypeCategory(object.element) === null) {
+          this.typeError(
+            `List<${describeType(object.element)}>.sorted() requires an explicit comparator${this.unorderedTypeGuidance(object.element)}`,
+            callSpan,
+          );
         }
         return { kind: "list", element: readonlyElement! };
       }
@@ -4903,8 +5044,11 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "min" || member.property === "max") {
         this.collectionCalls.set(member.span.end, member.property === "min" ? "listMin" : "listMax");
         checkCollectionArguments([]);
-        if (!this.listAggregationOrderedType(object.element)) {
-          this.typeError(`List.${member.property} requires List<number> or List<string>, received ${describeType(object)}`, member.span);
+        if (this.orderedTypeCategory(object.element) === null) {
+          this.typeError(
+            `List.${member.property} requires List<number> or List<string>, received ${describeType(object)}${this.unorderedTypeGuidance(object.element)}`,
+            member.span,
+          );
         }
         return optionalOf(readonlyElement!);
       }
@@ -5524,10 +5668,7 @@ export class Analyzer implements TypeEnvironment {
         return callable(["value"], [comparison], boolType);
       case "pop":
         if (list.readonlyView) return null;
-        return callable(["index"], [numberType], optionalOf(list.element), 0);
-      case "removeLast":
-        if (list.readonlyView) return null;
-        return callable([], [], list.element);
+        return callable(["index"], [numberType], list.element, 0);
       case "clear":
         if (list.readonlyView) return null;
         return callable([], [], nullType);
@@ -6481,15 +6622,29 @@ export class Analyzer implements TypeEnvironment {
       && ["field", "file", "files", "remove", "has", "names"].every((name) => type.fields.has(name));
   }
 
-  private isCollectionOrderKey(source: ValueType): boolean {
+  // D42 item 65: the single place in the compiler that answers "is this
+  // ordered". Every ordering site — direct `<` `<=` `>` `>=`, `min`/`max`,
+  // default `sorted()`, `sorted(by=)`, `sortBy`, `minBy`, `maxBy` — asks this
+  // one question, because four mechanisms giving three answers was the
+  // structural root of ORD-1/2/3. `Comparable` is exactly `number`, `string`,
+  // and single-category unions of them: enums are bare strings at runtime, so
+  // ordering them silently yields member-name alphabetical order. `any` and
+  // `unknown` answer "dynamic" instead of an order, and each caller decides
+  // whether an unchecked boundary value is admissible there.
+  private orderedTypeCategory(source: ValueType): "number" | "string" | "dynamic" | null {
     const type = this.resolveNamedClasses(this.expandAliases(source));
-    if (type.kind === "any" || type.kind === "unknown" || type.kind === "string" || type.kind === "number" || type.kind === "enum" || type.kind === "enumMember") return true;
-    if (type.kind !== "union" || type.members.length === 0) return false;
-    const categories = new Set(type.members.map((member) => {
-      const value = this.resolveNamedClasses(this.expandAliases(member));
-      return value.kind === "string" || value.kind === "enum" || value.kind === "enumMember" ? "string" : value.kind === "number" ? "number" : "invalid";
-    }));
-    return !categories.has("invalid") && categories.size === 1;
+    if (type.kind === "any" || type.kind === "unknown") return "dynamic";
+    if (type.kind === "number") return "number";
+    if (type.kind === "string") return "string";
+    if (type.kind !== "union" || type.members.length === 0) return null;
+    let category: "number" | "string" | null = null;
+    for (const member of type.members) {
+      const memberCategory = this.orderedTypeCategory(member);
+      if (memberCategory === null || memberCategory === "dynamic") return null;
+      if (category !== null && category !== memberCategory) return null;
+      category = memberCategory;
+    }
+    return category;
   }
 
   private combineJsonStatuses(statuses: readonly (boolean | null)[]): boolean | null {
@@ -7113,18 +7268,6 @@ export class Analyzer implements TypeEnvironment {
     return source.kind === "unknown" || source.kind === "any";
   }
 
-  private defaultSortableType(original: ValueType): boolean {
-    const type = this.expandAliases(original);
-    if (type.kind === "string" || type.kind === "number" || type.kind === "enum" || type.kind === "enumMember" || type.kind === "any" || type.kind === "unknown") return true;
-    return type.kind === "union" && type.members.every((member) => this.defaultSortableType(member));
-  }
-
-  private listAggregationOrderedType(original: ValueType): boolean {
-    const type = this.expandAliases(original);
-    if (type.kind === "string" || type.kind === "number" || type.kind === "any" || type.kind === "unknown") return true;
-    return type.kind === "union" && type.members.every((member) => this.listAggregationOrderedType(member));
-  }
-
   private matchTypeFullyCovered(
     target: ValueType,
     coveredTypes: readonly ValueType[],
@@ -7475,7 +7618,7 @@ export class Analyzer implements TypeEnvironment {
       .map((name) => [name, this.stringMember(name)!]));
     if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed", "isInteger", "isNaN", "isFinite"]
       .map((name) => [name, this.numberMember(name)!]));
-    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "removeLast", "clear", "copy", "count", "index", "sorted", "reversed", "map", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
+    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
     if (type.kind === "map") return available(["size", "get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.mapMember(type, name));
     if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.recordMember(type, name));
     if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values"], (name) => this.setMember(type, name));

@@ -301,7 +301,39 @@ equality spelling. Comparisons whose operands cannot both be numbers compile
 to plain JavaScript `===`; only number-capable comparisons carry the NaN
 repair.
 
+`==` and `!=` require the two operand types to **intersect**: some single
+value must be able to inhabit both. `1 == "1"`, `user == "a"`, `true == 1`,
+`List<number> == List<string>`, and a comparison between members of two
+different enums are compile errors, because a strict comparison between types
+that share no value is a constant, and a silently constant condition is a
+logic bug rather than a coercion bug. Intersection is decided by
+assignability in either direction, so structurally identical records
+intersect regardless of their names, a partial union overlap
+(`(string | number) == string`) is enough, and `unknown` or `any` on either
+side stays legal. `null` inhabits every optional, so `value == null` and
+`value != null` — the language's only null test — are unaffected; a
+comparison of a *non-optional* value against `null` is rejected as the
+constant it is, with guidance to drop the check or declare the value
+optional.
+
+The one place assignability does not decide is enum against `string`. An enum
+member converts to `string` as a one-way wire exit (section 6), and equality
+is symmetric, so honoring that direction here would open a read path around
+`Enum.parse`. `raw == Kind.textDelta` is therefore rejected and teaches the
+two honest spellings: `Kind.parse(raw) == Kind.textDelta` to validate first,
+or `raw == str(Kind.textDelta)` to compare strings deliberately.
+
 Ordered comparisons accept numbers with numbers or strings with strings.
+Ordering is exactly that set — `number`, `string`, and a union whose members
+are all one of those two categories. Enums are excluded: an enum's runtime
+value is a bare string, so ordering enum members sorts them by member name,
+which is never the order the author means. One rule answers "is this ordered"
+for `<`, `<=`, `>`, `>=`, `min()`, `max()`, default `sorted()`,
+`sorted(by=selector)`, and the `sortBy`/`minBy`/`maxBy` keys, so no two of
+them can disagree. A business order is stated explicitly —
+`sorted(by=row => row.rank)`, an explicit comparator, or a string-backed enum
+whose values encode the order (`low = "1-low"`).
+
 `<`, `<=`, `>`, and `>=` keep IEEE behavior on `NaN`: every ordered
 comparison against `NaN` is `false`. The ordered aggregations (`sum`, `min`,
 `max`, default-ordered and `by=`-keyed `sorted`) refuse `NaN` elements with a
@@ -904,8 +936,7 @@ List members:
 | `extend(values)` | Add a List atomically; returns `null`. |
 | `insert(index, value)` | Insert at a bounded position; returns `null`. |
 | `remove(value)` | Remove the first exact value; returns `bool`. |
-| `pop(index=-1)` | Remove and return a value, or `null`; a non-integer index throws. |
-| `removeLast()` | Remove and return the last value; an empty List throws `IndexError`. |
+| `pop(index=-1)` | Remove and return the value at a position; an empty List, an out-of-range index, or a non-integer index throws `IndexError`. |
 | `clear()` | Remove every value; returns `null`. |
 | `copy()` | Shallow copy. |
 | `slice(start=0, end=size)` | Shallow range copy. |
@@ -918,7 +949,7 @@ List members:
 | `filter(test)` | Filtered List. |
 | `reduce(combine, initial)` | Folded result. |
 | `sum()` | Sum of a `List<number>` from zero. |
-| `min()`, `max()` | Smallest/largest number or string, or `null` when empty. |
+| `min()`, `max()` | Smallest/largest ordered element, or `null` when empty. |
 | `sorted(compare?)`, `sorted(by=selector)` | Sorted copy by a comparator or ordered key. |
 | `reversed()` | Reversed copy. |
 | `join(separator="")` | Joined string for `List<string>`. |
@@ -928,21 +959,31 @@ the end; indexes outside `-size` through `size - 1` throw `IndexError`. Use
 `get` for an optional read: an in-range read returns the value, an
 out-of-range **integer** returns `null`, and a non-integer index is an error
 rather than a silent `null` — a fractional index is a computation bug, not an
-absence. `pop` follows the same split: expected absence (empty List or
-out-of-range integer) returns `null`, a non-integer index throws.
-`removeLast` is the strict tail counterpart — use it when emptiness is a bug,
-`pop()` when absence is an expected answer. `sorted` and `reversed` do not
+absence. `pop` is on the strict side with `[]`, not with `get`: it returns
+`T`, and an empty List, an out-of-range index, or a non-integer index all
+throw `IndexError` — the same contract as Python's `list.pop`. Negative
+indexes count from the end. Draining a List is therefore a size guard rather
+than a null dance:
+
+```velar fragment
+while chunks.size > 0:
+    assembled += chunks.pop(0)
+```
+
+`sorted` and `reversed` do not
 mutate the source. Exact-value operations (`has`, `index`, `count`, `remove`)
 compare by SameValueZero, so they agree with `==` and with Set/Map key
-identity, including on `NaN`. The ordered aggregations `sum`, `min`, `max`,
+identity, including on `NaN`. The ordered aggregations and `sorted` accept
+ordered elements and keys only — `number`, `string`, or a single-category
+union of them — so an enum element or key is rejected with guidance to
+`sorted(by=rank)` or a string-backed enum (section 4). `sum`, `min`, `max`,
 and `sorted` (default order and numeric `by=` keys) throw a targeted error on
 a `NaN` element — `NaN` has no ordering and poisons totals; the message
 points to `filter(x => not x.isNaN())`. Collection methods that return a new
 value without mutating their receiver (`copy`, `slice`, the callback family,
 the aggregations, `get`, `has`, `keys`, `values`, `entries`) are compile
 errors as bare expression statements: the result is discarded. Discarding
-`pop()`, `removeLast()`, or `remove(value)` stays legal — they mutate and
-also report.
+`pop()` or `remove(value)` stays legal — they mutate and also report.
 Callback operations (`find`, `some`, `every`, `map`, `filter`, `reduce`, keyed `sorted`,
 `sum`, `min`, and `max`) read one
 checked shallow snapshot, so a callback may mutate the original List without
@@ -1210,11 +1251,17 @@ naturally:
 
 ```velar fragment
 while true:
-    const chunk = chunks.pop(0)
+    const chunk = chunks.get(cursor)
     if chunk == null:
         break
     assembled += chunk
+    cursor += 1
 ```
+
+Draining a List needs no optional at all — `pop` is strict, so the shorter and
+more direct spelling is a size guard: `while chunks.size > 0:` with
+`assembled += chunks.pop(0)` in the body. The `while true` shape above is for
+a pull source whose exhaustion is genuinely reported as `null`.
 
 The two exits differ after the loop. An arm's writes still escape it — `break`
 carries them directly to the code after the loop, and `continue` carries them

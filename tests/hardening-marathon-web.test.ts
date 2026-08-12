@@ -317,26 +317,25 @@ type Row:
 
 state rows: List<Row> = [{label: "a"}, {label: "b"}, {label: "c"}]
 
-def take() -> Row?:
+def take() -> Row:
     return rows.pop(0)
 
-def drop() -> Row?:
-    return rows.removeLast()
+def pair() -> string:
+    return rows.pop(0).label + rows.pop().label
 `);
   assert.ok(program.includes("__velarWebListPop("), "pop() lost its reactive wrapper");
-  assert.ok(program.includes("__velarWebListRemoveLast("), "removeLast() lost its reactive wrapper");
   // The raw operations survive inside the collection runtime that defines them;
   // what must never survive is a raw call in the application's own code.
   const application = program.slice(program.indexOf("function take()"));
   assert.ok(!/(?<![A-Za-z])__velarListPop\(/u.test(application), "a raw List pop survived in Web application code");
-  assert.ok(!/(?<![A-Za-z])__velarListRemoveLast\(/u.test(application), "a raw List removeLast survived in Web application code");
-
   // The defect was mechanical: `String.replace` with a string pattern rewrites
-  // one occurrence, and the two rewrites returned early, so a single lowered
-  // node emitting two collection calls would silently keep a raw one.
+  // one occurrence, so a single lowered node emitting two collection calls
+  // would silently keep a raw one. `pair` is exactly that node.
+  assert.equal(application.match(/__velarWebListPop\(/gu)?.length, 3, "the rewrite missed an occurrence inside one expression");
+
   const emitter = await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8");
   const rewrite = emitter.slice(emitter.indexOf("const emitted = super.emitExpression(expression);"), emitter.indexOf("private emitLook("));
-  assert.equal(rewrite.match(/\.replaceAll\(/gu)?.length, 2, "the collection-call rewrite no longer replaces every occurrence");
+  assert.equal(rewrite.match(/\.replaceAll\(/gu)?.length, 1, "the collection-call rewrite no longer replaces every occurrence");
   assert.ok(!/\.replace\(/u.test(rewrite), "the collection-call rewrite kept a single-occurrence replace");
 });
 
