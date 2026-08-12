@@ -39,7 +39,7 @@ test("Desktop is one VelarScript project with Web syntax and no renderer/main so
       },
     }, null, 2), "utf8");
     await writeFile(join(projectRoot, "src", "main.vel"), `
-import {appDataDirectory, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory} from "velar/desktop"
+import {ProjectTaskCommand, ProjectTaskOutputChannel, appDataDirectory, platform, projectDirectory, selectedProjectDirectory, selectProjectDirectory, startProjectTask} from "velar/desktop"
 import {createText, exists, readText, watchFiles, writeText} from "velar/fs"
 import {get} from "velar/env"
 import {ProcessOutputChannel, run, start} from "velar/process"
@@ -87,10 +87,20 @@ component App:
         const second = await run("git", ["--version"])
         detail = await readText(probe) + ":" + (get("LANG") ?? "") + streamed + git.stdout + second.stdout
 
+    action checkProject() -> null:
+        const task = await startProjectTask(ProjectTaskCommand.check, [], {timeout: 120000, maxOutputBytes: 1048576})
+        let output = ""
+        async for chunk in task:
+            if chunk.channel == ProjectTaskOutputChannel.stdout:
+                output += chunk.text
+        const result = await task.wait()
+        detail = output + result.stderr
+
     return <main>
         <GenerationProbe />
         <h1>VelarScript Desktop</h1>
         <button on:click={inspectHost}>Inspect host</button>
+        <button on:click={checkProject}>Check project</button>
         <p>{detail}</p>
     </main>
 
@@ -119,6 +129,8 @@ mount(<App />, "#app")
     });
     const assets = await readFile(join(projectRoot, "build", manifestEntry(await readFile(join(projectRoot, "build", "velar-build.json"), "utf8"))), "utf8");
     assert.match(assets, /velar\.desktop\.bridge\.v1/u);
+    assert.match(assets, /project-task/u);
+    assert.match(assets, /startProjectTask/u);
 
     const packaged = spawnSync(process.execPath, [cli, "package"], { cwd: projectRoot, encoding: "utf8" });
     assert.equal(packaged.status, 0, packaged.stderr);
@@ -126,7 +138,15 @@ mount(<App />, "#app")
       formatVersion: number;
       kind: string;
       version: string;
-      sizes: { hostBytes: number; rendererBytes: number; toolchainBytes: number; totalBytes: number };
+      sizes: {
+        hostBytes: number;
+        rendererBytes: number;
+        languageServerBytes: number;
+        projectTaskBytes: number;
+        buildEngineBytes: number;
+        toolchainBytes: number;
+        totalBytes: number;
+      };
       sizeBudgetBytes: number;
       applicationBundle: string;
       runtime: { kind: string; minimumMajor: number; discovery: string; embedded: boolean; version?: unknown; executableHint?: unknown };
@@ -148,7 +168,11 @@ mount(<App />, "#app")
     assert.equal(desktopBuild.runtime.version, undefined);
     assert.equal(desktopBuild.runtime.executableHint, undefined);
     assert.ok(desktopBuild.sizes.hostBytes < 512 * 1024, JSON.stringify(desktopBuild.sizes));
-    assert.ok(desktopBuild.sizes.toolchainBytes > 1024 * 1024 && desktopBuild.sizes.toolchainBytes < 5 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.ok(desktopBuild.sizes.languageServerBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.ok(desktopBuild.sizes.projectTaskBytes > 1024 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.ok(desktopBuild.sizes.buildEngineBytes > 5 * 1024 * 1024, JSON.stringify(desktopBuild.sizes));
+    assert.equal(desktopBuild.sizes.toolchainBytes,
+      desktopBuild.sizes.languageServerBytes + desktopBuild.sizes.projectTaskBytes + desktopBuild.sizes.buildEngineBytes);
     assert.ok(desktopBuild.sizes.totalBytes < desktopBuild.sizeBudgetBytes, JSON.stringify(desktopBuild.sizes));
     const application = join(projectRoot, "dist", "desktop", desktopBuild.applicationBundle);
     assert.ok(!(await collectNames(application)).some((name) => name === "node_modules" || name.endsWith(".map")));
@@ -159,7 +183,10 @@ mount(<App />, "#app")
     const hostConfigText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfig = JSON.parse(hostConfigText) as Record<string, unknown>;
     assert.deepEqual(hostConfig.languageServer, { path: "host/language-server.js" });
+    assert.deepEqual(hostConfig.projectTask, { path: "host/project-task.js", buildEnginePath: "host/build-engine" });
     assert.ok((await readFile(join(application, "Contents", "Resources", "host", "language-server.js"))).byteLength > 1024 * 1024);
+    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "project-task.js"))).byteLength > 1024 * 1024);
+    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "build-engine"))).byteLength > 5 * 1024 * 1024);
     assert.equal(hostConfig.nodeExecutableHint, undefined);
     assert.doesNotMatch(hostConfigText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
     const smokeEnvironment = { ...process.env, VELAR_DESKTOP_NODE: process.execPath, VELAR_DESKTOP_PROJECT_ROOT: projectRoot };
@@ -204,6 +231,33 @@ mount(<App />, "#app")
         else generationHost.once("exit", () => resolveExit());
       });
     }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Desktop project task diagnostics keep commands finite", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-task-diagnostic-"));
+  try {
+    await mkdir(join(directory, "src"));
+    await linkDesktopExtension(directory);
+    await writeFile(join(directory, "package.json"), JSON.stringify({ name: "task-diagnostic", version: "0.1.0", private: true, type: "module" }), "utf8");
+    await writeFile(join(directory, "velar.json"), JSON.stringify({
+      formatVersion: 2,
+      entry: "src/main.vel",
+      extensions: ["@velarscript/desktop"],
+      desktop: { productName: "Task Diagnostic", identifier: "dev.velarscript.task-diagnostic", permissions: { files: ["project"], processes: [] } },
+    }), "utf8");
+    const sourcePath = join(directory, "src", "main.vel");
+    await writeFile(sourcePath, `
+import {startProjectTask} from "velar/desktop"
+
+async def invalidCommand() -> null:
+    await startProjectTask("shell")
+`.trimStart(), "utf8");
+    const invalidCommand = spawnSync(process.execPath, [cli, "check", directory], { encoding: "utf8" });
+    assert.equal(invalidCommand.status, 1);
+    assert.match(invalidCommand.stderr, /ProjectTaskCommand/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

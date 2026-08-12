@@ -56,12 +56,13 @@ paths and versions are not embedded in the application.
 A future standalone profile must report its runtime bytes separately instead
 of hiding them from the application size budget.
 `velar package` asks the CLI package host to build the exact official language
-server and stores it at `Contents/Resources/host/language-server.js`. The bundle
-contains the official Core/Web/Desktop compiler extensions and source-backed
-standard assets, so the installed application neither searches `PATH` for
-`velar`, resolves project npm packages, nor depends on the build workspace.
-Toolchain bytes are reported separately and remain part of the application size
-budget and tree hash.
+server, the bounded project-task launcher, and the platform build engine. They
+are stored under `Contents/Resources/host` and counted separately as language,
+task, and build-engine bytes. The generated tools contain the official
+Core/Web/Desktop compiler extensions and source-backed standard assets, so the
+installed application neither searches `PATH` for `velar`, resolves project npm
+packages, nor depends on the build workspace. The default Desktop size budget
+is 20 MiB; every tool remains inside that budget and the application tree hash.
 
 Desktop owns `velar/desktop` and permission-scoped target implementations of
 `velar/fs`, `velar/path`, `velar/process`, `velar/http`, and `velar/env`.
@@ -74,6 +75,19 @@ document-generation retirement, project-grant replacement, Worker failure, or
 host shutdown reaps the corresponding process group. This exact official tool
 does not require a general process permission and cannot launch an arbitrary
 command.
+Applications with the `project` file grant may also call
+`startProjectTask(ProjectTaskCommand, arguments, options)`. The finite command
+set is `check`, `test`, `build`, and `run`; only `run` accepts program arguments.
+The returned `ProjectTask` exposes its package-owned PID plus pull-based
+`next()`, terminal `wait()`, and bounded `stop()` operations. Desktop fixes the
+working directory to the current canonical project grant, injects only its
+counted build-engine path, and exposes no executable, shell, working-directory,
+environment, package-manager, or browser-test option. Output is incrementally
+decoded and tagged by `ProjectTaskOutputChannel`, only one pull may be active,
+at most four tasks may live, output and timeout are bounded, and callers must
+consume output before waiting. Explicit stop, timeout, document retirement,
+project replacement, Worker failure, and host shutdown reuse the same
+process-group termination and confirmed-reaping owner as `velar/process`.
 Applications with the `project` file grant may call
 `selectProjectDirectory()` to open the native directory chooser. A successful
 choice atomically replaces the single project grant for subsequent relative

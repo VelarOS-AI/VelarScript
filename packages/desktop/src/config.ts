@@ -1,5 +1,5 @@
 export const VELAR_DESKTOP_API_VERSION = "0.10";
-export const DEFAULT_DESKTOP_SIZE_BUDGET_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_DESKTOP_SIZE_BUDGET_BYTES = 20 * 1024 * 1024;
 
 export interface DesktopWindowConfig {
   readonly title: string;

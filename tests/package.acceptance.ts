@@ -177,7 +177,7 @@ print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(refer
   const desktopApi = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_DESKTOP_API_VERSION,VELAR_DESKTOP_MODULES,velarDesktopFramework} from '@velarscript/desktop'; import {velarCompilerExtension} from '@velarscript/desktop/compiler'; import {velarFrameworkHost} from '@velarscript/desktop/host'; const fs=velarCompilerExtension.modules?.sources.get('velar/fs') ?? ''; const http=velarCompilerExtension.modules?.sources.get('velar/http') ?? ''; if (VELAR_DESKTOP_API_VERSION !== '0.10' || !VELAR_DESKTOP_MODULES.includes('velar/desktop') || velarDesktopFramework.programmingModel !== 'single-project' || velarCompilerExtension.contract?.kind !== 'application' || velarFrameworkHost.id !== '@velarscript/desktop' || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('invoke(\"watchNext\", [this.handle], 0)') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('HTTP options fields must be enumerable data values') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('responseOf') || !http.includes('maxResponseChunks')) process.exit(1); console.log(velarDesktopFramework.name)",
+    "import {VELAR_DESKTOP_API_VERSION,VELAR_DESKTOP_MODULES,velarDesktopFramework} from '@velarscript/desktop'; import {velarCompilerExtension} from '@velarscript/desktop/compiler'; import {velarFrameworkHost} from '@velarscript/desktop/host'; const desktop=velarCompilerExtension.modules?.sources.get('velar/desktop') ?? ''; const fs=velarCompilerExtension.modules?.sources.get('velar/fs') ?? ''; const http=velarCompilerExtension.modules?.sources.get('velar/http') ?? ''; if (VELAR_DESKTOP_API_VERSION !== '0.10' || !VELAR_DESKTOP_MODULES.includes('velar/desktop') || velarDesktopFramework.programmingModel !== 'single-project' || velarCompilerExtension.contract?.kind !== 'application' || velarFrameworkHost.id !== '@velarscript/desktop' || !desktop.includes('export async function startProjectTask') || !desktop.includes('ProjectTaskCommand') || !desktop.includes('ProjectTaskOutputChannel') || !fs.includes('export async function createText') || !fs.includes('export async function replaceTextIfMatches') || !fs.includes('export async function watchFiles') || !fs.includes('invoke(\"watchNext\", [this.handle], 0)') || !http.includes('__velarAssertJson') || !http.includes('__velarJsonStringify') || !http.includes('HTTP options fields must be enumerable data values') || !http.includes('HttpTransportError') || !http.includes('HttpTransportPhase') || !http.includes('responseOf') || !http.includes('maxResponseChunks')) process.exit(1); console.log(velarDesktopFramework.name)",
   ], directory);
   assert.equal(desktopApi.stdout, "@velarscript/desktop\n");
 
@@ -206,7 +206,7 @@ mount(<App />, "#app")
       formatVersion: number;
       kind: string;
       applicationBundle: string;
-      sizes: { toolchainBytes: number; totalBytes: number };
+      sizes: { languageServerBytes: number; projectTaskBytes: number; buildEngineBytes: number; toolchainBytes: number; totalBytes: number };
       sizeBudgetBytes: number;
       runtime: {
         kind: string;
@@ -220,7 +220,8 @@ mount(<App />, "#app")
     assert.equal(builtDesktop.formatVersion, 2);
     assert.equal(builtDesktop.kind, "velar-desktop-build");
     assert.ok(builtDesktop.sizes.totalBytes < builtDesktop.sizeBudgetBytes);
-    assert.ok(builtDesktop.sizes.toolchainBytes > 1024 * 1024);
+    assert.equal(builtDesktop.sizes.toolchainBytes,
+      builtDesktop.sizes.languageServerBytes + builtDesktop.sizes.projectTaskBytes + builtDesktop.sizes.buildEngineBytes);
     assert.deepEqual(builtDesktop.runtime, {
       kind: "external-node",
       minimumMajor: 24,
@@ -237,8 +238,11 @@ mount(<App />, "#app")
     const hostConfigurationText = await readFile(join(application, "Contents", "Resources", "desktop.json"), "utf8");
     const hostConfiguration = JSON.parse(hostConfigurationText) as Record<string, unknown>;
     assert.deepEqual(hostConfiguration.languageServer, { path: "host/language-server.js" });
+    assert.deepEqual(hostConfiguration.projectTask, { path: "host/project-task.js", buildEnginePath: "host/build-engine" });
     const packagedLanguageServer = join(application, "Contents", "Resources", "host", "language-server.js");
     assert.ok((await readFile(packagedLanguageServer)).byteLength > 1024 * 1024);
+    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "project-task.js"))).byteLength > 1024 * 1024);
+    assert.ok((await readFile(join(application, "Contents", "Resources", "host", "build-engine"))).byteLength > 5 * 1024 * 1024);
     await probeLanguageServer(packagedLanguageServer, desktopProject);
     assert.equal(hostConfiguration.nodeExecutableHint, undefined);
     assert.ok(!hostConfigurationText.includes(process.execPath));

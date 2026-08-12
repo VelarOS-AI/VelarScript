@@ -8,6 +8,8 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { buildLanguageServerTool } from "../packages/cli/src/language-server-tool.ts";
+import { buildProjectTaskTool } from "../packages/cli/src/project-task-tool.ts";
+import { buildBuildEngineTool } from "../packages/cli/src/build-engine-tool.ts";
 
 const workerPath = resolve("packages/desktop/native/node/worker.js");
 
@@ -155,6 +157,77 @@ test("Desktop owns one packaged official language-server lifecycle without proce
     assert.equal(serverPid, null, "closing the Desktop language server must reap its process group");
   } finally {
     if (serverPid !== null) terminateProcessGroup(serverPid);
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Desktop owns bounded packaged project tasks without executable grants", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-task-"));
+  const project = join(directory, "project");
+  const appData = join(directory, "app-data");
+  const host = join(directory, "host");
+  await Promise.all([mkdir(project), mkdir(appData), mkdir(host)]);
+  await writeFile(join(project, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] }), "utf8");
+  await writeFile(join(project, "main.vel"), "print(\"project-task-run\")\n", "utf8");
+  await writeFile(join(project, "main.test.vel"), "def test_project_task() -> null:\n    if 2 + 2 != 4:\n        throw Error(\"math failed\")\n", "utf8");
+  await Promise.all([
+    buildProjectTaskTool(join(host, "project-task.js")),
+    buildBuildEngineTool(join(host, "build-engine")),
+  ]);
+  const configPath = join(directory, "desktop.json");
+  await writeFile(configPath, JSON.stringify({
+    protocolVersion: 1,
+    permissions: { files: ["project"], processes: [], network: [], secrets: [] },
+    projectTask: { path: "host/project-task.js", buildEnginePath: "host/build-engine" },
+  }), "utf8");
+  const worker = spawn(process.execPath, [workerPath, configPath, appData, project], { stdio: ["pipe", "pipe", "pipe"] });
+  const client = new WorkerClient(worker);
+  let runningPid: number | null = null;
+  try {
+    await assert.rejects(client.call("project-task", "start", ["dev", [], { timeout: 1000, maxOutputBytes: 65536 }]), /command is invalid/u);
+    await assert.rejects(client.call("project-task", "start", ["check", ["--out", "escape"], { timeout: 1000, maxOutputBytes: 65536 }]), /Only a run project task accepts/u);
+    await assert.rejects(client.call("project-task", "start", ["check", [], { cwd: "/tmp", timeout: 1000, maxOutputBytes: 65536 }]), /options are invalid/u);
+
+    for (const [command, expected] of [["check", /Checked 1 module/u], ["test", /1 passed, 0 failed/u], ["build", /Built 1 module/u], ["run", /project-task-run/u]] as const) {
+      const started = await client.call("project-task", "start", [command, [], { timeout: 120000, maxOutputBytes: 1024 * 1024 }]) as { handle: number; pid: number };
+      assert.ok(started.handle > 0 && started.pid > 0);
+      await assert.rejects(client.call("process", "read", [started.handle]), /process handle is unknown/u);
+      let output = "";
+      while (true) {
+        const chunk = await client.call("project-task", "read", [started.handle]) as { channel: string; text: string } | null;
+        if (chunk === null) break;
+        output += chunk.text;
+      }
+      const outcome = await client.call("project-task", "wait", [started.handle]) as {
+        result: { code: number | null; signal: string | null; stdout: string; stderr: string };
+        error: null;
+        retained: false;
+      };
+      assert.equal(outcome.result.code, 0, outcome.result.stderr);
+      assert.match(output, expected);
+      assert.equal(output, `${outcome.result.stdout}${outcome.result.stderr}`);
+      await assert.rejects(client.call("project-task", "read", [started.handle]), /project task handle is unknown/u);
+    }
+    assert.equal((await readFile(join(project, "dist", "main.js"), "utf8")).includes("project-task-run"), true);
+
+    await writeFile(join(project, "main.vel"), "import {sleep} from \"velar/async\"\nprint(\"started\")\nawait sleep(60000)\n", "utf8");
+    const running = await client.call("project-task", "start", ["run", [], { timeout: 0, maxOutputBytes: 65536 }]) as { handle: number; pid: number };
+    runningPid = running.pid;
+    const first = await client.call("project-task", "read", [running.handle]) as { channel: string; text: string };
+    assert.match(first.text, /started/u);
+    const stopStarted = Date.now();
+    const stopped = await client.call("project-task", "stop", [running.handle]) as { result: { code: number | null; signal: string | null } | null; error: unknown };
+    assert.equal(stopped.error, null);
+    assert.ok((stopped.result?.code ?? 0) !== 0 || stopped.result?.signal !== null, JSON.stringify(stopped));
+    assert.ok(Date.now() - stopStarted < 5000, "ProjectTask.stop must confirm package-owned process-group cleanup within 5 seconds");
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { process.kill(runningPid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+      catch { runningPid = null; break; }
+    }
+    assert.equal(runningPid, null, "ProjectTask.stop must reap the package-owned launcher PID");
+  } finally {
+    if (runningPid !== null) terminateProcessGroup(runningPid);
     await client.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -734,8 +807,8 @@ test("Desktop capability host drains transferred process ownership before a fata
   }), "utf8");
   const source = await readFile(workerPath, "utf8");
   const crashingSource = source.replace(
-    'respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });',
-    'respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid }); setTimeout(() => { throw new Error("injected Desktop worker crash"); }, 100); await new Promise(() => {});',
+    'task.kind = "process";\n  processHandles.set(handle, task);\n  // The native shell becomes the crash-recovery owner before the renderer\n  // receives the public start/run result.\n  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });',
+    'task.kind = "process";\n  processHandles.set(handle, task);\n  // The native shell becomes the crash-recovery owner before the renderer\n  // receives the public start/run result.\n  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid }); setTimeout(() => { throw new Error("injected Desktop worker crash"); }, 100); await new Promise(() => {});',
   );
   assert.notEqual(crashingSource, source);
   const crashingWorker = join(directory, "worker.mjs");

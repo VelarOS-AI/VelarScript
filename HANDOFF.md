@@ -2967,14 +2967,53 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
   cross-process disk index/cold start、重复长时间 watcher burst 与 sustained RSS；multi-tab、tasks/test/build/
   terminal、wide-glyph hit testing、native picker/IME、crash recovery 和正式 release thresholds 尚未完成。
 
+- W-138 用 Editor 的真实 check/test/build/run、输出和取消场景关闭了 packaged Desktop task owner 缺口。
+  问题不属于语言语法或产品按钮：`velar/process` 要求清单显式授权任意 native executable，而官方 CLI 任务
+  原先只能通过该广泛权限、外部 PATH 或产品复制来启动。CLI 又在顶层静态加载 Playwright，使即使普通
+  check/build/run 的自包含 bundle 也会拉入浏览器原生依赖。现在 browser runner 只在显式 `--browser` 时
+  动态加载；CLI package-host 用既有 official tool request 建立同一 command owner 的 bounded project-task
+  launcher，并随 Desktop 包显式携带 exact platform build engine。没有新包身份、npm 依赖或语法。
+
+  `velar/desktop` 新增 `ProjectTaskCommand.check/test/build/run`、`ProjectTaskOutputChannel`、`ProjectTask` 与
+  `startProjectTask`。只有 run 接受 bounded program arguments；公开 options 只有 timeout/maxOutputBytes。
+  Desktop Worker 固定 `process.execPath`、包内 launcher、当前 canonical project grant cwd 与包内 build-engine
+  environment，不暴露 executable、shell、cwd、env、任意 CLI flag、package manager 或 browser test。它最多
+  持有四个 task，复用既有 incremental UTF-8、single-reader、consume-before-wait、16 MiB output、timeout、
+  process-group SIGTERM/SIGKILL、5 秒 termination confirmation、owner retirement、project replacement 与 fatal
+  drain 契约。native host 继续通过已有 process-owned/process-settled lifecycle 持有 crash recovery PID。
+
+  diagnostics/codegen/真实执行证据包括：open string command 产生 `VEL4001` ProjectTaskCommand mismatch；Worker
+  对 unknown command、non-run arguments、注入 cwd fail closed；renderer hostile proxy/runtime 2/2；Worker real
+  lifecycle 5/5，check/test/build/run 均在 processes=[] 下执行，流式输出与 final result 一致，long run stop <5 秒
+  且 PID 已回收。最终 `.app` Worker 对 Editor 的 check/test/build 均 exit 0，3 owned/3 settled，退出后没有
+  Worker/task/LSP 残留。生成 renderer 包含公开 enum/type/start/next/wait/stop，无 product executable/PATH lookup。
+
+  Editor 只新增固定 Check/Test/Build/Run/Stop/Clear、1 MiB output、10 分钟 deadline、dirty buffer guard、single
+  active task 以及 project/app teardown cleanup；继续 processes=[]，没有命令拼接、CLI copy、cwd/env 注入或
+  private bridge workaround。完整 `npm run check` 为 53 formatted sources、108 docs、75 boundaries；完整
+  serial compiler/runtime/CLI/Desktop 与四示例 check/Core gates 通过。Editor format 6、check 3、Core 1、build/
+  package、packaged task probe 与单 Chromium 8/8 通过；浏览器后残留审计为空。Chromium FCP median/p95 8/44
+  ms，input frame median/p95 约 4.5/5.6 ms，1 MiB load/input next-frame 约 31.832/5.3 ms。
+
+  `.app` 为 14,820,087 bytes（14.13 MiB）/20 MiB：host 334,704、renderer 216,013、capability 75,038、
+  language server 1,741,622、project task 1,761,793、build engine 10,573,778、metadata 117,139；renderer JS+CSS
+  211,035 bytes，SHA-256 `ee44a31120896c925eb19827ef539d174429e9196da43d74d91e4419b2c377c9`。三项
+  official tool 均显式计数且进入 tree hash；无 node_modules。Lite 原 11-file WIP 未修改，未推送/发布/升版。
+
+  仍阻止生产可用的是 multi-tab/session orchestration、interactive terminal；JS/TS full cross-file module/type/
+  package graph、workspace symbols、formatter 与 official JS/TS task execution；cross-process index cold start、
+  sustained watcher/RSS、wide-glyph hit testing、native picker/IME、crash recovery、sustained edit memory 和正式
+  release thresholds。
+
 下一执行顺序：
 
 1. 以 W-126/W-127/W-128/W-129 的 target-extension、source-grammar、package-host 与 source-backed
    standard-module contract 为边界，Web、Node、Desktop、Game 继续只通过自有
    AST/type/semantic/editor/formatter/lowering/runtime 扩展；不得把目标特性或 host/product policy 放回 Core。
-2. 下一波优先用 Editor multi-tab/task/test/build 场景继续暴露公开 session、command、process、terminal 与
-   recovery owner 缺口；同时评估 JavaScript/TypeScript cross-file module/type graph、workspace symbols 与
-   formatter 的正确 owner。Editor 只保留项目、标签、命令、索引编排和 UX。
+2. 下一波优先用 Editor multi-tab/session/interactive-terminal 场景继续暴露公开 document session、terminal、
+   command concurrency 与 recovery owner 缺口；同时评估 JavaScript/TypeScript cross-file module/type graph、
+   workspace symbols、formatter 与 official JS/TS task execution 的正确 owner。Editor 只保留项目、标签、
+   命令、索引编排和 UX。
 3. W-137 已证明单次 20k/4,096 watcher burst、overflow/rescan、增量 tree/index latency 与 RSS；下一阶段只在
    重复长时间 burst、进程 cold start 或真实重启证据证明 session index 不足时设计 cross-process disk snapshot。
 4. 保持 Lite 无 workspace，Agent/provider/tool/approval 只留产品层；Desktop 的 `namespace:tool`

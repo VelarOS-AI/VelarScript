@@ -18,6 +18,7 @@ const MAX_WATCH_TEXT_UNITS = 2 * 1024 * 1024;
 const MAX_LANGUAGE_SERVER_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_LANGUAGE_SERVER_QUEUED_BYTES = 64 * 1024 * 1024;
 const MAX_LANGUAGE_SERVERS = 4;
+const MAX_PROJECT_TASKS = 4;
 const WATCH_DEBOUNCE_MS = 20;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
@@ -55,6 +56,8 @@ let projectRoot = null;
 let projectLexicalRoot = null;
 let projectRootUpdate = Promise.resolve();
 let languageServerPath = null;
+let projectTaskPath = null;
+let buildEnginePath = null;
 
 class HttpTransportFailure extends Error {
   constructor(phase) {
@@ -71,6 +74,21 @@ if (config.languageServer !== undefined) {
   const candidate = resolve(dirname(configPath), config.languageServer.path);
   languageServerPath = await realpath(candidate);
   if (!(await stat(languageServerPath)).isFile()) throw new Error("Bundled language server must be an ordinary file");
+}
+if (config.projectTask !== undefined) {
+  if (!config.projectTask || typeof config.projectTask !== "object" || Array.isArray(config.projectTask)
+    || Object.keys(config.projectTask).some(key => !["path", "buildEnginePath"].includes(key))
+    || config.projectTask.path !== "host/project-task.js" || config.projectTask.buildEnginePath !== "host/build-engine") {
+    throw new Error("Invalid bundled project-task configuration");
+  }
+  const resourcesRoot = await realpath(dirname(configPath));
+  projectTaskPath = await realpath(resolve(dirname(configPath), config.projectTask.path));
+  buildEnginePath = await realpath(resolve(dirname(configPath), config.projectTask.buildEnginePath));
+  if (!contained(resourcesRoot, projectTaskPath) || !contained(resourcesRoot, buildEnginePath)
+    || !(await stat(projectTaskPath)).isFile() || !(await stat(buildEnginePath)).isFile()) {
+    throw new Error("Bundled project task tools must be ordinary files inside Desktop resources");
+  }
+  await access(buildEnginePath, fsConstants.X_OK);
 }
 if (fileScopes.has("app-data")) {
   const dataRoot = resolve(appDataRoot, "data");
@@ -184,6 +202,7 @@ async function dispatch(capability, operation, args, owner, activity) {
     if (operation === "stop") return processStop(args, owner);
   }
   if (capability === "language-server") return languageServerOperation(operation, args, owner, activity);
+  if (capability === "project-task") return projectTaskOperation(operation, args, owner, activity);
   if (capability === "http") {
     if (operation === "request") return httpRequest(args, owner, activity);
     if (operation === "read") return httpRead(args, owner);
@@ -853,6 +872,65 @@ async function commitTextReplacement(path, data, mode) {
   finally { await rm(temporary, {force: true, recursive: false}); }
 }
 
+async function projectTaskStart(args, owner, activity) {
+  if (projectTaskPath === null || buildEnginePath === null) throw new Error("This Desktop package does not contain official project tasks");
+  if (projectRoot === null || !fileScopes.has("project")) throw new Error("Desktop project tasks require the project file grant");
+  if (args.length !== 3) throw new TypeError("Project task start arguments are invalid");
+  const [command, commandArgs, options] = args;
+  if (!["check", "test", "build", "run"].includes(command)) throw new TypeError("Project task command is invalid");
+  if (!Array.isArray(commandArgs) || commandArgs.length > 1000 || command !== "run" && commandArgs.length > 0) {
+    throw new TypeError("Only a run project task accepts a bounded List<string> of program arguments");
+  }
+  let argumentUnits = 0;
+  for (const item of commandArgs) {
+    if (typeof item !== "string" || item.length > 1024 * 1024 || item.includes("\0")) throw new TypeError("Project task arguments must contain bounded strings");
+    argumentUnits += item.length;
+    if (argumentUnits > 1024 * 1024) throw new RangeError("Project task arguments cannot exceed 1 MiB");
+  }
+  if (!options || typeof options !== "object" || Array.isArray(options)
+    || Object.keys(options).some(key => !["timeout", "maxOutputBytes"].includes(key))) throw new TypeError("Project task options are invalid");
+  const timeout = integer(options.timeout ?? 120000, 0, 600000, "Project task timeout");
+  const maxOutputBytes = integer(options.maxOutputBytes ?? 4 * 1024 * 1024, 1, 16 * 1024 * 1024, "Project task maxOutputBytes");
+  let activeProjectTasks = 0;
+  for (const task of processHandles.values()) if (task.kind === "project-task") activeProjectTasks += 1;
+  if (activeProjectTasks >= MAX_PROJECT_TASKS) throw new RangeError("Desktop cannot own more than 4 project tasks");
+  if (processHandles.size >= 128) throw new RangeError("Desktop process handle limit reached");
+  if (activity.cancelled) throw new Error("Desktop host request was cancelled");
+  const handle = nextProcessHandle++;
+  const environment = Object.create(null);
+  for (const name of ["HOME", "LANG", "LC_ALL", "TMPDIR"]) if (typeof process.env[name] === "string") environment[name] = process.env[name];
+  environment.ESBUILD_BINARY_PATH = buildEnginePath;
+  const toolArguments = [projectTaskPath, command, projectLexicalRoot ?? projectRoot];
+  if (command === "run" && commandArgs.length > 0) toolArguments.push("--", ...commandArgs);
+  let task = null;
+  activity.cancel = () => { if (task !== null) retainRetiredProcess(handle, task); };
+  task = await launchChild(process.execPath, toolArguments, {
+    cwd: projectRoot,
+    environment,
+    stdin: "",
+    timeout,
+    maxOutputBytes,
+  }, () => respond({ protocolVersion: 1, hostEvent: "process-settled", owner, handle }));
+  task.owner = owner;
+  task.kind = "project-task";
+  processHandles.set(handle, task);
+  respond({ protocolVersion: 1, hostEvent: "process-owned", owner, handle, pid: task.pid });
+  task.result.catch(() => {});
+  if (activity.cancelled || owner !== activeOwner) {
+    retainRetiredProcess(handle, task);
+    throw new Error("Desktop document generation is no longer active");
+  }
+  return {handle, pid: task.pid};
+}
+
+function projectTaskOperation(operation, args, owner, activity) {
+  if (operation === "start") return projectTaskStart(args, owner, activity);
+  if (operation === "read") return processRead(args, owner, "project-task");
+  if (operation === "wait") return processWait(args, owner, "project-task");
+  if (operation === "stop") return processStop(args, owner, "project-task");
+  throw new Error(`Unknown project-task operation '${operation}'`);
+}
+
 async function processRun(args, owner, activity) {
   const started = await processStart(args, owner, activity);
   const outcome = await processWait([started.handle], owner);
@@ -879,6 +957,7 @@ async function processStart(args, owner, activity) {
   activity.cancel = () => { if (task !== null) retainRetiredProcess(handle, task); };
   task = await launchProcess(args, () => respond({ protocolVersion: 1, hostEvent: "process-settled", owner, handle }));
   task.owner = owner;
+  task.kind = "process";
   processHandles.set(handle, task);
   // The native shell becomes the crash-recovery owner before the renderer
   // receives the public start/run result.
@@ -893,8 +972,8 @@ async function processStart(args, owner, activity) {
   return { handle, pid: task.pid };
 }
 
-async function processWait(args, owner) {
-  const [handle, task] = ownedProcess(args[0], owner);
+async function processWait(args, owner, kind = "process") {
+  const [handle, task] = ownedProcess(args[0], owner, kind);
   if (task.reading) throw new Error("Process wait() cannot run while next() is pending");
   task.waitStarted = true;
   if (task.waitRetained && !task.settled) signalTree(task.child, "SIGKILL");
@@ -904,15 +983,16 @@ async function processWait(args, owner) {
   return outcome;
 }
 
-async function processRead(args, owner) {
-  const [, task] = ownedProcess(args[0], owner);
+async function processRead(args, owner, kind = "process") {
+  const [, task] = ownedProcess(args[0], owner, kind);
   return task.next();
 }
 
-async function processStop(args, owner) {
+async function processStop(args, owner, kind = "process") {
   const handle = processHandle(args[0]);
   const task = processHandles.get(handle);
   if (!task) return { result: null, error: null };
+  if (task.kind !== kind) throw new Error(`Desktop ${kind === "process" ? "process" : "project task"} handle is unknown or already released`);
   if (task.owner !== owner) throw new Error("Desktop process handle belongs to another document generation");
   task.stop();
   const outcome = await waitForTask(task);
@@ -921,10 +1001,10 @@ async function processStop(args, owner) {
   return { result: outcome.result, error: outcome.error };
 }
 
-function ownedProcess(value, owner) {
+function ownedProcess(value, owner, kind = "process") {
   const handle = processHandle(value);
   const task = processHandles.get(handle);
-  if (!task) throw new Error("Desktop process handle is unknown or already released");
+  if (!task || task.kind !== kind) throw new Error(`Desktop ${kind === "process" ? "process" : "project task"} handle is unknown or already released`);
   if (task.owner !== owner) throw new Error("Desktop process handle belongs to another document generation");
   return [handle, task];
 }
@@ -1087,6 +1167,11 @@ async function launchProcess(args, settled) {
     }
   }
   const executable = await resolveExecutable(command, environment.PATH ?? "");
+  return launchChild(executable, commandArgs, {cwd, environment, stdin, timeout, maxOutputBytes}, settled);
+}
+
+async function launchChild(executable, commandArgs, launchOptions, settled) {
+  const {cwd, environment, stdin, timeout, maxOutputBytes} = launchOptions;
   const child = spawn(executable, commandArgs, {
     cwd,
     env: environment,

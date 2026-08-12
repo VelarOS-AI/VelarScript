@@ -14,7 +14,7 @@ import { resolveVelarProject, type VelarProjectConfig } from "./config.ts";
 import { standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
 import { runProgram } from "./program-runner.ts";
-import { runBrowserTests, type BrowserEngineSelection } from "./browser-test-runner.ts";
+import type { BrowserEngineSelection } from "./browser-test-runner.ts";
 import { buildProductionFramework, writeProductionManifest } from "./production-build.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { copyPublicAssets, writeStaticDeployment } from "./static-deployment.ts";
@@ -26,6 +26,8 @@ import { parseDependencyArguments, runDependencyCommand, type DependencyAction }
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { loadApplicationPackageHost, validateApplicationPackageResult } from "./application-package-host.ts";
 import { buildLanguageServerTool, VELAR_LANGUAGE_SERVER_TOOL_ID } from "./language-server-tool.ts";
+import { buildProjectTaskTool, VELAR_PROJECT_TASK_TOOL_ID } from "./project-task-tool.ts";
+import { buildBuildEngineTool, VELAR_BUILD_ENGINE_TOOL_ID } from "./build-engine-tool.ts";
 
 
 interface CommandArguments {
@@ -341,9 +343,11 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stderr.write(`velar test: ${hostErrorMessage(error)}\n`);
       return 1;
     }
-    return parsed.browser
-      ? runBrowserTests(projectConfig, parsed.input, parsed.browser)
-      : runTests(projectConfig, parsed.input);
+    if (parsed.browser) {
+      const { runBrowserTests } = await import("./browser-test-runner.ts");
+      return runBrowserTests(projectConfig, parsed.input, parsed.browser);
+    }
+    return runTests(projectConfig, parsed.input);
   }
 
   const parsed = command === "package" ? parsePackageArguments(rest) : parseCommandArguments(rest);
@@ -401,13 +405,16 @@ async function main(arguments_: readonly string[]): Promise<number> {
           await frameworkBuild;
         },
         buildTool: async (tool) => {
-          if (!tool || tool.id !== VELAR_LANGUAGE_SERVER_TOOL_ID || typeof tool.outputFile !== "string") {
+          if (!tool || typeof tool.outputFile !== "string"
+            || ![VELAR_LANGUAGE_SERVER_TOOL_ID, VELAR_PROJECT_TASK_TOOL_ID, VELAR_BUILD_ENGINE_TOOL_ID].includes(tool.id)) {
             throw new Error(`application package host requested unknown official tool '${String(tool?.id ?? "")}'`);
           }
           if (toolRequests.has(tool.id)) throw new Error(`application package host requested official tool '${tool.id}' more than once`);
           toolRequests.add(tool.id);
           const outputFile = packageFrameworkOutput(projectConfig.root, tool.outputFile);
-          await buildLanguageServerTool(outputFile);
+          if (tool.id === VELAR_LANGUAGE_SERVER_TOOL_ID) await buildLanguageServerTool(outputFile);
+          else if (tool.id === VELAR_PROJECT_TASK_TOOL_ID) await buildProjectTaskTool(outputFile);
+          else await buildBuildEngineTool(outputFile);
         },
       });
       if (buildRequests !== 1 || !frameworkBuild) throw new Error("application package host did not request exactly one checked framework build");

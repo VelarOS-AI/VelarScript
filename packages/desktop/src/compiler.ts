@@ -1,4 +1,4 @@
-import type { CompilerExtension, ModuleInterface, ValueType } from "@velarscript/compiler";
+import { optionalOf, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import { VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME } from "@velarscript/compiler/extension";
 import { velarCompilerExtension as webCompilerExtension, webModuleSource } from "@velarscript/web/compiler";
 import { nodeModuleInterfaces, VELAR_NODE_API_VERSION, VELAR_PROCESS_HOST_RUNTIME } from "@velarscript/node/compiler";
@@ -6,17 +6,21 @@ import { VELAR_DESKTOP_API_VERSION, velarProjectExtension, type VelarDesktopConf
 
 const stringType: ValueType = { kind: "string" };
 const boolType: ValueType = { kind: "bool" };
+const numberType: ValueType = { kind: "number" };
 const nullType: ValueType = { kind: "null" };
-const optionalStringType: ValueType = { kind: "union", members: [stringType, nullType] };
+const optionalStringType = optionalOf(stringType);
+const optionalNumberType = optionalOf(numberType);
+const listStringType: ValueType = { kind: "list", element: stringType };
 
-function functionType(parameters: readonly ValueType[], result: ValueType): ValueType {
-  return { kind: "function", parameters, requiredParameters: parameters.length, result };
+function functionType(parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
+  return { kind: "function", parameters, requiredParameters, result };
 }
 
 function moduleInterface(
   exports: ReadonlyMap<string, ValueType>,
   namedTypes: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
   namedTypeIdentities: ReadonlyMap<string, string> = new Map(),
+  enums: ReadonlyMap<string, EnumInfo> = new Map(),
 ): ModuleInterface {
   return {
     exports,
@@ -26,7 +30,7 @@ function moduleInterface(
     namedTypes,
     namedTypeIdentities,
     typeAliases: new Map(),
-    enums: new Map(),
+    enums,
     classes: new Map(),
     testFunctions: [],
     extensionExports: new Map(),
@@ -61,8 +65,34 @@ function __velarDesktopHostCall(capability, operation, args, timeout = 30000) {
 
 const languageServerIdentity = "velar/desktop#type:LanguageServer";
 const languageServerType: ValueType = { kind: "named", name: "LanguageServer", identity: languageServerIdentity };
+const projectTaskIdentity = "velar/desktop#type:ProjectTask";
+const projectTaskType: ValueType = { kind: "named", name: "ProjectTask", identity: projectTaskIdentity };
+const projectTaskCommandIdentity = "velar/desktop#enum:ProjectTaskCommand";
+const projectTaskCommands = new Set(["check", "test", "build", "run"]);
+const projectTaskCommandType: ValueType = { kind: "enum", name: "ProjectTaskCommand", identity: projectTaskCommandIdentity };
+const projectTaskOutputChannelIdentity = "velar/desktop#enum:ProjectTaskOutputChannel";
+const projectTaskOutputChannels = new Set(["stdout", "stderr"]);
+const projectTaskOutputChannelType: ValueType = { kind: "enum", name: "ProjectTaskOutputChannel", identity: projectTaskOutputChannelIdentity };
+const projectTaskResultType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["code", optionalNumberType],
+  ["signal", optionalStringType],
+  ["stdout", stringType],
+  ["stderr", stringType],
+]) };
+const projectTaskOutputType: ValueType = { kind: "object", fields: new Map<string, ValueType>([
+  ["channel", projectTaskOutputChannelType],
+  ["text", stringType],
+]) };
+const projectTaskOptionsType: ValueType = {
+  kind: "object",
+  fields: new Map<string, ValueType>([["timeout", numberType], ["maxOutputBytes", numberType]]),
+  optionalFields: new Set(["timeout", "maxOutputBytes"]),
+};
 const desktopModuleInterface = moduleInterface(new Map([
   ["LanguageServer", { kind: "typeObject", name: "LanguageServer" }],
+  ["ProjectTask", { kind: "typeObject", name: "ProjectTask" }],
+  ["ProjectTaskCommand", { kind: "enumObject", name: "ProjectTaskCommand", identity: projectTaskCommandIdentity, members: projectTaskCommands }],
+  ["ProjectTaskOutputChannel", { kind: "enumObject", name: "ProjectTaskOutputChannel", identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
   ["platform", functionType([], stringType)],
   ["packaged", functionType([], boolType)],
   ["homeDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -71,13 +101,26 @@ const desktopModuleInterface = moduleInterface(new Map([
   ["selectedProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
   ["selectProjectDirectory", functionType([], { kind: "promise", value: optionalStringType })],
   ["languageServer", functionType([], { kind: "promise", value: languageServerType })],
+  ["startProjectTask", functionType([projectTaskCommandType, listStringType, projectTaskOptionsType], { kind: "promise", value: projectTaskType }, 1)],
 ]), new Map([
   ["LanguageServer", new Map([
     ["send", functionType([stringType], { kind: "promise", value: nullType })],
     ["next", functionType([], { kind: "promise", value: optionalStringType })],
-    ["close", functionType([], { kind: "promise", value: nullType })],
+      ["close", functionType([], { kind: "promise", value: nullType })],
+    ])],
+  ["ProjectTask", new Map([
+    ["pid", numberType],
+    ["next", functionType([], { kind: "promise", value: optionalOf(projectTaskOutputType) })],
+    ["wait", functionType([], { kind: "promise", value: projectTaskResultType })],
+    ["stop", functionType([], { kind: "promise", value: nullType })],
   ])],
-]), new Map([["LanguageServer", languageServerIdentity]]));
+]), new Map([
+  ["LanguageServer", languageServerIdentity],
+  ["ProjectTask", projectTaskIdentity],
+]), new Map([
+  ["ProjectTaskCommand", { identity: projectTaskCommandIdentity, members: projectTaskCommands }],
+  ["ProjectTaskOutputChannel", { identity: projectTaskOutputChannelIdentity, members: projectTaskOutputChannels }],
+]));
 
 const desktopTestModuleInterface = moduleInterface(new Map([
   ["appDataDirectory", functionType([], { kind: "promise", value: stringType })],
@@ -93,9 +136,13 @@ const desktopProcessInterface: ModuleInterface = nodeProcessInterface;
 
 const DESKTOP_MODULE_SOURCE = String.raw`
 ${DESKTOP_HOST_ABI_RUNTIME}
+${VELAR_TYPE_REGISTRY_RUNTIME}
+${VELAR_UTF8_RUNTIME}
+${VELAR_PROCESS_HOST_RUNTIME}
 const desktopPlatform = __velarDesktopHostField("platform");
 const desktopPackaged = __velarDesktopHostField("packaged");
 const languageServerToken = Symbol("velar.desktop.language-server");
+const projectTaskToken = Symbol("velar.desktop.project-task");
 export function platform() {
   const value = desktopPlatform;
   if (typeof value !== "string" || value.length === 0) throw new TypeError("Desktop host returned an invalid platform");
@@ -164,6 +211,182 @@ export const LanguageServer = Object.freeze({
 export async function languageServer() {
   const handle = await __velarDesktopHostCall("language-server", "start", []);
   return new LanguageServerHandle(languageServerToken, handle);
+}
+const projectTaskOptionFields = new __velarProcessNativeSet(["timeout", "maxOutputBytes"]);
+const projectTaskStartFields = new __velarProcessNativeSet(["handle", "pid"]);
+const projectTaskOutputFields = new __velarProcessNativeSet(["channel", "text"]);
+const projectTaskResultFields = new __velarProcessNativeSet(["code", "signal", "stdout", "stderr"]);
+const projectTaskErrorFields = new __velarProcessNativeSet(["name", "message"]);
+const projectTaskWaitFields = new __velarProcessNativeSet(["result", "error", "retained"]);
+const projectTaskStopFields = new __velarProcessNativeSet(["result", "error"]);
+export const ProjectTaskCommand = __velarRegisterRuntimeType(__velarProcessFreeze({
+  check: "check", test: "test", build: "build", run: "run",
+  is(value) { return value === "check" || value === "test" || value === "build" || value === "run"; },
+  parse(value) {
+    if (!ProjectTaskCommand.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectTaskCommand");
+    return value;
+  },
+}));
+export const ProjectTaskOutputChannel = __velarRegisterRuntimeType(__velarProcessFreeze({
+  stdout: "stdout", stderr: "stderr",
+  is(value) { return value === "stdout" || value === "stderr"; },
+  parse(value) {
+    if (!ProjectTaskOutputChannel.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectTaskOutputChannel");
+    return value;
+  },
+}));
+function projectTaskArguments(value, command) {
+  if (value == null) return [];
+  if (!__velarProcessIsArray(value) || value.length > 1000) throw new __velarProcessNativeTypeError("Project task arguments must be a bounded List<string>");
+  if (command !== "run" && value.length > 0) throw new __velarProcessNativeTypeError("Only a run project task accepts program arguments");
+  let units = 0;
+  const output = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = __velarProcessOwnDescriptor(value, __velarProcessNativeString(index));
+    const item = descriptor?.enumerable && "value" in descriptor ? descriptor.value : null;
+    if (typeof item !== "string" || item.length > 1024 * 1024 || __velarProcessIncludes(item, "\0")) {
+      throw new __velarProcessNativeTypeError("Project task arguments must contain bounded string data values");
+    }
+    units += item.length;
+    if (units > 1024 * 1024) throw new __velarProcessNativeRangeError("Project task arguments cannot exceed 1 MiB");
+    output[output.length] = item;
+  }
+  return output;
+}
+function projectTaskOptions(value) {
+  value = __velarProcessRecord(value == null ? {} : value, "Project task options", projectTaskOptionFields);
+  const timeout = value.timeout ?? 120000;
+  const maxOutputBytes = value.maxOutputBytes ?? 4 * 1024 * 1024;
+  if (!__velarProcessIsSafeInteger(timeout) || timeout < 0 || timeout > 600000) {
+    throw new __velarProcessNativeRangeError("Project task timeout must be an integer from 0 through 600000 milliseconds");
+  }
+  if (!__velarProcessIsSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 16 * 1024 * 1024) {
+    throw new __velarProcessNativeRangeError("Project task maxOutputBytes must be an integer from 1 through 16777216");
+  }
+  return {timeout, maxOutputBytes};
+}
+function projectTaskError(value) {
+  value = __velarProcessRecord(value, "Project task host error", projectTaskErrorFields);
+  if (typeof value.message !== "string" || value.message.length === 0 || value.message.length > 65536
+    || value.name !== "Error" && value.name !== "RangeError" && value.name !== "TypeError") {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid project task error");
+  }
+  if (value.name === "RangeError") return new __velarProcessNativeRangeError(value.message);
+  if (value.name === "TypeError") return new __velarProcessNativeTypeError(value.message);
+  return new __velarProcessNativeError(value.message);
+}
+function projectTaskResult(value, maxOutputBytes) {
+  value = __velarProcessRecord(value, "Project task result", projectTaskResultFields);
+  if (value.code !== null && !__velarProcessIsSafeInteger(value.code)
+    || value.signal !== null && (typeof value.signal !== "string" || value.signal.length === 0 || value.signal.length > 128)
+    || typeof value.stdout !== "string" || typeof value.stderr !== "string"
+    || __velarUtf8ByteLength(value.stdout) + __velarUtf8ByteLength(value.stderr) > maxOutputBytes) {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid project task result");
+  }
+  return __velarProcessFreeze({code: value.code, signal: value.signal, stdout: value.stdout, stderr: value.stderr});
+}
+function projectTaskOutput(value, maxOutputBytes) {
+  if (value === null) return null;
+  value = __velarProcessRecord(value, "Project task output", projectTaskOutputFields);
+  if (!ProjectTaskOutputChannel.is(value.channel) || typeof value.text !== "string" || value.text.length === 0
+    || __velarUtf8ByteLength(value.text) > maxOutputBytes) {
+    throw new __velarProcessNativeTypeError("Desktop host returned invalid project task output");
+  }
+  return __velarProcessFreeze({channel: value.channel, text: value.text});
+}
+function projectTaskWait(value, maxOutputBytes) {
+  value = __velarProcessRecord(value, "Project task wait result", projectTaskWaitFields);
+  if (typeof value.retained !== "boolean" || value.result !== null && value.error !== null
+    || value.retained && (value.result !== null || value.error === null)
+    || !value.retained && value.result === null && value.error === null) {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid project task wait result");
+  }
+  return {
+    result: value.result === null ? null : projectTaskResult(value.result, maxOutputBytes),
+    error: value.error === null ? null : projectTaskError(value.error),
+    retained: value.retained,
+  };
+}
+function projectTaskStop(value, maxOutputBytes) {
+  value = __velarProcessRecord(value, "Project task stop result", projectTaskStopFields);
+  if (value.result !== null && value.error !== null) throw new __velarProcessNativeTypeError("Desktop host returned a contradictory project task stop result");
+  return {
+    result: value.result === null ? null : projectTaskResult(value.result, maxOutputBytes),
+    error: value.error === null ? null : projectTaskError(value.error),
+  };
+}
+class ProjectTaskHandle {
+  constructor(token, handle, pid, maxOutputBytes) {
+    if (token !== projectTaskToken || !__velarProcessIsSafeInteger(handle) || handle < 1
+      || !__velarProcessIsSafeInteger(pid) || pid < 1) throw new __velarProcessNativeTypeError("ProjectTask values are created only by velar/desktop.startProjectTask");
+    this.handle = handle;
+    this.pid = pid;
+    this.maxOutputBytes = maxOutputBytes;
+    this.outputBytes = 0;
+    this.reading = false;
+    this.waitStarted = false;
+    this.stopRequested = false;
+    this.result = null;
+    __velarProcessSeal(this);
+  }
+  async next() {
+    if (this.waitStarted) throw new __velarProcessNativeError("Project task output must be consumed before wait()");
+    if (this.stopRequested) throw new __velarProcessNativeError("Project task output is unavailable after stop()");
+    if (this.reading) throw new __velarProcessNativeError("ProjectTask.next() allows only one active pull");
+    this.reading = true;
+    try {
+      const output = projectTaskOutput(await __velarDesktopHostCall("project-task", "read", [this.handle], 0), this.maxOutputBytes);
+      if (output !== null) {
+        this.outputBytes += __velarUtf8ByteLength(output.text);
+        if (this.outputBytes > this.maxOutputBytes) throw new __velarProcessNativeRangeError("Project task output exceeded maxOutputBytes");
+      }
+      return output;
+    } finally { this.reading = false; }
+  }
+  wait() {
+    if (this.reading) return __velarProcessReject(new __velarProcessNativeError("Project task wait() cannot run while next() is pending"));
+    this.waitStarted = true;
+    if (this.result === null) {
+      let pending;
+      pending = __velarProcessThen(__velarDesktopHostCall("project-task", "wait", [this.handle], 0), value => {
+        const outcome = projectTaskWait(value, this.maxOutputBytes);
+        if (outcome.retained) { if (this.result === pending) this.result = null; throw outcome.error; }
+        if (outcome.error) throw outcome.error;
+        return outcome.result;
+      }, error => { if (this.result === pending) this.result = null; throw error; });
+      this.result = pending;
+    }
+    return this.result;
+  }
+  async stop() {
+    if (this.result !== null && this.waitStarted) { await this.result; return null; }
+    this.stopRequested = true;
+    const outcome = projectTaskStop(await __velarDesktopHostCall("project-task", "stop", [this.handle], 10000), this.maxOutputBytes);
+    if (outcome.error) { this.result = __velarProcessObservedReject(outcome.error); throw outcome.error; }
+    if (outcome.result) this.result = __velarProcessResolve(outcome.result);
+    return null;
+  }
+}
+export const ProjectTask = __velarProcessFreeze({
+  is(value) { return value instanceof ProjectTaskHandle; },
+  parse(value) {
+    if (!(value instanceof ProjectTaskHandle)) throw new __velarProcessNativeTypeError("Value does not match ProjectTask");
+    return value;
+  },
+});
+export async function startProjectTask(command, arguments_ = [], options = {}) {
+  command = ProjectTaskCommand.parse(command);
+  const args = projectTaskArguments(arguments_, command);
+  const wire = projectTaskOptions(options);
+  const value = __velarProcessRecord(
+    await __velarDesktopHostCall("project-task", "start", [command, args, wire]),
+    "Project task start result",
+    projectTaskStartFields,
+  );
+  if (!__velarProcessIsSafeInteger(value.handle) || value.handle < 1 || !__velarProcessIsSafeInteger(value.pid) || value.pid < 1) {
+    throw new __velarProcessNativeTypeError("Desktop host returned an invalid project task start result");
+  }
+  return new ProjectTaskHandle(projectTaskToken, value.handle, value.pid, wire.maxOutputBytes);
 }
 `.trimStart();
 

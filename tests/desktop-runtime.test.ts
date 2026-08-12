@@ -22,6 +22,7 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-runtime-"));
   const calls: Array<{ capability: string; operation: string; args: readonly unknown[]; timeout: number }> = [];
   const processChunks = new Map<number, unknown[]>();
+  const projectTaskChunks = new Map<number, unknown[]>();
   const httpChunks = new Map<number, unknown[]>();
   const httpResponseFailures = new Set<number>();
   const pendingRequests = new Map<number, { reject(error: Error): void }>();
@@ -71,6 +72,20 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
         if (operation === "send" || operation === "close") return null;
         if (operation === "next") return languageServerMessages.shift() ?? null;
       }
+      if (capability === "project-task" && operation === "start") {
+        projectTaskChunks.set(20, [{ channel: "stdout", text: "checked\n" }, { channel: "stderr", text: "notice\n" }, null]);
+        return { handle: 20, pid: 720 };
+      }
+      if (capability === "project-task" && operation === "read") return projectTaskChunks.get(args[0] as number)?.shift() ?? null;
+      if (capability === "project-task" && operation === "wait") return {
+        result: { code: 0, signal: null, stdout: "checked\n", stderr: "notice\n" },
+        error: null,
+        retained: false,
+      };
+      if (capability === "project-task" && operation === "stop") return {
+        result: { code: 143, signal: null, stdout: "", stderr: "" },
+        error: null,
+      };
       if (capability === "process" && operation === "start") {
         if (args[0] === "hostile-start") {
           return Object.defineProperty({ pid: 700 }, "handle", {
@@ -633,6 +648,15 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       selectProjectDirectory(): Promise<string | null>;
       LanguageServer: { is(value: unknown): boolean; parse(value: unknown): unknown };
       languageServer(): Promise<{ send(message: string): Promise<null>; next(): Promise<string | null>; close(): Promise<null> }>;
+      ProjectTask: { is(value: unknown): boolean; parse(value: unknown): unknown };
+      ProjectTaskCommand: Readonly<{ check: "check"; test: "test"; build: "build"; run: "run" }>;
+      ProjectTaskOutputChannel: Readonly<{ stdout: "stdout"; stderr: "stderr" }>;
+      startProjectTask(command: "check" | "test" | "build" | "run", args?: string[], options?: { timeout?: number; maxOutputBytes?: number }): Promise<{
+        pid: number;
+        next(): Promise<{ channel: "stdout" | "stderr"; text: string } | null>;
+        wait(): Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>;
+        stop(): Promise<null>;
+      }>;
     }>(directory, "desktop", "velar/desktop");
     assert.equal(desktopRuntime.platform(), "test");
     assert.equal(desktopRuntime.packaged(), false);
@@ -653,6 +677,20 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.equal(calls.find((call) => call.capability === "language-server" && call.operation === "next")?.timeout, 0);
     assert.equal(await languageServer.close(), null);
     assert.equal(await languageServer.next(), null);
+    assert.equal(desktopRuntime.ProjectTaskCommand.check, "check");
+    assert.equal(desktopRuntime.ProjectTaskOutputChannel.stderr, "stderr");
+    await assert.rejects(desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, ["--unsafe"]), /Only a run project task accepts/u);
+    const projectTask = await desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, [], { timeout: 5000, maxOutputBytes: 65536 });
+    assert.equal(projectTask.pid, 720);
+    assert.equal(desktopRuntime.ProjectTask.is(projectTask), true);
+    assert.equal(desktopRuntime.ProjectTask.parse(projectTask), projectTask);
+    assert.deepEqual(await projectTask.next(), { channel: "stdout", text: "checked\n" });
+    assert.deepEqual(await projectTask.next(), { channel: "stderr", text: "notice\n" });
+    assert.equal(await projectTask.next(), null);
+    assert.deepEqual(await projectTask.wait(), { code: 0, signal: null, stdout: "checked\n", stderr: "notice\n" });
+    const projectTaskStart = calls.find((call) => call.capability === "project-task" && call.operation === "start");
+    assert.deepEqual(projectTaskStart?.args, ["check", [], { timeout: 5000, maxOutputBytes: 65536 }]);
+    assert.equal(calls.find((call) => call.capability === "project-task" && call.operation === "read")?.timeout, 0);
 
     const environment = await runtime<{ get(name: string): string | null; require(name: string): string }>(directory, "env", "velar/env");
     assert.equal(environment.get("LANG"), "en_US.UTF-8");

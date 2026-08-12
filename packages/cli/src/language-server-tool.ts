@@ -1,18 +1,14 @@
-import { chmod, mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { standardModuleSource } from "./standard-modules.ts";
+import { embeddedStandardAssetsPlugin } from "./official-tool-assets.ts";
 
 export const VELAR_LANGUAGE_SERVER_TOOL_ID = "velar-language-server";
 
 export async function buildLanguageServerTool(outputFile: string): Promise<void> {
   outputFile = resolve(outputFile);
   const sourceExtension = import.meta.url.endsWith(".ts") ? "ts" : "js";
-  const [javascriptSource, textBufferSource] = await Promise.all([
-    readFile(fileURLToPath(new URL("../stdlib/javascript.vel", import.meta.url)), "utf8"),
-    readFile(fileURLToPath(new URL("../stdlib/text-buffer.vel", import.meta.url)), "utf8"),
-  ]);
   await mkdir(dirname(outputFile), { recursive: true });
   await build({
     entryPoints: [fileURLToPath(new URL(`./language-server-bundle-entry.${sourceExtension}`, import.meta.url))],
@@ -26,24 +22,7 @@ export async function buildLanguageServerTool(outputFile: string): Promise<void>
     sourcemap: false,
     legalComments: "none",
     logLevel: "silent",
-    plugins: [{
-      name: "velar-embedded-standard-assets",
-      setup(build) {
-        build.onResolve({ filter: /^velar\// }, (args) => ({ path: args.path, namespace: "velar-standard-module" }));
-        build.onLoad({ filter: /.*/, namespace: "velar-standard-module" }, (args) => {
-          const contents = standardModuleSource(args.path);
-          if (contents === null) throw new Error(`Official language service requested unknown standard module '${args.path}'`);
-          return { contents, loader: "js" };
-        });
-        build.onResolve({ filter: /^\.\/embedded-standard-assets\.(?:ts|js)$/ }, (args) => /standard-modules\.(?:ts|js)$/u.test(args.importer)
-          ? { path: "velar:embedded-standard-assets", namespace: "velar-tool" }
-          : null);
-        build.onLoad({ filter: /^velar:embedded-standard-assets$/, namespace: "velar-tool" }, () => ({
-          contents: `const assets = new Map([["javascript.vel", ${JSON.stringify(javascriptSource)}], ["text-buffer.vel", ${JSON.stringify(textBufferSource)}]]); export function embeddedStandardAsset(name) { return assets.get(name) ?? null; }`,
-          loader: "js",
-        }));
-      },
-    }],
+    plugins: [await embeddedStandardAssetsPlugin()],
   });
   await chmod(outputFile, 0o644);
 }

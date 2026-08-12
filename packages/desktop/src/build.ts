@@ -26,6 +26,9 @@ export interface DesktopBuildManifest {
     readonly hostBytes: number;
     readonly rendererBytes: number;
     readonly capabilityHostBytes: number;
+    readonly languageServerBytes: number;
+    readonly projectTaskBytes: number;
+    readonly buildEngineBytes: number;
     readonly toolchainBytes: number;
     readonly metadataBytes: number;
     readonly totalBytes: number;
@@ -69,7 +72,13 @@ export async function buildDesktopApplication(
     const workerPath = join(hostResources, "worker.js");
     await cp(fileURLToPath(new URL("../native/node/worker.js", import.meta.url)), workerPath);
     const languageServerPath = join(hostResources, "language-server.js");
-    await buildTool({ id: "velar-language-server", outputFile: languageServerPath });
+    const projectTaskPath = join(hostResources, "project-task.js");
+    const buildEnginePath = join(hostResources, "build-engine");
+    await Promise.all([
+      buildTool({ id: "velar-language-server", outputFile: languageServerPath }),
+      buildTool({ id: "velar-project-task", outputFile: projectTaskPath }),
+      buildTool({ id: "velar-build-engine", outputFile: buildEnginePath }),
+    ]);
     await cp(fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
     const hostPath = join(executableDirectory, "VelarDesktopHost");
     await compileMacHost(hostPath);
@@ -83,12 +92,16 @@ export async function buildDesktopApplication(
       window: config.window,
       permissions: config.permissions,
       languageServer: { path: "host/language-server.js" },
+      projectTask: { path: "host/project-task.js", buildEnginePath: "host/build-engine" },
     }, null, 2)}\n`, "utf8");
 
     const hostBytes = (await stat(hostPath)).size;
     const rendererBytes = await treeSize(renderer);
     const capabilityHostBytes = (await stat(workerPath)).size;
-    const toolchainBytes = (await stat(languageServerPath)).size;
+    const languageServerBytes = (await stat(languageServerPath)).size;
+    const projectTaskBytes = (await stat(projectTaskPath)).size;
+    const buildEngineBytes = (await stat(buildEnginePath)).size;
+    const toolchainBytes = languageServerBytes + projectTaskBytes + buildEngineBytes;
     const totalBytes = await treeSize(applicationBundle);
     const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes - toolchainBytes;
     if (totalBytes > config.build.sizeBudgetBytes) {
@@ -106,7 +119,17 @@ export async function buildDesktopApplication(
       runtime: Object.freeze({ kind: "external-node", minimumMajor: 24 as const, discovery: "environment-and-system-paths" as const, embedded: false }),
       applicationBundle: applicationName,
       sizeBudgetBytes: config.build.sizeBudgetBytes,
-      sizes: Object.freeze({ hostBytes, rendererBytes, capabilityHostBytes, toolchainBytes, metadataBytes, totalBytes }),
+      sizes: Object.freeze({
+        hostBytes,
+        rendererBytes,
+        capabilityHostBytes,
+        languageServerBytes,
+        projectTaskBytes,
+        buildEngineBytes,
+        toolchainBytes,
+        metadataBytes,
+        totalBytes,
+      }),
       sha256: await hashTree(applicationBundle),
     });
     await writeFile(join(staging, "velar-desktop-build.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
