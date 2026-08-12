@@ -59,6 +59,10 @@ them; the first row is the **one silent trap** in the list — read it twice.
 | `onClick={handler}` | `on:click={handler}`; form binding is `bind:value={state}`. |
 | Implicit `{props.children}` | Declare it: a `children: WebNode` prop receives the JSX tag body. |
 | `map[key]` reads | `map.get(key)` returns `T?`. On Lists, `[index]` throws on a bug; `.get(index)` returns `null` when absence is an expected answer. |
+| `[...text]` or `list(text)` for characters | `text.split("")` — the empty separator splits per Unicode code point. |
+| `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |
+| `text.trim().size == 0` blank test | `text.isBlank()` — `true` for empty or whitespace-only text. |
+| `pop()` plus a null dance when emptiness is a bug | `items.removeLast()` removes and returns the last item, throwing on empty; `pop()` stays the optional read. |
 
 The long tail is deliberately not in this table: the diagnostic will name
 the current spelling when you hit it.
@@ -237,7 +241,8 @@ def isClosing(word: string) -> bool:
 ```
 
 Mutate state directly — deep reactivity is the default, so rebuild-the-list
-spellings are noise: `tasks.append(task)`, `tasks[0].done = true`.
+spellings are noise: `tasks.append(task)`, `tasks[0].done = true`,
+`panel.open = not panel.open`.
 
 ### Dispatch with match
 

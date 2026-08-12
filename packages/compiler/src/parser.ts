@@ -54,7 +54,7 @@ const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ..
 // appear inside a record literal's field list. A keyword followed by ':' is a
 // keyword-named field, so it never counts as statement evidence.
 const statementStarterKinds = new Set<TokenKind>([
-  "const", "let", "def", "return", "throw", "assert", "invert", "if", "match", "for", "while", "break", "continue", "try", "pass",
+  "const", "let", "def", "return", "throw", "assert", "if", "match", "for", "while", "break", "continue", "try", "pass",
 ]);
 // Token kinds that legally appear at the top level of a record literal's
 // field list: field names, shorthand entries, and their separators.
@@ -361,23 +361,6 @@ export class Parser {
         }
       }
       return { kind: "AssertStatement", condition, message, span: span(keyword.span.start, message?.span.end ?? condition.span.end) };
-    }
-
-    if (this.match("invert")) {
-      const keyword = this.previous();
-      if (this.atStatementEnd()) {
-        this.diagnostics.push(diagnostic("VEL2017", "'invert' requires a writable bool target", keyword.span));
-        return null;
-      }
-      const target = this.parseExpression();
-      if (target.kind !== "IdentifierExpression" && target.kind !== "MemberExpression" && target.kind !== "IndexExpression") {
-        this.diagnostics.push(diagnostic("VEL2005", "Invert target must be a name, member, or index", target.span));
-      }
-      return {
-        kind: "InvertStatement",
-        target: target as AssignmentStatement["target"],
-        span: span(keyword.span.start, target.span.end),
-      };
     }
 
     if (this.match("if")) {
@@ -1372,26 +1355,33 @@ export class Parser {
     this.expect("indent", "Expected indented match cases");
 
     const cases: MatchStatement["cases"][number][] = [];
-    let elseBody: readonly Statement[] | null = null;
     this.consumeNewlines();
     while (!this.check("dedent") && !this.check("eof")) {
       const branchStart = this.current().span.start;
       if (this.match("case")) {
-        if (elseBody) {
-          this.diagnostics.push(diagnostic("VEL2015", "A match case cannot follow else", this.previous().span));
-        }
         const pattern = this.parseMatchPattern(true);
         const guard = this.match("if") ? this.parseExpression() : null;
         const body = this.parseBlock();
         cases.push({ pattern, guard, body, span: span(branchStart, body.at(-1)?.span.end ?? this.previous().span.end) });
       } else if (this.match("else")) {
-        if (elseBody) {
-          this.diagnostics.push(diagnostic("VEL2015", "A match block can contain only one else branch", this.previous().span));
-        }
+        // D28 item 4: 'case _:' is the only fallback spelling. The removed
+        // 'else:' clause recovers as a wildcard case so exhaustiveness and
+        // the rest of the block keep analyzing without cascades.
+        const keyword = this.previous();
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL2035",
+          "Use 'case _:' for the fallback case; 'match' has no 'else' clause",
+          keyword.span,
+        ));
         const body = this.parseBlock();
-        if (!elseBody) elseBody = body;
+        cases.push({
+          pattern: { kind: "MatchWildcardPattern", span: keyword.span },
+          guard: null,
+          body,
+          span: span(branchStart, body.at(-1)?.span.end ?? this.previous().span.end),
+        });
       } else {
-        this.diagnostics.push(diagnostic("VEL2015", "A match block accepts only case or else branches", this.current().span));
+        this.diagnostics.push(diagnostic("VEL2015", "A match block accepts only case branches", this.current().span));
         this.synchronize();
       }
       this.consumeNewlines();
@@ -1400,8 +1390,8 @@ export class Parser {
     if (cases.length === 0) {
       this.diagnostics.push(diagnostic("VEL2015", "A match block requires at least one case", span(start, close.span.end)));
     }
-    const end = elseBody?.at(-1)?.span.end ?? cases.at(-1)?.span.end ?? value.span.end;
-    return { kind: "MatchStatement", value, cases, elseBody, span: span(start, end) };
+    const end = cases.at(-1)?.span.end ?? value.span.end;
+    return { kind: "MatchStatement", value, cases, span: span(start, end) };
   }
 
   private startsMatchValue(): boolean {

@@ -9,7 +9,6 @@ import type {
   ExternFunctionDeclaration,
   ExternConstantDeclaration,
   FunctionDeclaration,
-  InvertStatement,
   MatchPattern,
   MatchValue,
   Program,
@@ -144,91 +143,6 @@ function continuesOptionalChain(expression: Expression): boolean {
   return false;
 }
 
-function sameExpressionShape(left: Expression, right: Expression): boolean {
-  if (left.kind !== right.kind) return false;
-  switch (left.kind) {
-    case "LiteralExpression":
-      return right.kind === "LiteralExpression" && Object.is(left.value, right.value);
-    case "FStringExpression":
-      return right.kind === "FStringExpression"
-        && left.parts.length === right.parts.length
-        && left.parts.every((part, index) => {
-          const other = right.parts[index]!;
-          return part.kind === other.kind && (part.kind === "text"
-            ? part.value === other.value
-            : other.kind === "expression" && sameExpressionShape(part.value, other.value));
-        });
-    case "IdentifierExpression":
-      return right.kind === "IdentifierExpression" && left.name === right.name;
-    case "SuperExpression":
-      return right.kind === "SuperExpression";
-    case "DynamicImportExpression":
-      return right.kind === "DynamicImportExpression" && left.source === right.source;
-    case "ListExpression":
-      return right.kind === "ListExpression"
-        && left.elements.length === right.elements.length
-        && left.elements.every((element, index) => sameExpressionShape(element, right.elements[index]!));
-    case "ObjectExpression":
-      return right.kind === "ObjectExpression"
-        && left.properties.length === right.properties.length
-        && left.properties.every((property, index) => {
-          const other = right.properties[index]!;
-          return property.kind === other.kind
-            && (property.kind !== "ObjectProperty" || other.kind === "ObjectProperty" && property.name === other.name)
-            && sameExpressionShape(property.value, other.value);
-        });
-    case "SpreadExpression":
-      return right.kind === "SpreadExpression" && sameExpressionShape(left.value, right.value);
-    case "UnaryExpression":
-      return right.kind === "UnaryExpression"
-        && left.operator === right.operator
-        && sameExpressionShape(left.operand, right.operand);
-    case "BinaryExpression":
-      return right.kind === "BinaryExpression"
-        && left.operator === right.operator
-        && sameExpressionShape(left.left, right.left)
-        && sameExpressionShape(left.right, right.right);
-    case "AssignmentExpression":
-      return right.kind === "AssignmentExpression"
-        && left.operator === right.operator
-        && sameExpressionShape(left.target, right.target)
-        && sameExpressionShape(left.value, right.value);
-    case "ComparisonChainExpression":
-      return right.kind === "ComparisonChainExpression"
-        && left.operators.length === right.operators.length
-        && left.operators.every((operator, index) => operator === right.operators[index])
-        && left.operands.length === right.operands.length
-        && left.operands.every((operand, index) => sameExpressionShape(operand, right.operands[index]!));
-    case "ConditionalExpression":
-      return right.kind === "ConditionalExpression"
-        && sameExpressionShape(left.condition, right.condition)
-        && sameExpressionShape(left.thenValue, right.thenValue)
-        && sameExpressionShape(left.elseValue, right.elseValue);
-    case "CallExpression":
-      return right.kind === "CallExpression"
-        && left.optional === right.optional
-        && sameExpressionShape(left.callee, right.callee)
-        && left.arguments.length === right.arguments.length
-        && left.arguments.every((argument, index) => sameExpressionShape(argument, right.arguments[index]!))
-        && (left.argumentNames ?? []).length === (right.argumentNames ?? []).length
-        && (left.argumentNames ?? []).every((name, index) => name === (right.argumentNames ?? [])[index]);
-    case "MemberExpression":
-      return right.kind === "MemberExpression"
-        && left.property === right.property
-        && left.optional === right.optional
-        && sameExpressionShape(left.object, right.object);
-    case "IndexExpression":
-      return right.kind === "IndexExpression"
-        && left.optional === right.optional
-        && sameExpressionShape(left.object, right.object)
-        && sameExpressionShape(left.index, right.index);
-    case "IsExpression":
-    case "ArrowFunctionExpression":
-    default:
-      return false;
-  }
-}
-
 export interface ClassField {
   readonly mutable: boolean;
   readonly type: ValueType;
@@ -252,13 +166,13 @@ export interface ClassInfo {
   readonly staticMethods: ReadonlyMap<string, ValueType>;
 }
 
-export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "recordSet" | "recordCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
+export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listRemoveLast" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "recordSet" | "recordCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
 
-export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed";
+export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
 const listCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "get"], ["slice", "slice"], ["append", "listAppend"], ["extend", "listExtend"],
-  ["insert", "listInsert"], ["remove", "listRemove"], ["pop", "listPop"],
+  ["insert", "listInsert"], ["remove", "listRemove"], ["pop", "listPop"], ["removeLast", "listRemoveLast"],
   ["clear", "clear"], ["copy", "listCopy"], ["has", "has"], ["count", "listCount"],
   ["index", "listIndex"], ["find", "listFind"], ["some", "listSome"], ["every", "listEvery"],
   ["map", "listMap"], ["filter", "listFilter"], ["reduce", "listReduce"], ["join", "listJoin"],
@@ -281,10 +195,30 @@ const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
   ["trim", "stringTrim"], ["upper", "stringUpper"], ["lower", "stringLower"], ["slice", "stringSlice"],
   ["char", "stringChar"], ["has", "stringHas"], ["index", "stringIndex"], ["count", "stringCount"], ["startsWith", "stringStartsWith"], ["endsWith", "stringEndsWith"],
   ["split", "stringSplit"], ["replace", "stringReplace"], ["replaceAll", "stringReplaceAll"],
-  ["padStart", "stringPadStart"], ["padEnd", "stringPadEnd"], ["repeat", "stringRepeat"],
+  ["padStart", "stringPadStart"], ["padEnd", "stringPadEnd"], ["repeat", "stringRepeat"], ["isBlank", "stringIsBlank"],
 ]);
 const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
   ["abs", "numberAbs"], ["round", "numberRound"], ["floor", "numberFloor"], ["ceil", "numberCeil"], ["toFixed", "numberToFixed"],
+  ["isInteger", "numberIsInteger"], ["isNaN", "numberIsNaN"], ["isFinite", "numberIsFinite"],
+]);
+
+// D29 item 14: compiler-owned value/collection methods that return a fresh
+// value without mutating their receiver. An expression statement that calls
+// one of these and drops the result is always a bug. Mutate-and-return
+// operations (pop/removeLast/remove) and null-returning mutators stay legal,
+// and user-function purity is deliberately never analyzed (D26 retired that).
+const discardedPureCollectionOperations = new Set<CollectionOperation>([
+  "get", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
+  "listMap", "listFilter", "listReduce", "listJoin", "listSorted", "listReversed",
+  "listSum", "listMin", "listMax", "setCopy", "mapCopy", "recordCopy",
+  "has", "keys", "values", "entries",
+]);
+const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
+  "stringTrim", "stringUpper", "stringLower", "stringSlice", "stringChar",
+  "stringStartsWith", "stringEndsWith", "stringReplace", "stringReplaceAll",
+  "stringPadStart", "stringPadEnd", "stringRepeat", "stringSplit", "stringIsBlank",
+  "numberAbs", "numberRound", "numberFloor", "numberCeil", "numberToFixed",
+  "numberIsInteger", "numberIsNaN", "numberIsFinite",
 ]);
 export interface FormReadField {
   readonly name: string;
@@ -326,6 +260,12 @@ export interface LoweringHints {
   readonly extensionLiterals: ReadonlyMap<string, string>;
   readonly extensionCalls: ReadonlyMap<string, string>;
   readonly runtimeNarrowings: ReadonlyMap<string, RuntimeNarrowingGuard>;
+  /**
+   * Span identities of `==`/`!=` operations (and comparison-chain links)
+   * whose operands may both be NaN at runtime. These lower to SameValueZero;
+   * every other equality elides the repair and emits plain `===` (D36 item 41).
+   */
+  readonly sameValueZeroEqualities: ReadonlySet<string>;
 }
 
 export interface RuntimeNarrowingGuard {
@@ -489,6 +429,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionCalls = new Map<number, CollectionOperation>();
   private readonly collectionSizes = new Set<number>();
   private readonly primitiveCalls = new Map<number, PrimitiveOperation>();
+  private readonly sameValueZeroEqualities = new Set<string>();
   private readonly stringSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
   private readonly javaScriptBindings = new Set<string>();
@@ -1055,6 +996,7 @@ export class Analyzer implements TypeEnvironment {
       extensionLiterals: this.extensionLiterals,
       extensionCalls: this.extensionCalls,
       runtimeNarrowings: this.runtimeNarrowings,
+      sameValueZeroEqualities: this.sameValueZeroEqualities,
     };
   }
 
@@ -1945,21 +1887,7 @@ export class Analyzer implements TypeEnvironment {
             }
           }
         }
-        if (statement.elseBody) {
-          if (universalCovered) {
-            this.diagnostics.push(diagnostic("VEL4014", "The match else branch is already covered", statement.elseBody[0]?.span ?? statement.span));
-          }
-          const elseBaseline = this.flowSnapshotAfterInvalidations(flowBaseline, fallthroughInvalidations);
-          let elseFacts: ReadonlyMap<string, ValueType> = new Map();
-          const elseInvalidations = this.analyzeIsolatedFlow(elseBaseline, () => {
-            elseFacts = this.analyzeBlock(statement.elseBody!, fallthroughNarrowings);
-          });
-          if (!universalCovered && !this.blockAlwaysExits(statement.elseBody)) {
-            continuingInvalidations.push(...fallthroughInvalidations, elseInvalidations);
-            continuingFacts.push(elseFacts);
-          }
-        }
-        const exhaustive = Boolean(statement.elseBody) || universalCovered || this.matchTypeFullyCovered(
+        const exhaustive = universalCovered || this.matchTypeFullyCovered(
           matched,
           coveredTypes,
           coveredValues,
@@ -2224,11 +2152,9 @@ export class Analyzer implements TypeEnvironment {
       case "AssignmentStatement":
         this.analyzeAssignment(statement);
         break;
-      case "InvertStatement":
-        this.analyzeAssignment(statement);
-        break;
       case "ExpressionStatement":
         this.checkFloatingPromiseStatement(this.inferExpression(statement.expression), statement.expression);
+        this.checkDiscardedPureResult(statement.expression);
         break;
       case "AsyncStatement":
         this.analyzeAsyncStatement(statement);
@@ -2257,6 +2183,24 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "optional") return this.carriesPromise(this.expandAliases(type.inner));
     if (type.kind === "union") return type.members.some((member) => this.carriesPromise(this.expandAliases(member)));
     return false;
+  }
+
+  // D29 item 14: an expression statement whose top level calls a
+  // compiler-owned pure value/collection method throws its only product away.
+  // The operation tables already prove which method the call lowered to, so
+  // the check needs no user-function purity analysis.
+  private checkDiscardedPureResult(expression: Expression): void {
+    if (expression.kind !== "CallExpression" || expression.callee.kind !== "MemberExpression") return;
+    const collectionOperation = this.collectionCalls.get(expression.callee.span.end);
+    const primitiveOperation = this.primitiveCalls.get(expression.callee.span.end);
+    const pure = (collectionOperation !== undefined && discardedPureCollectionOperations.has(collectionOperation))
+      || (primitiveOperation !== undefined && discardedPurePrimitiveOperations.has(primitiveOperation));
+    if (!pure) return;
+    this.diagnostics.push(diagnostic(
+      "VEL4029",
+      `'${expression.callee.property}' does not modify its receiver, so the result is discarded; keep the returned value or remove the call`,
+      expression.span,
+    ));
   }
 
   // Reconstructs a call spelling such as "boom()" or "user.save(...)" for the
@@ -3015,9 +2959,8 @@ export class Analyzer implements TypeEnvironment {
     if (completedFlow) this.restoreFlowFacts(completedFlow);
   }
 
-  private analyzeAssignment(statement: AssignmentStatement | InvertStatement): void {
-    const inverted = statement.kind === "InvertStatement";
-    const operator = inverted ? null : statement.operator;
+  private analyzeAssignment(statement: AssignmentStatement): void {
+    const operator = statement.operator;
     let targetType = unknownType;
     let targetBinding: Binding | null = null;
     let targetWritable = true;
@@ -3040,15 +2983,15 @@ export class Analyzer implements TypeEnvironment {
         targetWritable = false;
       }
       targetBinding = binding;
-      targetType = inverted || operator !== "=" ? binding.type : (binding.storageBinding ?? binding).declaredType;
+      targetType = operator !== "=" ? binding.type : (binding.storageBinding ?? binding).declaredType;
     } else if (statement.target.kind === "MemberExpression") {
       targetType = this.inferMember(
         statement.target.object,
         statement.target.property,
         statement.target.optional,
         statement.target.span,
-        inverted || operator !== "=",
-        inverted || operator !== "=",
+        operator !== "=",
+        operator !== "=",
       );
       const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
       if (owner.kind === "union" && this.dataFieldIsReadonly(owner, statement.target.property)) {
@@ -3138,7 +3081,7 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic("VEL3002", `Cannot index-assign through ${describeType(objectType)}; it is a read-only view`, statement.target.span));
           targetWritable = false;
         }
-        if (inverted || operator !== "=") {
+        if (operator !== "=") {
           this.typeError("Record keys may be absent; read and check the value before a compound assignment", statement.target.span);
           targetWritable = false;
         }
@@ -3148,30 +3091,7 @@ export class Analyzer implements TypeEnvironment {
       }
     }
 
-    if (inverted) {
-      const targetIsBool = this.contextuallyAssignable(targetType, boolType, statement.target.span);
-      this.requireAssignable(targetType, boolType, statement.target.span);
-      if (targetWritable && targetIsBool) {
-        if (statement.target.kind === "MemberExpression") this.invalidateCurrentMemberNarrowings();
-        else this.invalidateAssignmentNarrowings(statement.target, targetBinding);
-      }
-      return;
-    }
-
     const valueType = this.inferExpression(statement.value, operator === "=" ? targetType : unknownType);
-
-    if (targetWritable
-      && operator === "="
-      && statement.value.kind === "UnaryExpression"
-      && statement.value.operator === "not"
-      && sameExpressionShape(statement.target, statement.value.operand)
-      && sameType(this.expandAliases(targetType), boolType)) {
-      this.diagnostics.push(diagnostic(
-        "VEL3018",
-        "Use 'invert target' to reverse a writable bool; self-negating assignment is not part of VelarScript",
-        statement.span,
-      ));
-    }
 
     if (operator !== "=" && targetType.kind !== "number" && !(operator === "+=" && targetType.kind === "string")) {
       this.typeError(`Operator '${operator}' is not valid for ${describeType(targetType)}`, statement.span);
@@ -3474,6 +3394,8 @@ export class Analyzer implements TypeEnvironment {
             const surviving = this.survivingNarrowings(successful);
             if (operator !== "==" && operator !== "!=") {
               this.requireOrderedComparison(types[index]!, rightType, left, right, expression.span);
+            } else if (this.equalityOperandMayBeNaN(left, types[index]!) && this.equalityOperandMayBeNaN(right, rightType)) {
+              this.sameValueZeroEqualities.add(spanIdentity({ start: left.span.start, end: right.span.end }));
             }
             const link: Expression = {
               kind: "BinaryExpression",
@@ -3644,6 +3566,9 @@ export class Analyzer implements TypeEnvironment {
       return boolType;
     }
     if (operator === "==" || operator === "!=") {
+      if (this.equalityOperandMayBeNaN(leftExpression, left) && this.equalityOperandMayBeNaN(rightExpression, right)) {
+        this.sameValueZeroEqualities.add(spanIdentity(operationSpan));
+      }
       return boolType;
     }
     if (["<", "<=", ">", ">="].includes(operator)) {
@@ -3661,6 +3586,41 @@ export class Analyzer implements TypeEnvironment {
     this.requireAssignable(left, numberType, leftExpression.span);
     this.requireAssignable(right, numberType, rightExpression.span);
     return numberType;
+  }
+
+  // D36 item 41: `==`/`!=` are SameValueZero, but the repair only matters
+  // when both operands can be NaN at runtime. NaN lives exclusively inside
+  // JavaScript numbers, so any operand whose static type excludes number
+  // (and the unchecked kinds that could hide one) proves the repair away and
+  // the emitter keeps plain `===`. A numeric literal operand is the value
+  // check's degenerate case: NaN has no literal spelling, so the literal
+  // itself can never be NaN.
+  private equalityOperandMayBeNaN(expression: Expression, type: ValueType): boolean {
+    if (expression.kind === "LiteralExpression" && typeof expression.value === "number") return false;
+    if (expression.kind === "UnaryExpression"
+      && (expression.operator === "-" || expression.operator === "+")
+      && expression.operand.kind === "LiteralExpression"
+      && typeof expression.operand.value === "number") return false;
+    return this.equalityMayCompareNaN(type);
+  }
+
+  private equalityMayCompareNaN(type: ValueType): boolean {
+    const expanded = this.expandAliases(type);
+    switch (expanded.kind) {
+      case "number":
+      case "any":
+      case "unknown":
+      case "parameter":
+        return true;
+      case "optional":
+        return this.equalityMayCompareNaN(expanded.inner);
+      case "union":
+        return expanded.members.some((member) => this.equalityMayCompareNaN(member));
+      case "named":
+        return expanded.name === "number";
+      default:
+        return false;
+    }
   }
 
   private coalescingFallbackContext(left: ValueType, contextualType: ValueType): ValueType {
@@ -4688,7 +4648,7 @@ export class Analyzer implements TypeEnvironment {
     const object = this.inferredOrAnalyze(member.object);
     if (object.kind !== "list" && object.kind !== "map" && object.kind !== "set" && object.kind !== "record") return null;
     const mutating = object.kind === "list"
-      ? new Set(["append", "extend", "insert", "remove", "pop", "clear"])
+      ? new Set(["append", "extend", "insert", "remove", "pop", "removeLast", "clear"])
       : object.kind === "map" ? new Set(["set", "update", "remove", "clear"])
         : object.kind === "set" ? new Set(["add", "update", "remove", "clear"])
           : new Set(["set", "remove", "clear"]);
@@ -4788,7 +4748,7 @@ export class Analyzer implements TypeEnvironment {
       if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
     };
     const lowered = object.kind === "list"
-      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
+      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "removeLast", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
       : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property)
         : object.kind === "set" ? ["add", "update", "has", "remove", "clear", "copy", "values"].includes(member.property)
           : object.kind === "record" ? ["get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property) : false;
@@ -4874,6 +4834,11 @@ export class Analyzer implements TypeEnvironment {
         this.collectionCalls.set(member.span.end, "listPop");
         checkCollectionArguments([numberType], 0);
         return optionalOf(object.element);
+      }
+      if (member.property === "removeLast") {
+        this.collectionCalls.set(member.span.end, "listRemoveLast");
+        checkCollectionArguments([]);
+        return object.element;
       }
       if (member.property === "clear" || member.property === "copy" || member.property === "reversed") {
         this.collectionCalls.set(member.span.end, member.property === "clear" ? "clear" : member.property === "copy" ? "listCopy" : "listReversed");
@@ -5551,6 +5516,9 @@ export class Analyzer implements TypeEnvironment {
       case "pop":
         if (list.readonlyView) return null;
         return callable(["index"], [numberType], optionalOf(list.element), 0);
+      case "removeLast":
+        if (list.readonlyView) return null;
+        return callable([], [], list.element);
       case "clear":
         if (list.readonlyView) return null;
         return callable([], [], nullType);
@@ -5613,6 +5581,7 @@ export class Analyzer implements TypeEnvironment {
       case "padStart":
       case "padEnd": return callable(["size", "fill"], [numberType, stringType], stringType, 1);
       case "repeat": return callable(["count"], [numberType], stringType);
+      case "isBlank": return callable([], [], boolType);
       default: return null;
     }
   }
@@ -5627,6 +5596,9 @@ export class Analyzer implements TypeEnvironment {
       case "floor":
       case "ceil": return callable([], [], numberType);
       case "toFixed": return callable(["digits"], [numberType], stringType);
+      case "isInteger":
+      case "isNaN":
+      case "isFinite": return callable([], [], boolType);
       default: return null;
     }
   }
@@ -7195,9 +7167,8 @@ export class Analyzer implements TypeEnvironment {
       if (statement.kind === "WhileStatement" && this.nonFallthroughWhileStatements.has(statement.span.start)) return true;
       if (statement.kind === "IfStatement" && statement.elseBody
         && this.blockAlwaysReturns(statement.thenBody) && this.blockAlwaysReturns(statement.elseBody)) return true;
-      if (statement.kind === "MatchStatement" && (statement.elseBody || this.exhaustiveMatches.has(statement.span.start))
-        && statement.cases.every((branch) => this.blockAlwaysReturns(branch.body))
-        && (!statement.elseBody || this.blockAlwaysReturns(statement.elseBody))) return true;
+      if (statement.kind === "MatchStatement" && this.exhaustiveMatches.has(statement.span.start)
+        && statement.cases.every((branch) => this.blockAlwaysReturns(branch.body))) return true;
       if (statement.kind === "TryStatement") {
         if (statement.finallyBody && this.blockAlwaysReturns(statement.finallyBody)) return true;
         if (this.blockAlwaysReturns(statement.tryBody)
@@ -7214,9 +7185,8 @@ export class Analyzer implements TypeEnvironment {
     if (statement.kind === "IfStatement" && statement.elseBody) {
       return this.blockAlwaysExits(statement.thenBody) && this.blockAlwaysExits(statement.elseBody);
     }
-    if (statement.kind === "MatchStatement" && (statement.elseBody || this.exhaustiveMatches.has(statement.span.start))) {
-      return statement.cases.every((branch) => this.blockAlwaysExits(branch.body))
-        && (!statement.elseBody || this.blockAlwaysExits(statement.elseBody));
+    if (statement.kind === "MatchStatement" && this.exhaustiveMatches.has(statement.span.start)) {
+      return statement.cases.every((branch) => this.blockAlwaysExits(branch.body));
     }
     if (statement.kind !== "TryStatement") return false;
     if (statement.finallyBody && this.blockAlwaysExits(statement.finallyBody)) return true;
@@ -7483,11 +7453,11 @@ export class Analyzer implements TypeEnvironment {
       }
       return common;
     }
-    if (type.kind === "string") return new Map(["size", "trim", "upper", "lower", "slice", "char", "has", "index", "count", "startsWith", "endsWith", "split", "replace", "replaceAll", "padStart", "padEnd", "repeat"]
+    if (type.kind === "string") return new Map(["size", "trim", "upper", "lower", "slice", "char", "has", "index", "count", "startsWith", "endsWith", "split", "replace", "replaceAll", "padStart", "padEnd", "repeat", "isBlank"]
       .map((name) => [name, this.stringMember(name)!]));
-    if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed"]
+    if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed", "isInteger", "isNaN", "isFinite"]
       .map((name) => [name, this.numberMember(name)!]));
-    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
+    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "removeLast", "clear", "copy", "count", "index", "sorted", "reversed", "map", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
     if (type.kind === "map") return available(["size", "get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.mapMember(type, name));
     if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.recordMember(type, name));
     if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values"], (name) => this.setMember(type, name));

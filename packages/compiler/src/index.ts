@@ -503,13 +503,11 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
           if (branch.guard) visitExpression(branch.guard);
           visitBlock(branch.body);
         }
-        if (statement.elseBody) visitBlock(statement.elseBody);
         break;
       case "ForStatement": visitExpression(statement.iterable); visitBlock(statement.body); break;
       case "WhileStatement": visitExpression(statement.condition); visitBlock(statement.body); break;
       case "TryStatement": visitBlock(statement.tryBody); if (statement.catchBody) visitBlock(statement.catchBody); if (statement.finallyBody) visitBlock(statement.finallyBody); break;
       case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
-      case "InvertStatement": visitExpression(statement.target); break;
       case "ExpressionStatement": visitExpression(statement.expression); break;
       case "AsyncStatement": visitExpression(statement.expression); break;
       case "ImportDeclaration":

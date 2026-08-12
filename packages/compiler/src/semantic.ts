@@ -809,7 +809,6 @@ export function buildSemanticIndex(
           for (const child of branch.body) visitStatement(child);
           exitScope();
         }
-        if (statement.elseBody) visitBlock(statement.elseBody, statement.span);
         break;
       case "ForStatement":
         visitExpression(statement.iterable);
@@ -837,7 +836,6 @@ export function buildSemanticIndex(
         if (statement.finallyBody) visitBlock(statement.finallyBody, statement.span);
         break;
       case "AssignmentStatement": visitExpression(statement.target, true); visitExpression(statement.value); break;
-      case "InvertStatement": visitExpression(statement.target, true); break;
       case "ExpressionStatement": visitExpression(statement.expression); break;
       case "AsyncStatement": visitExpression(statement.expression); break;
       case "BreakStatement":

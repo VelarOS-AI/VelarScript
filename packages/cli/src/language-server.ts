@@ -89,7 +89,6 @@ const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
 
 const keywordDocumentation = new Map<string, string>([
   ["assert", "Requires a boolean or optional invariant and narrows stable values in following statements."],
-  ["invert", "Reverses one writable bool binding, member, or index in place."],
   ["not", "Negates a checked condition; use `not in` for negative membership and `is not` for a negative runtime type test."],
   ["in", "Tests List, Set, Map, Record, or string membership; `not in` is its direct negative form."],
   ["is", "Tests a value against a runtime type and narrows stable locations; `is not` is its direct negative form."],
@@ -125,7 +124,7 @@ const builtinTypeDocumentation = new Map<string, string>([
 ]);
 
 const coreCompletionItems = [
-  ...["const", "let", "readonly", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "invert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
+  ...["const", "let", "readonly", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
   { label: "str", kind: 3, detail: "str(value) -> string" },
   { label: "print", kind: 3, detail: "print(value) -> null" },
@@ -1247,12 +1246,6 @@ function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): un
         editRange = { start: positionAt(document.text, colon), end: positionAt(document.text, colon + 1) };
         replacement = "=";
         title = "Use '=' for the named argument";
-      }
-    } else if (diagnostic.code === "VEL3018") {
-      const selfNegation = /^([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\s*=\s*not\s+(.+)$/u.exec(original);
-      if (selfNegation && selfNegation[1] === selfNegation[2]!.trim()) {
-        replacement = `invert ${selfNegation[1]}`;
-        title = `Use 'invert ${selfNegation[1]}'`;
       }
     } else if (diagnostic.code === "VEL4001" && typeof diagnostic.message === "string") {
       const member = /\.([A-Za-z_$][A-Za-z0-9_$]*)$/u.exec(original);

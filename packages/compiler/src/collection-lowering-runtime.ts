@@ -32,6 +32,7 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarListInsert",
   "__velarListRemove",
   "__velarListPop",
+  "__velarListRemoveLast",
   "__velarListCopy",
   "__velarListCount",
   "__velarListIndex",
@@ -256,7 +257,7 @@ function __velarCollectionGet(value, key) {
   value = __velarReactiveRaw(value);
   if (__velarCollectionListIsArray(value)) {
     __velarValidateOwnedList(value, "List.get");
-    if (!__velarCollectionListIsInteger(key)) return null;
+    if (!__velarCollectionListIsInteger(key)) throw new __VelarIndexError("List.get index must be an integer");
     const index = key < 0 ? value.length + key : key;
     if (index >= 0 && index < value.length) return __velarReactiveCollectionRead(value, index, __velarOwnedListElement(value, index, "List.get"));
     __velarReactiveCollectionTrack(value, key < 0 ? __velarReactiveIterateKey : index);
@@ -389,7 +390,7 @@ function __velarListInsert(value, index, item) {
 
 function __velarListPop(value, requested = -1) {
   __velarValidateDenseList(value, "List.pop");
-  if (!__velarCollectionListIsInteger(requested)) return null;
+  if (!__velarCollectionListIsInteger(requested)) throw new __VelarIndexError("List.pop index must be an integer");
   const index = requested < 0 ? value.length + requested : requested;
   if (index < 0 || index >= value.length) return null;
   const item = value[index];
@@ -398,6 +399,11 @@ function __velarListPop(value, requested = -1) {
   __velarReactiveCollectionUnlink(value, item);
   __velarReactiveCollectionTrigger(value, index, true, true, index);
   return item;
+}
+function __velarListRemoveLast(value) {
+  __velarValidateDenseList(value, "List.removeLast");
+  if (value.length === 0) throw new __VelarIndexError("List.removeLast requires a non-empty List");
+  return __velarListPop(value, -1);
 }
 function __velarListRemove(value, item) { value = __velarValidateDenseList(value, "List.remove"); item = __velarReactiveRaw(item); for (let index = 0; index < value.length; index += 1) if (__velarSameValueZero(__velarReactiveRaw(value[index]), item)) { __velarListPop(value, index); return true; } return false; }
 function __velarListCopy(value) { __velarReactiveCollectionTrack(value); return __velarCopyList(value, "List.copy"); }
@@ -410,7 +416,7 @@ function __velarListMap(value, transform) { const items = __velarCopyList(value,
 function __velarListFilter(value, predicate) { const items = __velarCopyList(value, "List.filter"); __velarReactiveCollectionTrack(value); const output = []; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); const accepted = predicate(item); if (typeof accepted !== "boolean") throw new __velarCollectionNativeTypeError("List.filter predicate must return bool"); if (accepted) output[output.length] = __velarReactiveRaw(item); } return __velarMarkOwnedList(output); }
 function __velarListReduce(value, combine, initial) { const items = __velarCopyList(value, "List.reduce"); __velarReactiveCollectionTrack(value); let result = initial; for (let index = 0; index < items.length; index += 1) { const next = combine(result, __velarReactiveCollectionRead(value, index, items[index])); result = next === undefined ? null : next; } return result; }
 function __velarListJoin(value, separator = "") { value = __velarValidateDenseList(value, "List.join"); __velarReactiveCollectionTrack(value); if (typeof separator !== "string") throw new __velarCollectionNativeTypeError("List.join separator must be string"); for (let index = 0; index < value.length; index += 1) if (typeof value[index] !== "string") throw new __velarCollectionNativeTypeError("List.join requires string values"); return __velarCollectionListHostJoin(value, separator); }
-function __velarOrderedListValue(value, name, kind = null) { const current = typeof value; if ((current !== "string" && current !== "number") || (current === "number" && __velarCollectionListIsNaN(value)) || (kind !== null && current !== kind)) throw new __velarCollectionNativeTypeError(name + " requires uniform non-NaN numbers or strings"); return current; }
+function __velarOrderedListValue(value, name, kind = null) { const current = typeof value; if (current === "number" && __velarCollectionListIsNaN(value)) throw new __velarCollectionNativeTypeError(name + " found NaN, which has no ordering; drop it with filter(x => not x.isNaN()) or fix the upstream computation"); if ((current !== "string" && current !== "number") || (kind !== null && current !== kind)) throw new __velarCollectionNativeTypeError(name + " requires uniform numbers or strings"); return current; }
 function __velarListSorted(value, compare = null, by = null) {
   if (compare !== null && by !== null) throw new __velarCollectionNativeTypeError("List.sorted accepts either a comparator or by, not both");
   if (compare !== null && typeof compare !== "function") throw new __velarCollectionNativeTypeError("List.sorted comparator must be a function");
@@ -427,11 +433,12 @@ function __velarListSorted(value, compare = null, by = null) {
     return __velarMarkOwnedList(selected);
   }
   let kind = null;
+  if (compare === null) { for (let index = 0; index < output.length; index += 1) kind = __velarOrderedListValue(output[index], "List.sorted()", kind); }
   const compareValues = compare ?? ((left, right) => { kind = __velarOrderedListValue(left, "List.sorted()", kind); __velarOrderedListValue(right, "List.sorted()", kind); return left < right ? -1 : left > right ? 1 : 0; });
   __velarCollectionListHostSort(output, (left, right) => { const order = compareValues(left, right); if (typeof order !== "number" || !__velarCollectionListIsFinite(order)) throw new __velarCollectionNativeTypeError("List.sorted comparator must return a finite number"); return order; });
   return output;
 }
-function __velarListSum(value) { const items = __velarCopyList(value, "List.sum"); __velarReactiveCollectionTrack(value); let total = 0; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); if (typeof item !== "number") throw new __velarCollectionNativeTypeError("List.sum requires numbers"); total += item; } return total; }
+function __velarListSum(value) { const items = __velarCopyList(value, "List.sum"); __velarReactiveCollectionTrack(value); let total = 0; for (let index = 0; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); if (typeof item !== "number") throw new __velarCollectionNativeTypeError("List.sum requires numbers"); if (__velarCollectionListIsNaN(item)) throw new __velarCollectionNativeTypeError("List.sum found NaN, which poisons the total; drop it with filter(x => not x.isNaN()) or fix the upstream computation"); total += item; } return total; }
 function __velarListExtremum(value, maximum) { const items = __velarCopyList(value, maximum ? "List.max" : "List.min"); __velarReactiveCollectionTrack(value); if (items.length === 0) return null; let result = __velarReactiveCollectionRead(value, 0, items[0]); let kind = __velarOrderedListValue(result, maximum ? "List.max" : "List.min"); for (let index = 1; index < items.length; index += 1) { const item = __velarReactiveCollectionRead(value, index, items[index]); __velarOrderedListValue(item, maximum ? "List.max" : "List.min", kind); if (maximum ? item > result : item < result) result = item; } return result; }
 function __velarListMin(value) { return __velarListExtremum(value, false); }
 function __velarListMax(value) { return __velarListExtremum(value, true); }

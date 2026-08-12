@@ -176,7 +176,8 @@ named arguments and first-class binding exactly like collection methods.
 `size`, `char(index)`, `slice(start=0, end=size)`, and the positions returned by
 `index(text, start=0)` use Unicode code points,
 matching string iteration rather than JavaScript UTF-16 units. Negative
-positions count from the end, out-of-range `char` returns `null`, and slice
+positions count from the end, out-of-range `char` returns `null` while a
+non-integer index throws, and slice
 positions clamp. `index` also clamps its start and returns `null` when no match
 exists. `text.has(part)` and `part in text` are the method and operator forms of
 the same substring test. Direct string indexing stays absent.
@@ -184,7 +185,8 @@ the same substring test. Direct string indexing stays absent.
 The `velar/text` module keeps transformations that are not simple receiver
 operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`,
 `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, and
-`escapeHtml`. Blank text can be tested directly with `text.trim().size == 0`.
+`escapeHtml`. Blank text is tested with the `text.isBlank()` member — `true`
+for empty or whitespace-only text.
 `utf8Size(text)` returns the exact byte count used
 by official UTF-8 transport, JSON, and filesystem budgets, including stable
 three-byte treatment of an unpaired surrogate. `lineStarts(text)` performs one
@@ -367,8 +369,11 @@ or another dynamic JavaScript value into a VelarScript number.
 | Numeric helpers | `hypot`, `random`, `randomInt`, `isFinite`, `isInteger`, `gcd`, `lcm` |
 
 The receiver-shaped operations are number members: `.abs()`, `.round()`,
-`.floor()`, `.ceil()`, and `.toFixed(digits)`. `round` returns a number at the
-nearest integer; `toFixed` returns decimal text with 0 through 100 digits.
+`.floor()`, `.ceil()`, `.toFixed(digits)`, and the predicates `.isInteger()`,
+`.isNaN()`, and `.isFinite()`. `round` returns a number at the
+nearest integer; `toFixed` returns decimal text with 0 through 100 digits;
+`isInteger` follows `Number.isInteger`, so `Infinity` and `NaN` are not
+integers.
 These members use a compiler-owned Number runtime that captures their Math,
 Number, reflection, and Error operations when the generated module initializes;
 later replacement of JavaScript globals or prototypes cannot redirect them.

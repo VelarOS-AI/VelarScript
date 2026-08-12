@@ -20,7 +20,7 @@ const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<="
 const genericNames = new Set(["List", "Set", "Map", "Promise", "Function", "Type"]);
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
-const expressionStatementWords = new Set(["return", "throw", "assert", "invert"]);
+const expressionStatementWords = new Set(["return", "throw", "assert"]);
 const parenthesizedKeywordWords = new Set([
   "if", "while", "for", "match", "case", "catch",
   ...expressionStatementWords,

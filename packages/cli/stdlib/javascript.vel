@@ -198,22 +198,27 @@ def requiredChar(value: string, index: number) -> string:
     assert result != null else "Script character offset is outside the source"
     return result
 
+// A character list spells as split(""): the empty separator splits per
+// Unicode code point. The 4096-per-chunk layer stays only for capacity —
+// one List is bounded to 1,000,000 items while a ScriptDocument accepts
+// 16 million code points (4096 chunks of 4096 characters). Extending a
+// fresh List materializes each chunk once so the hot per-character reads
+// stay O(1).
 def sourceCharacters(source: string) -> ScriptCharacters:
     let output: List<List<string>> = []
     for part in chunks(source, 4096):
         let values: List<string> = []
-        for value in part:
-            values.append(value)
+        values.extend(part.split(""))
         output.append(values)
     return {parts: output, size: source.size}
 
 def sourceAt(source: ScriptCharacters, index: number) -> string:
-    assert index.floor() == index and index >= 0 and index < source.size else "Script character offset is outside the source"
+    assert index.isInteger() and index >= 0 and index < source.size else "Script character offset is outside the source"
     const part = source.parts[(index / 4096).floor()]
     return part[index % 4096]
 
 def sourceText(source: ScriptCharacters, start: number, end: number) -> string:
-    assert start.floor() == start and end.floor() == end and start >= 0 and start <= end and end <= source.size else "Script character range is outside the source"
+    assert start.isInteger() and end.isInteger() and start >= 0 and start <= end and end <= source.size else "Script character range is outside the source"
     let output: List<string> = []
     let cursor = start
     while cursor < end:
@@ -424,15 +429,13 @@ def buildStructure(sourceSize: number, tokens: List<ScriptToken>, diagnostics: L
                 else if delimiterValues[-1] != expected:
                     appendDiagnostic(diagnostics, "SCRIPT1102", f"Expected '{matchingClose(delimiterValues[-1])}' before '{value}'", token.start, token.end)
                 else:
-                    const openingIndex = delimiterTokens[-1]
+                    const openingIndex = delimiterTokens.removeLast()
                     pairs.set(openingIndex, tokenIndex)
                     pairs.set(tokenIndex, openingIndex)
-                    delimiterTokens = delimiterTokens.slice(0, delimiterTokens.size - 1)
-                    delimiterValues = delimiterValues.slice(0, delimiterValues.size - 1)
+                    delimiterValues.removeLast()
                     if value == "}" and scopeStack.size > 1:
-                        const scopeId = scopeStack[-1]
+                        const scopeId = scopeStack.removeLast()
                         scopes[scopeId].end = token.start
-                        scopeStack = scopeStack.slice(0, scopeStack.size - 1)
         tokenIndex += 1
     for openingIndex in delimiterTokens:
         const opening = tokens[openingIndex]

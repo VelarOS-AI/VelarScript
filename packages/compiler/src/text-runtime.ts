@@ -109,6 +109,7 @@ function __velarTextReplacementOutputUnits(value, search, replacement, all) {
 
 function __velarStringSize(value) { return __velarTextCodePointLength(__velarTextValue(value)); }
 function __velarStringTrim(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []); }
+function __velarStringIsBlank(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []) === ""; }
 function __velarStringUpper(value) { return __velarTextOutput(__velarTextCall(__velarNativeStringUpper, __velarTextValue(value), []), "String.upper"); }
 function __velarStringLower(value) { return __velarTextOutput(__velarTextCall(__velarNativeStringLower, __velarTextValue(value), []), "String.lower"); }
 function __velarStringSlice(value, start = 0, end = null) {
@@ -122,7 +123,7 @@ function __velarStringSlice(value, start = 0, end = null) {
 }
 function __velarStringChar(value, index) {
   value = __velarTextValue(value);
-  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [index])) return null;
+  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [index])) throw new __velarTextNativeTypeError("String.char index must be an integer");
   const total = __velarTextCodePointLength(value);
   if (index < 0) index += total;
   if (index < 0) return null;

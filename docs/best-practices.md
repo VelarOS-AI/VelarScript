@@ -118,6 +118,7 @@ spellings are noise:
 ```velar fragment
 tickets.append(ticket)
 tickets[0].done = true
+tickets[0].pinned = not tickets[0].pinned
 ```
 
 ## 4. Dispatch with match

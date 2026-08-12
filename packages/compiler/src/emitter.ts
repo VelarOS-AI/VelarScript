@@ -4,7 +4,6 @@ import type {
   EnumDeclaration,
   Expression,
   ImportDeclaration,
-  InvertStatement,
   MatchPattern,
   Program,
   Statement,
@@ -139,8 +138,10 @@ export class JavaScriptEmitter {
           ["stringCount", "__velarStringCount"], ["stringStartsWith", "__velarStringStartsWith"], ["stringEndsWith", "__velarStringEndsWith"],
           ["stringSplit", "__velarStringSplit"], ["stringReplace", "__velarStringReplace"], ["stringReplaceAll", "__velarStringReplaceAll"],
           ["stringPadStart", "__velarStringPadStart"], ["stringPadEnd", "__velarStringPadEnd"], ["stringRepeat", "__velarStringRepeat"],
+          ["stringIsBlank", "__velarStringIsBlank"],
           ["numberAbs", "__velarNumberAbs"], ["numberRound", "__velarNumberRound"], ["numberFloor", "__velarNumberFloor"],
           ["numberCeil", "__velarNumberCeil"], ["numberToFixed", "__velarNumberToFixed"],
+          ["numberIsInteger", "__velarNumberIsInteger"], ["numberIsNaN", "__velarNumberIsNaN"], ["numberIsFinite", "__velarNumberIsFinite"],
         ].filter(([, local]) => usesGeneratedName(local!));
         helpers.push(`import { ${imports.map(([exported, local]) => `${exported} as ${local}`).join(", ")} } from ${JSON.stringify(VELAR_PRIMITIVE_METHOD_MODULE)};`);
       } else {
@@ -690,13 +691,11 @@ export class JavaScriptEmitter {
             if (branch.guard) visitExpression(branch.guard);
             branch.body.forEach(visitStatement);
           });
-          statement.elseBody?.forEach(visitStatement);
           break;
         case "ForStatement": visitExpression(statement.iterable); statement.body.forEach(visitStatement); break;
         case "WhileStatement": visitExpression(statement.condition); statement.body.forEach(visitStatement); break;
         case "TryStatement": statement.tryBody.forEach(visitStatement); statement.catchBody?.forEach(visitStatement); statement.finallyBody?.forEach(visitStatement); break;
         case "AssignmentStatement": visitExpression(statement.target); visitExpression(statement.value); break;
-        case "InvertStatement": visitExpression(statement.target); break;
         case "ExpressionStatement": visitExpression(statement.expression); break;
         case "AsyncStatement":
           // The detached-task observer normalizes rejection values, so the
@@ -899,11 +898,6 @@ export class JavaScriptEmitter {
           }
           lines.push(`${indentation}  }`);
         }
-        if (statement.elseBody) {
-          lines.push(`${indentation}  if (!${matchedName}) {`);
-          lines.push(...statement.elseBody.map((child) => this.emitMappedStatement(child, depth + 2)).filter(Boolean));
-          lines.push(`${indentation}  }`);
-        }
         lines.push(`${indentation}}`);
         return lines.join("\n");
       }
@@ -1032,8 +1026,6 @@ export class JavaScriptEmitter {
           const value = this.emitMappedExpression(statement.value);
           return `${indentation}${target} ${statement.operator} ${value};`;
         }
-      case "InvertStatement":
-        return this.emitInvertStatement(statement, depth);
       case "ExpressionStatement":
         return `${indentation}${this.emitMappedExpression(statement.expression, false)};`;
       case "AsyncStatement":
@@ -1045,54 +1037,6 @@ export class JavaScriptEmitter {
       default:
         return "";
     }
-  }
-
-  private emitInvertStatement(statement: InvertStatement, depth: number): string {
-    const indentation = "  ".repeat(depth);
-    const target = statement.target;
-    if (target.kind === "IdentifierExpression") {
-      const name = this.emitMappedAssignmentTarget(target);
-      return `${indentation}${name} = !${name};`;
-    }
-    if (target.kind === "IndexExpression") {
-      this.needsIndexHelpers = true;
-      this.needsCollectionHelpers = true;
-      const suffix = statement.span.start;
-      const objectName = `$velarIndexObject${suffix}`;
-      const keyName = `$velarIndexKey${suffix}`;
-      return [
-        `${indentation}{`,
-        `${indentation}  const ${objectName} = ${this.emitMappedExpression(target.object)};`,
-        `${indentation}  const ${keyName} = ${this.emitMappedExpression(target.index)};`,
-        `${indentation}  __velarSetIndex(${objectName}, ${keyName}, !__velarIndex(${objectName}, ${keyName}));`,
-        `${indentation}}`,
-      ].join("\n");
-    }
-
-    const key = spanIdentity(target.span);
-    const privateProperty = this.hints.privateMembers.has(key);
-    const property = `${privateProperty ? "#" : ""}${target.property}`;
-    if (target.object.kind === "SuperExpression") {
-      return `${indentation}super.${property} = !super.${property};`;
-    }
-    const suffix = statement.span.start;
-    const objectName = `$velarMemberObject${suffix}`;
-    const staticFieldOwnerDepth = this.hints.staticFieldReads.get(key);
-    const guardedInstanceField = this.hints.instanceFieldReads.has(key);
-    const guardedPrivateField = this.hints.privateInstanceFieldReads.has(key);
-    const read = staticFieldOwnerDepth !== undefined
-      ? `__velarReadStaticField(${objectName}, ${JSON.stringify(target.property)}, ${staticFieldOwnerDepth})`
-      : guardedPrivateField
-        ? `__velarReadPrivateField(${objectName}.${property}, ${JSON.stringify(target.property)})`
-        : guardedInstanceField
-          ? `__velarReadInstanceField(${objectName}, ${JSON.stringify(target.property)})`
-          : `${objectName}.${property}`;
-    return [
-      `${indentation}{`,
-      `${indentation}  const ${objectName} = ${this.emitMappedExpression(target.object)};`,
-      `${indentation}  ${objectName}.${property} = !${read};`,
-      `${indentation}}`,
-    ].join("\n");
   }
 
   private emitImport(statement: ImportDeclaration, indentation: string): string {
@@ -1506,6 +1450,15 @@ export class JavaScriptEmitter {
           const membership = `__velarContains(${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
           return expression.operator === "not in" ? `!(${membership})` : membership;
         }
+        // D36 item 41: `==`/`!=` are SameValueZero. The analyzer proves which
+        // comparisons can actually meet two NaN operands; everything else
+        // elides the repair and stays plain strict equality.
+        if ((expression.operator === "==" || expression.operator === "!=")
+          && this.hints.sameValueZeroEqualities.has(spanIdentity(expression.span))) {
+          this.needsCollectionHelpers = true;
+          const equality = `__velarSameValueZero(${this.emitBinaryOperand(expression.left)}, ${this.emitBinaryOperand(expression.right)})`;
+          return expression.operator === "==" ? equality : `!${equality}`;
+        }
         const operator = expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
           ? `(${this.emitMappedExpression(expression.left)})`
@@ -1722,6 +1675,21 @@ export class JavaScriptEmitter {
     for (let index = 1; index < expression.operands.length; index += 1) {
       body.push(`const ${prefix}_${index} = ${this.emitMappedExpression(expression.operands[index]!)};`);
       const sourceOperator = expression.operators[index - 1]!;
+      const linkSpan = spanIdentity({
+        start: expression.operands[index - 1]!.span.start,
+        end: expression.operands[index]!.span.end,
+      });
+      if ((sourceOperator === "==" || sourceOperator === "!=") && this.hints.sameValueZeroEqualities.has(linkSpan)) {
+        // Chain operands are already captured once, so the SameValueZero
+        // repair inlines as its short-circuit shape (D36 item 41).
+        const left = `${prefix}_${index - 1}`;
+        const right = `${prefix}_${index}`;
+        const equality = `${left} === ${right} || (${left} !== ${left} && ${right} !== ${right})`;
+        body.push(sourceOperator === "=="
+          ? `if (!(${equality})) return false;`
+          : `if (${equality}) return false;`);
+        continue;
+      }
       const operator = sourceOperator === "==" ? "===" : sourceOperator === "!=" ? "!==" : sourceOperator;
       body.push(`if (!(${prefix}_${index - 1} ${operator} ${prefix}_${index})) return false;`);
     }
@@ -1747,6 +1715,7 @@ export class JavaScriptEmitter {
       case "listInsert": return "__velarListInsert";
       case "listRemove": return "__velarListRemove";
       case "listPop": return "__velarListPop";
+      case "listRemoveLast": return "__velarListRemoveLast";
       case "listCopy": return "__velarListCopy";
       case "listCount": return "__velarListCount";
       case "listFind": return "__velarListFind";
@@ -1798,11 +1767,15 @@ export class JavaScriptEmitter {
       case "stringPadStart": return "__velarStringPadStart";
       case "stringPadEnd": return "__velarStringPadEnd";
       case "stringRepeat": return "__velarStringRepeat";
+      case "stringIsBlank": return "__velarStringIsBlank";
       case "numberAbs": return "__velarNumberAbs";
       case "numberRound": return "__velarNumberRound";
       case "numberFloor": return "__velarNumberFloor";
       case "numberCeil": return "__velarNumberCeil";
       case "numberToFixed": return "__velarNumberToFixed";
+      case "numberIsInteger": return "__velarNumberIsInteger";
+      case "numberIsNaN": return "__velarNumberIsNaN";
+      case "numberIsFinite": return "__velarNumberIsFinite";
       default: return null;
     }
   }
@@ -2001,9 +1974,8 @@ export class JavaScriptEmitter {
       if (statement.kind === "ReturnStatement" || statement.kind === "ThrowStatement") return true;
       if (statement.kind === "IfStatement" && statement.elseBody
         && this.blockAlwaysReturns(statement.thenBody) && this.blockAlwaysReturns(statement.elseBody)) return true;
-      if (statement.kind === "MatchStatement" && (statement.elseBody || this.hints.exhaustiveMatches.has(statement.span.start))
-        && statement.cases.every((branch) => this.blockAlwaysReturns(branch.body))
-        && (!statement.elseBody || this.blockAlwaysReturns(statement.elseBody))) return true;
+      if (statement.kind === "MatchStatement" && this.hints.exhaustiveMatches.has(statement.span.start)
+        && statement.cases.every((branch) => this.blockAlwaysReturns(branch.body))) return true;
       if (statement.kind === "TryStatement") {
         if (statement.finallyBody && this.blockAlwaysReturns(statement.finallyBody)) return true;
         if (statement.catchBody && this.blockAlwaysReturns(statement.tryBody) && this.blockAlwaysReturns(statement.catchBody)) return true;

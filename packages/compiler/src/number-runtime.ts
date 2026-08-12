@@ -13,6 +13,9 @@ const __velarNumberMathRound = __velarNumberGetOwnPropertyDescriptor(__velarNumb
 const __velarNumberMathFloor = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "floor")?.value;
 const __velarNumberMathCeil = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "ceil")?.value;
 const __velarNumberIsSafeInteger = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isSafeInteger")?.value;
+const __velarNumberNativeIsInteger = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isInteger")?.value;
+const __velarNumberNativeIsNaN = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isNaN")?.value;
+const __velarNumberNativeIsFinite = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isFinite")?.value;
 const __velarNativeNumberToFixed = __velarNumberGetOwnPropertyDescriptor(__velarNumberPrototype, "toFixed")?.value;
 function __velarNumberCall(operation, receiver, arguments_) {
   if (typeof operation !== "function" || typeof __velarNumberReflectApply !== "function") throw new __velarNumberNativeTypeError("The JavaScript Number runtime is unavailable");
@@ -27,4 +30,7 @@ function __velarNumberToFixed(value, digits) {
   if (!__velarNumberCall(__velarNumberIsSafeInteger, __velarNumberNativeNumber, [digits]) || digits < 0 || digits > 100) throw new __velarNumberNativeRangeError("Number.toFixed digits must be an integer from 0 through 100");
   return __velarNumberCall(__velarNativeNumberToFixed, __velarNumberValue(value), [digits]);
 }
+function __velarNumberIsInteger(value) { return __velarNumberCall(__velarNumberNativeIsInteger, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
+function __velarNumberIsNaN(value) { return __velarNumberCall(__velarNumberNativeIsNaN, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
+function __velarNumberIsFinite(value) { return __velarNumberCall(__velarNumberNativeIsFinite, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
 `.trimStart();

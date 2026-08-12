@@ -28,7 +28,6 @@ export type CoreStatement =
   | TryStatement
   | PassStatement
   | AssignmentStatement
-  | InvertStatement
   | ExpressionStatement
   | AsyncStatement;
 
@@ -383,7 +382,6 @@ export interface MatchStatement {
   readonly kind: "MatchStatement";
   readonly value: Expression;
   readonly cases: readonly MatchCase[];
-  readonly elseBody: readonly Statement[] | null;
   readonly span: Span;
 }
 
@@ -510,12 +508,6 @@ export interface AssignmentStatement {
 }
 
 export type AssignmentTarget = IdentifierExpression | MemberExpression | IndexExpression;
-
-export interface InvertStatement {
-  readonly kind: "InvertStatement";
-  readonly target: AssignmentTarget;
-  readonly span: Span;
-}
 
 export interface ExpressionStatement {
   readonly kind: "ExpressionStatement";

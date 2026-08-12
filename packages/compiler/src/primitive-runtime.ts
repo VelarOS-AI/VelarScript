@@ -25,10 +25,14 @@ export {
   __velarStringPadStart as stringPadStart,
   __velarStringPadEnd as stringPadEnd,
   __velarStringRepeat as stringRepeat,
+  __velarStringIsBlank as stringIsBlank,
   __velarNumberAbs as numberAbs,
   __velarNumberRound as numberRound,
   __velarNumberFloor as numberFloor,
   __velarNumberCeil as numberCeil,
   __velarNumberToFixed as numberToFixed,
+  __velarNumberIsInteger as numberIsInteger,
+  __velarNumberIsNaN as numberIsNaN,
+  __velarNumberIsFinite as numberIsFinite,
 };
 `.trimStart();

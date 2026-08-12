@@ -46,7 +46,7 @@ export component TaskForm(onCreate: CreateTaskHandler):
     state error = ""
 
     def submit() -> null:
-        if title.trim().size == 0:
+        if title.isBlank():
             error = "Give the task a clear title."
         else:
             onCreate({title, description, priority})

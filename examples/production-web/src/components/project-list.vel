@@ -5,7 +5,7 @@ def isHealthy(status: string) -> bool:
     match status:
         case "Healthy":
             return true
-        else:
+        case _:
             return false
 
 const projectsLook = look:

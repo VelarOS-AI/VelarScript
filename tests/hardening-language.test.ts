@@ -81,7 +81,7 @@ print([1, notNumber].sorted().size)
   assert.deepEqual(rejected.diagnostics, []);
   const rejectedExecution = executeModule(rejected.code ?? "");
   assert.notEqual(rejectedExecution.status, 0);
-  assert.match(String(rejectedExecution.stderr), /TypeError: List\.sorted\(\) requires uniform non-NaN numbers or strings/u);
+  assert.match(String(rejectedExecution.stderr), /TypeError: List\.sorted\(\) found NaN, which has no ordering/u);
 });
 
 test("[#15/#20] text operations count code points and never split a surrogate pair", () => {

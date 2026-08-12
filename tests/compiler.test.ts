@@ -1869,7 +1869,7 @@ def check<T>(value: T) -> bool:
     match value:
         case T:
             return true
-        else:
+        case _:
             return false
 `.trimStart());
   assert.equal(caseFence.code, null);
@@ -1935,7 +1935,7 @@ print(values[0])
   assert.equal(execution.stdout, "1\n1\n15\n");
 });
 
-test("invert reverses writable bool targets and evaluates target parts once", () => {
+test("self-negating assignment reverses writable bool targets with ordinary evaluation", () => {
   const result = compile(`
 let active = false
 let receiverCalls = 0
@@ -1947,7 +1947,7 @@ class Switch:
         pass
 
     def flip() -> bool:
-        invert self.enabled
+        self.enabled = not self.enabled
         return self.enabled
 
 def receiver() -> List<bool>:
@@ -1958,41 +1958,31 @@ def key() -> number:
     keyCalls += 1
     return 0
 
-invert active
+active = not active
 const toggle = Switch(false)
 print(active)
 print(toggle.flip())
-invert receiver()[key()]
+receiver()[key()] = not receiver()[key()]
 print(receiverCalls)
 print(keyCalls)
 print(values[0])
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /active = !active;/u);
-  assert.match(result.code ?? "", /#enabled = !__velarReadPrivateField/u);
-  assert.match(result.code ?? "", /__velarSetIndex\([^\n]+, !__velarIndex\(/u);
+  assert.match(result.code ?? "", /active = !\(active\);/u);
+  // Ordinary read-modify-write: the receiver and index evaluate on each
+  // side, exactly like JavaScript and Python (D28 item 7).
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\ntrue\n1\n1\ntrue\n");
-  assert.equal(formatSource("let active=false\ninvert    active\n"), "let active = false\ninvert active\n");
+  assert.equal(execution.stdout, "true\ntrue\n2\n2\ntrue\n");
+  assert.equal(formatSource("let active=false\nactive=not    active\n"), "let active = false\nactive = not active\n");
 });
 
-test("invert requires a writable bool and replaces self-negating assignment", () => {
-  const invalidTargets = compile(`
-const fixed = false
-invert fixed
-let count = 1
-invert count
-let maybe: bool? = null
-invert maybe
-`.trimStart());
-  assert.equal(invalidTargets.code, null);
-  assert.deepEqual(invalidTargets.diagnostics.map((item) => item.code), ["VEL3002", "VEL4001", "VEL4001"]);
+test("self-negating assignment follows ordinary assignment checking and 'invert' is an ordinary name", () => {
+  const nonWritable = compile("const fixed = false\nfixed = not fixed\n");
+  assert.equal(nonWritable.code, null);
+  assert.deepEqual(nonWritable.diagnostics.map((item) => item.code), ["VEL3002"]);
 
-  const nonWritableLegacy = compile("const fixed = false\nfixed = not fixed\n");
-  assert.deepEqual(nonWritableLegacy.diagnostics.map((item) => item.code), ["VEL3002"]);
-
-  const retiredSpelling = compile(`
+  const legalFlips = compile(`
 type Box:
     active: bool
 
@@ -2005,10 +1995,25 @@ def current() -> Box:
 active = not active
 box.active = not box.active
 current().active = not current().active
+print(active)
+print(box.active)
 `.trimStart());
-  assert.equal(retiredSpelling.code, null);
-  assert.deepEqual(retiredSpelling.diagnostics.map((item) => item.code), ["VEL3018", "VEL3018", "VEL3018"]);
-  assert.ok(retiredSpelling.diagnostics.every((item) => item.message.includes("invert target")));
+  assert.deepEqual(legalFlips.diagnostics, []);
+  const execution = executeModule(legalFlips.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true\nfalse\n");
+
+  const ordinaryName = compile(`
+def invert(value: bool) -> bool:
+    return not value
+
+print(invert(false))
+`.trimStart());
+  assert.deepEqual(ordinaryName.diagnostics, []);
+  const named = executeModule(ordinaryName.code ?? "");
+  assert.equal(named.status, 0, String(named.stderr));
+  assert.equal(named.stdout, "true\n");
+  assert.equal(formatSource("print(invert(false))\n"), "print(invert(false))\n");
 });
 
 test("numeric literals support familiar exponents and reject non-finite overflow", () => {
@@ -3309,7 +3314,7 @@ def describe(value: string) -> string:
         case "failed":
             const prefix = "bad"
             return prefix
-        else:
+        case _:
             return "unknown"
 
 def numeric(value: number?) -> string:
@@ -3318,7 +3323,7 @@ def numeric(value: number?) -> string:
             return "negative"
         case null:
             return "missing"
-        else:
+        case _:
             return "number"
 
 print(describe("ready"))
@@ -3358,12 +3363,22 @@ def label(value: string) -> string:
   for (const source of [
     "case \"orphan\":\n    pass\n",
     "match \"value\":\n    case selected:\n        pass\n",
-    "match \"value\":\n    else:\n        pass\n",
-    "match \"value\":\n    else:\n        pass\n    case \"late\":\n        pass\n",
   ]) {
     const result = compile(source);
     assert.equal(result.code, null);
     assert.ok(result.diagnostics.some((item) => item.code === "VEL2001" || item.code === "VEL2015" || item.code === "VEL4001"), source);
+  }
+
+  // D28 item 4: 'case _:' is the only fallback; 'else:' recovers as the
+  // wildcard case with guidance so the rest of the match keeps analyzing.
+  for (const source of [
+    "match \"value\":\n    else:\n        pass\n",
+    "match \"value\":\n    else:\n        pass\n    case \"late\":\n        pass\n",
+  ]) {
+    const result = compile(source);
+    assert.equal(result.code, null, source);
+    assert.ok(result.diagnostics.some((item) => item.code === "VEL2035"
+      && /Use 'case _:' for the fallback case; 'match' has no 'else' clause/u.test(item.message)), source);
   }
 });
 
@@ -3456,7 +3471,7 @@ def fallback(user: User?) -> string:
     match user:
         case null:
             return "missing"
-        else:
+        case _:
             return user.name
 
 def afterMatch(user: User?) -> string:
@@ -3469,7 +3484,7 @@ def increment(value: string | number) -> number:
     match value:
         case string:
             return 0
-        else:
+        case _:
             return value + 1
 
 def first(values: List<string>?) -> string:
@@ -3523,7 +3538,7 @@ def guarded(box: Box) -> string:
     match box.user:
         case User if clear(box):
             return box.user.name
-        else:
+        case _:
             return "missing"
 
 def guardedElse(box: Box) -> string:
@@ -3532,7 +3547,7 @@ def guardedElse(box: Box) -> string:
             return "missing"
         case User if clearAndReject(box):
             return "unreachable"
-        else:
+        case _:
             return box.user.name
 `.trimStart());
   assert.deepEqual(guardCallKeepsFacts.diagnostics, []);
@@ -3571,7 +3586,7 @@ def managerName(value: User?) -> string:
     match value:
         case User as user if user.manager != null:
             return user.manager.name
-        else:
+        case _:
             return "missing"
 
 const managed: User = {
@@ -3600,7 +3615,7 @@ def managerName(value: User) -> string:
     match value:
         case User if value.manager != null:
             return value.manager.name
-        else:
+        case _:
             return absent(value.manager)
 
 const unmanaged: User = {name: "Ada", manager: null}
@@ -3619,7 +3634,7 @@ def invalid(value: User?) -> string:
     match value:
         case User if value.manager != null:
             return value.manager.manager?.manager == null ? "managed" : "deep"
-        else:
+        case _:
             return value.manager == null ? "missing" : "unexpected"
 `.trimStart());
   assert.ok(partialPattern.diagnostics.some((item) => /optional access/u.test(item.message)));
@@ -3640,7 +3655,7 @@ def label(box: Box, kind: string) -> string:
             box.user = null
         case "keep":
             return box.user.name
-        else:
+        case _:
             return "other"
     return "dropped"
 
@@ -3665,7 +3680,7 @@ def invalid(box: Box, kind: string) -> null:
     match kind:
         case "drop":
             box.user = null
-        else:
+        case _:
             pass
     const stale: User = box.user
 `.trimStart());
@@ -3681,7 +3696,7 @@ def label(user: User?, kind: string) -> string:
     match kind:
         case "first":
             assert user != null
-        else:
+        case _:
             assert user != null
     return user.name
 
@@ -3737,7 +3752,7 @@ def label(kind: string) -> string:
     match kind:
         case Keys.first:
             return "matched"
-        else:
+        case _:
             return shared.user.name
 `.trimStart());
   assert.deepEqual(patternEffect.diagnostics, []);
@@ -3822,7 +3837,7 @@ export def classify(value: Payload | List<number> | null) -> string:
             return f"object:{first}:{rest.size}:{details.active}"
         case [first, ...rest]:
             return f"list:{first}:{rest.size}"
-        else:
+        case _:
             return "other"
 `.trimStart());
 
@@ -3921,14 +3936,14 @@ def inspect(value: Left | Right) -> null:
 `.trimStart());
   assert.ok(impossibleUnionShape.diagnostics.some((item) => /fields cannot occur together on Left \| Right/u.test(item.message)));
 
-  const unreachableElse = compile(`
+  const unreachableFallback = compile(`
 match true:
     case _:
         pass
-    else:
+    case _:
         pass
 `.trimStart());
-  assert.ok(unreachableElse.diagnostics.some((item) => item.code === "VEL4014" && /else branch is already covered/u.test(item.message)));
+  assert.ok(unreachableFallback.diagnostics.some((item) => item.code === "VEL4014" && /This match branch is already covered/u.test(item.message)));
 });
 
 test("match structural bindings carry precise semantic types and lexical references", () => {
@@ -3992,7 +4007,7 @@ component Badge:
             case "failed":
                 const message = "Failed"
                 return message
-            else:
+            case _:
                 return "Unknown"
 
     return <p>{label()}</p>
@@ -4943,7 +4958,7 @@ test("guides Python conditional expressions to the '?:' spelling", () => {
   const statement = compile("if true:\n    print(1)\nelse:\n    print(2)\n");
   assert.deepEqual(statement.diagnostics, []);
 
-  const guarded = compile("match 1:\n    case 1 if true:\n        print(1)\n    else:\n        print(2)\n");
+  const guarded = compile("match 1:\n    case 1 if true:\n        print(1)\n    case _:\n        print(2)\n");
   assert.deepEqual(guarded.diagnostics, []);
 });
 
@@ -14190,11 +14205,11 @@ def darkLabel(dark: bool) -> string:
 
 def localShadow() -> bool:
     let dark = true
-    invert dark
+    dark = not dark
     return dark
 
 def toggle() -> null:
-    invert dark
+    dark = not dark
 
 const labels = [true, false].map(dark => darkLabel(dark))
 
@@ -14207,10 +14222,10 @@ mount(<App />, "#app")
   // A shadowing parameter or local is an ordinary lexical binding: reads and
   // writes inside the shadow scope never lower to reactive .get()/.set().
   assert.match(result.code ?? "", /function darkLabel\(dark\) \{\n  return \(dark \? "dark" : "light"\);/u);
-  assert.match(result.code ?? "", /let dark = true;\n  dark = !dark;\n  return dark;/u);
+  assert.match(result.code ?? "", /let dark = true;\n  dark = !\(dark\);\n  return dark;/u);
   assert.match(result.code ?? "", /dark => darkLabel\(dark\)/u);
   // Assignment that resolves to the module reactive binding still publishes.
-  assert.match(result.code ?? "", /dark\.set\(!dark\.get\(\)\);/u);
+  assert.match(result.code ?? "", /dark\.set\(!\(dark\.get\(\)\)\);/u);
   // Reads outside any shadow scope still lower reactively.
   assert.match(result.code ?? "", /darkLabel\(dark\.get\(\)\)/u);
 
@@ -14227,14 +14242,14 @@ component App:
         return title
 
     action toggle() -> null:
-        invert open
+        open = not open
 
     return <p>{describe(open)} {echo(title())}</p>
 `.trimStart());
   assert.deepEqual(component.diagnostics, []);
   assert.match(component.code ?? "", /function describe\(open\) \{\n {6}return \(open \? "yes" : "no"\);/u);
   assert.match(component.code ?? "", /function echo\(title\) \{\n {6}return title;/u);
-  assert.match(component.code ?? "", /open\.set\(!open\.get\(\)\);/u);
+  assert.match(component.code ?? "", /open\.set\(!\(open\.get\(\)\)\);/u);
   assert.match(component.code ?? "", /describe\(open\.get\(\)\)/u);
   assert.match(component.code ?? "", /echo\(title\(\)\)/u);
 });
@@ -17034,7 +17049,7 @@ print(tail[0])
 print(values.slice(20).size)
 
 try:
-    values.slice(0.5)
+    print(values.slice(0.5).size)
 catch error:
     print(error.name)
 `.trimStart());
@@ -17337,6 +17352,9 @@ test("project compilation shares primitive method runtime without publishing it"
     "numberAbs",
     "numberCeil",
     "numberFloor",
+    "numberIsFinite",
+    "numberIsInteger",
+    "numberIsNaN",
     "numberRound",
     "numberToFixed",
     "stringChar",
@@ -17344,6 +17362,7 @@ test("project compilation shares primitive method runtime without publishing it"
     "stringEndsWith",
     "stringHas",
     "stringIndex",
+    "stringIsBlank",
     "stringLower",
     "stringPadEnd",
     "stringPadStart",
@@ -23484,7 +23503,7 @@ def label(value: unknown, initial: User?) -> string:
     match value:
         case Client:
             return "client"
-        else:
+        case _:
             return user.name
 `.trimStart());
   assert.equal(externalMatch.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
@@ -23520,7 +23539,7 @@ def invalid(client: Client, user: User) -> string:
     match client:
         case Client if user.manager != null:
             return "managed"
-        else:
+        case _:
             return absent(user.manager)
 `.trimStart());
   assert.ok(externalGuard.diagnostics.some((item) => /Cannot assign User\? to null/u.test(item.message)));
@@ -23571,7 +23590,7 @@ def label(initial: User?) -> string:
     match remote:
         case User:
             return "remote"
-        else:
+        case _:
             return user.name
 `);
   assert.equal(matched.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
@@ -27284,8 +27303,8 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const memberFixed = await waitFor((message) => message.id === 131);
   assert.deepEqual((memberFixed.result as Array<{ edit: { changes: Record<string, Array<{ newText: string }>> } }>).map((item) => item.edit.changes[memberFixUri]![0]!.newText), ["append"]);
 
-  const invertFixUri = pathToFileURL(join(directory, "invert-fix.vel")).href;
-  const invertFixText = [
+  const flipUri = pathToFileURL(join(directory, "self-negation.vel")).href;
+  const flipText = [
     "type Box:",
     "    active: bool",
     "let active = false",
@@ -27300,22 +27319,13 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   send({
     jsonrpc: "2.0",
     method: "textDocument/didOpen",
-    params: { textDocument: { uri: invertFixUri, languageId: "velar", version: 1, text: invertFixText } },
+    params: { textDocument: { uri: flipUri, languageId: "velar", version: 1, text: flipText } },
   });
-  const invertPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
-    && (message.params as { uri?: string }).uri === invertFixUri);
-  const invertDiagnostics = (invertPublished.params as { diagnostics: Array<{ code: string; range: Range }> }).diagnostics;
-  assert.equal(invertDiagnostics.filter((item) => item.code === "VEL3018").length, 3);
-  send({
-    jsonrpc: "2.0",
-    id: 134,
-    method: "textDocument/codeAction",
-    params: { textDocument: { uri: invertFixUri }, context: { diagnostics: invertDiagnostics, only: ["quickfix"] } },
-  });
-  const invertFixed = await waitFor((message) => message.id === 134);
-  const invertFixes = invertFixed.result as Array<{ isPreferred: boolean; edit: { changes: Record<string, Array<{ newText: string }>> } }>;
-  assert.deepEqual(invertFixes.map((item) => item.edit.changes[invertFixUri]![0]!.newText), ["invert active", "invert box.active"]);
-  assert.ok(invertFixes.every((item) => item.isPreferred));
+  const flipPublished = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
+    && (message.params as { uri?: string }).uri === flipUri);
+  // D28 item 7: self-negating assignment is ordinary code — no diagnostic
+  // and therefore no quick fix; 'invert' is no longer a spelling to teach.
+  assert.deepEqual((flipPublished.params as { diagnostics: unknown[] }).diagnostics, []);
 
   const privateFixUri = pathToFileURL(join(directory, "private-fix.vel")).href;
   const privateFixText = [
@@ -27401,7 +27411,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.match(JSON.stringify(completed.result), /super/);
   assert.match(JSON.stringify(completed.result), /throw/);
   assert.match(JSON.stringify(completed.result), /assert/);
-  assert.match(JSON.stringify(completed.result), /invert/);
+  assert.doesNotMatch(JSON.stringify(completed.result), /"label":"invert"/u);
   assert.match(JSON.stringify(completed.result), /velar\/collections/);
   assert.match(JSON.stringify(completed.result), /velar\/async/);
   assert.match(JSON.stringify(completed.result), /velar\/time/);

@@ -25,7 +25,6 @@ import {
 } from "./ast.ts";
 
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
-type InvertStatement = Extract<Statement, { readonly kind: "InvertStatement" }>;
 
 interface LookStaticAtom {
   readonly kind: "hook" | "media" | "scheme";
@@ -325,10 +324,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const reactive = this.emitReactiveAssignment(statement, depth);
       if (reactive) return reactive;
     }
-    if (statement.kind === "InvertStatement") {
-      const reactive = this.emitReactiveInvert(statement, depth);
-      if (reactive) return reactive;
-    }
     return super.emitStatement(statement, depth);
   }
 
@@ -382,6 +377,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     const emitted = super.emitExpression(expression);
     if (this.webOutput && emitted.includes("__velarListPop(")) return emitted.replace("__velarListPop(", "__velarWebListPop(");
+    if (this.webOutput && emitted.includes("__velarListRemoveLast(")) return emitted.replace("__velarListRemoveLast(", "__velarWebListRemoveLast(");
     return emitted;
   }
 
@@ -540,16 +536,6 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       const value = this.emitMappedExpression(statement.value);
       if (statement.operator === "=") return `${indentation}${state}.set(${value});`;
       return `${indentation}${state}.set(${state}.get() ${statement.operator.slice(0, -1)} ${value});`;
-    }
-    return null;
-  }
-
-  private emitReactiveInvert(statement: InvertStatement, depth: number): string | null {
-    const indentation = "  ".repeat(depth);
-    if (statement.target.kind === "IdentifierExpression"
-      && this.hints.reactiveReferences.get(spanIdentity(statement.target.span)) === "state") {
-      const state = statement.target.name;
-      return `${indentation}${state}.set(!${state}.get());`;
     }
     return null;
   }
@@ -1199,6 +1185,10 @@ function __velarReactive(value, parent = null) { return __velarRuntime.reactive(
 
 function __velarWebListPop(value, requested = -1) {
   return __velarReactive(__velarListPop(value, requested));
+}
+
+function __velarWebListRemoveLast(value) {
+  return __velarReactive(__velarListRemoveLast(value));
 }
 
 function __velarUntracked(read) {

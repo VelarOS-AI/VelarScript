@@ -29,6 +29,16 @@ D11 已对「有构建器属性上的多 token 字符串」定向拒绝，本条
   `Use the unit literal 12px; quoted unit values are not part of Look`。
 - 表维护成本与 D36 第 38 条（原生属性表）同一诚实标注；实施同批（I），
   两张表同族。
+- **42-补（用户实地标本，2026-08-12）**：D11 的多 token 字符串定向拒绝存在
+  且质量高（`border = "1px solid red"` 会重组教 `border(1px, color("red"))`；
+  padding/boxShadow 同），但 **grid-template 族从未注册**：
+  `gridTemplateColumns = "240px minmax(0, 1fr)"` 与 `"1fr 1fr"` 实测放行 ——
+  而它恰是构建器最富的属性（tracks/minmax/repeat）。修法：(a) 注册 grid
+  模板族进多 token 检查，消息按 border 先例重组
+  `Use 'tracks(240px, minmax(0px, 1fr))'`；(b) **全量注册审计** —— 逐一核对
+  每个有构建器的属性（transition、背景渐变族等）都进了 D11 检查，缺一个补
+  一个；(c) 每个构建器属性各一条多 token 拒绝回归（注册完备性由测试固化，
+  不再靠人记）。
 - 回归：合法关键字通过、垃圾拒绝、引号单位值得到指引、`display = "grid"` 等
   既有示例全绿。
 

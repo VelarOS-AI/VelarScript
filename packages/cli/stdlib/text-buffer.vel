@@ -494,8 +494,7 @@ export class TextHistory:
     def undo() -> TextSelection?:
         self.requireReady()
         assert self.undoEntries.size > 0 else "TextHistory has no edit to undo"
-        const entry = self.undoEntries.pop()
-        assert entry != null else "TextHistory has no edit to undo"
+        const entry = self.undoEntries.removeLast()
         self.undoBytes -= entry.bytes
         self.revertSteps(entry.steps)
         self.redoEntries.append(entry)
@@ -505,8 +504,7 @@ export class TextHistory:
     def redo() -> TextSelection?:
         self.requireReady()
         assert self.redoEntries.size > 0 else "TextHistory has no edit to redo"
-        const entry = self.redoEntries.pop()
-        assert entry != null else "TextHistory has no edit to redo"
+        const entry = self.redoEntries.removeLast()
         for step in entry.steps:
             const transaction = self.buffer.apply(step.forward)
             self.expectedRevision = transaction.afterRevision

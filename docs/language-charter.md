@@ -278,27 +278,35 @@ groupings read differently, so the mix requires explicit parentheses.
 spellings; the unparenthesized mix is rejected with guidance. Pure `??`
 chains and pure `and`/`or` chains are unaffected.
 
-Use `invert target` when a writable `bool` must be reversed in place:
+A writable `bool` reverses with ordinary assignment:
 
 ```velar fragment
 let active = false
-invert active
-invert panel.visible
-invert flags[index]
+active = not active
+panel.visible = not panel.visible
+flags[index] = not flags[index]
 ```
 
-The target may be a mutable binding, writable member, or writable List index.
-Its receiver and index are each evaluated exactly once. `active = not active`
-is deliberately rejected: the dedicated statement states the mutation intent,
-avoids repeating complex target expressions, and can use a reactive state's
-read/write protocol as one operation. The language server offers a preferred
-quick fix when the equivalent rewrite is statically unambiguous.
+This is a plain read-modify-write, exactly as in JavaScript and Python:
+receivers and indexes on both sides evaluate per ordinary expression rules.
+There is no dedicated toggle statement, and `invert` is an ordinary
+identifier.
 
-Equality uses `==` and `!=` in source and compiles to strict JavaScript
-identity/value equality. There is no coercive equality spelling.
+Equality uses `==` and `!=` in source and compiles to SameValueZero
+comparison: strict identity/value equality with one repair — `NaN == NaN` is
+`true`. Equality is therefore reflexive (`x == x` always holds) and agrees
+with `Set` and `Map` key identity and with List membership (`has`, `index`,
+`count`, `remove`, `in`). `-0 == 0` stays `true`. There is no coercive
+equality spelling. Comparisons whose operands cannot both be numbers compile
+to plain JavaScript `===`; only number-capable comparisons carry the NaN
+repair.
 
 Ordered comparisons accept numbers with numbers or strings with strings.
-Python-style comparison chains evaluate each operand once:
+`<`, `<=`, `>`, and `>=` keep IEEE behavior on `NaN`: every ordered
+comparison against `NaN` is `false`. The ordered aggregations (`sum`, `min`,
+`max`, default-ordered and `by=`-keyed `sorted`) refuse `NaN` elements with a
+targeted error instead. Python-style comparison chains evaluate each operand
+once:
 
 ```velar fragment
 assert 0 < percentage <= 100
@@ -762,12 +770,13 @@ String members are:
 | --- | --- |
 | `size` | Unicode code-point count. |
 | `trim()`, `upper()`, `lower()` | Transformed string. |
+| `isBlank()` | Whether the string is empty or whitespace-only — the identity is `trim().size == 0`. Unlike Python's `isspace()`, the empty string is blank. |
 | `slice(start=0, end=size)` | Code-point slice. |
-| `char(index)` | Code point or `null`; negative indexes count from the end. |
+| `char(index)` | Code point or `null`; negative indexes count from the end; a non-integer index throws. |
 | `has(text)`, `startsWith(text)`, `endsWith(text)` | Membership or boundary check. |
 | `index(text, start=0)` | First code-point position at or after `start`, or `null`; negative starts count from the end and out-of-range starts clamp. |
 | `count(text)` | Non-overlapping occurrence count; an empty search has `size + 1` positions. |
-| `split(separator)` | `List<string>`. |
+| `split(separator)` | `List<string>`. An empty separator splits per Unicode code point, so `"a😀b".split("")` is `["a", "😀", "b"]` — the character-list spelling; `"".split("")` is `[]`. |
 | `replace(from, to)`, `replaceAll(from, to)` | Replaced string. |
 | `padStart(size, fill=" ")`, `padEnd(size, fill=" ")` | Padded string. |
 | `repeat(count)` | Repeated string. |
@@ -777,12 +786,22 @@ same left-then-right evaluation order as collection membership. Direct string
 indexing is intentionally absent; use `text.char(index)` when absence is an
 expected result.
 
-Number members are `abs()`, `round()`, `floor()`, `ceil()`, and
-`toFixed(digits) -> string`. Conversion still has one spelling: use
+Number members are `abs()`, `round()`, `floor()`, `ceil()`,
+`toFixed(digits) -> string`, and the three predicates
+`isInteger() -> bool`, `isNaN() -> bool`, and `isFinite() -> bool`.
+`isInteger` follows `Number.isInteger`: `Infinity` and `NaN` are not
+integers, so it replaces the `x == x.floor()` folk test, which `Infinity`
+passes. `isNaN()` is the one NaN test — equality already answers it honestly
+(`x == x` is always `true`), so the JavaScript `x !== x` idiom has no Velar
+spelling. Conversion still has one spelling: use
 `str(value)` or an f-string, never `.toString()`. Both enforce the section 5
 text-conversion contract — values outside strings, numbers, bools, enums, and
 `null` (with their optionals and unions) are rejected, and data is formatted
 explicitly.
+
+Every string and number method above returns a new value and never modifies
+its receiver. An expression statement that calls one and discards the result
+is a compile error — there is nothing the call could have accomplished.
 
 Rest parameters use `...values`. A rest parameter is always final and may
 follow defaulted fixed parameters.
@@ -879,13 +898,14 @@ List members:
 | Member | Result |
 | --- | --- |
 | `size` | Number of values. |
-| `get(index)` | Value or `null`; negative indexes count from the end. |
+| `get(index)` | Value or `null`; negative indexes count from the end; a non-integer index throws. |
 | `has(value)` | Whether the exact value is present. |
 | `append(value)` | Add one value; returns `null`. |
 | `extend(values)` | Add a List atomically; returns `null`. |
 | `insert(index, value)` | Insert at a bounded position; returns `null`. |
 | `remove(value)` | Remove the first exact value; returns `bool`. |
-| `pop(index=-1)` | Remove and return a value, or `null`. |
+| `pop(index=-1)` | Remove and return a value, or `null`; a non-integer index throws. |
+| `removeLast()` | Remove and return the last value; an empty List throws `IndexError`. |
 | `clear()` | Remove every value; returns `null`. |
 | `copy()` | Shallow copy. |
 | `slice(start=0, end=size)` | Shallow range copy. |
@@ -905,7 +925,24 @@ List members:
 
 Direct indexing and indexed assignment are strict. Negative indexes count from
 the end; indexes outside `-size` through `size - 1` throw `IndexError`. Use
-`get` for an optional read. `sorted` and `reversed` do not mutate the source.
+`get` for an optional read: an in-range read returns the value, an
+out-of-range **integer** returns `null`, and a non-integer index is an error
+rather than a silent `null` — a fractional index is a computation bug, not an
+absence. `pop` follows the same split: expected absence (empty List or
+out-of-range integer) returns `null`, a non-integer index throws.
+`removeLast` is the strict tail counterpart — use it when emptiness is a bug,
+`pop()` when absence is an expected answer. `sorted` and `reversed` do not
+mutate the source. Exact-value operations (`has`, `index`, `count`, `remove`)
+compare by SameValueZero, so they agree with `==` and with Set/Map key
+identity, including on `NaN`. The ordered aggregations `sum`, `min`, `max`,
+and `sorted` (default order and numeric `by=` keys) throw a targeted error on
+a `NaN` element — `NaN` has no ordering and poisons totals; the message
+points to `filter(x => not x.isNaN())`. Collection methods that return a new
+value without mutating their receiver (`copy`, `slice`, the callback family,
+the aggregations, `get`, `has`, `keys`, `values`, `entries`) are compile
+errors as bare expression statements: the result is discarded. Discarding
+`pop()`, `removeLast()`, or `remove(value)` stays legal — they mutate and
+also report.
 Callback operations (`find`, `some`, `every`, `map`, `filter`, `reduce`, keyed `sorted`,
 `sum`, `min`, and `max`) read one
 checked shallow snapshot, so a callback may mutate the original List without
@@ -1054,7 +1091,7 @@ match result:
         throw error
     case null:
         pass
-    else:
+    case _:
         print("Unsupported")
 ```
 
@@ -1089,15 +1126,17 @@ matches one or more items and creates a new List for `rest`; `[]` matches only
 an empty List. Object patterns require each named field to be a present own data
 field, permit additional fields, and never invoke accessors while checking or
 capturing. Nested object and List patterns follow the same rules. `_` is the
-only wildcard and never creates a binding. Reusing a binding name inside one
-pattern is an error.
+only wildcard and never creates a binding; it covers every position, so the
+fallback branch is also spelled `case _:` — `match` has no `else` clause, and
+the removed `else:` spelling receives guidance. Reusing a binding name inside
+one pattern is an error.
 
 The matched expression evaluates once. Guards run only after their pattern
 matches, and a successful guard narrows its case body by the same rules as
 `if`. A successful pattern also narrows the original matched identifier or
 stable data field in its guard and body, so `case User:` makes the matched value
 a `User` without requiring an `as` alias. Pattern failure also carries facts to
-later cases and `else`, so the path after `case null` treats an optional matched
+later cases, so the path after `case null` treats an optional matched
 location as present. A failed guard continues to the next case after
 retaining any effects it already performed. Cases are mutually exclusive: a
 write in one case cannot erase a fact used only by a sibling, but facts
@@ -1595,7 +1634,7 @@ export component Profile(userId: string):
         return await saveUser(profile.value)
 
     def toggleExpanded() -> null:
-        invert expanded
+        expanded = not expanded
 
     return <section>
         <button type="button" on:click={toggleExpanded}>{label()}</button>
