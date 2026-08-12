@@ -3094,3 +3094,91 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
    架构与 Lite 不共用应用设计，Lite 不复用 VelarOS Desktop 私有代码或包。
 5. 下一波先复核 main 上是否出现新的并行工作，再跑相关定向测试与完整 compiler/runtime、六包、release
    rehearsal、Workbench 安装态、单引擎安全浏览器和 Lite 门禁；只精确暂存本轮文件，只允许本地提交。
+
+## 九、语法设计审查波次（2026-08-12，Claude 主持，用户逐条裁决）
+
+两轮全面语法审查（真编译器探针 + 示例语料 + Lite 账本 + 盲测账本交叉验证）产出
+两项已落地修复与三份已批准规格。**除本节修复外全部待实施，按规格内批次编排执行。**
+
+**已修复（本地未提交，门禁全绿：check + 627 tests + 三浏览器矩阵）**：
+
+1. **语句边界闭合（VEL2032）**：`const total = price quantity`（漏运算符）此前在
+   模块顶层静默丢弃尾部 token（块内早有检查，唯顶层缺失）；Web 项目 `10%3` 曾
+   静默编成 `"10%"` 加悬空 `3;`。现两处均定向诊断，百分比形态教「加空格写取模」。
+2. **条件判真值（用户裁决「if 只判断 bool」）**：`bool`/`bool?` 条件只在值为
+   `true` 时进分支（`bool?` 降级 `=== true`，真分支收窄为 `bool`）；非 bool 可选值
+   禁裸判，教 `value != null`。此前裸可选条件是存在性检查，`if flag:` 在
+   `flag == false` 时走真分支（缺陷探针确认）。全仓迁移 145 处；`presenceConditions`
+   机制改名 `truthConditions` 并仅存 bool? 路径。
+3. **空值判断唯一拼写 `!= null` / `== null`（用户加码裁决「写 != 更简单」）**：
+   定案原则「`is` 测类型，`==`/`!=` 测值，`null` 是值」。`is [not] null` 为移除
+   拼写，解析层定向指引并恢复为等值比较；`is not Error`（类型）与 `not in`
+   （成员）不受影响。上一波教学拼写与 145 处迁移随之从 `is not null` 复迁为
+   `!= null`，9 处加括号三元恢复免括号形态。详见 D30 第 22 条（含溯源：最初
+   裁决原话即 `!=null`，中途经 `not null` 提案绕道，本条回归并成文防第三次摇摆）。
+
+**已批准规格（docs/handoff/，实施者不需重新决策）**：
+
+- **D28 拼写统一**：match 兜底只留 `case _:`；「渲染空」唯一拼写 `null` +
+  `-> WebNode?`（不把 null 并入 WebNode）；撤 `invert` 放开 `x = not x`。
+  第 6 条（事件修饰符）用户驳回保留，仅补 charter 文档与分工说明。
+- **D29 表达力与一致性**：加 `isInteger()`（不加整除，`//` 被注释占用）；
+  `List.get`/`string.char`/`List.pop` 非整数索引改报错（越界整数仍 null，Map 不动）；
+  丢弃纯结果报错（`values.sorted()` 作语句）；删除零使用的 `resource.ready`；
+  字符串背书枚举可直接当 string 用（已有能力，采用缺口）→ Lite 映射函数迁移；
+  评估后**不做**：`int` 类型/包装器（除法不闭合 + 病毒式注解 + `int()` 截断与
+  floor 分叉埋坑）、下标政策统一（Map 禁用与 Record 可空各有正确理由，只成文）。
+  块体箭头改判永久取舍（保住免括号记录返回）。
+- **D30 词法审查**：保留字软化（`type`/`match`/`case`/`from`/`as` + Web 的
+  `state`/`action` 等 —— 双亲语言均合法，消歧原则依托 VEL2032；`enum` 因 JS 保留
+  必须硬留）；纯表达式语句报错（`x == 5` 笔误镜像）；数字分隔符 `1_000_000` 加入、
+  hex 不加只给指引、拒绝前导零、修「Unknown numeric unit」误导工厂；`not` 优先级
+  保持现状但 charter 补优先级表 + `not x in y` → `x not in y` 指引；比较链限同向
+  （`1 < 2 > 1` 现合法，收紧）；第 22 条（`is` 目标禁 optional，让
+  `x is not null ? a : b` 免括号）**待用户批准**。
+
+**批次序**（规格内有细则）：A（case _/invert/isInteger/索引收紧/丢弃报错）→
+E（词法字面量）→ F（表达式语句/链/指引）→ G（保留字软化，最大件，最后）；
+B（Web：null 渲染 + ready 删除）与 C（纯文档）可并行；D（示例清扫：computed
+纯包装 8 处、解包舞蹈 14 处、f-string 多余 str() 30+ 处、todo 示例未展示 D26）
+最后。每批次三道门禁，G 后复跑对抗搜捕并新增「笔误语料」维度（本波两个缺陷
+均为惯用代码探不到的形态，印证七A教训）。
+
+**同日设计裁决记录（勿翻案）**：`is not` 作为类型测试负形式保留、不改裸 `not`
+（Python 原拼写 + 类型测试信号），但其目标不含 `null` —— 空值判断唯一拼写是
+`==`/`!=`（本节第 3 条）；三种响应式读法维持（D14'' 封存）；记录 `?` 的
+缺席/null 合并维持（undefined→null 归一化的自洽结果），仅补文档。
+
+**第四轮排查（双亲陷阱复刻检查 + stdlib 源码审计）已批准 → D32**：f-string 与
+`str()` 收紧到转换白名单（现状：记录插值出 `[object Object]`、List 走隐式
+Array.toString、**自有 toString 数据字段被字符串强转执行** —— 正门违反钩子禁令，
+W-79~96 关了侧门没关正门；修法与 JSX children 同一契约，诊断教 `print(value)`
+检查 / `stringify(value)` 造文本）；浮动 Promise 编译期拦截（现状：不 await 的
+异步调用零诊断、运行裸 unhandled rejection 崩进程），fire-and-forget 出口经用户
+驳回 `background()` 包裹后定为 **`async` 语句**（`await save()` 等 / `async save()`
+不等，对称即教学；限 `Promise<null>`，失败归一化走宿主错误通道不崩进程）；
+`??` 与 `and`/`or` 混用必须括号（JS 同款规则；现状静默定 `or` 更紧，分组语义
+真分叉）。三条并入批次 H（升格为第 3-4 轮缺陷波）。正面确认：Python 可变默认
+参数陷阱未复刻（每调用求值）、JS 比较器 bool 误排序被类型拦截、嵌套 f-string
+可用。stdlib 审计（1353 行官方 Vel）：`x == x.floor()` 再 +16 处证据、`pop()`
+可空逼出双 assert 与 slice-drop 两种民间解法、95 行手搓字符串随机访问层
+（string 无索引/无 chars()，待议）、80 处 `or value ==` 长链但同文件 `in` Set
+用得漂亮（采用债）。
+
+**空值拼写返工波已完成并验收**（2026-08-12）：VEL2033 解析层定向指引
+（`is [not] null` → `==`/`!= null`，恢复为等值比较继续编译；`x is not null ? a : b`
+恰好一条诊断、无 VEL2031 混淆）；VEL4001 教学拼写复迁 `!= null`；全仓复迁
+（示例 21 处、charter 5 处 + §4 新增「is 测类型、null 是值」成文句、测试 158 行、
+脚手架 1 处）；14 处加括号三元恢复免括号。门禁：check 退出 0、633/633 测试、
+三浏览器矩阵全绿。
+
+**第三轮排查（语义结构层）已批准 → D31**：模块初始化环编译期拒绝（缺陷族：
+现状编译零诊断、运行裸 ReferenceError；纯函数环与跨模块类型互递归保持合法）；
+**支持 JSX 展开 `<Chip {...attrs} />`**（用户推翻保守建议 —— 语义定为「逐个写出
+的等价物」：字段静态已知、按名检查、沿用记录展开的后者覆盖规则、`key`/`ref`
+不可走私、`Record<T>`/Map 拒绝）；`key` 加入 VEL5056 守卫（现状可声明但永远
+不可满足）；children 机制成文 + VEL5018 教 `children: WebNode` 拼写（机制存在
+但 charter 零提及）；泛型改 bind-then-check（`pick(1, "x")` 现状静默 T=联合、
+错误在下游远处爆；改为实参处报错 + 上下文播种保联合表达力；List 字面量联合
+推断不变）；三小项（static 方法 `self` 诊断教类名访问、§10 构造器措辞、裸副作用
+导入消息）。批次 H（模块环，排返工波之后批次 A 之前）/ I（Web 组件面，并入 B）。
