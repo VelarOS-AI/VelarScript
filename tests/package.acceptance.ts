@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -29,6 +29,7 @@ try {
   assert.ok(cli.files.some((file) => file.path === "dist/deployment-verifier.js"));
   assert.ok(cli.files.some((file) => file.path === "stdlib/text-buffer.vel"));
   assert.ok(cli.files.some((file) => file.path === "stdlib/javascript.vel"));
+  assert.ok(cli.files.some((file) => file.path === "skill/ai-skill.md"));
   assert.ok(compiler.files.some((file) => file.path === "dist/framework-host.js"));
   assert.ok(compiler.files.some((file) => file.path === "dist/application-package-host.js"));
   assert.ok(node.files.some((file) => file.path === "dist/compiler.js"));
@@ -121,6 +122,12 @@ try {
   assert.match(help.stdout, /isolated framework application output/u);
   const packageHelp = await run(process.execPath, [installedCli, "help", "package"], directory);
   assert.match(packageHelp.stdout, /target-owned native packaging host/u);
+  const installedSkill = await run(process.execPath, [installedCli, "skill"], directory);
+  assert.equal(
+    installedSkill.stdout,
+    await readFile(join(root, "docs", "ai-skill.md"), "utf8"),
+    "the installed 'velar skill' must print docs/ai-skill.md verbatim",
+  );
 
   await writeFile(join(directory, "main.vel"), `
 import {range, sum} from "velar/collections"
@@ -148,6 +155,25 @@ print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(refer
   assert.match(await readFile(join(directory, "node_modules", "velar", "javascript.js"), "utf8"), /class ScriptDocument/u);
   const built = await run(process.execPath, [join(directory, "main.js")], directory);
   assert.equal(built.stdout, "42\n11\nA😀|游戏\n5:B!\n0:2\n");
+
+  // Anti-lock-in eject gate: the emitted build output is the whole program. It
+  // must run standalone in a bare directory with only Node — no compiler, no
+  // CLI, no @velarscript packages — so a project can take the readable
+  // JavaScript and keep shipping without the Vel toolchain.
+  const ejected = join(consumerDirectory, "ejected");
+  await mkdir(join(ejected, "node_modules"), { recursive: true });
+  await writeFile(join(ejected, "package.json"), `${JSON.stringify({ name: "ejected-app", private: true, type: "module" }, null, 2)}\n`, "utf8");
+  await cp(join(directory, "main.js"), join(ejected, "main.js"));
+  await cp(join(directory, "main.js.map"), join(ejected, "main.js.map"));
+  await cp(join(directory, "node_modules", "velar"), join(ejected, "node_modules", "velar"), { recursive: true });
+  const ejectedCode = await readFile(join(ejected, "main.js"), "utf8");
+  assert.match(ejectedCode, /\/\/# sourceMappingURL=main\.js\.map/u, "emitted output must stay source-mapped after ejecting");
+  assert.doesNotMatch(ejectedCode, /@velarscript/u, "emitted output must not import the Vel toolchain");
+  assert.deepEqual(await readdir(join(ejected, "node_modules")), ["velar"],
+    "the ejected directory may contain only the generated readable runtime, never toolchain packages");
+  const ejectedRun = await run(process.execPath, [join(ejected, "main.js")], ejected);
+  assert.equal(ejectedRun.stdout, built.stdout, "ejected output must run identically without the Vel toolchain");
+  process.stdout.write("VelarScript anti-lock-in eject acceptance passed: built output ran standalone without the Vel toolchain\n");
 
   const api = await run(process.execPath, [
     "--input-type=module",

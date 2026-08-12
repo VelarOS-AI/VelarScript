@@ -6,15 +6,42 @@
 
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
-VelarScript is the first extensible language framework for the AI era, built
-primarily for the JavaScript ecosystem and compiled to modern JavaScript. Core stays target-neutral;
-official Node, Web, and Desktop packages compose explicit capabilities without
-splitting the source language. It keeps the JavaScript runtime model—objects,
-references, garbage collection, Promises, the event loop, and the prototype
-chain—but replaces JavaScript's source surface with a smaller, checked
-Python/JavaScript blend.
+VelarScript is a language AI writes and maintains, and humans read and own.
+The person who owns the product supplies intent and reads the result; the
+model writes the VelarScript and every later change to it; the compiler
+guards each change. Vel is built from the bones of JavaScript and Python —
+the two languages every model already knows best — so a model writes it on
+prior knowledge alone, and the language keeps **one obvious spelling** per
+idea: model output stays uniform, and any Vel codebase reads like any other.
 
-The Web framework is an extension package, not hidden compiler behavior:
+Where JavaScript would trap a non-programmer owner, the compiler teaches
+instead: every removed or mistaken spelling gets a **diagnostic that names
+the one current spelling**, so a model self-corrects in one round and a
+person learns the language from the compiler — a property measured by blind
+tests, not claimed. And because Vel compiles to legible, source-mapped
+JavaScript, there is no lock-in: if Vel itself ever becomes the obstacle,
+take the emitted JavaScript and keep shipping — an exit enforced by a
+[permanent acceptance gate](tests/package.acceptance.ts), not promised in
+prose. The full mission is written down in
+[Why VelarScript exists](docs/why-velarscript.md).
+
+## Compatibility policy
+
+VelarScript **never promises backward compatibility**. The language absorbs
+evidence and breaks cleanly: removed spellings get teaching migration
+diagnostics, never silent aliases and never permanent compatibility debt.
+Pin your toolchain version; migrations are guided. Vel currently fits
+products that move fast — prototypes, internal tools, short-lifecycle
+applications. A stable channel for long-lived products is a future
+milestone, earned by evidence, not declared by a version number.
+
+## One language, explicit packages
+
+VelarScript compiles to modern JavaScript and keeps the JavaScript runtime
+model—objects, references, garbage collection, Promises, the event loop, and
+the prototype chain—while replacing JavaScript's source surface with a
+smaller, checked Python/JavaScript blend. Core stays target-neutral; the Web
+framework is an extension package, not hidden compiler behavior:
 
 - `@velarscript/compiler` owns the Core language.
 - `@velarscript/node` adds bounded filesystem, path, process, terminal, server, and HTTP
@@ -209,6 +236,7 @@ velar run [entry.vel | project-directory] [-- <program-arguments>...]
 velar test [project-directory | file.test.vel]
 velar test [project-directory] --browser [chromium|firefox|webkit|all]
 velar format [file.vel | project-directory] [--check]
+velar skill
 velar verify [project-directory | build-directory]
 velar preview [project-directory | build-directory] [--port <port>]
 velar lsp
@@ -217,6 +245,10 @@ velar lsp
 ## Documentation
 
 - [Changelog](CHANGELOG.md)
+- [Why VelarScript exists](docs/why-velarscript.md)
+- [Best practices](docs/best-practices.md)
+- [AI skill brief](docs/ai-skill.md) (printed verbatim by `velar skill`)
+- [Escape hatches](docs/escape-hatches.md)
 - [Language reference](docs/language-charter.md)
 - [Standard library](docs/standard-library.md)
 - [Web framework API](docs/web-api.md)

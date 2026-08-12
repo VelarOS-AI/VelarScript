@@ -122,6 +122,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return 0;
   }
 
+  if (command === "skill") {
+    if (rest.length > 0) {
+      process.stderr.write("velar skill: this command does not accept arguments\n");
+      return 2;
+    }
+    process.stdout.write(await readFile(new URL("../skill/ai-skill.md", import.meta.url), "utf8"));
+    return 0;
+  }
+
   if (command === "create") {
     const parsed = parseCreateArguments(rest);
     if (typeof parsed === "string") {
@@ -910,6 +919,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar build <single.vel> --out <file.js>",
     "  velar package [project-directory]",
     "  velar format [file.vel | project-directory] [--check]",
+    "  velar skill",
     "  velar lsp",
     "  velar --version",
     "",
@@ -918,7 +928,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 
 const commandNames = new Set([
   "check", "create", "install", "add", "remove", "update", "dev", "build", "package", "run", "verify", "preview",
-  "verify-deployment", "test", "format", "lsp",
+  "verify-deployment", "test", "format", "skill", "lsp",
 ]);
 
 function printCommandHelp(command: string, output: NodeJS.WritableStream = process.stdout): void {
@@ -938,6 +948,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     "verify-deployment": ["Usage: velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]", "Compares verified local bytes, routes, MIME types, and headers with an HTTPS deployment."],
     test: ["Usage: velar test [project-directory | file.test.vel]", "       velar test [project-directory | file.browser.test.vel] --browser[=chromium|firefox|webkit|all]", "Runs Core tests or explicit browser tests; bare --browser defaults to Chromium."],
     format: ["Usage: velar format [file.vel | project-directory] [--check]", "Formats one file or every manifest-owned .vel source; --check never writes."],
+    skill: ["Usage: velar skill", "Prints the packaged VelarScript AI skill brief verbatim to stdout for any coding agent."],
     lsp: ["Usage: velar lsp", "Runs the stdio language server for an editor host."],
   };
   output.write(["VelarScript Compiler", "", ...(details[command] ?? []), ""].join("\n"));

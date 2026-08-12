@@ -82,6 +82,12 @@ origin. CI may provide the same target with `VELAR_DEPLOYMENT_URL`.
 `--json` emits the versioned verification report used as external-preview
 evidence.
 
+The distribution also carries the VelarScript AI skill brief
+(`skill/ai-skill.md`, kept byte-identical to the repository's
+`docs/ai-skill.md` by a permanent gate). `velar skill` prints it verbatim to
+stdout, so any coding agent can load the language brief with one offline
+command.
+
 Use `velar help <command>` or `velar <command> --help` for command-specific
 usage and defaults. Project creation is transactional, manifests reject unknown
 fields, and production/release verification fails closed rather than serving or

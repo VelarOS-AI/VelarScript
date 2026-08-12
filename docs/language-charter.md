@@ -6,6 +6,13 @@ not part of the language.
 
 ## 1. Design contract
 
+VelarScript exists so that AI can write and maintain code that the product's
+human owner can read and safely change: the human supplies intent, the model
+writes the VelarScript, and the compiler guards each change. Every rule in
+this contract serves that mission — uniform model output, diagnostics that
+teach, and a readable JavaScript exit — as recorded in
+[Why VelarScript exists](why-velarscript.md).
+
 VelarScript is designed for people and AI systems that already understand
 JavaScript, Python, HTML, CSS, or JSX.
 

@@ -23,6 +23,11 @@ template publishes a checked Web component source entry and keeps its preview
 application outside that public entry. `game` is reserved for the future
 official Canvas framework and deliberately fails until that package exists.
 
+Every generated project includes a root `AGENTS.md` that points coding agents
+at `velar skill` — the language brief packaged with the toolchain — together
+with the project's gate commands (`velar check`, `velar test`, `velar format`)
+and the JavaScript escape-hatch ladder.
+
 Creation is transactional. It refuses non-empty targets and never installs
 dependencies, downloads browsers, initializes Git, or contacts a service.
 The generated README keeps the first `npm install` explicit, then points to the

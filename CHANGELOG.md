@@ -6,6 +6,18 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The toolchain now ships the AI skill brief. `velar skill` prints the
+  agent-agnostic language brief to stdout; every generated project scaffolds
+  an `AGENTS.md` pointing agents at it, the project gates, and the escape
+  hatches; and permanent tests keep the packaged copy byte-identical to
+  `docs/ai-skill.md`, under its size budget, and free of drift — every code
+  fence in the brief compiles against the current compiler.
+- The anti-lock-in exit is now gate-tested: the package acceptance copies a
+  built application's emitted output into a bare directory and runs it with
+  plain Node — no `@velarscript/*` packages present — proving the readable
+  JavaScript exit works. `docs/escape-hatches.md` documents the full escape
+  ladder, and `docs/why-velarscript.md` plus the README carry the mission
+  and compatibility policy.
 - Module initialization cycles are rejected at compile time (`VEL3019`). An
   initializer-position read of an import whose module has not evaluated yet
   under the project's module order — previously a clean compile followed by a
