@@ -3,7 +3,10 @@
 > **修复波 1（Core 编译器 + CLI）已落地**：α-1、α-2、α-3+NEW-1、α-5、
 > α-6/7/8/9/10/13/14、β-2、β-3、β-8、β-10、β-12、γ-1、γ-2、γ-3 全部修复并
 > 带回归（`tests/hardening-marathon-core.test.ts` 20 项）。**修复波 2（Web
-> 运行时）待跑**：β-1、β-4、β-5、β-6（门禁扩展）、β-7、β-9、β-11、β-13、α-4。
+> 运行时）亦已落地**：β-1、β-4、β-5、β-6（门禁扩展）、β-7、β-9（四因之三）、
+> β-11、β-13、α-4 全部修复并带回归（`tests/hardening-marathon-web.test.ts`，
+> 含 Chromium 执行级证据）。**29 条账本已清空**；新增待裁决的三条排序谓词
+> 不一致见文末「批次 M 前置」。
 
 马拉松协议下的实现层漏洞搜捕记录。纪律沿用七A节硬化阶段：**静态发现 =
 未验证假设**，一律先执行验证（默认立场是驳回）再修；验证通过才进修复波。
@@ -225,6 +228,86 @@ provenance 规则写在注释里。
 实施者选了「项目主 entry 为第一根」，而非最保守的「SCC 内任何读都不安全」——
 后者会拒掉现有测试套件钉住的三个合法程序。两个驱动器传同一个 primaryEntry，
 分歧无论如何已闭合。
+
+## 修复波 2 实测结果（2026-08-12 落地）
+
+### β-1 死根滞留（WeakRef + 三轮 gc 测量）
+
+| 代数 | parents 前→后 | gc 后存活死根 前→后 | 每次深层突变 µs 前→后 |
+|---|---|---|---|
+| 51 | 51 → **1** | 51/51 → **0/51** | 9.08 → **0.89** |
+| 200 | 200 → **1** | 200/200 → **1/200** | 20.28 → **1.11** |
+| 800 | 800 → **1** | 800/800 → **1/800** | 64.09 → **0.88** |
+| 3200 | 3200 → **1** | 3200/3200 → **1/3200** | 268.62 → **1.15** |
+
+线性增长彻底消除（3200 代 268µs → 1.15µs）。唯一存活者是最近一个 `previous`
+（仍被运行帧持有），不随 N 增长。修法：`unlink` 级联 —— 子节点失去最后一个
+owner 时递归遍历其自有值/List 项/Map 键值/Set 成员并解除 owner 身份。
+
+### β-7 记录字段写入（本波性能收益最大项）
+
+| 维度 | 前 | 后 | 新预算 |
+|---|---|---|---|
+| 记录字段写（β-7） | **48.58 ms**（4858 ns） | **4.1 ms**（415 ns）—— **11.7×** | 13（新维度） |
+| 深层记录读（β-9） | 4.09 ms | 3.7 ms | 12（新维度） |
+| pull（state→computed） | 2.03 ms | 1.8 ms | 7 → **6** |
+| push（state→computed→observer） | 9.37 ms | 9.0-9.8 ms | 30（**本波未改善** —— 每次更新一个微任务轮次占主导，诚实记录） |
+
+### β-6 门禁扩展（本波最重要的结构性收获）
+
+覆盖面从**三段切片**扩到**整个 `WEB_RUNTIME_BODY`**（`__velarReport` →
+`__velarTick`），并断言三段旧切片仍在该跨度内 —— **覆盖面无法再静默缩小**。
+禁用十类模式（宿主集合构造与原型、ambient Object 静态、Array.isArray/Reflect/
+Number.is*/JSON/Symbol.for/String()、自有集合的实例方法、按接收者的可替换 DOM
+成员、document. 与 DOM 构造器、非捕获迭代器的 for…of、数组展开与展开调用、
+Array 原型方法、经 `.` 从宿主对象读框架状态）。
+
+**当场揪出的真实违规**（全部已修）：keyed 重整（`new Map()`×2、entries/next
+实例方法、Array 迭代器 for…of、`created.push`、`String(key)`）；look/style/class
+（12 处 WeakMap 实例调用、6 处 `new Set()`、12 处 add/delete/size、
+Object.create/entries/keys/freeze、8 处 `element.style.*`、classList、
+setAttribute/removeAttribute、三个 expando、`[...next].join`、flatMap/filter）；
+`__velarRootHost`（nodeType/childNodes/querySelectorAll/`__velarHost`）；事件
+（6 处 add/removeEventListener、5 处 `modifiers.includes`）；表单绑定
+（value/valueAsNumber/checked 读写）；`unsafe:html` 的 innerHTML；23 处 `.push`。
+为此在 web 自有基础层新增约 30 个捕获 DOM 操作，各按「Node 原型候选 → 接口
+候选 → 自有数据 seam」派发，沿用既有 setAttribute 模式。
+
+**窄范围显式放行**（各自在门禁注明理由）：顶层初始化捕获（本身即 ABI）；对捕获
+入口 `__velarGraphSetItems`/`MapItems`/`MapKeyItems` 的 for…of（其迭代器 `next`
+仍是原型方法，属全仓既有约定，未擅自单方面更改）；发射器自建纯对象上的标记读
+（永非宿主对象）；String 实例方法（在集合/DOM ABI 之外，标记不禁）。
+
+### 本波的诚实标注
+
+- **β-9 四因之一未做**：每次捕获操作的 `[args]` 数组分配。移除需共享可变参数
+  缓冲，而读路径已降到约 37ns/次追踪读 —— 判定风险收益倒挂，**不做并记录**。
+- **β-11 属潜在缺陷**：每个子节点都经该 override 发射，今天没有程序能产出未
+  重写的调用；测试钉住机制本身。
+- **β-6 可利用性未验证**（账本原也标未验证）：关闭了门禁与违规，未构建敌意
+  全局的浏览器探针。
+- **域外遗留一处同类**：`packages/web/src/runtime.ts:1158`（`velar/web` 的
+  `Link`）仍用 `node.classList.add(...names)` —— 同类、不同切片，下一轮看。
+
+---
+
+## 批次 M 前置：三条排序谓词不一致（约束完整性分析副产物）
+
+`Comparable` 约束无法定义，直到三个谓词对「什么算有序」给出同一答案。
+
+| ID | 严重度 | 实测 |
+|---|---|---|
+| ORD-1 | **major（静态/运行时不一致）** | `List<number 或 string 联合>.sorted()` **编译通过**、运行抛 `TypeError: List.sorted() requires uniform numbers or strings`。`defaultSortableType`（analyzer.ts:7116）用 `members.every` 接受混合类别联合，而 `isCollectionOrderKey`（6484）正确要求 `categories.size === 1` |
+| ORD-2 | major（误拒） | `List<Status>.min()` 被拒（`listAggregationOrderedType`:7122 遗漏 enum），而同一列表 `.sorted()` 编译且运行正常 |
+| ORD-3 | major（不一致 + **静默错序**） | 直接 `Status.open < Status.done` 被拒，但 `sorted(by=row => row.status)` 通过；且 `[Priority.high, Priority.low, Priority.normal].sorted()` **实测输出 `[high, low, normal]`** —— 按成员名字母序，对 `low/normal/high` 这类最自然用例静默给出错误顺序 |
+
+**待用户裁决**：枚举是否算 `Comparable`。推荐**选项 A：不算** ——
+`sorted()`/`sorted(by=)` 收紧为拒绝枚举与混合联合，同时消灭 ORD-1 的不一致与
+ORD-3 的静默错序；业务排序走显式 `sorted(by=rank)` 或字符串背书枚举把序编进值。
+代价是破坏性变更（今天能跑的枚举排序会开始报错，但它本来就在给错序）。
+备选 B（字母序成文）与 C（引入序数）的理由与代价见对话记录。
+
+---
 
 ## 验证与修复编排
 
