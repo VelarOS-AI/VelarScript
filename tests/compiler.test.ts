@@ -3100,7 +3100,7 @@ def broken() -> Missing:
     return null
 component App:
     resource value: number = broken()
-    return <p key={broken()}>{broken()}</p>
+    return <p title={broken()}>{broken()}</p>
 `.trimStart());
   assert.equal(webPropagation.diagnostics.length, 1);
   assert.equal(webPropagation.diagnostics[0]?.message, "Unknown type 'Missing'");
@@ -10656,8 +10656,8 @@ const newlinePosition = newline.positionAt(1)
 print(f"{str(newline.lineCount)}|{str(newlinePosition.line)}:{str(newlinePosition.column)}|{newline.lineText(0)}")
 
 const lines = TextBuffer("a\\r\\nb\\n😀")
-const viewport: TextLineSlice = lines.lineSlice(1, 3)
-print(f"{str(lines.size)}|{str(lines.lineCount)}|{lines.lineText(0)}|{str(viewport.start)}:{str(viewport.end)}|{viewport.text == "b\\n😀"}")
+const sliceRange: TextLineSlice = lines.lineSlice(1, 3)
+print(f"{str(lines.size)}|{str(lines.lineCount)}|{lines.lineText(0)}|{str(sliceRange.start)}:{str(sliceRange.end)}|{sliceRange.text == "b\\n😀"}")
 const crlfMiddle = lines.positionAt(2)
 print(f"{str(crlfMiddle.line)}:{str(crlfMiddle.column)}|{str(lines.offsetAt(crlfMiddle.line, crlfMiddle.column))}")
 
@@ -25384,14 +25384,28 @@ const broken = look:
   assert.match(messages, /Cannot assign Error to number \| string/u);
   assert.match(messages, /Expected at least 1 argument but received 0/u);
 
+  // LOK-U8: a literal argument is checked where it is written. The runtime guard
+  // is unchanged and still owns every computed argument, pinned below.
   const invalidRange = compile(`
 import {rgba} from "velar/look"
 
 const broken = look:
     color = rgba(0, 0, 0, 2)
 `.trimStart());
-  assert.deepEqual(invalidRange.diagnostics, []);
-  const rangeExecution = executeWithLookModule(invalidRange.code ?? "");
+  assert.ok(invalidRange.diagnostics.some((item) => item.code === "VEL5042"
+    && /RGB alpha must be from 0 through 1; rgba received 2/u.test(item.message)), JSON.stringify(invalidRange.diagnostics));
+
+  const dynamicRange = compile(`
+import {rgba} from "velar/look"
+
+def opacity() -> number:
+    return 2
+
+const broken = look:
+    color = rgba(0, 0, 0, opacity())
+`.trimStart());
+  assert.deepEqual(dynamicRange.diagnostics, []);
+  const rangeExecution = executeWithLookModule(dynamicRange.code ?? "");
   assert.notEqual(rangeExecution.status, 0);
   assert.match(String(rangeExecution.stderr), /RGB alpha must be from 0 through 1/u);
 

@@ -188,6 +188,76 @@ overrides normal Look and class declarations for the same property, including
 stateful Look rules. Raw `style="..."`, Style objects, conditional directive
 names, and reusable Style values remain unsupported.
 
+### The animation boundary and its escape
+
+Look owns no animation vocabulary. There is no `@keyframes` target, so an
+animation name written in Look could never resolve, and `animation` and
+`animationName` are rejected at compile time with the boundary named. The
+supported spellings are:
+
+- `transition` (and `transitionProperty`, `transitionDuration`,
+  `transitionDelay`, `transitionTimingFunction`) for state changes — a hover
+  colour, an opening panel, a fading toast. This covers most product motion and
+  stays inside the checked language.
+- keyframe animation through the unsafe CSS boundary: declare the keyframes and
+  the class that uses them in a real stylesheet, import it at module level with
+  an explicit order, and attach the class from JSX.
+
+```velar fragment
+import css unsafe "./motion.css" before look
+
+component Spinner:
+    return <span class="spinner" role="status" aria-label="Loading" />
+```
+
+That stylesheet is unchecked native CSS by design: its class names, keyframe
+names, and cascade are the stylesheet author's responsibility. A checked
+`keyframes` declaration is not part of Web API 0.10.
+
+Media conditions cover `viewport.width`, `viewport.height`, `scheme.dark`,
+`scheme.light`, and `motion.reduced` — the last lowering to
+`prefers-reduced-motion`, so reduced-motion variants are expressible without
+leaving Look. Container queries, `print`, and `orientation` have no Look
+spelling in 0.10; reach them through the unsafe CSS boundary.
+
+### Form binding and the event object
+
+`bind:value` and `bind:checked` bind one control; `bind:group` binds a set of
+controls that share one decision. A radio group's state holds the selected
+input's `value`, and a checkbox group's `List<string>` state holds the checked
+values, so checking and unchecking are membership changes. Every `bind:` target
+is a writable reactive location — a state name, or a field or index path rooted
+in one, such as `bind:value={form.name}` or `bind:value={items[0]}`. Each bound
+input identifies itself by its `value` attribute.
+
+```velar fragment
+type Signup:
+    email: string
+
+component Form:
+    state signup: Signup = {email: ""}
+    state plan = "team"
+    state extras: List<string> = []
+
+    return <form>
+        <input type="email" bind:value={signup.email} aria-label="Email" />
+        <input type="radio" value="solo" bind:group={plan} aria-label="Solo" />
+        <input type="radio" value="team" bind:group={plan} aria-label="Team" />
+        <input type="checkbox" value="digest" bind:group={extras} aria-label="Digest" />
+    </form>
+```
+
+An event object carries typed event fields only — `type`,
+`defaultPrevented`, `preventDefault`, `stopPropagation`, and the fields of its
+specific event kind (`key`, `clientX`, `data`, and so on). It deliberately
+carries no `target` or `currentTarget`: an untyped element reference inside a
+handler is how DOM reading leaks back into application code, and the value the
+handler wanted is available through a binding. Read control values with `bind:`,
+reach a specific element with `ref={element}`, and read a whole form at submit
+time with `velar/forms`. An event handler runs for effect and returns `null`;
+because `{}` after `=>` builds an empty record rather than an empty block, a
+no-op handler is written `() => null`.
+
 A base Look selector and a simple class selector have equal specificity, so
 their winner is determined by ordinary CSS source order; `before look` and
 `after look` imports make that order explicit. Compound selectors,

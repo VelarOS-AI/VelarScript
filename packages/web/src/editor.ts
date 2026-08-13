@@ -42,6 +42,7 @@ const nativeJsxCompletions: readonly CompilerProjectEditorCompletion[] = [
   { label: "look", detail: "checked Look value", kind: "field" },
   { label: "bind:value", detail: "two-way string/number form binding", kind: "field" },
   { label: "bind:checked", detail: "two-way boolean form binding", kind: "field" },
+  { label: "bind:group", detail: "two-way radio or checkbox group binding", kind: "field" },
   { label: "class:", detail: "reactive class directive", kind: "field" },
   { label: "unsafe:html", detail: "explicit unsafe HTML boundary", kind: "field" },
   ...jsxControlCompletions,

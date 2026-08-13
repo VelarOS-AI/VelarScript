@@ -6,6 +6,22 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Look stops lying. A `look:` literal that reads component state is
+  rejected at the read — it froze at declaration while looking exactly
+  like the live forms — with `look={cond ? a : b}` and directive values
+  taught as the two forms that update. Bare non-zero numbers no longer
+  produce dead CSS (`width = 100` computed as `auto`; literal `0` stays
+  legal), builder calls with literal arguments are range-checked at
+  compile time, a component-scoped CSS import is rejected instead of
+  silently discarded, `viewport`/`scheme`/`motion` are reserved names,
+  `motion.reduced` joins the media vocabulary, and `animation` teaches
+  the keyframes escape until the checked form lands.
+- Forms bind deeper: `bind:value={form.name}` and `{items[0]}` accept
+  writable reactive member paths, and `bind:group` lands for radio groups
+  and checkbox Lists. JSX accepts `{name ?? <Fallback/>}`, teaches the
+  ternary for `and`-rendering and the two comment attempts, diagnoses a
+  static `key`, and keyword prop names collapse eleven-error cascades
+  into one taught message.
 - The module boundary hardens: imports, every export form, re-exports and
   extern modules are module-top-level-only statements instead of emitting
   invalid JavaScript from blocks; two path spellings of one file (case

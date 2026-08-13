@@ -1806,13 +1806,23 @@ Magic JSX `if`, `else-if`, and `else` attributes are not part of the language.
 
 Important native directives include:
 
-- `on:click={handler}` and other typed events
-- `bind:value={state}` for supported form controls
+- `on:click={handler}` and other typed events; a handler returns `null`
+- `bind:value={state}` for supported form controls, and `bind:checked={flag}`
+  for a single checkbox
+- `bind:group={choice}` on `<input type="radio">`, where the state holds the
+  selected input's `value`, and `bind:group={choices}` on
+  `<input type="checkbox">`, where `List<string>` state holds the checked values
+  and checking or unchecking is a membership change
 - `ref={element}` on a native element for an optional element binding
 - `ref={handle}` on a component that explicitly declares `exposes`
 - `look={visual}`
 - `class={nameOrList}`
 - stable `key` values for dynamic children
+
+A `bind:` target is a writable reactive location: a state name, or a field or
+index path rooted in one, such as `bind:value={form.name}` or
+`bind:value={items[0]}`. A computed value, a `const`, and a function result are
+rejected — nothing would receive the write.
 
 Refs require mutable optional `let` bindings and are restored to `null` during
 cleanup. A component Handle is shallow-frozen, remains stable for its component
@@ -1825,8 +1835,19 @@ A `key` drives identity-preserving reuse only in the keyed-children shape: an
 interpolation that is `items.map(item => <Row key={item.id} />)`, or a `?:`
 branch of one — so an empty-state ternary around a keyed list keeps the keyed
 path. A list rendered with `.map(...)` in that position requires a key on its
-root element, and a `key` anywhere else in an interpolation is a diagnostic
-rather than a silently ignored attribute.
+root element, and a `key` anywhere else — inside an interpolation or on an
+element in a fixed position — is a diagnostic rather than a silently ignored
+attribute.
+
+`<` begins JSX only where a value can begin. The decision is made from the
+preceding token, and the positions are: the start of a module, after a newline
+or an indent, after `=`, after `return`, after `=>`, after `(`, `[`, or `{`,
+after `,`, `:`, or `?`, and after `??`, `and`, or `or`. Everywhere else `<` is
+the less-than operator. `and` and `or` are in the list so that the React habit
+`{ready and <Panel />}` parses and is answered with the conditional-rendering
+spelling — `{ready ? <Panel /> : null}` — rather than a parse cascade; those two
+operators still combine bool values only. Outside these positions, wrap the
+element in parentheses.
 
 ## 15. State, computed values, resources, and actions
 
@@ -2065,11 +2086,20 @@ const raised = shadow(0px, 12px, 32px, rgba(0, 0, 0, 0.16), spread=0px, inset=fa
 ```
 
 Builder inputs are checked visual values, not JavaScript coercion points.
-Colors use finite numeric ranges; layout builders accept finite numbers,
-bounded strings, typed lengths/percentages, and their declared track values.
-Functions, records, classes, non-finite numbers, and objects with conversion
-hooks never become CSS text. A dynamic property value of `null` removes that
-controlled value instead of emitting the text `"null"`.
+Layout builders accept bounded strings, typed lengths, percentages, track
+fractions, and their declared track values. A bare number is accepted only
+where CSS itself has no unit: a repeat count, and the unitless properties
+listed under *Unit values and calculations*. In a length position `0` is the
+one unitless value; every other bare number is rejected with the unit it needs,
+because `padding: 16` is a declaration the browser discards. Functions,
+records, classes, non-finite numbers, and objects with conversion hooks never
+become CSS text. A dynamic property value of `null` removes that controlled
+value instead of emitting the text `"null"`.
+
+Numeric domains are checked where the argument is written. A literal argument
+outside a builder's range — a colour channel above 255, an opacity above 1, a
+division by zero — is a compile error rather than a first-paint failure; a
+computed argument keeps the same check at run time.
 
 ### Unit values and calculations
 
@@ -2083,7 +2113,7 @@ const gutter: Length = 16px
 const content: Percentage = 75%
 const fluid: LengthPercentage = content - gutter * 2
 const wide: Length = 25vw + 2rem
-const motion: Duration = 1s + 200ms
+const settle: Duration = 1s + 200ms
 const rotation: Angle = 0.5turn + 90deg
 ```
 
@@ -2092,8 +2122,16 @@ Percentage yields `LengthPercentage`. A visual value may be multiplied or
 divided by a finite number, and a number may multiply a visual value. Compatible
 same-unit expressions fold to one value; mixed length units and
 length-percentage expressions lower to CSS `calc(...)`. Unit-by-unit
-multiplication, division by a unit value, color arithmetic, and arithmetic on
-composite values such as `Spacing` are rejected.
+multiplication, division by a unit value, division by zero, color arithmetic,
+and arithmetic on composite values such as `Spacing` are rejected.
+
+A Look property that names a CSS length requires a unit. The properties whose
+CSS grammar is unitless keep plain numbers: `lineHeight`, `opacity`, `zIndex`,
+`fontWeight`, `flex`, `flexGrow`, `flexShrink`, `order`, `scale`, and
+`aspectRatio`.
+
+`viewport`, `scheme`, and `motion` name the Look media subjects and are reserved
+bindings in a Web module, so a local binding can never shadow a media condition.
 
 ### JSX Look directives
 
@@ -2216,8 +2254,12 @@ including a field of a const token record. Dynamic function results are rejected
 because media rules must be extracted before the program runs. The
 color-scheme subjects `scheme.dark` and `scheme.light` lower to
 `prefers-color-scheme`. The two schemes are complementary, so `not scheme.dark`
-is the same condition as `scheme.light`. Media subjects compose with element
-states and each other:
+is the same condition as `scheme.light`. The accessibility subject
+`motion.reduced` lowers to `prefers-reduced-motion`, and its negation is the
+`no-preference` side of the same query. That set — `viewport.width`,
+`viewport.height`, `scheme.dark`, `scheme.light`, `motion.reduced` — is the
+whole media vocabulary; container queries, print, and orientation have no Look
+spelling. Media subjects compose with element states and each other:
 
 ```velar
 import {rgb} from "velar/look"
@@ -2241,6 +2283,21 @@ Pseudo-element targets also use `@` but own a block:
 
 Targets cannot be nested. Conditions may appear inside a target, but a target
 cannot appear inside another target.
+
+A `look:` literal is built once, where it is written: its conditions become CSS
+selectors and media queries, and its values are read at construction. A
+condition or value inside a literal therefore cannot read reactive state — the
+read would be a snapshot that never updates, so it is rejected. Reactive visuals
+live on the element, where the whole attribute is re-read on change:
+`look={active ? activeLook : baseLook}` chooses a Look, and
+`look:color={active ? hot : cold}` sets one property. Element states, media
+subjects, and their combinations remain live in a literal because they are CSS
+conditions rather than program values.
+
+Look has no animation vocabulary. `@keyframes` cannot be written in Look, so
+`animation` and `animationName` are rejected with the boundary named: load
+keyframes through a module-level `import css unsafe` and reference them from
+that stylesheet, or express state changes with `transition`.
 
 ### Stable output and external overrides
 

@@ -3,6 +3,7 @@ import {
   Parser,
   type CompilerLexicalExtension,
   type Expression,
+  type Parameter,
   type Statement,
   type Token,
   type TypeSyntax,
@@ -34,8 +35,72 @@ const recoveredDiagnostic = (code: string, message: string, sourceSpan: Span): D
 const renderBlockSpellings = new Set(["render", "show", "view"]);
 
 export class VelarWebParser extends Parser {
+  private insideComponentProps = 0;
+
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[]) {
     super(tokens, lexicalExtensions);
+  }
+
+  /**
+   * WEB-N4: a component prop list is where a Web author reaches for the HTML
+   * names, and `class`, `look`, and the Core keywords are all tokens rather than
+   * identifiers. Recovering the keyword as the prop name turns an eleven-message
+   * parser cascade into one directed message, and a declaration-position `?`
+   * teaches the default value that actually makes a prop omittable.
+   */
+  protected override parseParameters(): readonly Parameter[] {
+    if (this.insideComponentProps === 0) return super.parseParameters();
+    this.expect("leftParen", "Expected '('");
+    const parameters: Parameter[] = [];
+    if (!this.check("rightParen")) {
+      do {
+        if (this.match("ellipsis")) this.diagnostics.push(diagnostic("VEL2016", "Components use named props and do not support rest parameters", this.previous().span));
+        const nameToken = this.check("identifier") ? this.advance() : this.componentPropKeyword();
+        if (!nameToken) {
+          this.diagnostics.push(diagnostic("VEL2016", "A component prop list holds 'name: Type' props separated by commas", this.current().span));
+          break;
+        }
+        let optionalMarker = false;
+        if (this.check("question")) {
+          this.advance();
+          optionalMarker = true;
+        }
+        const type = this.match("colon") ? this.parseTypeReference() : null;
+        let defaultValue = this.match("assign") ? this.parseExpression() : null;
+        if (optionalMarker) {
+          this.diagnostics.push(diagnostic(
+            "VEL2016",
+            `A component prop becomes omittable through its default value, not through '?': write '${nameToken.value}: Type = default' for a real default, or '${nameToken.value}: Type? = null' when absence is the value`,
+            span(nameToken.span.start, (defaultValue ?? type ?? nameToken).span.end),
+          ));
+          defaultValue ??= { kind: "LiteralExpression", value: null, raw: "null", span: nameToken.span };
+        }
+        parameters.push({
+          name: nameToken.value,
+          type: optionalMarker && type ? { syntax: { kind: "OptionalTypeSyntax", inner: type.syntax, span: type.span }, span: type.span } : type,
+          defaultValue,
+          rest: false,
+          span: span(nameToken.span.start, (defaultValue ?? type ?? nameToken).span.end),
+        });
+      } while (this.match("comma") && !this.check("rightParen"));
+    }
+    this.expect("rightParen", "Expected ')' after parameters");
+    return parameters;
+  }
+
+  /**
+   * Consumes a keyword standing where a prop name belongs and reports the one
+   * message that names it, or returns null when the token cannot be a name.
+   */
+  private componentPropKeyword(): Token | null {
+    const token = this.current();
+    if (token.kind !== "extensionKeyword" && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(token.value)) return null;
+    if (token.kind === "identifier" || token.kind === "eof" || token.kind === "newline") return null;
+    this.advance();
+    this.diagnostics.push(diagnostic("VEL2016", token.value === "class" || token.value === "look"
+      ? `Every component already accepts '${token.value}'; remove it from the prop list and pass it at the call site with ${token.value}={...}`
+      : `'${token.value}' is a VelarScript keyword and cannot name a component prop; choose another name`, token.span));
+    return token;
   }
 
   protected override createNestedParser(tokens: readonly Token[]): Parser {
@@ -147,10 +212,26 @@ export class VelarWebParser extends Parser {
       return jsxExpression(syntax, (source) => this.parseJsxEmbedded(source), (item) => this.diagnostics.push(item));
     }
     if (token.kind !== "extensionKeyword" || token.value !== "look") return undefined;
-    this.expect("colon", "Expected ':' after 'look'");
-    this.expect("newline", "Expected a newline before Look entries");
+    // LOK-I3: an unfinished Look value used to unravel into six diagnostics as
+    // each expectation failed in turn. The shape is checked up front so the
+    // reader gets one message naming the whole spelling.
+    if (!this.check("colon") || this.peekKind(1) !== "newline") {
+      this.diagnostics.push(diagnostic("VEL5038", "A Look value is written as 'look:' followed by an indented block of 'property = value' entries", token.span));
+      this.skipMistypedDeclaration();
+      return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+    }
+    let ahead = 1;
+    while (this.peekKind(ahead) === "newline") ahead += 1;
+    if (this.peekKind(ahead) !== "indent") {
+      // The colon stays unconsumed so the surrounding statement still ends at
+      // its own newline; only this one message describes the missing block.
+      this.diagnostics.push(diagnostic("VEL5038", "A Look block requires at least one indented 'property = value' entry", token.span));
+      this.advance();
+      return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+    }
+    this.advance();
     this.consumeNewlines();
-    this.expect("indent", "Expected an indented Look block");
+    this.advance();
     const block = this.expect("extensionToken", "Expected Look entries");
     const payload = block.value === WEB_LOOK_TOKEN ? block.payload as WebLookBlockSyntax | undefined : undefined;
     if (!payload || payload.kind !== "WebLookBlockSyntax") {
@@ -177,6 +258,17 @@ export class VelarWebParser extends Parser {
   // control flow. The child recovers as an inert null literal so the rest of
   // the module still analyzes and reports its own guidance in the same compile.
   private parseJsxEmbedded(source: WebExpressionSource): Expression {
+    // WEB-U13: '{/* ... */}' is the JSX comment habit. VelarScript has no block
+    // comment at all, so the interpolation gets one message naming '//' instead
+    // of two 'Expected an expression' failures.
+    if (/^\s*\/[*/]/u.test(source.source)) {
+      this.diagnostics.push(recoveredDiagnostic(
+        "VEL5002",
+        "JSX has no comment form; write a '//' comment on its own line outside the markup",
+        source.span,
+      ));
+      return { kind: "LiteralExpression", value: null, raw: "null", span: source.span };
+    }
     if (/^\s*for\b/u.test(source.source)) {
       const detail = /^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^:{\n]+):/u.exec(source.source);
       const binding = detail?.[1] ?? "item";
@@ -255,7 +347,9 @@ export class VelarWebParser extends Parser {
       this.parseTypeParameters();
       this.diagnostics.push(diagnostic("VEL2025", `Component '${name.value}' cannot declare type parameters; only 'def' functions take '<T>'`, name.span));
     }
+    this.insideComponentProps += 1;
     const parameters = this.check("leftParen") ? this.parseParameters() : [];
+    this.insideComponentProps -= 1;
     for (const parameter of parameters) {
       if (parameter.rest) {
         this.diagnostics.push(diagnostic("VEL2016", "Components use named props and do not support rest parameters", parameter.span));

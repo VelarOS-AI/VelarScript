@@ -175,6 +175,10 @@ component SaveButton(children: WebNode):
     return <button look={buttonLook} type="button">{children}</button>
 ```
 
+A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Look has no `animation`: use `transition` for state changes, or load `@keyframes` through a module-level `import css unsafe "./motion.css" before look` and attach that class.
+
+Form state binds with `bind:value={name}` (also a writable path such as `bind:value={form.email}`), `bind:checked={flag}`, and `bind:group={choice}` — radio state holds the selected input's `value`, checkbox `List<string>` state holds the checked values; the event object has no `target`.
+
 ## The idioms
 
 These are the canonical shapes, distilled from the project's best-practices

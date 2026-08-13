@@ -8,7 +8,7 @@ import { VelarWebParser } from "./parser.ts";
 import { scanWebToken } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
-import { LOOK_BUILDERS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
+import { LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
 import { isWebTypeAssignable, resolveWebTypeSyntax, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
@@ -532,7 +532,11 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["CanvasElement", new Set(["width", "height"])],
     ]),
     globals: webGlobals,
-    reservedBindings: new Set(["mount", "tick", "computed"]),
+    // LOK-D4: the Look media subjects are matched by name inside a Look
+    // condition, ahead of ordinary lexical resolution. A user binding of the
+    // same name used to be reverse-shadowed with no diagnostic anywhere, so the
+    // three names are reserved in a Web module.
+    reservedBindings: new Set(["mount", "tick", "computed", ...LOOK_MEDIA_SUBJECTS.keys()]),
     globalGuidance: new Map([
       ...[...LOOK_BUILDERS].map((name) => [name, `Import '${name}' by name from \"velar/look\"`] as const),
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
@@ -579,6 +583,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
+      { label: "bind:group", kind: 10, detail: "Two-way radio or checkbox group binding" },
       { label: "on:click", kind: 10, detail: "DOM click handler" },
       { label: "on:submit.prevent", kind: 10, detail: "DOM event with a preventDefault modifier" },
       { label: "class:", kind: 10, detail: "Reactive class directive" },

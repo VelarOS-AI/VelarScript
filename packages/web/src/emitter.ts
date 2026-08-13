@@ -27,7 +27,7 @@ import {
 type AssignmentStatement = Extract<Statement, { readonly kind: "AssignmentStatement" }>;
 
 interface LookStaticAtom {
-  readonly kind: "hook" | "media" | "scheme";
+  readonly kind: "hook" | "media" | "scheme" | "motion";
   readonly name: string;
   readonly operator?: "<" | "<=" | ">" | ">=";
   readonly value?: string;
@@ -644,13 +644,18 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
           const [event, ...modifiers] = attribute.name.slice(3).split(".");
           return `__velarOn(${element}, ${JSON.stringify(event)}, () => (${this.emitMappedExpression(value)}), ${scope}, ${JSON.stringify(modifiers)});`;
         }
-        if (attribute.name === "bind:value" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
+        if (attribute.name === "bind:value" && value && typeof value !== "string") {
           const numeric = expression.tag === "input" && expression.attributes.some((item) => item.name === "type" && item.value === "number");
           const enumName = this.hints.enumValueBindings.get(attribute.span.start);
-          return `__velarBindValue(${element}, ${value.name}, ${scope}, ${numeric}${enumName ? `, ${enumName}.parse` : ""});`;
+          return `__velarBindValue(${element}, ${this.emitBindTarget(value)}, ${scope}, ${numeric}${enumName ? `, ${enumName}.parse` : ""});`;
         }
-        if (attribute.name === "bind:checked" && value && typeof value !== "string" && value.kind === "IdentifierExpression") {
-          return `__velarBindChecked(${element}, ${value.name}, ${scope});`;
+        if (attribute.name === "bind:checked" && value && typeof value !== "string") {
+          return `__velarBindChecked(${element}, ${this.emitBindTarget(value)}, ${scope});`;
+        }
+        if (attribute.name === "bind:group" && value && typeof value !== "string") {
+          const multiple = expression.attributes.some((item) => item.name === "type" && item.value === "checkbox");
+          const enumName = this.hints.enumValueBindings.get(attribute.span.start);
+          return `__velarBindGroup(${element}, ${this.emitBindTarget(value)}, ${scope}, ${multiple}${enumName ? `, ${enumName}.parse` : ""});`;
         }
         if (attribute.name.startsWith("class:") && value && typeof value !== "string") {
           return `__velarClass(${element}, ${JSON.stringify(attribute.name.slice(6))}, () => ${this.emitMappedExpression(value)}, ${scope});`;
@@ -736,6 +741,21 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     return output;
   }
 
+  /**
+   * D47 rule 84(A): a bind target is a state cell, or a writable reactive
+   * location inside one. A member/index path lowers to the get/set pair the
+   * binding helpers already expect, so a field of state reads and writes through
+   * exactly the same statements the author would have written by hand.
+   */
+  private emitBindTarget(value: Expression): string {
+    if (value.kind === "IdentifierExpression") return value.name;
+    const next: Expression = { kind: "IdentifierExpression", name: "$velarBindNext", span: value.span };
+    const read = this.emitMappedExpression(value);
+    const assignment = { kind: "AssignmentStatement", target: value, value: next, operator: "=", span: value.span } as unknown as Statement;
+    const write = this.emitStatement(assignment, 0).trim();
+    return `{ get: () => (${read}), set: ($velarBindNext) => { ${write} } }`;
+  }
+
   private emitJsxAttributeValue(attribute: JSXAttribute): string {
     if (attribute.value === null) return "true";
     if (typeof attribute.value === "string") return JSON.stringify(attribute.value);
@@ -817,7 +837,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     const lookCss: string[] = [];
     for (const rule of rules.values()) {
       const hookAtoms = rule.staticAtoms.filter((atom) => atom.kind === "hook");
-      const mediaAtoms = rule.staticAtoms.filter((atom) => atom.kind === "media" || atom.kind === "scheme");
+      const mediaAtoms = rule.staticAtoms.filter((atom) => atom.kind === "media" || atom.kind === "scheme" || atom.kind === "motion");
       const base = `[data-velar-look~=${JSON.stringify(rule.token)}]${rule.staticAtoms.length > 0 ? "[data-velar-look]" : ""}`;
       const selectors = lookSelectors(base, hookAtoms, rule.target);
       const css = `${selectors.join(",")}{${lookDeclaration(rule.token, rule.property)}}`;
@@ -941,7 +961,14 @@ function viewportAtom(expression: Expression, negated: boolean, staticValues: Re
 // The two subjects are complementary, so negation flips to the other scheme
 // and the atom itself stays canonical.
 function schemeAtom(expression: Expression, negated: boolean): LookStaticAtom | null {
-  if (expression.kind !== "MemberExpression" || expression.object.kind !== "IdentifierExpression" || expression.object.name !== "scheme") return null;
+  if (expression.kind !== "MemberExpression" || expression.object.kind !== "IdentifierExpression") return null;
+  // LOK-U3: 'motion.reduced' joins the media subjects. prefers-reduced-motion is
+  // complementary in the same way the schemes are, so negation names the other
+  // side of the query rather than wrapping it.
+  if (expression.object.name === "motion") {
+    return expression.property === "reduced" ? { kind: "motion", name: negated ? "no-preference" : "reduce", negated: false } : null;
+  }
+  if (expression.object.name !== "scheme") return null;
   if (expression.property !== "dark" && expression.property !== "light") return null;
   const scheme = negated ? (expression.property === "dark" ? "light" : "dark") : expression.property;
   return { kind: "scheme", name: scheme, negated: false };
@@ -965,6 +992,7 @@ function lookToken(atoms: readonly LookStaticAtom[], target: string, property: s
   const conditions = atoms.map((atom) => {
     if (atom.kind === "hook") return `${atom.negated ? "not-" : ""}${kebab(atom.name)}`;
     if (atom.kind === "scheme") return `scheme-${atom.name}`;
+    if (atom.kind === "motion") return `motion-${atom.name}`;
     return `viewport-${atom.name}-${atom.negated ? "not-" : ""}${lookOperatorName(atom.operator!)}-${atom.value}`;
   }).sort();
   const prefix = [target ? kebab(target) : "", conditions.length > 0 ? conditions.join("+") : "base"].filter(Boolean).join(":");
@@ -986,6 +1014,7 @@ function lookOperatorName(operator: "<" | "<=" | ">" | ">="): string {
 
 function lookMediaQuery(atom: LookStaticAtom): string {
   if (atom.kind === "scheme") return `(prefers-color-scheme: ${atom.name})`;
+  if (atom.kind === "motion") return `(prefers-reduced-motion: ${atom.name})`;
   const operator = atom.negated
     ? atom.operator === "<" ? ">=" : atom.operator === "<=" ? ">" : atom.operator === ">" ? "<=" : "<"
     : atom.operator!;
@@ -2313,6 +2342,48 @@ function __velarBindValue(element, state, scope, numeric = false, parse = null) 
   const update = () => state.set(numeric ? __velarDomFieldNumber(element) : parse ? parse(__velarDomFieldValue(element)) : __velarDomFieldValue(element));
   __velarDomAddListener(element, "input", update, false);
   __velarAppendOwned(scope.cleanups, () => __velarDomRemoveListener(element, "input", update, false));
+}
+
+function __velarBindGroupValues(state, own) {
+  const value = __velarUntracked(() => state.get());
+  const values = __velarListSnapshot(value, "bind:group state");
+  const output = new __velarDomNativeArray(values.length);
+  let count = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    const item = values[index];
+    if (typeof item !== "string") throw new TypeError("bind:group on a checkbox requires List<string> state");
+    if (item !== own) { output[count] = item; count += 1; }
+  }
+  output.length = count;
+  return output;
+}
+
+function __velarBindGroup(element, state, scope, multiple = false, parse = null) {
+  __velarObserver(() => {
+    const own = __velarDomFieldValue(element);
+    const value = state.get();
+    if (!multiple) {
+      if (value != null && typeof value !== "string") throw new TypeError("bind:group requires text state");
+      __velarDomSetFieldChecked(element, value === own);
+      return;
+    }
+    const values = __velarListSnapshot(value, "bind:group state");
+    let present = false;
+    for (let index = 0; index < values.length; index += 1) if (values[index] === own) present = true;
+    __velarDomSetFieldChecked(element, present);
+  }, "dom", scope);
+  const update = () => {
+    const own = __velarDomFieldValue(element);
+    if (!multiple) {
+      if (__velarDomFieldChecked(element)) state.set(parse ? parse(own) : own);
+      return;
+    }
+    const remaining = __velarBindGroupValues(state, own);
+    if (__velarDomFieldChecked(element)) remaining[remaining.length] = own;
+    state.set(remaining);
+  };
+  __velarDomAddListener(element, "change", update, false);
+  __velarAppendOwned(scope.cleanups, () => __velarDomRemoveListener(element, "change", update, false));
 }
 
 function __velarBindChecked(element, state, scope) {

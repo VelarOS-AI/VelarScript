@@ -68,20 +68,35 @@ export function scanWebToken(context: CompilerLexicalScanContext): CompilerLexic
   };
 }
 
+/**
+ * The token kinds a JSX element may follow. `<` is otherwise the less-than
+ * operator, so the decision is made from the previous token: every kind here is
+ * a position where a value begins and a comparison cannot. The list is published
+ * in charter §14 (GRM-A3); `nullish` and `and` joined it so `{name ?? <Fallback
+ * />}` parses and `{ready and <Panel />}` reaches its type rejection instead of
+ * an untargeted parse cascade.
+ */
+export const WEB_JSX_PREVIOUS_TOKEN_KINDS: readonly string[] = [
+  "assign", "return", "fatArrow", "leftParen", "leftBracket", "leftBrace",
+  "comma", "colon", "question", "newline", "indent", "nullish", "and", "or",
+];
+
 function shouldStartJsx(context: CompilerLexicalScanContext): boolean {
   if (!/[A-Za-z>]/u.test(context.source[context.offset + 1] ?? "")) return false;
   const previous = context.tokens.at(-1)?.kind;
-  return previous === undefined || [
-    "assign", "return", "fatArrow", "leftParen", "leftBracket", "leftBrace",
-    "comma", "colon", "question", "newline", "indent",
-  ].includes(previous);
+  return previous === undefined || WEB_JSX_PREVIOUS_TOKEN_KINDS.includes(previous);
 }
 
+// A Look block opens at the first indented line after `look:`. Blank lines and
+// comment lines between the two produce their own newline tokens (a comment
+// leaves no token of its own), so every newline in between is skipped; without
+// that, a comment as the first line inside a Look block left the block
+// untokenized and unravelled into a five-diagnostic cascade.
 function isLookBlockStart(tokens: readonly Token[]): boolean {
   if (tokens.at(-1)?.kind !== "indent") return false;
   let index = tokens.length - 2;
   if (tokens[index]?.kind !== "newline") return false;
-  index -= 1;
+  while (tokens[index]?.kind === "newline") index -= 1;
   if (tokens[index]?.kind !== "colon") return false;
   index -= 1;
   return tokens[index]?.kind === "extensionKeyword" && tokens[index]?.value === "look";
@@ -272,6 +287,16 @@ class WebJsxScanner {
     const children: WebJsxChildSyntax[] = [];
     if (!selfClosing && !(tag === tag.toLowerCase() && voidTags.has(tag))) {
       while (this.index < this.source.length && !this.source.startsWith("</", this.index)) {
+        // WEB-U13: an HTML comment inside markup is the first thing a Web author
+        // reaches for. It has no JSX spelling, so it is skipped with one message
+        // rather than unravelling into a five-diagnostic tag cascade.
+        if (this.source.startsWith("<!--", this.index)) {
+          const commentStart = this.index;
+          const close = this.source.indexOf("-->", this.index + 4);
+          this.index = close < 0 ? this.source.length : close + 3;
+          this.report("VEL5002", "JSX has no comment form; write a '//' comment on its own line outside the markup", commentStart, this.index);
+          continue;
+        }
         if (this.peek() === "<") children.push(this.scanElement());
         else if (this.peek() === "{") {
           const childStart = this.index;

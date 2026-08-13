@@ -5,6 +5,7 @@ import {
   boolType,
   describeType,
   expressionContainsDirectAwait,
+  invalidType,
   isInvalidType,
   isAssignable,
   nullType,
@@ -25,13 +26,21 @@ import {
   type ValueType,
 } from "@velarscript/compiler/extension";
 import {
+  LOOK_ABSENT_MEDIA_SUBJECTS,
   LOOK_ARITHMETIC_HINT,
+  LOOK_BORDER_STYLE_NAMES,
+  LOOK_BUILDER_NUMERIC_RANGES,
+  LOOK_BUILDERS,
   LOOK_HOOKS,
+  LOOK_LENGTH_BUILDERS,
   LOOK_MEDIA_LENGTH_UNITS,
+  LOOK_MEDIA_SUBJECTS,
   LOOK_NUMERIC_TYPE_NAMES,
   LOOK_PROPERTIES,
   LOOK_TARGETS,
   LOOK_UNIT_TYPES,
+  LOOK_UNITLESS_PROPERTIES,
+  nearestLookName,
 } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, type LookStaticValue } from "./look-static.ts";
 import { dynamicChildLeaves } from "./emitter.ts";
@@ -78,13 +87,22 @@ const nativeDomEventNames = new Set([
   "copy", "cut", "paste", "load", "error", "transitionend", "animationend", "play", "pause", "ended",
 ]);
 const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle", "Opacity"]);
+const webEventTypeNames = new Set(["Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent"]);
+const webEventDeadFields = new Set(["target", "currentTarget", "value", "checked"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
+const bindTargetGuidance = (directive: string): string =>
+  `${directive} requires a writable reactive location: a state name, or a field or index path on one such as ${directive}={form.name} or ${directive}={items[0]}`;
 const LOOK_CONDITION_TERM_LIMIT = 32;
 
 const lookLength: ValueType = { kind: "named", name: "Length" };
 const lookPercentage: ValueType = { kind: "named", name: "Percentage" };
 const lookLengthPercentage: ValueType = { kind: "named", name: "LengthPercentage" };
-const lookMetric: ValueType = { kind: "union", members: [numberType, lookLength, lookPercentage, lookLengthPercentage] };
+// LOK-D3: a length property never accepts a bare number. `width = 100` used to
+// compile and reach CSS as the invalid declaration `width: 100`, which computes
+// to `auto`; the unions below carry only spelled units, and the unitless-legal
+// properties (opacity, zIndex, lineHeight, flex*, order, scale, aspectRatio,
+// fontWeight) keep `number` individually.
+const lookMetric: ValueType = { kind: "union", members: [lookLength, lookPercentage, lookLengthPercentage] };
 const lookColor: ValueType = { kind: "named", name: "Color" };
 const lookImage: ValueType = { kind: "named", name: "Image" };
 const lookBorder: ValueType = { kind: "named", name: "Border" };
@@ -351,11 +369,102 @@ function isViewportComparison(expression: Expression): boolean {
   return true;
 }
 
-// 'scheme.dark' and 'scheme.light' are Look condition subjects that lower to
-// a prefers-color-scheme media query, mirroring the viewport.* media atoms.
+// LOK-I2: '720px >= viewport.width' means the same breakpoint as
+// 'viewport.width <= 720px', but only the viewport-on-the-left spelling lowers
+// to a media query. The flipped spelling is recognized so it teaches the
+// supported order instead of reporting the subject as an unknown name.
+const flippedComparisons: ReadonlyMap<string, string> = new Map([["<", ">"], ["<=", ">="], [">", "<"], [">=", "<="]]);
+
+function flippedViewportComparison(expression: Expression): { readonly property: string; readonly operator: string; readonly threshold: Expression } | null {
+  if (expression.kind !== "BinaryExpression" || !flippedComparisons.has(expression.operator)) return null;
+  const subject = mediaSubjectShape(expression.right);
+  if (subject?.subject !== "viewport" || (subject.feature !== "width" && subject.feature !== "height")) return null;
+  return { property: subject.feature, operator: flippedComparisons.get(expression.operator)!, threshold: expression.left };
+}
+
+// 'scheme.dark'/'scheme.light' and 'motion.reduced' are Look condition subjects
+// that lower to prefers-color-scheme and prefers-reduced-motion media queries,
+// mirroring the viewport.* media atoms.
 function isSchemeCondition(expression: Expression): boolean {
-  if (expression.kind !== "MemberExpression" || expression.object.kind !== "IdentifierExpression" || expression.object.name !== "scheme") return false;
-  return expression.property === "dark" || expression.property === "light";
+  if (expression.kind !== "MemberExpression" || expression.object.kind !== "IdentifierExpression") return false;
+  const subject = expression.object.name;
+  if (subject === "viewport") return false;
+  return (LOOK_MEDIA_SUBJECTS.get(subject)?.has(expression.property)) ?? false;
+}
+
+/** The subject name of a `subject.feature` shape, whether or not it is a Look subject. */
+function mediaSubjectShape(expression: Expression): { readonly subject: string; readonly feature: string } | null {
+  if (expression.kind !== "MemberExpression" || expression.optional || expression.object.kind !== "IdentifierExpression") return null;
+  return { subject: expression.object.name, feature: expression.property };
+}
+
+function lookMediaVocabulary(): string {
+  return [...LOOK_MEDIA_SUBJECTS].flatMap(([subject, features]) => [...features].map((feature) => `${subject}.${feature}`)).join(", ");
+}
+
+/** A readable rendering of a breakpoint threshold for diagnostic guidance. */
+function lookSourceOf(expression: Expression): string {
+  if (isWebUnit(expression)) return expression.raw;
+  if (expression.kind === "IdentifierExpression") return expression.name;
+  if (expression.kind === "LiteralExpression") return expression.raw;
+  if (expression.kind === "MemberExpression") return `${lookSourceOf(expression.object)}.${expression.property}`;
+  return "breakpoint";
+}
+
+/**
+ * A canonical rendering of one Look condition, so two sibling blocks that lower
+ * to the same selector and media query share a duplicate-detection scope.
+ */
+function lookConditionSignature(expression: Expression): string {
+  if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") return `@${expression.name}`;
+  if (expression.kind === "UnaryExpression" && expression.operator === "not") return `!(${lookConditionSignature(expression.operand)})`;
+  if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")) {
+    return `(${lookConditionSignature(expression.left)}${expression.operator}${lookConditionSignature(expression.right)})`;
+  }
+  if (expression.kind === "BinaryExpression") return `(${lookConditionSignature(expression.left)}${expression.operator}${lookConditionSignature(expression.right)})`;
+  if (expression.kind === "MemberExpression") return `${lookConditionSignature(expression.object)}.${expression.property}`;
+  if (expression.kind === "IdentifierExpression") return `id:${expression.name}`;
+  if (isWebUnit(expression)) return `${expression.value}${expression.unit}`;
+  if (expression.kind === "LiteralExpression") return `lit:${expression.raw}`;
+  return `span:${expression.span.start}`;
+}
+
+/**
+ * Every name in a module or component body whose read is reactive but whose
+ * binding is not itself a state/prop reference: a computed accessor, a resource
+ * handle, an action handle. A Look literal that reads one of these freezes it
+ * exactly as it freezes a state read (LOK-D1).
+ */
+function collectDerivedReactiveNames(program: Program): ReadonlySet<string> {
+  const names = new Set<string>();
+  const record = (statements: readonly Statement[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "VariableDeclaration" && statement.pattern.kind === "NameBindingPattern"
+        && statement.initializer.kind === "CallExpression" && statement.initializer.callee.kind === "IdentifierExpression"
+        && statement.initializer.callee.name === "computed") {
+        names.add(statement.pattern.name);
+        continue;
+      }
+      if (!isWebStatement(statement)) continue;
+      if (statement.kind === "ExtensionStatement:web:resource" || statement.kind === "ExtensionStatement:web:action") names.add(statement.name);
+      if (statement.kind === "ExtensionStatement:web:component") record(statement.body as readonly Statement[]);
+    }
+  };
+  record(program.body);
+  return names;
+}
+
+/** Local names bound to a velar/look builder, including aliased imports. */
+function collectLookBuilderNames(program: Program): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  for (const statement of program.body) {
+    if (statement.kind !== "ImportDeclaration" || statement.source !== "velar/look" || statement.javascript) continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.namespace || !LOOK_BUILDERS.has(specifier.imported)) continue;
+      names.set(specifier.local, specifier.imported);
+    }
+  }
+  return names;
 }
 
 function lookConditionTermCount(expression: Expression, negated = false): number {
@@ -383,6 +492,20 @@ function firstRelativeCssUrl(source: string): string | null {
 
 function isLookNumericType(type: ValueType): boolean {
   return type.kind === "named" && LOOK_NUMERIC_TYPE_NAMES.has(type.name);
+}
+
+/** True when a property's declared domain includes a spelled visual unit type. */
+function mentionsLookUnitType(type: ValueType): boolean {
+  if (type.kind === "named") return LOOK_NUMERIC_TYPE_NAMES.has(type.name) || type.name === "Spacing" || type.name === "TrackList" || type.name === "Track";
+  if (type.kind === "union") return type.members.some(mentionsLookUnitType);
+  if (type.kind === "optional") return mentionsLookUnitType(type.inner);
+  return false;
+}
+
+function lookLiteralZero(expression: Expression): boolean {
+  if (expression.kind === "LiteralExpression") return expression.value === 0;
+  if (expression.kind === "UnaryExpression" && (expression.operator === "-" || expression.operator === "+")) return lookLiteralZero(expression.operand);
+  return isWebUnit(expression) && expression.value === 0;
 }
 
 function lookAdditiveType(left: ValueType, right: ValueType): ValueType | null {
@@ -498,6 +621,14 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly probedOperandTypes = new Map<string, ValueType>();
   private readonly importedLookStaticValues: ReadonlyMap<string, LookStaticValue>;
   private lookStaticValues: ReadonlyMap<string, LookStaticValue> = new Map();
+  private readonly lookEntryScopes = new Map<string, Set<string>>();
+  private readonly derivedReactiveNames = new Set<string>();
+  private readonly checkedBuilderCalls = new Set<string>();
+  private readonly staticJsxKeys: { readonly element: JSXElementExpression; readonly attribute: JSXAttribute }[] = [];
+  private readonly honoredJsxKeys = new Set<JSXElementExpression>();
+  private readonly reportedJsxKeys = new Set<JSXElementExpression>();
+  private lookBuilderNames: ReadonlyMap<string, string> = new Map();
+  private lookLiteralDepth = 0;
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
@@ -510,7 +641,28 @@ export class VelarWebAnalyzer extends Analyzer {
 
   override analyze(program: Program): readonly Diagnostic[] {
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
-    return super.analyze(program);
+    this.lookBuilderNames = collectLookBuilderNames(program);
+    for (const name of collectDerivedReactiveNames(program)) this.derivedReactiveNames.add(name);
+    super.analyze(program);
+    this.reportStaticJsxKeys();
+    return this.diagnostics;
+  }
+
+  /**
+   * WEB-C1: charter §14 promises that a key outside a keyed shape is a
+   * diagnostic rather than a silent no-op. Interpolated positions report while
+   * their interpolation is walked; static positions are collected during JSX
+   * inference and reported once every keyed interpolation is known.
+   */
+  private reportStaticJsxKeys(): void {
+    for (const { element, attribute } of this.staticJsxKeys) {
+      if (this.honoredJsxKeys.has(element) || this.reportedJsxKeys.has(element)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL5050",
+        `This JSX key has no effect: '<${element.tag}>' is rendered in a fixed position, and keys reuse children by identity only inside 'items.map(item => <Row key={item.id} />)' — remove the key, or render this element from a keyed .map()`,
+        attribute.span,
+      ));
+    }
   }
 
   protected override predeclareExtensionStatement(statement: Statement): boolean {
@@ -585,6 +737,13 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth -= 1;
         return true;
       case "ExtensionStatement:web:unsafe-css": {
+        // LOK-D2: a stylesheet import is a module-level ordering declaration.
+        // Nested inside a component or a function it used to pass every check,
+        // build, and then appear in no output at all.
+        if (!this.isTopLevelScope()) {
+          this.diagnostics.push(diagnostic("VEL5037", "CSS imports are module-level; move 'import css unsafe' to the top of the module so its order against Look stays visible", statement.span));
+          return true;
+        }
         if (this.unsafeCssImports.has(statement.source)) {
           this.diagnostics.push(diagnostic("VEL5037", `Unsafe CSS '${statement.source}' is imported more than once; each stylesheet must have one explicit order position`, statement.span));
         }
@@ -632,6 +791,23 @@ export class VelarWebAnalyzer extends Analyzer {
       }
       this.probedOperandTypes.set(spanIdentity(expression.operand.span), operand);
     }
+    // WEB-U15 / GRM-A3: '&&' rendering is the React habit. The lexer now starts
+    // JSX after 'and'/'or' so the shape parses and this rejection names the
+    // conditional-rendering spelling instead of leaking a bool type error.
+    if (expression.kind === "BinaryExpression" && (expression.operator === "and" || expression.operator === "or")
+      && (isWebJsx(expression.left) || isWebJsx(expression.right))) {
+      const rightIsElement = isWebJsx(expression.right);
+      const tag = rightIsElement ? expression.right.tag : isWebJsx(expression.left) ? expression.left.tag : "";
+      const condition = lookSourceOf(rightIsElement ? expression.left : expression.right);
+      this.inferExpression(expression.left);
+      this.inferExpression(expression.right);
+      this.diagnostics.push(diagnostic(
+        "VEL5029",
+        `'${expression.operator}' combines bool values and cannot yield an element; render conditionally with '{${condition} ? <${tag || ">"} ... : null}'`,
+        expression.span,
+      ));
+      return invalidType;
+    }
     if (expression.kind === "BinaryExpression" && ["+", "-", "*", "/"].includes(expression.operator)) {
       const left = this.inferExpression(expression.left);
       const right = this.inferExpression(expression.right);
@@ -644,16 +820,47 @@ export class VelarWebAnalyzer extends Analyzer {
           ?? ((expression.operator === "*" || expression.operator === "/") && isLookNumericType(left) && right.kind === "number" ? left : null)
           ?? (expression.operator === "*" && left.kind === "number" && isLookNumericType(right) ? right : null);
         if (result) {
+          // LOK-U8: dividing a visual value by a literal zero produces a
+          // non-finite length that the runtime rejects on first construction.
+          if (expression.operator === "/" && lookLiteralZero(expression.right)) {
+            this.diagnostics.push(diagnostic("VEL5042", "Look unit arithmetic cannot divide by zero", expression.span));
+            return invalidType;
+          }
           this.extensionCalls.set(spanIdentity(expression.span), LOOK_ARITHMETIC_HINT);
           return result;
         }
+        // The rejection is final: returning the invalid type keeps the Look
+        // property's own assignment error from co-reporting a union dump on the
+        // very expression that was already named (LOK-I1).
         this.diagnostics.push(diagnostic("VEL5042", `Look unit arithmetic cannot apply '${expression.operator}' to ${describeType(left)} and ${describeType(right)}`, expression.span));
-        return unknownType;
+        return invalidType;
+      }
+    }
+    // WEB-N2 / D47 rule 84: the event object is typed down to event semantics
+    // and deliberately carries no target, so `event.target.value` is a dead end
+    // that used to cascade into three unknown-access errors. The read is where
+    // the author wanted two-way binding, so it names that spelling and stops.
+    if (expression.kind === "MemberExpression" && !expression.optional && webEventDeadFields.has(expression.property)
+      && expression.object.kind === "IdentifierExpression") {
+      const binding = this.lookup(expression.object.name);
+      const expanded = binding ? this.expandAliases(binding.type) : null;
+      if (expanded?.kind === "named" && webEventTypeNames.has(expanded.name)) {
+        this.diagnostics.push(diagnostic(
+          "VEL5019",
+          `A VelarScript event object carries typed event fields only and has no '${expression.property}': read the element's value through a two-way binding instead — 'bind:value={name}' binds a state name, and 'bind:value={form.field}' or 'bind:value={items[0]}' binds a writable path inside state`,
+          expression.span,
+        ));
+        return invalidType;
       }
     }
     if (isWebJsx(expression)) return this.inferJsx(expression);
     if (isWebLook(expression)) {
-      this.analyzeLookEntries(expression.entries, false, false, 1);
+      this.lookLiteralDepth += 1;
+      try {
+        this.analyzeLookEntries(expression.entries, false, false, 1, `look:${expression.span.start}`);
+      } finally {
+        this.lookLiteralDepth -= 1;
+      }
       return { kind: "named", name: "Look" };
     }
     if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") {
@@ -669,6 +876,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
+    if (expression.kind === "CallExpression") this.checkLookBuilderCall(expression);
     // Operands probed for Look arithmetic are re-requested by the core analyzer immediately after the
     // probe declines; reusing the probe result (consume-once) keeps operand analysis single-run so
     // operand diagnostics are not reported twice.
@@ -919,7 +1127,11 @@ export class VelarWebAnalyzer extends Analyzer {
         this.flowFrameDepth += 1;
         const rendered = item.value ? this.inferExpression(item.value) : nullType;
         this.flowFrameDepth -= 1;
-        if (!isWebNodeType(rendered) && rendered.kind !== "any") this.typeError("A component must return JSX", item.span);
+        // WEB-U15: `return null` is the React habit for "render nothing". A
+        // component always has one root, so the decision belongs to the caller.
+        if (rendered.kind === "null") {
+          this.typeError("A component always returns one JSX root; decide at the call site with '{show ? <Card /> : null}', or return an empty element such as <span />", item.span);
+        } else if (!isWebNodeType(rendered) && rendered.kind !== "any") this.typeError("A component must return JSX", item.span);
       } else {
         this.analyzeStatement(item);
       }
@@ -1016,56 +1228,230 @@ export class VelarWebAnalyzer extends Analyzer {
     insideTarget: boolean,
     nested: boolean,
     inheritedTerms: number,
+    scopeKey = "",
   ): void {
-    const seenProperties = new Set<string>();
-    const seenTargets = new Set<string>();
     for (const entry of entries) {
       if (entry.kind === "LookSpread") {
         const type = this.inferExpression(entry.value, { kind: "named", name: "Look" });
         this.requireAssignable(type, { kind: "named", name: "Look" }, entry.value.span);
+        this.reportLookSnapshotReads(entry.value);
         if (nested) this.diagnostics.push(diagnostic("VEL5044", "Look composition is only valid at the outer level; compose first, then place the result in a condition or target", entry.span));
         continue;
       }
       if (entry.kind === "LookIf") {
         this.inferLookCondition(entry.condition);
+        this.reportLookSnapshotReads(entry.condition);
         const thenTerms = lookConditionTermCount(entry.condition);
         const elseTerms = lookConditionTermCount(entry.condition, true);
         if (inheritedTerms * Math.max(thenTerms, elseTerms) > LOOK_CONDITION_TERM_LIMIT) {
           this.diagnostics.push(diagnostic("VEL5045", `A Look condition may expand to at most ${LOOK_CONDITION_TERM_LIMIT} selector/runtime terms; split this visual decision into ordinary values`, entry.condition.span));
         }
-        this.analyzeLookEntries(entry.thenEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * thenTerms));
-        this.analyzeLookEntries(entry.elseEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * elseTerms));
+        const signature = lookConditionSignature(entry.condition);
+        this.analyzeLookEntries(entry.thenEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * thenTerms), `${scopeKey}&${signature}`);
+        this.analyzeLookEntries(entry.elseEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * elseTerms), `${scopeKey}&!${signature}`);
         continue;
       }
       if (entry.kind === "LookTarget") {
         if (!LOOK_TARGETS.has(entry.name)) {
+          const nearest = nearestLookName(entry.name, LOOK_TARGETS);
           this.diagnostics.push(diagnostic("VEL5038", LOOK_HOOKS.has(entry.name)
             ? `Use 'if @${entry.name}:'; '@${entry.name}' is an element state condition, not a pseudo-element target`
-            : `Unknown Look target '@${entry.name}'`, entry.span));
+            : nearest
+              ? `Unknown Look target '@${entry.name}'; did you mean '@${nearest}'?`
+              : `Unknown Look target '@${entry.name}'; Look targets are ${[...LOOK_TARGETS].map((name) => `@${name}`).join(", ")}`, entry.span));
         }
         if (insideTarget) this.diagnostics.push(diagnostic("VEL5038", "Look targets cannot be nested", entry.span));
-        if (seenTargets.has(entry.name)) this.diagnostics.push(diagnostic("VEL5039", `Look target '@${entry.name}' is defined more than once in the same scope`, entry.span));
-        seenTargets.add(entry.name);
-        this.analyzeLookEntries(entry.entries, true, true, inheritedTerms);
+        // A repeated target is reported once; its body then gets a private scope
+        // so the properties inside are not reported a second time as duplicates.
+        const repeated = !this.recordLookEntry(`${scopeKey}#target`, entry.name);
+        if (repeated) this.diagnostics.push(diagnostic("VEL5039", `Look target '@${entry.name}' is defined more than once in the same scope`, entry.span));
+        this.analyzeLookEntries(entry.entries, true, true, inheritedTerms, repeated ? `${scopeKey}@${entry.name}#${entry.span.start}` : `${scopeKey}@${entry.name}`);
         continue;
       }
-      if (!LOOK_PROPERTIES.has(entry.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look property '${entry.name}'`, entry.span));
-      if (seenProperties.has(entry.name)) this.diagnostics.push(diagnostic("VEL5039", `Look property '${entry.name}' is defined more than once in the same scope`, entry.span));
-      seenProperties.add(entry.name);
-      const shorthandGuidance = lookShorthandStringGuidance(entry.name, entry.value);
-      if (shorthandGuidance) {
-        this.diagnostics.push(diagnostic("VEL5038", shorthandGuidance, entry.value.span));
-        continue;
+      if (!this.recordLookEntry(scopeKey, entry.name)) {
+        this.diagnostics.push(diagnostic("VEL5039", `Look property '${entry.name}' is defined more than once in the same scope`, entry.span));
       }
+      if (!this.analyzeLookValue(entry.name, entry.value, entry.span, null)) continue;
       const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? stringType;
       const actual = this.inferExpression(entry.value, expected);
+      this.reportLookSnapshotReads(entry.value);
+      // Zero is the one unitless CSS length, so `padding = 0` stays legal while
+      // every other bare number is answered with the unit it needs (LOK-D3).
+      if (mentionsLookUnitType(expected) && lookLiteralZero(entry.value)) continue;
+      if (this.reportLookNumberWithoutUnit(entry.name, actual, expected, entry.value.span)) continue;
       if (actual.kind !== "null" && expected.kind !== "unknown") this.requireAssignable(actual, expected, entry.value.span);
     }
   }
 
+  /**
+   * LOK-D1: a `look:` literal is constructed once, where it is written. Its
+   * conditions and its values are snapshot positions — a reactive read inside
+   * one compiles cleanly and then never updates, which is the quietest trap in
+   * the visual language. The two spellings that stay live are the JSX
+   * expression position and the `look:property` directive, so the read is
+   * rejected here and both are taught.
+   */
+  private reportLookSnapshotReads(expression: Expression): void {
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item);
+        return;
+      }
+      if (!value || typeof value !== "object") return;
+      const record = value as Record<string, unknown>;
+      if (record.kind === "IdentifierExpression" && typeof record.name === "string") {
+        const name = record.name;
+        const reactive = this.reactiveBindingKind(name) !== null || this.derivedReactiveRead(name);
+        if (reactive) {
+          this.diagnostics.push(diagnostic(
+            "VEL5058",
+            `A Look literal is built once where it is written, so '${name}' is read as a snapshot and the visual never follows it. Put the reactive decision on the element instead: 'look={${name} ? oneLook : otherLook}' chooses a whole Look, and 'look:property={...}' sets one property`,
+            record.span as Span,
+          ));
+        }
+        return;
+      }
+      for (const [key, child] of Object.entries(record)) if (key !== "span") visit(child);
+    };
+    visit(expression);
+  }
+
+  /**
+   * True when a name both belongs to a derived reactive declaration and still
+   * resolves to one here: a computed accessor is a zero-argument function, and a
+   * resource or action handle is a record with its reactive fields. An ordinary
+   * binding that happens to share the name — a function parameter, a local — is
+   * not a reactive read.
+   */
+  private derivedReactiveRead(name: string): boolean {
+    if (!this.derivedReactiveNames.has(name)) return false;
+    const binding = this.lookup(name);
+    if (!binding) return false;
+    const type = this.expandAliases(binding.type);
+    if (type.kind === "function" || type.kind === "action") return type.parameters.length === 0 && !type.rest;
+    return type.kind === "object" && (type.fields.has("reload") || type.fields.has("pending"));
+  }
+
+  /**
+   * LOK-U8: the velar/look builders check their numeric domains at run time, so
+   * a literal out-of-range colour used to compile clean and blank the page on
+   * the first paint. Literal arguments are checked in the same terms while the
+   * module compiles; dynamic arguments keep the runtime guard.
+   */
+  private checkLookBuilderCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
+    if (expression.callee.kind !== "IdentifierExpression") return;
+    const builder = this.lookBuilderNames.get(expression.callee.name);
+    if (!builder) return;
+    const key = spanIdentity(expression.span);
+    if (this.checkedBuilderCalls.has(key)) return;
+    this.checkedBuilderCalls.add(key);
+    const ranges = LOOK_BUILDER_NUMERIC_RANGES.get(builder);
+    for (const [index, argument] of expression.arguments.entries()) {
+      const named = expression.argumentNames?.[index] ?? null;
+      const position = named ? -1 : index;
+      const range = position >= 0 ? ranges?.[position] : undefined;
+      const literal = argument.kind === "LiteralExpression" && typeof argument.value === "number" ? argument.value
+        : argument.kind === "UnaryExpression" && argument.operator === "-" && argument.operand.kind === "LiteralExpression" && typeof argument.operand.value === "number"
+          ? -argument.operand.value : null;
+      if (range && literal !== null && (literal < range[1] || literal > range[2])) {
+        this.diagnostics.push(diagnostic("VEL5042", `${range[0]} must be from ${range[1]} through ${range[2]}; ${builder} received ${literal}`, argument.span));
+      }
+      // LOK-D3, builder half: a unitless number in a length position is dead
+      // CSS exactly as it is on a property. Zero is the one unitless length.
+      if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null && literal !== 0
+        && !(builder === "border" && position !== 0) && !(builder === "shadow" && position === 5)) {
+        this.diagnostics.push(diagnostic(
+          "VEL5042",
+          `${builder} composes CSS lengths, so ${literal} requires a unit; write a unit value such as ${literal}px or ${literal}rem (only 0 is unitless)`,
+          argument.span,
+        ));
+      }
+      if (builder === "border" && position === 2 && argument.kind === "LiteralExpression" && typeof argument.value === "string"
+        && !LOOK_BORDER_STYLE_NAMES.has(argument.value)) {
+        this.diagnostics.push(diagnostic("VEL5042", `Border style '${argument.value}' is not a CSS border style; use one of ${[...LOOK_BORDER_STYLE_NAMES].join(", ")}`, argument.span));
+      }
+    }
+    if (builder === "tracks" && expression.arguments.length > 1024) {
+      this.diagnostics.push(diagnostic("VEL5042", "tracks cannot contain more than 1024 values", expression.span));
+    }
+  }
+
+  /**
+   * Records one entry in its lowered scope (condition signature plus target) so
+   * two sibling blocks with the same condition report the property they both
+   * set. Returns false when the entry repeats. LOK-I4: the charter's duplicate
+   * promise used to hold only inside a single indented scope.
+   */
+  private recordLookEntry(scopeKey: string, name: string): boolean {
+    const seen = this.lookEntryScopes.get(scopeKey) ?? new Set<string>();
+    this.lookEntryScopes.set(scopeKey, seen);
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  }
+
+  /**
+   * The vocabulary checks a Look property shares between the block spelling and
+   * the `look:`/`style:` directives. Returns false when the entry is already
+   * reported and its value needs no further checking. LOK-I1: an unrecognized
+   * property no longer co-reports a `stringType` fallback assignment error.
+   */
+  private analyzeLookValue(name: string, value: Expression, entrySpan: Span, directive: "look" | "style" | null): boolean {
+    const inline = directive !== null;
+    const label = directive === "style" ? "inline Style" : directive === "look" ? "inline Look" : "Look";
+    if (name === "animation" || name === "animationName") {
+      this.diagnostics.push(diagnostic(
+        "VEL5038",
+        `Look has no animation vocabulary: '@keyframes' cannot be written in Look, so an animation name would never resolve. Load the keyframes with a module-level 'import css unsafe "./motion.css" before look' and set '${name}' from that stylesheet, or express state changes with 'transition'`,
+        entrySpan,
+      ));
+      if (!inline) this.inferExpression(value);
+      return false;
+    }
+    if (!LOOK_PROPERTIES.has(name)) {
+      const nearest = nearestLookName(name, LOOK_PROPERTIES);
+      this.diagnostics.push(diagnostic("VEL5038", nearest
+        ? `Unknown ${label} property '${name}'; did you mean '${nearest}'?`
+        : `Unknown ${label} property '${name}'; ${inline ? `${directive!}:* uses the same camelCase property names as a Look block` : "Look properties use the DOM camelCase spelling of a CSS property"}`, entrySpan));
+      if (!inline) this.inferExpression(value);
+      return false;
+    }
+    const shorthandGuidance = lookShorthandStringGuidance(name, value);
+    if (shorthandGuidance) {
+      this.diagnostics.push(diagnostic("VEL5038", shorthandGuidance, value.span));
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * LOK-D3: a bare number on a length property reaches CSS as a declaration the
+   * browser discards. The union already rejects it; this diagnostic replaces the
+   * union dump with the unit the author meant to write.
+   */
+  private reportLookNumberWithoutUnit(name: string, actual: ValueType, expected: ValueType, valueSpan: Span): boolean {
+    if (this.expandAliases(actual).kind !== "number" || LOOK_UNITLESS_PROPERTIES.has(name)) return false;
+    if (!mentionsLookUnitType(expected)) return false;
+    this.diagnostics.push(diagnostic(
+      "VEL5038",
+      `Look property '${name}' is a CSS length and requires a unit; write a unit value such as 16px, 1rem, or 50%`,
+      valueSpan,
+    ));
+    return true;
+  }
+
   private inferLookCondition(expression: Expression): ValueType {
     if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") {
-      if (!LOOK_HOOKS.has(expression.name)) this.diagnostics.push(diagnostic("VEL5038", `Unknown Look hook '@${expression.name}'`, expression.span));
+      if (!LOOK_HOOKS.has(expression.name)) {
+        // LOK-I2: the target position redirects a hook to 'if @hook:', so the
+        // condition position redirects a target to its block spelling.
+        const nearest = nearestLookName(expression.name, LOOK_HOOKS);
+        this.diagnostics.push(diagnostic("VEL5038", LOOK_TARGETS.has(expression.name)
+          ? `Use '@${expression.name}:' as a target block; '@${expression.name}' is a pseudo-element target, not an element state condition`
+          : nearest
+            ? `Unknown Look hook '@${expression.name}'; did you mean '@${nearest}'?`
+            : `Unknown Look hook '@${expression.name}'; Look hooks are ${[...LOOK_HOOKS].map((name) => `@${name}`).join(", ")}`, expression.span));
+      }
       return boolType;
     }
     if (expression.kind === "UnaryExpression" && expression.operator === "not") {
@@ -1083,22 +1469,53 @@ export class VelarWebAnalyzer extends Analyzer {
     if (isViewportComparison(expression)) {
       const comparison = expression as Extract<Expression, { kind: "BinaryExpression" }>;
       this.inferExpression(comparison.right, lookLength);
-      const threshold = evaluateLookStaticExpression(comparison.right, this.lookStaticValues);
-      if (threshold?.kind !== "unit") {
-        this.diagnostics.push(diagnostic(
-          "VEL5052",
-          "A viewport breakpoint must resolve at compile time to a px, rem, or em value; use a const unit token or an imported const unit token",
-          comparison.right.span,
-        ));
-      } else if (!LOOK_MEDIA_LENGTH_UNITS.has(threshold.unit)) {
-        this.diagnostics.push(diagnostic("VEL5052", `Viewport breakpoints do not support '${threshold.unit}'; use px, rem, or em`, comparison.right.span));
-      }
+      this.checkViewportThreshold(comparison.right);
+      return boolType;
+    }
+    const flipped = flippedViewportComparison(expression);
+    if (flipped) {
+      this.inferExpression(flipped.threshold, lookLength);
+      this.diagnostics.push(diagnostic(
+        "VEL5052",
+        `Write the viewport on the left of a breakpoint: 'viewport.${flipped.property} ${flipped.operator} ${lookSourceOf(flipped.threshold)}'`,
+        expression.span,
+      ));
+      this.checkViewportThreshold(flipped.threshold);
       return boolType;
     }
     if (isSchemeCondition(expression)) return boolType;
+    // LOK-U3: the media-subject set is closed. A subject the reader reached for
+    // and Look does not carry names the whole set instead of reporting the
+    // subject as an unknown Core name. A comparison carries its subject on
+    // either side, so both operands are examined.
+    const operands = expression.kind === "BinaryExpression" ? [expression.left, expression.right] : [expression];
+    for (const operand of operands) {
+      const subject = mediaSubjectShape(operand);
+      if (!subject || this.lookup(subject.subject)) continue;
+      if (!LOOK_MEDIA_SUBJECTS.has(subject.subject) && !LOOK_ABSENT_MEDIA_SUBJECTS.has(subject.subject)) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL5038",
+        `Look media conditions are ${lookMediaVocabulary()}; '${subject.subject}.${subject.feature}' is not one of them`,
+        expression.span,
+      ));
+      return boolType;
+    }
     const type = this.inferExpression(expression);
     this.requireCondition(type, expression);
     return boolType;
+  }
+
+  private checkViewportThreshold(value: Expression): void {
+    const threshold = evaluateLookStaticExpression(value, this.lookStaticValues);
+    if (threshold?.kind !== "unit") {
+      this.diagnostics.push(diagnostic(
+        "VEL5052",
+        "A viewport breakpoint must resolve at compile time to a px, rem, or em value; use a const unit token or an imported const unit token",
+        value.span,
+      ));
+    } else if (!LOOK_MEDIA_LENGTH_UNITS.has(threshold.unit)) {
+      this.diagnostics.push(diagnostic("VEL5052", `Viewport breakpoints do not support '${threshold.unit}'; use px, rem, or em`, value.span));
+    }
   }
 
   private inferJsx(expression: JSXElementExpression): ValueType {
@@ -1125,15 +1542,20 @@ export class VelarWebAnalyzer extends Analyzer {
       }
     }
     if (component) this.analyzeComponentElement(expression);
+    const key = expression.attributes.find((attribute) => attribute.name === "key");
+    if (key) this.staticJsxKeys.push({ element: expression, attribute: key });
     for (const child of expression.children) {
       if (child.kind === "JSXExpressionChild") {
+        // The keyed recognizer is purely syntactic, so the honored roots of this
+        // interpolation are known before its expression is inferred; a nested
+        // element then knows whether its own key is honored (WEB-C1).
+        this.checkKeyedInterpolation(child.expression);
         const childType = this.inferExpression(child.expression);
         if (containsPromise(this.expandAliases(childType))) this.diagnostics.push(diagnostic("VEL5031", "JSX cannot render a Promise; await it before rendering", child.expression.span));
         else if (!isInvalidType(childType) && !(child.expression.kind === "ListExpression" && child.expression.elements.length === 0)
           && !this.isJsxRenderable(childType)) {
           this.diagnostics.push(diagnostic("VEL5047", `JSX can render only text, finite numbers, bool, enums, WebNode values, and Lists of those values; received ${describeType(childType)}`, child.expression.span));
         }
-        this.checkKeyedInterpolation(child.expression);
       } else if (child.kind === "ExtensionExpression:web:jsx") {
         this.inferJsx(child);
       }
@@ -1155,6 +1577,7 @@ export class VelarWebAnalyzer extends Analyzer {
       if (leaf.list.key) honoredKeyRoots.add(leaf.list.arrow.body);
       else this.diagnostics.push(diagnostic("VEL5017", "A JSX list rendered with .map() requires a key on its root element", leaf.list.arrow.body.span));
     }
+    for (const root of honoredKeyRoots) this.honoredJsxKeys.add(root);
     this.reportIneffectiveJsxKeys(expression, honoredKeyRoots);
   }
 
@@ -1170,6 +1593,7 @@ export class VelarWebAnalyzer extends Analyzer {
       if (honored.has(element)) return;
       const key = element.attributes.find((attribute) => attribute.name === "key");
       if (key) {
+        this.reportedJsxKeys.add(element);
         this.diagnostics.push(diagnostic(
           "VEL5050",
           "This JSX key has no effect: keys reuse children by identity only when the interpolation is 'items.map(item => <Row key={item.id} />)' or a '?:' branch of one; every other shape rebuilds its children on change — restructure the interpolation into that shape or remove the key",
@@ -1198,7 +1622,17 @@ export class VelarWebAnalyzer extends Analyzer {
       provided.add("children");
       this.requireAssignable(webNodeType, component.properties.get("children")!, expression.span);
     }
-    for (const required of component.requiredProperties) if (!provided.has(required)) this.diagnostics.push(diagnostic("VEL5012", `Component '${expression.tag}' requires prop '${required}'`, expression.span));
+    for (const required of component.requiredProperties) {
+      if (provided.has(required)) continue;
+      // D31-26 promised that `children: WebNode?` is the omittable form; the
+      // implementation makes a prop omittable through its default value, so the
+      // diagnostic teaches the spelling that actually omits (WEB-N4).
+      const declared = component.properties.get(required);
+      const optionalDeclaration = declared !== undefined && this.expandAliases(declared).kind === "optional";
+      this.diagnostics.push(diagnostic("VEL5012", optionalDeclaration
+        ? `Component '${expression.tag}' requires prop '${required}'; a prop becomes omittable through its default value — declare '${required}: ${describeType(declared)} = null' on the component`
+        : `Component '${expression.tag}' requires prop '${required}'`, expression.span));
+    }
     for (const attribute of expression.attributes) {
       if (removedJsxControlAttributes.has(attribute.name)) continue;
       if (attribute.name === "key") {
@@ -1212,10 +1646,7 @@ export class VelarWebAnalyzer extends Analyzer {
       }
       const expected = component.properties.get(attribute.name);
       if (attribute.name === "look") {
-        const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
-        if (attribute.value && typeof attribute.value !== "string" && attribute.value.kind === "ExtensionExpression:web:look") {
-          this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
-        } else if (!this.isLookInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(actual)}`, attribute.span));
+        this.analyzeJsxLookAttribute(attribute);
         continue;
       }
       if (attribute.name.startsWith("look:")) {
@@ -1251,6 +1682,34 @@ export class VelarWebAnalyzer extends Analyzer {
     }
   }
 
+  /**
+   * The `look=` attribute on either host kind. A Look block written inline is
+   * reported without inferring its entries, so the one directive-level message
+   * stands alone; an empty list names the accepted family rather than rendering
+   * `List<unknown>` (LOK-I3, LOK-I6).
+   */
+  private analyzeJsxLookAttribute(attribute: JSXAttribute): void {
+    const value = attribute.value;
+    if (!value) {
+      this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
+      return;
+    }
+    if (typeof value === "string") {
+      this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value such as look={cardLook}", attribute.span));
+      return;
+    }
+    if (value.kind === "ExtensionExpression:web:look") {
+      this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
+      return;
+    }
+    if (value.kind === "ListExpression" && value.elements.length === 0) {
+      this.diagnostics.push(diagnostic("VEL5040", "JSX look accepts a Look, a Look?, or a list of Look values; an empty list composes nothing — remove the attribute", attribute.span));
+      return;
+    }
+    const actual = this.inferExpression(value);
+    if (!this.isLookInput(actual)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(actual)}`, attribute.span));
+  }
+
   private analyzeComponentRef(
     expression: JSXElementExpression,
     attribute: JSXAttribute,
@@ -1282,7 +1741,10 @@ export class VelarWebAnalyzer extends Analyzer {
     const value = attribute.value;
     const eventName = attribute.name.startsWith("on:") ? attribute.name.slice(3).split(".")[0] ?? "" : "";
     const expectedEvent = eventName ? webEventType(eventName) : null;
-    const eventHandlerType: ValueType | null = expectedEvent ? { kind: "function", parameters: [expectedEvent], requiredParameters: 1, result: unknownType } : null;
+    // GRM-A4: the declared handler type returns null. `() => {}` after a fat
+    // arrow is an empty-record factory rather than an empty block, so a handler
+    // position that accepted any result silently accepted that record.
+    const eventHandlerType: ValueType | null = expectedEvent ? { kind: "function", parameters: [expectedEvent], requiredParameters: 1, result: nullType } : null;
     // An event arrow that assigns a state binding from an event field is the
     // hand-rolled spelling of a two-way binding: it receives bind:value
     // guidance and skips ordinary handler inference so the guidance is not
@@ -1295,15 +1757,17 @@ export class VelarWebAnalyzer extends Analyzer {
         attribute.span,
       ));
     }
-    const inferred = typeof value === "string" ? stringType : boundState ? anyType : value ? this.inferExpression(value, eventHandlerType ?? unknownType) : boolType;
+    // A `look=` value is inferred inside its own check so an inline Look block
+    // is reported once rather than analyzed as a snapshot as well.
+    const inferred = typeof value === "string" ? stringType
+      : boundState || attribute.name === "look" ? anyType
+        : value ? this.inferExpression(value, eventHandlerType ?? unknownType) : boolType;
     if (attribute.name === "style") {
       this.diagnostics.push(diagnostic("VEL5041", "Raw JSX style is not supported; use style:property for a checked high-priority inline override, or prefer Look for ordinary visuals", attribute.span));
     } else if (attribute.name.startsWith("style:")) {
       this.analyzeInlineVisualAttribute(attribute, inferred, "style");
     } else if (attribute.name === "look") {
-      if (!value || typeof value === "string") this.diagnostics.push(diagnostic("VEL5040", "JSX look requires an expression value", attribute.span));
-      else if (value.kind === "ExtensionExpression:web:look") this.diagnostics.push(diagnostic("VEL5053", "An inline Look block is not supported; use look:property directives for simple overrides or extract a const Look for conditions and targets", attribute.span));
-      else if (!this.isLookInput(inferred)) this.diagnostics.push(diagnostic("VEL5040", `JSX look requires Look, Look?, or a list of Look values; received ${describeType(inferred)}`, attribute.span));
+      this.analyzeJsxLookAttribute(attribute);
     } else if (attribute.name.startsWith("look:")) {
       this.analyzeInlineVisualAttribute(attribute, inferred, "look");
     } else if (attribute.name === "class") {
@@ -1313,8 +1777,8 @@ export class VelarWebAnalyzer extends Analyzer {
         this.diagnostics.push(diagnostic("VEL5047", `unsafe:html requires string or string?, received ${describeType(inferred)}`, attribute.span));
       }
     } else if (attribute.name === "bind:value") {
-      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || !this.writableStateName(value.name)) {
-        this.diagnostics.push(diagnostic("VEL5019", "bind:value requires a writable state name", attribute.span));
+      if (!this.isWritableBindTarget(value)) {
+        this.diagnostics.push(diagnostic("VEL5019", bindTargetGuidance("bind:value"), attribute.span));
       } else {
         if (!["input", "textarea", "select"].includes(expression.tag)) this.diagnostics.push(diagnostic("VEL5019", `bind:value is not valid on <${expression.tag}>`, attribute.span));
         const numeric = expression.tag === "input" && expression.attributes.some((item) => item.name === "type" && item.value === "number");
@@ -1322,12 +1786,14 @@ export class VelarWebAnalyzer extends Analyzer {
         if (!numeric && inferred.kind === "enum") this.enumValueBindings.set(attribute.span.start, inferred.name);
       }
     } else if (attribute.name === "bind:checked") {
-      if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || !this.writableStateName(value.name)) {
-        this.diagnostics.push(diagnostic("VEL5019", "bind:checked requires a writable state name", attribute.span));
+      if (!this.isWritableBindTarget(value)) {
+        this.diagnostics.push(diagnostic("VEL5019", bindTargetGuidance("bind:checked"), attribute.span));
       } else {
         if (expression.tag !== "input") this.diagnostics.push(diagnostic("VEL5019", `bind:checked is not valid on <${expression.tag}>`, attribute.span));
         this.requireAssignable(inferred, boolType, attribute.span);
       }
+    } else if (attribute.name === "bind:group") {
+      this.analyzeBindGroup(expression, attribute, value, inferred);
     } else if (attribute.name === "ref") {
       if (!value || typeof value === "string" || value.kind !== "IdentifierExpression" || !this.lookup(value.name)?.mutable) {
         this.diagnostics.push(diagnostic("VEL5020", "ref requires a mutable let binding", attribute.span));
@@ -1362,6 +1828,7 @@ export class VelarWebAnalyzer extends Analyzer {
       } else if (inferred.kind === "function" || inferred.kind === "action" || inferred.kind === "intrinsic") {
         if (inferred.rest || inferred.parameters.length > 1) this.diagnostics.push(diagnostic("VEL5021", `Event '${event}' handlers accept zero parameters or one ${describeType(expectedEvent ?? { kind: "named", name: "Event" })} parameter`, attribute.span));
         else if (inferred.parameters.length === 1 && expectedEvent && !isAssignable(expectedEvent, inferred.parameters[0]!, this)) this.diagnostics.push(diagnostic("VEL5021", `Event '${event}' provides ${describeType(expectedEvent)}, not ${describeType(inferred.parameters[0]!)}`, attribute.span));
+        this.checkEventHandlerResult(event ?? "", value, inferred.result, attribute.span);
       }
     } else if (attribute.name.startsWith("class:")) {
       this.requireAssignable(inferred, boolType, attribute.span);
@@ -1372,6 +1839,97 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     if (attribute.name.startsWith("on:click") && !["button", "a", "input", "select", "textarea", "summary"].includes(expression.tag)
       && !expression.attributes.some((item) => item.name === "role")) this.diagnostics.push(diagnostic("VEL5023", `Clickable <${expression.tag}> requires an explicit role`, expression.span));
+  }
+
+  /**
+   * GRM-A4: an event handler runs for effect and returns null. The hole this
+   * closes is `on:click={() => {}}`: after a fat arrow, braces build a record,
+   * never a block, so the empty-record factory used to be accepted as a handler
+   * and silently did nothing on every click.
+   */
+  private checkEventHandlerResult(event: string, value: JSXAttribute["value"], result: ValueType, attributeSpan: Span): void {
+    const resolved = this.expandAliases(result);
+    // An asynchronous handler stays legal whatever it resolves to: attaching an
+    // action directly or through a wrapper is a decided spelling, and an action
+    // already owns its pending state, its errors, and its result.
+    if (resolved.kind === "promise") return;
+    if (resolved.kind === "null" || resolved.kind === "any" || isInvalidType(resolved) || resolved.kind === "unknown") return;
+    const emptyRecordBody = value && typeof value !== "string" && value.kind === "ArrowFunctionExpression"
+      && value.body.kind === "ObjectExpression" && value.body.properties.length === 0;
+    this.diagnostics.push(diagnostic("VEL5021", emptyRecordBody
+      ? `Event '${event}' handlers return null, and '{}' after '=>' builds an empty record rather than an empty block; write '() => null' for a handler that does nothing, or name a 'def' that performs the work`
+      : `Event '${event}' handlers return null; this handler returns ${describeType(result)} — the result is discarded, so call it inside a 'def' that returns null`, attributeSpan));
+  }
+
+  /**
+   * D47 rule 84(A): a bind target is a writable reactive location — a state
+   * name, or a record-field / List-index / Map-key path rooted in one. A
+   * computed accessor, a const, and a function result stay rejected: nothing
+   * would receive the write.
+   */
+  private isWritableBindTarget(value: JSXAttribute["value"]): boolean {
+    if (!value || typeof value === "string") return false;
+    if (value.kind === "IdentifierExpression") return this.writableStateName(value.name);
+    return this.bindPathRoot(value) !== null;
+  }
+
+  /**
+   * Walks a member/index path inward to its root state binding, checking every
+   * segment is a writable location: a declared record field, a List element, or
+   * a Map value. Returns the root state name, or null when the path is not a
+   * writable reactive location.
+   */
+  private bindPathRoot(value: Expression): string | null {
+    const segments: Expression[] = [];
+    let node: Expression = value;
+    while (node.kind === "MemberExpression" || node.kind === "IndexExpression") {
+      if (node.kind === "MemberExpression" && node.optional) return null;
+      segments.push(node);
+      node = node.object;
+    }
+    if (node.kind !== "IdentifierExpression" || !this.writableStateName(node.name)) return null;
+    let current = this.expandAliases(this.lookup(node.name)!.type);
+    for (const segment of segments.reverse()) {
+      if (segment.kind === "MemberExpression") {
+        const fields = current.kind === "object" ? current.fields
+          : current.kind === "named" ? this.fieldsOf(current.identity ?? current.name) : null;
+        const field = fields?.get(segment.property);
+        if (!field) return null;
+        current = this.expandAliases(field);
+      } else if (current.kind === "list") current = this.expandAliases(current.element);
+      else if (current.kind === "map" || current.kind === "record") current = this.expandAliases(current.value);
+      else return null;
+    }
+    return node.name;
+  }
+
+  /**
+   * D47 rule 84: `bind:group` binds a set of inputs that share one decision.
+   * A radio group holds the selected input's `value`; a checkbox group holds the
+   * checked values as a List<string>, so checking and unchecking are membership
+   * changes.
+   */
+  private analyzeBindGroup(expression: JSXElementExpression, attribute: JSXAttribute, value: JSXAttribute["value"], inferred: ValueType): void {
+    const inputType = expression.attributes.find((item) => item.name === "type")?.value;
+    const kind = expression.tag === "input" && typeof inputType === "string" && (inputType === "radio" || inputType === "checkbox") ? inputType : null;
+    if (!kind) {
+      this.diagnostics.push(diagnostic("VEL5019", `bind:group binds a group of choices and requires <input type="radio"> or <input type="checkbox">; use bind:value for a single field and bind:checked for a single flag`, attribute.span));
+      return;
+    }
+    if (!expression.attributes.some((item) => item.name === "value")) {
+      this.diagnostics.push(diagnostic("VEL5019", `bind:group identifies each choice by its value attribute; add value="..." to this <input type="${kind}">`, attribute.span));
+      return;
+    }
+    if (!this.isWritableBindTarget(value)) {
+      this.diagnostics.push(diagnostic("VEL5019", bindTargetGuidance("bind:group"), attribute.span));
+      return;
+    }
+    const expected: ValueType = kind === "radio" ? stringType : { kind: "list", element: stringType };
+    if (kind === "radio" && inferred.kind === "enum") {
+      this.enumValueBindings.set(attribute.span.start, inferred.name);
+      return;
+    }
+    this.requireAssignable(inferred, expected, attribute.span);
   }
 
   // Matches 'event => stateName = event.field' (any member depth) where the
@@ -1451,11 +2009,8 @@ export class VelarWebAnalyzer extends Analyzer {
 
   private analyzeInlineVisualAttribute(attribute: JSXAttribute, actual: ValueType, directive: "look" | "style"): void {
     const property = attribute.name.slice(`${directive}:`.length);
-    const label = directive === "look" ? "inline Look" : "inline Style";
-    if (!property || !LOOK_PROPERTIES.has(property)) {
-      this.diagnostics.push(diagnostic("VEL5038", property
-        ? `Unknown ${label} property '${property}'; ${directive}:* uses the same camelCase property names as a Look block`
-        : `A ${directive}: directive requires a camelCase Look property name`, attribute.span));
+    if (!property) {
+      this.diagnostics.push(diagnostic("VEL5038", `A ${directive}: directive requires a camelCase Look property name`, attribute.span));
       return;
     }
     if (attribute.value === null) {
@@ -1465,12 +2020,10 @@ export class VelarWebAnalyzer extends Analyzer {
     const expression = typeof attribute.value === "string"
       ? { kind: "LiteralExpression", value: attribute.value, raw: JSON.stringify(attribute.value), span: attribute.span } as const
       : attribute.value;
-    const shorthandGuidance = lookShorthandStringGuidance(property, expression);
-    if (shorthandGuidance) {
-      this.diagnostics.push(diagnostic("VEL5038", shorthandGuidance, expression.span));
-      return;
-    }
+    if (!this.analyzeLookValue(property, expression, attribute.span, directive)) return;
     const expected = LOOK_PROPERTY_TYPES.get(property) ?? stringType;
+    if (mentionsLookUnitType(expected) && lookLiteralZero(expression)) return;
+    if (this.reportLookNumberWithoutUnit(property, actual, expected, expression.span)) return;
     if (expected.kind !== "unknown") this.requireAssignable(actual, optionalOf(expected), expression.span);
   }
 }
