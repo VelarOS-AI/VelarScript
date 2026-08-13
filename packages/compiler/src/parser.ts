@@ -452,7 +452,11 @@ export class Parser {
       return { kind: "ContinueStatement", span: this.previous().span };
     }
 
-    if (this.match("try")) {
+    // D39 item 51: the statement-head `try` is the block form only when a
+    // block follows it. Anything else is the expression form, which reaches
+    // the expression parser below and must be consumed by something.
+    if (this.check("try") && this.peekKind(1) === "colon") {
+      this.advance();
       return this.parseTry(start);
     }
 
@@ -2326,6 +2330,16 @@ export class Parser {
   }
 
   private parsePowerBase(): Expression {
+    // D39 item 51: `try` reaches exactly as far as `await` does — the whole
+    // postfix chain — so `try User.parse(raw)` and `try await load()` both
+    // read as one attempt.
+    if (this.match("try")) {
+      const keyword = this.previous();
+      return this.withParseDepth(() => {
+        const value = this.parsePowerBase();
+        return { kind: "TryExpression", value, span: span(keyword.span.start, value.span.end) };
+      });
+    }
     if (!this.match("await")) return this.parsePostfix();
     const operator = this.previous();
     return this.withParseDepth(() => {

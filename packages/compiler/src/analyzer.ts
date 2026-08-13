@@ -2620,6 +2620,20 @@ export class Analyzer implements TypeEnvironment {
         this.analyzeAssignment(statement);
         break;
       case "ExpressionStatement": {
+        // D39 item 51: a bare `try` statement is a swallow nobody can see. The
+        // result has to be consumed; deliberately ignoring a failure is
+        // try/catch, which says so.
+        if (statement.expression.kind === "TryExpression") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            "A 'try' result must be consumed — bind it, test it, or supply a fallback with '??'; to run something and ignore its failure on purpose, use a try/catch block",
+            statement.span,
+          ));
+          // One mistake, one diagnostic: the generic discarded-result message
+          // would repeat this in weaker words.
+          this.inferExpression(statement.expression);
+          break;
+        }
         const type = this.inferExpression(statement.expression);
         this.checkFloatingPromiseStatement(type, statement.expression);
         this.checkDiscardedExpressionResult(statement.expression, type);
@@ -4104,6 +4118,37 @@ export class Analyzer implements TypeEnvironment {
         }
         this.requireAssignable(operand, numberType, expression.operand.span);
         return numberType;
+      }
+      case "TryExpression": {
+        // D39 item 51: an expected failure is an optional. The inner
+        // expression is checked against the non-optional shape of whatever the
+        // consumer wants, because failure is what supplies the null.
+        if (expression.value.kind === "TryExpression") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            "'try try' says nothing the first 'try' has not already said; one 'try' turns any failure in the whole chain into null",
+            expression.span,
+          ));
+        }
+        const attempted = this.inferExpression(expression.value, nonOptional(this.expandAliases(contextualType)));
+        if (isInvalidType(attempted)) return invalidType;
+        const resolved = this.expandAliases(attempted);
+        if (resolved.kind === "null") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            "This expression produces null on success, so a 'try' result cannot tell success from failure; use try/catch to handle the failure",
+            expression.span,
+          ));
+          return invalidType;
+        }
+        if (resolved.kind === "promise") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            `'try' catches a failure while the expression runs, but this expression is ${describeType(attempted)}; write 'try await ...' so the rejection is what is caught`,
+            expression.span,
+          ));
+        }
+        return optionalOf(attempted);
       }
       case "BinaryExpression":
         return this.inferBinary(expression.left, expression.operator, expression.right, expression.span, contextualType);

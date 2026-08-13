@@ -527,6 +527,21 @@ def parseConfig(raw: unknown) -> Config:
     return config
 ```
 
+An expected failure is an optional, not a block: `try expression` produces
+`null` when anything in the chain throws, and its result must be consumed.
+Reach for `try`/`catch` when the failure's details matter.
+
+```velar
+type Port:
+    value: number
+
+def readPort(raw: unknown) -> number:
+    return Port.parse(raw).value
+
+const port = try readPort({ value: 8080 }) ?? 3000
+print(f"{port}")
+```
+
 ### Modules
 
 Export and import by name; a package's public face is a barrel of explicit

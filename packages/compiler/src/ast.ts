@@ -569,6 +569,7 @@ export type CoreExpression =
   | ObjectExpression
   | SpreadExpression
   | UnaryExpression
+  | TryExpression
   | BinaryExpression
   | AssignmentExpression
   | ComparisonChainExpression
@@ -659,6 +660,18 @@ export interface UnaryExpression {
   readonly kind: "UnaryExpression";
   readonly operator: "not" | "+" | "-" | "await";
   readonly operand: Expression;
+  readonly span: Span;
+}
+
+/**
+ * D39 item 51: `try <postfix-expression>` turns an expected failure into
+ * `null`. It carries the same reach as `await` — the whole postfix chain — and
+ * its result must be consumed, so a swallowed failure is always visible where
+ * it is handled.
+ */
+export interface TryExpression {
+  readonly kind: "TryExpression";
+  readonly value: Expression;
   readonly span: Span;
 }
 
@@ -812,6 +825,11 @@ export function expressionContainsDirectAwait(
   switch (expression.kind) {
     case "UnaryExpression":
       return expression.operator === "await" || expressionContainsDirectAwait(expression.operand, extension);
+    case "TryExpression":
+      // The wrapper is emitted as an async immediately-invoked function only
+      // when its own body awaits, and that await belongs to the frame around
+      // it either way.
+      return expressionContainsDirectAwait(expression.value, extension);
     case "FStringExpression":
       return expression.parts.some((part) => part.kind === "expression" && expressionContainsDirectAwait(part.value, extension));
     case "ListExpression":

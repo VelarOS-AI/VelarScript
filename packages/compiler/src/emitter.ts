@@ -742,6 +742,9 @@ export class JavaScriptEmitter {
         case "UnaryExpression":
           visitExpression(expression.operand);
           break;
+        case "TryExpression":
+          visitExpression(expression.value);
+          break;
         case "BinaryExpression":
           visitExpression(expression.left);
           visitExpression(expression.right);
@@ -1742,6 +1745,14 @@ export class JavaScriptEmitter {
       case "SpreadExpression":
         this.needsCollectionHelpers = true;
         return `...__velarCopyList(${this.emitMappedExpression(expression.value)}, "Call spread")`;
+      // D39 item 51: the attempt runs in its own frame so any failure inside
+      // the whole chain becomes null, and nothing else in the surrounding
+      // expression is skipped.
+      case "TryExpression": {
+        const asynchronous = this.expressionContainsDirectAwait(expression.value);
+        const attempt = `{ try { return ${this.emitMappedExpression(expression.value)}; } catch { return null; } }`;
+        return `${asynchronous ? "await " : ""}(${asynchronous ? "async " : ""}() => ${attempt})()`;
+      }
       case "UnaryExpression":
         if (expression.operator === "await") {
           return `await ${this.emitMappedExpression(expression.operand)}`;

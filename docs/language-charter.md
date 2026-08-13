@@ -1905,6 +1905,30 @@ replace a pending return or exception. A loop wholly inside `finally` may still
 use its own `break` and `continue`. Finish cleanup normally or `throw` an
 explicit cleanup error, then return after the `try` statement.
 
+### Expected failure as an optional
+
+A failure the caller already expects is an optional, not a control-flow block.
+`try expression` evaluates the expression and produces `null` if anything in it
+throws:
+
+```velar fragment
+const parsed = try User.parse(untrusted)
+const port = try readPort() ?? 8080
+const body = try await load(url)
+```
+
+`try` reaches exactly as far as `await` does — the whole postfix chain — so a
+failure anywhere in `try a().b().c()` produces one `null`. The result type is
+`T?`; an already-optional result stays itself, because failure and an absent
+value merge. `try try` is rejected, and so is a `try` whose expression produces
+`null` on success, since that result could not tell the two apart.
+
+The result must be consumed: a bare `try` statement is rejected, because a
+swallowed failure with no visible consumer is exactly what this spelling must
+not enable. `try` is an explicit, locally visible swallow with the same
+standing as `?? fallback`; when the failure's details matter, the answer is
+still `try`/`catch`.
+
 Assertions remain active in production:
 
 ```velar fragment

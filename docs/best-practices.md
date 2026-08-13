@@ -254,6 +254,16 @@ Give a class an `@dispose:` block only when it truly owns something a scope
 should release; delegate it to the `close()` or `stop()` the class already
 publishes rather than inventing a second verb, and keep it safe to run twice.
 
+Sort failures by whether the caller already expects them. An expected failure
+is an optional — `try` it and supply the fallback at the use site, where a
+reader can see the decision. An unexpected one is a `try`/`catch` block,
+because the details are what you need. Never hand-write the third shape, a
+`def tryParse` that wraps a parse in try/catch and returns null:
+
+```velar fragment
+const settings = try Settings.parse(raw) ?? defaultSettings()
+```
+
 ## 9. Modules
 
 Export and import by name. A package's public face is a barrel of explicit
