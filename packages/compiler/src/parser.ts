@@ -956,6 +956,17 @@ export class Parser {
       const fieldName = this.expectMemberName("Expected a field name");
       this.expect("colon", "Expected ':' after field name");
       const type = this.parseTypeReference();
+      if (this.check("assign")) {
+        // ENM-U5: record fields carry no defaults — a record is data, so
+        // every construction site states its values.
+        this.diagnostics.push(diagnostic(
+          "VEL2017",
+          `Record fields do not take default values; make the field optional ('${fieldName.value}: ...?') or set the value where the record is built`,
+          this.current().span,
+        ));
+        this.advance();
+        this.parseExpression();
+      }
       fields.push({ readonly, name: fieldName.value, type, span: span(fieldStart, type.span.end) });
       this.expectStatementEnd();
       this.consumeNewlines();
@@ -974,6 +985,25 @@ export class Parser {
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
+      // ENM-I8: a bare `pass` line is the placeholder statement here exactly
+      // as in a class body — never a member named 'pass'. An enum whose body
+      // is only `pass` then falls through to the existing "requires at least
+      // one member" rule, and 'pass' becomes the one undeclarable member name.
+      if (this.check("pass")) {
+        const keyword = this.advance();
+        if (this.check("assign")) {
+          this.diagnostics.push(diagnostic(
+            "VEL2017",
+            "'pass' is the placeholder line and cannot be declared as an enum member; pick another member name",
+            keyword.span,
+          ));
+          this.synchronize();
+        } else {
+          this.expectStatementEnd();
+        }
+        this.consumeNewlines();
+        continue;
+      }
       const member = this.expectMemberName("Expected an enum member name");
       let value = member.value;
       let valueSpan: Span | undefined;
@@ -1482,6 +1512,22 @@ export class Parser {
       pattern = { kind: "MatchTypePattern", type, span: span(start, type.span.end) };
     }
 
+    // ENM-U3: `case a | b:` reads naturally to authors from either parent
+    // language, but alternatives are spelled with a comma; '|' joins types
+    // only inside type annotations. One diagnostic, and the alternatives are
+    // consumed so the rest of the match parses cleanly.
+    if (root && this.check("pipe")) {
+      this.diagnostics.push(diagnostic(
+        "VEL2015",
+        "Combine match alternatives with a comma — 'case a, b:'; '|' joins types only in type annotations",
+        this.current().span,
+      ));
+      while (this.match("pipe") && !this.check("colon") && !this.check("newline") && !this.check("eof")) {
+        if (this.startsMatchValue()) this.parseMatchValue();
+        else this.parseMatchPattern(false);
+      }
+    }
+
     if (this.match("as")) {
       const binding = this.expect("identifier", "Expected a binding name after 'as'");
       pattern = {
@@ -1504,16 +1550,33 @@ export class Parser {
       return this.numberLiteral(number, true, span(start, number.span.end));
     }
     if (token.kind === "identifier" && this.peekKind(1) === "dot") {
+      // ENM-U2: a dotted path is a value pattern at any depth — the same rule
+      // the father language uses (dotted = value, bare name = binding).
       const object = this.advance();
-      this.advance();
-      const property = this.expect("identifier", "Expected an enum member after '.'");
-      return {
-        kind: "MemberExpression",
-        object: { kind: "IdentifierExpression", name: object.value, span: object.span },
-        property: property.value,
-        optional: false,
-        span: span(object.span.start, property.span.end),
-      };
+      let expression: Expression = { kind: "IdentifierExpression", name: object.value, span: object.span };
+      while (this.match("dot")) {
+        // ENM-I7: keyword member names follow the member-access grammar, so
+        // `case S.null:` parses. `pass` stays out: it is the placeholder line
+        // and the one name an enum can never declare (ENM-I8).
+        if (this.check("pass")) {
+          this.diagnostics.push(diagnostic(
+            "VEL2015",
+            "'pass' is the placeholder line, and the one name an enum never declares; no member spells it",
+            this.current().span,
+          ));
+          this.advance();
+          return null;
+        }
+        const property = this.expectMemberName("Expected an enum member after '.'");
+        expression = {
+          kind: "MemberExpression",
+          object: expression,
+          property: property.value,
+          optional: false,
+          span: span(object.span.start, property.span.end),
+        };
+      }
+      return expression as Extract<MatchStatement["cases"][number]["pattern"], { kind: "MatchValuePattern" }>["values"][number];
     }
     this.advance();
     switch (token.kind) {
@@ -1755,6 +1818,26 @@ export class Parser {
     let left = this.parseUnary();
 
     while (true) {
+      // '|' never operates on values — the union spelling lives in type
+      // annotations — and the author reaching for it here almost always
+      // means 'or'. Recovery reads it that way under one diagnostic.
+      if (this.check("pipe") && binaryPrecedence.or! >= minimumPrecedence) {
+        const operator = this.advance();
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL2031",
+          "'|' joins types only in type annotations; combine conditions with 'or'",
+          operator.span,
+        ));
+        const right = this.parseExpression(binaryPrecedence.or! + 1);
+        left = {
+          kind: "BinaryExpression",
+          left,
+          operator: "or",
+          right,
+          span: span(left.span.start, right.span.end),
+        } satisfies BinaryExpression;
+        continue;
+      }
       const javaScriptInstanceof = this.check("identifier") && this.current().value === "instanceof";
       const compoundNotIn = this.check("not") && this.peekKind(1) === "in";
       const precedence = javaScriptInstanceof
@@ -2005,6 +2088,23 @@ export class Parser {
       ));
       return this.withParseDepth(() => this.parseUnary());
     }
+    if ((this.check("plus") || this.check("minus")) && this.peekKind(1) === this.current().kind
+      && this.current().span.end === this.tokens[this.index + 1]!.span.start) {
+      // GRM-D2: '++value' parses as '+(+value)' — a legal silent no-op — so
+      // the stacked-operator spelling is taught directly.
+      const first = this.current();
+      const operator = first.kind === "plus" ? "+" : "-";
+      const target = this.tokens[this.index + 2];
+      const name = target?.kind === "identifier" ? target.value : "name";
+      this.diagnostics.push(recoveredDiagnostic(
+        "VEL2031",
+        `VelarScript has no '${operator}${operator}'; write '${name} ${operator}= 1'`,
+        span(first.span.start, this.tokens[this.index + 1]!.span.end),
+      ));
+      this.advance();
+      this.advance();
+      return this.withParseDepth(() => this.parseUnary());
+    }
     if (this.match("not") || this.match("plus") || this.match("minus")) {
       const operator = this.previous();
       return this.withParseDepth(() => {
@@ -2090,11 +2190,12 @@ export class Parser {
             if ((this.check("identifier") || this.check("from")) && this.peekKind(1) === "colon") {
               const name = this.advance();
               this.advance();
-              this.diagnostics.push(diagnostic("VEL2024", `Named argument '${name.value}' uses ':' rather than '='`, name.span));
+              this.diagnostics.push(diagnostic("VEL2024", `Write '=' between the name and value for named argument '${name.value}': ${name.value} = value`, name.span));
               if (sawSpread) this.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
               sawNamed = true;
               argumentNames.push(name.value);
               arguments_.push(this.parseExpression());
+              this.recoverChainedNamedArgument();
             } else if ((this.check("identifier") || this.check("from")) && this.peekKind(1) === "assign") {
               const name = this.advance();
               this.advance();
@@ -2102,6 +2203,7 @@ export class Parser {
               sawNamed = true;
               argumentNames.push(name.value);
               arguments_.push(this.parseExpression());
+              this.recoverChainedNamedArgument();
             } else {
               const argument = this.parseSpreadExpression();
               if (sawNamed) this.diagnostics.push(diagnostic("VEL2024", "Positional arguments must appear before named arguments", argument.span));
@@ -2156,19 +2258,37 @@ export class Parser {
     const callableName = expression.kind === "IdentifierExpression" ? expression.name
       : expression.kind === "MemberExpression" ? expression.property
         : null;
-    if (callableName === null || !this.genericCallableNames.has(callableName)
-      || !this.check("less") || this.current().span.start !== expression.span.end) return null;
+    if (callableName === null || !this.check("less") || this.current().span.start !== expression.span.end) return null;
+    // Beyond the same-file generic-name list, the recovery extends to any
+    // callee — imported generics and methods — when the angle content carries
+    // type evidence: a builtin type name, a capitalized name, optional or
+    // union syntax, or nested generics. Without that evidence the comparison
+    // reading wins, so `a<b>(c)` over three numbers stays a chain (rule #41).
+    const knownGeneric = this.genericCallableNames.has(callableName);
+    const typeEvidence = (token: Token): boolean => {
+      if (token.kind === "question" || token.kind === "pipe" || token.kind === "arrow") return true;
+      if (token.kind !== "identifier") return false;
+      if (["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "readonly"].includes(token.value)) return true;
+      const first = token.value[0] ?? "";
+      return first >= "A" && first <= "Z";
+    };
+    let sawTypeEvidence = false;
     let depth = 0;
     for (let index = this.index; index < this.tokens.length; index += 1) {
       const token = this.tokens[index]!;
       if (token.kind === "newline" || token.kind === "eof") return null;
-      if (token.kind === "less") depth += 1;
-      else if (token.kind === "greater") {
+      if (token.kind === "less") {
+        depth += 1;
+        if (depth >= 2) sawTypeEvidence = true;
+      } else if (token.kind === "greater") {
         depth -= 1;
         if (depth === 0) {
           const call = this.tokens[index + 1];
-          return call?.kind === "leftParen" && call.span.start === token.span.end ? index : null;
+          if (call?.kind !== "leftParen" || call.span.start !== token.span.end) return null;
+          return knownGeneric || sawTypeEvidence ? index : null;
         }
+      } else if (typeEvidence(token)) {
+        sawTypeEvidence = true;
       }
     }
     return null;
@@ -2273,6 +2393,15 @@ export class Parser {
       case "null":
         return { kind: "LiteralExpression", value: null, raw: token.value, span: token.span };
       case "identifier":
+        if (token.value === "function" && (this.check("leftParen") || (this.check("identifier") && this.peekKind(1) === "leftParen"))) {
+          this.diagnostics.push(diagnostic(
+            "VEL2031",
+            "VelarScript has no 'function' expressions; declare 'def name(...)' or write an arrow '(x) => value'",
+            token.span,
+          ));
+          this.synchronize();
+          return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+        }
         return { kind: "IdentifierExpression", name: token.value, span: token.span };
       case "super":
         return { kind: "SuperExpression", span: token.span };
@@ -2323,8 +2452,87 @@ export class Parser {
         return { kind: "ObjectExpression", properties, span: span(token.span.start, close.span.end) };
       }
       default:
+        if (token.kind === "indent") {
+          // GRM-A5's sibling shape: a line indented under a complete
+          // statement continues nothing. One diagnostic owns the whole
+          // orphan block so its lines do not cascade.
+          this.diagnostics.push(diagnostic(
+            "VEL2002",
+            "A statement ends at its newline; this indented line continues nothing — parenthesize an expression to span lines, or align the line with its block",
+            token.span,
+          ));
+          let blocks = 1;
+          while (blocks > 0 && !this.check("eof")) {
+            if (this.check("indent")) blocks += 1;
+            else if (this.check("dedent")) blocks -= 1;
+            this.advance();
+          }
+          return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+        }
+        if (token.kind === "newline" || token.kind === "dedent" || token.kind === "eof") {
+          // GRM-A5: an operator dangling at the line end leaves the parser at
+          // the statement boundary. GRM-D2's postfix shape lands here too
+          // (`i++` parses as `i + +<nothing>`), so it gets its own teaching.
+          const beforeBoundary = this.tokens[this.index - 2];
+          const stacked = this.tokens[this.index - 3];
+          const increment = beforeBoundary && stacked
+            && beforeBoundary.kind === stacked.kind
+            && (beforeBoundary.kind === "plus" || beforeBoundary.kind === "minus")
+            && stacked.span.end === beforeBoundary.span.start;
+          if (increment) {
+            const operator = beforeBoundary.kind === "plus" ? "+" : "-";
+            const target = this.tokens[this.index - 4];
+            const name = target?.kind === "identifier" ? target.value : "name";
+            this.diagnostics.push(diagnostic(
+              "VEL2031",
+              `VelarScript has no '${operator}${operator}'; write '${name} ${operator}= 1'`,
+              span(stacked.span.start, beforeBoundary.span.end),
+            ));
+          } else {
+            this.diagnostics.push(diagnostic(
+              "VEL2002",
+              "A statement ends at its newline; parenthesize the expression to continue it across lines",
+              token.span,
+            ));
+          }
+          if (token.kind === "newline") {
+            // A continuation line indented under the broken statement would
+            // cascade line by line; it belongs to this one error, so its
+            // whole block is consumed here.
+            let ahead = 0;
+            while (this.peekKind(ahead) === "newline") ahead += 1;
+            if (this.peekKind(ahead) === "indent") {
+              while (ahead > 0) {
+                this.advance();
+                ahead -= 1;
+              }
+              this.advance();
+              let blocks = 1;
+              while (blocks > 0 && !this.check("eof")) {
+                if (this.check("indent")) blocks += 1;
+                else if (this.check("dedent")) blocks -= 1;
+                this.advance();
+              }
+            } else {
+              this.index -= 1;
+            }
+          } else if (token.kind === "dedent") {
+            this.index -= 1;
+          }
+          return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+        }
         this.diagnostics.push(diagnostic("VEL2002", "Expected an expression", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+    }
+  }
+
+  // GRM-T1: `f(x=y=2)` chains a second '=' after the named value; the whole
+  // chain is consumed under one diagnostic so ')' recovery does not cascade.
+  private recoverChainedNamedArgument(): void {
+    while (this.check("assign")) {
+      this.diagnostics.push(diagnostic("VEL2024", "A named argument takes one value; remove the extra '='", this.current().span));
+      this.advance();
+      this.parseExpression();
     }
   }
 
@@ -2567,6 +2775,19 @@ export class Parser {
     if (previous.kind === "unitNumber" && previous.value.endsWith("%") && previous.span.end === token.span.start) {
       const amount = previous.value.slice(0, -1);
       return `'${previous.value}' is a percentage literal, so '${token.value}' starts a second statement; write '${amount} % ${token.value}' with spaces for the remainder operator`;
+    }
+    // '|' spells a union only inside type annotations; at value level the
+    // author almost always means 'or' (or a comma between match values).
+    if (token.kind === "pipe") {
+      return "'|' joins types only in type annotations; combine conditions with 'or'";
+    }
+    // GRM-A5: structural tokens have no source text, so they need prose —
+    // 'move indent to its own line' taught nothing.
+    if (token.kind === "indent") {
+      return "A statement ends at its newline; this line is indented as a continuation, but only parenthesized expressions span lines — parenthesize, or align the line with its block";
+    }
+    if (token.kind === "dedent" || token.kind === "newline" || token.kind === "eof") {
+      return "A statement ends at its newline; parenthesize an expression to continue it across lines";
     }
     return `A statement ends at its newline; move '${describeStatementToken(token)}' to its own line, or join it to the value before it with an operator`;
   }

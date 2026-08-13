@@ -256,6 +256,8 @@ export interface LoweringHints {
   readonly classChecks: ReadonlySet<string>;
   readonly privateMembers: ReadonlySet<string>;
   readonly classNames: ReadonlySet<string>;
+  /** Class names whose chain reaches the builtin Error — their lowering stamps `.name` (audit 4 micro-ruling). */
+  readonly errorSubclassNames: ReadonlySet<string>;
   readonly enumNames: ReadonlySet<string>;
   /**
    * Module-scope bindings that hold runtime Type objects: local `type`
@@ -300,6 +302,15 @@ export interface LoweringHints {
    * every other equality elides the repair and emits plain `===` (D36 item 41).
    */
   readonly sameValueZeroEqualities: ReadonlySet<string>;
+  /**
+   * Span identities of match value candidates that must compare by
+   * SameValueZero — the subject and the candidate can both be NaN — so
+   * `case box.nan:` agrees with `==` (ENM-D2, charter section 8). Everything
+   * else keeps plain `===`.
+   */
+  readonly sameValueZeroMatchValues: ReadonlySet<string>;
+  /** Span identities of calls to the prelude's equals(a, b) (D47 rule 81). */
+  readonly equalsCalls: ReadonlySet<string>;
 }
 
 export interface RuntimeNarrowingGuard {
@@ -391,6 +402,8 @@ const coreGlobalGuidance = new Map([
   ["Boolean", "Use an explicit boolean comparison; VelarScript does not expose JavaScript truthiness conversion"],
   ["Number", "Use number(text), typed forms, or validated data instead of JavaScript Number coercion"],
   ["String", "Use str(value) instead of the JavaScript String global"],
+  ["stringify", "Add the import: import {stringify} from \"velar/json\""],
+  ["parse", "Add the import: import {parse} from \"velar/json\""],
   ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil"]
     .map((name) => [name, removedGlobalFunctionGuidance(name)!] as const),
 ]);
@@ -471,6 +484,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly collectionSizes = new Set<number>();
   private readonly primitiveCalls = new Map<number, PrimitiveOperation>();
   private readonly sameValueZeroEqualities = new Set<string>();
+  private readonly sameValueZeroMatchValues = new Set<string>();
+  private readonly equalsCalls = new Set<string>();
   private readonly stringSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
   private readonly javaScriptBindings = new Set<string>();
@@ -572,6 +587,8 @@ export class Analyzer implements TypeEnvironment {
   private instanceFieldInitializerDepth = 0;
   protected deferredExecutionDepth = 0;
   private readonly importedBindingSources = new Map<Binding, { readonly source: string; readonly imported: string | null }>();
+  /** Namespace import locals by name, known before signature validation runs (ENM-I9 teaching). */
+  private readonly namespaceImportLocals = new Map<string, string>();
   private readonly initializationImportReadSites = new Map<string, InitializationImportRead>();
   /** Local class bindings mapped to the source offset where their `class` statement evaluates (CLS-D8). */
   private readonly hoistedClassDeclarations = new Map<Binding, number>();
@@ -611,6 +628,9 @@ export class Analyzer implements TypeEnvironment {
         ["name", { mutable: false, type: stringType }],
         ["message", { mutable: false, type: stringType }],
         ["stack", { mutable: false, type: optionalOf(stringType) }],
+        // ASY-U3: charter section 11 promises a non-Error rejection remains
+        // available as the JavaScript cause; the member makes that reachable.
+        ["cause", { mutable: false, type: unknownType }],
       ]),
       getters: new Set(),
       abstractGetters: new Set(),
@@ -620,6 +640,35 @@ export class Analyzer implements TypeEnvironment {
       staticGetters: new Set(),
       staticMethods: new Map(),
     });
+    // ENM-U4 + COL-U5: the three compiler-raised error types are nameable —
+    // catchable, `is`-narrowable, and constructible — wired exactly like
+    // Error. ValidationError additionally carries the failure detail its
+    // parse sites report (path, field, reason).
+    for (const [name, detailFields] of [
+      ["ValidationError", [
+        ["path", { mutable: false, type: optionalOf(stringType) }],
+        ["field", { mutable: false, type: optionalOf(stringType) }],
+        ["reason", { mutable: false, type: optionalOf(stringType) }],
+      ]],
+      ["NarrowingError", []],
+      ["IndexError", []],
+    ] as const) {
+      this.classes.set(name, {
+        parameters: [stringType],
+        parameterNames: ["message"],
+        requiredParameters: 0,
+        base: "Error",
+        abstract: false,
+        fields: new Map(detailFields as readonly (readonly [string, ClassField])[]),
+        getters: new Set(),
+        abstractGetters: new Set(),
+        methods: new Map(),
+        abstractMethods: new Set(),
+        staticFields: new Map(),
+        staticGetters: new Set(),
+        staticMethods: new Map(),
+      });
+    }
     this.importBindings = new Map(context.imports);
     this.dynamicImports = new Map(context.dynamicImports);
     for (const [name, kind] of context.reactiveImports ?? []) this.reactiveBindings.set(name, kind);
@@ -659,6 +708,12 @@ export class Analyzer implements TypeEnvironment {
     this.registerExternTypeImports(program);
     this.registerTypeShapes(program);
     this.validateDataTypeDeclarations(program);
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration") continue;
+      for (const specifier of statement.specifiers) {
+        if (specifier.namespace) this.namespaceImportLocals.set(specifier.local, statement.source);
+      }
+    }
     this.validateCoreDeclarationSignatures(program);
     this.registerClassShapes(program);
     this.rejectUnproductiveRecursiveTypes(program);
@@ -1058,6 +1113,7 @@ export class Analyzer implements TypeEnvironment {
       classChecks: this.classChecks,
       privateMembers: this.privateMembers,
       classNames: new Set([...this.classes.keys(), ...this.classDisplayNames.values()]),
+      errorSubclassNames: new Set([...this.classes.keys()].filter((name) => name !== "Error" && this.isSubclassOf(name, "Error"))),
       enumNames: new Set(this.enums.keys()),
       runtimeTypeObjectNames: this.runtimeTypeObjectNames,
       optionalMembers: this.optionalMembers,
@@ -1084,6 +1140,8 @@ export class Analyzer implements TypeEnvironment {
       extensionCalls: this.extensionCalls,
       runtimeNarrowings: this.runtimeNarrowings,
       sameValueZeroEqualities: this.sameValueZeroEqualities,
+      sameValueZeroMatchValues: this.sameValueZeroMatchValues,
+      equalsCalls: this.equalsCalls,
     };
   }
 
@@ -1765,8 +1823,8 @@ export class Analyzer implements TypeEnvironment {
         const seen = new Set<string>();
         const serializedValues = new Map<string, string>();
         for (const member of statement.members) {
-          if (member.name === "is" || member.name === "parse") {
-            this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is reserved for runtime validation`, member.span));
+          if (member.name === "is" || member.name === "parse" || member.name === "values") {
+            this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is reserved for the enum's runtime surface (is, parse, values)`, member.span));
           }
           if (member.name === "prototype" || member.name === "__proto__") {
             this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is unavailable because VelarScript does not expose prototype manipulation`, member.span));
@@ -1946,6 +2004,7 @@ export class Analyzer implements TypeEnvironment {
         const fallthroughInvalidations: FlowFactInvalidations[] = [];
         const coveredValues = new Set<string>();
         const coveredEnumMembers = new Set<string>();
+        const guardedEnumMembers = new Set<string>();
         const coveredTypes: ValueType[] = [];
         const coveredListLengths = new Set<number>();
         let coveredListMinimum: number | null = null;
@@ -1981,12 +2040,15 @@ export class Analyzer implements TypeEnvironment {
             for (const value of rootPattern.values) {
               const key = this.matchValueKey(value);
               if (!branch.guard && coveredValues.has(key)) {
-                this.diagnostics.push(diagnostic("VEL4013", `Match value '${key}' is declared more than once`, value.span));
+                this.diagnostics.push(diagnostic("VEL4013", `Match value '${this.matchValueDisplay(value)}' is declared more than once`, value.span));
               }
               if (!branch.guard) coveredValues.add(key);
               const valueType = this.inferredExpressionTypes.get(spanIdentity(value.span));
               if (!branch.guard && valueType?.kind === "enumMember") {
                 coveredEnumMembers.add(this.enumMemberCoverageKey(valueType.identity, valueType.member));
+              }
+              if (branch.guard && valueType?.kind === "enumMember") {
+                guardedEnumMembers.add(this.enumMemberCoverageKey(valueType.identity, valueType.member));
               }
             }
           } else if (rootPattern.kind === "MatchTypePattern") {
@@ -1996,6 +2058,10 @@ export class Analyzer implements TypeEnvironment {
                 this.diagnostics.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, rootPattern.span));
               }
               coveredTypes.push(checked);
+              // ENM-I5: a parenthesized singleton pattern `case (S.a):` is a
+              // type pattern of enumMember kind; it matches exactly that
+              // member, so it counts toward member coverage.
+              this.creditEnumMemberCoverage(checked, coveredEnumMembers);
               if (this.matchPatternCoversWholeType(rootPattern, matched)) universalCovered = true;
             }
           } else if (rootPattern.kind === "MatchWildcardPattern" && !branch.guard) {
@@ -2092,13 +2158,22 @@ export class Analyzer implements TypeEnvironment {
           coveredListLengths,
           coveredListMinimum,
         );
+        const enumSubject = this.enumMatchSubject(matched);
         if (exhaustive) {
           this.exhaustiveMatches.add(statement.span.start);
-        } else if (matched.kind === "enum") {
-          const missing = [...(this.enums.get(matched.identity)?.members ?? this.enums.get(matched.name)?.members ?? [])]
-            .filter((member) => !coveredEnumMembers.has(this.enumMemberCoverageKey(matched.identity, member)));
+        } else if (enumSubject !== null) {
+          // ENM-I6: an optional enum subject carries the same exhaustiveness
+          // contract as the bare enum — every member plus `case null`.
+          const target = enumSubject.target;
+          const missing = [...(this.enums.get(target.identity)?.members ?? this.enums.get(target.name)?.members ?? [])]
+            .filter((member) => !coveredEnumMembers.has(this.enumMemberCoverageKey(target.identity, member)));
+          const guarded = missing.filter((member) => guardedEnumMembers.has(this.enumMemberCoverageKey(target.identity, member)));
+          if (enumSubject.optional && !coveredValues.has("null")) missing.push("null");
           if (missing.length > 0) {
-            this.diagnostics.push(diagnostic("VEL4015", `Match on ${matched.name} is missing: ${missing.join(", ")}`, statement.span));
+            const note = guarded.length > 0
+              ? "; a guarded case matches only when its condition holds, so it does not count — add an unguarded case or 'case _:'"
+              : "";
+            this.diagnostics.push(diagnostic("VEL4015", `Match on ${describeType(matched)} is missing: ${missing.join(", ")}${note}`, statement.span));
           }
         } else if (!isInvalidType(matched)) {
           // D45 rule 77: a match over a class (or a union containing one) must
@@ -2189,7 +2264,9 @@ export class Analyzer implements TypeEnvironment {
             : iterable.kind === "list" || iterable.kind === "set" || iterable.kind === "string" ? numberType
               : unknownType;
           if (iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {
-            this.typeError(`Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
+            this.typeError(iterable.kind === "enumObject"
+              ? `Cannot iterate over the enum itself; ${iterable.name}.values() returns the members as a List — for member in ${iterable.name}.values():`
+              : `Cannot iterate over ${describeType(iterable)}`, statement.iterable.span);
           }
         }
         const baseline = this.snapshotFlowFacts();
@@ -2491,7 +2568,12 @@ export class Analyzer implements TypeEnvironment {
     const baseName = statement.base?.name ?? null;
     if (baseName) {
       const baseBinding = this.lookup(baseName) ?? this.builtin(baseName);
-      if (baseBinding?.type.kind !== "classConstructor" || !this.classes.has(baseName)) {
+      if (baseName === "ValidationError" || baseName === "NarrowingError" || baseName === "IndexError") {
+        // The compiler-raised error types are leaf contracts: user subclasses
+        // would dilute what a caught ValidationError/NarrowingError/IndexError
+        // proves. Extend Error for custom hierarchies.
+        this.typeError(`The builtin error type '${baseName}' cannot be extended; extend Error and declare your own fields`, statement.base!.span);
+      } else if (baseBinding?.type.kind !== "classConstructor" || !this.classes.has(baseName)) {
         this.typeError(`Unknown base class '${baseName}'`, statement.base!.span);
       } else if (baseName === statement.name || this.isSubclassOf(baseName, statement.name)) {
         this.typeError(`Class '${statement.name}' has a cyclic inheritance relationship`, statement.base!.span);
@@ -3522,6 +3604,7 @@ export class Analyzer implements TypeEnvironment {
                 this.requireAssignable(spreadElement, expectedElement, item.span);
               }
             }
+            else if (itemType.kind === "enumObject") this.typeError(`Cannot spread the enum itself; spread its member List instead — [...${itemType.name}.values()]`, item.span);
             else if (itemType.kind !== "any") this.typeError(`Cannot spread ${describeType(itemType)} into a list`, item.span);
           } else {
             element = mergeTypes(element, expectedElement.kind === "unknown" ? this.widenAggregateSingleton(itemType) : itemType);
@@ -3635,10 +3718,16 @@ export class Analyzer implements TypeEnvironment {
             }
             return result;
           }
-          if (awaited.kind !== "any") {
-            this.typeError(`Cannot await ${describeType(operand)}`, expression.span);
-          }
-          return awaited.kind === "any" ? anyType : unknownType;
+          // ASY-U2: awaiting `any` adopts a foreign thenable — its hooks run
+          // here and a raw undefined result skips null normalization — so the
+          // unchecked domain is rejected exactly like `unknown`.
+          this.typeError(
+            awaited.kind === "any"
+              ? "Cannot await any; validate the value into a checked Promise first — an unchecked thenable runs foreign hooks and can leak raw undefined"
+              : `Cannot await ${describeType(operand)}`,
+            expression.span,
+          );
+          return unknownType;
         }
         if (isInvalidType(operand)) return invalidType;
         if (expression.operator === "not") {
@@ -3673,6 +3762,8 @@ export class Analyzer implements TypeEnvironment {
             const surviving = this.survivingNarrowings(successful);
             if (operator !== "==" && operator !== "!=") {
               this.requireOrderedComparison(types[index]!, rightType, left, right, expression.span);
+            } else if (this.rejectFreshCollectionEquality(index === 0 ? left : right, right, operator)) {
+              // A fresh literal chain link is already constant; nothing else to learn.
             } else if (this.equalityOperandMayBeNaN(left, types[index]!) && this.equalityOperandMayBeNaN(right, rightType)) {
               this.sameValueZeroEqualities.add(spanIdentity({ start: left.span.start, end: right.span.end }));
             }
@@ -3721,12 +3812,28 @@ export class Analyzer implements TypeEnvironment {
           return mergeTypes(thenType, elseType);
         }
       case "IsExpression": {
-        this.inferExpression(expression.value);
+        const subject = this.inferExpression(expression.value);
         const checked = this.resolveAnnotation(expression.type);
         const valid = this.validateTypeReference(expression.type);
         if (valid && this.rejectErasedRuntimeCheck(checked, expression.type.span)) return invalidType;
         if (valid && checked.kind === "class") {
           this.classChecks.add(spanIdentity(expression.span));
+        }
+        if (valid) {
+          // GRM-D1 second half: bool is a closed primitive, so an `is` whose
+          // subject is statically bool is decided at compile time — the same
+          // constant-test reasoning as D42 item 64.
+          const expandedSubject = this.expandAliases(subject);
+          if (expandedSubject.kind === "bool") {
+            const matches = this.expandAliases(checked).kind === "bool";
+            const constant = (expression.operator === "is") === matches;
+            this.typeError(
+              `The subject is already statically bool, so '${expression.operator} ${describeType(checked)}' is always ${constant}; drop the constant test`,
+              expression.span,
+            );
+          } else {
+            this.rejectDisjointEnumTest(subject, checked, expression.operator, expression.span);
+          }
         }
         return valid ? boolType : invalidType;
       }
@@ -3838,19 +3945,20 @@ export class Analyzer implements TypeEnvironment {
     if (isInvalidType(left) || isInvalidType(right)) return invalidType;
     if (operator === "in" || operator === "not in") {
       if (right.kind === "list" || right.kind === "set") {
-        this.requireAssignable(left, this.readonlyDataViewOf(right.element), leftExpression.span);
+        this.requireMembershipIntersection(left, this.readonlyDataViewOf(right.element), leftExpression.span, operator);
       } else if (right.kind === "map") {
-        this.requireAssignable(left, this.readonlyDataViewOf(right.key), leftExpression.span);
+        this.requireMembershipIntersection(left, this.readonlyDataViewOf(right.key), leftExpression.span, operator);
       } else if (right.kind === "record") {
-        this.requireAssignable(left, stringType, leftExpression.span);
+        this.requireMembershipIntersection(left, stringType, leftExpression.span, operator);
       } else if (right.kind === "string") {
-        this.requireAssignable(left, stringType, leftExpression.span);
+        this.requireMembershipIntersection(left, stringType, leftExpression.span, operator);
       } else if (right.kind !== "any") {
         this.typeError(`Membership requires a List, Set, Map, Record, or string, received ${describeType(right)}`, rightExpression.span);
       }
       return boolType;
     }
     if (operator === "==" || operator === "!=") {
+      if (this.rejectFreshCollectionEquality(leftExpression, rightExpression, operator)) return boolType;
       this.requireIntersectingEquality(left, right, operator, leftExpression, rightExpression, operationSpan);
       if (this.equalityOperandMayBeNaN(leftExpression, left) && this.equalityOperandMayBeNaN(rightExpression, right)) {
         this.sameValueZeroEqualities.add(spanIdentity(operationSpan));
@@ -3899,10 +4007,177 @@ export class Analyzer implements TypeEnvironment {
     if (left !== leftType) this.runtimeNarrowings.delete(spanIdentity(leftExpression.span));
     if (right !== rightType) this.runtimeNarrowings.delete(spanIdentity(rightExpression.span));
     if (this.equalityTypesIntersect(left, right)) return;
+    const errorSpan = { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) };
+    // When only the enum/string veto separated the operands, the comparison is
+    // not constant — an enum member and a raw string can match wire text at
+    // runtime. That silent match is exactly the read path around `Enum.parse`
+    // the veto exists to close, so the message names the boundary instead of
+    // claiming a constant result (ENM-I2).
+    if (this.typesIntersect(left, right, false)) {
+      this.typeError(
+        `${describeType(left)} and ${describeType(right)} can meet only where an enum member matches a raw string, and the enum and string domains never meet in '${operator}'${this.equalityGuidance(left, right)}`,
+        errorSpan,
+      );
+      return;
+    }
     const constant = operator === "==" ? "false" : "true";
     this.typeError(
       `${describeType(left)} and ${describeType(right)} have no values in common, so '${operator}' is always ${constant}${this.equalityGuidance(left, right)}`,
-      { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) },
+      errorSpan,
+    );
+  }
+
+  // COL-I3 first half: collection `==` is reference identity (the runtime
+  // follows the mother language), so a freshly constructed literal operand
+  // can never be identical to anything — the comparison is provably constant,
+  // which is D42's own reason to reject it. Content comparison has a spelling
+  // now: equals(a, b).
+  private rejectFreshCollectionEquality(left: Expression, right: Expression, operator: string): boolean {
+    const fresh = this.freshCollectionOperand(left) ?? this.freshCollectionOperand(right);
+    if (!fresh) return false;
+    const constant = operator === "==" ? "false" : "true";
+    this.typeError(
+      `A ${fresh.description} built inside the comparison is a new object, and '${operator}' compares collection identity, so the result is always ${constant}; compare contents with equals(a, b)`,
+      fresh.span,
+    );
+    return true;
+  }
+
+  private freshCollectionOperand(expression: Expression): { readonly description: string; readonly span: Span } | null {
+    if (expression.kind === "ListExpression") return { description: "List literal", span: expression.span };
+    if (expression.kind === "ObjectExpression") return { description: "record literal", span: expression.span };
+    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
+      && (expression.callee.name === "Map" || expression.callee.name === "Set")
+      && !this.lookup(expression.callee.name)) {
+      return { description: `${expression.callee.name}(...) construction`, span: expression.span };
+    }
+    return null;
+  }
+
+  // ENM-I3: the membership vocabulary — `in`, `has`, `index`, `count`,
+  // `remove`, and the Map.get key — asks the question `==` asks, one element
+  // at a time, so the probe carries the same intersection requirement and
+  // the same enum/string boundary as D42 item 64.
+  private requireMembershipIntersection(probe: ValueType, domain: ValueType, span: Span, operation: string): void {
+    if (isInvalidType(probe) || isInvalidType(domain)) return;
+    if (this.equalityTypesIntersect(probe, domain)) return;
+    this.typeError(
+      this.typesIntersect(probe, domain, false)
+        ? `${describeType(probe)} can match ${describeType(domain)} only as an enum member against a raw string, and the enum and string domains never meet in '${operation}'${this.equalityGuidance(probe, domain)}`
+        : `${describeType(probe)} and ${describeType(domain)} have no values in common, so '${operation}' can never match${this.equalityGuidance(probe, domain)}`,
+      span,
+    );
+  }
+
+  // ENM-I1: `is` / `is not` between statically disjoint enum domains is the
+  // last equality surface that could launder one enum's member into another
+  // (`==` and `case` already reject). The test is constant only when both
+  // sides live purely in the enum/null domain; any string, unknown, or other
+  // arm makes the runtime check a real validation and keeps it legal.
+  private rejectDisjointEnumTest(subjectSource: ValueType, checked: ValueType, operator: "is" | "is not", span: Span): void {
+    const subjectArms = this.pureEnumDomainArms(subjectSource);
+    const checkedArms = this.pureEnumDomainArms(checked);
+    if (!subjectArms || !checkedArms) return;
+    if (!subjectArms.some((arm) => arm.kind !== "null") || !checkedArms.some((arm) => arm.kind !== "null")) return;
+    const meets = subjectArms.some((subjectArm) => checkedArms.some((checkedArm) =>
+      subjectArm.kind === "null"
+        ? checkedArm.kind === "null"
+        : checkedArm.kind !== "null" && this.equalityTypesIntersect(subjectArm, checkedArm)));
+    if (meets) return;
+    const constant = operator === "is" ? "false" : "true";
+    this.typeError(
+      `${describeType(subjectSource)} and ${describeType(checked)} have no values in common, so '${operator}' is always ${constant}`,
+      span,
+    );
+  }
+
+  /** The enum/null arms of a type, or null when any arm falls outside that domain. */
+  private pureEnumDomainArms(source: ValueType): Extract<ValueType, { kind: "enum" | "enumMember" | "null" }>[] | null {
+    const arms: Extract<ValueType, { kind: "enum" | "enumMember" | "null" }>[] = [];
+    const visit = (current: ValueType): boolean => {
+      const type = this.resolveNamedClasses(this.expandAliases(current));
+      if (type.kind === "enum" || type.kind === "enumMember" || type.kind === "null") {
+        arms.push(type);
+        return true;
+      }
+      if (type.kind === "optional") return visit(type.inner) && visit(nullType);
+      if (type.kind === "union") return type.members.every(visit);
+      return false;
+    };
+    return visit(source) ? arms : null;
+  }
+
+  // ENM-I1's call spelling: `B.is(value)` — the stored-validator form charter
+  // section 6 blesses — must agree with the `is` operator, so a probe that is
+  // statically another enum's member is rejected the same way.
+  private rejectDisjointEnumValidatorProbe(calleeExpression: Expression, arguments_: readonly Expression[]): void {
+    if (calleeExpression.kind !== "MemberExpression" || calleeExpression.property !== "is" || arguments_.length !== 1) return;
+    const target = this.enumTargetOfValidatorObject(calleeExpression.object);
+    if (!target) return;
+    const argument = arguments_[0]!;
+    if (argument.kind === "SpreadExpression") return;
+    const probe = this.inferredExpressionTypes.get(spanIdentity(argument.span));
+    if (!probe) return;
+    this.rejectDisjointEnumTest(probe, target, "is", argument.span);
+  }
+
+  private enumTargetOfValidatorObject(object: Expression): Extract<ValueType, { kind: "enum" }> | null {
+    if (object.kind !== "IdentifierExpression") return null;
+    const type = this.lookup(object.name)?.type;
+    if (!type) return null;
+    if (type.kind === "enumObject") return { kind: "enum", name: type.name, identity: type.identity };
+    if (type.kind === "typeObject") {
+      const aliased = this.aliasedEnumTarget(type.name);
+      if (aliased) return { kind: "enum", name: aliased.name, identity: aliased.identity };
+    }
+    return null;
+  }
+
+  /** The enum behind a type alias name, or null when the alias does not resolve to an enum. */
+  private aliasedEnumTarget(name: string): { readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> } | null {
+    if (!this.typeAliases.has(name)) return null;
+    const expanded = this.expandAliases({ kind: "named", name });
+    if (expanded.kind === "enum") {
+      const info = this.enums.get(expanded.identity) ?? this.enums.get(expanded.name);
+      return info ? { name: expanded.name, identity: expanded.identity, members: info.members } : null;
+    }
+    if (expanded.kind === "named") {
+      const info = this.enums.get(expanded.name);
+      return info ? { name: expanded.name, identity: info.identity, members: info.members } : null;
+    }
+    return null;
+  }
+
+  // ENM-D1: an enum member is a bare string at runtime, so a Set element or
+  // Map key type whose union mixes members of different enums — or an enum
+  // with `string` — would collapse nominally distinct keys into one slot.
+  // The same no-intersection principle as D42 item 64, applied where the
+  // collection would silently unify what the type system keeps apart.
+  private rejectCollidingKeyDomain(keySource: ValueType, span: Span, position: string): void {
+    const enumIdentities = new Set<string>();
+    let enumName: string | null = null;
+    let sawString = false;
+    const visit = (source: ValueType): void => {
+      const type = this.expandAliases(source);
+      if (type.kind === "enum" || type.kind === "enumMember") {
+        enumIdentities.add(type.identity);
+        enumName ??= type.name;
+      } else if (type.kind === "string") {
+        sawString = true;
+      } else if (type.kind === "optional") {
+        visit(type.inner);
+      } else if (type.kind === "union") {
+        for (const member of type.members) visit(member);
+      }
+    };
+    visit(keySource);
+    if (enumIdentities.size === 0 || (enumIdentities.size === 1 && !sawString)) return;
+    const collision = sawString
+      ? `mixes ${enumName ?? "an enum"} with string, and an enum member is a bare string at runtime`
+      : "mixes members of different enums, which are bare strings at runtime";
+    this.typeError(
+      `A ${position} of ${describeType(keySource)} ${collision}, so nominally distinct keys would collapse into one slot; keep the domains in separate collections, or store wire strings deliberately with str(member)`,
+      span,
     );
   }
 
@@ -3933,6 +4208,10 @@ export class Analyzer implements TypeEnvironment {
   // still compare. Aliases, optionals, and unions are opened first so a
   // partial overlap (`(string | number) == string`) is enough.
   private equalityTypesIntersect(leftSource: ValueType, rightSource: ValueType): boolean {
+    return this.typesIntersect(leftSource, rightSource, true);
+  }
+
+  private typesIntersect(leftSource: ValueType, rightSource: ValueType, enumStringVeto: boolean): boolean {
     const left = this.resolveNamedClasses(this.expandAliases(leftSource));
     const right = this.resolveNamedClasses(this.expandAliases(rightSource));
     if (isInvalidType(left) || isInvalidType(right)) return true;
@@ -3941,27 +4220,27 @@ export class Analyzer implements TypeEnvironment {
     if (left.kind === "any" || right.kind === "any") return true;
     if (left.kind === "unknown" || right.kind === "unknown") return true;
     if (left.kind === "parameter" || right.kind === "parameter") return true;
-    if (left.kind === "union") return left.members.some((member) => this.equalityTypesIntersect(member, right));
-    if (right.kind === "union") return right.members.some((member) => this.equalityTypesIntersect(left, member));
-    if (left.kind === "optional") {
-      return this.equalityTypesIntersect(left.inner, right) || this.equalityTypesIntersect(nullType, right);
-    }
-    if (right.kind === "optional") {
-      return this.equalityTypesIntersect(left, right.inner) || this.equalityTypesIntersect(left, nullType);
-    }
     // D42 item 65's one documented exception to "assignability decides
     // intersection": enum -> `string` assignability is a one-way exit that
     // exists so a wire value can be sent out. Equality is symmetric, so
     // honoring it here would open a read path around `Enum.parse` and undo
     // charter section 6's promise that an open string never silently becomes
-    // an enum member.
-    if (this.isEnumAgainstString(left, right)) return false;
+    // an enum member. The veto runs before union arms distribute (ENM-I2):
+    // a `Status | string` operand still puts a raw string and an enum member
+    // into the same comparison, so the two domains never meet — not even
+    // through a union arm — and the author narrows first.
+    if (enumStringVeto
+      && ((this.valueLevelEnum(left) !== null && this.hasValueLevelString(right))
+        || (this.hasValueLevelString(left) && this.valueLevelEnum(right) !== null))) return false;
+    if (left.kind === "union") return left.members.some((member) => this.typesIntersect(member, right, enumStringVeto));
+    if (right.kind === "union") return right.members.some((member) => this.typesIntersect(left, member, enumStringVeto));
+    if (left.kind === "optional") {
+      return this.typesIntersect(left.inner, right, enumStringVeto) || this.typesIntersect(nullType, right, enumStringVeto);
+    }
+    if (right.kind === "optional") {
+      return this.typesIntersect(left, right.inner, enumStringVeto) || this.typesIntersect(left, nullType, enumStringVeto);
+    }
     return isAssignable(left, right, this) || isAssignable(right, left, this);
-  }
-
-  private isEnumAgainstString(left: ValueType, right: ValueType): boolean {
-    const nominal = (type: ValueType): boolean => type.kind === "enum" || type.kind === "enumMember";
-    return (nominal(left) && right.kind === "string") || (left.kind === "string" && nominal(right));
   }
 
   private equalityGuidance(leftSource: ValueType, rightSource: ValueType): string {
@@ -3970,6 +4249,15 @@ export class Analyzer implements TypeEnvironment {
     const leftEnum = this.valueLevelEnum(left);
     const rightEnum = this.valueLevelEnum(right);
     const enumSide = leftEnum ?? rightEnum;
+    // A union operand that mixes the enum domain with raw strings has no
+    // deliberate comparison to teach until the author knows which domain the
+    // value is in, so the way out is narrowing first (ENM-I2).
+    const mixedUnion = (leftEnum !== null && this.hasValueLevelString(left)) ? leftEnum
+      : (rightEnum !== null && this.hasValueLevelString(right)) ? rightEnum
+        : null;
+    if (mixedUnion !== null) {
+      return `; narrow the union first — 'if value is ${mixedUnion.name}:' — and compare inside the branch`;
+    }
     // The rejection itself needs an exact enum-versus-string pair, but the
     // guidance is worth giving whenever one side can hold a bare string and
     // the other an enum member — that is the mistake, wrapped or not.
@@ -4362,6 +4650,7 @@ export class Analyzer implements TypeEnvironment {
           value = mergeTypes(value, entryValue);
         }
         for (const extra of ordered.slice(1)) this.inferExpression(extra);
+        if (argument.elements.length > 0) this.rejectCollidingKeyDomain(key, argument.span, "Map key type");
         return argument.elements.length === 0 && expectedMap ? expectedMap : { kind: "map", key, value };
       }
       const source = this.inferExpression(argument, expectedMap ?? unknownType);
@@ -4375,6 +4664,7 @@ export class Analyzer implements TypeEnvironment {
         const sourceElement = source.readonlyView ? this.readonlyDataViewOf(source.element) : source.element;
         if (sourceElement.kind === "list") {
           const entryElement = sourceElement.readonlyView ? this.readonlyDataViewOf(sourceElement.element) : sourceElement.element;
+          this.rejectCollidingKeyDomain(entryElement, argument.span, "Map key type");
           return { kind: "map", key: entryElement, value: entryElement };
         }
       }
@@ -4409,7 +4699,9 @@ export class Analyzer implements TypeEnvironment {
       const source = this.inferExpression(argument, collectionContext?.kind === "set" ? { kind: "list", element: collectionContext.element } : unknownType);
       for (const extra of ordered.slice(1)) this.inferExpression(extra);
       if (source.kind === "list" || source.kind === "set") {
-        return { kind: "set", element: source.readonlyView ? this.readonlyDataViewOf(source.element) : source.element };
+        const element = source.readonlyView ? this.readonlyDataViewOf(source.element) : source.element;
+        this.rejectCollidingKeyDomain(element, argument.span, "Set element type");
+        return { kind: "set", element };
       }
       if (source.kind === "any") return { kind: "set", element: anyType };
       this.typeError(`Set construction requires a List or Set, received ${describeType(source)}`, argument.span);
@@ -4481,6 +4773,7 @@ export class Analyzer implements TypeEnvironment {
         this.recordRuntimeObjectShape(arguments_[0], callee.result);
       }
       this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
+      this.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_);
       this.reportPromiseCarrierHazard(callee.result, callSpan);
       if (callee.result.kind === "optional") this.optionalCalls.add(spanIdentity(callSpan));
       return callee.result;
@@ -4668,6 +4961,9 @@ export class Analyzer implements TypeEnvironment {
   ): ValueType {
     if (intrinsic.name === "collections.range") {
       return this.inferRangeCall(intrinsic, sourceArguments, argumentNames, callSpan);
+    }
+    if (intrinsic.name === "core.equals") {
+      return this.inferEqualsCall(intrinsic, sourceArguments, argumentNames, callSpan);
     }
     let arguments_ = sourceArguments;
     let namedPreanalyzed = false;
@@ -5096,6 +5392,131 @@ export class Analyzer implements TypeEnvironment {
     return intrinsic.result;
   }
 
+  // D47 rule 81: equals(a, b) is deep structural comparison over data, so the
+  // call site enforces the data domain — class instances compare by identity
+  // ('=='), functions and Promises have no structural content, unknown/any
+  // must be validated first — and the two operands must intersect, D42's own
+  // constant-comparison principle.
+  private inferEqualsCall(
+    intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
+    sourceArguments: readonly Expression[],
+    argumentNames: readonly (string | null)[] | undefined,
+    callSpan: Span,
+  ): ValueType {
+    const plan = this.planNamedArguments(
+      sourceArguments,
+      argumentNames,
+      intrinsic.parameters,
+      intrinsic.parameterNames,
+      intrinsic.requiredParameters,
+      callSpan,
+    );
+    const operands: { type: ValueType; span: Span }[] = [];
+    if (plan) {
+      for (const [source, target] of plan.targets.entries()) {
+        const argument = sourceArguments[source]!;
+        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+        if (argument.kind === "SpreadExpression") this.typeError("equals does not accept a call spread", argument.span);
+        const type = this.inferExpression(value);
+        if (target === 0 || target === 1) operands[target] = { type, span: value.span };
+      }
+      if (!plan.valid) return intrinsic.result;
+      this.namedArgumentOrders.set(spanIdentity(callSpan), trimTrailingOmittedArguments(
+        [0, 1].map((target) => {
+          for (const [source, mapped] of plan.targets.entries()) if (mapped === target) return source;
+          return -1;
+        }),
+      ));
+    } else {
+      if (sourceArguments.length !== 2) {
+        this.typeError(`Expected 2 arguments but received ${sourceArguments.length}`, callSpan);
+      }
+      for (const argument of sourceArguments) {
+        const value = argument.kind === "SpreadExpression" ? argument.value : argument;
+        if (argument.kind === "SpreadExpression") this.typeError("equals does not accept a call spread", argument.span);
+        const type = this.inferExpression(value);
+        if (operands.length < 2) operands.push({ type, span: value.span });
+      }
+      if (sourceArguments.length !== 2) return intrinsic.result;
+    }
+    let violated = false;
+    for (const operand of operands) {
+      if (!operand) continue;
+      const violation = this.equalsDomainViolation(operand.type);
+      if (violation) {
+        this.typeError(`equals compares data structurally, and ${violation}`, operand.span);
+        violated = true;
+      }
+    }
+    if (!violated && operands[0] && operands[1] && !this.equalityTypesIntersect(operands[0].type, operands[1].type)) {
+      this.typeError(
+        this.typesIntersect(operands[0].type, operands[1].type, false)
+          ? `${describeType(operands[0].type)} and ${describeType(operands[1].type)} can meet only where an enum member matches a raw string, and the enum and string domains never meet in equals${this.equalityGuidance(operands[0].type, operands[1].type)}`
+          : `${describeType(operands[0].type)} and ${describeType(operands[1].type)} have no values in common, so equals(a, b) is always false${this.equalityGuidance(operands[0].type, operands[1].type)}`,
+        callSpan,
+      );
+    }
+    this.equalsCalls.add(spanIdentity(callSpan));
+    return intrinsic.result;
+  }
+
+  /** The reason a type cannot participate in equals(a, b), or null when it is pure data. */
+  private equalsDomainViolation(source: ValueType, seen: Set<string> = new Set()): string | null {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    switch (type.kind) {
+      case "class":
+      case "classConstructor":
+        return `${type.name} is a class instance; behavior objects compare by identity — use '=='`;
+      case "function":
+      case "action":
+      case "intrinsic":
+        return "a function has no structural content to compare";
+      case "promise":
+        return "a Promise has no structural content to compare; await it first";
+      case "unknown":
+        return "unknown must be validated first — parse it with a Type before comparing";
+      case "any":
+        return "any must be validated first — parse it with a Type before comparing";
+      case "optional":
+        return this.equalsDomainViolation(type.inner, seen);
+      case "union": {
+        for (const member of type.members) {
+          const violation = this.equalsDomainViolation(member, seen);
+          if (violation) return violation;
+        }
+        return null;
+      }
+      case "list":
+      case "set":
+        return this.equalsDomainViolation(type.element, seen);
+      case "map":
+        return this.equalsDomainViolation(type.key, seen) ?? this.equalsDomainViolation(type.value, seen);
+      case "record":
+        return this.equalsDomainViolation(type.value, seen);
+      case "object": {
+        for (const field of type.fields.values()) {
+          const violation = this.equalsDomainViolation(field, seen);
+          if (violation) return violation;
+        }
+        return null;
+      }
+      case "named": {
+        const identity = type.identity ?? type.name;
+        if (seen.has(identity)) return null;
+        seen.add(identity);
+        const fields = this.fieldsOf(identity);
+        if (!fields) return null;
+        for (const field of fields.values()) {
+          const violation = this.equalsDomainViolation(field, seen);
+          if (violation) return violation;
+        }
+        return null;
+      }
+      default:
+        return null;
+    }
+  }
+
   private inferCollectionCall(
     member: Extract<Expression, { kind: "MemberExpression" }>,
     sourceArguments: readonly Expression[],
@@ -5204,6 +5625,26 @@ export class Analyzer implements TypeEnvironment {
     const requireCount = (count: number): void => {
       if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
     };
+    // ENM-I3: a membership probe (`has`, `index`, `count`, `remove`, and the
+    // Map/Record key of `get`) is judged by intersection with the element or
+    // key domain — the per-element `==` question — rather than assignability,
+    // whose enum -> string one-way exit would launder a bare-string match.
+    const checkProbeArgument = (domain: ValueType, operation: string): void => {
+      requireCount(1);
+      const argument = argumentAt(0);
+      if (!argument) return;
+      if (argument.kind === "SpreadExpression") {
+        this.inferExpression(argument.value);
+        return;
+      }
+      const probe = namedPreanalyzed ? this.inferredExpressionType(argument) : this.inferExpression(argument, domain);
+      this.requireMembershipIntersection(probe, domain, argument.span, operation);
+      if (!namedPreanalyzed) {
+        for (const extra of arguments_.slice(1)) {
+          if (!omitted(extra)) this.inferExpression(extra.kind === "SpreadExpression" ? extra.value : extra);
+        }
+      }
+    };
     const lowered = object.kind === "list"
       ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
       : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property)
@@ -5284,7 +5725,7 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "listRemove");
-        checkCollectionArguments([comparisonElement!]);
+        checkProbeArgument(comparisonElement!, "List.remove");
         return boolType;
       }
       if (member.property === "pop") {
@@ -5299,7 +5740,7 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "has" || member.property === "count") {
         this.collectionCalls.set(member.span.end, member.property === "has" ? "has" : "listCount");
-        checkCollectionArguments([comparisonElement!]);
+        checkProbeArgument(comparisonElement!, `List.${member.property}`);
         return member.property === "has" ? boolType : numberType;
       }
       if (member.property === "sorted") {
@@ -5399,7 +5840,7 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "index") {
         this.collectionCalls.set(member.span.end, "listIndex");
-        checkCollectionArguments([comparisonElement!]);
+        checkProbeArgument(comparisonElement!, "List.index");
         return optionalOf(numberType);
       }
       if (member.property === "join") {
@@ -5454,12 +5895,12 @@ export class Analyzer implements TypeEnvironment {
         if (!namedPreanalyzed && sourceArguments.length === 2 && !sourceArguments.some((argument) => argument.kind === "SpreadExpression")) {
           const key = inferArgument(0, comparisonKey!);
           const keyArgument = argumentAt(0);
-          if (keyArgument) this.requireAssignable(key, comparisonKey!, keyArgument.span);
+          if (keyArgument) this.requireMembershipIntersection(key, comparisonKey!, keyArgument.span, "Map.get");
           inferArgument(1);
           this.typeError("Use 'get(key) ?? fallback'; Map.get has one optional-result contract", callSpan);
           return optionalOf(readonlyValue!);
         }
-        checkCollectionArguments([comparisonKey!]);
+        checkProbeArgument(comparisonKey!, "Map.get");
         return optionalOf(readonlyValue!);
       }
       if (member.property === "keys") {
@@ -5479,12 +5920,12 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "has") {
         this.collectionCalls.set(member.span.end, "has");
-        checkCollectionArguments([comparisonKey!]);
+        checkProbeArgument(comparisonKey!, "Map.has");
         return boolType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "remove");
-        checkCollectionArguments([comparisonKey!]);
+        checkProbeArgument(comparisonKey!, "Map.remove");
         return boolType;
       }
       if (member.property === "clear") {
@@ -5506,7 +5947,7 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "get") {
         this.collectionCalls.set(member.span.end, "get");
-        checkCollectionArguments([stringType]);
+        checkProbeArgument(stringType, "Record.get");
         return optionalOf(readonlyValue!);
       }
       if (member.property === "keys") {
@@ -5526,12 +5967,12 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "has") {
         this.collectionCalls.set(member.span.end, "has");
-        checkCollectionArguments([stringType]);
+        checkProbeArgument(stringType, "Record.has");
         return boolType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "remove");
-        checkCollectionArguments([stringType]);
+        checkProbeArgument(stringType, "Record.remove");
         return boolType;
       }
       if (member.property === "clear") {
@@ -5572,12 +6013,12 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "has") {
         this.collectionCalls.set(member.span.end, "has");
-        checkCollectionArguments([comparisonElement!]);
+        checkProbeArgument(comparisonElement!, "Set.has");
         return boolType;
       }
       if (member.property === "remove") {
         this.collectionCalls.set(member.span.end, "remove");
-        checkCollectionArguments([comparisonElement!]);
+        checkProbeArgument(comparisonElement!, "Set.remove");
         return boolType;
       }
       if (member.property === "clear") {
@@ -5856,7 +6297,11 @@ export class Analyzer implements TypeEnvironment {
       } else if (!field && !getter && !method) {
         this.typeError(`Class '${object.name}' has no member '${property}'`, memberSpan);
       }
-      if (readValue && field && !classKey.startsWith("js:")) {
+      if (readValue && field && !classKey.startsWith("js:")
+        && !(property === "cause" && this.isSubclassOf(classKey, "Error"))) {
+        // Error's `cause` is host-managed and legitimately absent (ASY-U3);
+        // the read normalizes undefined to null instead of tripping the
+        // initialization guard.
         this.instanceFieldReads.add(spanIdentity(memberSpan));
       }
       if (readValue && privateField
@@ -5934,17 +6379,31 @@ export class Analyzer implements TypeEnvironment {
         this.classMethodReferences.add(spanIdentity(memberSpan));
       }
     } else if (object.kind === "enumObject") {
-      if (object.members.has(property)) {
-        result = { kind: "enumMember", name: object.name, identity: object.identity, member: property };
-      } else if (property === "is") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
-      } else if (property === "parse") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name: object.name, identity: object.identity } };
+      const enumResult = this.enumRuntimeMember(object.name, object.identity, object.members, property);
+      if (enumResult) {
+        result = enumResult;
       } else {
-        this.typeError(`Enum '${object.name}' has no member '${property}'`, memberSpan);
+        this.typeError(
+          `Enum '${object.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`,
+          memberSpan,
+        );
       }
     } else if (object.kind === "typeObject") {
-      if (property === "is") {
+      // ENM-I4: identities follow aliases (charter section 12), so an alias
+      // whose target is an enum answers member access, values(), is, and
+      // parse exactly as the enum itself does.
+      const aliasedEnum = this.aliasedEnumTarget(object.name);
+      if (aliasedEnum) {
+        const enumResult = this.enumRuntimeMember(aliasedEnum.name, aliasedEnum.identity, aliasedEnum.members, property);
+        if (enumResult) {
+          result = enumResult;
+        } else {
+          this.typeError(
+            `Enum '${aliasedEnum.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`,
+            memberSpan,
+          );
+        }
+      } else if (property === "is") {
         result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
       } else if (property === "parse") {
         result = {
@@ -6750,14 +7209,22 @@ export class Analyzer implements TypeEnvironment {
 
   // A condition judges truth, never presence. 'bool' and 'bool?' both ask
   // whether the value is true, so 'false' and null take the same else path and
-  // 'if flag:' stays the spelling for both. Any other optional has to say which
-  // question it asks, because "holds a value" and "is true" are different
-  // tests; 'any' remains accepted as the explicit unchecked-JavaScript
-  // boundary.
+  // 'if flag:' stays the spelling for both. Any other optional has to say
+  // which question it asks, because "holds a value" and "is true" are
+  // different tests. BRG-N4: `any` is rejected too — raw JavaScript
+  // truthiness would judge 0 and "" false, which breaks the owner's ruling
+  // that a condition judges only bool; validate the boundary value first.
   protected requireCondition(type: ValueType, condition: Expression): void {
     if (isInvalidType(type)) return;
     const expanded = this.expandAliases(type);
-    if (expanded.kind === "bool" || expanded.kind === "any") return;
+    if (expanded.kind === "bool") return;
+    if (expanded.kind === "any") {
+      this.typeError(
+        "A condition judges only bool, and an unchecked any would ride JavaScript truthiness (0 and \"\" become false); validate the value first, or compare it explicitly",
+        condition.span,
+      );
+      return;
+    }
     if (expanded.kind === "optional") {
       if (this.expandAliases(expanded.inner).kind === "bool") {
         this.truthConditions.add(spanIdentity(condition.span));
@@ -6795,6 +7262,20 @@ export class Analyzer implements TypeEnvironment {
     const expandedActual = this.expandAliases(actual);
     const expandedExpected = this.expandAliases(expected);
     const expectedCore = expandedExpected.kind === "optional" ? this.expandAliases(expandedExpected.inner) : expandedExpected;
+    // COL-I5: a named record type is open — a User value may carry fields
+    // beyond its declaration (validation admits extras), so it cannot flow
+    // into Record<T> wholesale; the spread spelling is rejected for the same
+    // reason (COL-D2).
+    if (expandedActual.kind === "named" && expectedCore.kind === "record"
+      && this.fieldsOf(expandedActual.identity ?? expandedActual.name)) {
+      const fields = [...this.fieldsOf(expandedActual.identity ?? expandedActual.name)!.keys()];
+      const example = fields.slice(0, 2).map((field) => `${field}: value.${field}`).join(", ") + (fields.length > 2 ? ", ..." : "");
+      this.typeError(
+        `Cannot assign ${describeType(actual)} to ${describeType(expected)}: a named record is open, so a ${describeType(actual)} value may carry fields beyond its declaration; copy the declared fields explicitly — {${example}}`,
+        valueSpan,
+      );
+      return;
+    }
     if (expandedActual.kind === "object" && expectedCore.kind === "map") {
       this.typeError(expandedActual.fields.size === 0
         ? "Use 'Map()' to create an empty Map; a record literal '{}' builds a record, not a Map"
@@ -7252,6 +7733,17 @@ export class Analyzer implements TypeEnvironment {
           const imported = this.lookup(syntax.enumName)?.type ?? this.importBindings.get(syntax.enumName);
           const members = info?.members ?? (imported?.kind === "enumObject" ? imported.members : null);
           if (!members) {
+            // ENM-I9 first half: a namespace import in a type position is the
+            // common way here; the old "'m' is not an enum" text answered a
+            // question nobody asked.
+            const namespaceSource = this.namespaceImportLocals.get(syntax.enumName);
+            if (namespaceSource !== undefined) {
+              this.typeError(
+                `Namespace members cannot be written in type positions; import '${syntax.member}' by name — import {${syntax.member}} from ${JSON.stringify(namespaceSource)} — or bind an enum object first with const ${syntax.member} = ${syntax.enumName}.${syntax.member}`,
+                syntax.enumNameSpan,
+              );
+              return false;
+            }
             this.typeError(`'${syntax.enumName}' is not an enum and cannot qualify a singleton type`, syntax.enumNameSpan);
             return false;
           }
@@ -7277,6 +7769,14 @@ export class Analyzer implements TypeEnvironment {
           }
           if (valid && argumentsValid && syntax.name === "Promise") {
             this.reportPromiseCarrierHazard(resolver({ syntax, span: syntax.span }), syntax.span);
+          }
+          if (valid && argumentsValid && (syntax.name === "Set" || syntax.name === "Map") && syntax.arguments.length > 0) {
+            const keySyntax = syntax.arguments[0]!;
+            this.rejectCollidingKeyDomain(
+              resolver({ syntax: keySyntax, span: keySyntax.span }),
+              keySyntax.span,
+              syntax.name === "Set" ? "Set element type" : "Map key type",
+            );
           }
           return valid && argumentsValid;
         }
@@ -7363,10 +7863,37 @@ export class Analyzer implements TypeEnvironment {
           if (input.kind !== "unknown" && !this.matchLiteralCompatible(this.expandAliases(input), literal)) {
             this.typeError(`Cannot match ${describeType(input)} against ${describeType(literal)}`, value.span);
           }
+          // ENM-D2: when the subject and this candidate can both be NaN, the
+          // branch test lowers to SameValueZero so it agrees with `==`
+          // (charter section 8). A literal candidate can never be NaN, so
+          // ordinary matches keep plain `===`.
+          if (this.equalityMayCompareNaN(input) && this.equalityOperandMayBeNaN(value, literal)) {
+            this.sameValueZeroMatchValues.add(spanIdentity(value.span));
+          }
         }
         return values.length > 0 ? unionOf(values) : unknownType;
       }
       case "MatchTypePattern": {
+        // ENM-U2's other half: a bare identifier is never a value pattern —
+        // dotted paths are values, bare names are types — so a name that
+        // resolves to an ordinary binding gets the real teaching instead of
+        // "Unknown type".
+        const syntax = pattern.type.syntax;
+        if (syntax.kind === "NamedTypeSyntax") {
+          const binding = this.lookup(syntax.name);
+          const bindingKind = binding?.type.kind;
+          if (binding && bindingKind !== "typeObject" && bindingKind !== "enumObject"
+            && bindingKind !== "classConstructor" && bindingKind !== "runtimeType"
+            && !this.typeAliases.has(syntax.name) && !this.namedTypes.has(syntax.name)
+            && !this.enums.has(syntax.name) && !this.classes.has(syntax.name)
+            && !this.primitiveNames.has(syntax.name)) {
+            this.typeError(
+              `'${syntax.name}' is a binding, and bindings cannot be matched directly; match a dotted path (case owner.${syntax.name}:) or use a guard (case _ if value == ${syntax.name}:)`,
+              pattern.span,
+            );
+            return invalidType;
+          }
+        }
         const checked = this.resolveAnnotation(pattern.type);
         const valid = this.validateTypeReference(pattern.type);
         if (valid && this.rejectErasedRuntimeCheck(checked, pattern.type.span)) return invalidType;
@@ -7633,7 +8160,19 @@ export class Analyzer implements TypeEnvironment {
   private matchValueKey(value: MatchValue): string {
     return value.kind === "LiteralExpression"
       ? value.value === null ? "null" : `${typeof value.value}:${String(value.value)}`
-      : `${value.object.kind === "IdentifierExpression" ? value.object.name : "?"}.${value.property}`;
+      : `path:${this.matchValueDisplay(value)}`;
+  }
+
+  // ENM-U6: diagnostics render the value the way the author spelled it —
+  // never the internal typed key ("number:5") — including full dotted paths.
+  private matchValueDisplay(value: MatchValue): string {
+    if (value.kind === "LiteralExpression") return String(value.value);
+    const path = (expression: Expression): string => expression.kind === "IdentifierExpression"
+      ? expression.name
+      : expression.kind === "MemberExpression"
+        ? `${path(expression.object)}.${expression.property}`
+        : "?";
+    return path(value);
   }
 
   private matchTypesOverlap(left: ValueType, right: ValueType): boolean {
@@ -7703,6 +8242,33 @@ export class Analyzer implements TypeEnvironment {
     return `${identity}\u0000${member}`;
   }
 
+  /** ENM-I5: enum members reached through a type pattern (parenthesized singletons, unions of them) credit member coverage. */
+  private creditEnumMemberCoverage(checked: ValueType, covered: Set<string>): void {
+    const type = this.expandAliases(checked);
+    if (type.kind === "enumMember") {
+      covered.add(this.enumMemberCoverageKey(type.identity, type.member));
+    } else if (type.kind === "enum") {
+      for (const member of this.enums.get(type.identity)?.members ?? this.enums.get(type.name)?.members ?? []) {
+        covered.add(this.enumMemberCoverageKey(type.identity, member));
+      }
+    } else if (type.kind === "optional") {
+      this.creditEnumMemberCoverage(type.inner, covered);
+    } else if (type.kind === "union") {
+      for (const member of type.members) this.creditEnumMemberCoverage(member, covered);
+    }
+  }
+
+  /** ENM-I6: the enum behind a match subject - bare or optional - that carries the exhaustiveness contract. */
+  private enumMatchSubject(matched: ValueType): { readonly target: Extract<ValueType, { kind: "enum" }>; readonly optional: boolean } | null {
+    const expanded = this.expandAliases(matched);
+    if (expanded.kind === "enum") return { target: expanded, optional: false };
+    if (expanded.kind === "optional") {
+      const inner = this.expandAliases(expanded.inner);
+      if (inner.kind === "enum") return { target: inner, optional: true };
+    }
+    return null;
+  }
+
   /** The class arms of a match subject: the type itself, or the class members of its optional/union spellings. */
   private classArmsOf(expanded: ValueType): Extract<ValueType, { kind: "class" }>[] {
     if (expanded.kind === "class") return [expanded];
@@ -7759,9 +8325,15 @@ export class Analyzer implements TypeEnvironment {
       ["str", { kind: "function", parameterNames: ["value"], parameters: [textConvertibleType], requiredParameters: 1, result: stringType }],
       // `print` inspects any value by contract and keeps the `any` domain.
       ["print", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: nullType }],
+      // D47 rule 81: equals(a, b) — deep structural comparison over data.
+      // Pure computation, so it lives in the prelude beside str/print; the
+      // call site owns the domain checks (inferEqualsCall).
+      ["equals", { kind: "intrinsic", name: "core.equals", parameterNames: ["a", "b"], parameters: [unknownType, unknownType], requiredParameters: 2, result: boolType }],
     ]);
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
-      ?? (name === "Error" ? { kind: "classConstructor", name: "Error" } satisfies ValueType : null)
+      ?? (name === "Error" || name === "ValidationError" || name === "NarrowingError" || name === "IndexError"
+        ? { kind: "classConstructor", name } satisfies ValueType
+        : null)
       ?? (name === "Map" || name === "Set" ? anyType : null);
     return type ? {
       mutable: false,
@@ -7934,7 +8506,7 @@ export class Analyzer implements TypeEnvironment {
     const lead = site === "f-string" ? "An f-string renders" : "str() converts";
     this.diagnostics.push(diagnostic(
       "VEL4026",
-      `${lead} strings, numbers, bools, enums, and null; format ${describeType(type)} explicitly — print(value) to inspect it, stringify(value) for data text`,
+      `${lead} strings, numbers, bools, enums, and null; format ${describeType(type)} explicitly — print(value) to inspect it, or stringify(value) for data text (import {stringify} from "velar/json")`,
       span,
     ));
   }
@@ -8077,6 +8649,7 @@ export class Analyzer implements TypeEnvironment {
       for (const name of type.members) members.set(name, { kind: "enumMember", name: type.name, identity: type.identity, member: name });
       members.set("is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType });
       members.set("parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name: type.name, identity: type.identity } });
+      members.set("values", { kind: "function", parameterNames: [], parameters: [], requiredParameters: 0, result: { kind: "list", element: { kind: "enum", name: type.name, identity: type.identity } } });
       return members;
     }
     if (type.kind === "typeObject") return new Map([
@@ -8088,6 +8661,17 @@ export class Analyzer implements TypeEnvironment {
       ["parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: type.value }],
     ]);
     return new Map();
+  }
+
+  /** The runtime surface of an enum object: its members plus is, parse, and values() (ENM-U1). */
+  private enumRuntimeMember(name: string, identity: string, members: ReadonlySet<string>, property: string): ValueType | null {
+    if (members.has(property)) return { kind: "enumMember", name, identity, member: property };
+    if (property === "is") return { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
+    if (property === "parse") return { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name, identity } };
+    // ENM-U1 (D47-approved): values() returns the members in declaration
+    // order as a fresh mutable List on every call, like split and friends.
+    if (property === "values") return { kind: "function", parameterNames: [], parameters: [], requiredParameters: 0, result: { kind: "list", element: { kind: "enum", name, identity } } };
+    return null;
   }
 
   private runtimeTypeObjectValue(type: Extract<ValueType, { kind: "typeObject" }>): ValueType {

@@ -99,9 +99,12 @@ function __velarRecordTypeIs(value, check) {
 
 export const VELAR_VALIDATION_ERROR_RUNTIME = String.raw`
 class __VelarValidationError extends __velarCollectionNativeTypeError {
-  constructor(message) {
+  constructor(message, detail) {
     super(message);
     this.name = "ValidationError";
+    this.path = detail?.path ?? null;
+    this.field = detail?.field ?? null;
+    this.reason = detail?.reason ?? null;
   }
 }
 `.trimStart();

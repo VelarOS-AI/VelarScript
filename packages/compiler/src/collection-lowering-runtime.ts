@@ -8,6 +8,7 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarMaxCollectionItems",
   "__velarCollectionValue",
   "__velarSameValueZero",
+  "__velarEquals",
   "__velarValidateDenseList",
   "__velarReactiveListIterator",
   "__velarReactiveSetIterator",
@@ -573,6 +574,164 @@ function __velarContains(item, value) {
     return descriptor !== undefined;
   }
   return __velarCollectionHas(value, item);
+}
+
+// D47 rule 81: equals(a, b) — deep structural comparison. Lists compare
+// ordered element-wise, Sets as the same member set, Maps as the same
+// key-value pairs, records as the same field set; leaves compare by
+// SameValueZero so NaN agrees with '=='. Cyclic structures throw (the same
+// stance stringify takes), and so does data nested past the validator depth
+// budget, so a pathological input never becomes a silent stack overflow.
+function __velarEquals(left, right) {
+  return __velarEqualsVisit(left, right, [], 0);
+}
+function __velarEqualsVisit(left, right, active, depth) {
+  left = __velarCollectionValue(__velarReactiveRaw(left));
+  right = __velarCollectionValue(__velarReactiveRaw(right));
+  if (left === right || (left !== left && right !== right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  if (depth >= 1000) throw new __velarCollectionNativeTypeError("equals cannot compare data nested more than 1000 collections deep");
+  for (let index = 0; index < active.length; index += 1) {
+    if (active[index] === left || active[index] === right) throw new __velarCollectionNativeTypeError("equals cannot compare cyclic data");
+  }
+  active[active.length] = left;
+  active[active.length] = right;
+  try {
+    if (__velarCollectionListIsArray(left)) {
+      if (!__velarCollectionListIsArray(right)) return false;
+      const leftList = __velarValidateOwnedList(left, "equals");
+      const rightList = __velarValidateOwnedList(right, "equals");
+      __velarReactiveCollectionTrack(leftList);
+      __velarReactiveCollectionTrack(rightList);
+      if (leftList.length !== rightList.length) return false;
+      for (let index = 0; index < leftList.length; index += 1) {
+        if (!__velarEqualsVisit(__velarOwnedListElement(leftList, index, "equals"), __velarOwnedListElement(rightList, index, "equals"), active, depth + 1)) return false;
+      }
+      return true;
+    }
+    if (__velarIsSet(left)) {
+      if (!__velarIsSet(right)) return false;
+      const size = __velarCollectionSetMapSetSize(left);
+      if (size > __velarMaxCollectionItems || __velarCollectionSetMapSetSize(right) > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A collection cannot exceed 1000000 items");
+      __velarReactiveCollectionTrack(left);
+      __velarReactiveCollectionTrack(right);
+      if (size !== __velarCollectionSetMapSetSize(right)) return false;
+      // The native lookup already answers SameValueZero membership; only
+      // structured members without an identical partner fall back to the
+      // injective structural matching below. Structural equality is an
+      // equivalence relation, so greedy matching is exact.
+      const pending = [];
+      const leftIterator = __velarCollectionSetMapSetValues(left);
+      while (true) {
+        const step = __velarCollectionSetMapSetNext(leftIterator);
+        if (step.done) break;
+        const member = __velarCollectionValue(__velarReactiveRaw(step.value));
+        if (__velarCollectionSetMapSetHas(right, member)) continue;
+        if (member === null || typeof member !== "object") return false;
+        pending[pending.length] = member;
+      }
+      if (pending.length === 0) return true;
+      const candidates = [];
+      const rightIterator = __velarCollectionSetMapSetValues(right);
+      while (true) {
+        const step = __velarCollectionSetMapSetNext(rightIterator);
+        if (step.done) break;
+        const member = __velarCollectionValue(__velarReactiveRaw(step.value));
+        if (__velarCollectionSetMapSetHas(left, member)) continue;
+        if (member === null || typeof member !== "object") return false;
+        candidates[candidates.length] = member;
+      }
+      if (candidates.length !== pending.length) return false;
+      const used = new __velarCollectionNativeArray(candidates.length);
+      for (let leftIndex = 0; leftIndex < pending.length; leftIndex += 1) {
+        let matched = false;
+        for (let rightIndex = 0; rightIndex < candidates.length; rightIndex += 1) {
+          if (used[rightIndex]) continue;
+          if (__velarEqualsVisit(pending[leftIndex], candidates[rightIndex], active, depth + 1)) {
+            used[rightIndex] = true;
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) return false;
+      }
+      return true;
+    }
+    if (__velarIsMap(left)) {
+      if (!__velarIsMap(right)) return false;
+      const size = __velarCollectionSetMapMapSize(left);
+      if (size > __velarMaxCollectionItems || __velarCollectionSetMapMapSize(right) > __velarMaxCollectionItems) throw new __velarCollectionSetMapNativeRangeError("A collection cannot exceed 1000000 items");
+      __velarReactiveCollectionTrack(left);
+      __velarReactiveCollectionTrack(right);
+      if (size !== __velarCollectionSetMapMapSize(right)) return false;
+      const pendingKeys = [];
+      const pendingValues = [];
+      const leftIterator = __velarCollectionSetMapMapEntries(left);
+      while (true) {
+        const step = __velarCollectionSetMapMapNext(leftIterator);
+        if (step.done) break;
+        const key = __velarCollectionValue(__velarReactiveRaw(step.value[0]));
+        const value = step.value[1];
+        if (__velarCollectionSetMapMapHas(right, key)) {
+          if (!__velarEqualsVisit(value, __velarCollectionSetMapMapGet(right, key), active, depth + 1)) return false;
+          continue;
+        }
+        if (key === null || typeof key !== "object") return false;
+        pendingKeys[pendingKeys.length] = key;
+        pendingValues[pendingValues.length] = value;
+      }
+      if (pendingKeys.length === 0) return true;
+      const candidateKeys = [];
+      const candidateValues = [];
+      const rightIterator = __velarCollectionSetMapMapEntries(right);
+      while (true) {
+        const step = __velarCollectionSetMapMapNext(rightIterator);
+        if (step.done) break;
+        const key = __velarCollectionValue(__velarReactiveRaw(step.value[0]));
+        if (__velarCollectionSetMapMapHas(left, key)) continue;
+        if (key === null || typeof key !== "object") return false;
+        candidateKeys[candidateKeys.length] = key;
+        candidateValues[candidateValues.length] = step.value[1];
+      }
+      if (candidateKeys.length !== pendingKeys.length) return false;
+      const used = new __velarCollectionNativeArray(candidateKeys.length);
+      for (let leftIndex = 0; leftIndex < pendingKeys.length; leftIndex += 1) {
+        let matched = false;
+        for (let rightIndex = 0; rightIndex < candidateKeys.length; rightIndex += 1) {
+          if (used[rightIndex]) continue;
+          if (__velarEqualsVisit(pendingKeys[leftIndex], candidateKeys[rightIndex], active, depth + 1)
+            && __velarEqualsVisit(pendingValues[leftIndex], candidateValues[rightIndex], active, depth + 1)) {
+            used[rightIndex] = true;
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) return false;
+      }
+      return true;
+    }
+    if (__velarIsRecord(left)) {
+      if (!__velarIsRecord(right)) return false;
+      const leftFields = __velarRecordFields(left, "equals");
+      const rightFields = __velarRecordFields(right, "equals");
+      __velarReactiveCollectionTrack(left);
+      __velarReactiveCollectionTrack(right);
+      if (leftFields.length !== rightFields.length) return false;
+      for (let index = 0; index < leftFields.length; index += 1) {
+        const field = leftFields[index];
+        const rightDescriptor = __velarCollectionRecordGetOwnPropertyDescriptor(right, field);
+        if (!rightDescriptor || !rightDescriptor.enumerable || !("value" in rightDescriptor)) return false;
+        if (!__velarEqualsVisit(__velarCollectionRecordGetOwnPropertyDescriptor(left, field).value, rightDescriptor.value, active, depth + 1)) return false;
+      }
+      return true;
+    }
+    // Anything else — class instances, host objects — has no structural
+    // content contract; the analyzer rejects those domains statically, so a
+    // value reaching here came through 'any' and fails closed.
+    return false;
+  } finally {
+    active.length -= 2;
+  }
 }
 
 function __velarCollectionRemove(value, item) {

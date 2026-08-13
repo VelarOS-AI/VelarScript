@@ -321,7 +321,26 @@ member converts to `string` as a one-way wire exit (section 6), and equality
 is symmetric, so honoring that direction here would open a read path around
 `Enum.parse`. `raw == Kind.textDelta` is therefore rejected and teaches the
 two honest spellings: `Kind.parse(raw) == Kind.textDelta` to validate first,
-or `raw == str(Kind.textDelta)` to compare strings deliberately.
+or `raw == str(Kind.textDelta)` to compare strings deliberately. The boundary
+holds through union arms: a `Kind | string` operand still puts a raw string
+and an enum member into one comparison, so it is rejected with guidance to
+narrow first (`if value is Kind:`) — the enum domain and the string domain
+never meet in `==`. The same intersection requirement (including the
+enum/string boundary) governs every membership probe — `in`, `has`, `index`,
+`count`, `remove`, and the key of `Map.get` — because a membership test asks
+the `==` question one element at a time.
+
+A freshly constructed collection literal is rejected as an equality operand:
+collection `==` is reference identity, and a `[1] == [1]` comparison builds a
+new object that can never be identical to anything, so the result is provably
+constant. Content comparison has its own spelling: the prelude function
+`equals(a, b) -> bool` compares data structurally — Lists ordered
+element-wise, Sets as the same member set, Maps as the same key/value pairs,
+records as the same field set — with SameValueZero at the leaves, so `NaN`
+agrees with `==`. Its operands must intersect, exactly like `==`. Class
+instances are rejected (behavior objects compare by identity — use `==`),
+as are functions, Promises, and unvalidated `unknown`/`any`; cyclic
+structures throw, the same stance `stringify` takes.
 
 Ordered comparisons accept numbers with numbers or strings with strings.
 Ordering is exactly that set — `number`, `string`, and a union whose members
@@ -697,7 +716,23 @@ export enum Status:
 
 const status: Status = Status.active
 const parsed = Status.parse("done")
+const members = Status.values()
 ```
+
+`Status.values()` returns the members in declaration order as a fresh mutable
+`List<Status>` on every call — the member enumeration for `<select>` options,
+iteration, and spreading (`for member in Status.values():`,
+`[...Status.values()]`; the enum object itself is not iterable or
+spreadable). `is`, `parse`, and `values` are the enum's reserved runtime
+surface and cannot be member names. A bare `pass` line inside an enum body is
+the placeholder statement, exactly as in a class body — never a member — so
+`pass` is the one name an enum cannot declare, and an enum whose body is only
+`pass` still requires at least one member.
+
+An enum's identity follows aliases (section 12) on the type side and the
+value side alike: after `type S = Status`, member access (`S.done`), `parse`,
+`is`, and `values()` all answer through the same frozen enum object, and the
+alias is that object at runtime.
 
 Open strings do not silently become enum members.
 When an external protocol already owns the wire spelling, a member may map its
@@ -999,7 +1034,14 @@ while chunks.size > 0:
 `sorted` and `reversed` do not
 mutate the source. Exact-value operations (`has`, `index`, `count`, `remove`)
 compare by SameValueZero, so they agree with `==` and with Set/Map key
-identity, including on `NaN`. The ordered aggregations and `sorted` accept
+identity, including on `NaN` — and they carry `==`'s static intersection
+requirement on the probe (section 4), so a probe that could never equal an
+element is a compile error. A `match` value pattern whose subject and
+candidate can both be `NaN` also compares by SameValueZero, so every
+exact-value operation in the language answers the way `==` answers. A Set
+element type or Map key type may not mix members of different enums, or an
+enum with `string`: enum members are bare strings at runtime, so such keys
+would silently collapse into one slot. The ordered aggregations and `sorted` accept
 ordered elements and keys only — `number`, `string`, or a single-category
 union of them — so an enum element or key is rejected with guidance to
 `sorted(by=rank)` or a string-backed enum (section 4). `sum`, `min`, `max`,
@@ -1197,6 +1239,23 @@ only wildcard and never creates a binding; it covers every position, so the
 fallback branch is also spelled `case _:` — `match` has no `else` clause, and
 the removed `else:` spelling receives guidance. Reusing a binding name inside
 one pattern is an error.
+
+A dotted path is a value pattern at any depth: `case config.limits.max:`
+reads the path once and compares by SameValueZero, exactly as `==` would —
+the father language's rule that a dotted name is a value while a bare name is
+a binding. A bare local binding cannot be matched directly; use a dotted path
+or a guard (`case _ if value == limit:`). Alternatives are spelled with a
+comma (`case a, b:`); `|` joins types only in type annotations. Keyword
+member names follow the ordinary member-access grammar in patterns
+(`case S.null:` matches the member named `null`).
+
+Match exhaustiveness over an enum subject demands every member; over an
+optional enum subject (`Status?`) it demands every member plus `case null:`.
+A parenthesized singleton pattern — `case (Status.done):`, the type-pattern
+spelling of one member — credits that member's coverage exactly as the value
+pattern does. A guarded case matches only when its condition holds, so it
+never counts toward exhaustiveness; the diagnostic says so when a guard is
+the only mention of a missing member.
 
 The matched expression evaluates once. Guards run only after their pattern
 matches, and a successful guard narrows its case body by the same rules as
@@ -1418,10 +1477,24 @@ finally:
 JavaScript boundary failures are normalized to `Error` before entering a catch
 binding. Primitive thrown values retain a readable message. Objects and
 functions receive a stable generic message and remain available as the
-JavaScript `cause`; normalization never calls their conversion hooks.
-The generated module captures native Error identity/construction and primitive
-String conversion when it initializes; replacing those ambient operations
-later cannot change which value reaches the checked catch binding.
+JavaScript `cause`; normalization never calls their conversion hooks — and
+`error.cause` is a readable `unknown` member on every checked `Error`, so the
+original value stays reachable (validate it before use; an absent cause reads
+as `null`). The generated module captures native Error identity/construction
+and primitive String conversion when it initializes; replacing those ambient
+operations later cannot change which value reaches the checked catch binding.
+
+The three compiler-raised error types are nameable: `ValidationError` (a
+failed `parse`), `NarrowingError` (a stale flow fact caught by a runtime
+recheck), and `IndexError` (an out-of-range or non-integer List position).
+Each extends `Error`, so `catch` receives it as an `Error` and `is` narrows
+it — `if error is ValidationError:` — and each may be constructed and thrown
+directly. `ValidationError` carries the failure detail its parse sites
+report: `path` (for a record, `TypeName.field`), `field`, and `reason`, each
+`string?`. The three names are reserved Core bindings and cannot be extended;
+extend `Error` for custom hierarchies. An `Error` subclass reports under its
+declared name: the class lowering sets `.name` to the class name, so reports
+and `print(error.name)` say `TimeoutError`, not `Error`.
 
 The `try` body and `catch` body are separate execution paths. A mutation in a
 catch that returns cannot erase a fact used only by the normal try continuation,
@@ -2201,6 +2274,22 @@ uses one cross-module normalization identity cache and accepts only actual
 Promises at checked JavaScript boundaries, never magic thenables. Unsafe
 JavaScript `any` imports deliberately remain outside this guarantee. A
 discarded expression result is not wrapped.
+
+## Standard library membership boundary
+
+`velar/*` is a closed vocabulary owned by the language. A module belongs to
+that namespace only when it provides universal computation that any program
+may need, or a minimal orthogonal capability primitive for interacting with
+the outside world. Joining the Standard library therefore carries the same
+design burden as adding a language feature: every member expands the public
+compatibility surface and the vocabulary that tools and coding agents must
+learn.
+
+Domain functionality for one application category — including editor, game,
+chart, or similar tooling — never joins the Standard library. It publishes as
+an ordinary installable package with a `velar.entry` source entry and is
+imported by package name after npm installation. A library's implementation in
+portable VelarScript does not grant it a `velar/*` identity.
 
 ## 19. Deliberately absent source features
 

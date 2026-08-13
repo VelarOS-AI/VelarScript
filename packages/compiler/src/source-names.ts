@@ -36,8 +36,8 @@ export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIden
 ]);
 
 const coreReservedBindings = new Set([
-  "Array", "Boolean", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
-  "Symbol", "TypeError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
+  "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
+  "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
 ]);
 
 const javaScriptReservedBindings = new Set([
@@ -82,7 +82,7 @@ export function memberNameRestriction(name: string, owner: "class" | "enum" | "d
   if (forbiddenSourceIdentifiers.has(name)) return "source";
   if (forbiddenPrototypeMembers.has(name)) return "prototype";
   if (owner === "class" && name === "constructor") return "constructor";
-  if (owner === "enum" && (name === "is" || name === "parse")) return "enum-runtime";
+  if (owner === "enum" && (name === "is" || name === "parse" || name === "values")) return "enum-runtime";
   return null;
 }
 

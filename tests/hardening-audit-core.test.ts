@@ -685,7 +685,7 @@ point.x = 99
 print(str(instance.read()))
 `);
   assert.equal(failing.stdout, "false\n");
-  assert.match(failing.stderr, /Value does not match Point; a record accepts only plain data objects — project the fields into a record first, for example \{x: instance\.x\}/u);
+  assert.match(failing.stderr, /Value does not match Point — the value is not a record; a record accepts only plain data objects — project the fields into a record first, for example \{x: instance\.x\}/u);
   assert.doesNotMatch(failing.stdout, /99/u);
 });
 

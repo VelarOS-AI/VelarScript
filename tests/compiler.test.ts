@@ -141,6 +141,15 @@ async function linkWorkspaceDesktopExtension(projectRoot: string): Promise<void>
   await symlink(resolve("packages/desktop"), join(scope, "desktop"), "dir");
 }
 
+async function linkWorkspaceEditorPackages(projectRoot: string): Promise<void> {
+  const scope = join(projectRoot, "node_modules", "@velarscript");
+  await mkdir(scope, { recursive: true });
+  await Promise.all([
+    symlink(resolve("packages/text-buffer"), join(scope, "text-buffer"), "dir"),
+    symlink(resolve("packages/script-analysis"), join(scope, "script-analysis"), "dir"),
+  ]);
+}
+
 test("compiles bindings, functions, and strict equality", () => {
   const result = compile(`
 export def double(value: number) -> number:
@@ -216,7 +225,7 @@ greet(missing="Velar")
   const positional = compileCore(`def greet(name: string, count: number = 1) -> null:\n    print(name)\n\ngreet(name="Velar", 2)\n`);
   assert.match(positional.diagnostics.map((item) => item.message).join("\n"), /Positional arguments must appear before named arguments/u);
   const colon = compileCore(`def greet(name: string) -> null:\n    print(name)\n\ngreet(name: "Velar")\n`);
-  assert.match(colon.diagnostics.map((item) => item.message).join("\n"), /uses ':' rather than '='/u);
+  assert.match(colon.diagnostics.map((item) => item.message).join("\n"), /Write '=' between the name and value for named argument 'name'/u);
 });
 
 test("named calls evaluate the callee first and preserve optional short-circuiting", () => {
@@ -3160,7 +3169,7 @@ print(order.join(","))
   assert.equal(execution.stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\nneedle,haystack\nfalse\nneedle,haystack\ntrue\nasync needle,async haystack\n");
 
   const invalid = compile("print(1 in \"123\")\nprint(1 not in \"123\")\nprint(\"x\" in {x: 1})\n");
-  assert.ok(invalid.diagnostics.some((item) => /Cannot assign number to string/u.test(item.message)));
+  assert.ok(invalid.diagnostics.some((item) => /number and string have no values in common, so 'in' can never match/u.test(item.message)));
   assert.ok(invalid.diagnostics.some((item) => /Membership requires a List, Set, Map, Record, or string/u.test(item.message)));
 
   const dynamic = compileCore(`
@@ -4162,7 +4171,7 @@ enum Status:
     __proto__
 `.trimStart());
   assert.ok(malformed.diagnostics.some((item) => /declared more than once/u.test(item.message)));
-  assert.ok(malformed.diagnostics.some((item) => /reserved for runtime validation/u.test(item.message)));
+  assert.ok(malformed.diagnostics.some((item) => /reserved for the enum's runtime surface/u.test(item.message)));
   assert.equal(malformed.diagnostics.filter((item) => /does not expose prototype manipulation/u.test(item.message)).length, 2);
 
   const incomplete = compile(`
@@ -4385,7 +4394,7 @@ test("throws only Error values, normalizes JavaScript failures, and preserves re
   const result = compile(`
 import js unsafe {explode} from "data:text/javascript,export function explode(){throw 'raw failure'}"
 
-class ValidationError extends Error:
+class BucketError extends Error:
     const code: string
 
     constructor(code: string, message: string):
@@ -4394,12 +4403,12 @@ class ValidationError extends Error:
 
 def bucket(value: number) -> number:
     if value < 0:
-        throw ValidationError("negative", "Value must be positive")
+        throw BucketError("negative", "Value must be positive")
     else:
         return value % 4
 
 async def failLater() -> number:
-    throw ValidationError("async", "Async failure")
+    throw BucketError("async", "Async failure")
 
 let remainder = 11
 remainder %= 4
@@ -4408,7 +4417,7 @@ print(remainder)
 try:
     print(bucket(-1))
 catch error:
-    print(error is ValidationError)
+    print(error is BucketError)
     print(error.message)
 finally:
     print("finalized")
@@ -4426,7 +4435,7 @@ catch:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /throw new ValidationError/);
+  assert.match(result.code ?? "", /throw new BucketError/);
   assert.match(result.code ?? "", /remainder %= 4/);
   assert.match(result.code ?? "", /error = __velarNormalizeError\(error\)/);
   const execution = executeModule(result.code ?? "");
@@ -4631,8 +4640,8 @@ test("rejects ambient JavaScript coercion globals with intentional replacements"
 
 test("compiler host capabilities stay protected while extension conveniences follow lexical scope", () => {
   const hostBindings = [
-    "Array", "Boolean", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
-    "Symbol", "TypeError", "WeakMap", "WeakSet", "console", "document", "globalThis", "queueMicrotask",
+    "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
+    "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "queueMicrotask",
   ];
   for (const name of hostBindings) {
     const result = compileCore(`const ${name} = 1\n`);
@@ -4663,10 +4672,13 @@ test("compiler host capabilities stay protected while extension conveniences fol
     /declares invalid global '\$velarValue'/u,
   );
 
+  // N-2b: IndexError is nameable (a reserved Core binding), so a user class
+  // can no longer shadow the builtin the `is` check resolves to.
   const hygienicIndex = compileCore("class IndexError:\n    constructor():\n        pass\n\nconst values = [1]\nprint(values[0])\n");
-  assert.deepEqual(hygienicIndex.diagnostics, []);
-  assert.match(hygienicIndex.code ?? "", /class __VelarIndexError extends __velarCollectionListNativeRangeError/u);
-  assert.match(hygienicIndex.code ?? "", /class IndexError \{/u);
+  assert.ok(hygienicIndex.diagnostics.some((item) => item.code === "VEL3007" && /'IndexError' is a reserved Core binding/u.test(item.message)));
+  const indexMachinery = compileCore("const values = [1]\nprint(values[0])\n");
+  assert.deepEqual(indexMachinery.diagnostics, []);
+  assert.match(indexMachinery.code ?? "", /class __VelarIndexError extends __velarCollectionListNativeRangeError/u);
 });
 
 test("JavaScript reserved words stay data names but cannot become emitted bindings", () => {
@@ -10408,9 +10420,9 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
-    "velar/test", "velar/text-buffer", "velar/javascript", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
+    "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 304);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 280);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 20);
@@ -10421,8 +10433,6 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
-  assert.deepEqual(api.modules["velar/javascript"], ["ScriptActivity", "ScriptAnalysis", "ScriptCompletion", "ScriptDiagnostic", "ScriptDiagnosticSeverity", "ScriptDocument", "ScriptEdit", "ScriptHover", "ScriptLanguage", "ScriptReference", "ScriptRename", "ScriptSpan", "ScriptSymbol", "ScriptSymbolKind", "ScriptToken", "ScriptTokenKind"]);
-  assert.deepEqual(api.modules["velar/text-buffer"], ["TextBuffer", "TextChange", "TextEdit", "TextHistory", "TextLineSlice", "TextPosition", "TextSelection", "TextTransaction"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
   assert.deepEqual(api.modules["velar/fs"], ["Blob", "FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readBlob", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
@@ -10587,12 +10597,28 @@ print(logLevel())
   ].join("\n"));
 });
 
+test("evicted editor modules teach their installable package replacements", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-evicted-editor-modules-"));
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+import {ScriptDocument} from "velar/javascript"
+import {TextBuffer} from "velar/text-buffer"
+`.trimStart(), "utf8");
+
+  const project = await compileProjectCore(entry);
+  assert.deepEqual(project.failures.map((failure) => failure.message), [
+    "Standard module 'velar/javascript' moved to package '@velarscript/script-analysis'; install it, then import from '@velarscript/script-analysis'",
+    "Standard module 'velar/text-buffer' moved to package '@velarscript/text-buffer'; install it, then import from '@velarscript/text-buffer'",
+  ]);
+});
+
 test("pure VelarScript text buffer ships a balanced rope with code-point positions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-text-buffer-"));
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
+  await linkWorkspaceEditorPackages(directory);
   await writeFile(entry, `
-import {TextBuffer, TextChange, TextEdit, TextHistory, TextLineSlice, TextPosition, TextSelection, TextTransaction} from "velar/text-buffer"
+import {TextBuffer, TextChange, TextEdit, TextHistory, TextLineSlice, TextPosition, TextSelection, TextTransaction} from "@velarscript/text-buffer"
 
 const buffer = TextBuffer("ab😀\\ncd")
 const initialPosition: TextPosition = buffer.positionAt(4)
@@ -10706,7 +10732,7 @@ catch error:
     encoding: "utf8",
   });
   assert.equal(build.status, 0, String(build.stderr));
-  const generated = await readFile(join(output, "node_modules", "velar", "text-buffer.js"), "utf8");
+  const generated = await readFile(join(output, "__velar_packages__", "@velarscript", "text-buffer", "src", "index.js"), "utf8");
   assert.match(generated, /class TextBuffer/u);
   assert.match(generated, /class RopeNode/u);
   assert.match(generated, /#root/u);
@@ -10738,7 +10764,7 @@ catch error:
 
   const invalidEntry = join(directory, "invalid.vel");
   await writeFile(invalidEntry, `
-import {TextBuffer} from "velar/text-buffer"
+import {TextBuffer} from "@velarscript/text-buffer"
 
 const buffer = TextBuffer("value")
 buffer.replace("0", 1, "x")
@@ -10759,8 +10785,9 @@ test("pure VelarScript JavaScript service owns incremental lexing and local sema
   const directory = await mkdtemp(join(tmpdir(), "velar-javascript-service-"));
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
+  await linkWorkspaceEditorPackages(directory);
   await writeFile(entry, `
-import {ScriptDocument, ScriptLanguage} from "velar/javascript"
+import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
 
 const source = "interface User { name: string }\\nconst count: number = 1\\nfunction greet(name: string): string {\\n    const message = ` + "`" + `Hello \${name}` + "`" + `\\n    return message\\n}\\nconst result = greet(\\\"Velar\\\")\\n"
 const service = ScriptDocument(ScriptLanguage.typescript, source)
@@ -10798,7 +10825,7 @@ print(broken.analysis().diagnostics[0].code)
     encoding: "utf8",
   });
   assert.equal(build.status, 0, String(build.stderr));
-  const generated = await readFile(join(output, "node_modules", "velar", "javascript.js"), "utf8");
+  const generated = await readFile(join(output, "__velar_packages__", "@velarscript", "script-analysis", "src", "index.js"), "utf8");
   assert.match(generated, /class ScriptDocument/u);
   assert.match(generated, /function lexScript/u);
   assert.doesNotMatch(generated, /from ["']typescript|tsserver|node_modules\/typescript/u);
@@ -10823,7 +10850,7 @@ print(broken.analysis().diagnostics[0].code)
 
   const invalidEntry = join(directory, "invalid.vel");
   await writeFile(invalidEntry, `
-import {ScriptDocument, ScriptLanguage} from "velar/javascript"
+import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
 
 const service = ScriptDocument("typescript", "const value = 1")
 service.update(1)
@@ -10847,8 +10874,9 @@ service.activity().revision = 2
 test("TextBuffer keeps repeated 1 MiB middle edits below the piece-table regression budget", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-text-buffer-performance-"));
   const entry = join(directory, "main.vel");
+  await linkWorkspaceEditorPackages(directory);
   await writeFile(entry, `
-import {TextBuffer} from "velar/text-buffer"
+import {TextBuffer} from "@velarscript/text-buffer"
 
 const buffer = TextBuffer("const value = 1\\n".repeat(65536))
 const offset = (buffer.size / 2).floor()
@@ -16771,7 +16799,7 @@ scores.get(key=1)
   const typeMessages = wrongTypes.diagnostics.map((item) => item.message).join("\n");
   assert.match(typeMessages, /Cannot assign string to number/u);
   assert.match(typeMessages, /Cannot assign number to \(number\) -> unknown/u);
-  assert.match(typeMessages, /Cannot assign number to string/u);
+  assert.match(typeMessages, /number and string have no values in common, so 'Map\.get' can never match/u);
 
   const invalidNames = compileCore(`
 const values = [1]
@@ -17194,7 +17222,7 @@ type Payload:
 state payload: Payload = {value: 1}
 
 export def probe() -> null:
-    print(seesRaw(payload) ? "raw" : "proxy")
+    print(seesRaw(payload) == true ? "raw" : "proxy")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /seesRaw\(__velarHostRaw\(payload\.get\(\)\)\)/u);
@@ -20026,7 +20054,7 @@ print(next)
   assert.equal(definition?.path, library);
   assert.equal((await readFile(library, "utf8")).slice(definition?.span.start, definition?.span.end), "todo");
   assert.equal(projectSymbolAt(valid, entry, enumMember)?.kind, "enum-member");
-  assert.deepEqual(projectCompletionsAt(valid, entry, enumMember).map((item) => item.label), ["todo", "doing", "done", "is", "parse"]);
+  assert.deepEqual(projectCompletionsAt(valid, entry, enumMember).map((item) => item.label), ["todo", "doing", "done", "is", "parse", "values"]);
   const parseCall = validSource.indexOf("Status.parse(") + "Status.parse(".length;
   assert.deepEqual(projectSignatureAt(valid, entry, parseCall), {
     label: "parse(value: unknown) -> Status",
@@ -20760,7 +20788,7 @@ class Player extends Entity:
     static def guest() -> Player:
         return Player("guest", 1)
 
-class ValidationError extends Error:
+class RequiredFieldError extends Error:
     const field: string
 
     constructor(field: string, message: string):
@@ -20769,7 +20797,7 @@ class ValidationError extends Error:
 
 const shape: Shape = Circle(3)
 const entity: Entity = Player.guest()
-const error: Error = ValidationError("name", "Required")
+const error: Error = RequiredFieldError("name", "Required")
 print(shape.area())
 print(entity.describe())
 print(entity is Entity)
@@ -20782,7 +20810,7 @@ print(error.message)
   assert.match(result.code ?? "", /class Player extends Entity/);
   assert.match(result.code ?? "", /super\(id\);/);
   assert.match(result.code ?? "", /static guest\(\)/);
-  assert.match(result.code ?? "", /class ValidationError extends Error/);
+  assert.match(result.code ?? "", /class RequiredFieldError extends Error/);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "9\nguest:1\ntrue\nRequired\n");

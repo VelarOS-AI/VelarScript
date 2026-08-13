@@ -6,6 +6,32 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The bare-string identity door closes on its last surfaces: Map and Set
+  key types reject unions mixing different enums or enum with string, the
+  membership vocabulary (`in`, `has`, `index`, `count`, `remove`,
+  `Map.get`) requires the probe to intersect the element type, enum and
+  string domains never meet in `==` even through union arms, and `is`
+  between disjoint enum types is a compile error. A freshly constructed
+  collection literal as an equality operand is rejected — it is never
+  identical to anything — and the new prelude `equals(a, b)` provides deep
+  structural comparison with SameValueZero leaves for the content
+  question.
+- Enums round out: `Status.values()` returns the members in declaration
+  order, member access follows type aliases, keyword member names can be
+  matched (`case S.null:`), a bare `pass` in an enum body is the
+  placeholder rather than a member named pass, optional enum subjects get
+  the same match exhaustiveness as bare ones, parenthesized member
+  patterns keep their coverage credit, and match value patterns agree
+  with `==` on NaN. `ValidationError`, `NarrowingError`, and `IndexError`
+  are nameable and catchable, and validation failures name the first
+  failing field and reason.
+- Nested `is` emits correctly parenthesized checks (previously
+  `(x is number) is bool` was wrong even with source parentheses, now a
+  constant-test compile error), `await` on `any` and `any` in conditions
+  are rejected toward validation, checked `Error` gains `cause`, error
+  subclasses carry their declared `.name`, and `++i`/`i--`, stray
+  semicolons, `|`/`&`/`^`, `function(){}`, and `:=` each teach their one
+  VelarScript spelling.
 - The standard library sheds its two editor-domain modules:
   `velar/javascript` and `velar/text-buffer` move out as installable
   packages (`@velarscript/script-analysis`, `@velarscript/text-buffer`),

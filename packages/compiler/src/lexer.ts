@@ -168,7 +168,18 @@ export class Lexer {
           this.nesting = Math.max(0, this.nesting - 1);
           break;
         case ":":
-          this.simple("colon", start, 1);
+          if (this.peek(1) === "=") {
+            // ':=' reads as the walrus operator to authors from the father
+            // language; recovery as '=' keeps 'x := 5' one diagnostic.
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "VelarScript has no ':=' binding operator; declare with 'const x = ...' or assign with 'x = ...'", span(start, start + 2)));
+            this.simple("assign", start, 2);
+          } else {
+            this.simple("colon", start, 1);
+          }
+          break;
+        case ";":
+          this.diagnostics.push(recoveredDiagnostic("VEL1005", "A statement ends at its newline; VelarScript does not use ';'", span(start, start + 1)));
+          this.advance();
           break;
         case ",":
           this.simple("comma", start, 1);
@@ -235,8 +246,13 @@ export class Lexer {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2)));
             this.simple("and", start, 2);
           } else {
-            this.invalidCharacter(character, start);
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Combine conditions with 'and'; VelarScript has no bitwise '&'", span(start, start + 1)));
+            this.simple("and", start, 1);
           }
+          break;
+        case "^":
+          this.diagnostics.push(recoveredDiagnostic("VEL1005", "Write '**' for exponentiation; VelarScript has no bitwise '^'", span(start, start + 1)));
+          this.simple("starStar", start, 1);
           break;
         case "<":
           this.simple(this.peek(1) === "=" ? "lessEqual" : "less", start, this.peek(1) === "=" ? 2 : 1);

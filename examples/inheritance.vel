@@ -19,7 +19,7 @@ class Player extends Entity:
     static def guest() -> Player:
         return Player("guest", 1)
 
-class ValidationError extends Error:
+class FormError extends Error:
     const field: string
 
     constructor(field: string, message: string):
@@ -27,7 +27,7 @@ class ValidationError extends Error:
         self.field = field
 
 const entity: Entity = Player.guest()
-const error: Error = ValidationError("name", "Required")
+const error: Error = FormError("name", "Required")
 print(entity.describe())
 print(entity is Entity)
 print(error.message)

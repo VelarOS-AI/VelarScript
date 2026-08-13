@@ -47,6 +47,15 @@ interface GeneratedMapping {
 
 const javaScriptNodeMarker = /\u0000VELAR_MAP_(\d+)\u0000/gu;
 
+// ENM-U4 + COL-U5: the compiler-raised error types are nameable in source;
+// their runtime classes carry compiler-owned names. The source names are
+// reserved Core bindings, so a bare reference is always the builtin.
+const builtinErrorRuntimeNames: ReadonlyMap<string, string> = new Map([
+  ["ValidationError", "__VelarValidationError"],
+  ["NarrowingError", "__VelarNarrowingError"],
+  ["IndexError", "__VelarIndexError"],
+]);
+
 export class JavaScriptEmitter {
   private readonly typeDeclarations = new Map<string, TypeDeclaration | TypeAliasDeclaration>();
   private readonly runtimeTypes = new Set<string>();
@@ -68,6 +77,7 @@ export class JavaScriptEmitter {
   private needsNumberHelper = false;
   private needsThrownValueHelper = false;
   private needsDetachedTaskHelper = false;
+  private needsNarrowingErrorClass = false;
   private suppressPromiseNormalization = 0;
   private nextJavaScriptNodeId = 0;
   private readonly javaScriptNodeSpans = new Map<number, Span>();
@@ -162,10 +172,14 @@ export class JavaScriptEmitter {
         helpers.push(VELAR_CLASS_FIELD_RUNTIME);
       }
     }
-    if (this.hints.runtimeNarrowings.size > 0) {
+    if (this.hints.runtimeNarrowings.size > 0 || this.needsNarrowingErrorClass) {
       if (this.sharedRuntimeModules) {
         this.requireRuntimeModule(VELAR_NARROWING_MODULE);
-        helpers.push(`import { narrow as __velarNarrow } from ${JSON.stringify(VELAR_NARROWING_MODULE)};`);
+        const imports = [
+          ...(this.hints.runtimeNarrowings.size > 0 ? ["narrow as __velarNarrow"] : []),
+          ...(this.needsNarrowingErrorClass ? ["NarrowingError as __VelarNarrowingError"] : []),
+        ];
+        helpers.push(`import { ${imports.join(", ")} } from ${JSON.stringify(VELAR_NARROWING_MODULE)};`);
       } else {
         helpers.push(VELAR_NARROWING_RUNTIME);
       }
@@ -1124,7 +1138,41 @@ export class JavaScriptEmitter {
     });
     const predicate = checks.length > 0 ? checks.join(" && ") : "true";
     const exportPrefix = statement.exported ? "export " : "";
+    // COL-U5: parse failures name the failing field. The explain companion
+    // re-runs the per-field checks only on the failure path, so is() and the
+    // success path stay exactly as cheap as before.
+    const explainName = `__velarTypeExplain_${statement.name}`;
+    const explainLines = [
+      `${indentation}function ${explainName}(value) {`,
+      `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) {`,
+      `${indentation}    return { path: ${JSON.stringify(statement.name)}, field: null, reason: "the value is not a record" };`,
+      `${indentation}  }`,
+      ...fields.flatMap(({ field, type }) => {
+        const descriptor = "__velarExplainField";
+        const typeText = formatTypeReference(field.type);
+        const lines = [
+          `${indentation}  {`,
+          `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(field.name)});`,
+        ];
+        if (type.kind === "optional") {
+          lines.push(`${indentation}    if (${descriptor} !== undefined && !(${descriptor}.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
+        } else {
+          lines.push(`${indentation}    if (${descriptor} === undefined) {`);
+          lines.push(`${indentation}      return { path: ${JSON.stringify(`${statement.name}.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' is missing`)} };`);
+          lines.push(`${indentation}    }`);
+          lines.push(`${indentation}    if (!(${descriptor}.enumerable && "value" in ${descriptor} && ${this.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
+        }
+        lines.push(`${indentation}      return { path: ${JSON.stringify(`${statement.name}.${field.name}`)}, field: ${JSON.stringify(field.name)}, reason: ${JSON.stringify(`field '${field.name}' does not match ${typeText}`)} };`);
+        lines.push(`${indentation}    }`);
+        lines.push(`${indentation}  }`);
+        return lines;
+      }),
+      `${indentation}  return { path: ${JSON.stringify(statement.name)}, field: null, reason: null };`,
+      `${indentation}}`,
+      "",
+    ];
     return [
+      ...explainLines,
       `${indentation}function ${checkName}(value, __state = __velarValidationState()) {`,
       // D44 rule 70: a record contract accepts only plain data objects, so a
       // class instance can never satisfy it — otherwise the validated record
@@ -1154,7 +1202,8 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
-      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)} + __velarValidationRejectionHint(value));`,
+      `${indentation}      const __velarDetail = ${explainName}(value);`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)} + (__velarDetail.reason ? " — " + __velarDetail.reason : "") + __velarValidationRejectionHint(value), __velarDetail);`,
       `${indentation}    }`,
       `${indentation}    return value;`,
       `${indentation}  },`,
@@ -1164,6 +1213,13 @@ export class JavaScriptEmitter {
 
   private emitTypeAliasDeclaration(statement: TypeAliasDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
+    // ENM-I4: identities follow aliases, so an alias whose target resolves to
+    // an enum IS that enum object at runtime — members, is, parse, and
+    // values() all answer through the one frozen object.
+    const enumTarget = this.enumAliasTarget(statement.name);
+    if (enumTarget !== null) {
+      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = ${enumTarget};`;
+    }
     const checkName = this.runtimeTypeCheckName(statement.name);
     const predicate = this.emitTypeCheck(resolveTypeReference(statement.target), "value", "__state");
     const exportPrefix = statement.exported ? "export " : "";
@@ -1178,7 +1234,7 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
-      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
       `${indentation}    }`,
       `${indentation}    return value;`,
       `${indentation}  },`,
@@ -1201,9 +1257,13 @@ export class JavaScriptEmitter {
       `${indentation}  },`,
       `${indentation}  parse(value) {`,
       `${indentation}    if (!${statement.name}.is(value)) {`,
-      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)});`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
       `${indentation}    }`,
       `${indentation}    return value;`,
+      `${indentation}  },`,
+      // ENM-U1: the members in declaration order, a fresh mutable List per call.
+      `${indentation}  values() {`,
+      `${indentation}    return [${values.join(", ")}];`,
       `${indentation}  },`,
       `${indentation}}));`,
     ].join("\n");
@@ -1234,12 +1294,17 @@ export class JavaScriptEmitter {
         return `__velarValidationIsPromise(${value})`;
       case "named":
         if (this.hints.enumNames.has(type.name)) return `${type.name}.is(${value})`;
-        if (this.hints.classNames.has(type.name)) return `__velarValidationIsInstance(${value}, ${type.name})`;
+        if (this.hints.classNames.has(type.name)) {
+          return `__velarValidationIsInstance(${value}, ${this.builtinErrorRuntimeName(type.name) ?? type.name})`;
+        }
+        // An alias of an enum is lowered as the enum object itself, so its
+        // check delegates the same way a direct enum name does (ENM-I4).
+        if (this.enumAliasTarget(type.name) !== null) return `${type.name}.is(${value})`;
         return this.typeDeclarations.has(type.name)
           ? `${this.runtimeTypeCheckName(type.name)}(${value}, ${state})`
           : `${type.name}.is(${value}, ${state})`;
       case "class":
-        return `__velarValidationIsInstance(${value}, ${type.name})`;
+        return `__velarValidationIsInstance(${value}, ${this.builtinErrorRuntimeName(type.name) ?? type.name})`;
       case "enum":
         return `${type.name}.is(${value})`;
       case "enumMember":
@@ -1313,6 +1378,27 @@ export class JavaScriptEmitter {
     return `__velarTypeCheck_${name}`;
   }
 
+  /** The runtime class behind a nameable builtin error type, marking the runtime it needs. */
+  private builtinErrorRuntimeName(name: string): string | null {
+    const runtime = builtinErrorRuntimeNames.get(name);
+    if (!runtime) return null;
+    if (name === "ValidationError") this.needsRuntimeTypeHelpers = true;
+    else if (name === "NarrowingError") this.needsNarrowingErrorClass = true;
+    else this.needsCollectionHelpers = true;
+    return runtime;
+  }
+
+  /** The enum an alias (or alias chain) resolves to, or null when the name is not an alias of an enum. */
+  private enumAliasTarget(name: string, seen: readonly string[] = []): string | null {
+    if (seen.includes(name)) return null;
+    const declaration = this.typeDeclarations.get(name);
+    if (!declaration || declaration.kind !== "TypeAliasDeclaration") return null;
+    const target = resolveTypeReference(declaration.target);
+    if (target.kind !== "named") return null;
+    if (this.hints.enumNames.has(target.name)) return target.name;
+    return this.enumAliasTarget(target.name, [...seen, name]);
+  }
+
   private emitClass(statement: ClassDeclaration, depth: number): string {
     const indentation = "  ".repeat(depth);
     const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
@@ -1325,6 +1411,12 @@ export class JavaScriptEmitter {
       constructorLines.push(explicitSuper
         ? this.emitMappedStatement(constructorBody.shift()!, depth + 2)
         : `${indentation}    super();`);
+    }
+    // Error subclasses report under their declared name — the JavaScript
+    // default leaves `.name` at "Error", which mislabels every report header
+    // (audit 4's micro-ruling).
+    if (statement.base && this.hints.errorSubclassNames.has(statement.name)) {
+      constructorLines.push(`${indentation}    this.name = ${JSON.stringify(statement.name)};`);
     }
     for (const parameter of statement.parameters) {
       if (parameter.binding) {
@@ -1427,7 +1519,9 @@ export class JavaScriptEmitter {
           this.needsNumberHelper = true;
           return "__velarNumber";
         }
-        return expression.name === "str" ? "String" : expression.name === "print" ? "console.log" : expression.name;
+        return expression.name === "str" ? "String"
+          : expression.name === "print" ? "console.log"
+            : this.builtinErrorRuntimeName(expression.name) ?? expression.name;
       case "SuperExpression":
         return "super";
       case "DynamicImportExpression": {
@@ -1520,10 +1614,16 @@ export class JavaScriptEmitter {
           // structural checks that reference the value more than once capture
           // it first so an arbitrary source expression still runs exactly once.
           const uses = test.split(value).length - 1;
+          // GRM-D1: a nested `is` (or unary) operand spliced into the direct
+          // check would rebind under the generated operator — `typeof typeof
+          // x` — so those operands keep explicit parentheses.
+          const operand = expression.value.kind === "IsExpression" || expression.value.kind === "UnaryExpression"
+            ? `(${emittedValue})`
+            : emittedValue;
           const result = uses === 1
             ? classCheck
-              ? `${emittedValue} instanceof ${this.typeRuntimeName(expression.type)}`
-              : this.emitIsCheck(checked, emittedValue)
+              ? `${operand} instanceof ${this.typeRuntimeName(expression.type)}`
+              : this.emitIsCheck(checked, operand)
             : `(${value} => ${test})(${emittedValue})`;
           return expression.operator === "is not" ? `!(${result})` : result;
         }
@@ -1601,6 +1701,9 @@ export class JavaScriptEmitter {
         if (expression.callee.kind === "IdentifierExpression" && (expression.callee.name === "Map" || expression.callee.name === "Set")) {
           this.needsCollectionHelpers = true;
           callee = expression.callee.name === "Map" ? "__velarCreateMap" : "__velarCreateSet";
+        } else if (expression.callee.kind === "IdentifierExpression" && this.hints.equalsCalls.has(spanIdentity(expression.span))) {
+          this.needsCollectionHelpers = true;
+          callee = "__velarEquals";
         } else {
           if (this.hints.constructorCalls.has(spanIdentity(expression.span))) {
             // A callee that is not a plain name path may be wrapped (for
@@ -1767,7 +1870,8 @@ export class JavaScriptEmitter {
 
   private typeRuntimeName(reference: TypeReference): string {
     const type = resolveTypeReference(reference);
-    return type.kind === "named" ? type.name : formatTypeReference(reference);
+    if (type.kind === "named") return this.builtinErrorRuntimeName(type.name) ?? type.name;
+    return formatTypeReference(reference);
   }
 
   private collectionHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null {
@@ -1878,7 +1982,16 @@ export class JavaScriptEmitter {
           bind(current.binding.name, value);
           break;
         case "MatchValuePattern":
-          rejectUnless(current.values.map((candidate) => `${value} === ${this.emitMappedExpression(candidate)}`).join(" || ") || "false");
+          // ENM-D2: a candidate whose value can be NaN compares by
+          // SameValueZero so `case box.nan:` agrees with `==` (charter
+          // section 8); every other candidate keeps plain `===`.
+          rejectUnless(current.values.map((candidate) => {
+            if (this.hints.sameValueZeroMatchValues.has(spanIdentity(candidate.span))) {
+              this.needsCollectionHelpers = true;
+              return `__velarSameValueZero(${value}, ${this.emitMappedExpression(candidate)})`;
+            }
+            return `${value} === ${this.emitMappedExpression(candidate)}`;
+          }).join(" || ") || "false");
           break;
         case "MatchTypePattern":
           rejectUnless(this.emitTypeCheck(resolveTypeReference(current.type), value));
