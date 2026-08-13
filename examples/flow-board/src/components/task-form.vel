@@ -55,8 +55,20 @@ export component TaskForm(onCreate: CreateTaskHandler):
             error = ""
 
     return <form class="composer" look={composerLook} on:submit.prevent={submit} aria-label="Create task">
-        <input look={fieldLook} data-title-input bind:value={title} aria-label="Task title" placeholder="What needs to be done?" />
-        <input look={fieldLook} data-description-input bind:value={description} aria-label="Task description" placeholder="Add a useful detail" />
+        <input
+            look={fieldLook}
+            data-title-input
+            bind:value={title}
+            aria-label="Task title"
+            placeholder="What needs to be done?"
+        />
+        <input
+            look={fieldLook}
+            data-description-input
+            bind:value={description}
+            aria-label="Task description"
+            placeholder="Add a useful detail"
+        />
         <select look={fieldLook} data-priority-input bind:value={priority} aria-label="Priority">
             <option value={TaskPriority.low}>Low priority</option>
             <option value={TaskPriority.normal}>Normal priority</option>

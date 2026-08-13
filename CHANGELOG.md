@@ -6,6 +6,17 @@ truth for acceptance status.
 
 ## Unreleased
 
+- `velar fix` applies the mechanical corrections: a diagnostic now carries
+  its own replacement where one is provably equivalent, so the command,
+  the editor quick fix, and the message all come from one source instead
+  of the language server re-deriving rewrites from message text. Fixes
+  that would change meaning stay diagnostics — `substr` to `slice` moves
+  a length to an end position, and `length` to `size` changes the counting
+  unit, so both teach the difference rather than silently applying it.
+- The formatter takes ownership of JSX it can see whole, packaging budget
+  failures report their composition instead of only the total, and an
+  uncaught error prints your `.vel` frames without Node's internal frames
+  and banner (`--stack` restores the full trace).
 - The statement-head words are contextual, not reserved: `type`, `match`,
   `from`, `as`, and the Web words `state`, `action`, `resource`, `watch`,
   `look`, `component`, `computed`, `mounted`, `cleanup`, `keyframes`,

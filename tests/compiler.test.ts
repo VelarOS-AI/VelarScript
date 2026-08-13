@@ -5412,7 +5412,7 @@ print(iso(0))
 
   const help = spawnSync(process.execPath, [cli, "run", "--help"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /Usage: velar run \[entry\.vel \| project-directory\] \[-- <program-arguments>\.\.\.\]/u);
+  assert.match(help.stdout, /Usage: velar run \[entry\.vel \| project-directory\] \[--stack\] \[-- <program-arguments>\.\.\.\]/u);
 });
 
 test("CLI run forwards termination to the compiled program and closes inherited streams", { skip: process.platform === "win32" }, async () => {
@@ -27502,7 +27502,9 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   });
   const fixed = await waitFor((message) => message.id === 30);
   const fixes = fixed.result as Array<{ title: string; kind: string; isPreferred: boolean; edit: { changes: Record<string, Array<{ newText: string }>> } }>;
-  assert.deepEqual(fixes.map((item) => item.edit.changes[fixUri]![0]!.newText).sort(), ["    ", "and", "false", "not", "true", "=="].sort());
+  // A word operator takes the space it needs from the rewrite itself, so
+  // applying the '!' fix to '!False' produces 'not False' and never 'notFalse'.
+  assert.deepEqual(fixes.map((item) => item.edit.changes[fixUri]![0]!.newText).sort(), ["    ", "and", "false", "not ", "true", "=="].sort());
   assert.ok(fixes.every((item) => item.kind === "quickfix" && item.isPreferred));
 
   const namedFixUri = pathToFileURL(join(directory, "named-fix.vel")).href;
@@ -27615,7 +27617,10 @@ test("language server publishes diagnostics, hover, and completion", async (cont
     params: { textDocument: { uri: typeFixUri }, context: { diagnostics: typeDiagnostics, only: ["quickfix"] } },
   });
   const typeFixed = await waitFor((message) => message.id === 132);
-  assert.deepEqual((typeFixed.result as Array<{ edit: { changes: Record<string, Array<{ newText: string }>> } }>).map((item) => item.edit.changes[typeFixUri]![0]!.newText), ["List", "<string>"]);
+  // The '[T]' rewrite replaces the two brackets and leaves the type argument
+  // text between them exactly as written.
+  assert.deepEqual((typeFixed.result as Array<{ edit: { changes: Record<string, Array<{ newText: string }>> } }>)
+    .map((item) => item.edit.changes[typeFixUri]!.map((edit) => edit.newText)), [["List"], ["<", ">"]]);
 
   const unsafeFixUri = pathToFileURL(join(directory, "unsafe-fix.vel")).href;
   const unsafeFixText = "const values: List<number> = [1]\nvalues.findIndex(value => value > 0)\nvalues.sort()\n";

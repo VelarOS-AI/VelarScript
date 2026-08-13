@@ -24,7 +24,11 @@ The working loop:
 
 1. Write ordinary code the way a fluent JS/Python author would.
 2. Run `velar check`. Do exactly what each diagnostic says.
-3. Run `velar test`. Run `velar format` to settle layout.
+3. Run `velar fix` to apply every rewrite the diagnostics already named
+   (retired spellings with one successor, line-ending semicolons, and the rest
+   of that family); it never rewrites anything that needs a decision, so what
+   is left after it is the real work.
+4. Run `velar test`. Run `velar format` to settle layout.
 
 Do not invent workarounds for a diagnostic; it is the language telling you
 the canonical spelling.
@@ -49,15 +53,13 @@ velar create my-tool --template node   # Node/CLI application
 velar create my-lib --template library # reusable source library
 ```
 
-The templates are `web`, `node`, `desktop`, `docs`, `library`, and `component`.
-Each writes `velar.json`, a `package.json` whose scripts are the gates, a `src/`
-tree, a passing test, and an `AGENTS.md`. Use it instead of hand-assembling a
-project.
+The templates are `web`, `node`, `desktop`, `docs`, `library`, and `component`;
+each writes `velar.json`, a `package.json` whose scripts are the gates, a `src/`
+tree, a passing test, and an `AGENTS.md`. Use it instead of hand-assembling.
 
-When you must write the manifest yourself, these are the complete minimums.
-`formatVersion` is required; `extensions` may be omitted by a project that
-loads none, `entry` defaults to `src/main.vel`, `outDir` to `dist`, and
-`publicDir` to `public`.
+Writing the manifest yourself: `formatVersion` is required, `extensions` may be
+omitted by a project that loads none, `entry` defaults to `src/main.vel`,
+`outDir` to `dist`, and `publicDir` to `public`.
 
 A Core project (CLI, library, Node) loads no extensions:
 

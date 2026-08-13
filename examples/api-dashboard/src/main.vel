@@ -190,11 +190,15 @@ component Dashboard:
 
     def metrics() -> WebNode:
         const current = payload()
-        return current != null ? <>{current.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />)}</> : <></>
+        return current != null ? <>{current.metrics.map(metric => <MetricCard key={metric.id} metric={metric} />)}</> :<></>
 
     def traffic() -> WebNode:
         const current = payload()
-        return current != null ? <TrafficChart points={current.traffic} maxValue={current.trafficMax} peakLabel={current.peakLabel} /> : <></>
+        return current != null ? <TrafficChart
+            points={current.traffic}
+            maxValue={current.trafficMax}
+            peakLabel={current.peakLabel}
+        /> :<></>
 
     return <main class="dashboard" look={dashboardLook} data-dashboard><div look={dashboardInnerLook}>
         <header class="toolbar" look={toolbarLook}>
@@ -202,7 +206,15 @@ component Dashboard:
                 <h1>VelarScript Metrics</h1>
                 <p>Updated: {updated()}</p>
             </div>
-            <button look={refreshLook} data-refresh type="button" disabled={dashboard.loading} on:click={dashboard.reload}>Refresh</button>
+            <button
+                look={refreshLook}
+                data-refresh
+                type="button"
+                disabled={dashboard.loading}
+                on:click={dashboard.reload}
+            >
+                Refresh
+            </button>
         </header>
         {status()}
         <section class="grid" look={gridLook} aria-label="Current metrics">

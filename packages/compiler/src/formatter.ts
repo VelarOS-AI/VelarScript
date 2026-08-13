@@ -8,12 +8,14 @@ export interface FormatOptions {
   readonly extensions?: readonly CompilerExtension[];
 }
 
-type InlineKind = "word" | "literal" | "string" | "operator" | "open" | "close" | "comma" | "colon" | "dot" | "at" | "embedded" | "comment";
+type InlineKind = "word" | "literal" | "string" | "operator" | "open" | "close" | "comma" | "colon" | "dot" | "at" | "embedded" | "markup" | "comment";
 
 interface InlineToken {
   readonly kind: InlineKind;
   readonly text: string;
   readonly generic?: boolean;
+  /** The parsed element behind a "markup" token; the printer owns its layout. */
+  readonly element?: MarkupElement;
 }
 
 const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%="] as const;
@@ -71,7 +73,7 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
     // one level past the statement it continues — without opening a block for
     // the lines that follow it.
     if (embeddedDepth === 0 && isChainContinuationLine(content) && formatted.length > 0) {
-      formatted.push(`${" ".repeat((statementLevel + 1) * indentWidth)}${formatInline(content, angleEmbedding)}`);
+      formatted.push(`${" ".repeat((statementLevel + 1) * indentWidth)}${formatInline(content, angleEmbedding, markupLayout(indentWidth, (statementLevel + 1) * indentWidth, angleEmbedding))}`);
       continue;
     }
     const current = indentation.at(-1) ?? 0;
@@ -82,7 +84,11 @@ export function formatSource(text: string, options: FormatOptions = {}): string 
       if (width !== (indentation.at(-1) ?? 0)) indentation.push(width);
     }
     statementLevel = indentation.length - 1;
-    formatted.push(`${" ".repeat(statementLevel * indentWidth)}${embeddedDepth > 0 ? content : formatInline(content, angleEmbedding)}`);
+    const indent = " ".repeat(statementLevel * indentWidth);
+    const layout = markupLayout(indentWidth, statementLevel * indentWidth, angleEmbedding);
+    formatted.push(`${indent}${embeddedDepth > 0
+      ? formatEmbeddedContent(content, angleEmbedding, layout, layout.column)
+      : formatInline(content, angleEmbedding, layout)}`);
     embeddedDepth = nextEmbeddedDepth(content, embeddedDepth, angleEmbedding);
   }
 
@@ -305,8 +311,9 @@ function embeddedStart(source: string): number {
 function formatInline(
   source: string,
   embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
+  layout: MarkupLayout = heldLayoutFor(embedding),
 ): string {
-  const tokens = tokenizeInline(source, embedding);
+  const tokens = tokenizeInline(source, embedding, layout);
   if (tokens.length === 0) return "";
   let output = "";
   for (let index = 0; index < tokens.length; index += 1) {
@@ -314,14 +321,22 @@ function formatInline(
     const previous = tokens[index - 1];
     const next = tokens[index + 1];
     if (previous && needsSpace(previous, token, next, tokens, index)) output += " ";
-    output += token.text;
+    output += token.element
+      ? renderMarkupElement(token.element, layout, layout.column + lastLineWidth(output))
+      : token.text;
   }
   return output;
+}
+
+function lastLineWidth(output: string): number {
+  const start = output.lastIndexOf("\n");
+  return start === -1 ? output.length : output.length - start - 1;
 }
 
 function tokenizeInline(
   source: string,
   embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
+  layout: MarkupLayout = heldLayoutFor(embedding),
 ): InlineToken[] {
   const tokens: InlineToken[] = [];
   const genericStack: boolean[] = [];
@@ -356,6 +371,15 @@ function tokenizeInline(
       continue;
     }
     if (embedding && character === "<" && beginsEmbeddedAngleSyntax(tokens, source, index)) {
+      // D39 §54: an element that both opens and closes on this line is the
+      // formatter's to shape. Anything else — an element whose children live on
+      // later lines — stays exactly as the author laid it out.
+      const scanned = scanMarkupElement(source, index, embedding, layout);
+      if (scanned) {
+        tokens.push({ kind: "markup", text: source.slice(index, scanned.end), element: scanned.element });
+        index = scanned.end;
+        continue;
+      }
       tokens.push({ kind: "embedded", text: source.slice(index).trimEnd() });
       break;
     }
@@ -706,7 +730,9 @@ function needsSpace(
 ): boolean {
   if (current.kind === "comment") return true;
   if (previous.kind === "comment") return !previous.text.startsWith("//");
-  if (current.kind === "embedded") return previous.kind !== "open" && previous.kind !== "comma" && previous.kind !== "colon";
+  if (current.kind === "embedded" || current.kind === "markup") {
+    return previous.kind !== "open" && previous.kind !== "comma" && previous.kind !== "colon";
+  }
   if (current.kind === "comma" || current.kind === "close" || current.kind === "dot" || current.kind === "colon") {
     if (current.kind === "colon" && isTernaryColon(tokens, index)) return true;
     return false;
@@ -760,4 +786,313 @@ function isTernaryColon(tokens: readonly InlineToken[], colonIndex: number): boo
     else if (depth === 0 && (token.kind === "colon" || token.kind === "comma")) return false;
   }
   return false;
+}
+
+/**
+ * D39 §54 — the canonical shape of embedded angle-bracket markup.
+ *
+ * The formatter reflows one thing and only one thing: an element that both
+ * opens and closes on a single physical line. Such an element is written on one
+ * line while it fits inside the print width, and takes the block shape — open
+ * tag, one child per line indented one level, closing tag at the element's own
+ * indentation — as soon as it does not. Attributes follow the same rule one
+ * level down: they stay on the open tag until the open tag alone overflows,
+ * and then take one line each.
+ *
+ * Two rules keep this a layout change and never a rendering change:
+ *
+ *  - Whitespace between children is program text. Markup drops a line break
+ *    with its surrounding indentation but keeps a written space, so an element
+ *    whose children carry meaningful spaces is never broken, and text is never
+ *    re-wrapped or re-spaced.
+ *  - Markup the author already spread across lines keeps its line structure,
+ *    exactly like every other construct in the language: the formatter
+ *    canonicalizes spelling, not the author's line breaks.
+ */
+const MARKUP_PRINT_WIDTH = 120;
+const MAX_MARKUP_DEPTH = 48;
+
+type MarkupEmbedding = NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null;
+
+interface MarkupLayout {
+  readonly indentWidth: number;
+  /** The canonical indentation column of the line the markup starts on. */
+  readonly column: number;
+  /** False inside a string interpolation, where a line break would change the string. */
+  readonly breakable: boolean;
+  readonly embedding: MarkupEmbedding;
+}
+
+/**
+ * The layout of markup that cannot take a line of its own — inside a string
+ * interpolation, or inside a `{...}` hole. It still carries the embedding, so
+ * markup nested further in is recognized as markup rather than re-spaced as
+ * comparison operators.
+ */
+function heldLayoutFor(embedding: MarkupEmbedding): MarkupLayout {
+  return { indentWidth: 4, column: 0, breakable: false, embedding };
+}
+
+function markupLayout(indentWidth: number, column: number, embedding: MarkupEmbedding): MarkupLayout {
+  return { indentWidth, column, breakable: true, embedding };
+}
+
+function heldMarkupLayout(layout: MarkupLayout): MarkupLayout {
+  return { ...layout, breakable: false };
+}
+
+interface MarkupAttribute {
+  /** The attribute name, or "" for a `{...spread}` attribute. */
+  readonly name: string;
+  /** The written value including its quotes or braces, or null for a bare attribute. */
+  readonly value: string | null;
+}
+
+type MarkupChild =
+  | { readonly kind: "element"; readonly element: MarkupElement }
+  | { readonly kind: "expression"; readonly text: string }
+  | { readonly kind: "text"; readonly text: string };
+
+interface MarkupElement {
+  readonly tag: string;
+  readonly attributes: readonly MarkupAttribute[];
+  readonly children: readonly MarkupChild[];
+  readonly selfClosing: boolean;
+}
+
+/**
+ * Reads one balanced element starting at `<`. It returns null the moment the
+ * element is not complete and unambiguous within `source` — an unclosed
+ * element, a mismatched closing tag, an HTML comment, an unterminated string or
+ * expression — and the caller then leaves the text exactly as written.
+ */
+function scanMarkupElement(
+  source: string,
+  start: number,
+  embedding: MarkupEmbedding,
+  layout: MarkupLayout,
+  depth = 0,
+): { readonly element: MarkupElement; readonly end: number } | null {
+  if (depth > MAX_MARKUP_DEPTH || source[start] !== "<") return null;
+  let index = start + 1;
+  const nameStart = index;
+  while (index < source.length && /[A-Za-z0-9_.:-]/u.test(source[index]!)) index += 1;
+  const tag = source.slice(nameStart, index);
+  if (!tag && source[index] !== ">") return null;
+
+  const attributes: MarkupAttribute[] = [];
+  let selfClosing = false;
+  let closed = false;
+  while (index < source.length) {
+    while (index < source.length && /\s/u.test(source[index]!)) index += 1;
+    if (source.startsWith("/>", index)) {
+      index += 2;
+      selfClosing = true;
+      closed = true;
+      break;
+    }
+    if (source[index] === ">") {
+      index += 1;
+      closed = true;
+      break;
+    }
+    if (source[index] === "{") {
+      const end = findInterpolatedExpressionEnd(source, index + 1);
+      if (end < 0) return null;
+      attributes.push({ name: "", value: source.slice(index, end + 1) });
+      index = end + 1;
+      continue;
+    }
+    const attributeStart = index;
+    while (index < source.length && /[A-Za-z0-9_.:-]/u.test(source[index]!)) index += 1;
+    const name = source.slice(attributeStart, index);
+    if (!name) return null;
+    let cursor = index;
+    while (cursor < source.length && /[ \t]/u.test(source[cursor]!)) cursor += 1;
+    if (source[cursor] !== "=") {
+      attributes.push({ name, value: null });
+      continue;
+    }
+    cursor += 1;
+    while (cursor < source.length && /[ \t]/u.test(source[cursor]!)) cursor += 1;
+    if (source[cursor] === '"' || source[cursor] === "'") {
+      const quote = source[cursor]!;
+      const close = source.indexOf(quote, cursor + 1);
+      if (close < 0) return null;
+      attributes.push({ name, value: source.slice(cursor, close + 1) });
+      index = close + 1;
+      continue;
+    }
+    if (source[cursor] === "{") {
+      const end = findInterpolatedExpressionEnd(source, cursor + 1);
+      if (end < 0) return null;
+      attributes.push({ name, value: source.slice(cursor, end + 1) });
+      index = end + 1;
+      continue;
+    }
+    return null;
+  }
+  if (!closed) return null;
+  if (selfClosing || (tag !== "" && tag === tag.toLowerCase() && embedding?.voidElements?.has(tag) === true)) {
+    return { element: { tag, attributes, children: [], selfClosing: true }, end: index };
+  }
+
+  const children: MarkupChild[] = [];
+  while (index < source.length && !source.startsWith("</", index)) {
+    if (source.startsWith("<!--", index)) return null;
+    if (source[index] === "<") {
+      const child = scanMarkupElement(source, index, embedding, layout, depth + 1);
+      if (!child) return null;
+      children.push({ kind: "element", element: child.element });
+      index = child.end;
+      continue;
+    }
+    if (source[index] === "{") {
+      const end = findInterpolatedExpressionEnd(source, index + 1);
+      if (end < 0) return null;
+      children.push({ kind: "expression", text: source.slice(index, end + 1) });
+      index = end + 1;
+      continue;
+    }
+    const textStart = index;
+    while (index < source.length && source[index] !== "<" && source[index] !== "{") index += 1;
+    children.push({ kind: "text", text: source.slice(textStart, index) });
+  }
+  if (!source.startsWith("</", index)) return null;
+  index += 2;
+  const closingStart = index;
+  while (index < source.length && /[A-Za-z0-9_.:-]/u.test(source[index]!)) index += 1;
+  if (source.slice(closingStart, index) !== tag) return null;
+  while (index < source.length && /\s/u.test(source[index]!)) index += 1;
+  if (source[index] !== ">") return null;
+  return { element: { tag, attributes, children, selfClosing: false }, end: index + 1 };
+}
+
+function renderMarkupElement(element: MarkupElement, layout: MarkupLayout, column: number): string {
+  const inline = renderInlineMarkup(element, layout);
+  if (!layout.breakable || column + inline.length <= MARKUP_PRINT_WIDTH) return inline;
+  if (element.selfClosing) return renderMarkupOpenTag(element, layout, column);
+  if (!isBreakableMarkup(element)) return inline;
+  const indent = " ".repeat(layout.column);
+  const childIndent = " ".repeat(layout.column + layout.indentWidth);
+  const childLayout = markupLayout(layout.indentWidth, layout.column + layout.indentWidth, layout.embedding);
+  const lines = [renderMarkupOpenTag(element, layout, column)];
+  for (const child of element.children) {
+    if (child.kind === "text") {
+      const text = child.text.trim();
+      if (text.length > 0) lines.push(`${childIndent}${text}`);
+      continue;
+    }
+    lines.push(`${childIndent}${child.kind === "element"
+      ? renderMarkupElement(child.element, childLayout, childLayout.column)
+      : renderMarkupExpression(child.text, childLayout)}`);
+  }
+  lines.push(`${indent}</${element.tag}>`);
+  return lines.join("\n");
+}
+
+function renderMarkupOpenTag(element: MarkupElement, layout: MarkupLayout, column: number): string {
+  const inline = `<${element.tag}${element.attributes.map((attribute) => ` ${renderMarkupAttribute(attribute, layout)}`).join("")}${element.selfClosing ? " />" : ">"}`;
+  if (!layout.breakable || column + inline.length <= MARKUP_PRINT_WIDTH || element.attributes.length === 0) return inline;
+  const indent = " ".repeat(layout.column);
+  const attributeIndent = " ".repeat(layout.column + layout.indentWidth);
+  const attributeLayout = markupLayout(layout.indentWidth, layout.column + layout.indentWidth, layout.embedding);
+  return [
+    `<${element.tag}`,
+    ...element.attributes.map((attribute) => `${attributeIndent}${renderMarkupAttribute(attribute, attributeLayout)}`),
+    `${indent}${element.selfClosing ? "/>" : ">"}`,
+  ].join("\n");
+}
+
+function renderInlineMarkup(element: MarkupElement, layout: MarkupLayout): string {
+  const open = `<${element.tag}${element.attributes.map((attribute) => ` ${renderMarkupAttribute(attribute, layout)}`).join("")}`;
+  if (element.selfClosing) return `${open} />`;
+  const children = element.children.map((child) => child.kind === "text"
+    ? child.text
+    : child.kind === "element"
+      ? renderInlineMarkup(child.element, layout)
+      : renderMarkupExpression(child.text, layout)).join("");
+  return `${open}>${children}</${element.tag}>`;
+}
+
+function renderMarkupAttribute(attribute: MarkupAttribute, layout: MarkupLayout): string {
+  if (attribute.name === "") return renderMarkupExpression(attribute.value ?? "{}", layout);
+  if (attribute.value === null) return attribute.name;
+  if (!attribute.value.startsWith("{")) return `${attribute.name}=${attribute.value}`;
+  return `${attribute.name}=${renderMarkupExpression(attribute.value, layout)}`;
+}
+
+/** Formats the code inside `{...}`; a hole never breaks across lines. */
+function renderMarkupExpression(text: string, layout: MarkupLayout): string {
+  return `{${formatInline(text.slice(1, -1).trim(), layout.embedding, heldMarkupLayout(layout))}}`;
+}
+
+/**
+ * An element breaks between children only when it has no text child at all —
+ * when it is a container of elements and holes rather than a piece of written
+ * content.
+ *
+ * That is one line drawn for two reasons at once. It is the safe line: markup
+ * renders a written space between children but not a line break with its
+ * indentation, so any text child (even a bare "/" separator) could change what
+ * the page shows if the boundaries around it moved. It is also the readable
+ * line: a sentence belongs on its line, not spread one word and one hole at a
+ * time.
+ */
+function isBreakableMarkup(element: MarkupElement): boolean {
+  if (element.selfClosing || element.children.length === 0) return false;
+  return element.children.every((child) => child.kind !== "text" || child.text.trim() === child.text);
+}
+
+/**
+ * Formats a line inside markup the author spread across lines. The line's own
+ * layout is the author's; each balanced element on it still takes its canonical
+ * shape, and everything else — code inside holes, text, unbalanced tag
+ * fragments — is copied exactly.
+ */
+function formatEmbeddedContent(
+  source: string,
+  embedding: MarkupEmbedding,
+  layout: MarkupLayout,
+  column: number,
+  depth = 0,
+): string {
+  if (!embedding || depth > MAX_MARKUP_DEPTH) return source;
+  let output = "";
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index]!;
+    if (character === '"' || character === "'" || character === "`") {
+      const scanned = scanStringLiteral(source, index);
+      const end = scanned && scanned.end > index ? scanned.end : index + 1;
+      output += source.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (character === "{") {
+      const end = findInterpolatedExpressionEnd(source, index + 1);
+      if (end < 0) {
+        output += character;
+        index += 1;
+        continue;
+      }
+      // A hole is code, and the formatter never reflows code: markup inside it
+      // keeps its line, exactly as it does on a statement line.
+      const innerColumn = column + lastLineWidth(output) + 1;
+      output += `{${formatEmbeddedContent(source.slice(index + 1, end), embedding, heldMarkupLayout(layout), innerColumn, depth + 1)}}`;
+      index = end + 1;
+      continue;
+    }
+    if (character === "<" && /[A-Za-z>]/u.test(source[index + 1] ?? "")) {
+      const scanned = scanMarkupElement(source, index, embedding, layout);
+      if (scanned) {
+        output += renderMarkupElement(scanned.element, layout, column + lastLineWidth(output));
+        index = scanned.end;
+        continue;
+      }
+    }
+    output += character;
+    index += 1;
+  }
+  return output;
 }

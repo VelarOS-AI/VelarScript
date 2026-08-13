@@ -44,6 +44,66 @@ export interface DesktopBuildResult {
   readonly manifest: DesktopBuildManifest;
 }
 
+export type DesktopBuildSizes = DesktopBuildManifest["sizes"];
+
+interface DesktopSizeComponent {
+  readonly label: string;
+  readonly bytes: number;
+  /**
+   * Mandatory first-party tooling ships in every Desktop application: it is not
+   * application code and cannot be removed by changing the project.
+   */
+  readonly mandatory: boolean;
+}
+
+function desktopSizeComponents(sizes: DesktopBuildSizes): readonly DesktopSizeComponent[] {
+  return [
+    { label: "build engine (velar-build-engine)", bytes: sizes.buildEngineBytes, mandatory: true },
+    { label: "language server (velar-language-server)", bytes: sizes.languageServerBytes, mandatory: true },
+    { label: "project task host (velar-project-task)", bytes: sizes.projectTaskBytes, mandatory: true },
+    { label: "terminal host (VelarTerminalHost)", bytes: sizes.terminalHostBytes, mandatory: true },
+    { label: "capability host (worker.js)", bytes: sizes.capabilityHostBytes, mandatory: true },
+    { label: "native host (VelarDesktopHost)", bytes: sizes.hostBytes, mandatory: false },
+    { label: "renderer (application code and assets)", bytes: sizes.rendererBytes, mandatory: false },
+    { label: "bundle metadata (Info.plist, icon, desktop.json)", bytes: sizes.metadataBytes, mandatory: false },
+  ];
+}
+
+/**
+ * MIG-3: a budget failure that reports only the total forces upstream
+ * archaeology before anyone can judge whether raising the budget is safe. The
+ * composition — every component, its share, and the mandatory first-party
+ * tooling floor no project can shrink — makes that judgment possible in one
+ * pass, so this is the one message the failure prints.
+ */
+export function desktopSizeBudgetFailure(sizes: DesktopBuildSizes, sizeBudgetBytes: number): string | null {
+  if (sizes.totalBytes <= sizeBudgetBytes) return null;
+  const components = [...desktopSizeComponents(sizes)].sort((left, right) => right.bytes - left.bytes);
+  const mandatoryBytes = components
+    .filter((component) => component.mandatory)
+    .reduce((total, component) => total + component.bytes, 0);
+  const share = (bytes: number): string => `${((bytes / Math.max(1, sizes.totalBytes)) * 100).toFixed(1)}%`;
+  const largest = components[0];
+  return [
+    `Desktop bundle is ${formatDesktopBytes(sizes.totalBytes)} (${sizes.totalBytes} bytes), exceeding the `
+    + `${formatDesktopBytes(sizeBudgetBytes)} (${sizeBudgetBytes}-byte) size budget by `
+    + `${formatDesktopBytes(sizes.totalBytes - sizeBudgetBytes)} (${sizes.totalBytes - sizeBudgetBytes} bytes)`,
+    "Composition:",
+    ...components.map((component) => `  ${component.bytes.toString().padStart(11)} bytes  ${share(component.bytes).padStart(6)}  `
+      + `${component.label}${component.mandatory ? " [mandatory first-party tooling]" : ""}`),
+    `Mandatory first-party tooling: ${formatDesktopBytes(mandatoryBytes)} (${mandatoryBytes} bytes, ${share(mandatoryBytes)} of the bundle) `
+    + "ships in every Desktop application and no project change removes it, so any budget below that floor can never pass",
+    `Largest contributor: ${largest ? `${largest.label} at ${formatDesktopBytes(largest.bytes)} (${share(largest.bytes)})` : "none"}`,
+    `Raise desktop.build.sizeBudgetBytes to at least ${sizes.totalBytes} to accept this bundle, or remove bytes from the non-mandatory components above`,
+  ].join("\n");
+}
+
+export function formatDesktopBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / 1024 / 1024).toFixed(2)} MiB`;
+}
+
 export async function buildDesktopApplication(
   projectRoot: string,
   config: VelarDesktopConfig,
@@ -109,9 +169,19 @@ export async function buildDesktopApplication(
     const toolchainBytes = languageServerBytes + projectTaskBytes + buildEngineBytes + terminalHostBytes;
     const totalBytes = await treeSize(applicationBundle);
     const metadataBytes = totalBytes - hostBytes - rendererBytes - capabilityHostBytes - toolchainBytes;
-    if (totalBytes > config.build.sizeBudgetBytes) {
-      throw new Error(`Desktop bundle is ${totalBytes} bytes, exceeding the ${config.build.sizeBudgetBytes}-byte size budget`);
-    }
+    const budgetFailure = desktopSizeBudgetFailure({
+      hostBytes,
+      rendererBytes,
+      capabilityHostBytes,
+      languageServerBytes,
+      projectTaskBytes,
+      buildEngineBytes,
+      terminalHostBytes,
+      toolchainBytes,
+      metadataBytes,
+      totalBytes,
+    }, config.build.sizeBudgetBytes);
+    if (budgetFailure) throw new Error(budgetFailure);
     const manifest: DesktopBuildManifest = Object.freeze({
       formatVersion: 2,
       kind: "velar-desktop-build",

@@ -281,7 +281,13 @@ export component WebCapabilities:
         <div class="summary" look={capabilityRowLook}>
             <span look={summaryItemLook} data-browser>{initialLocation.path}</span>
             <span look={summaryItemLook} data-route>{initialRoute.path}</span>
-            <span look={summaryItemLook} data-environment>{online ? "online" : "offline"}/{visible ? "visible" : "hidden"}/{darkScheme ? "dark" : "light"}</span>
+            <span look={summaryItemLook} data-environment>
+                {online ? "online" : "offline"}
+                /
+                {visible ? "visible" : "hidden"}
+                /
+                {darkScheme ? "dark" : "light"}
+            </span>
             <span look={summaryItemLook} data-session>{sessionLabel}</span>
             <span look={summaryItemLook} data-database>{databaseLabel}</span>
             <span look={summaryItemLook} data-time>{iso(now())}</span>
@@ -290,8 +296,18 @@ export component WebCapabilities:
             <span look={summaryItemLook} data-error>{errorLabel}</span>
             <span look={summaryItemLook} data-recovery>{recoveryLabel}</span>
             <span look={summaryItemLook} data-remainder>{11 % 4}</span>
-            <span look={summaryItemLook} data-set>{capabilityNames.size}:{capabilityNames.has("files") ? "set-ready" : "set-missing"}</span>
-            <span look={summaryItemLook} data-config>{config.apiBase}:{config.releaseChannel}:{config.features.recovery ? "recovery" : "disabled"}</span>
+            <span look={summaryItemLook} data-set>
+                {capabilityNames.size}
+                :
+                {capabilityNames.has("files") ? "set-ready" : "set-missing"}
+            </span>
+            <span look={summaryItemLook} data-config>
+                {config.apiBase}
+                :
+                {config.releaseChannel}
+                :
+                {config.features.recovery ? "recovery" : "disabled"}
+            </span>
             <span look={summaryItemLook} data-runtime-error>{runtimeErrorLabel}</span>
             <span look={summaryItemLook} data-resource>{resourceStatus()}</span>
             <span look={summaryItemLook} data-action>{actionStatus()}</span>
@@ -299,22 +315,64 @@ export component WebCapabilities:
             <span look={summaryItemLook} data-keyboard-event>{keyboardLabel}</span>
             <span look={summaryItemLook} data-input-event>{inputLabel}</span>
             <span look={summaryItemLook} data-pointer-event>{pointerLabel}</span>
-            <span look={summaryItemLook} data-timer>{timerLabel}:{timerTicks > 0 ? "every-ready" : "every-pending"}</span>
+            <span look={summaryItemLook} data-timer>
+                {timerLabel}
+                :
+                {timerTicks > 0 ? "every-ready" : "every-pending"}
+            </span>
             <span look={summaryItemLook} data-render-stable>{renderStatus()}</span>
         </div>
         <div class="actions" look={capabilityRowLook}>
-            <input look={eventInputLook} data-event-input aria-label="Native event probe" on:keydown={captureKey} on:beforeinput={captureInput} />
-            <button look={actionButtonLook} data-pointer-probe type="button" on:pointerdown={capturePointer}>Check pointer event</button>
-            <button look={actionButtonLook} type="button" disabled={chooseFile.pending} on:click={chooseFile}>Choose text file</button>
+            <input
+                look={eventInputLook}
+                data-event-input
+                aria-label="Native event probe"
+                on:keydown={captureKey}
+                on:beforeinput={captureInput}
+            />
+            <button look={actionButtonLook} data-pointer-probe type="button" on:pointerdown={capturePointer}>
+                Check pointer event
+            </button>
+            <button look={actionButtonLook} type="button" disabled={chooseFile.pending} on:click={chooseFile}>
+                Choose text file
+            </button>
             <button look={actionButtonLook} type="button" on:click={saveStatus}>Download status</button>
-            <button look={actionButtonLook} type="button" disabled={copyStatus.pending} on:click={copyStatus}>Copy status</button>
-            <button look={actionButtonLook} type="button" data-test-event on:click={failEvent}>Fail event safely</button>
-            <button look={actionButtonLook} type="button" data-test-render on:click={failRender}>Fail render safely</button>
-            <button look={actionButtonLook} type="button" data-resource-retry on:click={recoveryResource.reload}>Retry resource</button>
-            <button look={actionButtonLook} type="button" data-action-retry disabled={recoverAction.pending} on:click={recoverAction}>Run action</button>
-            <input look={eventInputLook} data-realtime-socket-url aria-label="WebSocket test URL" bind:value={socketUrl} />
-            <input look={eventInputLook} data-realtime-events-url aria-label="Event stream test URL" bind:value={eventsUrl} />
-            <button look={actionButtonLook} data-realtime-connect type="button" on:click={connectRealtime}>Connect realtime</button>
+            <button look={actionButtonLook} type="button" disabled={copyStatus.pending} on:click={copyStatus}>
+                Copy status
+            </button>
+            <button look={actionButtonLook} type="button" data-test-event on:click={failEvent}>
+                Fail event safely
+            </button>
+            <button look={actionButtonLook} type="button" data-test-render on:click={failRender}>
+                Fail render safely
+            </button>
+            <button look={actionButtonLook} type="button" data-resource-retry on:click={recoveryResource.reload}>
+                Retry resource
+            </button>
+            <button
+                look={actionButtonLook}
+                type="button"
+                data-action-retry
+                disabled={recoverAction.pending}
+                on:click={recoverAction}
+            >
+                Run action
+            </button>
+            <input
+                look={eventInputLook}
+                data-realtime-socket-url
+                aria-label="WebSocket test URL"
+                bind:value={socketUrl}
+            />
+            <input
+                look={eventInputLook}
+                data-realtime-events-url
+                aria-label="Event stream test URL"
+                bind:value={eventsUrl}
+            />
+            <button look={actionButtonLook} data-realtime-connect type="button" on:click={connectRealtime}>
+                Connect realtime
+            </button>
         </div>
         {realtimeEnabled ? <RealtimeProbe socketUrl={socketUrl} eventsUrl={eventsUrl} /> : <span data-realtime>idle</span>}
         <span data-file>{fileName}</span>

@@ -28,6 +28,7 @@ import { loadApplicationPackageHost, validateApplicationPackageResult } from "./
 import { buildLanguageServerTool, VELAR_LANGUAGE_SERVER_TOOL_ID } from "./language-server-tool.ts";
 import { buildProjectTaskTool, VELAR_PROJECT_TASK_TOOL_ID } from "./project-task-tool.ts";
 import { buildBuildEngineTool, VELAR_BUILD_ENGINE_TOOL_ID } from "./build-engine-tool.ts";
+import { applyProjectMechanicalFixes } from "./mechanical-fixer.ts";
 
 
 interface CommandArguments {
@@ -59,6 +60,7 @@ interface PreviewArguments {
 interface RunArguments {
   readonly input: string | null;
   readonly programArguments: readonly string[];
+  readonly fullStack: boolean;
 }
 
 interface DeploymentVerificationArguments {
@@ -242,11 +244,42 @@ async function main(arguments_: readonly string[]): Promise<number> {
       return 1;
     }
     try {
-      return await runProgram(projectConfig, parsed.programArguments);
+      return await runProgram(projectConfig, parsed.programArguments, { fullStack: parsed.fullStack });
     } catch (error) {
       process.stderr.write(`velar run: ${hostErrorMessage(error)}\n`);
       return 1;
     }
+  }
+
+  if (command === "fix") {
+    const input = parseSingleOptionalInput(rest);
+    if (input !== null && typeof input === "object") {
+      process.stderr.write(`velar fix: ${input.error}\n`);
+      return 2;
+    }
+    let fixConfig: VelarProjectConfig;
+    try {
+      fixConfig = await resolveVelarProject(input);
+    } catch (error) {
+      process.stderr.write(`velar fix: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+    let report;
+    try {
+      report = await applyProjectMechanicalFixes(fixConfig, displayPath);
+    } catch (error) {
+      process.stderr.write(`velar fix: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+    for (const change of report.changes) process.stdout.write(`${change}\n`);
+    if (report.remainingDiagnostics.length > 0) process.stderr.write(`${report.remainingDiagnostics.join("\n\n")}\n`);
+    const files = report.changedFiles.length;
+    process.stdout.write(
+      `applied ${report.changes.length} mechanical fix${report.changes.length === 1 ? "" : "es"}`
+      + `${files > 0 ? ` in ${files} file${files === 1 ? "" : "s"}` : ""}`
+      + `; ${report.remainingDiagnostics.length} diagnostic${report.remainingDiagnostics.length === 1 ? " remains" : "s remain"}\n`,
+    );
+    return report.remainingDiagnostics.length > 0 ? 1 : 0;
   }
 
   if (command !== "check" && command !== "build" && command !== "package" && command !== "format" && command !== "dev" && command !== "test") {
@@ -776,6 +809,7 @@ function parseTestArguments(arguments_: readonly string[]): TestArguments | stri
 
 function parseRunArguments(arguments_: readonly string[]): RunArguments | string {
   let input: string | null = null;
+  let fullStack = false;
   const programArguments: string[] = [];
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
@@ -783,11 +817,16 @@ function parseRunArguments(arguments_: readonly string[]): RunArguments | string
       programArguments.push(...arguments_.slice(index + 1));
       break;
     }
+    if (argument === "--stack") {
+      if (fullStack) return "--stack may be provided only once";
+      fullStack = true;
+      continue;
+    }
     if (argument.startsWith("--")) return `unknown option '${argument}'; program arguments belong after '--'`;
     if (input) return `unexpected extra input '${argument}'`;
     input = argument;
   }
-  return { input, programArguments };
+  return { input, programArguments, fullStack };
 }
 
 function helpRequested(command: string, arguments_: readonly string[]): boolean {
@@ -909,7 +948,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar update [package...]",
     "  velar dev [entry.vel | project-directory] [--port <port>]",
     "  velar build [entry.vel | project-directory] [--out-dir <directory>]",
-    "  velar run [entry.vel | project-directory] [-- <program-arguments>...]",
+    "  velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]",
     "  velar verify [project-directory | build-directory]",
     "  velar preview [project-directory | build-directory] [--port <port>]",
     "  velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]",
@@ -918,6 +957,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
     "  velar build <single.vel> --out <file.js>",
     "  velar package [project-directory]",
     "  velar format [file.vel | project-directory] [--check]",
+    "  velar fix [entry.vel | project-directory]",
     "  velar skill",
     "  velar lsp",
     "  velar --version",
@@ -927,7 +967,7 @@ function printHelp(output: NodeJS.WritableStream = process.stdout): void {
 
 const commandNames = new Set([
   "check", "create", "install", "add", "remove", "update", "dev", "build", "package", "run", "verify", "preview",
-  "verify-deployment", "test", "format", "skill", "lsp",
+  "verify-deployment", "test", "format", "fix", "skill", "lsp",
 ]);
 
 function printCommandHelp(command: string, output: NodeJS.WritableStream = process.stdout): void {
@@ -941,12 +981,17 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Runs the development server; the default port is 5173."],
     build: ["Usage: velar build [entry.vel | project-directory] [--out-dir <directory>]", "       velar build <single.vel> --out <file.js>", "Builds isolated framework application output or JavaScript modules."],
     package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
-    run: ["Usage: velar run [entry.vel | project-directory] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program."],
+    run: ["Usage: velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program.", "--stack prints the full Node.js trace behind an uncaught program error instead of the VelarScript frames."],
     verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact production manifest, inventory, sizes, hashes, and relationships."],
     preview: ["Usage: velar preview [project-directory | build-directory] [--port <1-65535>]", "Serves only a verified production build; the default port is 4173."],
     "verify-deployment": ["Usage: velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]", "Compares verified local bytes, routes, MIME types, and headers with an HTTPS deployment."],
     test: ["Usage: velar test [project-directory | file.test.vel]", "       velar test [project-directory | file.browser.test.vel] --browser[=chromium|firefox|webkit|all]", "Runs Core tests or explicit browser tests; bare --browser defaults to Chromium."],
     format: ["Usage: velar format [file.vel | project-directory] [--check]", "Formats one file or every manifest-owned .vel source; --check never writes."],
+    fix: [
+      "Usage: velar fix [entry.vel | project-directory]",
+      "Applies every mechanical rewrite the compiler's own diagnostics name — retired spellings with one named successor, line-ending semicolons, and the rest of that family — then reports the diagnostics that are left.",
+      "Nothing that needs a decision is rewritten, and a second run changes nothing.",
+    ],
     skill: ["Usage: velar skill", "Prints the packaged VelarScript AI skill brief verbatim to stdout for any coding agent."],
     lsp: ["Usage: velar lsp", "Runs the stdio language server for an editor host."],
   };

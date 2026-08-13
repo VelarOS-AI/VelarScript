@@ -130,14 +130,26 @@ export component TicketDetail(route: RouteContext):
             <p look={bodyLook}>{currentTicket.summary}</p>
             <p look={bodyLook} data-route-id>Route ID: {id}</p>
             <p look={bodyLook} data-detail-status>Status: {currentTicket.status}</p>
-            <button look={buttonLook()} ref={resolveButton} data-resolve type="button" on:click={askResolve}>Resolve ticket</button>
+            <button look={buttonLook()} ref={resolveButton} data-resolve type="button" on:click={askResolve}>
+                Resolve ticket
+            </button>
             <span class="visually-hidden" look={visuallyHiddenLook} data-dialog-result>{resolution}</span>
             <dialog look={dialogLook} ref={confirmDialog} data-resolve-dialog aria-labelledby="resolve-dialog-title">
                 <h2 look={titleLook} id="resolve-dialog-title">Resolve this ticket?</h2>
                 <p look={bodyLook}>The ticket remains available in the inbox after its status changes.</p>
                 <div class="dialog-actions" look={dialogActionsLook}>
-                    <button class="secondary" look={buttonLook(true)} data-cancel-resolve type="button" on:click={cancelResolve}>Cancel</button>
-                    <button look={buttonLook()} data-confirm-resolve type="button" on:click={confirmResolve}>Resolve</button>
+                    <button
+                        class="secondary"
+                        look={buttonLook(true)}
+                        data-cancel-resolve
+                        type="button"
+                        on:click={cancelResolve}
+                    >
+                        Cancel
+                    </button>
+                    <button look={buttonLook()} data-confirm-resolve type="button" on:click={confirmResolve}>
+                        Resolve
+                    </button>
                 </div>
             </dialog>
         </article>

@@ -81,12 +81,34 @@ export component TicketForm:
 
     return <form look={formLook} ref={form} on:submit.prevent={submit} data-ticket-form>
         <div class="grid" look={gridLook}>
-            <label look={labelLook}>Issue title<input look={fieldLook} name="title" data-title placeholder="What needs attention?" /></label>
-            <label look={labelLook}>Requester<input look={fieldLook} name="requester" data-requester placeholder="Customer name" /></label>
-            <label look={labelLook}>Priority<select look={fieldLook} name="priority" data-priority><option value={TicketPriority.low}>Low</option><option value={TicketPriority.normal} selected={true}>Normal</option><option value={TicketPriority.high}>High</option></select></label>
-            <label look={labelLook}>Estimate<input look={fieldLook} name="estimate" data-estimate type="number" min="1" placeholder="Minutes" /></label>
+            <label look={labelLook}>
+                Issue title
+                <input look={fieldLook} name="title" data-title placeholder="What needs attention?" />
+            </label>
+            <label look={labelLook}>
+                Requester
+                <input look={fieldLook} name="requester" data-requester placeholder="Customer name" />
+            </label>
+            <label look={labelLook}>
+                Priority
+                <select look={fieldLook} name="priority" data-priority>
+                    <option value={TicketPriority.low}>Low</option>
+                    <option value={TicketPriority.normal} selected={true}>Normal</option>
+                    <option value={TicketPriority.high}>High</option>
+                </select>
+            </label>
+            <label look={labelLook}>
+                Estimate
+                <input look={fieldLook} name="estimate" data-estimate type="number" min="1" placeholder="Minutes" />
+            </label>
         </div>
-        <label look={labelLook}>Summary<textarea look={textareaLook} name="summary" data-summary placeholder="Add useful context"></textarea></label>
-        <label class="urgent" look={urgentLook}><input look={checkboxLook} name="urgent" data-urgent type="checkbox" />Mark as urgent</label>
+        <label look={labelLook}>
+            Summary
+            <textarea look={textareaLook} name="summary" data-summary placeholder="Add useful context"></textarea>
+        </label>
+        <label class="urgent" look={urgentLook}>
+            <input look={checkboxLook} name="urgent" data-urgent type="checkbox" />
+            Mark as urgent
+        </label>
         <button look={submitLook} data-create-ticket type="submit">Create ticket</button>
     </form>

@@ -47,4 +47,13 @@ const contextLook = look:
     fontWeight = 700
 
 export component App:
-    return <div class="shell" look={shellLook}><header look={headerLook}><Link look={brandLook} to="/">SupportDesk</Link><nav data-primary aria-label="Primary navigation"><NavLink look={navLinkLook} to="/" exact={true}>Inbox</NavLink></nav><span look={contextLook}>Customer operations</span></header><Router routes={routes} fallback={MissingPage} /></div>
+    return <div class="shell" look={shellLook}>
+        <header look={headerLook}>
+            <Link look={brandLook} to="/">SupportDesk</Link>
+            <nav data-primary aria-label="Primary navigation">
+                <NavLink look={navLinkLook} to="/" exact={true}>Inbox</NavLink>
+            </nav>
+            <span look={contextLook}>Customer operations</span>
+        </header>
+        <Router routes={routes} fallback={MissingPage} />
+    </div>

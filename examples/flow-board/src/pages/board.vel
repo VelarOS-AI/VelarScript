@@ -86,12 +86,18 @@ const boardLook = look:
 
 export component Board:
     return <main class="page" look={pageLook} data-board>
-        <Head title="FlowBoard · Focused project work" description="A real project board built entirely with VelarScript" themeColor="#f6f8fc" />
+        <Head
+            title="FlowBoard · Focused project work"
+            description="A real project board built entirely with VelarScript"
+            themeColor="#f6f8fc"
+        />
         <section class="hero" look={heroLook}>
             <div>
                 <p class="eyebrow" look={eyebrowLook}>Today’s focus</p>
                 <h1 look={titleLook}>Make work flow.</h1>
-                <p class="intro" look={introLook}>Capture the next useful task, move it through the work, and keep the whole project visible without turning the board into another job.</p>
+                <p class="intro" look={introLook}>
+                    Capture the next useful task, move it through the work, and keep the whole project visible without turning the board into another job.
+                </p>
             </div>
             <div class="summary" look={summaryLook} aria-label="Board summary">
                 <span look={summaryItemLook} data-board-state>{changed() ? "Modified" : "Sample"}</span>
@@ -104,7 +110,13 @@ export component Board:
         <TaskForm onCreate={addTask} />
 
         <section class="tools" look={toolsLook} aria-label="Board filters">
-            <input look={controlLook()} data-search bind:value={query} aria-label="Search tasks" placeholder="Search title or description" />
+            <input
+                look={controlLook()}
+                data-search
+                bind:value={query}
+                aria-label="Search tasks"
+                placeholder="Search title or description"
+            />
             <select look={controlLook()} data-status-filter bind:value={filter} aria-label="Filter by status">
                 <option value={TaskFilter.all}>All statuses</option>
                 <option value={TaskFilter.todo}>To do</option>
@@ -116,8 +128,26 @@ export component Board:
 
         <p class="results" look={resultsLook} data-results>{visibleTasks().size} of {tasks.size} tasks shown</p>
         <section class="board" look={boardLook} aria-label="Task board">
-            <BoardColumn title="To do" status={TaskStatus.todo} tasks={visibleTasks()} onAdvance={advanceTask} onDelete={deleteTask} />
-            <BoardColumn title="In progress" status={TaskStatus.doing} tasks={visibleTasks()} onAdvance={advanceTask} onDelete={deleteTask} />
-            <BoardColumn title="Done" status={TaskStatus.done} tasks={visibleTasks()} onAdvance={advanceTask} onDelete={deleteTask} />
+            <BoardColumn
+                title="To do"
+                status={TaskStatus.todo}
+                tasks={visibleTasks()}
+                onAdvance={advanceTask}
+                onDelete={deleteTask}
+            />
+            <BoardColumn
+                title="In progress"
+                status={TaskStatus.doing}
+                tasks={visibleTasks()}
+                onAdvance={advanceTask}
+                onDelete={deleteTask}
+            />
+            <BoardColumn
+                title="Done"
+                status={TaskStatus.done}
+                tasks={visibleTasks()}
+                onAdvance={advanceTask}
+                onDelete={deleteTask}
+            />
         </section>
     </main>

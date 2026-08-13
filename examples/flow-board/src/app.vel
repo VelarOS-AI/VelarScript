@@ -53,7 +53,10 @@ export component App:
     return <div class="shell" look={shellLook}>
         <header class="topbar" look={topbarLook}>
             <Link look={brandLook} to="/">FlowBoard</Link>
-            <nav look={navLook} aria-label="Primary navigation"><Link look={navLinkLook} to="/">Board</Link><Link look={navLinkLook} to="/analytics">Analytics</Link></nav>
+            <nav look={navLook} aria-label="Primary navigation">
+                <Link look={navLinkLook} to="/">Board</Link>
+                <Link look={navLinkLook} to="/analytics">Analytics</Link>
+            </nav>
         </header>
         <Router routes={routes} />
     </div>

@@ -4,13 +4,20 @@ export interface ForbiddenSourceIdentifierRule {
   readonly guidance: string;
   /** Tokens used only to recover after reporting the source spelling. */
   readonly recovery: readonly { readonly kind: TokenKind; readonly value: string }[] | null;
+  /**
+   * D38 §48: the source text that replaces this spelling, registered only where
+   * the guidance names exactly one successor. `null` keeps the rule advice —
+   * 'var' offers 'let' or 'const', which is the author's choice to make.
+   */
+  readonly fix: string | null;
 }
 
 function forbidden(
   guidance: string,
   recovery: ForbiddenSourceIdentifierRule["recovery"],
+  fix: string | null = null,
 ): ForbiddenSourceIdentifierRule {
-  return { guidance, recovery };
+  return { guidance, recovery, fix };
 }
 
 /**
@@ -20,18 +27,17 @@ function forbidden(
  */
 export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIdentifierRule> = new Map([
   ["var", forbidden("Use 'let' or 'const'; VelarScript does not expose 'var'", [{ kind: "let", value: "let" }])],
-  ["undefined", forbidden("Use 'null'; VelarScript does not expose 'undefined'", [{ kind: "null", value: "null" }])],
-  ["none", forbidden("Use 'null'; VelarScript uses the Web-native empty value spelling", [{ kind: "null", value: "null" }])],
-  ["None", forbidden("Use 'null'; VelarScript keywords are lowercase and Web-native", [{ kind: "null", value: "null" }])],
-  ["True", forbidden("Use 'true'; VelarScript keywords are lowercase", [{ kind: "true", value: "true" }])],
-  ["False", forbidden("Use 'false'; VelarScript keywords are lowercase", [{ kind: "false", value: "false" }])],
-  ["elif", forbidden("Use 'else if'; VelarScript keeps ordinary readable if chains", [{ kind: "else", value: "else" }, { kind: "if", value: "if" }])],
-  ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
-  ["float", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
-  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "identifier", value: "match" }])],
-  ["this", forbidden("Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'", [{ kind: "identifier", value: "self" }])],
-  ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [])],
-  ["eval", forbidden("VelarScript does not expose 'eval'", null)],
+  ["undefined", forbidden("Use 'null'; VelarScript does not expose 'undefined'", [{ kind: "null", value: "null" }], "null")],
+  ["none", forbidden("Use 'null'; VelarScript uses the Web-native empty value spelling", [{ kind: "null", value: "null" }], "null")],
+  ["None", forbidden("Use 'null'; VelarScript keywords are lowercase and Web-native", [{ kind: "null", value: "null" }], "null")],
+  ["True", forbidden("Use 'true'; VelarScript keywords are lowercase", [{ kind: "true", value: "true" }], "true")],
+  ["False", forbidden("Use 'false'; VelarScript keywords are lowercase", [{ kind: "false", value: "false" }], "false")],
+  ["elif", forbidden("Use 'else if'; VelarScript keeps ordinary readable if chains", [{ kind: "else", value: "else" }, { kind: "if", value: "if" }], "else if")],
+  ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }], "number")],
+  ["float", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }], "number")],
+  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "identifier", value: "match" }], "match")],
+  ["this", forbidden("Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'", [{ kind: "identifier", value: "self" }], "self")],
+  ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [], "")],  ["eval", forbidden("VelarScript does not expose 'eval'", null)],
   ["with", forbidden("Use a record spread such as '{...value, field: next}' to build an updated record; VelarScript does not expose 'with'", null)],
 ]);
 

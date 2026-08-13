@@ -26,7 +26,8 @@ import {
   type ValueType,
 } from "./types.ts";
 
-export { diagnostic, formatDiagnostic, type Diagnostic } from "./diagnostic.ts";
+export { diagnostic, formatDiagnostic, mechanicalEdits, mechanicalFix, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
+export { applyMechanicalFixes, type AppliedMechanicalFix, type MechanicalFixResult } from "./mechanical-fix.ts";
 export { formatSource } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
 export { SourceText, type Span } from "./source.ts";

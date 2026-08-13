@@ -102,14 +102,29 @@ component TodoApp:
         <h1>VelarScript Todo App</h1>
         <p>{remaining()} task(s) remaining</p>
         <form class="composer" look={composerLook}>
-            <input look={inputLook} aria-label="New task" placeholder="What needs doing?" bind:value={draft} on:keydown={addTodoOnKey} />
+            <input
+                look={inputLook}
+                aria-label="New task"
+                placeholder="What needs doing?"
+                bind:value={draft}
+                on:keydown={addTodoOnKey}
+            />
             <button look={buttonLook()} type="button" disabled={draft == ""} on:click={addTodo}>Add task</button>
         </form>
         <ul class="todos" look={todosLook}>
             {todos.map(todo => <li key={todo.id} class="todo" look={todoLook}>
-                <button look={buttonLook()} type="button" on:click={() => toggleTodo(todo.id)}>{todo.done ? "Undo" : "Done"}</button>
+                <button look={buttonLook()} type="button" on:click={() => toggleTodo(todo.id)}>
+                    {todo.done ? "Undo" : "Done"}
+                </button>
                 <span class="title" look={titleLook(todo.done)}>{todo.title}</span>
-                <button look={buttonLook(dangerous=true)} type="button" class="remove" on:click={() => removeTodo(todo.id)}>Remove</button>
+                <button
+                    look={buttonLook(dangerous = true)}
+                    type="button"
+                    class="remove"
+                    on:click={() => removeTodo(todo.id)}
+                >
+                    Remove
+                </button>
             </li>)}
         </ul>
     </section></main>
