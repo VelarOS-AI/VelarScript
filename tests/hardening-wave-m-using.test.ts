@@ -373,6 +373,21 @@ def main() -> null:
   assert.match(emitted, /owned\["__velar:dispose"\]\(\)/u);
 });
 
+test("[D43 69] an owned binding participates in the shadowed-read rule", () => {
+  const reported = diagnostics(`
+class Handle:
+    @dispose:
+        pass
+
+const owned = "outer"
+
+def main() -> null:
+    print(owned)
+    using owned = Handle()
+`);
+  assert.ok(reported.some((item) => /^VEL3017 'owned' is shadowed by a declaration later in this scope/u.test(item)), reported.join("\n"));
+});
+
 test("[D43 69] an inherited release contract still runs", () => {
   const output = run(`
 class Base:

@@ -794,6 +794,10 @@ export function buildSemanticIndex(
         typeReferences(statement.type);
         visitPattern(statement.pattern, "variable", statement.pattern.span, statement.binding === "let", statement.exported, statement.span.start);
         break;
+      case "TestDeclaration":
+        // A test body is an ordinary block for navigation and rename.
+        visitBlock(statement.body, statement.span);
+        break;
       case "UsingDeclaration":
         // D43 item 69: an owned resource is an ordinary immutable binding as
         // far as navigation and rename are concerned.

@@ -9666,6 +9666,10 @@ export class Analyzer implements TypeEnvironment {
         this.collectPatternNames(statement.pattern, (name) => {
           if (!pending.has(name)) pending.set(name, { span: statement.span, loopHead: false });
         });
+      } else if (statement.kind === "UsingDeclaration") {
+        // An owned binding declares a name in this scope exactly as `const`
+        // does, so a read above it is the same shadow hazard.
+        if (!pending.has(statement.name)) pending.set(statement.name, { span: statement.span, loopHead: false });
       } else {
         const extension = this.prescanExtensionScopeDeclaration(statement);
         if (extension && !pending.has(extension.name)) pending.set(extension.name, { span: extension.span, loopHead: false });
