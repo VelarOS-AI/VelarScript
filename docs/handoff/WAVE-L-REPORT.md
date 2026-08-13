@@ -311,7 +311,7 @@ Checked 76 runtime boundary operations and the shared registry, strict JSON, Web
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 155902.153208
+ℹ duration_ms 157036.199584
 ```
 
 `npm run test:browser`
