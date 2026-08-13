@@ -496,8 +496,8 @@ async def test_descriptor_based_deep_reads() -> null:
 async def test_json_tracks_nested_records_and_lists() -> null:
     await browser.open("/")
     await browser.click("[data-json]")
-    expect(await browser.text("[data-json-root]")).toBe('{"inner":{"done":true}}')
-    expect(await browser.text("[data-json-list]")).toBe('["a","b"]')
+    expect(await browser.text("[data-json-root]")).toBe(\`{"inner":{"done":true}}\`)
+    expect(await browser.text("[data-json-list]")).toBe(\`["a","b"]\`)
 
 async def test_out_of_range_list_get_tracks_arrival() -> null:
     await browser.open("/")

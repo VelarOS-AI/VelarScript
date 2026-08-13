@@ -116,7 +116,7 @@ const sorted = values.sorted(by=value => value > 0)
   assert.ok(result.diagnostics.some((item) => /number or string|number \| string|only string or only number/u.test(item.message)));
 });
 
-test("[#17] unknown escapes are diagnosed in plain, interpolated, and layout strings", () => {
+test("[#17/D47 82] string escapes distinguish removed hex spelling from unknown escapes", () => {
   const result = compile(String.raw`
 const plain = "\x41"
 const interpolated = f"\q{1}"
@@ -126,7 +126,8 @@ const layout = "
 `.trimStart());
   const escapes = result.diagnostics.filter((item) => item.code === "VEL1008");
   assert.equal(escapes.length, 3);
-  assert.ok(escapes.every((item) => /Unknown string escape/u.test(item.message)));
+  assert.match(escapes[0]?.message ?? "", /Use a braced Unicode escape.*\\xNN/u);
+  assert.ok(escapes.slice(1).every((item) => /Unknown string escape/u.test(item.message)));
   assert.equal(result.code, null);
 });
 
@@ -207,7 +208,7 @@ test("[#34] formatting preserves a tab-margined layout string's program and valu
     "def command() -> string:",
     '  return "',
     "\tall:",
-    "\t\techo hi",
+    "\t\\techo hi",
     '  "',
     "",
     "print(command())",
@@ -312,5 +313,7 @@ const b = 2
 const c = 3
 const valid = a<b>(c)
 `.trimStart());
-  assert.deepEqual(comparison.diagnostics, []);
+  assert.deepEqual(comparison.diagnostics.map((item) => item.message), [
+    "Comparison chains must point one way; split the comparisons with 'and'",
+  ]);
 });

@@ -166,7 +166,7 @@ async def test_jsx_child_layout_string() -> null:
 
 async def test_jsx_child_layout_string_with_quote_content() -> null:
     await browser.open("/")
-    expect(await browser.text("[data-quoted]")).toBe('3" of rain')
+    expect(await browser.text("[data-quoted]")).toBe("3\u{22} of rain")
 
 async def test_jsx_attribute_layout_string() -> null:
     await browser.open("/")

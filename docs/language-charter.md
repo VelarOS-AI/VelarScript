@@ -67,10 +67,24 @@ VelarScript source files use the `.vel` extension.
 ```velar
 // A normal comment.
 
+/*
+A block comment, which /* nests */ so commenting out a region that already
+contains a block comment works.
+*/
+
 /// Documentation attached to the following declaration.
 export def greet(name: string) -> string:
-    return f"Hello, {name}"
+    const version = /* pinned by the release */ 1
+    return f"Hello, {name} ({version})"
 ```
+
+A `/* */` comment may sit inside a line, as above, or span lines. A multi-line
+one occupies whole lines: only `/*` on its opening line and only `*/` on its
+closing line, so the comment's extent is visible without reading to the end of a
+code line. Nesting is counted, so an unclosed inner `/*` is reported as an
+unterminated comment rather than silently swallowing the rest of the file, and
+the formatter keeps a nested block together and reindents it with the block that
+owns it.
 
 Blocks use a trailing colon and indentation. Four spaces are conventional.
 Tabs are normalized for indentation, but mixed or inconsistent indentation is
@@ -96,6 +110,16 @@ const urgent = tasks
     .filter(task => not task.done)
     .map(task => task.title)
 ```
+
+A statement exists to do something. An expression statement is therefore
+restricted to the shapes that can: a call, an assignment, `await`, and the
+detached `async` statement. A statement whose whole content is a value —
+a comparison, a literal, a name, arithmetic, a `??` fallback, a conditional, an
+index, a collection, a unary value, or a bare string — is rejected, because the
+result is computed and thrown away. Each shape is answered with the thing the
+author meant: a bare comparison teaches `=` or using the result, `++i` and
+`--i` teach `+= 1` and `-= 1`, and a bare string teaches `//`, since a string
+on its own line is a docstring habit rather than a comment.
 
 ## 3. Bindings and literals
 
@@ -151,10 +175,12 @@ Literals are intentionally small:
 ```velar
 const title = "VelarScript"
 const count = 42
+const budget = 1_000_000
 const ratio = 0.75
 const enabled = true
 const missing = null
 const message = f"{title}: {count}"
+const payload = `{"name":"Nova","role":"admin"}`
 const poem = "
     first line
     second "quoted" line
@@ -172,12 +198,28 @@ const user = {id: "user-1", title}
 `null` is the only ordinary empty value. `undefined`, `none`, and `None` are
 not VelarScript values.
 
-Single and double quotes are equivalent string delimiters. An inline string
-must close before its physical line ends; otherwise the lexer diagnoses that
-line and resumes at the next one. A quote followed immediately by a newline
-instead opens a layout string. Its first nonblank content line establishes a
-structural indentation margin, and a quote back at the opening line's
-indentation closes the value:
+A string is delimited by double quotes or by backticks. The two produce the
+same `string` value with the same capabilities — the same escapes, the same
+prefixes, the same positions — and only the escaping differs, because `"` is
+ordinary text inside a backtick string. That is the case backticks exist for: a
+JSON body, an HTML fragment, or a quoted attribute selector is written once
+instead of escaped character by character.
+
+```velar fragment
+const payload = parseJson(`{"name":"Nova","role":"admin"}`, User)
+```
+
+Single-quoted strings are rejected, with a message naming both legal
+delimiters. `'` is ordinary text inside either one, and `\'` is accepted as
+well, so text pasted from another language does not need editing.
+
+An inline string must close before its physical line ends; otherwise the lexer
+diagnoses that line and resumes at the next one. A backtick string is always
+inline: a line break inside one receives the same guidance to a layout string
+that a double-quoted inline string does. A double quote followed immediately by
+a newline instead opens a layout string. Its first nonblank content line
+establishes a structural indentation margin, and a quote back at the opening
+line's indentation closes the value:
 
 ````velar fragment
 const markdown = "
@@ -191,20 +233,68 @@ The opening and closing newlines and the structural margin are syntax, not
 text. Internal line endings, blank lines, quotes, and indentation beyond that
 margin are preserved exactly; there is no common-dedent or trim pass. A dedent
 without the closing quote diagnoses the layout string before the dedented line,
-so following code remains independently lexable. Ordinary inline and layout
-strings keep the familiar `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
+so following code remains independently lexable. Multi-line text is therefore
+the layout string's job and single-line text is the inline string's; a backtick
+string never spans lines, and a layout string is always double-quoted.
 
-The only string prefixes are `f`, `r`, and `rf`. `f` enables `{expression}`
-interpolation, `r` makes backslashes literal, and canonical `rf` combines both.
-`fr` receives a direct “use `rf`” diagnostic rather than becoming a second
-spelling. In a raw inline string, backslash never escapes the closing delimiter,
-so `r"C:\path\"` includes the final backslash; a delimiter inside raw inline
-text is doubled: `r"He said ""hello"""`. Layout-string quotes are ordinary
-content unless they appear as the dedented closing delimiter. Literal
+Outside a raw string, both delimiters keep the familiar `\\`, `\n`, `\r`, `\t`,
+`\"`, and `\'` escapes, plus `` \` `` for a literal backtick and `\u{...}` for
+a code point. `\u{...}` takes one to six hexadecimal digits and produces that
+code point, so `"\u{1F525}"` is one emoji. A value above `U+10FFFF` is rejected,
+and so is a surrogate in `U+D800`–`U+DFFF`, which keeps every literal free of
+lone surrogates. `\uXXXX` and `\xNN` are not second spellings: both receive a
+direct message teaching the braced form.
+
+The only string prefixes are `f`, `r`, and `rf`, and the prefix is independent
+of the delimiter — all combinations exist, and `f` interpolation stays
+`{expression}` in both. `f` enables interpolation, `r` makes backslashes
+literal, and canonical `rf` combines both. `fr` receives a direct “use `rf`”
+diagnostic rather than becoming a second spelling. In a raw inline string,
+backslash never escapes the closing delimiter, so `r"C:\path\"` includes the
+final backslash; a delimiter inside raw inline text is doubled, in whichever
+delimiter the string uses: `r"He said ""hello"""`. Layout-string quotes are
+ordinary content unless they appear as the dedented closing delimiter. Literal
 interpolation braces in an `f` or `rf` string remain `{{` and `}}`. JavaScript
-`${...}` is not a second interpolation syntax. Backtick and triple-quoted
-strings are not part of the language; their old spellings receive guidance to
-quoted layout strings.
+`${...}` is never interpolation — in a backtick string it is literal text,
+exactly as in a double-quoted one, because generating JavaScript source is a
+real use of these literals. Triple-quoted strings are not part of the language;
+that spelling receives guidance to a quoted layout string.
+
+Both delimiters are legal wherever the author writes, but formatted source has
+one spelling per string. `velar format` picks the delimiter from the text:
+
+| String content | Canonical delimiter |
+|---|---|
+| no `"` | `"..."` |
+| a `"` and no `` ` `` | `` `...` `` |
+| both | whichever escapes fewer characters; a tie takes `"..."` |
+
+The rule is deterministic, so any given text has exactly one formatted
+spelling, and formatting is idempotent. It applies to inline strings of every
+prefix; a layout string keeps its double quotes because its content is text.
+
+Source hygiene is part of the lexer, not a linter. Bidirectional formatting
+controls (`U+202A`–`U+202E`, `U+2066`–`U+2069`) cannot appear literally
+anywhere in a source file — not in a string, not in a comment — because that is
+exactly how source is made to read differently than it runs. The only way one
+enters a program is `\u{202E}` inside a string, which stays visible to a
+reviewer. Other control characters — `U+0000`–`U+001F` other than the line
+endings a layout string owns, `U+007F`, and `U+0080`–`U+009F` — are rejected
+inside a literal with the same guidance to `\u{...}`, so a tab inside text is
+written `\t` and only structural indentation may be a real tab. Characters that
+carry meaning in ordinary text are deliberately untouched: the zero-width joiner
+(`U+200D`) that builds emoji families, variation selectors such as `U+FE0F`,
+and the zero-width space all remain legal literal content.
+
+Number literals accept `_` as a digit-group separator between digits, in the
+integer part, the fraction, and the exponent alike: `1_000`, `1_000.5`, and
+`1e1_0` are all legal, and the separator is not part of the value. A separator
+that is not between two digits — leading, trailing, or doubled — is rejected.
+Every other numeric spelling a JavaScript or Python author might reach for is
+rejected with the decimal spelling it should have been: a leading zero (`007`),
+the radix forms `0xFF`, `0b101`, and `0o17`, a point with no digit on one side
+(`.5`, `5.`), and bare `Infinity` or `NaN`, which are produced by arithmetic
+(`1 / 0`, `0 / 0`) and detected with `value.isNaN()` rather than written.
 
 A bare `return` returns `null`, including at JavaScript and asynchronous
 boundaries. Falling through a function without another result has the same
@@ -290,7 +380,8 @@ flags[index] = not flags[index]
 This is a plain read-modify-write, exactly as in JavaScript and Python:
 receivers and indexes on both sides evaluate per ordinary expression rules.
 There is no dedicated toggle statement, and `invert` is an ordinary
-identifier.
+identifier — a name, a function, a field. The removed `invert x` statement is
+the one shape that is not: it is answered with `x = not x`.
 
 Equality uses `==` and `!=` in source and compiles to SameValueZero
 comparison: strict identity/value equality with one repair — `NaN == NaN` is
@@ -319,10 +410,15 @@ optional.
 The one place assignability does not decide is enum against `string`. An enum
 member converts to `string` as a one-way wire exit (section 6), and equality
 is symmetric, so honoring that direction here would open a read path around
-`Enum.parse`. `raw == Kind.textDelta` is therefore rejected and teaches the
-two honest spellings: `Kind.parse(raw) == Kind.textDelta` to validate first,
-or `raw == str(Kind.textDelta)` to compare strings deliberately. The boundary
-holds through union arms: a `Kind | string` operand still puts a raw string
+`Enum.parse`. `raw == Kind.textDelta` is therefore rejected and teaches both
+honest spellings together with the rule for choosing between them, because they
+differ on the value the author has not thought about yet — an unknown one.
+`Kind.parse(raw) == Kind.textDelta` states that the text must name a member:
+`parse` throws on anything else, which is right for a closed set and wrong for a
+protocol that must ignore tags it does not know. `str(Kind.textDelta) == raw`
+compares strings deliberately and answers `false` for an unknown value, which
+is what a forward-compatible wire handler needs. The boundary holds through
+union arms: a `Kind | string` operand still puts a raw string
 and an enum member into one comparison, so it is rejected with guidance to
 narrow first (`if value is Kind:`) — the enum domain and the string domain
 never meet in `==`. The same intersection requirement (including the
@@ -364,11 +460,22 @@ once:
 
 ```velar fragment
 assert 0 < percentage <= 100
+assert high >= middle > low
 ```
 
 Each later operand is checked only under the facts established by every earlier
 successful link. When the complete chain is true, those facts are available in
 the controlled body.
+
+A chain must point one way. `<` and `<=` chain with each other and `>` and `>=`
+chain with each other; a mixed-direction chain such as `a < b > c` is rejected
+and asks for `and`, because it reads as a range in Python and as a comparison of
+a boolean in JavaScript and there is no reading that is obviously right.
+Equality never chains: `a == b == c` is rejected outright with the same
+guidance, since the two languages disagree on it and the `and` spelling says
+which comparison is meant. `in` and `is` are not chain links either — a
+membership or type test used inside another comparison must be parenthesized,
+`(a < b) in flags`, or split with `and`.
 
 Power uses `**`. Membership uses `in`, with `not in` as its direct negative.
 Runtime type checks use `is`, with `is not` as its direct negative:
@@ -2378,6 +2485,11 @@ The following are not part of VelarScript:
 
 - `var`, `undefined`, `none`, or `None`
 - coercive equality
+- single-quoted or triple-quoted strings; the delimiters are `"` and `` ` ``
+- `${...}` interpolation, hexadecimal, binary, or octal number literals, and
+  `Infinity` or `NaN` as literals
+- equality chains (`a == b == c`) and mixed-direction comparison chains
+- expression statements that only compute a value
 - `switch`
 - `new`
 - `this` in VelarScript class methods

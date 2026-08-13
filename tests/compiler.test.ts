@@ -2023,6 +2023,27 @@ print(invert(false))
   assert.equal(named.status, 0, String(named.stderr));
   assert.equal(named.stdout, "true\n");
   assert.equal(formatSource("print(invert(false))\n"), "print(invert(false))\n");
+
+  // MIG-4: the removed 'invert x' statement is steered to the assignment that
+  // replaced it instead of falling into the generic statement-boundary message,
+  // and the reflex consumes only that line.
+  const removedName = compile("let ready = false\ninvert ready\nlet after = 7\n");
+  assert.equal(removedName.code, null);
+  assert.deepEqual(removedName.diagnostics.map((item) => item.code), ["VEL2033"]);
+  assert.equal(removedName.diagnostics[0]?.message, "Use 'ready = not ready'; the 'invert' statement was removed");
+  assert.ok(removedName.semanticIndex.symbols.some((item) => item.name === "after"));
+
+  const removedMember = compile("type Box:\n    active: bool\nlet box: Box = {active: false}\ninvert box.active\n");
+  assert.deepEqual(
+    removedMember.diagnostics.map((item) => item.message),
+    ["Use 'box.active = not box.active'; the 'invert' statement was removed"],
+  );
+
+  const removedIndex = compile("let flags = [true]\ninvert flags[0]\n");
+  assert.deepEqual(
+    removedIndex.diagnostics.map((item) => item.message),
+    ["Use 'x = not x'; the 'invert' statement was removed"],
+  );
 });
 
 test("numeric literals support familiar exponents and reject non-finite overflow", () => {
@@ -2044,7 +2065,7 @@ print(2.5E-2)
 test("interpolated strings balance nested expressions and keep escapes in text", () => {
   const result = compile(`
 const name = "Ada"
-print(f"{({name: name}).name} {{ready}} {'}'}\\nnext")
+print(f"{({name: name}).name} {{ready}} {"}"}\\nnext")
 print(f"same quote: {"ready"}")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -3260,7 +3281,9 @@ async def inRange() -> bool:
 const ascending = value("a", 1) < value("b", 2) < value("c", 3)
 const stopped = value("d", 3) < value("e", 2) < value("f", 4)
 const lexical = "alpha" < "beta" < "gamma"
-const equality = value("g", 4) == value("h", 4) != value("i", 5)
+// Equality no longer chains (D30 item 20), so this reads as two comparisons
+// joined by 'and' — each operand still evaluates exactly once, in source order.
+const equality = value("g", 4) == 4 and value("h", 4) != value("i", 5)
 print(ascending)
 print(stopped)
 print(lexical)
@@ -3295,16 +3318,20 @@ const objects = Item() < Item()
   assert.equal(invalid.diagnostics.filter((item) => /Ordered comparison requires two numbers or two strings/u.test(item.message)).length, 3);
 });
 
-test("comparison chains carry successful-link facts into later operands and bodies", () => {
+test("equality split with 'and' carries successful-link facts into later operands and bodies", () => {
+  // Equality no longer chains (D30 item 20): 'user != null != user.name' is
+  // rejected, and the null narrowing it used to carry rides 'and' instead —
+  // to the right operand and into the controlled body, with no optional-access
+  // workaround at either place.
   const result = compileCore(`
 type User:
     name: string
 
 def hasName(user: User?) -> bool:
-    return user != null != user.name
+    return user != null and user.name != ""
 
 def label(user: User?) -> string:
-    if user != null != user.name:
+    if user != null and user.name != "":
         return user.name
     return "missing"
 
@@ -3318,6 +3345,12 @@ print(label({name: "Ada"}))
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "false\ntrue\nmissing\nAda\n");
+
+  const chained = compileCore("type User:\n    name: string\ndef broken(user: User?) -> bool:\n    return user != null != user.name\n");
+  assert.deepEqual(
+    chained.diagnostics.map((item) => item.message),
+    ["Equality comparisons do not chain; split the comparisons with 'and'"],
+  );
 });
 
 test("match selects strict literal branches without fallthrough", () => {
@@ -4765,17 +4798,20 @@ test("rejects legacy and discarded design surface with intentional diagnostics",
 });
 
 test("keeps JavaScript-only operations and private identifiers out of the Velar AST", () => {
+  // 'delete x.y' and 'typeof x' recover into an expression whose result is
+  // discarded, so each also reports the pure-expression rejection (VEL4030) —
+  // the recovered spelling stays first and stays exact.
   const cases = new Map([
-    ["let row = {value: 1}\ndelete row.value\n", /does not expose JavaScript 'delete'/u],
-    ["let value = 1\ntypeof value\n", /does not expose JavaScript 'typeof'/u],
-    ["class Box:\n    pass\nlet value = Box()\nprint(value instanceof Box)\n", /does not expose JavaScript 'instanceof'/u],
-    ["class Box:\n    private let value: number = 1\n    def read() -> number:\n        return self.#value\n", /does not expose JavaScript private identifiers/u],
-    ["class Box:\n    private let #value: number = 1\n", /does not expose JavaScript private identifiers/u],
+    ["let row = {value: 1}\ndelete row.value\n", [/does not expose JavaScript 'delete'/u, ["VEL2031", "VEL4030"]] as const],
+    ["let value = 1\ntypeof value\n", [/does not expose JavaScript 'typeof'/u, ["VEL2031", "VEL4030"]] as const],
+    ["class Box:\n    pass\nlet value = Box()\nprint(value instanceof Box)\n", [/does not expose JavaScript 'instanceof'/u, ["VEL2031"]] as const],
+    ["class Box:\n    private let value: number = 1\n    def read() -> number:\n        return self.#value\n", [/does not expose JavaScript private identifiers/u, ["VEL1005"]] as const],
+    ["class Box:\n    private let #value: number = 1\n", [/does not expose JavaScript private identifiers/u, ["VEL1005"]] as const],
   ]);
-  for (const [source, message] of cases) {
+  for (const [source, [message, codes]] of cases) {
     const result = compileCore(source);
     assert.equal(result.code, null, source);
-    assert.equal(result.diagnostics.length, 1, `${source}: ${JSON.stringify(result.diagnostics)}`);
+    assert.deepEqual(result.diagnostics.map((item) => item.code), codes, `${source}: ${JSON.stringify(result.diagnostics)}`);
     assert.match(result.diagnostics[0]!.message, message);
   }
 
@@ -4956,7 +4992,9 @@ test("guides bare hex colors to quoted strings without numeric-unit cascades", (
     "Use '\"#3478f6\"'; VelarScript writes hex colors as quoted strings or color builders such as rgb(...)",
   );
 
-  const look = compile("component App:\n    look:\n        background = #f0f0f0\n    return <div>ok</div>\n");
+  // A Look block is an expression, so it is bound to a name; a bare 'look:'
+  // statement discards its own value and reports that instead (VEL4030).
+  const look = compile("const panel = look:\n    background = #f0f0f0\n");
   assert.equal(look.code, null);
   assert.deepEqual(look.diagnostics.map((item) => item.code), ["VEL1005"]);
   assert.match(look.diagnostics[0]?.message ?? "", /Use '"#f0f0f0"'/u);
@@ -19602,9 +19640,19 @@ test("quoted strings unify multiline, interpolation, and raw path semantics", ()
   assert.equal(formatSource(blankLayout), blankLayout);
   assert.equal(executeModule(compileCore(blankLayout).code ?? "").stdout, "first\n\nsecond\n");
 
-  const legacyDelimiter = String.fromCharCode(96);
-  const legacy = compileCore(`const text = ${legacyDelimiter}legacy\ntext${legacyDelimiter}\n`);
-  assert.ok(legacy.diagnostics.some((item) => item.code === "VEL1005" && /layout string/u.test(item.message)));
+  // D46: backticks are a real delimiter, not a guided-away spelling. A backtick
+  // string is the same value a double-quoted literal makes; only the escaping
+  // differs, which is the JSON-in-string case it exists for.
+  const backtick = String.fromCharCode(96);
+  const backticked = compileCore([
+    `const payload = ${backtick}{"name":"Nova","role":"admin"}${backtick}`,
+    'const escaped = "{\\"name\\":\\"Nova\\",\\"role\\":\\"admin\\"}"',
+    "print(payload)",
+    "print(payload == escaped)",
+    "",
+  ].join("\n"));
+  assert.deepEqual(backticked.diagnostics, []);
+  assert.equal(executeModule(backticked.code ?? "").stdout, '{"name":"Nova","role":"admin"}\ntrue\n');
   const triple = compileCore('const text = """legacy\ntext"""\n');
   assert.ok(triple.diagnostics.some((item) => item.code === "VEL1005" && /layout string/u.test(item.message)));
   const noncanonical = compileCore('const path = fr"{1}\\tmp"\n');
@@ -19729,13 +19777,20 @@ const missing = "Lin" not in names
 test("formatter does not confuse capitalized values with generic types", () => {
   const source = `const lower = Player < score
 const bounded = Player < score and score > Limit
-const chained = value < Other > limit
 const values: List<Player> = []
 `;
   const formatted = formatSource(source);
   assert.equal(formatted, source);
   assert.deepEqual(inspectModule(formatted).diagnostics, []);
   assert.equal(formatSource(formatted), formatted);
+
+  // A mixed-direction chain is no longer a compilable comparison (D30 item 20),
+  // but the formatter still has to read '<' and '>' as operators rather than a
+  // generic argument list, so the text round-trips unchanged and the rejection
+  // is the chain rule rather than a parse cascade.
+  const mixed = "const chained = value < Other > limit\n";
+  assert.equal(formatSource(mixed), mixed);
+  assert.deepEqual(inspectModule(mixed).diagnostics.map((item) => item.code), ["VEL2031"]);
 });
 
 test("formatter keeps structural match patterns compact and unambiguous", () => {
@@ -27888,10 +27943,13 @@ print(measure(null))
   const optionalExecution = executeModule(optionalContinuation.code ?? "");
   assert.equal(optionalExecution.stdout, "0\n");
 
-  // '.5' is not a member chain, so the line does not join and still reports
-  // its own expression error rather than silently becoming 'a.5'.
+  // '.5' is not a member chain, so the line does not join and still reports its
+  // own literal error rather than silently becoming 'a.5'. The literal now has
+  // a directed spelling (D30 item 18), and the recovered '0.5' stands alone on
+  // its line, so the discarded-expression rejection follows it.
   const numeric = compile("let a = 1\n.5\n");
-  assert.ok(numeric.diagnostics.some((item) => item.code === "VEL2002"), JSON.stringify(numeric.diagnostics));
+  assert.deepEqual(numeric.diagnostics.map((item) => item.code), ["VEL1007", "VEL4030"], JSON.stringify(numeric.diagnostics));
+  assert.equal(numeric.diagnostics[0]?.message, "Write '0.5'; decimal literals require a digit before the point");
 
   // Trailing-dot continuation stays unsupported.
   const trailing = compile("def broken(items: List<string>) -> List<string>:\n    return items.\n        filter(value => value != \"\")\n");

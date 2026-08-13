@@ -2506,10 +2506,13 @@ export class Analyzer implements TypeEnvironment {
       case "AssignmentStatement":
         this.analyzeAssignment(statement);
         break;
-      case "ExpressionStatement":
-        this.checkFloatingPromiseStatement(this.inferExpression(statement.expression), statement.expression);
+      case "ExpressionStatement": {
+        const type = this.inferExpression(statement.expression);
+        this.checkFloatingPromiseStatement(type, statement.expression);
+        this.checkDiscardedExpressionResult(statement.expression, type);
         this.checkDiscardedPureResult(statement.expression);
         break;
+      }
       case "AsyncStatement":
         this.analyzeAsyncStatement(statement);
         break;
@@ -2530,6 +2533,39 @@ export class Analyzer implements TypeEnvironment {
         : `This expression is ${describeType(type)}; 'await' it to wait for it, or prefix it with 'async' to run it detached`,
       expression.span,
     ));
+  }
+
+  // D30 item 17: the only general expression statements are shapes whose top
+  // level may perform an effect. A call remains legal (D29 separately rejects
+  // compiler-proven pure methods), and `await` owns asynchronous completion.
+  // Every other result is a likely `=`/`==` typo, a Python docstring reflex,
+  // or a value accidentally left on its own line.
+  private checkDiscardedExpressionResult(expression: Expression, type: ValueType): void {
+    if (isInvalidType(type) || this.carriesPromise(this.expandAliases(type))
+      || expression.kind === "CallExpression" || expression.kind === "AssignmentExpression") return;
+    if (expression.kind === "UnaryExpression" && expression.operator === "await") return;
+    let message: string;
+    if (expression.kind === "LiteralExpression" && typeof expression.value === "string") {
+      message = "A bare string is not a docstring; use '//' for a comment, or use the string value";
+    } else if (expression.kind === "ComparisonChainExpression"
+      || expression.kind === "IsExpression"
+      || (expression.kind === "BinaryExpression"
+        && (expression.operator === "==" || expression.operator === "!=" || expression.operator === "<"
+          || expression.operator === "<=" || expression.operator === ">" || expression.operator === ">="
+          || expression.operator === "in" || expression.operator === "not in"))) {
+      message = "This comparison result is discarded; use '=' to assign, or use the result";
+    } else if (expression.kind === "UnaryExpression"
+      && (expression.operator === "+" || expression.operator === "-")
+      && expression.operand.kind === "UnaryExpression"
+      && expression.operand.operator === expression.operator
+      && expression.operand.operand.kind === "IdentifierExpression") {
+      message = expression.operator === "+"
+        ? `VelarScript has no '++' operator; write '${expression.operand.operand.name} += 1'`
+        : `VelarScript has no '--' operator; write '${expression.operand.operand.name} -= 1'`;
+    } else {
+      message = "This expression result is discarded; call a function, assign the value, or use the result";
+    }
+    this.diagnostics.push(diagnostic("VEL4030", message, expression.span));
   }
 
   private carriesPromise(type: ValueType): boolean {
@@ -4345,10 +4381,16 @@ export class Analyzer implements TypeEnvironment {
     // The rejection itself needs an exact enum-versus-string pair, but the
     // guidance is worth giving whenever one side can hold a bare string and
     // the other an enum member — that is the mistake, wrapped or not.
+    // MIG-1: both spellings are honest, but they behave differently on an
+    // unknown value — parse throws, str compares — so the message states the
+    // choosing rule instead of ranking one first. Recommending parse alone
+    // broke a forward-compatible protocol handler in the referee migration:
+    // it compiled clean and then threw on the first unknown wire tag.
     if (enumSide !== null && this.hasValueLevelString(leftEnum === null ? left : right)) {
       const member = enumSide.kind === "enumMember" ? `${enumSide.name}.${enumSide.member}` : `${enumSide.name}.member`;
-      return `; an enum member converts to string only as a one-way wire exit, so validate first with ${enumSide.name}.parse(text) == ${member},`
-        + ` or write str(${member}) == text to compare strings deliberately`;
+      return `; an enum member converts to string only as a one-way wire exit, so choose by what an unknown value means here:`
+        + ` write ${enumSide.name}.parse(text) == ${member} when the text must name a member — ${enumSide.name}.parse throws on anything else —`
+        + ` or str(${member}) == text when unknown values are expected and must be ignored, as on an open wire protocol`;
     }
     if (left.kind === "null" || right.kind === "null") {
       const value = left.kind === "null" ? right : left;

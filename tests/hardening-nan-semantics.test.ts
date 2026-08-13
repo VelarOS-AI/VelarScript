@@ -115,20 +115,17 @@ print(same("a", "a"))
   assert.match(unchecked.code ?? "", /return __velarSameValueZero\(/u);
 });
 
-test("[D36 41] comparison chains inline the SameValueZero repair per numeric link", () => {
+test("[D36 41/D30 20] split equality comparisons inline the SameValueZero repair per numeric link", () => {
   const result = compile(`
 const a = 0 / 0
 const b = 0 / 0
 const c = 0 / 0
-print(a == b == c)
+print(a == b and b == c)
 const s = "x"
-print("x" == s == "x")
+print("x" == s and s == "x")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(
-    result.code ?? "",
-    /\$velarCompare\d+_0 === \$velarCompare\d+_1 \|\| \(\$velarCompare\d+_0 !== \$velarCompare\d+_0 && \$velarCompare\d+_1 !== \$velarCompare\d+_1\)/u,
-  );
+  assert.match(result.code ?? "", /console\.log\(\(__velarSameValueZero\(a, b\) && __velarSameValueZero\(b, c\)\)\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "true\ntrue\n");

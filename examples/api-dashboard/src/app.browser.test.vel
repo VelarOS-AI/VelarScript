@@ -6,9 +6,9 @@ async def test_dashboard_loads_typed_data_and_real_svg() -> null:
     await browser.waitForText("[data-dashboard]", "Visitors")
     expect(await browser.count("[data-metric]")).toBe(3)
     expect(await browser.namespace("[data-trend-chart]")).toBe("http://www.w3.org/2000/svg")
-    expect(await browser.namespace('[data-chart-bar="mon"] rect')).toBe("http://www.w3.org/2000/svg")
+    expect(await browser.namespace(`[data-chart-bar="mon"] rect`)).toBe("http://www.w3.org/2000/svg")
     expect(await browser.namespace("[data-chart-summary]")).toBe("http://www.w3.org/1999/xhtml")
-    expect(await browser.visible('[data-chart-bar="mon"] rect')).toBe(true)
+    expect(await browser.visible(`[data-chart-bar="mon"] rect`)).toBe(true)
     expect(await browser.attribute("[data-trend-chart]", "aria-labelledby")).toBe("traffic-chart-title traffic-chart-description")
 
 async def test_dashboard_resource_reloads_without_replacing_the_chart_contract() -> null:

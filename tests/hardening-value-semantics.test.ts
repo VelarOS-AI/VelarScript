@@ -171,14 +171,43 @@ test("[D42 65] enum versus string is the one documented exception and its diagno
   // exit. Equality is symmetric, so honoring it here would open a read path
   // around Kind.parse.
   accepts("enum Kind:\n    textDelta\nconst wire: string = str(Kind.textDelta)\nprint(wire)\n");
-  const guidance = /an enum member converts to string only as a one-way wire exit, so validate first with Kind\.parse\(text\) == Kind\.textDelta, or write str\(Kind\.textDelta\) == text to compare strings deliberately/u;
+  // MIG-1: both spellings appear with the rule for choosing between them,
+  // including the fact that decides it — parse throws on an unknown value, so
+  // a forward-compatible protocol handler must use the str form.
+  const guidance = /an enum member converts to string only as a one-way wire exit, so choose by what an unknown value means here: write Kind\.parse\(text\) == Kind\.textDelta when the text must name a member — Kind\.parse throws on anything else — or str\(Kind\.textDelta\) == text when unknown values are expected and must be ignored, as on an open wire protocol/u;
   rejects("enum Kind:\n    textDelta\nconst raw: string = \"text-delta\"\nprint(str(raw == Kind.textDelta))\n", guidance);
   rejects("enum Kind:\n    textDelta\nconst raw: string = \"text-delta\"\nprint(str(Kind.textDelta == raw))\n", guidance);
   rejects("enum Kind:\n    textDelta\nconst raw: string = \"text-delta\"\nconst k: Kind = Kind.textDelta\nprint(str(raw != k))\n", /Kind\.parse\(text\) == Kind\.member/u);
+  rejects("enum Kind:\n    textDelta\nconst raw: string = \"text-delta\"\nconst k: Kind = Kind.textDelta\nprint(str(raw != k))\n", /Kind\.parse throws on anything else/u);
 
   // Both taught spellings compile.
   accepts("enum Kind:\n    textDelta\nconst raw: string = \"textDelta\"\nprint(str(Kind.parse(raw) == Kind.textDelta))\n");
   accepts("enum Kind:\n    textDelta\nconst raw: string = \"textDelta\"\nprint(str(raw == str(Kind.textDelta)))\n");
+});
+
+test("[MIG-1] the enum-wire guidance states the fact that decides between its two forms", () => {
+  // The referee migration followed 'parse first' into a runtime break: an
+  // unknown future wire tag threw where the handler had to ignore it. Both
+  // taught forms compile, so the difference is only visible at execution —
+  // that is exactly why the message now carries it.
+  const source = `enum Kind:
+    textDelta = "response.output_text.delta"
+
+def parsed(raw: string) -> string:
+    try:
+        return str(Kind.parse(raw) == Kind.textDelta)
+    catch error:
+        return "threw"
+
+def compared(raw: string) -> string:
+    return str(str(Kind.textDelta) == raw)
+
+print(parsed("response.output_text.delta"))
+print(parsed("response.future.event"))
+print(compared("response.output_text.delta"))
+print(compared("response.future.event"))
+`;
+  assert.equal(run(source), "true\nthrew\ntrue\nfalse\n");
 });
 
 test("[D42 64] runtime lowering is unchanged: SameValueZero survives the static tightening", () => {

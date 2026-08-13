@@ -43,7 +43,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
-import { findInterpolatedExpressionEnd, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
 import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
@@ -288,6 +288,25 @@ export class Parser {
 
     if (this.check("const") || this.check("let")) {
       return this.parseVariable(start, exported);
+    }
+
+    // MIG-4: 'invert x' was the removed toggle statement, and its leftover
+    // operand otherwise falls into the generic statement-boundary message,
+    // which never names the assignment that replaced it. 'invert' stayed an
+    // ordinary identifier, so only the removed statement's own shape — the
+    // bare word followed by a value name — is claimed here; 'invert(...)',
+    // 'invert.field', and 'invert = ...' keep their ordinary meanings.
+    if (this.check("identifier") && this.current().value === "invert" && this.peekKind(1) === "identifier") {
+      const keyword = this.current();
+      const target = this.describeInvertTarget(this.index + 1);
+      this.synchronize();
+      const removed = span(keyword.span.start, this.previous().span.end);
+      this.diagnostics.push(diagnostic(
+        "VEL2033",
+        `Use '${target} = not ${target}'; the 'invert' statement was removed`,
+        removed,
+      ));
+      return { kind: "PassStatement", span: removed };
     }
 
     if (this.check("identifier") && this.peekKind(1) === "identifier") {
@@ -1900,6 +1919,15 @@ export class Parser {
       const operator = this.advance();
       if (compoundNotIn) this.advance();
       const comparisonOperator = comparisonOperators[operator.kind];
+      const membershipOrTypeTest = compoundNotIn || operator.kind === "in" || operator.kind === "is" || javaScriptInstanceof;
+      if (this.isUnparenthesizedComparisonLayer(left)
+        && (membershipOrTypeTest || this.isMembershipOrTypeTest(left))) {
+        this.diagnostics.push(diagnostic(
+          "VEL2031",
+          "Parenthesize an 'in' or 'is' test used inside another comparison, or split the tests with 'and'",
+          operator.span,
+        ));
+      }
       if (comparisonOperator) {
         const operands: Expression[] = [left];
         const operators: ComparisonChainExpression["operators"][number][] = [];
@@ -1909,6 +1937,25 @@ export class Parser {
           operands.push(this.parseExpression(precedence + 1));
           nextOperator = comparisonOperators[this.current().kind];
           if (nextOperator) this.advance();
+        }
+        if (operators.length > 1) {
+          if (operators.some((item) => item === "==" || item === "!=")) {
+            this.diagnostics.push(diagnostic(
+              "VEL2031",
+              "Equality comparisons do not chain; split the comparisons with 'and'",
+              span(operands[0]!.span.start, operands.at(-1)!.span.end),
+            ));
+          } else {
+            const ascending = operators.every((item) => item === "<" || item === "<=");
+            const descending = operators.every((item) => item === ">" || item === ">=");
+            if (!ascending && !descending) {
+              this.diagnostics.push(diagnostic(
+                "VEL2031",
+                "Comparison chains must point one way; split the comparisons with 'and'",
+                span(operands[0]!.span.start, operands.at(-1)!.span.end),
+              ));
+            }
+          }
         }
         left = operators.length === 1
           ? {
@@ -1982,15 +2029,27 @@ export class Parser {
         continue;
       }
 
+      let binaryLeft = left;
+      let prefixNotIn = false;
+      if (operator.kind === "in" && !compoundNotIn
+        && left.kind === "UnaryExpression" && left.operator === "not") {
+        prefixNotIn = true;
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL2031",
+          "Use 'x not in y'; 'not x in y' puts 'not' on the wrong operand",
+          span(left.span.start, operator.span.end),
+        ));
+        binaryLeft = left.operand;
+      }
       const right = this.parseExpression(precedence + 1);
-      const spelledOperator = compoundNotIn ? "not in" : this.binaryOperator(operator);
-      this.checkNullishBooleanMixing(spelledOperator, left, right, operator.span);
+      const spelledOperator = compoundNotIn || prefixNotIn ? "not in" : this.binaryOperator(operator);
+      this.checkNullishBooleanMixing(spelledOperator, binaryLeft, right, operator.span);
       left = {
         kind: "BinaryExpression",
-        left,
+        left: binaryLeft,
         operator: spelledOperator,
         right,
-        span: span(left.span.start, right.span.end),
+        span: span(binaryLeft.span.start, right.span.end),
       } satisfies BinaryExpression;
     }
 
@@ -2459,7 +2518,9 @@ export class Parser {
         // Explicit parentheses are the author's grouping decision. Binary
         // nodes carry that fact so the '??' / 'and' / 'or' mixing rule can
         // tell a deliberate grouping from a bare chain.
-        return expression.kind === "BinaryExpression" ? { ...expression, parenthesized: true } : expression;
+        return expression.kind === "BinaryExpression" || expression.kind === "ComparisonChainExpression" || expression.kind === "IsExpression"
+          ? { ...expression, parenthesized: true }
+          : expression;
       }
       case "leftBracket": {
         const elements: Expression[] = [];
@@ -2602,7 +2663,12 @@ export class Parser {
 
     while (index < token.value.length) {
       if (!raw && token.value[index] === "\\") {
-        index += Math.min(2, token.value.length - index);
+        index = scanStringEscape(token.value, index).end;
+        continue;
+      }
+      if (token.value[index] === "$" && token.value[index + 1] === "{") {
+        const close = token.value.indexOf("}", index + 2);
+        index = close < 0 ? index + 2 : close + 1;
         continue;
       }
       if (token.value[index] === "{" && token.value[index + 1] === "{") {
@@ -2720,8 +2786,9 @@ export class Parser {
         decoded += quote;
         index += 1;
       } else if (!raw && character === "\\" && next !== undefined) {
-        decoded += next === "n" ? "\n" : next === "r" ? "\r" : next === "t" ? "\t" : next;
-        index += 1;
+        const escaped = scanStringEscape(value, index);
+        decoded += escaped.value ?? next;
+        index = escaped.end - 1;
       } else if ((character === "{" && next === "{") || (character === "}" && next === "}")) {
         decoded += character;
         index += 1;
@@ -2751,9 +2818,9 @@ export class Parser {
     bracketFragment = false,
     sourceOffsets?: readonly number[],
   ): Expression {
-    let lexed = bracketFragment ? new Lexer(fragment, this.lexicalExtensions, { bracketFragment: true }).lex() : null;
+    let lexed = bracketFragment ? new Lexer(fragment, this.lexicalExtensions, { bracketFragment: true, scanSourceHygiene: false }).lex() : null;
     if (!lexed || containsExtensionBlockStart(lexed.tokens)) {
-      lexed = new Lexer(fragment, this.lexicalExtensions).lex();
+      lexed = new Lexer(fragment, this.lexicalExtensions, { scanSourceHygiene: false }).lex();
     }
     const mappedSpan = (local: Span): Span => sourceOffsets
       ? span(sourceOffsets[local.start] ?? offset, sourceOffsets[local.end] ?? sourceOffsets.at(-1) ?? offset)
@@ -2802,6 +2869,19 @@ export class Parser {
       percent: "%",
     };
     return operators[token.kind] ?? "+";
+  }
+
+  private isUnparenthesizedComparisonLayer(expression: Expression): boolean {
+    if (expression.kind === "ComparisonChainExpression" || expression.kind === "IsExpression") return !expression.parenthesized;
+    return expression.kind === "BinaryExpression" && !expression.parenthesized
+      && (expression.operator === "in" || expression.operator === "not in" || expression.operator === "=="
+        || expression.operator === "!=" || expression.operator === "<" || expression.operator === "<="
+        || expression.operator === ">" || expression.operator === ">=");
+  }
+
+  private isMembershipOrTypeTest(expression: Expression): boolean {
+    return expression.kind === "IsExpression"
+      || (expression.kind === "BinaryExpression" && (expression.operator === "in" || expression.operator === "not in"));
   }
 
   // '??' never shares a bare binary chain with 'and'/'or': the two groupings
@@ -2881,6 +2961,23 @@ export class Parser {
       return "A statement ends at its newline; parenthesize an expression to continue it across lines";
     }
     return `A statement ends at its newline; move '${describeStatementToken(token)}' to its own line, or join it to the value before it with an operator`;
+  }
+
+  // The removed 'invert' statement's replacement names the value the author
+  // wrote, so a plain name or member path is rendered from its own tokens
+  // (identifier and dot tokens carry their exact source text). Any other
+  // operand shape keeps a copyable generic spelling rather than a guess.
+  private describeInvertTarget(start: number): string {
+    if (this.tokens[start]?.kind !== "identifier") return "x";
+    let text = this.tokens[start]!.value;
+    let index = start + 1;
+    while (this.tokens[index]?.kind === "dot" && this.tokens[index + 1]?.kind === "identifier") {
+      text += `.${this.tokens[index + 1]!.value}`;
+      index += 2;
+    }
+    const end = this.tokens[index]?.kind;
+    if (end !== "newline" && end !== "dedent" && end !== "eof") return "x";
+    return text;
   }
 
   private synchronize(): void {

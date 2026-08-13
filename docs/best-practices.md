@@ -177,6 +177,12 @@ const count = 3
 const summary = f"{count} open tickets"
 ```
 
+Use double quotes for ordinary inline text and backticks when the text itself
+contains double quotes, especially JSON fixtures; `velar format` chooses the
+delimiter with fewer escapes. Backticks are still Velar strings, not JavaScript
+templates: only an `f` prefix plus `{value}` interpolates, while `${value}` is
+literal text.
+
 Data becomes text through `stringify` from `velar/json`, never through
 interpolation of a record. Multi-line text is a layout string, not a stack
 of `\n` escapes.

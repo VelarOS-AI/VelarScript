@@ -377,11 +377,18 @@ removing structural indentation, so nested interpolation diagnostics and source
 maps still address the original source.
 
 The `f`, `r`, and canonical `rf` prefixes independently select interpolation
-and raw backslashes. Formatter preprocessing protects complete layout spans
-before surrounding line normalization and restores their physical line endings
-and value-bearing indentation. Legacy backtick/triple-quote forms and
-noncanonical `fr` recover only to emit one-current-spelling guidance;
-diagnostics still prevent output.
+and raw backslashes, and they are orthogonal to the delimiter: double quotes and
+backticks reach the same scanner, with the delimiter deciding only which quote
+character needs escaping. Layout mode belongs to double quotes alone. One shared
+escape owner serves plain and interpolated strings, including `\u{...}` code
+points and their surrogate and range rejections. The outermost lexer makes a
+single whole-text source-hygiene pass for bidirectional controls, and nested
+lexers disable it so one source position reports once. Formatter preprocessing
+protects complete layout spans before surrounding line normalization and
+restores their physical line endings and value-bearing indentation; inline
+strings are then re-emitted in the canonical delimiter for their text. Single
+quotes, triple-quote forms, and noncanonical `fr` recover only to emit
+one-current-spelling guidance; diagnostics still prevent output.
 
 `List`, `Set`, and `Map` constructors remain compiler-owned. `Set()`
 construction accepts zero arguments or one checked List/Set. `Map()` accepts a

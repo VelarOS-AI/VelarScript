@@ -1,11 +1,12 @@
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
-import { findInterpolatedExpressionEnd, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
 import { forbiddenSourceIdentifiers, isForbiddenPrototypeMember, isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 const MAX_TOKENS = 250000;
 const MAX_NESTING = 512;
+const bidirectionalControls = new Set([0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]);
 
 // A logical line may continue onto the next physical line when that line's
 // first token is '.' or '?.' member access (a leading-dot method chain). The
@@ -30,6 +31,7 @@ export class Lexer {
   private readonly numericSuffixes = new Set<string>();
   private readonly tokens: Token[] = [];
   private readonly diagnostics: Diagnostic[] = [];
+  private readonly diagnosedBidirectionalOffsets = new Set<number>();
   private readonly indentStack = [0];
   private index = 0;
   private atLineStart = true;
@@ -39,14 +41,16 @@ export class Lexer {
   // and physical-line indentation never opens or closes blocks, exactly as
   // between ordinary parentheses.
   private readonly bracketFragment: boolean;
+  private readonly scanSourceHygiene: boolean;
 
   constructor(
     text: string,
     extensions: readonly CompilerLexicalExtension[] = [],
-    options: { readonly bracketFragment?: boolean } = {},
+    options: { readonly bracketFragment?: boolean; readonly scanSourceHygiene?: boolean } = {},
   ) {
     this.text = text;
     this.bracketFragment = options.bracketFragment ?? false;
+    this.scanSourceHygiene = options.scanSourceHygiene ?? true;
     for (const extension of extensions) {
       for (const [keyword, value] of Object.entries(extension.keywords ?? {})) {
         const existing = this.extensionKeywords.get(keyword);
@@ -62,6 +66,7 @@ export class Lexer {
   }
 
   lex(): LexResult {
+    if (this.scanSourceHygiene) this.diagnoseForbiddenSourceCharacters();
     while (!this.isAtEnd()) {
       if (this.tokens.length >= MAX_TOKENS) {
         this.diagnostics.push(diagnostic("VEL1005", `A VelarScript module cannot exceed ${MAX_TOKENS} tokens`, span(this.index, this.index)));
@@ -99,6 +104,11 @@ export class Lexer {
         continue;
       }
 
+      if (character === "/" && this.peek(1) === "*") {
+        this.readBlockComment();
+        continue;
+      }
+
       if (this.readExtensionToken()) continue;
 
       // A raw inline string may legally start with a doubled delimiter:
@@ -122,11 +132,6 @@ export class Lexer {
         continue;
       }
 
-      if (character === "f" && this.peek(1) === "`") {
-        this.readLegacyBacktick(true);
-        continue;
-      }
-
       if (this.isIdentifierStart(character)) {
         this.readIdentifier();
         continue;
@@ -134,11 +139,6 @@ export class Lexer {
 
       if (this.isDigit(character)) {
         this.readNumber();
-        continue;
-      }
-
-      if (character === "`") {
-        this.readLegacyBacktick(false);
         continue;
       }
 
@@ -185,7 +185,9 @@ export class Lexer {
           this.simple("comma", start, 1);
           break;
         case ".":
-          if (this.peek(1) === "." && this.peek(2) === ".") {
+          if (this.isDigit(this.peek(1))) {
+            this.readLeadingDotNumber();
+          } else if (this.peek(1) === "." && this.peek(2) === ".") {
             this.simple("ellipsis", start, 3);
           } else {
             this.simple("dot", start, 1);
@@ -311,7 +313,7 @@ export class Lexer {
     }
 
     const blank = this.peek() === "\n" || this.peek() === "\r" || this.isAtEnd();
-    const comment = this.peek() === "/" && this.peek(1) === "/";
+    const comment = (this.peek() === "/" && this.peek(1) === "/") || this.blockCommentOwnsLine();
     this.atLineStart = false;
 
     if (blank || comment) {
@@ -380,6 +382,66 @@ export class Lexer {
     }
   }
 
+  private readBlockComment(): void {
+    const start = this.index;
+    const openingLineStart = this.lineStart(start);
+    const openingStandalone = this.text.slice(openingLineStart, start).trim().length === 0;
+    this.index += 2;
+    let depth = 1;
+    let firstNewline = -1;
+    while (!this.isAtEnd() && depth > 0) {
+      if (this.text.startsWith("/*", this.index)) {
+        depth += 1;
+        this.index += 2;
+      } else if (this.text.startsWith("*/", this.index)) {
+        depth -= 1;
+        this.index += 2;
+      } else {
+        if (firstNewline < 0 && (this.peek() === "\n" || this.peek() === "\r")) firstNewline = this.index;
+        this.advance();
+      }
+    }
+    if (depth > 0) {
+      this.diagnostics.push(diagnostic("VEL1003", "Unterminated block comment; close it with '*/'", span(start, this.index)));
+      return;
+    }
+    if (firstNewline < 0) return;
+
+    const closeStart = this.index - 2;
+    const closingLineStart = this.lineStart(closeStart);
+    const closingPrefixEmpty = this.text.slice(closingLineStart, closeStart).trim().length === 0;
+    let closingLineEnd = this.index;
+    while (closingLineEnd < this.text.length && this.text[closingLineEnd] !== "\n" && this.text[closingLineEnd] !== "\r") closingLineEnd += 1;
+    const closingSuffixEmpty = this.text.slice(this.index, closingLineEnd).trim().length === 0;
+    const openingSuffixEmpty = this.text.slice(start + 2, firstNewline).trim().length === 0;
+    if (!openingStandalone || !openingSuffixEmpty || !closingPrefixEmpty || !closingSuffixEmpty) {
+      this.diagnostics.push(diagnostic(
+        "VEL1010",
+        "A multiline block comment must occupy whole lines: write only '/*' on its opening line and only '*/' on its closing line",
+        span(start, this.index),
+      ));
+    }
+  }
+
+  private blockCommentOwnsLine(): boolean {
+    if (this.peek() !== "/" || this.peek(1) !== "*") return false;
+    let cursor = this.index + 2;
+    let depth = 1;
+    while (cursor < this.text.length && this.text[cursor] !== "\n" && this.text[cursor] !== "\r") {
+      if (this.text.startsWith("/*", cursor)) {
+        depth += 1;
+        cursor += 2;
+      } else if (this.text.startsWith("*/", cursor)) {
+        depth -= 1;
+        cursor += 2;
+        if (depth === 0) return this.text.slice(cursor, this.lineEnd(cursor)).trim().length === 0;
+      } else {
+        cursor += 1;
+      }
+    }
+    return true;
+  }
+
   private readIdentifier(): void {
     const start = this.index;
     while (this.isIdentifierPart(this.peek())) {
@@ -389,6 +451,17 @@ export class Lexer {
     const rule = forbiddenSourceIdentifiers.get(value);
     const extensionGuidance = rule ? undefined : this.extensionForbiddenIdentifiers.get(value);
     const previous = this.tokens.at(-1)?.kind;
+    if ((value === "Infinity" || value === "NaN") && previous !== "dot" && previous !== "optionalDot") {
+      this.diagnostics.push(diagnostic(
+        "VEL1007",
+        value === "Infinity"
+          ? "Infinity is not a literal in VelarScript; produce it with arithmetic such as 1 / 0"
+          : "NaN is not a literal in VelarScript; produce it with arithmetic such as 0 / 0 and detect it with value.isNaN()",
+        span(start, this.index),
+      ));
+      this.tokens.push({ kind: "number", value: "0", span: span(start, this.index) });
+      return;
+    }
     if (rule) {
       if (rule.recovery) {
         this.diagnostics.push(recoveredDiagnostic("VEL1005", rule.guidance, span(start, this.index)));
@@ -410,43 +483,110 @@ export class Lexer {
 
   private readNumber(): void {
     const start = this.index;
-    while (this.isDigit(this.peek())) {
-      this.advance();
+    const integer = this.readDigitsWithSeparators();
+    if (integer.length > 1 && integer.startsWith("0")) {
+      this.diagnostics.push(diagnostic(
+        "VEL1007",
+        "Remove the leading zeros; octal literals are not part of VelarScript",
+        span(start, this.index),
+      ));
     }
-    if (this.peek() === "." && this.isDigit(this.peek(1))) {
+    let value = integer;
+    if (this.peek() === "." && (this.isDigit(this.peek(1)) || this.peek(1) === "_")) {
       this.advance();
-      while (this.isDigit(this.peek())) {
-        this.advance();
-      }
+      value += `.${this.readDigitsWithSeparators()}`;
+    } else if (this.peek() === "." && !this.isIdentifierStart(this.peek(1)) && this.peek(1) !== ".") {
+      const point = this.index;
+      this.advance();
+      value += ".0";
+      this.diagnostics.push(recoveredDiagnostic(
+        "VEL1007",
+        `Write '${integer}.0'; decimal literals require a digit after the point`,
+        span(point, this.index),
+      ));
     }
     if ((this.peek() === "e" || this.peek() === "E")
-      && (this.isDigit(this.peek(1)) || ((this.peek(1) === "+" || this.peek(1) === "-") && this.isDigit(this.peek(2))))) {
-      this.advance();
-      if (this.peek() === "+" || this.peek() === "-") this.advance();
-      while (this.isDigit(this.peek())) this.advance();
+      && (this.isDigit(this.peek(1)) || this.peek(1) === "_"
+        || ((this.peek(1) === "+" || this.peek(1) === "-") && (this.isDigit(this.peek(2)) || this.peek(2) === "_")))) {
+      const exponent = this.advance();
+      value += exponent;
+      if (this.peek() === "+" || this.peek() === "-") value += this.advance();
+      value += this.readDigitsWithSeparators();
     }
     const numberEnd = this.index;
     if (this.peek() === "%" && this.numericSuffixes.has("%")) this.advance();
     else while (this.isIdentifierPart(this.peek())) this.advance();
     const suffix = this.text.slice(numberEnd, this.index);
     if (suffix && this.numericSuffixes.has(suffix)) {
-      this.tokens.push({ kind: "unitNumber", value: this.text.slice(start, this.index), span: span(start, this.index) });
+      this.tokens.push({ kind: "unitNumber", value: `${value}${suffix}`, span: span(start, this.index) });
       return;
     }
     if (suffix) {
-      this.diagnostics.push(diagnostic("VEL1007", `Unknown numeric unit '${suffix}'`, span(numberEnd, this.index)));
+      const radix = integer === "0" && suffix.length > 1 ? suffix[0]?.toLowerCase() : null;
+      const radixName = radix === "x" ? "Hexadecimal" : radix === "b" ? "Binary" : radix === "o" ? "Octal" : null;
+      this.diagnostics.push(diagnostic(
+        "VEL1007",
+        radixName
+          ? `${radixName} literals are not part of VelarScript; write the decimal value`
+          : this.numericSuffixes.size > 0
+            ? `Unknown numeric unit '${suffix}'`
+            : `Unexpected characters '${suffix}' after a number`,
+        span(numberEnd, this.index),
+      ));
     }
-    this.tokens.push({ kind: "number", value: this.text.slice(start, numberEnd), span: span(start, numberEnd) });
+    this.tokens.push({ kind: "number", value, span: span(start, numberEnd) });
+  }
+
+  private readLeadingDotNumber(): void {
+    const start = this.index;
+    this.advance();
+    let value = `0.${this.readDigitsWithSeparators()}`;
+    if ((this.peek() === "e" || this.peek() === "E")
+      && (this.isDigit(this.peek(1)) || this.peek(1) === "_"
+        || ((this.peek(1) === "+" || this.peek(1) === "-") && (this.isDigit(this.peek(2)) || this.peek(2) === "_")))) {
+      value += this.advance();
+      if (this.peek() === "+" || this.peek() === "-") value += this.advance();
+      value += this.readDigitsWithSeparators();
+    }
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL1007",
+      `Write '${value}'; decimal literals require a digit before the point`,
+      span(start, this.index),
+    ));
+    this.tokens.push({ kind: "number", value, span: span(start, this.index) });
+  }
+
+  private readDigitsWithSeparators(): string {
+    let value = "";
+    while (this.isDigit(this.peek()) || this.peek() === "_") {
+      if (this.isDigit(this.peek())) {
+        value += this.advance();
+        continue;
+      }
+      const separator = this.index;
+      const valid = this.isDigit(this.text[this.index - 1] ?? "") && this.isDigit(this.peek(1));
+      this.advance();
+      if (!valid) {
+        this.diagnostics.push(diagnostic(
+          "VEL1007",
+          "Numeric separators must appear only between digits",
+          span(separator, this.index),
+        ));
+      }
+    }
+    return value;
   }
 
   private readString(scanned: StringLiteralScan): void {
     const start = this.index;
     this.index = scanned.end;
-    this.diagnoseUnknownStringEscapes(scanned);
+    this.diagnoseStringContents(scanned);
     if (!scanned.closed) {
       const message = scanned.layout
         ? "Unterminated layout string; close it with a quote at the opening line's indentation"
-        : `Unterminated ${scanned.interpolated ? "interpolated " : ""}string literal before the end of the line`;
+        : scanned.quote === "`"
+          ? "Inline strings cannot contain a line break; use a double-quoted layout string with the opening quote at the end of its line"
+          : `Unterminated ${scanned.interpolated ? "interpolated " : ""}string literal before the end of the line`;
       this.diagnostics.push(diagnostic("VEL1003", message, span(start, this.index)));
     }
     if (scanned.indentationError) {
@@ -458,6 +598,13 @@ export class Lexer {
     }
     if (!scanned.canonical) {
       this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'rf' rather than 'fr' for raw interpolated strings", span(start, start + scanned.prefixLength)));
+    }
+    if (scanned.quote === "'") {
+      this.diagnostics.push(diagnostic(
+        "VEL1005",
+        "Use double quotes or backticks for strings; single-quoted strings are not part of VelarScript",
+        span(start + scanned.prefixLength, Math.min(this.index, start + scanned.prefixLength + 1)),
+      ));
     }
     const payload: StringTokenPayload = {
       prefixLength: scanned.prefixLength,
@@ -482,27 +629,39 @@ export class Lexer {
     }
   }
 
-  private diagnoseUnknownStringEscapes(scanned: StringLiteralScan): void {
-    if (scanned.raw) return;
-    const known = new Set(["\\", scanned.quote, "n", "r", "t"]);
+  private diagnoseStringContents(scanned: StringLiteralScan): void {
     const sourceOffset = (index: number): number => scanned.contentOffsets?.[index] ?? scanned.contentStart + index;
     for (let index = 0; index < scanned.content.length; index += 1) {
       const character = scanned.content[index]!;
       const next = scanned.content[index + 1];
-      if (character === "\\") {
-        if (next !== undefined && !known.has(next)) {
+      if (!scanned.raw && character === "\\") {
+        const escaped = scanStringEscape(scanned.content, index);
+        if (escaped.error !== null) {
           const start = sourceOffset(index);
-          const shown = next === "\n" || next === "\r" ? "line break" : `\\${next}`;
-          this.diagnostics.push(diagnostic(
-            "VEL1008",
-            `Unknown string escape '${shown}'; use '\\\\' for a literal backslash or an r\"...\" raw string`,
-            span(start, sourceOffset(index + 2)),
-          ));
+          const messages = {
+            legacyUnicode: "Use a braced Unicode escape such as '\\u{E9}'; '\\uXXXX' escapes are not part of VelarScript",
+            hex: "Use a braced Unicode escape such as '\\u{E9}'; '\\xNN' escapes are not part of VelarScript",
+            unicodeForm: "A Unicode escape must be '\\u{' followed by 1 to 6 hexadecimal digits and '}'",
+            unicodeRange: "A Unicode escape cannot exceed U+10FFFF",
+            unicodeSurrogate: "A Unicode escape cannot encode a surrogate from U+D800 through U+DFFF",
+            unknown: `Unknown string escape '${next === "\n" || next === "\r" ? "line break" : `\\${next ?? ""}`}'; use '\\\\' for a literal backslash or an r\"...\" raw string`,
+          } as const;
+          this.diagnostics.push(diagnostic("VEL1008", messages[escaped.error], span(start, sourceOffset(escaped.end))));
         }
-        index += Math.min(1, scanned.content.length - index - 1);
+        index = escaped.end - 1;
         continue;
       }
+      const codePoint = character.codePointAt(0)!;
+      if (!this.isBidirectionalControl(codePoint) && this.isForbiddenLiteralControl(codePoint)) {
+        const start = sourceOffset(index);
+        this.diagnostics.push(diagnostic(
+          "VEL1009",
+          `Control character U+${codePoint.toString(16).toUpperCase().padStart(4, "0")} must be written with a '\\u{...}' escape inside a string literal`,
+          span(start, sourceOffset(index + 1)),
+        ));
+      }
       if (!scanned.interpolated || character !== "{") continue;
+      if (scanned.content[index - 1] === "$") continue;
       if (next === "{") {
         index += 1;
         continue;
@@ -513,7 +672,7 @@ export class Lexer {
     }
   }
 
-  private decodeStringText(value: string, raw: boolean, quote: "\"" | "'", layout: boolean): string {
+  private decodeStringText(value: string, raw: boolean, quote: "\"" | "'" | "`", layout: boolean): string {
     let decoded = "";
     for (let index = 0; index < value.length; index += 1) {
       const character = value[index]!;
@@ -522,38 +681,14 @@ export class Lexer {
         decoded += quote;
         index += 1;
       } else if (!raw && character === "\\" && next !== undefined) {
-        decoded += next === "n" ? "\n" : next === "r" ? "\r" : next === "t" ? "\t" : next;
-        index += 1;
+        const escaped = scanStringEscape(value, index);
+        decoded += escaped.value ?? next;
+        index = escaped.end - 1;
       } else {
         decoded += character;
       }
     }
     return decoded;
-  }
-
-  private readLegacyBacktick(interpolated: boolean): void {
-    const start = this.index;
-    this.index += interpolated ? 2 : 1;
-    const contentStart = this.index;
-    while (!this.isAtEnd()) {
-      const character = this.advance();
-      if (character === "\\" && !this.isAtEnd()) this.advance();
-      else if (character === "`") break;
-    }
-    const closed = this.text[this.index - 1] === "`";
-    const contentEnd = closed ? this.index - 1 : this.index;
-    this.diagnostics.push(recoveredDiagnostic(
-      "VEL1005",
-      `Use a ${interpolated ? "'f\"'" : "'\"'"} layout string; put the opening quote at the end of its line and close it after the indented text block`,
-      span(start, this.index),
-    ));
-    if (!closed) this.diagnostics.push(diagnostic("VEL1003", "Unterminated legacy backtick string", span(start, this.index)));
-    this.tokens.push({
-      kind: interpolated ? "fstring" : "string",
-      value: this.text.slice(contentStart, contentEnd),
-      span: span(start, this.index),
-      ...(interpolated ? { payload: { prefixLength: 1, quote: '"', raw: true, layout: true } satisfies StringTokenPayload } : {}),
-    });
   }
 
   private legacyTripleQuotePrefix(): { readonly prefix: "" | "f" | "r" | "rf" | "fr"; readonly interpolated: boolean; readonly raw: boolean } | null {
@@ -677,8 +812,46 @@ export class Lexer {
     return true;
   }
 
+  private diagnoseForbiddenSourceCharacters(): void {
+    for (let index = 0; index < this.text.length; index += 1) {
+      const codePoint = this.text.codePointAt(index)!;
+      if (!this.isBidirectionalControl(codePoint)) {
+        if (codePoint > 0xffff) index += 1;
+        continue;
+      }
+      this.diagnosedBidirectionalOffsets.add(index);
+      this.diagnostics.push(diagnostic(
+        "VEL1009",
+        `Bidirectional control U+${codePoint.toString(16).toUpperCase()} cannot appear directly in VelarScript source; write it inside a string as '\\u{${codePoint.toString(16).toUpperCase()}}' so the source remains reviewable`,
+        span(index, index + 1),
+      ));
+    }
+  }
+
+  private isBidirectionalControl(codePoint: number): boolean {
+    return bidirectionalControls.has(codePoint);
+  }
+
+  private isForbiddenLiteralControl(codePoint: number): boolean {
+    // Physical CR/LF are structural content in layout strings. Every other C0
+    // control, DEL, and the C1 block must use the visible escape spelling.
+    return (codePoint >= 0 && codePoint <= 0x1f && codePoint !== 0x0a && codePoint !== 0x0d)
+      || (codePoint >= 0x7f && codePoint <= 0x9f);
+  }
+
+  private lineStart(index: number): number {
+    while (index > 0 && this.text[index - 1] !== "\n" && this.text[index - 1] !== "\r") index -= 1;
+    return index;
+  }
+
+  private lineEnd(index: number): number {
+    while (index < this.text.length && this.text[index] !== "\n" && this.text[index] !== "\r") index += 1;
+    return index;
+  }
+
   private invalidCharacter(character: string, start: number): void {
     this.advance();
+    if (this.diagnosedBidirectionalOffsets.has(start) || this.isBidirectionalControl(character.codePointAt(0)!)) return;
     this.diagnostics.push(diagnostic("VEL1001", `Unexpected character '${character}'`, span(start, this.index)));
   }
 

@@ -32,12 +32,13 @@ the canonical spelling.
 ## The traps your reflexes will hit
 
 Everything in this table was hit by real models writing Vel blind. All but
-the first row produce a teaching diagnostic, so `velar check` will catch
-them; the first row is the **one silent trap** in the list — read it twice.
+the first two rows produce a teaching diagnostic, so `velar check` will catch
+them; the first two are the **silent traps** in the list — read them twice.
 
 | Your reflex | Write instead |
 | --- | --- |
-| `"${value}"` template interpolation | `f"{value}"`. Only the `f` prefix interpolates; `${...}` inside any string is legal literal text, so nothing warns you. |
+| `"${value}"` or `` `${value}` `` template interpolation | `f"{value}"` or `` f`{value}` ``. Only the `f` prefix interpolates, in either delimiter; `${...}` is legal literal text in every string — including a backtick one — so nothing warns you. |
+| `a // b` floor division | `//` starts a comment, so the rest of the line disappears and `const c = a // b` silently binds `a`. Write `(a / b).floor()`. |
 | `# comment` | `// comment` (`///` documents the following declaration). |
 | `function f(...)`, `fn f(...)` | `def f(...) -> Result:` |
 | `interface X:`, `record X:`, `struct X:` | `type X:` — one keyword for record shapes and aliases. |
@@ -50,7 +51,12 @@ them; the first row is the **one silent trap** in the list — read it twice.
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
 | Bare `range(5)` | `range` is a normal import: `import {range} from "velar/collections"`. |
-| `"""triple-quoted"""` or backtick strings | A layout string: a quote followed immediately by a newline opens it; a quote back at the opening line's indentation closes it. |
+| `"""triple-quoted"""` for a block of text | A layout string: a double quote followed immediately by a newline opens it; a quote back at the opening line's indentation closes it. Backtick strings are real, but always single-line. |
+| Escaping `\"` through a JSON, HTML, or selector string | Use backticks: `` `{"name":"Nova"}` `` is the same `string` value, with `"` as ordinary text. Prefixes are orthogonal (`` f` ``, `` r` ``, `` rf` ``), and `velar format` picks the delimiter for you (`"` by default, backticks when the text contains `"`), so write whichever is convenient. |
+| `0xFF`, `0b1010`, `007`, `.5` | Decimal only: `255`, `10`, `7`, `0.5`. Group long digits with `_` — `1_000_000`. `Infinity` and `NaN` are not literals: write `1 / 0` and `0 / 0`. |
+| `a == b == c` | Equality never chains: `a == b and b == c`. Ordered chains work but must point one way — `0 < index <= size` is fine, `a < b > c` is not. An `in` or `is` test inside a comparison needs parentheses. |
+| A line that is only a value — `x == 5`, `items[0]`, `"a note"` | A statement must do something: call, assign, `await`, or `async`. A computed-and-discarded value is a compile error, and a bare string is not a docstring — use `//`. |
+| A block comment that starts or ends beside code on a multi-line span | `/* */` exists and nests — commenting out a region that already holds a comment works — but a multi-line one takes whole lines: only `/*` on its opening line, only `*/` on its closing line. Within a single line it can sit anywhere: `call(/* why */ value)`. |
 | `x if cond else y` | `cond ? x : y` |
 | `&&`, `\|\|`, `!`, `===`, `var`, `elif`, `None`, `undefined` | `and`, `or`, `not`, `==`, `let`/`const`, `else if`, `null`, `null`. |
 | `f"{user}"` or `str(user)` on a record | Text conversion accepts strings, numbers, bools, enums, and `null` only. `print(user)` inspects a value; `stringify(user)` from `velar/json` builds data text. |
@@ -63,7 +69,7 @@ them; the first row is the **one silent trap** in the list — read it twice.
 | `x !== x` or `Number.isNaN(x)` | Number predicates are members: `x.isNaN()`, `x.isFinite()`, `x.isInteger()`. `NaN == NaN` is `true` — equality is SameValueZero. |
 | `text.trim().size == 0` blank test | `text.isBlank()` — `true` for empty or whitespace-only text. |
 | `while true:` plus a `pop()` null check to drain a List | `pop(index=-1)` returns `T` and throws `IndexError` when empty or out of range, so drain with `while items.size > 0:`. |
-| `1 == "1"`, `user == "a"`, `A.member == B.member`, `raw == Kind.member` | `==`/`!=` require the operand types to intersect. Compare enums with `Kind.parse(raw) == Kind.member`, or strings with `raw == str(Kind.member)`. `value == null` on an optional is always fine. |
+| `1 == "1"`, `user == "a"`, `A.member == B.member`, `raw == Kind.member` | `==`/`!=` require the operand types to intersect. Compare enums with `Kind.parse(raw) == Kind.member` when the text must name a member — `parse` throws otherwise — or `str(Kind.member) == raw` when unknown values must be ignored, as on an open wire protocol. `value == null` on an optional is always fine. |
 | `[1, 2] == [1, 2]` content comparison | Collection `==` is identity; `equals(a, b)` compares data deeply (Lists ordered, Sets/Maps by members, SameValueZero leaves) with no import. |
 | Iterating or spreading an enum object | `Status.values()` returns the members in declaration order as a fresh `List<Status>`. |
 | `sorted()`, `min()`, or `sorted(by=)` over enums | Only `number`, `string`, and single-category unions are ordered. Give the order explicitly with `sorted(by=row => row.rank)` or a string-backed enum (`low = "1-low"`). |
@@ -300,18 +306,21 @@ mystery: `buttonLook(dangerous=true)`, never `buttonLook(true)`.
 
 Build text with f-strings — numbers, bools, and enums interpolate directly.
 Data becomes text through `stringify` from `velar/json`. Multi-line text is
-a layout string, not a stack of `\n` escapes:
+a layout string, not a stack of `\n` escapes. Text that contains `"` — a JSON
+fixture, a quoted selector — goes in backticks instead of being escaped:
 
 ```velar
 import {stringify} from "velar/json"
 
 const count = 3
 const summary = f"{count} open tickets"
+const fixture = `{"open":3,"state":"ready"}`
 const usage = "
     velar check
     velar test
 "
 print(summary)
+print(fixture)
 print(usage)
 print(stringify({open: count}))
 ```

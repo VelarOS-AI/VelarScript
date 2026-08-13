@@ -662,6 +662,7 @@ export interface ComparisonChainExpression {
   readonly kind: "ComparisonChainExpression";
   readonly operands: readonly Expression[];
   readonly operators: readonly ("==" | "!=" | "<" | "<=" | ">" | ">=")[];
+  readonly parenthesized?: true;
   readonly span: Span;
 }
 
@@ -678,6 +679,7 @@ export interface IsExpression {
   readonly value: Expression;
   readonly operator: "is" | "is not";
   readonly type: TypeReference;
+  readonly parenthesized?: true;
   readonly span: Span;
 }
 

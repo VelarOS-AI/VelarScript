@@ -1,5 +1,5 @@
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-import { findInterpolatedExpressionEnd, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan } from "./interpolated-string.ts";
 import type { CompilerExtension } from "./extension.ts";
 import { isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
 
@@ -90,7 +90,7 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
   const replacements: {
     readonly placeholder: string;
     readonly value: string;
-    readonly layout: boolean;
+    readonly kind: "layout" | "blockComment" | "opaqueString";
     readonly originalIndent: string;
   }[] = [];
   let output = "";
@@ -101,6 +101,24 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
       const next = end === -1 ? source.length : end;
       output += source.slice(index, next);
       index = next;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      const end = blockCommentEnd(source, index);
+      const value = source.slice(index, end);
+      if (!value.includes("\n") && !value.includes("\r")) {
+        output += value;
+        index = end;
+        continue;
+      }
+      let marker = `__velar_formatter_multiline_comment_${replacements.length}__`;
+      while (source.includes(marker)) marker += "_";
+      const placeholder = JSON.stringify(marker);
+      const lineStart = Math.max(source.lastIndexOf("\n", index - 1), source.lastIndexOf("\r", index - 1)) + 1;
+      const originalIndent = /^[ \t]*/u.exec(source.slice(lineStart, index))?.[0] ?? "";
+      replacements.push({ placeholder, value, kind: "blockComment", originalIndent });
+      output += placeholder;
+      index = end;
       continue;
     }
     const previous = source[index - 1];
@@ -122,7 +140,7 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
     const placeholder = JSON.stringify(marker);
     const lineStart = Math.max(source.lastIndexOf("\n", start - 1), source.lastIndexOf("\r", start - 1)) + 1;
     const originalIndent = /^[ \t]*/u.exec(source.slice(lineStart, start))?.[0] ?? "";
-    replacements.push({ placeholder, value, layout: scanned.layout, originalIndent });
+    replacements.push({ placeholder, value, kind: scanned.layout ? "layout" : "opaqueString", originalIndent });
     output += placeholder;
   }
   return {
@@ -132,12 +150,41 @@ function protectMultilineStrings(source: string): { readonly text: string; reado
       if (marker < 0) return current;
       const lineStart = Math.max(current.lastIndexOf("\n", marker - 1), current.lastIndexOf("\r", marker - 1)) + 1;
       const formattedIndent = /^[ \t]*/u.exec(current.slice(lineStart, marker))?.[0] ?? "";
-      const value = replacement.layout
+      const value = replacement.kind === "layout"
         ? reindentLayoutLiteral(replacement.value, replacement.originalIndent, formattedIndent)
-        : replacement.value;
+        : replacement.kind === "blockComment"
+          ? reindentBlockComment(replacement.value, replacement.originalIndent, formattedIndent)
+          : replacement.value;
       return `${current.slice(0, marker)}${value}${current.slice(marker + replacement.placeholder.length)}`;
     }, formatted),
   };
+}
+
+function reindentBlockComment(value: string, originalIndent: string, formattedIndent: string): string {
+  const lines = value.split(/(\r\n|\r|\n)/u);
+  for (let index = 0; index < lines.length; index += 2) {
+    const line = lines[index]!;
+    if (index === 0) continue;
+    if (line.startsWith(originalIndent)) lines[index] = `${formattedIndent}${line.slice(originalIndent.length)}`;
+  }
+  return lines.join("");
+}
+
+function blockCommentEnd(source: string, start: number): number {
+  let index = start + 2;
+  let depth = 1;
+  while (index < source.length && depth > 0) {
+    if (source.startsWith("/*", index)) {
+      depth += 1;
+      index += 2;
+    } else if (source.startsWith("*/", index)) {
+      depth -= 1;
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+  return index;
 }
 
 function reindentLayoutLiteral(value: string, originalIndent: string, formattedIndent: string): string {
@@ -201,6 +248,10 @@ function nextEmbeddedDepth(
       const end = source.indexOf("-->", index + 4);
       if (end === -1) return depth;
       index = end + 3;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      index = blockCommentEnd(source, index);
       continue;
     }
     if (source[index] !== "<" || !/[A-Za-z/>]/u.test(source[index + 1] ?? "")) {
@@ -281,13 +332,22 @@ function tokenizeInline(
       tokens.push({ kind: "comment", text: source.slice(index).trimEnd() });
       break;
     }
+    if (character === "/" && source[index + 1] === "*") {
+      const end = blockCommentEnd(source, index);
+      tokens.push({ kind: "comment", text: source.slice(index, end) });
+      index = end;
+      continue;
+    }
     const scannedString = scanStringLiteral(source, index);
     if (scannedString) {
       const start = index;
       index = scannedString.end;
+      const formattedString = scannedString.interpolated
+        ? formatInterpolatedString(source, start, scannedString, embedding)
+        : source.slice(start, index);
       tokens.push({
         kind: "string",
-        text: scannedString.interpolated ? formatInterpolatedString(source, start, scannedString, embedding) : source.slice(start, index),
+        text: canonicalizeInlineString(formattedString),
       });
       continue;
     }
@@ -304,15 +364,15 @@ function tokenizeInline(
     }
     if (/[0-9]/u.test(character)) {
       const start = index++;
-      while (index < source.length && /[0-9]/u.test(source[index]!)) index += 1;
-      if (source[index] === "." && /[0-9]/u.test(source[index + 1] ?? "")) {
+      while (index < source.length && /[0-9_]/u.test(source[index]!)) index += 1;
+      if (source[index] === "." && /[0-9_]/u.test(source[index + 1] ?? "")) {
         index += 1;
-        while (index < source.length && /[0-9]/u.test(source[index]!)) index += 1;
+        while (index < source.length && /[0-9_]/u.test(source[index]!)) index += 1;
       }
-      if ((source[index] === "e" || source[index] === "E") && /[+\-0-9]/u.test(source[index + 1] ?? "")) {
+      if ((source[index] === "e" || source[index] === "E") && /[+\-0-9_]/u.test(source[index + 1] ?? "")) {
         index += 1;
         if (source[index] === "+" || source[index] === "-") index += 1;
-        while (index < source.length && /[0-9]/u.test(source[index]!)) index += 1;
+        while (index < source.length && /[0-9_]/u.test(source[index]!)) index += 1;
       }
       while (index < source.length && /[A-Za-z%]/u.test(source[index]!)) index += 1;
       tokens.push({ kind: "literal", text: source.slice(start, index) });
@@ -412,13 +472,21 @@ function formatInterpolatedString(
     const character = source[index]!;
     const next = source[index + 1];
     if (!scanned.raw && character === "\\" && next !== undefined) {
-      output += `${character}${next}`;
-      index += 2;
+      const escaped = scanStringEscape(source, index, scanned.contentEnd);
+      output += source.slice(index, escaped.end);
+      index = escaped.end;
       continue;
     }
     if ((character === "{" || character === "}") && next === character) {
       output += `${character}${next}`;
       index += 2;
+      continue;
+    }
+    if (character === "$" && next === "{") {
+      const close = source.indexOf("}", index + 2);
+      const end = close < 0 || close >= scanned.contentEnd ? Math.min(scanned.contentEnd, index + 2) : close + 1;
+      output += source.slice(index, end);
+      index = end;
       continue;
     }
     if (character !== "{") {
@@ -432,6 +500,189 @@ function formatInterpolatedString(
     index = close + 1;
   }
   return `${output}${source.slice(scanned.contentEnd, scanned.end)}`;
+}
+
+type CanonicalStringChunk =
+  | { readonly kind: "text" | "templateText"; readonly value: string }
+  | { readonly kind: "expression"; readonly value: string };
+
+function canonicalizeInlineString(source: string): string {
+  let scanned = scanStringLiteral(source, 0);
+  if (!scanned || !scanned.closed || scanned.layout || scanned.quote === "'") return source;
+  const protectedEscapes = scanned.raw ? null : protectCanonicalEscapes(source, scanned);
+  const working = protectedEscapes?.source ?? source;
+  if (protectedEscapes) {
+    const rescanned = scanStringLiteral(working, 0);
+    if (!rescanned) return source;
+    scanned = rescanned;
+  }
+  const chunks = splitCanonicalStringChunks(working, scanned);
+  if (!chunks) return source;
+  const literal = chunks.filter((chunk) => chunk.kind !== "expression").map((chunk) => chunk.value).join("");
+  const doubleQuotes = [...literal].filter((character) => character === '"').length;
+  const backticks = [...literal].filter((character) => character === "`").length;
+  const quote: '"' | "`" = doubleQuotes === 0
+    ? '"'
+    : backticks === 0
+      ? "`"
+      : backticks < doubleQuotes
+        ? "`"
+        : '"';
+  const body = chunks.map((chunk) => chunk.kind === "expression"
+    ? chunk.value
+    : encodeCanonicalStringText(chunk.value, quote, scanned.raw, scanned.interpolated, chunk.kind === "templateText"))
+    .join("");
+  const formatted = `${scanned.prefix}${quote}${body}${quote}`;
+  return protectedEscapes?.restore(formatted) ?? formatted;
+}
+
+function protectCanonicalEscapes(
+  source: string,
+  scanned: StringLiteralScan,
+): { readonly source: string; readonly restore: (value: string) => string } {
+  const replacements: { readonly marker: string; readonly value: string }[] = [];
+  let output = source.slice(0, scanned.contentStart);
+  let index = scanned.contentStart;
+  while (index < scanned.contentEnd) {
+    if (source[index] !== "\\") {
+      output += source[index]!;
+      index += 1;
+      continue;
+    }
+    const escaped = scanStringEscape(source, index, scanned.contentEnd);
+    const spelling = source.slice(index, escaped.end);
+    const preserve = escaped.error === null
+      && (spelling === "\\n" || spelling === "\\r" || spelling === "\\t" || spelling === "\\\\" || spelling.startsWith("\\u{"));
+    if (!preserve) {
+      output += spelling;
+      index = escaped.end;
+      continue;
+    }
+    let codePoint = 0xe000 + replacements.length;
+    let marker = String.fromCodePoint(codePoint);
+    while (source.includes(marker) || replacements.some((item) => item.marker === marker)) {
+      codePoint += 1;
+      marker = String.fromCodePoint(codePoint);
+    }
+    replacements.push({ marker, value: spelling });
+    output += marker;
+    index = escaped.end;
+  }
+  output += source.slice(scanned.contentEnd);
+  return {
+    source: output,
+    restore: (value) => replacements.reduce((current, item) => current.replaceAll(item.marker, item.value), value),
+  };
+}
+
+function splitCanonicalStringChunks(source: string, scanned: StringLiteralScan): CanonicalStringChunk[] | null {
+  const chunks: CanonicalStringChunk[] = [];
+  let cursor = scanned.contentStart;
+  let textStart = cursor;
+  const flush = (end: number): boolean => {
+    if (end <= textStart) return true;
+    const decoded = decodeCanonicalStringText(source.slice(textStart, end), scanned, true);
+    if (decoded === null) return false;
+    chunks.push({ kind: "text", value: decoded });
+    return true;
+  };
+  if (!scanned.interpolated) {
+    const decoded = decodeCanonicalStringText(scanned.content, scanned, false);
+    return decoded === null ? null : [{ kind: "text", value: decoded }];
+  }
+  while (cursor < scanned.contentEnd) {
+    const character = source[cursor]!;
+    const next = source[cursor + 1];
+    if (!scanned.raw && character === "\\") {
+      cursor = scanStringEscape(source, cursor, scanned.contentEnd).end;
+      continue;
+    }
+    if (scanned.raw && character === scanned.quote && next === scanned.quote) {
+      cursor += 2;
+      continue;
+    }
+    if ((character === "{" || character === "}") && next === character) {
+      cursor += 2;
+      continue;
+    }
+    if (character === "$" && next === "{") {
+      if (!flush(cursor)) return null;
+      const close = source.indexOf("}", cursor + 2);
+      const end = close < 0 || close >= scanned.contentEnd ? Math.min(scanned.contentEnd, cursor + 2) : close + 1;
+      const decoded = decodeCanonicalStringText(source.slice(cursor, end), scanned, false);
+      if (decoded === null) return null;
+      chunks.push({ kind: "templateText", value: decoded });
+      cursor = end;
+      textStart = cursor;
+      continue;
+    }
+    if (character === "{") {
+      const close = findInterpolatedExpressionEnd(source, cursor + 1, scanned.contentEnd);
+      if (close < 0) return null;
+      if (!flush(cursor)) return null;
+      chunks.push({ kind: "expression", value: source.slice(cursor, close + 1) });
+      cursor = close + 1;
+      textStart = cursor;
+      continue;
+    }
+    cursor += 1;
+  }
+  if (!flush(scanned.contentEnd)) return null;
+  return chunks;
+}
+
+function decodeCanonicalStringText(value: string, scanned: StringLiteralScan, collapseBraces: boolean): string | null {
+  let output = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    const next = value[index + 1];
+    if (scanned.raw && character === scanned.quote && next === scanned.quote) {
+      output += character;
+      index += 1;
+    } else if (!scanned.raw && character === "\\") {
+      const escaped = scanStringEscape(value, index);
+      if (escaped.error !== null || escaped.value === null) return null;
+      output += escaped.value;
+      index = escaped.end - 1;
+    } else if (collapseBraces && scanned.interpolated
+      && (character === "{" || character === "}") && next === character) {
+      output += character;
+      index += 1;
+    } else {
+      output += character;
+    }
+  }
+  return output;
+}
+
+function encodeCanonicalStringText(
+  value: string,
+  quote: '"' | "`",
+  raw: boolean,
+  interpolated: boolean,
+  templateText: boolean,
+): string {
+  let output = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (raw) {
+      if (character === quote) output += `${quote}${quote}`;
+      else if (interpolated && !templateText && (character === "{" || character === "}")) output += `${character}${character}`;
+      else output += character;
+      continue;
+    }
+    if (character === "\\") output += "\\\\";
+    else if (character === "\n") output += "\\n";
+    else if (character === "\r") output += "\\r";
+    else if (character === "\t") output += "\\t";
+    else if (character === quote) output += `\\${quote}`;
+    else if (interpolated && !templateText && (character === "{" || character === "}")) output += `${character}${character}`;
+    else if ((codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)
+      || (codePoint >= 0x202a && codePoint <= 0x202e) || (codePoint >= 0x2066 && codePoint <= 0x2069))) {
+      output += `\\u{${codePoint.toString(16).toUpperCase()}}`;
+    } else output += character;
+  }
+  return output;
 }
 
 function beginsEmbeddedAngleSyntax(tokens: readonly InlineToken[], source: string, index: number): boolean {
@@ -450,7 +701,7 @@ function needsSpace(
   index: number,
 ): boolean {
   if (current.kind === "comment") return true;
-  if (previous.kind === "comment") return false;
+  if (previous.kind === "comment") return !previous.text.startsWith("//");
   if (current.kind === "embedded") return previous.kind !== "open" && previous.kind !== "comma" && previous.kind !== "colon";
   if (current.kind === "comma" || current.kind === "close" || current.kind === "dot" || current.kind === "colon") {
     if (current.kind === "colon" && isTernaryColon(tokens, index)) return true;

@@ -160,7 +160,7 @@ def isAsciiLetter(value: string) -> bool:
     return (value >= "A" and value <= "Z") or (value >= "a" and value <= "z")
 
 def isAscii(value: string) -> bool:
-    return value.size == 1 and value < ""
+    return value.size == 1 and value < "\u{80}"
 
 def isDigit(value: string) -> bool:
     return value >= "0" and value <= "9"
@@ -304,7 +304,7 @@ def lexScript(source: ScriptCharacters, base: number, diagnostics: List<ScriptDi
                 appendDiagnostic(diagnostics, "SCRIPT1001", "Unterminated block comment", start, index, base)
             appendToken(output, source, ScriptTokenKind.comment, start, index, base)
             continue
-        if value == "\"" or value == "'":
+        if value == `"` or value == "'":
             const start = index
             const quote = value
             index += 1

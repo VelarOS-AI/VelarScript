@@ -1,7 +1,7 @@
 export interface StringLiteralSyntax {
   readonly prefix: "" | "f" | "r" | "rf" | "fr";
   readonly prefixLength: number;
-  readonly quote: "\"" | "'";
+  readonly quote: "\"" | "'" | "`";
   readonly raw: boolean;
   readonly interpolated: boolean;
   readonly canonical: boolean;
@@ -21,7 +21,7 @@ export interface StringLiteralScan extends StringLiteralSyntax {
 
 export interface StringTokenPayload {
   readonly prefixLength: number;
-  readonly quote: "\"" | "'";
+  readonly quote: "\"" | "'" | "`";
   readonly raw: boolean;
   readonly layout: boolean;
   readonly contentOffsets?: readonly number[];
@@ -31,18 +31,18 @@ export function stringLiteralSyntax(source: string, start: number): StringLitera
   let prefix: StringLiteralSyntax["prefix"] = "";
   let prefixLength = 0;
   if ((source.startsWith("rf", start) || source.startsWith("fr", start))
-    && (source[start + 2] === "\"" || source[start + 2] === "'")) {
+    && isStringQuote(source[start + 2])) {
     prefix = source.slice(start, start + 2) as "rf" | "fr";
     prefixLength = 2;
   } else if ((source[start] === "f" || source[start] === "r")
-    && (source[start + 1] === "\"" || source[start + 1] === "'")) {
+    && isStringQuote(source[start + 1])) {
     prefix = source[start] as "f" | "r";
     prefixLength = 1;
-  } else if (source[start] !== "\"" && source[start] !== "'") {
+  } else if (!isStringQuote(source[start])) {
     return null;
   }
   const quote = source[start + prefixLength];
-  if (quote !== "\"" && quote !== "'") return null;
+  if (!isStringQuote(quote)) return null;
   return {
     prefix,
     prefixLength,
@@ -57,7 +57,11 @@ export function scanStringLiteral(source: string, start: number): StringLiteralS
   const syntax = stringLiteralSyntax(source, start);
   if (!syntax) return null;
   const quoteEnd = start + syntax.prefixLength + 1;
-  if (newlineLength(source, quoteEnd) > 0) return scanLayoutString(source, start, syntax);
+  // Layout strings have one canonical delimiter. A backtick that reaches a
+  // physical newline is an unterminated inline string and receives the
+  // layout-string teaching in the lexer; it never opens a second multiline
+  // spelling.
+  if (syntax.quote !== "`" && newlineLength(source, quoteEnd) > 0) return scanLayoutString(source, start, syntax);
   return syntax.interpolated
     ? scanInlineInterpolatedString(source, start, syntax)
     : scanInlinePlainString(source, start, syntax);
@@ -70,6 +74,24 @@ export function findInterpolatedExpressionEnd(source: string, start: number, end
       const newline = source.indexOf("\n", index + 2);
       if (newline < 0 || newline >= end) return -1;
       index = newline;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      let cursor = index + 2;
+      let commentDepth = 1;
+      while (cursor < end && commentDepth > 0) {
+        if (source.startsWith("/*", cursor)) {
+          commentDepth += 1;
+          cursor += 2;
+        } else if (source.startsWith("*/", cursor)) {
+          commentDepth -= 1;
+          cursor += 2;
+        } else {
+          cursor += 1;
+        }
+      }
+      if (commentDepth > 0) return -1;
+      index = cursor - 1;
       continue;
     }
     const literal = scanStringLiteral(source, index);
@@ -102,11 +124,15 @@ function scanInlineInterpolatedString(source: string, start: number, syntax: Str
       return inlineResult(source, syntax, contentStart, index, index + 1, true);
     }
     if (!syntax.raw && character === "\\") {
-      index += Math.min(2, lineEnd - index);
+      index = scanStringEscape(source, index, lineEnd).end;
       continue;
     }
     if ((character === "{" || character === "}") && source[index + 1] === character) {
       index += 2;
+      continue;
+    }
+    if (character === "{" && source[index - 1] === "$") {
+      index += 1;
       continue;
     }
     if (character === "{") {
@@ -133,7 +159,7 @@ function scanInlinePlainString(source: string, start: number, syntax: StringLite
       }
       return inlineResult(source, syntax, contentStart, index, index + 1, true);
     }
-    if (!syntax.raw && character === "\\") index += Math.min(2, lineEnd - index);
+    if (!syntax.raw && character === "\\") index = scanStringEscape(source, index, lineEnd).end;
     else index += 1;
   }
   return inlineResult(source, syntax, contentStart, lineEnd, lineEnd, false);
@@ -289,4 +315,66 @@ function indentationWidth(value: string): number {
 function newlineLength(source: string, index: number): number {
   if (source[index] === "\r") return source[index + 1] === "\n" ? 2 : 1;
   return source[index] === "\n" ? 1 : 0;
+}
+
+export type StringEscapeError = "legacyUnicode" | "hex" | "unicodeForm" | "unicodeRange" | "unicodeSurrogate" | "unknown";
+
+export interface StringEscapeScan {
+  readonly end: number;
+  readonly value: string | null;
+  readonly error: StringEscapeError | null;
+}
+
+/**
+ * Scans one non-raw string escape beginning at `start`. Keeping this owner in
+ * the shared string scanner makes delimiter discovery, Lexer diagnostics,
+ * f-string decoding, and formatter quote normalization agree on the exact
+ * escape boundary — especially for `\\u{...}`, whose braces are text rather
+ * than interpolation syntax.
+ */
+export function scanStringEscape(source: string, start: number, endLimit = source.length): StringEscapeScan {
+  const next = source[start + 1];
+  const simple: Readonly<Record<string, string>> = {
+    "\\": "\\",
+    "\"": "\"",
+    "'": "'",
+    "`": "`",
+    n: "\n",
+    r: "\r",
+    t: "\t",
+  };
+  if (next !== undefined && Object.hasOwn(simple, next)) {
+    return { end: Math.min(endLimit, start + 2), value: simple[next]!, error: null };
+  }
+  if (next === "u") {
+    if (source[start + 2] !== "{") {
+      const legacy = source.slice(start + 2, Math.min(endLimit, start + 6));
+      return {
+        end: /^[0-9a-fA-F]{4}$/u.test(legacy) ? start + 6 : Math.min(endLimit, start + 2),
+        value: null,
+        error: "legacyUnicode",
+      };
+    }
+    const close = source.indexOf("}", start + 3);
+    if (close < 0 || close >= endLimit) return { end: endLimit, value: null, error: "unicodeForm" };
+    const digits = source.slice(start + 3, close);
+    if (!/^[0-9a-fA-F]{1,6}$/u.test(digits)) return { end: close + 1, value: null, error: "unicodeForm" };
+    const codePoint = Number.parseInt(digits, 16);
+    if (codePoint > 0x10ffff) return { end: close + 1, value: null, error: "unicodeRange" };
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) return { end: close + 1, value: null, error: "unicodeSurrogate" };
+    return { end: close + 1, value: String.fromCodePoint(codePoint), error: null };
+  }
+  if (next === "x") {
+    const digits = source.slice(start + 2, Math.min(endLimit, start + 4));
+    return {
+      end: /^[0-9a-fA-F]{2}$/u.test(digits) ? start + 4 : Math.min(endLimit, start + 2),
+      value: null,
+      error: "hex",
+    };
+  }
+  return { end: Math.min(endLimit, start + (next === undefined ? 1 : 2)), value: null, error: "unknown" };
+}
+
+function isStringQuote(value: string | undefined): value is StringLiteralSyntax["quote"] {
+  return value === "\"" || value === "'" || value === "`";
 }

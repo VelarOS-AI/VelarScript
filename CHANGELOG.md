@@ -6,6 +6,33 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Strings gain the backtick delimiter: `` `...` `` is the same string as
+  `"..."` with inner double quotes unescaped, so the JSON fixture every
+  test writes stops being an escape thicket. Prefixes compose across both
+  delimiters, `${...}` stays literal text (generating JavaScript is a real
+  use), and `velar format` normalizes the delimiter deterministically —
+  double quotes unless the content argues otherwise. Single-quoted strings
+  are no longer accepted; the diagnostic names both legal delimiters.
+- Source hygiene: `\u{...}` writes any code point visibly (lone
+  surrogates rejected), bidirectional control characters are banned raw
+  everywhere in a source file — comments included — with the escape as the
+  only entry, and raw C0/DEL controls inside literals teach their escapes.
+  Emoji joiners and variation selectors are explicitly unaffected.
+- Numeric literals: `1_000` separators land; leading zeros, `0x`/`0b`/`0o`
+  radix forms, `.5`/`5.`, and bare `Infinity`/`NaN` each teach their one
+  VelarScript spelling instead of cascading.
+- A statement must have an effect: a bare comparison, literal, identifier,
+  or other value-only expression line is rejected with its directed
+  answer — `x == 5` alone on a line was silently doing nothing.
+- Comparison chains point one way: `a < b <= c` stays legal, `==`/`!=`
+  never chain (`a == b == c` silently meant Python's reading where
+  JavaScript's differs — the highest-risk ambiguity the grammar audit
+  found), and `in`/`is` inside a chain need parentheses or `and`.
+- `/* */` block comments land with nesting and a whole-line discipline for
+  multi-line forms. The retired `invert x` statement now steers to
+  `x = not x`, and the enum-wire equality guidance states the deciding
+  fact: `parse` throws on unknown values, so open wire protocols compare
+  with `str(...)` deliberately.
 - Look stops lying. A `look:` literal that reads component state is
   rejected at the read — it froze at declaration while looking exactly
   like the live forms — with `look={cond ? a : b}` and directive values
