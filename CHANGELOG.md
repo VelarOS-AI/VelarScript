@@ -6,6 +6,19 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The Desktop worker test suite can no longer freeze the gate. The hang
+  that cost several runs was a macOS FSEvents arming race — a recursive
+  watch started just before a write never receives that notification at
+  all — sitting under a chain with no deadline anywhere: the worker's
+  next-change pull is unbounded by design, the test harness had no
+  per-call bound, and `node --test` defaulted to no timeout. Every wait
+  now has a bound whose message names the operation, the worker, and the
+  likely cause; the lost-notification case re-triggers instead of parking;
+  three genuinely unbounded waits inside the Desktop host (the terminal
+  ownership handshake and two child stdin frame writes) gained deadlines;
+  and a failed terminal spawn no longer escalates a losing rejection into
+  a host exit. A reclaim hook clears what a killed run leaves behind, with
+  age floors that keep a concurrent suite safe.
 - The documentation catches up with twenty waves of behavior. Newly
   written down where only the compiler knew: module initialization order
   (including that statements above an import still run after the

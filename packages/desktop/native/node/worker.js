@@ -27,6 +27,8 @@ const TERMINAL_RESUME_BYTES = 1024 * 1024;
 const WATCH_DEBOUNCE_MS = 20;
 const PROCESS_STOP_CONFIRMATION_TIMEOUT_MS = 5000;
 const PROCESS_EXIT_PIPE_CONFIRMATION_TIMEOUT_MS = 5000;
+const HOST_HANDSHAKE_TIMEOUT_MS = 5000;
+const HOST_PIPE_WRITE_TIMEOUT_MS = 5000;
 const FATAL_DRAIN_TIMEOUT_MS = 8000;
 const processTerminationMarker = Object.freeze({});
 const processRootExitMarker = Object.freeze({});
@@ -74,6 +76,24 @@ class HttpTransportFailure extends Error {
     this.name = "HttpTransportError";
     this.phase = phase;
   }
+}
+// A bundled child that stops answering must fail the one request that waits on
+// it, never leave the host waiting without a bound.
+class HostDeadlineFailure extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HostDeadlineError";
+  }
+}
+function boundedHostWait(value, message, timeout) {
+  let timer = null;
+  const guarded = value.then(
+    (result) => { if (timer !== null) clearTimeout(timer); return result; },
+    (error) => { if (timer !== null) clearTimeout(timer); throw error; },
+  );
+  return Promise.race([guarded, new Promise((_, rejectDeadline) => {
+    timer = setTimeout(() => rejectDeadline(new HostDeadlineFailure(message)), timeout);
+  })]);
 }
 const launchDirectory = await realpath(launchRoot);
 if (config.languageServer !== undefined) {
@@ -569,7 +589,18 @@ async function sendLanguageServer(args, owner) {
   try { JSON.parse(args[1]); }
   catch { throw new TypeError("Language-server request must contain valid JSON"); }
   const frame = `Content-Length: ${bytes}\r\n\r\n${args[1]}`;
-  await new Promise((resolveWrite, rejectWrite) => task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite()));
+  try {
+    await boundedHostWait(
+      new Promise((resolveWrite, rejectWrite) => task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite())),
+      `Bundled language server did not accept a request within ${HOST_PIPE_WRITE_TIMEOUT_MS} milliseconds`,
+      HOST_PIPE_WRITE_TIMEOUT_MS,
+    );
+  } catch (error) {
+    // A half-written frame leaves the protocol stream unusable, so a write that
+    // never drains retires the server instead of corrupting later requests.
+    if (error instanceof HostDeadlineFailure) failLanguageServer(task, error);
+    throw error;
+  }
   return null;
 }
 
@@ -924,12 +955,24 @@ function terminalFrame(kind, payload = Buffer.alloc(0)) {
   return frame;
 }
 
-function writeTerminalFrame(task, frame) {
+async function writeTerminalFrame(task, frame) {
   if (task.failure) throw task.failure;
   if (task.settled || task.closing || !task.child.stdin.writable) throw new Error("Desktop terminal is closed");
-  return new Promise((resolveWrite, rejectWrite) => {
-    task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite(null));
-  });
+  try {
+    await boundedHostWait(
+      new Promise((resolveWrite, rejectWrite) => {
+        task.child.stdin.write(frame, error => error ? rejectWrite(error) : resolveWrite(null));
+      }),
+      `Bundled terminal host did not accept a frame within ${HOST_PIPE_WRITE_TIMEOUT_MS} milliseconds`,
+      HOST_PIPE_WRITE_TIMEOUT_MS,
+    );
+  } catch (error) {
+    // A half-written frame desynchronizes the terminal transport, so a write
+    // that never drains retires the session instead of corrupting it.
+    if (error instanceof HostDeadlineFailure) failTerminal(task, error);
+    throw error;
+  }
+  return null;
 }
 
 function settleTerminalPull(task) {
@@ -995,7 +1038,10 @@ async function terminalMetadata(task) {
   if (!stream) throw new Error("Bundled terminal host ownership channel is unavailable");
   let text = "";
   stream.setEncoding("utf8");
-  const metadata = await new Promise((resolveMetadata, rejectMetadata) => {
+  // The ownership handshake is the one reply the host cannot proceed without,
+  // so it carries its own bound: a terminal host that neither publishes its
+  // shell nor exits fails this open instead of blocking it forever.
+  const metadata = await boundedHostWait(new Promise((resolveMetadata, rejectMetadata) => {
     stream.on("data", chunk => {
       text += chunk;
       if (Buffer.byteLength(text, "utf8") > 256) rejectMetadata(new RangeError("Bundled terminal host metadata exceeds 256 bytes"));
@@ -1004,7 +1050,7 @@ async function terminalMetadata(task) {
     stream.once("end", () => resolveMetadata(text));
     task.child.once("error", rejectMetadata);
     task.child.once("close", () => rejectMetadata(new Error("Bundled terminal host closed before publishing shell ownership")));
-  });
+  }), `Bundled terminal host did not publish shell ownership within ${HOST_HANDSHAKE_TIMEOUT_MS} milliseconds`, HOST_HANDSHAKE_TIMEOUT_MS);
   let value;
   try { value = JSON.parse(metadata); }
   catch { throw new Error("Bundled terminal host returned invalid ownership metadata"); }
@@ -1068,6 +1114,9 @@ async function terminalOpen(args, owner, activity) {
   });
   try {
     const ownership = terminalMetadata(task);
+    // A failed spawn rejects both waits; keep the handshake observed so the
+    // losing rejection cannot escalate into a fatal drain of the whole host.
+    void ownership.catch(() => {});
     await new Promise((resolveStart, rejectStart) => {
       child.once("spawn", resolveStart);
       child.once("error", rejectStart);

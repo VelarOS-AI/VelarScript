@@ -1,19 +1,154 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import test from "node:test";
+import test, { before } from "node:test";
 import { pathToFileURL } from "node:url";
 import { buildLanguageServerTool } from "../packages/cli/src/language-server-tool.ts";
 import { buildProjectTaskTool } from "../packages/cli/src/project-task-tool.ts";
 import { buildBuildEngineTool } from "../packages/cli/src/build-engine-tool.ts";
 
 const workerPath = resolve("packages/desktop/native/node/worker.js");
+const temporaryPrefix = join(tmpdir(), "velar-desktop-");
 
-test("Desktop owns one packaged official language-server lifecycle without process grants", async () => {
+// Every wait in this suite is bounded. The worker speaks over stdio pipes and
+// drives real child processes, PTYs and OS file watchers, so a single reply
+// that never arrives used to freeze the whole `npm test` run at 0% CPU
+// indefinitely: node:test runs with --test-timeout=0, so nothing above these
+// promises ever intervenes. Each bound below is far above the worker's own
+// worst-case internal deadline so healthy-but-loaded runs never trip it, and
+// each failure names what timed out and the states that explain it.
+//
+// The worker's longest internal confirmation deadline for filesystem, process,
+// HTTP, language-server and terminal work is 5000 milliseconds, and the widest
+// payload the suite pushes through the pipe is about 1.2 MiB.
+const WORKER_CALL_TIMEOUT_MS = 30_000;
+// A project task carries its own bounded timeout (120000 milliseconds below),
+// so the transport deadline has to sit above the worker's own bound.
+const PROJECT_TASK_CALL_TIMEOUT_MS = 150_000;
+// macOS arms a recursive watch asynchronously, so a change written before the
+// FSEvents stream starts is never reported at all. Re-trigger the change while
+// the pull is outstanding instead of trusting one notification.
+const WATCHED_CHANGE_TIMEOUT_MS = 30_000;
+const WATCHED_CHANGE_RETRIGGER_MS = 250;
+// Optimized Swift compilation of the terminal host normally takes seconds.
+const TERMINAL_HOST_COMPILE_TIMEOUT_MS = 180_000;
+// Bundling an official tool is sub-second, and esbuild's own service pipe has
+// no deadline of its own, so name that wait rather than leave it to the
+// per-test backstop.
+const TOOL_BUILD_TIMEOUT_MS = 60_000;
+const LOCAL_SERVER_TIMEOUT_MS = 10_000;
+const STALE_STATE_TIMEOUT_MS = 30_000;
+// The process tests let descendants escape on purpose, and those descendants
+// are reparented to pid 1 for the few seconds before the test reaps them. Only
+// an escapee that has outlived any such window is a leftover, so a suite
+// running concurrently in another checkout keeps its own in-flight processes.
+const STALE_ESCAPEE_MINIMUM_AGE_SECONDS = 120;
+
+before(async () => { await releaseStaleWorkerState(); }, { timeout: 120_000 });
+
+/**
+ * A run that is killed mid-suite orphans its worker, the worker's bundled
+ * children and the descendants the process tests deliberately let escape, and
+ * leaves their temporary roots behind. Reclaim that state before the first
+ * test so leftovers cannot collide with, or be mistaken for, this run's own
+ * processes. Only orphans (reparented to pid 1) and temporary roots no live
+ * process still names are reclaimed, so a concurrent suite is left alone: its
+ * worker and bundled children always still have their live parent, and its
+ * escaped descendants are younger than the age floor below.
+ */
+async function releaseStaleWorkerState(): Promise<void> {
+  const orphans = (await processSnapshot()).filter((entry) => entry.ppid === 1 && entry.pid !== process.pid
+    && (entry.command.includes(workerPath)
+      || entry.command.includes(temporaryPrefix)
+      || (entry.command.startsWith(`${process.execPath} -e `)
+        && entry.command.includes("setInterval(() => {}, 1000)")
+        && entry.elapsedSeconds >= STALE_ESCAPEE_MINIMUM_AGE_SECONDS)));
+  for (const orphan of orphans) terminateProcessGroup(orphan.pid);
+  const deadline = Date.now() + STALE_STATE_TIMEOUT_MS;
+  const remaining = new Set(orphans.map((orphan) => orphan.pid));
+  while (remaining.size > 0 && Date.now() < deadline) {
+    for (const pid of remaining) {
+      try { process.kill(pid, 0); }
+      catch { remaining.delete(pid); }
+    }
+    if (remaining.size > 0) await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  const live = await processSnapshot();
+  const released: string[] = [];
+  const idleBefore = Date.now() - STALE_ESCAPEE_MINIMUM_AGE_SECONDS * 1000;
+  for (const name of await readdir(tmpdir())) {
+    const path = join(tmpdir(), name);
+    if (!path.startsWith(temporaryPrefix)) continue;
+    if (live.some((entry) => entry.command.includes(path))) continue;
+    // Some roots are only ever named through a child's environment, so age is
+    // the reliable second signal that nothing is still using this one.
+    const metadata = await stat(path).catch(() => null);
+    if (metadata === null || metadata.mtimeMs > idleBefore) continue;
+    await rm(path, { recursive: true, force: true });
+    released.push(name);
+  }
+  if (orphans.length > 0 || released.length > 0) {
+    console.log(`[desktop-worker] released stale state: ${orphans.length} orphaned process(es)${
+      remaining.size > 0 ? ` (${[...remaining].join(", ")} survived SIGKILL)` : ""
+    }, ${released.length} temporary root(s)`);
+  }
+  assert.deepEqual([...remaining], [], "stale Desktop worker processes survived SIGKILL, so this run cannot start clean");
+}
+
+type ProcessEntry = { pid: number; ppid: number; elapsedSeconds: number; command: string };
+
+async function processSnapshot(): Promise<readonly ProcessEntry[]> {
+  if (process.platform === "win32") return [];
+  // Reclaiming leftovers is hygiene, not a contract: the bounded waits below
+  // are what keep a hang loud. An unreadable process table reports itself and
+  // leaves the tests to run.
+  let table: string;
+  try { table = await runBoundedCommand("/bin/ps", ["-Aww", "-o", "pid=,ppid=,etime=,command="], STALE_STATE_TIMEOUT_MS); }
+  catch (error) {
+    console.log(`[desktop-worker] could not read the process table, skipping stale-process cleanup: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+  const entries: ProcessEntry[] = [];
+  for (const line of table.split("\n")) {
+    const fields = /^\s*(\d+)\s+(\d+)\s+((?:\d+-)?(?:\d+:)?\d+:\d+)\s+(.*)$/u.exec(line);
+    if (!fields) continue;
+    entries.push({
+      pid: Number(fields[1]),
+      ppid: Number(fields[2]),
+      elapsedSeconds: elapsedSeconds(fields[3] ?? ""),
+      command: fields[4] ?? "",
+    });
+  }
+  return entries;
+}
+
+/** Reads `ps` elapsed time, formatted `[[dd-]hh:]mm:ss`, as whole seconds. */
+function elapsedSeconds(value: string): number {
+  const [days, clock] = value.includes("-") ? value.split("-") : ["0", value];
+  let seconds = 0;
+  for (const part of (clock ?? "").split(":")) seconds = seconds * 60 + Number(part);
+  return Number(days) * 86_400 + seconds;
+}
+
+async function runBoundedCommand(executable: string, args: readonly string[], timeout: number): Promise<string> {
+  const child = spawn(executable, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
+  child.stderr.on("data", () => {});
+  const completion = new Promise<void>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("close", () => resolveExit());
+  });
+  try { await withDeadline(completion, `${basename(executable)} ${args.join(" ")}`, timeout); }
+  catch (error) { child.kill("SIGKILL"); throw error; }
+  return output;
+}
+
+test("Desktop owns one packaged official language-server lifecycle without process grants", { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-language-server-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -28,7 +163,7 @@ test("Desktop owns one packaged official language-server lifecycle without proce
   await writeFile(outsidePath, "const privateOutsideProject = 1\n", "utf8");
   const escapedLinkPath = join(project, "escaped-link.vel");
   await symlink(outsidePath, escapedLinkPath);
-  await buildLanguageServerTool(join(host, "language-server.js"));
+  await withDeadline(buildLanguageServerTool(join(host, "language-server.js")), "the bundled language-server tool build", TOOL_BUILD_TIMEOUT_MS);
   const configPath = join(directory, "desktop.json");
   await writeFile(configPath, JSON.stringify({
     protocolVersion: 1,
@@ -162,7 +297,7 @@ test("Desktop owns one packaged official language-server lifecycle without proce
   }
 });
 
-test("Desktop owns permission-scoped PTY terminals with resize and crash reaping", { timeout: 30_000 }, async () => {
+test("Desktop owns permission-scoped PTY terminals with resize and crash reaping", { timeout: 240_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-terminal-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -245,7 +380,7 @@ test("Desktop owns permission-scoped PTY terminals with resize and crash reaping
   }
 });
 
-test("Desktop owns bounded packaged project tasks without executable grants", async () => {
+test("Desktop owns bounded packaged project tasks without executable grants", { timeout: 240_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-project-task-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -254,10 +389,10 @@ test("Desktop owns bounded packaged project tasks without executable grants", as
   await writeFile(join(project, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] }), "utf8");
   await writeFile(join(project, "main.vel"), "print(\"project-task-run\")\n", "utf8");
   await writeFile(join(project, "main.test.vel"), "def test_project_task() -> null:\n    if 2 + 2 != 4:\n        throw Error(\"math failed\")\n", "utf8");
-  await Promise.all([
+  await withDeadline(Promise.all([
     buildProjectTaskTool(join(host, "project-task.js")),
     buildBuildEngineTool(join(host, "build-engine")),
-  ]);
+  ]), "the bundled project-task and build-engine tool builds", TOOL_BUILD_TIMEOUT_MS);
   const configPath = join(directory, "desktop.json");
   await writeFile(configPath, JSON.stringify({
     protocolVersion: 1,
@@ -316,7 +451,7 @@ test("Desktop owns bounded packaged project tasks without executable grants", as
   }
 });
 
-test("Desktop Node capability host enforces filesystem, process, and network grants", async () => {
+test("Desktop Node capability host enforces filesystem, process, and network grants", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-worker-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -433,8 +568,7 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
     const watcherHandle = await client.call("fs", "watchStart", [project, true]) as number;
     const externalChange = client.call("fs", "watchNext", [watcherHandle]) as Promise<{ paths: string[]; rescan: boolean }>;
     const externalPath = join(project, "external.vel");
-    await writeFile(externalPath, "const external = true\n", "utf8");
-    const externalBatch = await externalChange;
+    const externalBatch = await reportedChange(externalChange, externalPath, "the recursive Desktop project watch");
     assert.equal(externalBatch.rescan, false);
     assert.ok(externalBatch.paths.includes(await realpath(externalPath)));
     const pendingWatcherPull = client.call("fs", "watchNext", [watcherHandle]);
@@ -715,7 +849,7 @@ test("Desktop Node capability host enforces filesystem, process, and network gra
   }
 });
 
-test("Desktop process grants work independently from filesystem grants and keep wire bounds", async () => {
+test("Desktop process grants work independently from filesystem grants and keep wire bounds", { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-process-only-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -877,7 +1011,7 @@ setInterval(() => {}, 1000);
   }
 });
 
-test("Desktop capability host drains transferred process ownership before a fatal exit", async () => {
+test("Desktop capability host drains transferred process ownership before a fatal exit", { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-desktop-worker-crash-"));
   const project = join(directory, "project");
   const appData = join(directory, "app-data");
@@ -945,11 +1079,40 @@ async function compileTerminalHost(output: string): Promise<void> {
   let diagnostics = "";
   child.stdout.on("data", chunk => { diagnostics += chunk.toString("utf8"); });
   child.stderr.on("data", chunk => { diagnostics += chunk.toString("utf8"); });
-  const code = await new Promise<number | null>((resolveExit, rejectExit) => {
+  const exited = new Promise<number | null>((resolveExit, rejectExit) => {
     child.once("error", rejectExit);
     child.once("exit", resolveExit);
   });
+  let code: number | null;
+  try { code = await withDeadline(exited, "the bundled terminal-host Swift compilation", TERMINAL_HOST_COMPILE_TIMEOUT_MS); }
+  catch (error) {
+    // A compiler that never exits (a module-cache lock left behind by a killed
+    // run is the usual reason) must fail this test, not park the whole suite.
+    child.kill("SIGKILL");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}; swiftc pid ${child.pid ?? 0} was killed. Diagnostics so far: ${diagnostics || "(none)"}`);
+  }
   assert.equal(code, 0, diagnostics);
+}
+
+/**
+ * Awaits one reported filesystem change, re-triggering it while the pull is
+ * outstanding. `fs.watch` with `recursive: true` arms its macOS FSEvents
+ * stream asynchronously on another thread, so a write that lands before the
+ * stream starts is never reported — under concurrent load that happens for
+ * roughly one pull in ten, and the pull then never settles.
+ */
+async function reportedChange<T>(pull: Promise<T>, path: string, label: string): Promise<T> {
+  let settled = false;
+  const outcome = pull.finally(() => { settled = true; });
+  const deadline = Date.now() + WATCHED_CHANGE_TIMEOUT_MS;
+  while (!settled) {
+    await writeFile(path, "const external = true\n", "utf8");
+    if (Date.now() >= deadline) {
+      throw new Error(`${label} never reported ${path} within ${WATCHED_CHANGE_TIMEOUT_MS} milliseconds of repeated changes; the operating-system watch is not delivering notifications for this root.`);
+    }
+    await Promise.race([outcome.catch(() => {}), new Promise((resolveWait) => setTimeout(resolveWait, WATCHED_CHANGE_RETRIGGER_MS))]);
+  }
+  return outcome;
 }
 
 function withDeadline<T>(value: Promise<T>, label: string, timeout = 5_000): Promise<T> {
@@ -973,6 +1136,12 @@ class WorkerClient {
 
   constructor(child: ChildProcessWithoutNullStreams) {
     this.child = child;
+    // A worker that never spawns (EAGAIN under concurrent load) emits 'error'
+    // and never 'exit', and a broken pipe reports on the stream, so both have
+    // to fail the outstanding calls instead of leaving them outstanding.
+    child.once("error", (error) => this.failOutstanding(new Error(`Desktop worker could not be spawned or signalled: ${error.message}`)));
+    child.stdin.on("error", (error) => this.failOutstanding(new Error(`Desktop worker request pipe failed: ${error.message}`)));
+    child.stdout.on("error", (error) => this.failOutstanding(new Error(`Desktop worker response pipe failed: ${error.message}`)));
     this.writeHostCommand("owner-activate", this.owner);
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on("line", (line) => {
@@ -1008,11 +1177,28 @@ class WorkerClient {
         request.reject(error);
       } else request.reject(new Error(typeof message.error === "string" ? message.error : "Desktop worker failed"));
     });
-    child.once("exit", () => {
-      for (const request of this.pending.values()) request.reject(new Error("Desktop worker exited"));
-      this.pending.clear();
-      for (const update of this.projectRootUpdates.values()) update.reject(new Error("Desktop worker exited"));
-      this.projectRootUpdates.clear();
+    child.once("exit", () => this.failOutstanding(new Error("Desktop worker exited")));
+  }
+
+  private failOutstanding(error: Error): void {
+    for (const request of this.pending.values()) request.reject(error);
+    this.pending.clear();
+    for (const update of this.projectRootUpdates.values()) update.reject(error);
+    this.projectRootUpdates.clear();
+  }
+
+  /**
+   * Every reply is bounded. Without this a reply the worker never sends — a
+   * lost handshake, a wedged child, an OS notification that never armed —
+   * parks the suite forever at 0% CPU with no output at all.
+   */
+  private deadline<T>(value: Promise<T>, label: string, timeout: number): Promise<T> {
+    return withDeadline(value, label, timeout).catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.includes("did not settle within")) throw error;
+      const state = this.child.exitCode !== null ? `exited with code ${this.child.exitCode}`
+        : this.child.signalCode !== null ? `was killed by ${this.child.signalCode}`
+        : "is still running and idle";
+      throw new Error(`${error.message}; the Desktop worker (pid ${this.child.pid ?? 0}) ${state}. Likely causes: a stale worker or descendant orphaned by a killed run, a wedged bundled child holding the reply, or an operating-system notification that never arrived.`);
     });
   }
 
@@ -1022,7 +1208,10 @@ class WorkerClient {
 
   beginCall(capability: string, operation: string, args: readonly unknown[]): { id: number; result: Promise<unknown> } {
     const id = this.nextId++;
-    const result = new Promise<unknown>((resolveCall, rejectCall) => this.pending.set(id, { resolve: resolveCall, reject: rejectCall }));
+    const reply = new Promise<unknown>((resolveCall, rejectCall) => this.pending.set(id, { resolve: resolveCall, reject: rejectCall }));
+    const timeout = capability === "project-task" ? PROJECT_TASK_CALL_TIMEOUT_MS : WORKER_CALL_TIMEOUT_MS;
+    const result = this.deadline(reply, `Desktop worker call #${id} ${capability}.${operation}`, timeout)
+      .finally(() => this.pending.delete(id));
     this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, id, owner: this.owner, capability, operation, args })}\n`);
     return { id, result };
   }
@@ -1033,7 +1222,9 @@ class WorkerClient {
 
   setProjectRoot(path: string): Promise<void> {
     const commandID = this.nextProjectRootCommandID++;
-    const result = new Promise<void>((resolveUpdate, rejectUpdate) => this.projectRootUpdates.set(commandID, { resolve: resolveUpdate, reject: rejectUpdate }));
+    const settled = new Promise<void>((resolveUpdate, rejectUpdate) => this.projectRootUpdates.set(commandID, { resolve: resolveUpdate, reject: rejectUpdate }));
+    const result = this.deadline(settled, `Desktop project-root command #${commandID}`, WORKER_CALL_TIMEOUT_MS)
+      .finally(() => this.projectRootUpdates.delete(commandID));
     this.child.stdin.write(`${JSON.stringify({ protocolVersion: 1, hostCommand: "project-root-set", owner: this.owner, commandID, path })}\n`);
     return result;
   }
@@ -1163,14 +1354,21 @@ function localServer(
       response.end("desktop-ready");
     }
   });
-  return new Promise((resolveListen, reject) => {
+  return withDeadline(new Promise<Server>((resolveListen, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => resolveListen(server));
-  });
+  }), "the local Desktop worker test server listen", LOCAL_SERVER_TIMEOUT_MS);
 }
 
 function closeServer(server: Server): Promise<void> {
-  return new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  // close() alone waits for every open connection, and these handlers keep
+  // deliberately slow responses in flight, so drop the sockets first.
+  server.closeAllConnections();
+  return withDeadline(
+    new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose())),
+    "the local Desktop worker test server close",
+    LOCAL_SERVER_TIMEOUT_MS,
+  );
 }
 
 function addressPort(server: Server): number {
