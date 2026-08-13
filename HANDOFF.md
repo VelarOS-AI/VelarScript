@@ -3335,6 +3335,15 @@ velar/javascript（36KB JS 分析）与 velar/text-buffer（22KB）带进 stdlib
 内部引用、`velar create` 走声明依赖模型、编辑器成为第一个真实库消费者
 （比 stdlib 特权公民更好的裁判）。归新增波 S，排 N-2b 后。
 
+**Codex 并行任务（2026-08-13 用户调度 —— Codex 额度富余，两份任务书已备）**：
+① `docs/handoff/CODEX-TASK-S-STDLIB-EVICTION.md` —— 波 S（D48 迁出）交 Codex
+执行，**禁区已写明**（packages/web 与 packages/compiler 在途，不得触碰；git
+写命令禁止，工作留树由编排方验收提交）。② `docs/handoff/CODEX-TASK-BLINDTEST-
+PILOT.md` —— 盲测试点（路线图第三阶段首次实弹）：Codex 作为盲测对象，只凭
+`velar skill` 简报 + 诊断写三个递增复杂度的项目，撞墙记录本身是产出；在仓库外
+目录进行，零撞车。**编排方跟进**：Codex 报告落地后，S 波由编排方验收提交；
+盲测的 NOTES/SUMMARY 由编排方 triage 成缺陷/文档/简报三类工单。
+
 **马拉松工作协议（2026-08-12 用户授权，最高约束，优先于本节其余排期）**：
 
 1. **设计层改动必须先与用户探讨** —— 语言语义/拼写/表面的任何变更，即使发现
