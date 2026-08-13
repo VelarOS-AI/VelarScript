@@ -1129,7 +1129,7 @@ introducing a second testing language.
 ```velar fragment
 import {expect} from "velar/test"
 
-def test_profile_name() -> null:
+test "a profile keeps its declared name and tags":
     const profile = {name: "Ada", tags: ["compiler", "web"]}
     expect(profile.name).toBe("Ada")
     expect(profile.tags).toContain("web")

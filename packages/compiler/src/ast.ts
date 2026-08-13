@@ -16,6 +16,7 @@ export type CoreStatement =
   | ClassDeclaration
   | VariableDeclaration
   | UsingDeclaration
+  | TestDeclaration
   | FunctionDeclaration
   | ReturnStatement
   | ThrowStatement
@@ -268,6 +269,24 @@ export interface UsingDeclaration {
   readonly nameSpan: Span;
   readonly initializer: Expression;
   readonly span: Span;
+}
+
+/**
+ * D39 item 53: `test "name":` declares one test. The name is a string literal
+ * the reporter quotes verbatim, because a test is the product specification a
+ * human reads, not a machine-shaped function name.
+ */
+export interface TestDeclaration {
+  readonly kind: "TestDeclaration";
+  readonly title: string;
+  readonly titleSpan: Span;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+/** The generated function name a `test "name":` block emits and the runner calls. */
+export function testFunctionName(statement: TestDeclaration): string {
+  return `__velarTest${statement.span.start}`;
 }
 
 export type BindingPattern = NameBindingPattern | ObjectBindingPattern | ListBindingPattern;
@@ -784,6 +803,9 @@ export function statementContainsDirectAwait(
       return expression(statement.initializer);
     case "UsingDeclaration":
       return expression(statement.initializer);
+    case "TestDeclaration":
+      // A test body is its own async frame.
+      return false;
     case "ReturnStatement":
       return statement.value !== null && expression(statement.value);
     case "ThrowStatement":

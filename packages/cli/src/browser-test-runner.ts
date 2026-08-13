@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { formatDiagnostic } from "@velarscript/compiler";
+import { formatDiagnostic, type ModuleTest } from "@velarscript/compiler";
 import {
   chromium,
   firefox,
@@ -352,7 +352,7 @@ async function runBrowserTestsInWorker(
     }
     const verified = await verifyProductionBuild(site);
     await prepareStandardModules(compiled, config);
-    const entries: Array<{ readonly file: string; readonly output: string; readonly tests: readonly string[] }> = [];
+    const entries: Array<{ readonly file: string; readonly output: string; readonly tests: readonly ModuleTest[] }> = [];
     for (const file of files) {
       const entry = await compileBrowserTest(file, compiled, config);
       if (!entry) {
@@ -400,9 +400,12 @@ async function runBrowserTestsInWorker(
           engineEntries:
           for (const entry of entries) {
             const namespace = await import(`${pathToFileURL(entry.output).href}?engine=${engine}&run=${Date.now()}`) as Record<string, unknown>;
-            for (const name of entry.tests) {
+            for (const declared of entry.tests) {
               if (lifecycleFailure !== null) throw lifecycleFailure;
-              const test = namespace[name];
+              // D39 item 53: the reporter quotes the author's name for the
+              // test, which is the specification a person reads.
+              const name = declared.title;
+              const test = namespace[declared.name];
               const context = await activeBrowser.newContext();
               const page = await context.newPage();
               page.setDefaultTimeout(30_000);
@@ -419,8 +422,8 @@ async function runBrowserTestsInWorker(
                 await installBrowserPerformanceRuntime(page);
                 await installFrameworkRuntime(page, contract.initScript?.(config.framework.config));
                 installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
-                if (typeof test !== "function") throw new Error(`Test function '${name}' was not emitted`);
-                if (test.length !== 0) throw new Error(`Browser test function '${name}' cannot declare parameters`);
+                if (typeof test !== "function") throw new Error(`Test ${JSON.stringify(name)} was not emitted`);
+                if (test.length !== 0) throw new Error(`Browser test ${JSON.stringify(name)} cannot declare parameters`);
                 await boundedBrowserOperation(
                   Promise.resolve().then(() => test()),
                   limits.testTimeoutMs,
@@ -527,7 +530,7 @@ async function compileBrowserTest(
   file: string,
   outputRoot: string,
   config: VelarProjectConfig,
-): Promise<{ readonly file: string; readonly output: string; readonly tests: readonly string[] } | null> {
+): Promise<{ readonly file: string; readonly output: string; readonly tests: readonly ModuleTest[] } | null> {
   const project = await compileProject(file, new Map(), {
     sourceRoot: config.root,
     projectRoot: config.root,
@@ -547,9 +550,9 @@ async function compileBrowserTest(
   }
   await writeCompiledTestProject(project, outputRoot);
   const entry = project.modules.find((module) => module.inputPath === file);
-  const tests = entry?.result.moduleInterface.testFunctions ?? [];
+  const tests = entry?.result.moduleInterface.tests ?? [];
   if (tests.length === 0) {
-    process.stderr.write(`✗ ${relative(config.root, file)} contains no test_* functions\n`);
+    process.stderr.write(`✗ ${relative(config.root, file)} declares no tests\n`);
     return null;
   }
   return { file, output: entry ? compiledTestModulePath(project, entry, outputRoot) : join(outputRoot, relative(config.root, file).replace(/\.vel$/u, ".js")), tests };

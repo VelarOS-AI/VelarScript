@@ -8,11 +8,12 @@ import type {
   Program,
   Statement,
   TypeAliasDeclaration,
+  TestDeclaration,
   TypeDeclaration,
   UsingDeclaration,
   TypeReference,
 } from "./ast.ts";
-import { blockContainsDirectAwait, expressionContainsDirectAwait as containsDirectAwait } from "./ast.ts";
+import { blockContainsDirectAwait, expressionContainsDirectAwait as containsDirectAwait, testFunctionName } from "./ast.ts";
 import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
 import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
@@ -803,6 +804,7 @@ export class JavaScriptEmitter {
       if (this.visitExtensionRuntimeStatement(statement, visitExpression, visitStatement)) return;
       switch (statement.kind) {
         case "VariableDeclaration": visitExpression(statement.initializer); break;
+        case "TestDeclaration": statement.body.forEach(visitStatement); break;
         case "UsingDeclaration":
           // Releasing a resource reports its own failure through the host
           // channel, which carries the error-normalization runtime with it.
@@ -1016,6 +1018,16 @@ export class JavaScriptEmitter {
             "Variable",
           ),
         ].join("\n");
+      }
+      // D39 item 53: a test is an exported async function the runner calls by
+      // its generated name; the author's name travels in the module interface
+      // so the reporter can quote it verbatim.
+      case "TestDeclaration": {
+        const lines = [
+          ...this.emitStatementLines(statement.body, depth + 1),
+          `${"  ".repeat(depth + 1)}return null;`,
+        ];
+        return `${indentation}export async function ${testFunctionName(statement)}() {\n${lines.join("\n")}\n${indentation}}`;
       }
       case "FunctionDeclaration": {
         const prefix = `${statement.exported || this.forcedFunctionExports.has(statement.name) ? "export " : ""}${statement.asynchronous ? "async " : ""}function`;

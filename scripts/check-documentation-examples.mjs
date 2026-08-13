@@ -41,7 +41,11 @@ for (const file of files) {
     // Every example — fragment or complete — is compiled as a whole module by
     // the project driver, so both get the same analysis, the same emitter, and
     // the same project-level checks a real source file gets.
-    const entry = join(root, ".velar-documentation-example.vel");
+    // D39 item 53: `test "name":` is declared in a test module, so an example
+    // that declares one is compiled as the module kind it describes.
+    const entry = join(root, /^test\s+"/mu.test(source)
+      ? ".velar-documentation-example.test.vel"
+      : ".velar-documentation-example.vel");
     const result = await compileProject(entry, new Map([[entry, source]]), {
       sourceRoot: root,
       projectRoot: root,

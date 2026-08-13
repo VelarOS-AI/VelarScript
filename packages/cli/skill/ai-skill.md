@@ -94,11 +94,11 @@ everything else in `public/` is copied through. `.velar/` is the compiler's
 scratch directory. Both belong in `.gitignore`.
 
 **Tests.** `velar test` finds every `*.test.vel` file under the project (skipping
-`outDir` and `publicDir`) and runs the top-level functions whose names start with
-`test_`. No `export` is needed, and a `.test.vel` file containing no `test_*`
-function is a failure rather than a skip. `velar test --browser` is a separate
-suite: `*.browser.test.vel` files, run in a real browser through
-`velar/web-test`.
+`outDir` and `publicDir`) and runs its `test "name":` blocks. The name is a
+sentence about the code, quoted verbatim by the reporter and unique in its
+module; the body may `await` directly and needs no `export`. A file that declares no tests is a failure rather than a skip.
+`velar test --browser` is a separate suite: `*.browser.test.vel` files, run in a
+real browser through `velar/web-test`.
 
 **Separate the mounted entrypoint from testable code.** A test runs in Node with
 no DOM, so a headless test that imports the module calling `mount` fails on
@@ -176,17 +176,14 @@ print(formatName("ada"))
 print(formatName("ada", prefix="#"))
 ```
 
-A generic `def` may bound a type parameter with one of exactly three
-compiler-owned names — `Comparable` (has a runtime order), `Text` (has a text
-form), `Data` (is JSON-shaped) — which is what lets the body interpolate,
-sort, or serialize the value; the chain is `Comparable ⊂ Text ⊂ Data`, so one
-word always suffices, and a user type is never a bound:
+A type parameter may name one of three compiler-owned bounds, which is what
+lets the body order, interpolate, or serialize it: `Comparable` (runtime order)
+⊂ `Text` (text form) ⊂ `Data` (JSON-shaped). One word always suffices; a user
+type is never a bound.
 
-```velar
+```velar fragment
 def label<T: Text>(value: T) -> string:
     return f"{value}"
-
-print(label(5))
 ```
 
 `type` declares record shapes and aliases; `T?` is optional; every record
@@ -221,8 +218,8 @@ const status: Status = Status.active
 print(ProviderEventKind.textDelta)
 ```
 
-Classes use typed body fields, one explicit constructor, and explicit
-`self`; instances are called directly, without `new`:
+Classes use typed body fields, one explicit constructor, and explicit `self`;
+instances are called directly, without `new`:
 
 ```velar
 class Session:
@@ -238,24 +235,14 @@ class Session:
         self.close()
 
 const session = Session("session-1")
-session.close()
 ```
 
-`@name` members belong to the language, so they can never collide with a
-member you declare. `@dispose:` is the release contract — never called
-directly — that `using name = expression` runs on every exit from the owning
-scope (end of block, `return`, `break`, `continue`, or a throw), in reverse
-declaration order. The standard capability handles already have it, delegating
-to their own `close()`/`stop()`:
-
-```velar fragment
-async def collect(path: string) -> number:
-    using watcher = await watchFiles(path)
-    let seen = 0
-    async for batch in watcher:
-        seen += batch.paths.size
-    return seen
-```
+`@name` members belong to the language and can never collide with yours.
+`@dispose:` is the release contract — never called directly — that
+`using name = expression` runs on every exit from the owning scope (block end,
+`return`, `break`, `continue`, throw), in reverse declaration order. Standard
+handles already have it, so `using watcher = await watchFiles(path)` above an
+`async for` needs no `try`/`finally`.
 
 Components (Web extension) return JSX directly — there is no `render` block.
 `state` holds a fact, `computed(() => ...)` derives, `action` performs a
@@ -528,19 +515,8 @@ def parseConfig(raw: unknown) -> Config:
 ```
 
 An expected failure is an optional, not a block: `try expression` produces
-`null` when anything in the chain throws, and its result must be consumed.
-Reach for `try`/`catch` when the failure's details matter.
-
-```velar
-type Port:
-    value: number
-
-def readPort(raw: unknown) -> number:
-    return Port.parse(raw).value
-
-const port = try readPort({ value: 8080 }) ?? 3000
-print(f"{port}")
-```
+`null` when anything in the chain throws, and its result must be consumed —
+`const settings = try Settings.parse(raw) ?? defaults`. Use `try`/`catch` when the details matter.
 
 ### Modules
 

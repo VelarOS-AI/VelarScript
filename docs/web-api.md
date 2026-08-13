@@ -1399,7 +1399,7 @@ Failure rendering is bounded for large/deep Lists, Maps, Sets, records, and
 strings. It never calls conversion hooks on functions or unknown objects, and
 invalid regular-expression construction uses a stable owned message rather
 than formatting a hostile thrown value.
-`.test.vel` files and `test_*` discovery remain owned by `velar test`.
+`.test.vel` files and `test "name":` discovery remain owned by `velar test`.
 
 Browser application tests use a separate `.browser.test.vel` suffix and run
 only through `velar test --browser`:
@@ -1408,7 +1408,7 @@ only through `velar test --browser`:
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_home_page() -> null:
+test "the home page renders at the root route":
     await browser.open("/")
     await browser.waitForText("h1", "My VelarScript App")
     expect(await browser.currentPath()).toBe("/")

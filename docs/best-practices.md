@@ -264,13 +264,31 @@ because the details are what you need. Never hand-write the third shape, a
 const settings = try Settings.parse(raw) ?? defaultSettings()
 ```
 
-## 9. Modules
+## 9. Tests are the specification
+
+A test name is a sentence the product owner can read: state what the code must
+do, not which function is under test. `test "an empty draft cannot be
+submitted":` earns its place in a report; `test "submit validation":` does not.
+One behaviour per test, and let the assertions read as the evidence for the
+name:
+
+```velar fragment
+test "a resolved ticket leaves the open queue":
+    const board = boardWith(openTicket)
+    resolve(board, openTicket.id)
+    expect(openIds(board)).toEqual([])
+```
+
+Helpers in a test module stay ordinary `def`s with ordinary names; only the
+blocks are tests.
+
+## 10. Modules
 
 Export and import by name. A package's public face is a barrel of explicit
 re-exports (`export {x} from "./x.vel"`). If two modules need each other's
 values at load time, the shared value wants a third module.
 
-## 10. What elegance means here
+## 11. What elegance means here
 
 The `@velarscript/text-buffer` package is the reference specimen: small pure
 functions, structural record returns, one job per function, contracts as

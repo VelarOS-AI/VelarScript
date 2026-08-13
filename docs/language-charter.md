@@ -2147,6 +2147,32 @@ model is three sentences, and every one of them matters:
    An `any` that travels further into the program takes the compiler's
    guarantees with it wherever it stops.
 
+### Tests
+
+A `*.test.vel` module declares its tests as named blocks:
+
+```velar
+import {expect} from "velar/test"
+
+def scale(maximum: number) -> number:
+    assert maximum <= 1000000 else "The chart maximum is beyond the supported range"
+    return maximum
+
+test "an oversized chart maximum is rejected":
+    expect(() => scale(1000001)).toThrow()
+```
+
+The name is a string literal, and it is the test's identity: the reporter
+quotes it verbatim, so it reads as a sentence about the code rather than a
+machine-shaped function name. Names are unique within their module. A test body
+is its own async frame and may `await` directly, and a test needs no `export` —
+the runner discovers it.
+
+`test` is a contextual keyword. It declares a test only at the top level of a
+`*.test.vel` module, followed by a string literal and a block; everywhere else
+`test` is an ordinary name. There is one spelling: a top-level `def test_*` in a
+test module is rejected with the block to write instead.
+
 ## 13. Web extension boundary
 
 Core does not contain JSX, components, reactivity, lifecycle, or styling.

@@ -39,6 +39,7 @@ import type {
   TypeField,
   TypeParameterDeclaration,
   TypeReference,
+  TestDeclaration,
   TypeSyntax,
   UsingDeclaration,
   VariableDeclaration,
@@ -290,6 +291,24 @@ export class Parser {
 
     if (this.check("const") || this.check("let")) {
       return this.parseVariable(start, exported);
+    }
+
+    // D39 item 53: `test "name":` is a contextual keyword — statement head, a
+    // string literal, then a block. `test` stays an ordinary name everywhere
+    // else, including `test(...)` and `const test = ...`.
+    if (this.check("identifier") && this.current().value === "test"
+      && this.peekKind(1) === "string" && this.peekKind(2) === "colon") {
+      const keyword = this.advance();
+      if (exported) this.diagnostics.push(diagnostic("VEL2001", "A test is discovered by the runner and is not exported", keyword.span));
+      const title = this.advance();
+      const body = this.parseBlock();
+      return {
+        kind: "TestDeclaration",
+        title: title.value,
+        titleSpan: title.span,
+        body,
+        span: span(start, body.at(-1)?.span.end ?? title.span.end),
+      };
     }
 
     // D43 item 69: `using` is a contextual keyword — statement head, an

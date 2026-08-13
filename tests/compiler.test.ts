@@ -15166,7 +15166,7 @@ test("extension packages resolve a deterministic semantic dependency graph", asy
       velar: { extension: { kind, apiVersion, manifestKey, extends: parents } },
     }), "utf8");
     const moduleContract = moduleName
-      ? `, modules: {apiVersion: ${JSON.stringify(apiVersion)}, interfaces: new Map([[${JSON.stringify(moduleName)}, {exports:new Map(), mutableExports:new Set(), reactiveExports:new Map(), reExports:new Map(), namedTypes:new Map(), namedTypeIdentities:new Map(), typeAliases:new Map(), enums:new Map(), classes:new Map(), testFunctions:[], extensionExports:new Map(), extensionData:new Map()}]]), sources: new Map([[${JSON.stringify(moduleName)}, "export const ready = true\\n"]])}`
+      ? `, modules: {apiVersion: ${JSON.stringify(apiVersion)}, interfaces: new Map([[${JSON.stringify(moduleName)}, {exports:new Map(), mutableExports:new Set(), reactiveExports:new Map(), reExports:new Map(), namedTypes:new Map(), namedTypeIdentities:new Map(), typeAliases:new Map(), enums:new Map(), classes:new Map(), tests:[], extensionExports:new Map(), extensionData:new Map()}]]), sources: new Map([[${JSON.stringify(moduleName)}, "export const ready = true\\n"]])}`
       : "";
     await writeFile(join(root, "compiler.js"), `
 export const velarCompilerExtension = Object.freeze({id: ${JSON.stringify(name)}, contract: Object.freeze({protocolVersion: 1, apiVersion: ${JSON.stringify(apiVersion)}, kind: ${JSON.stringify(kind)}, extends: Object.freeze(${JSON.stringify(parents)})})${moduleContract}})
@@ -15649,7 +15649,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     await readFile(join(projectRoot, "public", "velarscript-mark.svg"), "utf8"),
     await readFile(resolve("assets/brand/velarscript-mark.svg"), "utf8"),
   );
-  assert.match(await readFile(join(projectRoot, "src", "app.test.vel"), "utf8"), /test_application_contract/u);
+  assert.match(await readFile(join(projectRoot, "src", "app.test.vel"), "utf8"), /^test "application contract":$/mu);
   assert.match(await readFile(join(projectRoot, "src", "app.browser.test.vel"), "utf8"), /browser\.open/u);
   await linkWorkspaceWebExtension(projectRoot);
   const config = await resolveVelarProject(projectRoot);
@@ -15661,7 +15661,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(checked.status, 0, checked.stderr);
   const coreTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(coreTest.status, 0, coreTest.stderr);
-  assert.match(coreTest.stdout, /app\.test\.vel :: test_application_contract/u);
+  assert.match(coreTest.stdout, /app\.test\.vel :: application contract/u);
 
   const formatCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "format", "--check"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(formatCheck.status, 0, formatCheck.stderr);
@@ -15736,7 +15736,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(libraryFormat.status, 0, libraryFormat.stderr);
   const libraryTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryTest.status, 0, libraryTest.stderr);
-  assert.match(libraryTest.stdout, /index\.test\.vel :: test_greeting/u);
+  assert.match(libraryTest.stdout, /index\.test\.vel :: greeting/u);
   const libraryBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryBuild.status, 0, libraryBuild.stderr);
   assert.match(await readFile(join(libraryRoot, "dist", "index.js"), "utf8"), /function greet/u);
@@ -15762,7 +15762,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(componentCheck.status, 0, componentCheck.stderr);
   const componentTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", componentRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(componentTest.status, 0, componentTest.stderr);
-  assert.match(componentTest.stdout, /index\.test\.vel :: test_component_content_contract/u);
+  assert.match(componentTest.stdout, /index\.test\.vel :: component content contract/u);
   const componentBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", componentRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(componentBuild.status, 0, componentBuild.stderr);
   await verifyProductionBuild(join(componentRoot, "dist"));
@@ -15783,7 +15783,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(nodeCheck.status, 0, nodeCheck.stderr);
   const nodeTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", nodeRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(nodeTest.status, 0, nodeTest.stderr);
-  assert.match(nodeTest.stdout, /app\.test\.vel :: test_node_application_contract/u);
+  assert.match(nodeTest.stdout, /app\.test\.vel :: node application contract/u);
 
   const desktopRoot = join(directory, "hello-desktop");
   const desktopCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", desktopRoot, "--template=desktop"], { cwd: directory, encoding: "utf8" });
@@ -15803,7 +15803,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(desktopCheck.status, 0, desktopCheck.stderr);
   const desktopTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", desktopRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(desktopTest.status, 0, desktopTest.stderr);
-  assert.match(desktopTest.stdout, /app\.test\.vel :: test_desktop_application_contract/u);
+  assert.match(desktopTest.stdout, /app\.test\.vel :: desktop application contract/u);
 
   const unavailableGame = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", join(directory, "game"), "--template", "game"], { cwd: directory, encoding: "utf8" });
   assert.equal(unavailableGame.status, 2);
@@ -16155,7 +16155,7 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
   assert.equal(invalidNpmCalled, false);
 });
 
-test("velar test discovers test_* functions without requiring exports", async () => {
+test("velar test discovers test blocks without requiring exports", async () => {
   const directory = await makeTemporaryDirectory("velar-test-project-");
   await mkdir(join(directory, "src"), { recursive: true });
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel", extensions: [] }), "utf8");
@@ -16164,10 +16164,10 @@ test("velar test discovers test_* functions without requiring exports", async ()
 import {expect} from "velar/test"
 import {add} from "./main.vel"
 
-def test_adds_numbers() -> null:
+test "it adds numbers":
     expect(add(2, 3)).toEqual(5)
 
-async def test_async_code() -> null:
+test "it awaits async code":
     await Promise.sleep(0ms)
     const value = "ready"
     expect(value).toEqual("ready")
@@ -16176,7 +16176,7 @@ async def test_async_code() -> null:
 
   const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: directory, encoding: "utf8" });
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.match(execution.stdout, /math\.test\.vel :: test_adds_numbers/);
+  assert.match(execution.stdout, /math\.test\.vel :: it adds numbers/);
   assert.match(execution.stdout, /2 passed, 0 failed/);
 });
 
@@ -16202,13 +16202,13 @@ export def greet(name: string) -> string:
 import {expect} from "velar/test"
 import {greet} from "velar-greeter"
 
-def test_package_graph() -> null:
+test "the package graph resolves":
     expect(greet("Velar")).toBe("Velar!")
 `.trimStart(), "utf8");
 
   const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: directory, encoding: "utf8" });
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.match(execution.stdout, /package\.test\.vel :: test_package_graph/u);
+  assert.match(execution.stdout, /package\.test\.vel :: the package graph resolves/u);
 });
 
 test("JSX fragments, declared children, form bindings, and event modifiers compose", () => {
@@ -28569,7 +28569,7 @@ print(measure("velar test resolves bridged packages"))
 import {expect} from "velar/test"
 import {measure} from "./words.vel"
 
-def test_bridged_dependency() -> null:
+test "a bridged dependency resolves":
     expect(measure("one two three")).toBe(3)
 `.trimStart(), "utf8");
 
@@ -28577,7 +28577,7 @@ def test_bridged_dependency() -> null:
   // through the project's own node_modules.
   const tested = spawnSync(process.execPath, [cli, "test"], { cwd: directory, encoding: "utf8" });
   assert.equal(tested.status, 0, String(tested.stderr));
-  assert.match(tested.stdout, /words\.test\.vel :: test_bridged_dependency/u);
+  assert.match(tested.stdout, /words\.test\.vel :: a bridged dependency resolves/u);
   assert.match(tested.stdout, /1 passed, 0 failed/u);
 
   const ran = spawnSync(process.execPath, [cli, "run"], { cwd: directory, encoding: "utf8" });

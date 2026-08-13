@@ -18,6 +18,7 @@ import type {
   TypeDeclaration,
   TypeAliasDeclaration,
   TypeParameterDeclaration,
+  TestDeclaration,
   TypeReference,
   TypeSyntax,
   UsingDeclaration,
@@ -377,6 +378,8 @@ export interface AnalysisContext {
   readonly inferredFunctionResults?: ReadonlyMap<string, ValueType>;
   /** True only for the final semantic pass after result inference converges. */
   readonly finalizeFunctionResultInference?: boolean;
+  /** The module's own path; `test "name":` is only declared in a `*.test.vel` module. */
+  readonly path?: string;
 }
 
 /**
@@ -595,6 +598,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly dynamicOrderings = new Set<string>();
   private readonly reportedBoundViolations = new Set<string>();
   private readonly usingDisposals = new Map<string, DisposalContract>();
+  private readonly declaredTestTitles = new Set<string>();
   private readonly moduleTopLevelHostCalls = new Set<string>();
   private readonly stringSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
@@ -784,6 +788,7 @@ export class Analyzer implements TypeEnvironment {
         staticMethods: new Map(),
       });
     }
+    this.modulePath = context.path ?? null;
     this.importBindings = new Map(context.imports);
     this.dynamicImports = new Map(context.dynamicImports);
     for (const [name, kind] of context.reactiveImports ?? []) this.reactiveBindings.set(name, kind);
@@ -811,6 +816,7 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  private readonly modulePath: string | null;
   private readonly importBindings: ReadonlyMap<string, ValueType>;
   private readonly dynamicImports: ReadonlyMap<string, ValueType>;
 
@@ -2063,10 +2069,22 @@ export class Analyzer implements TypeEnvironment {
       case "UsingDeclaration":
         this.analyzeUsingDeclaration(statement);
         break;
+      case "TestDeclaration":
+        this.analyzeTestDeclaration(statement);
+        break;
       case "FunctionDeclaration":
         // MOD-D1: `export def` below module scope emitted invalid JavaScript.
         if (statement.exported && this.scopes.length !== 1) {
           this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
+        }
+        // D39 item 53: one spelling. `def test_*` discovery is retired, so the
+        // name that used to mean "this is a test" gets pointed at the block.
+        if (statement.name.startsWith("test_") && this.scopes.length === 1 && (this.modulePath ?? "").endsWith(".test.vel")) {
+          this.diagnostics.push(diagnostic(
+            "VEL3019",
+            `Write 'test "${statement.name.slice("test_".length).replaceAll("_", " ")}":' and move the body into it; a test's name is a sentence the owner reads, and 'def test_*' discovery is retired`,
+            statement.signatureSpan,
+          ));
         }
         this.analyzeFunctionDeclaration(statement, null);
         break;
@@ -3095,6 +3113,52 @@ export class Analyzer implements TypeEnvironment {
     this.loopDepth = previousLoopDepth;
     this.finallyLoopDepths = previousFinallyLoopDepths;
     this.unreachableDiagnosticDepth = previousUnreachableDiagnosticDepth;
+    this.functionDepth -= 1;
+    this.flowFrameDepth -= 1;
+    this.exitScope();
+  }
+
+  /**
+   * D39 item 53: `test "name":` is one test. Its body is an async frame — a
+   * test awaits its own work — and its name is the product specification a
+   * person reads, so it must be present, unique in the module, and declared
+   * where the runner actually looks.
+   */
+  private analyzeTestDeclaration(statement: TestDeclaration): void {
+    if (!this.inModuleInitializationPosition() || this.scopes.length !== 1) {
+      this.diagnostics.push(diagnostic("VEL3019", "A test is declared at module top level", statement.span));
+    } else if (!(this.modulePath ?? "").endsWith(".test.vel")) {
+      this.diagnostics.push(diagnostic(
+        "VEL3019",
+        "Tests live in a '*.test.vel' module, which is where the runner looks; move this test beside the code it specifies",
+        statement.span,
+      ));
+    }
+    if (statement.title.trim() === "") {
+      this.diagnostics.push(diagnostic("VEL3019", "A test name states what the code must do; this one is empty", statement.titleSpan));
+    } else if (this.declaredTestTitles.has(statement.title)) {
+      this.diagnostics.push(diagnostic(
+        "VEL3019",
+        `This module already declares a test named ${JSON.stringify(statement.title)}; a report has to be able to name one failing test`,
+        statement.titleSpan,
+      ));
+    }
+    this.declaredTestTitles.add(statement.title);
+
+    this.enterScope();
+    this.flowFrameDepth += 1;
+    this.functionDepth += 1;
+    const previousLoopDepth = this.loopDepth;
+    this.loopDepth = 0;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
+    this.asynchronousFunctions.push(true);
+    this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
+    this.analyzeStatements(statement.body);
+    this.returnContexts.pop();
+    this.asynchronousFunctions.pop();
+    this.loopDepth = previousLoopDepth;
+    this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();

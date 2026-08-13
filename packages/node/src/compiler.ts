@@ -75,7 +75,7 @@ function moduleInterface(
     typeAliases,
     enums,
     classes,
-    testFunctions: [],
+    tests: [],
     extensionExports: new Map(),
     extensionData: new Map(),
   };
