@@ -3812,7 +3812,10 @@ export class Analyzer implements TypeEnvironment {
             }
             explicitFields.add(property.name);
             optionalFields.delete(property.name);
-            this.checkShorthandReservedName(property);
+            if (this.checkShorthandReservedName(property)) {
+              fields.set(property.name, unknownType);
+              continue;
+            }
             if (objectContext?.kind === "named" && expectedFields?.has(property.name)) {
               this.semanticObjectPropertyOwners.set(`${property.span.start}:${property.name}`, objectContext);
             }
@@ -6824,15 +6827,17 @@ export class Analyzer implements TypeEnvironment {
    * puts the reserved names on the same footing as every softened word, whose
    * shorthand now resolves to an ordinary binding.
    */
-  private checkShorthandReservedName(property: Extract<Expression, { kind: "ObjectExpression" }>["properties"][number] & { kind: "ObjectProperty" }): void {
-    if (!property.shorthand || this.lookup(property.name)) return;
+  private checkShorthandReservedName(property: Extract<Expression, { kind: "ObjectExpression" }>["properties"][number] & { kind: "ObjectProperty" }): boolean {
+    if (!property.shorthand || this.lookup(property.name)) return false;
     const restriction = bindingNameRestriction(property.name, this.extensionReservedBindings);
-    if (restriction !== "core" && restriction !== "extension") return;
+    if (restriction !== "core" && restriction !== "extension" && restriction !== "javascript") return false;
+    const owner = restriction === "core" ? "reserved Core binding" : restriction === "extension" ? "reserved extension binding" : "name JavaScript reserves";
     this.diagnostics.push(diagnostic(
       "VEL3007",
-      `Write '${property.name}: value'; '${property.name}' is a reserved ${restriction === "core" ? "Core" : "extension"} binding, so the shorthand has no binding of that name to read`,
+      `Write '${property.name}: value'; '${property.name}' is a ${owner}, so the shorthand has no binding of that name to read`,
       property.span,
     ));
+    return true;
   }
 
   private recordRuntimeObjectShape(expression: Extract<Expression, { kind: "ObjectExpression" }>, owner: Extract<ValueType, { kind: "named" }>): void {
@@ -8903,8 +8908,12 @@ export class Analyzer implements TypeEnvironment {
               : restriction === "extension"
                 ? `'${name}' is a reserved extension binding`
                 : `'${name}' is not available as a VelarScript binding`;
+        // The name is still declared after the report: a rejected parameter or
+        // loop binding whose body reads it would otherwise add an "Unknown
+        // name" for every use of the one mistake. No code is emitted from a
+        // module that reported a diagnostic, so the invalid spelling never
+        // reaches generated JavaScript.
         this.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
-        return;
       }
     }
     const scope = this.scopes.at(-1)!;

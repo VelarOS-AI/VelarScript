@@ -40,8 +40,14 @@ const coreReservedBindings = new Set([
   "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
 ]);
 
+// Spellings JavaScript reserves that VelarScript does not turn into a keyword
+// token. They are ordinary identifiers to the lexer — legal as record fields and
+// member names, which JavaScript also permits — but no binding may spell one,
+// because generated modules must remain valid JavaScript. `case` is here rather
+// than among the contextual keywords for exactly that reason: D30 item 16
+// softened it as a Vel word, and JavaScript still refuses `const case = ...`.
 const javaScriptReservedBindings = new Set([
-  "arguments", "debugger", "default", "delete", "do", "function", "implements", "instanceof", "interface", "package", "protected", "public", "typeof", "void", "yield",
+  "arguments", "case", "debugger", "default", "delete", "do", "function", "implements", "instanceof", "interface", "package", "protected", "public", "typeof", "void", "yield",
 ]);
 
 const forbiddenPrototypeMembers = new Set(["prototype", "__proto__"]);

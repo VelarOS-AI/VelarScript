@@ -134,6 +134,8 @@ them; the first two are the **silent traps** in the list — read them twice.
 | `if value:` truthiness | Conditions accept only `bool`/`bool?`. Test presence explicitly: `if value != null:`. |
 | `value is null` | `value == null` / `value != null` — `is` tests runtime types, `null` is a value. |
 | `switch`, or an `if`/`else if` ladder over an enum | `match` with `case _:` as the only fallback. |
+| Renaming a binding away from `type`, `state`, `from`, `match`, `case`, `as`, `action`, `resource`, `watch`, `look`, `component` | Don't. Declaration words are contextual: each declares only in its own shape, so `const {type, from} = event` and `const state = "ready"` are ordinary code in Core and Web alike. `enum` is the exception — JavaScript reserves it. |
+| A component's `mounted:` / `cleanup:` block | `@mounted:` / `@cleanup:`. Lifecycle hooks live in the language's `@` namespace, which is why a component can also declare its own `def mounted()`. |
 | Two statements on one line | One statement per line; there are no semicolons. A line starting with `.` or `?.` continues the previous line, so method chains format normally. |
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
@@ -454,6 +456,24 @@ component TicketPanel(id: string):
         <textarea bind:value={draft}></textarea>
         <button disabled={save.pending} on:click={save}>Save</button>
     </section>
+```
+
+Lifecycle is two sibling blocks in the language's own `@` namespace —
+`@mounted:` runs once after the DOM is inserted and may `await`; `@cleanup:`
+runs once before the component is destroyed and is synchronous:
+
+```velar fragment
+component Chart(points: List<number>):
+    let canvas: CanvasElement? = null
+
+    @mounted:
+        if canvas != null:
+            drawChart(canvas, points)
+
+    @cleanup:
+        releaseChart()
+
+    return <canvas ref={canvas}></canvas>
 ```
 
 **A resource loads once, at mount, and does not refetch when its inputs

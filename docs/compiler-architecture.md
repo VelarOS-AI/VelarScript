@@ -616,7 +616,8 @@ initialization therefore cannot change which case is selected.
   contract, so Core assignability and semantic kinds contain no Web type names;
   primitive members are read-only unless their owner explicitly marks a field
   writable, and structured target members require an owner callback;
-  loading lexical keywords alone can never silently activate Web semantics.
+  loading an extension's contextual keywords alone can never silently activate
+  Web semantics.
   Its `framework-host` subpath is a platform-neutral tooling ABI containing
   only protocol types and a version constant; it does not implement HTML,
   filesystem access, servers, bundling, browser automation, or framework
