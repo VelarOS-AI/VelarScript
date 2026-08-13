@@ -134,9 +134,9 @@ targets are authorized with at most 16 concurrent filesystem operations, so a
 maximum legal batch cannot multiply root resolution or create unbounded I/O.
 
 JavaScript and TypeScript documents use a separate protocol-neutral provider
-whose implementation is the pure source-backed `velar/javascript` module.
+whose implementation is the pure source package `@velarscript/script-analysis`.
 The CLI owns extension/language-id routing and LSP coordinate conversion; the
-Standard module owns only tokenization, structural diagnostics, local symbols,
+package owns only tokenization, structural diagnostics, local symbols,
 references, navigation, completion, rename, and semantic-token inputs. The
 provider applies the smallest code-point edit derived from a full-text LSP
 change and keeps one `ScriptDocument` per open document. It advertises this
@@ -933,18 +933,17 @@ shape retains the explicit code-point scan. `velar/text.lineStarts` and
 or bounded pieces without repeated source-level `.char(index)` calls or
 surrogate splitting.
 
-Portable Standard algorithms may be authored as CLI-owned `.vel` assets.
-`standard-modules.ts` inspects their explicit public interface, permits only
-static named imports from already-bootstrapped Standard modules, compiles the
-source lazily with shared runtime modules, and caches its JavaScript plus exact
-dependency closure. `velar/text-buffer` is the first such module. Published CLI
-artifacts include the source asset; applications still import only the stable
-`velar/text-buffer` identity and never resolve a repository path.
-Its immutable AVL rope and bounded history are consequently compiled by the
-ordinary class, optional narrowing, collection, and primitive-method lowering
-paths. The compiler owns none of its editor semantics; generated-code and real
-execution gates prove that this substantial Standard implementation consumes
-the same public language contract as application code.
+Reusable VelarScript algorithms outside the closed Standard vocabulary publish
+ordinary npm packages with a `velar.entry` source entry. The project loader
+resolves that entry from the installed package, keeps all relative imports
+inside its package root, compiles it with the ordinary application pipeline,
+and rejects multiple installed instances of one package in an application
+build. `@velarscript/text-buffer` and `@velarscript/script-analysis` are the
+first substantial consumers of this path. Their AVL rope, bounded history,
+incremental lexer, and local semantic analysis use ordinary class, optional
+narrowing, collection, readonly-view, and primitive-method lowering. The CLI
+language server consumes them through a build-time internal package edge; they
+never regain a user-visible `velar/*` identity.
 
 Checked Number receiver methods use a separate compiler-owned Number runtime.
 It captures the exact Math operations, `Number.isSafeInteger`, native

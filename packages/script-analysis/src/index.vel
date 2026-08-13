@@ -1,5 +1,5 @@
 import {chunks, matches} from "velar/text"
-import {TextBuffer, TextEdit} from "velar/text-buffer"
+import {TextBuffer, TextEdit} from "@velarscript/text-buffer"
 
 /// The source grammar selected for one ECMAScript document.
 export enum ScriptLanguage:

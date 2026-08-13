@@ -16,6 +16,8 @@ try {
   const create = await pack("create-velar");
   const cli = await pack("@velarscript/cli");
   const desktop = await pack("@velarscript/desktop");
+  const textBuffer = await pack("@velarscript/text-buffer");
+  const scriptAnalysis = await pack("@velarscript/script-analysis");
   for (const package_ of [compiler, node, web, create, cli, desktop]) {
     assert.ok(package_.files.some((file) => file.path === "LICENSE"));
     assert.ok(package_.files.some((file) => file.path === "README.md"));
@@ -27,9 +29,14 @@ try {
   assert.ok(cli.files.some((file) => file.path === "dist/production-verifier.js"));
   assert.ok(cli.files.some((file) => file.path === "dist/preview-server.js"));
   assert.ok(cli.files.some((file) => file.path === "dist/deployment-verifier.js"));
-  assert.ok(cli.files.some((file) => file.path === "stdlib/text-buffer.vel"));
-  assert.ok(cli.files.some((file) => file.path === "stdlib/javascript.vel"));
+  assert.ok(!cli.files.some((file) => file.path.startsWith("stdlib/")));
   assert.ok(cli.files.some((file) => file.path === "skill/ai-skill.md"));
+  assert.ok(textBuffer.files.some((file) => file.path === "LICENSE"));
+  assert.ok(textBuffer.files.some((file) => file.path === "README.md"));
+  assert.ok(textBuffer.files.some((file) => file.path === "src/index.vel"));
+  assert.ok(scriptAnalysis.files.some((file) => file.path === "LICENSE"));
+  assert.ok(scriptAnalysis.files.some((file) => file.path === "README.md"));
+  assert.ok(scriptAnalysis.files.some((file) => file.path === "src/index.vel"));
   assert.ok(compiler.files.some((file) => file.path === "dist/framework-host.js"));
   assert.ok(compiler.files.some((file) => file.path === "dist/application-package-host.js"));
   assert.ok(node.files.some((file) => file.path === "dist/compiler.js"));
@@ -53,6 +60,8 @@ try {
     join(directory, create.filename),
     join(directory, cli.filename),
     join(directory, desktop.filename),
+    join(directory, textBuffer.filename),
+    join(directory, scriptAnalysis.filename),
   ], directory);
 
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
@@ -73,6 +82,7 @@ try {
   assert.equal(installedManifest.dependencies.playwright, "^1.58.2");
   assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.10.0");
   assert.equal(installedManifest.dependencies["@velarscript/node"], "0.10.0");
+  assert.equal(installedManifest.dependencies["@velarscript/script-analysis"], "0.10.0");
   assert.equal(installedManifest.dependencies["@velarscript/web"], "0.10.0");
   assert.equal(installedManifest.dependencies["@velarscript/desktop"], "0.10.0");
   assert.equal(installedManifest.dependencies["create-velar"], "0.10.0");
@@ -132,8 +142,8 @@ try {
   await writeFile(join(directory, "main.vel"), `
 import {range, sum} from "velar/collections"
 import {chunks, utf8Size} from "velar/text"
-import {TextBuffer} from "velar/text-buffer"
-import {ScriptDocument, ScriptLanguage} from "velar/javascript"
+import {TextBuffer} from "@velarscript/text-buffer"
+import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
 
 export const answer = sum(range(0, 7)) * 2
 const buffer = TextBuffer("A😀\\nB")
@@ -147,13 +157,13 @@ const script = ScriptDocument(ScriptLanguage.typescript, scriptSource)
 const reference = (scriptSource.index("print(answer)") ?? 0) + "print(".size
 print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(reference).size)}")
 `.trimStart(), "utf8");
-  await run(process.execPath, [installedCli, "build", "main.vel", "--out", "main.js"], directory);
-  assert.match(await readFile(join(directory, "main.js"), "utf8"), /from "velar\/collections"/u);
-  assert.match(await readFile(join(directory, "node_modules", "velar", "collections.js"), "utf8"), /export function range/u);
-  assert.match(await readFile(join(directory, "node_modules", "velar", "text.js"), "utf8"), /export function chunks/u);
-  assert.match(await readFile(join(directory, "node_modules", "velar", "text-buffer.js"), "utf8"), /class TextBuffer/u);
-  assert.match(await readFile(join(directory, "node_modules", "velar", "javascript.js"), "utf8"), /class ScriptDocument/u);
-  const built = await run(process.execPath, [join(directory, "main.js")], directory);
+  await run(process.execPath, [installedCli, "build", "main.vel", "--out-dir", "dist"], directory);
+  assert.match(await readFile(join(directory, "dist", "main.js"), "utf8"), /from "velar\/collections"/u);
+  assert.match(await readFile(join(directory, "dist", "node_modules", "velar", "collections.js"), "utf8"), /export function range/u);
+  assert.match(await readFile(join(directory, "dist", "node_modules", "velar", "text.js"), "utf8"), /export function chunks/u);
+  assert.match(await readFile(join(directory, "dist", "__velar_packages__", "@velarscript", "text-buffer", "src", "index.js"), "utf8"), /class TextBuffer/u);
+  assert.match(await readFile(join(directory, "dist", "__velar_packages__", "@velarscript", "script-analysis", "src", "index.js"), "utf8"), /class ScriptDocument/u);
+  const built = await run(process.execPath, [join(directory, "dist", "main.js")], directory);
   assert.equal(built.stdout, "42\n11\nA😀|游戏\n5:B!\n0:2\n");
 
   // Anti-lock-in eject gate: the emitted build output is the whole program. It
@@ -163,12 +173,13 @@ print(f"{str(script.analysis().diagnostics.size)}:{str(script.referencesAt(refer
   const ejected = join(consumerDirectory, "ejected");
   await mkdir(join(ejected, "node_modules"), { recursive: true });
   await writeFile(join(ejected, "package.json"), `${JSON.stringify({ name: "ejected-app", private: true, type: "module" }, null, 2)}\n`, "utf8");
-  await cp(join(directory, "main.js"), join(ejected, "main.js"));
-  await cp(join(directory, "main.js.map"), join(ejected, "main.js.map"));
-  await cp(join(directory, "node_modules", "velar"), join(ejected, "node_modules", "velar"), { recursive: true });
+  await cp(join(directory, "dist", "main.js"), join(ejected, "main.js"));
+  await cp(join(directory, "dist", "main.js.map"), join(ejected, "main.js.map"));
+  await cp(join(directory, "dist", "node_modules", "velar"), join(ejected, "node_modules", "velar"), { recursive: true });
+  await cp(join(directory, "dist", "__velar_packages__"), join(ejected, "__velar_packages__"), { recursive: true });
   const ejectedCode = await readFile(join(ejected, "main.js"), "utf8");
   assert.match(ejectedCode, /\/\/# sourceMappingURL=main\.js\.map/u, "emitted output must stay source-mapped after ejecting");
-  assert.doesNotMatch(ejectedCode, /@velarscript/u, "emitted output must not import the Vel toolchain");
+  assert.doesNotMatch(ejectedCode, /from ["']@velarscript\//u, "emitted output must not import the Vel toolchain");
   assert.deepEqual(await readdir(join(ejected, "node_modules")), ["velar"],
     "the ejected directory may contain only the generated readable runtime, never toolchain packages");
   const ejectedRun = await run(process.execPath, [join(ejected, "main.js")], ejected);

@@ -225,7 +225,7 @@ values at load time, the shared value wants a third module.
 
 ## 10. What elegance means here
 
-The stdlib's own text-buffer module is the reference specimen: small pure
+The `@velarscript/text-buffer` package is the reference specimen: small pure
 functions, structural record returns, one job per function, contracts as
 asserts, and not one comment explaining a workaround — because there is
 nothing to work around when data is modeled first. Elegant VelarScript is

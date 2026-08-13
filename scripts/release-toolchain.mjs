@@ -21,7 +21,16 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
 const manifestName = "velar-toolchain-release.json";
 const checksumName = "SHA256SUMS";
-const workspaces = ["@velarscript/compiler", "@velarscript/node", "@velarscript/web", "create-velar", "@velarscript/cli", "@velarscript/desktop"];
+const workspaces = [
+  "@velarscript/compiler",
+  "@velarscript/node",
+  "@velarscript/web",
+  "create-velar",
+  "@velarscript/cli",
+  "@velarscript/desktop",
+  "@velarscript/text-buffer",
+  "@velarscript/script-analysis",
+];
 const excludedTreeNames = new Set([".git", "node_modules", "dist", "release", "coverage"]);
 
 async function main(arguments_) {
@@ -156,12 +165,12 @@ export async function verifyToolchainRelease(outputDirectory) {
     throw new Error("release manifest publishability does not match its mode and blockers");
   }
   if (!Array.isArray(manifest.packages) || manifest.packages.length !== workspaces.length) {
-    throw new Error("release manifest does not contain the complete toolchain package set");
+    throw new Error("release manifest does not contain the complete release package set");
   }
   const names = manifest.packages.map((package_) => package_?.name);
   const expectedNames = [...workspaces].sort();
   if (JSON.stringify(names) !== JSON.stringify(expectedNames)) {
-    throw new Error("release manifest package names must be the complete sorted toolchain set");
+    throw new Error("release manifest package names must be the complete sorted release set");
   }
   const sums = [];
   for (const package_ of manifest.packages) {
@@ -203,7 +212,9 @@ async function readPackageManifests() {
   const create = JSON.parse(await readFile(join(root, "packages", "create", "package.json"), "utf8"));
   const cli = JSON.parse(await readFile(join(root, "packages", "cli", "package.json"), "utf8"));
   const desktop = JSON.parse(await readFile(join(root, "packages", "desktop", "package.json"), "utf8"));
-  for (const package_ of [compiler, node, web, create, cli, desktop]) {
+  const textBuffer = JSON.parse(await readFile(join(root, "packages", "text-buffer", "package.json"), "utf8"));
+  const scriptAnalysis = JSON.parse(await readFile(join(root, "packages", "script-analysis", "package.json"), "utf8"));
+  for (const package_ of [compiler, node, web, create, cli, desktop, textBuffer, scriptAnalysis]) {
     if (package_.version !== rootManifest.version) throw new Error(`${package_.name} version must exactly match ${rootManifest.version}`);
     if (package_.repository?.url !== rootManifest.repository?.url) throw new Error(`${package_.name} repository must match the workspace repository`);
   }
@@ -235,7 +246,13 @@ async function readPackageManifests() {
   if (cli.dependencies?.["create-velar"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact project creator version");
   }
-  return { root: rootManifest, compiler, node, web, create, cli, desktop };
+  if (scriptAnalysis.dependencies?.["@velarscript/text-buffer"] !== textBuffer.version) {
+    throw new Error("@velarscript/script-analysis must pin the exact @velarscript/text-buffer version");
+  }
+  if (cli.dependencies?.["@velarscript/script-analysis"] !== scriptAnalysis.version) {
+    throw new Error("@velarscript/cli must pin the exact @velarscript/script-analysis version");
+  }
+  return { root: rootManifest, compiler, node, web, create, cli, desktop, textBuffer, scriptAnalysis };
 }
 
 function releaseBlockers(manifests, source) {
@@ -245,7 +262,16 @@ function releaseBlockers(manifests, source) {
   if (!source.clean) blockers.push("source working tree is not clean");
   if (source.tag !== `v${manifests.root.version}`) blockers.push(`HEAD is not exactly tagged v${manifests.root.version}`);
   if (!source.remoteMatches) blockers.push("origin does not match package repository metadata");
-  for (const package_ of [manifests.compiler, manifests.node, manifests.web, manifests.create, manifests.cli, manifests.desktop]) {
+  for (const package_ of [
+    manifests.compiler,
+    manifests.node,
+    manifests.web,
+    manifests.create,
+    manifests.cli,
+    manifests.desktop,
+    manifests.textBuffer,
+    manifests.scriptAnalysis,
+  ]) {
     if (!package_.license || package_.license === "UNLICENSED") blockers.push(`${package_.name} has no publishable license decision`);
   }
   return blockers;

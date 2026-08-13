@@ -1,0 +1,27 @@
+{
+  "name": "@velarscript/script-analysis",
+  "version": "0.10.0",
+  "description": "Pure VelarScript JavaScript and TypeScript lexical analysis for editor tooling.",
+  "license": "Apache-2.0",
+  "files": [
+    "src/index.vel",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VelarOS-AI/VelarScript.git",
+    "directory": "packages/script-analysis"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "velar": {
+    "entry": "src/index.vel"
+  },
+  "dependencies": {
+    "@velarscript/text-buffer": "0.10.0"
+  }
+}

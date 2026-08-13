@@ -7,7 +7,6 @@
   "files": [
     "dist",
     "skill",
-    "stdlib",
     "README.md"
   ],
   "scripts": {
@@ -34,6 +33,7 @@
     "@velarscript/compiler": "0.10.0",
     "@velarscript/desktop": "0.10.0",
     "@velarscript/node": "0.10.0",
+    "@velarscript/script-analysis": "0.10.0",
     "@velarscript/web": "0.10.0",
     "create-velar": "0.10.0",
     "esbuild": "^0.28.1",

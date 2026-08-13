@@ -283,6 +283,11 @@ export async function compileProjectEntries(
       }
       if (!dependency.source.startsWith(".")) {
         if (isStandardModule(dependency.source, compilerExtensions)) continue;
+        const migrated = migratedStandardPackageDiagnostic(dependency.source);
+        if (migrated) {
+          failures.push({ path: inputPath, message: migrated });
+          continue;
+        }
         try {
           const package_ = await resolveVelarSourcePackage(dependency.source, inputPath);
           const existing = velarPackages.get(package_.name);
@@ -431,6 +436,16 @@ export async function compileProjectEntries(
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     },
   };
+}
+
+function migratedStandardPackageDiagnostic(source: string): string | null {
+  if (source === "velar/javascript") {
+    return "Standard module 'velar/javascript' moved to package '@velarscript/script-analysis'; install it, then import from '@velarscript/script-analysis'";
+  }
+  if (source === "velar/text-buffer") {
+    return "Standard module 'velar/text-buffer' moved to package '@velarscript/text-buffer'; install it, then import from '@velarscript/text-buffer'";
+  }
+  return null;
 }
 
 function extensionOwnsStandardModule(source: string, extensions: readonly CompilerExtension[]): boolean {

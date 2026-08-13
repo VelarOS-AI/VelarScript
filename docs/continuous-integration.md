@@ -23,7 +23,7 @@ The repository defines three GitHub Actions workflows:
   Chromium, Firefox, and WebKit, and releases both resources through component
   cleanup. Host-side tests do not bypass that source contract by importing the
   generated realtime JavaScript module directly.
-- Packed-browser acceptance independently creates an application from the six
+- Packed-browser acceptance independently creates an application from the eight
   installed tarballs. Its application graph imports all nine browser
   application modules before mounting, while its generated browser test loads
   the tenth module, `velar/web-test`; the installed CLI then checks, tests,

@@ -1,4 +1,4 @@
-declare module "velar/javascript" {
+declare module "@velarscript/script-analysis" {
   import type { ScriptDocumentOwner, ScriptLanguage as ScriptLanguageName } from "./script-language-service.ts";
 
   export const ScriptLanguage: Readonly<Record<ScriptLanguageName, ScriptLanguageName>>;

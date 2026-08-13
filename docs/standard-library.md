@@ -10,16 +10,18 @@ The Core library combines the most useful everyday parts of Python and modern
 JavaScript behind a small explicit VelarScript surface. It is not a copy of either
 standard library.
 
+`velar/*` is a closed vocabulary owned by the language. A module belongs here
+only when it provides universal computation that any program may need, or a
+minimal orthogonal capability primitive for interacting with the outside world.
+Domain functionality such as editor, game, or chart tooling is always an
+installable library, even when it is implemented entirely in VelarScript.
+
 - Module-level capabilities are imported from official `velar/*` modules.
   Everyday value operations live on checked string, number, and collection
   members. Nothing patches JavaScript prototypes or creates new global names.
-- Standard modules whose implementation is naturally portable VelarScript may
-  ship as `.vel` assets inside the existing CLI package. The CLI derives their
-  public interface from that source, compiles them with shared compiler-runtime
-  modules, and includes their static Standard dependencies in the same
-  fail-closed closure as handwritten host modules. This is an implementation
-  form inside the existing Standard owner, not a new package identity or a
-  project source-path escape.
+- Implementation language does not determine membership. Reusable domain
+  modules written in VelarScript publish an ordinary npm package with one
+  `velar.entry` source entry and are imported by package name after installation.
 - Collection transforms return new lists and maps unless their name explicitly
   describes another result. JavaScript reference identity and `number`
   semantics remain unchanged.
@@ -250,107 +252,6 @@ const fields = splitPattern("one, two; three", " *[,;] *")
 const initial = "Ada".char(0)
 const short = "VelarScript".slice(0, 5)
 print(f"{initial ?? "?"}:{short.size}")
-```
-
-## `velar/text-buffer`
-
-`TextBuffer(text="")` is the Standard owner for incremental editable text. Its
-implementation is pure VelarScript and uses immutable AVL rope nodes with
-4,096-code-point maximum leaves. Nodes cache code-point length, UTF-8 bytes,
-line-feed count, trailing column, height, and leaf count; leaves cache local
-line starts. Split, concatenate, replacement, line lookup, and viewport reads
-therefore traverse tree height plus touched text instead of rebuilding global
-piece or line metadata. Adjacent small leaves coalesce automatically, so storage
-maintenance does not leak into a public `compact()` command. Public offsets,
-lengths, line columns, slices, and change records all use the same Unicode
-code-point positions as Core strings.
-
-The public surface is `size`, `byteSize`, `lineCount`, `revision`, `text()`,
-`slice(start,end)`, `replace(start,end,text)`, `insert(offset,text)`,
-`delete(start,end)`, `positionAt(offset)`, `offsetAt(line,column)`, and
-`lineText(line)`. `lineSlice(startLine,endLine)` returns a raw line-aligned
-viewport plus its absolute offsets; `endLine` is exclusive and may equal
-`lineCount`. Positions and lines are zero-based. Line text excludes LF and an
-immediately preceding CR. An offset between CR and LF normalizes to the visible
-end-of-line position, so every returned position is accepted by `offsetAt`.
-
-`apply(edits)` commits one non-empty ordered List of non-overlapping `TextEdit`
-ranges. Every range belongs to the same pre-revision, all validation and the
-16 MiB UTF-8 budget complete before state changes, and a successful batch
-increments revision exactly once. The returned `TextTransaction` contains one
-invertible `TextChange` per edit with shared before/after revisions. `replace`,
-`insert`, and `delete` are single-edit conveniences over that contract.
-
-`TextHistory(buffer,maxEntries=1000,maxBytes=32 MiB)` is the bounded undo/redo
-owner for one buffer. Its `apply` stores copied forward and inverse edits plus
-optional before/after `TextSelection` metadata. `begin`, repeated `apply`, and
-`commit` form one composition/history command; `cancel` reverts an active group.
-`undo` and `redo` return the selection to restore. An edit made directly on the
-attached buffer causes later history operations to fail closed on revision
-mismatch rather than replaying stale coordinates. History storage is bounded by
-both entry count and UTF-8 bytes.
-
-The buffer accepts at most 16 MiB of UTF-8 text, one million leaves, and 100,000
-edits per transaction. Editors should keep the full document in this owner,
-render `lineSlice` viewports, and route normal, multi-cursor, and composition
-changes through transactions rather than copying the document into a DOM input.
-
-```velar
-import {TextBuffer, TextHistory} from "velar/text-buffer"
-
-const text = TextBuffer("first\nthird")
-const history = TextHistory(text)
-const change = history.apply([
-    {start: text.offsetAt(1, 0), end: text.offsetAt(1, 0), inserted: "second\n"},
-])
-print(text.lineText(1))
-print(f"{str(change.beforeRevision)}:{str(change.afterRevision)}")
-```
-
-## `velar/javascript`
-
-`ScriptDocument(language, text="")` is the Standard owner for JavaScript and
-TypeScript lexical and local structural semantics. It is implemented in pure
-VelarScript on top of `velar/text-buffer`; it does not embed the TypeScript
-compiler, `tsserver`, an npm dependency, or a host-language parser. All spans
-and edits are half-open Unicode code-point ranges.
-
-The exported vocabulary is `ScriptLanguage`, `ScriptTokenKind`,
-`ScriptDiagnosticSeverity`, `ScriptSymbolKind`, `ScriptSpan`, `ScriptToken`,
-`ScriptDiagnostic`, `ScriptSymbol`, `ScriptReference`, `ScriptCompletion`,
-`ScriptHover`, `ScriptEdit`, `ScriptRename`, `ScriptAnalysis`,
-`ScriptActivity`, and `ScriptDocument`. A document publishes bounded tokens,
-delimiter and language-mode diagnostics, lexical scopes and declarations,
-local references, hover, definition, completion, rename, and semantic-token
-inputs. JavaScript files reject TypeScript-only declaration forms with
-`SCRIPT1201` rather than silently accepting the wrong language mode.
-Analysis, activity, token, symbol, navigation, completion, and rename results
-cross the public API as transitive `readonly` data views; callers cannot mutate
-the document's cached semantic state, and the runtime does not copy hundreds of
-thousands of tokens merely to enforce ownership.
-
-`update(text)` derives one bounded replacement from the previous revision.
-`apply(edits)` accepts ordered, non-overlapping pre-revision edits atomically.
-Both restart lexical work at a safe token boundary and report observable work
-through `ScriptActivity`: revision, whether the update was incremental, restart
-offset, code points read, tokens reused, and total tokens. Source characters
-are stored in bounded 4,096-code-point Lists so a document may use the full
-16 MiB `TextBuffer` budget without violating the one-million-item List ceiling.
-
-This service deliberately does not claim full JavaScript or TypeScript program
-semantics. It does not resolve packages, construct a cross-file module graph,
-perform TypeScript type checking, infer imported declarations, execute code,
-or format JavaScript/TypeScript. Consumers must keep those capabilities visibly
-unsupported until an official owner publishes them; local lexical information
-must not be presented as TypeScript compiler proof.
-
-```velar
-import {ScriptDocument, ScriptLanguage} from "velar/javascript"
-
-const script = ScriptDocument(ScriptLanguage.typescript, "const answer = 42\nprint(answer)")
-const references = script.referencesAt(26)
-const activity = script.apply([{start: 15, end: 17, replacement: "43"}])
-print(f"{str(script.analysis().diagnostics.size)}:{str(references.size)}:{str(activity.codePointsRead)}")
 ```
 
 ## `velar/math`

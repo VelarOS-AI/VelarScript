@@ -6,6 +6,14 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The standard library sheds its two editor-domain modules:
+  `velar/javascript` and `velar/text-buffer` move out as installable
+  packages (`@velarscript/script-analysis`, `@velarscript/text-buffer`),
+  since `velar/*` is closed vocabulary limited to universal computation
+  and capability primitives. The old imports get a directed migration
+  diagnostic naming the package, the CLI's own language service consumes
+  the package internally, and the install-import-run path for packages is
+  now part of the gates. The publish set grows to eight packages.
 - Importing `velar/app` no longer breaks reactivity. The runtime registry
   now owns its scheduler, so an application whose module graph stamps the
   registry from the generated `velar/app` module keeps every observed

@@ -2,7 +2,7 @@ import { chmod, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { embeddedStandardAssetsPlugin } from "./official-tool-assets.ts";
+import { officialToolModulesPlugin } from "./official-tool-assets.ts";
 
 export const VELAR_PROJECT_TASK_TOOL_ID = "velar-project-task";
 
@@ -30,7 +30,7 @@ export async function buildProjectTaskTool(outputFile: string): Promise<void> {
           buildContext.onResolve({ filter: /^\.\/browser-test-runner\.(?:ts|js)$/ }, (args) => ({ path: args.path, external: true }));
         },
       },
-      await embeddedStandardAssetsPlugin(),
+      await officialToolModulesPlugin(),
     ],
   });
   await chmod(outputFile, 0o644);

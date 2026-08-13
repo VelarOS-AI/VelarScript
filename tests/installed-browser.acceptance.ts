@@ -15,6 +15,8 @@ try {
   const create = await pack("create-velar");
   const cli = await pack("@velarscript/cli");
   const desktop = await pack("@velarscript/desktop");
+  const textBuffer = await pack("@velarscript/text-buffer");
+  const scriptAnalysis = await pack("@velarscript/script-analysis");
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
   await runNpm([
     "install",
@@ -27,6 +29,8 @@ try {
     join(directory, create),
     join(directory, cli),
     join(directory, desktop),
+    join(directory, textBuffer),
+    join(directory, scriptAnalysis),
   ], directory);
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
   const application = join(directory, "Team & App");
@@ -43,6 +47,8 @@ try {
     join(directory, create),
     join(directory, cli),
     join(directory, desktop),
+    join(directory, textBuffer),
+    join(directory, scriptAnalysis),
   ], application);
   await writeFile(join(application, "src", "web-contract.vel"), `
 import {onError} from "velar/app"
@@ -101,6 +107,8 @@ mount(<App />, "#app")
     join(directory, create),
     join(directory, cli),
     join(directory, desktop),
+    join(directory, textBuffer),
+    join(directory, scriptAnalysis),
   ], documentation);
   await runNpm(["run", "format:check"], documentation);
   await runNpm(["run", "check"], documentation);
@@ -125,6 +133,8 @@ mount(<App />, "#app")
     join(directory, create),
     join(directory, cli),
     join(directory, desktop),
+    join(directory, textBuffer),
+    join(directory, scriptAnalysis),
   ], component);
   const componentManifest = JSON.parse(await readFile(join(component, "package.json"), "utf8")) as {
     files: string[];

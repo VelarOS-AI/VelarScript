@@ -1,14 +1,30 @@
-import { readFile } from "node:fs/promises";
 import type { Plugin } from "esbuild";
+import { fileURLToPath } from "node:url";
+import { formatDiagnostic } from "@velarscript/compiler";
+import { compileProject } from "./project.ts";
 import { standardModuleSource } from "./standard-modules.ts";
 
-export async function embeddedStandardAssetsPlugin(): Promise<Plugin> {
-  const [javascriptSource, textBufferSource] = await Promise.all([
-    readFile(new URL("../stdlib/javascript.vel", import.meta.url), "utf8"),
-    readFile(new URL("../stdlib/text-buffer.vel", import.meta.url), "utf8"),
+const scriptAnalysisEntry = fileURLToPath(new URL("../../script-analysis/src/index.vel", import.meta.url));
+
+export async function officialToolModulesPlugin(): Promise<Plugin> {
+  const project = await compileProject(scriptAnalysisEntry, new Map(), {
+    sourceRoot: fileURLToPath(new URL("../../script-analysis/src/", import.meta.url)),
+    projectRoot: fileURLToPath(new URL("../../script-analysis/", import.meta.url)),
+  });
+  const failures = [
+    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+    ...project.modules.flatMap((module) => module.result.diagnostics
+      .map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
+  ];
+  if (failures.length > 0) throw new Error(`Cannot compile official script-analysis package:\n${failures.join("\n\n")}`);
+  const textBufferEntry = project.velarPackages.find((package_) => package_.name === "@velarscript/text-buffer")?.entryPath;
+  const modules = new Map([
+    ["@velarscript/script-analysis", project.modules.find((module) => module.inputPath === scriptAnalysisEntry)?.result.code],
+    ["@velarscript/text-buffer", project.modules.find((module) => module.inputPath === textBufferEntry)?.result.code],
   ]);
+  for (const [source, code] of modules) if (!code) throw new Error(`Official tool package '${source}' did not emit JavaScript`);
   return {
-    name: "velar-embedded-standard-assets",
+    name: "velar-official-tool-modules",
     setup(build) {
       build.onResolve({ filter: /^velar\// }, (args) => ({ path: args.path, namespace: "velar-standard-module" }));
       build.onLoad({ filter: /.*/, namespace: "velar-standard-module" }, (args) => {
@@ -16,13 +32,8 @@ export async function embeddedStandardAssetsPlugin(): Promise<Plugin> {
         if (contents === null) throw new Error(`Official tool requested unknown standard module '${args.path}'`);
         return { contents, loader: "js" };
       });
-      build.onResolve({ filter: /^\.\/embedded-standard-assets\.(?:ts|js)$/ }, (args) => /standard-modules\.(?:ts|js)$/u.test(args.importer)
-        ? { path: "velar:embedded-standard-assets", namespace: "velar-tool" }
-        : null);
-      build.onLoad({ filter: /^velar:embedded-standard-assets$/, namespace: "velar-tool" }, () => ({
-        contents: `const assets = new Map([["javascript.vel", ${JSON.stringify(javascriptSource)}], ["text-buffer.vel", ${JSON.stringify(textBufferSource)}]]); export function embeddedStandardAsset(name) { return assets.get(name) ?? null; }`,
-        loader: "js",
-      }));
+      build.onResolve({ filter: /^@velarscript\/(?:script-analysis|text-buffer)$/ }, (args) => ({ path: args.path, namespace: "velar-tool-package" }));
+      build.onLoad({ filter: /.*/, namespace: "velar-tool-package" }, (args) => ({ contents: modules.get(args.path)!, loader: "js" }));
     },
   };
 }

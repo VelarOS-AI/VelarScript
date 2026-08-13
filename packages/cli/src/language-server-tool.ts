@@ -2,7 +2,7 @@ import { chmod, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { embeddedStandardAssetsPlugin } from "./official-tool-assets.ts";
+import { officialToolModulesPlugin } from "./official-tool-assets.ts";
 
 export const VELAR_LANGUAGE_SERVER_TOOL_ID = "velar-language-server";
 
@@ -22,7 +22,7 @@ export async function buildLanguageServerTool(outputFile: string): Promise<void>
     sourcemap: false,
     legalComments: "none",
     logLevel: "silent",
-    plugins: [await embeddedStandardAssetsPlugin()],
+    plugins: [await officialToolModulesPlugin()],
   });
   await chmod(outputFile, 0o644);
 }

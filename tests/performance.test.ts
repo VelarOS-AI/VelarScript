@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
@@ -114,8 +114,14 @@ test("pure VelarScript script service bounds 1 MiB initial and tail-update work"
   const directory = await mkdtemp(join(tmpdir(), "velar-script-scale-"));
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
+  const packageScope = join(directory, "node_modules", "@velarscript");
+  await mkdir(packageScope, { recursive: true });
+  await Promise.all([
+    symlink(resolve("packages/text-buffer"), join(packageScope, "text-buffer"), "dir"),
+    symlink(resolve("packages/script-analysis"), join(packageScope, "script-analysis"), "dir"),
+  ]);
   await writeFile(entry, `
-import {ScriptDocument, ScriptLanguage} from "velar/javascript"
+import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
 import {monotonic} from "velar/time"
 
 const source = "const value = 1;\\n" + "value + 1;\\n".repeat(95324)

@@ -6,8 +6,9 @@ server for VelarScript. The language server and project graph are compiler-owned
 editors, including the injected VelarOS Workbench contribution, consume them as
 independent clients. Requires Node.js 24 or later.
 
-The same server routes JavaScript and TypeScript documents to the official pure
-VelarScript `velar/javascript` service. That service publishes bounded lexical
+The same server routes JavaScript and TypeScript documents to the pure
+VelarScript `@velarscript/script-analysis` package through an internal bundled
+tool edge. That package publishes bounded lexical
 and local structural diagnostics, symbols, hover, definition, references,
 rename, completion, and semantic tokens with incremental lexical updates. It is
 not the TypeScript compiler: cross-file/package type checking and JavaScript/

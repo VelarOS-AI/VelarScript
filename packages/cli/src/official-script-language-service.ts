@@ -1,4 +1,4 @@
-import { ScriptDocument, ScriptLanguage } from "velar/javascript";
+import { ScriptDocument, ScriptLanguage } from "@velarscript/script-analysis";
 import { registerScriptLanguageService } from "./script-language-service.ts";
 
 export function installOfficialScriptLanguageService(): void {

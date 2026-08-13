@@ -26,6 +26,16 @@ test("publication rehearsal emits reproducible verified package identities witho
     assert.equal(firstManifest.publish.publishable, false);
     assert.ok(!firstManifest.publish.blockers.some((item: string) => item.includes("stable release version")));
     assert.ok(!firstManifest.publish.blockers.some((item: string) => item.includes("publishable license")));
+    assert.deepEqual(firstManifest.packages.map((item: { name: string }) => item.name), [
+      "@velarscript/cli",
+      "@velarscript/compiler",
+      "@velarscript/desktop",
+      "@velarscript/node",
+      "@velarscript/script-analysis",
+      "@velarscript/text-buffer",
+      "@velarscript/web",
+      "create-velar",
+    ]);
     assert.deepEqual(
       firstManifest.packages.map((item: { name: string; version: string; sha256: string }) => ({ name: item.name, version: item.version, sha256: item.sha256 })),
       secondManifest.packages.map((item: { name: string; version: string; sha256: string }) => ({ name: item.name, version: item.version, sha256: item.sha256 })),
@@ -57,7 +67,7 @@ test("publication rehearsal emits reproducible verified package identities witho
     await writeFile(duplicateManifestPath, `${JSON.stringify(duplicateManifest, null, 2)}\n`, "utf8");
     const refusedDuplicate = await runRelease(["verify", duplicatePackages], true);
     assert.notEqual(refusedDuplicate.code, 0);
-    assert.match(refusedDuplicate.stderr, /complete sorted toolchain set/u);
+    assert.match(refusedDuplicate.stderr, /complete sorted release set/u);
 
     const traversingPackage = join(temporary, "traversing-package");
     await cp(first, traversingPackage, { recursive: true });

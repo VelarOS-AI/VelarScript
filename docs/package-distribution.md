@@ -2,7 +2,8 @@
 
 Status: stable package contract for VelarScript 0.10; publication separately authorized
 
-The toolchain is distributed as six independent npm packages:
+The repository distributes six toolchain packages and two installable
+VelarScript domain-library packages through npm:
 
 - `@velarscript/compiler`: compiler, formatter, diagnostics, semantic index,
   Core lowering APIs, compiler-extension ABI, neutral framework-host ABI, and
@@ -23,13 +24,21 @@ The toolchain is distributed as six independent npm packages:
 - `@velarscript/cli`: `velar` CLI, project tooling, development server, test
   runners, npm-backed dependency workflow, production builder/local and remote
   verifiers/preview server, and LSP server.
+- `@velarscript/text-buffer`: a pure VelarScript incremental text buffer,
+  published as a source package with `velar.entry`.
+- `@velarscript/script-analysis`: pure VelarScript JavaScript/TypeScript lexical
+  and local structural analysis. It depends exactly on
+  `@velarscript/text-buffer` and is bundled internally by the CLI language
+  server without acquiring a `velar/*` Standard identity.
 
-All six packages require Node.js 24 or later and contain no Workbench code.
+All eight packages require Node.js 24 or later and contain no Workbench code.
 Compiler, Node, Web, Desktop, creator, and CLI publish JavaScript and `.d.ts`
-artifacts from `dist`. Web pins the exact
+artifacts from `dist`; text-buffer and script-analysis publish their checked
+`.vel` source entries. Web pins the exact
 matching compiler version. Node pins compiler. Desktop pins compiler, Node,
-and Web, but never imports or executes the CLI. CLI pins compiler, Node, Web,
-Desktop, and creator as one complete official toolchain generation. It resolves
+and Web, but never imports or executes the CLI. Script-analysis pins
+text-buffer. CLI pins compiler, Node, Web, Desktop, creator, and script-analysis
+as one complete official release generation. It resolves
 every compiler/project extension declared by the application's format-v2
 manifest from the project first, then discovers and validates optional
 protocol-v1 `/host` and `/package-host` entries from the same owner.
@@ -173,7 +182,7 @@ installed `@velarscript/web` tarball, and the generated browser test imports
 `velar/web-test`. The installed CLI must check, test, build, integrity-verify,
 and run the resulting project before the release set is accepted.
 
-`npm run release:rehearse` adds the release-set boundary: all six tarballs,
+`npm run release:rehearse` adds the release-set boundary: all eight tarballs,
 deterministic SHA-256 values, source identity, npm integrity, and explicit
 publication blockers. Candidate mode fails closed unless Git/version/remote
 and license requirements are satisfied. CI may attest and upload these
@@ -185,10 +194,11 @@ cannot race with compiler, editor, or application tests.
 
 Release output replacement refuses repository roots/ancestors, symbolic links,
 and non-release directories. Verification accepts exactly the sorted compiler,
-Node, Web, Desktop, creator, and CLI package identities, canonical tarball names, matching versions/sizes/
-hashes/npm integrity, the declared checksum file, and no undeclared files.
-Workbench independently checks the same package set and tarball SHA-256 values
-before installing them; it does not import this repository's verifier.
+Node, Web, Desktop, creator, CLI, text-buffer, and script-analysis package
+identities, canonical tarball names, matching versions/sizes/hashes/npm
+integrity, the declared checksum file, and no undeclared files. Downstream
+consumers independently check the required package subset and tarball SHA-256
+values before installing it; they do not import this repository's verifier.
 
 Agent orchestration, canonical `namespace:tool` identity, provider transports,
 approval, and execution policy belong to VelarOS ecosystem packages rather
