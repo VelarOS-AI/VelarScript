@@ -310,7 +310,6 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
   const capabilities = new Set<string>();
   const primitiveOwners = new Map<string, string>();
   const globalOwners = new Map<string, string>();
-  const extensionKeywords = new Set(extensions.flatMap((extension) => Object.keys(extension.lexical?.keywords ?? {})));
   const extensionReservedBindings = new Set(extensions.flatMap((extension) => [...extension.analysis?.reservedBindings ?? []]));
   for (const extension of extensions) {
     if (!extension.id || seen.has(extension.id)) throw new Error(`Compiler extension '${extension.id}' is invalid or duplicated`);
@@ -324,13 +323,13 @@ function normalizedExtensions(extensions: readonly CompilerExtension[]): readonl
     for (const name of extension.analysis?.primitiveTypes ?? []) {
       const owner = primitiveOwners.get(name);
       if (isCorePrimitiveName(name)) throw new Error(`Compiler extension '${extension.id}' cannot replace Core primitive '${name}'`);
-      if (bindingNameRestriction(name, extensionKeywords, extensionReservedBindings) || owner) {
+      if (bindingNameRestriction(name, extensionReservedBindings) || owner) {
         throw new Error(`Compiler primitive '${name}' is invalid or has more than one owner${owner ? ` (${owner}, ${extension.id})` : ""}`);
       }
       primitiveOwners.set(name, extension.id);
     }
     for (const name of extension.analysis?.globals?.keys() ?? []) {
-      const restriction = bindingNameRestriction(name, extensionKeywords);
+      const restriction = bindingNameRestriction(name);
       if (restriction === "core") throw new Error(`Compiler extension '${extension.id}' cannot replace reserved Core binding '${name}'`);
       if (restriction) throw new Error(`Compiler extension '${extension.id}' declares invalid global '${name}'`);
       const owner = globalOwners.get(name);

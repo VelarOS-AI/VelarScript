@@ -3812,6 +3812,7 @@ export class Analyzer implements TypeEnvironment {
             }
             explicitFields.add(property.name);
             optionalFields.delete(property.name);
+            this.checkShorthandReservedName(property);
             if (objectContext?.kind === "named" && expectedFields?.has(property.name)) {
               this.semanticObjectPropertyOwners.set(`${property.span.start}:${property.name}`, objectContext);
             }
@@ -6815,6 +6816,25 @@ export class Analyzer implements TypeEnvironment {
     return result;
   }
 
+  /**
+   * A record shorthand names a binding. Reserved names have no binding to name,
+   * so `{computed}` and `{print}` used to reach past the author entirely and
+   * capture the runtime entry point. The shorthand is refused with the explicit
+   * spelling, which is the only way to mean either thing on purpose — and it
+   * puts the reserved names on the same footing as every softened word, whose
+   * shorthand now resolves to an ordinary binding.
+   */
+  private checkShorthandReservedName(property: Extract<Expression, { kind: "ObjectExpression" }>["properties"][number] & { kind: "ObjectProperty" }): void {
+    if (!property.shorthand || this.lookup(property.name)) return;
+    const restriction = bindingNameRestriction(property.name, this.extensionReservedBindings);
+    if (restriction !== "core" && restriction !== "extension") return;
+    this.diagnostics.push(diagnostic(
+      "VEL3007",
+      `Write '${property.name}: value'; '${property.name}' is a reserved ${restriction === "core" ? "Core" : "extension"} binding, so the shorthand has no binding of that name to read`,
+      property.span,
+    ));
+  }
+
   private recordRuntimeObjectShape(expression: Extract<Expression, { kind: "ObjectExpression" }>, owner: Extract<ValueType, { kind: "named" }>): void {
     const fields = this.fieldsOf(owner.identity ?? owner.name);
     if (!fields) return;
@@ -8870,7 +8890,7 @@ export class Analyzer implements TypeEnvironment {
   ): void {
     this.pendingScopeDeclarations.at(-1)?.delete(name);
     if (!internal) {
-      const restriction = bindingNameRestriction(name, undefined, this.extensionReservedBindings);
+      const restriction = bindingNameRestriction(name, this.extensionReservedBindings);
       if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
         const message = restriction === "javascript"
           ? name === "arguments"

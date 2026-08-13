@@ -64,11 +64,12 @@ export function isSourceIdentifierPart(character: string): boolean {
 
 export function bindingNameRestriction(
   name: string,
-  extensionKeywords: ReadonlySet<string> = new Set(),
   extensionReservedBindings: ReadonlySet<string> = new Set(),
 ): BindingNameRestriction | null {
   if (!isValidSourceIdentifier(name)) return "invalid";
-  if (Object.hasOwn(keywordKinds, name) || extensionKeywords.has(name)) return "keyword";
+  // D30 item 16: an extension's contextual keywords are ordinary names, so only
+  // the hard-reserved spellings are refused here.
+  if (Object.hasOwn(keywordKinds, name)) return "keyword";
   if (forbiddenSourceIdentifiers.has(name)) return "source";
   if (javaScriptReservedBindings.has(name)) return "javascript";
   if (name.toLowerCase().startsWith("__velar")) return "compiler";

@@ -50,9 +50,11 @@ after(removeTemporaryDirectories);
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
 const webFormatOptions = Object.freeze({ extensions: webCompilerExtensions });
+// D30 item 16: an extension's contextual keywords are ordinary names, so a
+// signature may use them; only hard-reserved and forbidden spellings are
+// unwritable at a call site.
 const unavailableOfficialParameterNames = new Set([
   ...Object.keys(keywordKinds),
-  ...Object.keys(velarCompilerExtension.lexical?.keywords ?? {}),
   ...Object.keys(velarCompilerExtension.lexical?.forbiddenIdentifiers ?? {}),
 ]);
 

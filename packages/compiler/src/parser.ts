@@ -49,7 +49,7 @@ import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
-const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ...Object.values(keywordKinds)]);
+const memberNameKinds = new Set<TokenKind>(["identifier", ...Object.values(keywordKinds)]);
 // Token kinds that begin a statement but can never begin a record field or
 // appear inside a record literal's field list. A keyword followed by ':' is a
 // keyword-named field, so it never counts as statement evidence.
@@ -61,7 +61,7 @@ const statementStarterKinds = new Set<TokenKind>([
 const statementStarterWords = new Set(["match"]);
 // Token kinds that legally appear at the top level of a record literal's
 // field list: field names, shorthand entries, and their separators.
-const recordFieldLevelKinds = new Set<TokenKind>(["identifier", "extensionKeyword", "string", "comma", ...Object.values(keywordKinds)]);
+const recordFieldLevelKinds = new Set<TokenKind>(["identifier", "string", "comma", ...Object.values(keywordKinds)]);
 const MAX_PARSE_DEPTH = 512;
 const PARSER_COMPLEXITY_FAILURE = Object.freeze({ kind: "VelarParserComplexityFailure" });
 
@@ -107,11 +107,11 @@ const comparisonOperators: Partial<Record<TokenKind, ComparisonChainExpression["
   greaterEqual: ">=",
 };
 
-// An extension keyword directly followed by ':' opens an indentation-owned
-// extension block whose capture depends on
-// physical lines; a bracket fragment containing one keeps line-sensitive form.
-function containsExtensionBlockStart(tokens: readonly Token[]): boolean {
-  return tokens.some((token, index) => token.kind === "extensionKeyword" && tokens[index + 1]?.kind === "colon");
+// An extension's contextual keyword directly followed by ':' opens an
+// indentation-owned extension block whose capture depends on physical lines; a
+// bracket fragment containing one keeps line-sensitive form.
+function containsExtensionBlockStart(tokens: readonly Token[], words: ReadonlySet<string>): boolean {
+  return tokens.some((token, index) => token.kind === "identifier" && words.has(token.value) && tokens[index + 1]?.kind === "colon");
 }
 
 // Statement-boundary guidance names the leftover token as the author typed it.
@@ -136,12 +136,15 @@ export class Parser {
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
   private readonly genericCallableNames = new Set<string>();
+  /** Extension-owned contextual keywords: names until a shape claims them. */
+  protected readonly contextualKeywords: ReadonlySet<string>;
   private index = 0;
   private parseDepth = 0;
 
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[] = []) {
     this.tokens = tokens;
     this.lexicalExtensions = lexicalExtensions;
+    this.contextualKeywords = new Set(lexicalExtensions.flatMap((extension) => [...extension.contextualKeywords ?? []]));
     for (let index = 0; index + 2 < tokens.length; index += 1) {
       if (tokens[index]?.kind === "def" && tokens[index + 1]?.kind === "identifier" && tokens[index + 2]?.kind === "less") {
         this.genericCallableNames.add(tokens[index + 1]!.value);
@@ -2558,19 +2561,20 @@ export class Parser {
         this.diagnostics.push(diagnostic("VEL2002", "No compiler extension accepts this embedded expression", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       }
-      case "extensionKeyword": {
-        const extensionExpression = this.parseExtensionExpression(token);
-        if (extensionExpression) return extensionExpression;
-        this.diagnostics.push(diagnostic("VEL2002", `Extension keyword '${token.value}' is not valid in this expression`, token.span));
-        return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
-      }
       case "true":
         return { kind: "LiteralExpression", value: true, raw: token.value, span: token.span };
       case "false":
         return { kind: "LiteralExpression", value: false, raw: token.value, span: token.span };
       case "null":
         return { kind: "LiteralExpression", value: null, raw: token.value, span: token.span };
-      case "identifier":
+      case "identifier": {
+        // An extension's contextual keyword is an ordinary name until its own
+        // parser recognizes the shape it owns; only then does the extension
+        // expression win over the identifier reading.
+        if (this.contextualKeywords.has(token.value)) {
+          const extensionExpression = this.parseExtensionExpression(token);
+          if (extensionExpression) return extensionExpression;
+        }
         if (token.value === "keyframes" && this.check("colon")) {
           this.diagnostics.push(diagnostic(
             "VEL2035",
@@ -2590,6 +2594,7 @@ export class Parser {
           return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
         }
         return { kind: "IdentifierExpression", name: token.value, span: token.span };
+      }
       case "super":
         return { kind: "SuperExpression", span: token.span };
       case "leftParen": {
@@ -2640,7 +2645,7 @@ export class Parser {
               : name.kind === "identifier"
                 ? { kind: "IdentifierExpression", name: name.value, span: name.span } satisfies IdentifierExpression
                 : { kind: "LiteralExpression", value: null, raw: "null", span: name.span } satisfies Expression;
-            properties.push({ kind: "ObjectProperty", name: name.value, value, span: span(name.span.start, value.span.end) });
+            properties.push({ kind: "ObjectProperty", name: name.value, value, ...(hasValue ? {} : { shorthand: true }), span: span(name.span.start, value.span.end) });
           } while (this.match("comma") && !this.check("rightBrace"));
         }
         const close = this.expect("rightBrace", "Expected '}' after object fields");
@@ -2926,7 +2931,7 @@ export class Parser {
     sourceOffsets?: readonly number[],
   ): Expression {
     let lexed = bracketFragment ? new Lexer(fragment, this.lexicalExtensions, { bracketFragment: true, scanSourceHygiene: false }).lex() : null;
-    if (!lexed || containsExtensionBlockStart(lexed.tokens)) {
+    if (!lexed || containsExtensionBlockStart(lexed.tokens, this.contextualKeywords)) {
       lexed = new Lexer(fragment, this.lexicalExtensions, { scanSourceHygiene: false }).lex();
     }
     const mappedSpan = (local: Span): Span => sourceOffsets
@@ -3142,9 +3147,7 @@ export class Parser {
   }
 
   protected matchExtensionKeyword(value: string): boolean {
-    if (this.current().kind !== "extensionKeyword" || this.current().value !== value) return false;
-    this.advance();
-    return true;
+    return this.matchWord(value);
   }
 
   /**
