@@ -197,7 +197,7 @@ export class JavaScriptEmitter {
           ["stringCount", "__velarStringCount"], ["stringStartsWith", "__velarStringStartsWith"], ["stringEndsWith", "__velarStringEndsWith"],
           ["stringSplit", "__velarStringSplit"], ["stringReplace", "__velarStringReplace"], ["stringReplaceAll", "__velarStringReplaceAll"],
           ["stringPadStart", "__velarStringPadStart"], ["stringPadEnd", "__velarStringPadEnd"], ["stringRepeat", "__velarStringRepeat"],
-          ["stringIsBlank", "__velarStringIsBlank"], ["stringCompare", "__velarStringCompare"],
+          ["stringIsBlank", "__velarStringIsBlank"], ["stringCompare", "__velarStringCompare"], ["orderCompare", "__velarOrderCompare"],
           ["numberAbs", "__velarNumberAbs"], ["numberRound", "__velarNumberRound"], ["numberFloor", "__velarNumberFloor"],
           ["numberCeil", "__velarNumberCeil"], ["numberToFixed", "__velarNumberToFixed"],
           ["numberIsInteger", "__velarNumberIsInteger"], ["numberIsNaN", "__velarNumberIsNaN"], ["numberIsFinite", "__velarNumberIsFinite"],
@@ -1668,6 +1668,13 @@ export class JavaScriptEmitter {
           this.needsPrimitiveHelpers = true;
           return `(__velarStringCompare(${this.emitBinaryOperand(expression.left)}, ${this.emitBinaryOperand(expression.right)}) ${expression.operator} 0)`;
         }
+        // D41 item 61: a comparison between Comparable-bounded parameters
+        // dispatches on the runtime category instead of guessing one.
+        if (["<", "<=", ">", ">="].includes(expression.operator)
+          && this.hints.dynamicOrderings.has(spanIdentity(expression.span))) {
+          this.needsPrimitiveHelpers = true;
+          return `(__velarOrderCompare(${this.emitBinaryOperand(expression.left)}, ${this.emitBinaryOperand(expression.right)}) ${expression.operator} 0)`;
+        }
         const operator = expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
           ? `(${this.emitMappedExpression(expression.left)})`
@@ -1950,6 +1957,11 @@ export class JavaScriptEmitter {
       if (["<", "<=", ">", ">="].includes(sourceOperator) && this.hints.stringOrderings.has(linkSpan)) {
         this.needsPrimitiveHelpers = true;
         body.push(`if (!(__velarStringCompare(${prefix}_${index - 1}, ${prefix}_${index}) ${sourceOperator} 0)) return false;`);
+        continue;
+      }
+      if (["<", "<=", ">", ">="].includes(sourceOperator) && this.hints.dynamicOrderings.has(linkSpan)) {
+        this.needsPrimitiveHelpers = true;
+        body.push(`if (!(__velarOrderCompare(${prefix}_${index - 1}, ${prefix}_${index}) ${sourceOperator} 0)) return false;`);
         continue;
       }
       const operator = sourceOperator === "==" ? "===" : sourceOperator === "!=" ? "!==" : sourceOperator;

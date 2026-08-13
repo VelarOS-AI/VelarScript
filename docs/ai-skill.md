@@ -176,6 +176,19 @@ print(formatName("ada"))
 print(formatName("ada", prefix="#"))
 ```
 
+A generic `def` may bound a type parameter with one of exactly three
+compiler-owned names — `Comparable` (has a runtime order), `Text` (has a text
+form), `Data` (is JSON-shaped) — which is what lets the body interpolate,
+sort, or serialize the value; the chain is `Comparable ⊂ Text ⊂ Data`, so one
+word always suffices, and a user type is never a bound:
+
+```velar
+def label<T: Text>(value: T) -> string:
+    return f"{value}"
+
+print(label(5))
+```
+
 `type` declares record shapes and aliases; `T?` is optional; every record
 type carries a runtime validator for untrusted data:
 

@@ -284,6 +284,9 @@ export interface FunctionDeclaration {
 
 export interface TypeParameterDeclaration {
   readonly name: string;
+  /** The bound written as `<T: Text>`; always a name from the closed vocabulary. */
+  readonly bound?: string;
+  readonly boundSpan?: Span;
   readonly span: Span;
 }
 

@@ -167,6 +167,20 @@ two statements, promote it to a named `def` — the name is documentation.
 Name arguments at call sites where a bare value would read as a mystery:
 `buttonLook(dangerous=true)`, never `buttonLook(true)`.
 
+A type parameter stays unbounded by default. Add a bound only when the body
+actually uses the capability — `<T: Text>` because it interpolates the value,
+`<T: Comparable>` because it orders it, `<T: Data>` because it serializes it.
+A bound the body does not need is a narrower contract for no gain, and it is
+the caller who pays. The chain runs `Comparable ⊂ Text ⊂ Data`, so one word
+always says it; reach for the weakest one that compiles:
+
+```velar
+def summarize<T: Text>(values: List<T>) -> string:
+    return values.map(str).join(", ")
+
+print(summarize([1, 2, 3]))
+```
+
 ## 6. Strings
 
 Text is built with f-strings — numbers, bools, and enums interpolate

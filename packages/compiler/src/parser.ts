@@ -878,7 +878,20 @@ export class Parser {
     if (!this.check("greater")) {
       do {
         const name = this.expect("identifier", "Expected a type parameter name");
-        if (name.value) parameters.push({ name: name.value, span: name.span });
+        // D41 item 61: `<T: Bound>` names one word from the compiler's closed
+        // bound vocabulary. The name is taken here and judged by the analyzer,
+        // so an unknown word gets a directed diagnostic instead of a parse
+        // cascade.
+        const bound = this.match("colon")
+          ? this.expect("identifier", "Expected a type parameter bound name after ':'")
+          : null;
+        if (name.value) {
+          parameters.push({
+            name: name.value,
+            ...(bound?.value ? { bound: bound.value, boundSpan: bound.span } : {}),
+            span: name.span,
+          });
+        }
       } while (this.match("comma") && !this.check("greater"));
     }
     const close = this.expect("greater", "Expected '>' after type parameters");

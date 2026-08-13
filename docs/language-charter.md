@@ -1203,8 +1203,46 @@ A parameter the call leaves unsolved becomes `unknown`. Type parameters are
 erased at runtime, so `is T`, `case T`, and every other runtime-checked
 position require a concrete type instead. Only `def` declarations — top-level,
 exported, extern, and class methods — take type parameters; generic `type`,
-`class`, and `component` declarations, bounds, and variance are deliberately
-out of scope.
+`class`, and `component` declarations and variance are deliberately out of
+scope.
+
+#### Bounds
+
+A type parameter may name one bound, written `<T: Bound>`. A bound does two
+things and nothing else: the call site checks the type the parameter solved
+to, and the body may use the capability the bound promises. There are no
+conditional types, mapped types, operations between bounds, inferred bounds,
+or default bounds — the type-level programming rule 4 excludes stays excluded.
+
+The bound vocabulary is closed and the compiler owns it. There are exactly
+three, and they form one containment chain — every `Comparable` type is also a
+`Text` type, and every `Text` type is also a `Data` type — so one word is
+always enough and there is no syntax for combining two:
+
+| Bound | Promise | What the body may do |
+| --- | --- | --- |
+| `Comparable` | the type has a runtime order | `<` `<=` `>` `>=`, `sorted()`, `min()`, `max()`, `sorted(by=)`, and `sortBy`/`minBy`/`maxBy` keys, plus everything `Text` allows |
+| `Text` | the type has a hook-free text form | f-string interpolation, `str(value)`, passing `str` itself, plus everything `Data` allows |
+| `Data` | the type is JSON-shaped | `Json.stringify`, `Json.stableStringify`, `Json.clone`, request bodies, stored values |
+
+```velar fragment
+def label<T: Text>(value: T) -> string:
+    return f"{value}"
+
+def ranked<T: Comparable>(values: List<T>) -> List<T>:
+    return values.sorted()
+
+print(label(5))
+print(ranked(["b", "a"]).size)
+```
+
+A user type is never a bound: `<T: User>` is rejected, and so is any name
+outside the three. The vocabulary is closed for the same reason user-defined
+decorators are absent — a library must not be able to change what a
+declaration means. An unbounded type parameter behaves exactly as before, a
+bound survives export so an imported generic keeps its contract, and the
+rejected call names the argument that solved the parameter to the type the
+bound refuses.
 
 ## 8. Collections
 

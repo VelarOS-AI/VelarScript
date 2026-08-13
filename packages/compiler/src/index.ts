@@ -13,6 +13,7 @@ import {
   bindNamedTypeParameters,
   boolType,
   invalidType,
+  isTypeParameterBound,
   mergeTypes,
   nullType,
   numberType,
@@ -23,6 +24,7 @@ import {
   stringType,
   unknownType,
   type EnumInfo,
+  type TypeParameterBound,
   type ValueType,
 } from "./types.ts";
 
@@ -832,9 +834,15 @@ function functionSignature(
   resolve: (reference: TypeReference | null) => ValueType,
 ): ValueType {
   const frame = new Map<string, ValueType>();
+  // D41 item 61 risk 4: this is the cross-module export interface. A bound
+  // dropped here would silently disappear from every imported generic.
+  const bounds: (TypeParameterBound | null)[] = [];
   for (const declaration of statement.typeParameters ?? []) {
-    if (!frame.has(declaration.name)) frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+    if (frame.has(declaration.name)) continue;
+    frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+    bounds.push(declaration.bound && isTypeParameterBound(declaration.bound) ? declaration.bound : null);
   }
+  const boundVector = bounds.some((bound) => bound !== null) ? bounds : null;
   const resolveBound = (reference: TypeReference | null): ValueType =>
     frame.size === 0 ? resolve(reference) : bindNamedTypeParameters(resolve(reference), frame);
   const result = statement.returnType
@@ -844,6 +852,7 @@ function functionSignature(
   return {
     kind: "function",
     ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
+    ...(frame.size > 0 && boundVector ? { typeParameterBounds: boundVector } : {}),
     parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolveBound(parameter.type)),
     parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
     requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,

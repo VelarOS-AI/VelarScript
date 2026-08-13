@@ -17482,6 +17482,9 @@ test("project compilation shares primitive method runtime without publishing it"
     "numberIsNaN",
     "numberRound",
     "numberToFixed",
+    // D41 item 61: the dispatching comparator behind ordered comparisons of
+    // `Comparable`-bounded type parameters.
+    "orderCompare",
     "stringChar",
     "stringCompare",
     "stringCount",
