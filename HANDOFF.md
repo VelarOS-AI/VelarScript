@@ -3344,6 +3344,15 @@ PILOT.md` —— 盲测试点（路线图第三阶段首次实弹）：Codex 作
 目录进行，零撞车。**编排方跟进**：Codex 报告落地后，S 波由编排方验收提交；
 盲测的 NOTES/SUMMARY 由编排方 triage 成缺陷/文档/简报三类工单。
 
+**keyframes 进语言（2026-08-13 用户批准方向 → D49 第 88 条）**：`keyframes:`
+块值字面量（from/to/N% 停靠点，升序查重，逗号多停靠点沿 match 先例）+
+`animate(frames, duration, ...)` 构建器（loop=true 替代不可拼写的 infinite；
+count/loop 互斥；实参含字面量编译期检查）。停靠点体复用 Look 全套属性机器
+减不可动画排除表；块内禁状态读（与 LOK-D1 同规则）、动态性活在
+`look:animation={...}` 指令位；`animation` 属性只收 Animation/List，字符串
+形拒绝（顺带关闭 LOK-D5 静默死声明）。a11y 立场：不做 reduced-motion 魔法，
+`if not motion.reduced:` 是官方搭配且必须进简报示例。归批次 I。
+
 **马拉松工作协议（2026-08-12 用户授权，最高约束，优先于本节其余排期）**：
 
 1. **设计层改动必须先与用户探讨** —— 语言语义/拼写/表面的任何变更，即使发现
