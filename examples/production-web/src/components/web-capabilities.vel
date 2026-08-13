@@ -6,7 +6,7 @@ import {currentRoute} from "velar/web"
 import {onError} from "velar/app"
 import {publicConfig} from "velar/config"
 import {logger, useSink} from "velar/log"
-import {border, rgb, spacing} from "velar/look"
+
 import {formBody, http} from "velar/http"
 import {eventStream, socket} from "velar/realtime"
 import {matches} from "velar/text"
@@ -44,31 +44,31 @@ const capabilitiesLook = look:
     display = "grid"
     gap = 12px
     padding = 16px
-    border = border(1px, rgb(66, 82, 143))
+    border = Look.border(1px, Look.rgb(66, 82, 143))
     borderRadius = 12px
-    background = rgb(17, 24, 46)
+    background = Look.rgb(17, 24, 46)
 
 const capabilityRowLook = look:
     display = "flex"
     flexWrap = "wrap"
-    gap = spacing(8px, 16px)
+    gap = Look.spacing(8px, 16px)
 
 const summaryItemLook = look:
-    color = rgb(189, 199, 255)
+    color = Look.rgb(189, 199, 255)
 
 const actionButtonLook = look:
-    padding = spacing(8px, 11px)
-    border = border(1px, rgb(82, 99, 165))
+    padding = Look.spacing(8px, 11px)
+    border = Look.border(1px, Look.rgb(82, 99, 165))
     borderRadius = 8px
     color = "inherit"
-    background = rgb(21, 28, 54)
+    background = Look.rgb(21, 28, 54)
     cursor = "pointer"
 const eventInputLook = look:
-    padding = spacing(8px, 11px)
-    border = border(1px, rgb(82, 99, 165))
+    padding = Look.spacing(8px, 11px)
+    border = Look.border(1px, Look.rgb(82, 99, 165))
     borderRadius = 8px
     color = "inherit"
-    background = rgb(21, 28, 54)
+    background = Look.rgb(21, 28, 54)
 
 component RealtimeProbe(socketUrl: string, eventsUrl: string):
     state socketLabel = "connecting"
@@ -213,8 +213,8 @@ export component WebCapabilities:
     const stopOnline = watchOnline(onlineChanged)
     const stopVisibility = watchVisibility(visibilityChanged)
     const stopMedia = watchMedia("(prefers-color-scheme: dark)", mediaChanged)
-    const stopReadyTimer = after(25, timerReady)
-    const stopHeartbeat = every(25, timerTick)
+    const stopReadyTimer = after(25ms, timerReady)
+    const stopHeartbeat = every(25ms, timerTick)
     const stopSession = session.watch("capability", CapabilityStatus, sessionChanged)
     const stopErrors = onError(report => captureRuntimeError(report.phase, report.error.message))
     const stopLog = useSink(record => captureLog(record.message))

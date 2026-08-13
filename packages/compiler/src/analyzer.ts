@@ -296,6 +296,8 @@ export interface LoweringHints {
   readonly namedArgumentOrders: ReadonlyMap<string, readonly number[]>;
   readonly extensionLiterals: ReadonlyMap<string, string>;
   readonly extensionCalls: ReadonlyMap<string, string>;
+  /** Prelude and permanent-namespace reads, keyed by span so lexical shadows win. */
+  readonly builtinValueReferences: ReadonlyMap<string, "Json" | "Promise" | "Look" | "range">;
   readonly runtimeNarrowings: ReadonlyMap<string, RuntimeNarrowingGuard>;
   /**
    * Span identities of `==`/`!=` operations (and comparison-chain links)
@@ -406,14 +408,16 @@ function sameInferredResult(left: ValueType, right: ValueType): boolean {
   return sameType(left, right);
 }
 
-const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown"]);
-const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type"]);
+const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
+const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
 const memberNarrowingPrefix = "\u0000member:";
 const coreGlobalGuidance = new Map([
   ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
   ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
-  ["JSON", "Use velar/json instead of the JSON global"],
-  ["Math", "Use velar/math instead of the Math global"],
+  ["JSON", "Use 'Json.parse(text)' or 'Json.stringify(value)'; VelarScript namespaces use PascalCase"],
+  ["Object", "Use record fields directly or Record<T>.keys(); VelarScript does not expose the JavaScript Object namespace"],
+  ["Array", "Use a '[]' List literal and List methods; VelarScript does not expose the JavaScript Array namespace"],
+  ["Math", "Use number methods such as value.abs(), value.round(), value.isFinite(), and value.isInteger(); VelarScript does not expose the JavaScript Math namespace"],
   ["Date", "Use velar/time instead of the Date global"],
   ["Boolean", "Use an explicit boolean comparison; VelarScript does not expose JavaScript truthiness conversion"],
   ["Number", "Use number(text), typed forms, or validated data instead of JavaScript Number coercion"],
@@ -421,16 +425,48 @@ const coreGlobalGuidance = new Map([
   // COL-U8: Set() and Map() are real constructors, so the List/Array
   // asymmetry is a trap worth naming: a List is built with a literal.
   ["List", "Lists are created with a '[]' literal (or [...values] to copy); 'List<T>' is a type name, not a constructor"],
-  ["Array", "Use a '[]' List literal; VelarScript does not expose JavaScript Array construction"],
   // TXT-I1: the Python spellings.
   ["len", "Use 'value.size'; strings and collections measure with the size member"],
   ["parseInt", "Use 'number(text)', then '.floor()' or '.round()' for an integer; VelarScript has one text-to-number conversion"],
   ["parseFloat", "Use 'number(text)'; VelarScript has one text-to-number conversion"],
-  ["stringify", "Add the import: import {stringify} from \"velar/json\""],
-  ["parse", "Add the import: import {parse} from \"velar/json\""],
-  ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil"]
+  ["stringify", "Use Json.stringify(value) directly; VelarScript's pure namespaces need no import"],
+  ["parse", "Use Json.parse(text) directly; VelarScript's pure namespaces need no import"],
+  ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil", "isFinite", "isInteger"]
     .map((name) => [name, removedGlobalFunctionGuidance(name)!] as const),
 ]);
+
+const durationType: ValueType = { kind: "named", name: "Duration" };
+const namespaceFunction = (
+  name: string,
+  parameterNames: readonly string[],
+  parameters: readonly ValueType[],
+  result: ValueType,
+  requiredParameters = parameters.length,
+): ValueType => ({ kind: "intrinsic", name, parameterNames, parameters, requiredParameters, result });
+const promiseOf = (value: ValueType): ValueType => ({ kind: "promise", value });
+const jsonNamespaceType: ValueType = {
+  kind: "object",
+  fields: new Map([
+    ["parse", namespaceFunction("json.parse", ["text", "target"], [stringType, anyType], unknownType, 1)],
+    ["stringify", namespaceFunction("json.stringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["stableStringify", namespaceFunction("json.stableStringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["clone", namespaceFunction("json.clone", ["value", "target"], [anyType, anyType], anyType, 1)],
+  ]),
+  readonlyFields: new Set(["parse", "stringify", "stableStringify", "clone"]),
+};
+const promiseNamespaceType: ValueType = {
+  kind: "object",
+  fields: new Map([
+    ["all", namespaceFunction("async.all", ["values"], [anyType], promiseOf(anyType))],
+    ["race", namespaceFunction("async.race", ["values"], [{ kind: "list", element: anyType }], promiseOf(anyType))],
+    ["sleep", { kind: "function", parameterNames: ["duration"], parameters: [durationType], requiredParameters: 1, result: promiseOf(nullType) }],
+    ["timeout", namespaceFunction("async.timeout", ["value", "duration", "message"], [promiseOf(anyType), durationType, stringType], promiseOf(anyType), 2)],
+    ["retry", namespaceFunction("async.retry", ["task", "attempts", "delay"], [anyType, numberType, durationType], promiseOf(anyType), 1)],
+    ["map", namespaceFunction("async.map", ["values", "worker", "concurrency"], [{ kind: "list", element: anyType }, anyType, numberType], promiseOf({ kind: "list", element: anyType }), 2)],
+    ["series", namespaceFunction("async.series", ["tasks"], [{ kind: "list", element: anyType }], promiseOf({ kind: "list", element: anyType }))],
+  ]),
+  readonlyFields: new Set(["all", "race", "sleep", "timeout", "retry", "map", "series"]),
+};
 
 function argumentNoun(expected: string): "argument" | "arguments" {
   return expected === "1" || expected === "at least 1" ? "argument" : "arguments";
@@ -560,6 +596,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly namedArgumentOrders = new Map<string, readonly number[]>();
   protected readonly extensionLiterals = new Map<string, string>();
   protected readonly extensionCalls = new Map<string, string>();
+  private readonly builtinValueReferences = new Map<string, "Json" | "Promise" | "Look" | "range">();
   private readonly semanticBindingTypes = new Map<string, ValueType>();
   private readonly semanticBindingMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly semanticMemberCache = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -1171,6 +1208,7 @@ export class Analyzer implements TypeEnvironment {
       namedArgumentOrders: this.namedArgumentOrders,
       extensionLiterals: this.extensionLiterals,
       extensionCalls: this.extensionCalls,
+      builtinValueReferences: this.builtinValueReferences,
       runtimeNarrowings: this.runtimeNarrowings,
       sameValueZeroEqualities: this.sameValueZeroEqualities,
       sameValueZeroMatchValues: this.sameValueZeroMatchValues,
@@ -1927,6 +1965,17 @@ export class Analyzer implements TypeEnvironment {
           ? this.lookup(statement.initializer.name)
           : null;
         const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
+        if (statement.exported && !statement.type && statement.pattern.kind === "NameBindingPattern"
+          && statement.initializer.kind === "CallExpression"
+          && statement.initializer.callee.kind === "IdentifierExpression"
+          && statement.initializer.callee.name === "computed"
+          && !this.lookup("computed")) {
+          this.diagnostics.push(diagnostic(
+            "VEL4025",
+            `Exported computed accessors need an explicit contract at the export boundary; write 'export const ${statement.pattern.name}: () -> T = computed(...)'`,
+            statement.span,
+          ));
+        }
         // D44 rule 71: an unannotated alias of an assignment-established fact
         // declares the source's domain and re-establishes the fact below, so
         // the alias keeps the declared question testable (`taken != null`
@@ -3649,6 +3698,8 @@ export class Analyzer implements TypeEnvironment {
   private inferExpressionType(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     const extensionType = this.inferExtensionExpression(expression, contextualType);
     if (extensionType) return extensionType;
+    const coreDuration = this.inferCoreDurationExpression(expression);
+    if (coreDuration) return coreDuration;
     switch (expression.kind) {
       case "LiteralExpression":
         return expression.value === null ? nullType : typeof expression.value === "string" ? stringType : typeof expression.value === "number" ? numberType : boolType;
@@ -3659,11 +3710,15 @@ export class Analyzer implements TypeEnvironment {
         }
         return stringType;
       case "IdentifierExpression": {
-        const binding = this.lookup(expression.name) ?? this.builtin(expression.name);
+        const lexical = this.lookup(expression.name);
+        const binding = lexical ?? this.builtin(expression.name);
         if (!binding) {
           const guidance = this.globalGuidance.get(expression.name);
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
+        }
+        if (!lexical && (expression.name === "Json" || expression.name === "Promise" || expression.name === "Look" || expression.name === "range")) {
+          this.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
         }
         this.checkShadowedRead(expression.name, expression.span);
         this.recordInitializationImportRead(binding, expression.name, expression.span);
@@ -4027,6 +4082,47 @@ export class Analyzer implements TypeEnvironment {
       default:
         return unknownType;
     }
+  }
+
+  private isCoreDurationLiteral(expression: Expression): boolean {
+    return expression.kind === "ExtensionExpression:core:duration";
+  }
+
+  private containsCoreDuration(expression: Expression): boolean {
+    if (this.isCoreDurationLiteral(expression)) return true;
+    if (expression.kind === "UnaryExpression") return this.containsCoreDuration(expression.operand);
+    return expression.kind === "BinaryExpression"
+      && (this.containsCoreDuration(expression.left) || this.containsCoreDuration(expression.right));
+  }
+
+  private inferCoreDurationExpression(expression: Expression): ValueType | null {
+    if (this.isCoreDurationLiteral(expression)) return durationType;
+    if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
+      && this.containsCoreDuration(expression.operand)) {
+      const operand = this.inferExpression(expression.operand);
+      if (!isAssignable(operand, durationType, this)) this.typeError(`Duration unary '${expression.operator}' requires Duration, received ${describeType(operand)}`, expression.span);
+      this.extensionCalls.set(spanIdentity(expression.span), "core.duration-arithmetic");
+      return durationType;
+    }
+    if (expression.kind !== "BinaryExpression" || !["+", "-", "*", "/"].includes(expression.operator)
+      || !this.containsCoreDuration(expression)) return null;
+    const left = this.inferExpression(expression.left);
+    const right = this.inferExpression(expression.right);
+    const leftDuration = isAssignable(left, durationType, this);
+    const rightDuration = isAssignable(right, durationType, this);
+    const valid = (expression.operator === "+" || expression.operator === "-")
+      ? leftDuration && rightDuration
+      : leftDuration && right.kind === "number" || expression.operator === "*" && left.kind === "number" && rightDuration;
+    if (!valid) {
+      this.typeError(`Duration arithmetic cannot apply '${expression.operator}' to ${describeType(left)} and ${describeType(right)}`, expression.span);
+      return invalidType;
+    }
+    if (expression.operator === "/" && expression.right.kind === "LiteralExpression" && expression.right.value === 0) {
+      this.typeError("Duration arithmetic cannot divide by zero", expression.span);
+      return invalidType;
+    }
+    this.extensionCalls.set(spanIdentity(expression.span), "core.duration-arithmetic");
+    return durationType;
   }
 
   private inferBinary(
@@ -5419,24 +5515,61 @@ export class Analyzer implements TypeEnvironment {
       case "async.all":
       case "async.race": {
         arity(1, 1);
-        const value = arrayAt(0).element;
-        const resolved = value.kind === "promise" ? value.value : value.kind === "any" ? anyType : unknownType;
-        if (value.kind !== "promise" && value.kind !== "any") this.typeError(`Expected a List of Promises, received List<${describeType(value)}>`, argumentAt(0)?.span ?? callSpan);
-        if (intrinsic.name === "async.race") this.reportPromiseResolutionHazard(resolved, argumentAt(0)?.span ?? callSpan);
-        return { kind: "promise", value: intrinsic.name === "async.all" ? { kind: "list", element: resolved } : resolved };
+        const argument = argumentAt(0);
+        const input = inferAt(0);
+        const unwrap = (source: ValueType): ValueType | null => {
+          const expanded = this.expandAliases(source);
+          if (expanded.kind === "promise") return expanded.value;
+          if (expanded.kind === "any") return anyType;
+          if (expanded.kind === "union") {
+            const members = expanded.members.map(unwrap);
+            return members.every((member): member is ValueType => member !== null) ? unionOf(members) : null;
+          }
+          return null;
+        };
+        if (intrinsic.name === "async.all" && (input.kind === "object" || input.kind === "record"
+          || input.kind === "named" && this.fieldsOf(input.identity ?? input.name) !== null)) {
+          if (input.kind === "record") {
+            const resolved = unwrap(input.value);
+            if (!resolved) this.typeError(`Promise.all requires every record field to be a Promise, received ${describeType(input)}`, argument?.span ?? callSpan);
+            return { kind: "promise", value: { kind: "record", value: resolved ?? unknownType } };
+          }
+          const fields = input.kind === "object" ? input.fields : this.fieldsOf(input.identity ?? input.name) ?? new Map();
+          const output = new Map<string, ValueType>();
+          for (const [name, field] of fields) {
+            const resolved = unwrap(field);
+            if (!resolved) this.typeError(`Promise.all record field '${name}' must be a Promise, received ${describeType(field)}`, argument?.span ?? callSpan);
+            output.set(name, resolved ?? unknownType);
+          }
+          return { kind: "promise", value: { kind: "object", fields: output } };
+        }
+        if (input.kind !== "list" && input.kind !== "any") {
+          this.typeError(`Expected a List of Promises${intrinsic.name === "async.all" ? " or a record of Promises" : ""}, received ${describeType(input)}`, argument?.span ?? callSpan);
+          return { kind: "promise", value: intrinsic.name === "async.all" ? { kind: "list", element: unknownType } : unknownType };
+        }
+        const value = input.kind === "list" ? input.element : anyType;
+        const resolved = unwrap(value);
+        if (!resolved) this.typeError(`Expected a List of Promises, received List<${describeType(value)}>`, argument?.span ?? callSpan);
+        if (intrinsic.name === "async.all" && this.expandAliases(value).kind === "union") {
+          this.typeError("Mixed result types need named fields; use Promise.all({name: loadName(), count: loadCount()})", argument?.span ?? callSpan);
+        }
+        const result = resolved ?? unknownType;
+        if (intrinsic.name === "async.race") this.reportPromiseResolutionHazard(result, argument?.span ?? callSpan);
+        return { kind: "promise", value: intrinsic.name === "async.all" ? { kind: "list", element: result } : result };
       }
       case "async.timeout": {
         arity(2, 3);
         const value = promiseValue(inferAt(0), 0);
         this.reportPromiseResolutionHazard(value, argumentAt(0)?.span ?? callSpan);
-        inferAt(1, numberType);
+        inferAt(1, durationType);
         inferAt(2, stringType);
         return { kind: "promise", value };
       }
       case "async.retry": {
-        arity(1, 2);
+        arity(1, 3);
         const task = callbackAt(0, [], unknownType);
         inferAt(1, numberType);
+        inferAt(2, durationType);
         const result = callbackResult(task);
         const resolved = result.kind === "promise" ? result.value : result;
         this.reportPromiseResolutionHazard(resolved, argumentAt(0)?.span ?? callSpan);
@@ -7278,7 +7411,20 @@ export class Analyzer implements TypeEnvironment {
       }
       return narrowed;
     }
-    if (expression.kind === "IdentifierExpression") {
+    if (expression.kind === "CallExpression" && expression.callee.kind === "MemberExpression"
+      && expression.callee.property === "is" && expression.arguments.length === 1
+      && expression.arguments[0]!.kind !== "SpreadExpression") {
+      const target = this.validatorTargetOf(expression.callee.object);
+      const value = expression.arguments[0]!;
+      if (target) {
+        const current = this.inferredExpressionTypes.get(spanIdentity(value.span)) ?? unknownType;
+        if (truthy) this.addLocationNarrowing(narrowed, value, this.runtimeCheckedType(current, target));
+        else {
+          const remaining = this.excludeCheckedType(current, target);
+          if (remaining) this.addLocationNarrowing(narrowed, value, remaining);
+        }
+      }
+    } else if (expression.kind === "IdentifierExpression") {
       const type = this.lookup(expression.name)?.type;
       if (type?.kind === "optional") {
         const fact = this.bareConditionNarrowing(type, truthy);
@@ -7304,6 +7450,17 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return narrowed;
+  }
+
+  /** The concrete checked value behind `Kind.is(value)`, when Kind is a runtime validator. */
+  private validatorTargetOf(object: Expression): ValueType | null {
+    if (object.kind !== "IdentifierExpression") return null;
+    const type = this.lookup(object.name)?.type ?? this.builtin(object.name)?.type;
+    if (!type) return null;
+    if (type.kind === "enumObject") return { kind: "enum", name: type.name, identity: type.identity };
+    if (type.kind === "typeObject") return this.runtimeTypeObjectValue(type);
+    if (type.kind === "runtimeType") return type.value;
+    return null;
   }
 
   // A bare optional condition is legal only for 'bool?', where it judges truth:
@@ -8616,6 +8773,9 @@ export class Analyzer implements TypeEnvironment {
       // Pure computation, so it lives in the prelude beside str/print; the
       // call site owns the domain checks (inferEqualsCall).
       ["equals", { kind: "intrinsic", name: "core.equals", parameterNames: ["a", "b"], parameters: [unknownType, unknownType], requiredParameters: 2, result: boolType }],
+      ["range", { kind: "intrinsic", name: "collections.range", parameterNames: ["start", "end", "step"], parameters: [numberType, numberType, numberType], requiredParameters: 1, result: { kind: "list", element: numberType } }],
+      ["Json", jsonNamespaceType],
+      ["Promise", promiseNamespaceType],
     ]);
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" || name === "ValidationError" || name === "NarrowingError" || name === "IndexError"
@@ -8831,7 +8991,7 @@ export class Analyzer implements TypeEnvironment {
     const lead = site === "f-string" ? "An f-string renders" : "str() converts";
     const exit = this.extensionTextForm(this.expandAliases(type)) === false
       ? "print(value) to inspect it"
-      : 'print(value) to inspect it, or stringify(value) for data text (import {stringify} from "velar/json")';
+      : "print(value) to inspect it, or Json.stringify(value) for data text";
     this.diagnostics.push(diagnostic(
       "VEL4026",
       `${lead} strings, numbers, bools, enums, null, and extension values with a declared text form; format ${describeType(type)} explicitly — ${exit}`,
@@ -9247,6 +9407,10 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return null;
+  }
+
+  protected isBuiltinValueReference(expression: Expression, name: "Json" | "Promise" | "Look" | "range"): boolean {
+    return this.builtinValueReferences.get(spanIdentity(expression.span)) === name;
   }
 
   protected applyNarrowings(narrowed: ReadonlyMap<string, ValueType>, narrowingSpan: Span): void {

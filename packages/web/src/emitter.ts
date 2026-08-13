@@ -216,7 +216,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (!this.webOutput) return super.detachedTaskHelpers();
     return [[
       `const __velarDetachedRegistryKey = Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)});`,
-      "const __velarDetachedPromiseThen = Promise.prototype.then;",
+      "const __velarDetachedPromiseThen = globalThis.Promise.prototype.then;",
       "const __velarDetachedApply = Reflect.apply;",
       "const __velarDetachedEnqueue = queueMicrotask;",
       "function __velarDetachedReport(failure) {",

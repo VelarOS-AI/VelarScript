@@ -92,7 +92,7 @@ velar update
 ## A small example
 
 ```velar
-import {border, color, rgb, spacing} from "velar/look"
+
 import {Head} from "velar/web"
 
 type Task:
@@ -105,19 +105,19 @@ const pageLook = look:
     gap = 16px
     maxWidth = 720px
     marginInline = "auto"
-    padding = spacing(48px, 20px)
+    padding = Look.spacing(48px, 20px)
 
     if viewport.width <= 640px:
-        padding = spacing(24px, 16px)
+        padding = Look.spacing(24px, 16px)
 
 const buttonLook = look:
-    border = border(0px, color("transparent"))
+    border = Look.border(0px, Look.color("transparent"))
     borderRadius = 10px
-    padding = spacing(10px, 14px)
+    padding = Look.spacing(10px, 14px)
     cursor = "pointer"
 
     if @hover:
-        background = rgb(235, 240, 255)
+        background = Look.rgb(235, 240, 255)
 
 export component App:
     state tasks: List<Task> = []

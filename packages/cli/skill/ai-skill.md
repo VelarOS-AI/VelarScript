@@ -29,6 +29,15 @@ The working loop:
 Do not invent workarounds for a diagnostic; it is the language telling you
 the canonical spelling.
 
+Pure standard helpers use permanent namespaces: `Json.parse`,
+`Json.stringify`, `Json.stableStringify`, and `Json.clone`; `Promise.all`,
+`Promise.race`, `Promise.sleep`, `Promise.timeout`, `Promise.retry`,
+`Promise.map`, and `Promise.series`; and Web visual builders under `Look.*`.
+These names need no import and may be shadowed by a lexical binding. `range`
+is likewise in the Core prelude. Capability modules such as `velar/http`,
+`velar/storage`, and `velar/browser` remain explicit imports. Core durations
+use `ms` or `s`, so write `await Promise.sleep(250ms)`, not a bare number.
+
 ## The traps your reflexes will hit
 
 Everything in this table was hit by real models writing Vel blind. All but
@@ -50,7 +59,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | Two statements on one line | One statement per line; there are no semicolons. A line starting with `.` or `?.` continues the previous line, so method chains format normally. |
 | `count++` | `count += 1` |
 | `call(name: value)` named argument | `call(name=value)` |
-| Bare `range(5)` | `range` is a normal import: `import {range} from "velar/collections"`. |
+| Importing `range` | `range(...)` is a Core prelude function and needs no import. |
 | `"""triple-quoted"""` for a block of text | A layout string: a double quote followed immediately by a newline opens it; a quote back at the opening line's indentation closes it. Backtick strings are real, but always single-line. |
 | Escaping `\"` through a JSON, HTML, or selector string | Use backticks: `` `{"name":"Nova"}` `` is the same `string` value, with `"` as ordinary text. Prefixes are orthogonal (`` f` ``, `` r` ``, `` rf` ``), and `velar format` picks the delimiter for you (`"` by default, backticks when the text contains `"`), so write whichever is convenient. |
 | `0xFF`, `0b1010`, `007`, `.5` | Decimal only: `255`, `10`, `7`, `0.5`. Group long digits with `_` — `1_000_000`. `Infinity` and `NaN` are not literals: write `1 / 0` and `0 / 0`. |
@@ -59,7 +68,7 @@ them; the first two are the **silent traps** in the list — read them twice.
 | A block comment that starts or ends beside code on a multi-line span | `/* */` exists and nests — commenting out a region that already holds a comment works — but a multi-line one takes whole lines: only `/*` on its opening line, only `*/` on its closing line. Within a single line it can sit anywhere: `call(/* why */ value)`. |
 | `x if cond else y` | `cond ? x : y` |
 | `&&`, `\|\|`, `!`, `===`, `var`, `elif`, `None`, `undefined` | `and`, `or`, `not`, `==`, `let`/`const`, `else if`, `null`, `null`. |
-| `f"{user}"` or `str(user)` on a record | Text conversion accepts strings, numbers, bools, enums, and `null` only. `print(user)` inspects a value; `stringify(user)` from `velar/json` builds data text. |
+| `f"{user}"` or `str(user)` on a record | Text conversion accepts strings, numbers, bools, enums, and `null` only. `print(user)` inspects a value; permanent `Json.stringify(user)` builds data text without an import. |
 | Calling an async function and moving on | A dropped Promise is a compile error. `await task()` to wait; `async task()` to run it detached. |
 | `flag or name ?? fallback` | Parenthesize — `??` never shares an unparenthesized chain with `and`/`or`. |
 | `onClick={handler}` | `on:click={handler}`; form binding is `bind:value={state}`. |
@@ -166,25 +175,25 @@ mount(<Counter label="Clicks" />, "#app")
 camelCase; units are literal:
 
 ```velar
-import {border, rgb, spacing} from "velar/look"
+
 
 const buttonLook = look:
-    border = border(0px, rgb(220, 224, 235))
+    border = Look.border(0px, Look.rgb(220, 224, 235))
     borderRadius = 10px
-    padding = spacing(10px, 14px)
+    padding = Look.spacing(10px, 14px)
     cursor = "pointer"
 
     if @hover:
-        background = rgb(235, 240, 255)
+        background = Look.rgb(235, 240, 255)
 
 component SaveButton(children: WebNode):
     return <button look={buttonLook} type="button">{children}</button>
 ```
 
-A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Declare checked motion as a module-level `keyframes:` value and pass it to `animate`; disable nonessential motion at the CSS layer:
+A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Declare checked motion as a module-level `keyframes:` value and pass it to `Look.animate`; disable nonessential motion at the CSS layer:
 
 ```velar
-import {animate} from "velar/look"
+
 
 const spin = keyframes:
     from:
@@ -194,10 +203,10 @@ const spin = keyframes:
 
 const rotatingLook = look:
     if not motion.reduced:
-        animation = animate(spin, 1s, easing="linear", loop=true)
+        animation = Look.animate(spin, 1s, easing="linear", loop=true)
 ```
 
-The `animation` property accepts only `Animation`, `List<Animation>`, or `null`; a CSS animation string is rejected. Bind a changing animation on the element with `look:animation={active ? animate(spin, 1s) : null}`. Native animation longhands remain outside Look because `animate` owns the checked contract.
+The `animation` property accepts only `Animation`, `List<Animation>`, or `null`; a CSS animation string is rejected. Bind a changing animation on the element with `look:animation={active ? Look.animate(spin, 1s) : null}`. Native animation longhands remain outside Look because `Look.animate` owns the checked contract.
 
 Form state binds with `bind:value={name}` (also a writable path such as `bind:value={form.email}`), `bind:checked={flag}`, and `bind:group={choice}` — radio state holds the selected input's `value`, checkbox `List<string>` state holds the checked values; the event object has no `target`.
 
@@ -321,12 +330,12 @@ mystery: `buttonLook(dangerous=true)`, never `buttonLook(true)`.
 ### Strings
 
 Build text with f-strings — numbers, bools, enums, and Web unit values with a declared text form interpolate directly.
-Data becomes text through `stringify` from `velar/json`. Multi-line text is
+Data becomes text through permanent `Json.stringify`. Multi-line text is
 a layout string, not a stack of `\n` escapes. Text that contains `"` — a JSON
 fixture, a quoted selector — goes in backticks instead of being escaped:
 
 ```velar
-import {stringify} from "velar/json"
+
 
 const count = 3
 const gap = 16px
@@ -341,7 +350,7 @@ print(summary)
 print(fixture)
 print(gapLabel)
 print(usage)
-print(stringify({open: count}))
+print(Json.stringify({open: count}))
 ```
 
 ### Components: four cells, one job each

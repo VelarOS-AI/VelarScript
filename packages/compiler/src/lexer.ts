@@ -28,7 +28,9 @@ export class Lexer {
   private readonly extensionKeywords = new Map<string, string>();
   private readonly extensionForbiddenIdentifiers = new Map<string, string>();
   private readonly extensionScanners: NonNullable<CompilerLexicalExtension["scan"]>[] = [];
-  private readonly numericSuffixes = new Set<string>();
+  // D39-52: milliseconds and seconds are Core duration literals. Extensions
+  // may add visual units, but Core owns these two spellings.
+  private readonly numericSuffixes = new Set<string>(["ms", "s"]);
   private readonly tokens: Token[] = [];
   private readonly diagnostics: Diagnostic[] = [];
   private readonly diagnosedBidirectionalOffsets = new Set<number>();

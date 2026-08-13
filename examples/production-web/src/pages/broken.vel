@@ -4,7 +4,7 @@ def failIfLeaked() -> null:
     throw Error("Construction timer leaked")
 
 export component Broken:
-    const stopTimer = every(25, failIfLeaked)
+    const stopTimer = every(25ms, failIfLeaked)
     cleanup:
         stopTimer()
     throw Error("Lazy route failed")

@@ -1,5 +1,5 @@
 import {countBy, sortBy} from "velar/collections"
-import {border, linearGradient, repeat, rgb, rgba, shadow, spacing} from "velar/look"
+
 import {format} from "velar/time"
 import {Head, Link} from "velar/web"
 import {Task} from "../domain.vel"
@@ -42,35 +42,35 @@ const pageLook = look:
     width = 100%
     maxWidth = 980px
     marginInline = "auto"
-    padding = spacing(42px, 16px, 64px, 16px)
+    padding = Look.spacing(42px, 16px, 64px, 16px)
 
 const backLook = look:
-    color = rgb(49, 87, 213)
+    color = Look.rgb(49, 87, 213)
     fontWeight = 700
     textDecoration = "none"
 const titleLook = look:
     margin = 0
-    color = rgb(21, 32, 58)
+    color = Look.rgb(21, 32, 58)
     fontSize = 42px
     letterSpacing = -0.04em
 
 const leadLook = look:
-    margin = spacing(8px, 0px, 0px, 0px)
-    color = rgb(110, 121, 141)
+    margin = Look.spacing(8px, 0px, 0px, 0px)
+    color = Look.rgb(110, 121, 141)
 
 const metricsLook = look:
     display = "grid"
-    gridTemplateColumns = repeat(4, 1fr)
+    gridTemplateColumns = Look.repeat(4, 1fr)
     gap = 12px
 
     if viewport.width <= 720px:
-        gridTemplateColumns = repeat(2, 1fr)
+        gridTemplateColumns = Look.repeat(2, 1fr)
 
 const surfaceLook = look:
-    border = border(1px, rgb(220, 227, 239))
+    border = Look.border(1px, Look.rgb(220, 227, 239))
     borderRadius = 18px
-    background = rgb(255, 255, 255)
-    boxShadow = shadow(0px, 12px, 34px, rgba(35, 50, 82, 0.06))
+    background = Look.rgb(255, 255, 255)
+    boxShadow = Look.shadow(0px, 12px, 34px, Look.rgba(35, 50, 82, 0.06))
 
 const metricLook = look:
     ...surfaceLook
@@ -79,11 +79,11 @@ const metricLook = look:
     padding = 18px
 
 const metricValueLook = look:
-    color = rgb(23, 32, 51)
+    color = Look.rgb(23, 32, 51)
     fontSize = 30px
 
 const metricLabelLook = look:
-    color = rgb(116, 128, 151)
+    color = Look.rgb(116, 128, 151)
     fontSize = 13px
 
 const progressLook = look:
@@ -91,14 +91,14 @@ const progressLook = look:
     height = 9px
     overflow = "hidden"
     borderRadius = 9999px
-    background = rgb(232, 237, 245)
+    background = Look.rgb(232, 237, 245)
 
 def progressFillLook(progress: number) -> Look:
     return look:
         width = progress * 1%
         height = 100%
         borderRadius = 9999px
-        background = linearGradient(90deg, rgb(49, 87, 213), rgb(92, 125, 240))
+        background = Look.linearGradient(90deg, Look.rgb(49, 87, 213), Look.rgb(92, 125, 240))
 
 const sectionLook = look:
     ...surfaceLook
@@ -111,17 +111,17 @@ const sectionTitleLook = look:
 
 const priorityGridLook = look:
     display = "grid"
-    gridTemplateColumns = repeat(3, 1fr)
+    gridTemplateColumns = Look.repeat(3, 1fr)
     gap = 10px
 
 const priorityLook = look:
     display = "flex"
     alignItems = "center"
     justifyContent = "space-between"
-    padding = spacing(12px, 14px)
+    padding = Look.spacing(12px, 14px)
     borderRadius = 12px
-    color = rgb(70, 81, 106)
-    background = rgb(241, 244, 249)
+    color = Look.rgb(70, 81, 106)
+    background = Look.rgb(241, 244, 249)
     textTransform = "capitalize"
 const activityListLook = look:
     display = "grid"
@@ -134,11 +134,11 @@ const activityItemLook = look:
     justifyContent = "space-between"
     gap = 16px
     paddingTop = 10px
-    borderTop = border(1px, rgb(237, 240, 245))
-    color = rgb(49, 60, 84)
+    borderTop = Look.border(1px, Look.rgb(237, 240, 245))
+    color = Look.rgb(49, 60, 84)
 
 const timeLook = look:
-    color = rgb(129, 139, 157)
+    color = Look.rgb(129, 139, 157)
     fontSize = 12px
 
 export component Analytics:

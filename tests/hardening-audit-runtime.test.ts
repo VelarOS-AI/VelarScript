@@ -275,13 +275,11 @@ test("[ASY-D2 + BLD-D1] any unowned error during a test fails that test; the run
 test("[ASY-U1] a runtime-empty race List throws RangeError instead of hanging forever", async () => {
   const result = await runCli({
     "main.vel": `
-import {race} from "velar/async"
-
 def empty() -> List<Promise<null>>:
     return []
 
 try:
-    const winner = await race(empty())
+    const winner = await Promise.race(empty())
     print("settled")
 catch error:
     print("caught: " + error.message)

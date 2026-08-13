@@ -145,6 +145,8 @@ const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<strin
     ["round", "Use 'value.round()'; number rounding is a checked member"],
     ["floor", "Use 'value.floor()'; number flooring is a checked member"],
     ["ceil", "Use 'value.ceil()'; number ceiling is a checked member"],
+    ["isFinite", "Use 'value.isFinite()'; finite-number checks are checked members"],
+    ["isInteger", "Use 'value.isInteger()'; integer checks are checked members"],
   ])],
 ]);
 

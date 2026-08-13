@@ -236,19 +236,18 @@ test("[WEB-N3] a detached action failure reports exactly once and superseded fai
     tests: `
 import {expect} from "velar/test"
 import {onError} from "velar/app"
-import {sleep} from "velar/async"
 
 state reports: List<string> = []
 const stop = onError(report => reports.append(f"{report.phase}/{report.detail}: {report.error.message}"))
 
-action fires(tag: string, ms: number) -> null:
-    await sleep(ms)
+action fires(tag: string, delay: Duration) -> null:
+    await Promise.sleep(delay)
     throw Error(f"bang {tag}")
 
 async def test_fire_and_forget_failures_report_once_with_detail() -> null:
-    async fires("old", 20)
-    async fires("new", 60)
-    await sleep(150)
+    async fires("old", 20ms)
+    async fires("new", 60ms)
+    await Promise.sleep(150ms)
     await tick()
     expect(fires.error?.message ?? "null").toBe("bang new")
     expect(reports.size).toBe(2)

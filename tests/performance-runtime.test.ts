@@ -229,7 +229,6 @@ test("emitted equality holds the SameValueZero hot-loop budget", { timeout: 180_
 
 const collectionProgram = `
 import {monotonic} from "velar/time"
-import {range} from "velar/collections"
 
 const size = 100000
 const rangeSize = 2000

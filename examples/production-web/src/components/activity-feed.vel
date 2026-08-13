@@ -1,5 +1,4 @@
 import {http} from "velar/http"
-import {border, color, rgb, spacing} from "velar/look"
 
 type ActivityPayload:
     message: string
@@ -9,16 +8,16 @@ const activityLook = look:
     alignItems = "center"
     justifyContent = "space-between"
     gap = 16px
-    padding = spacing(14px, 16px)
+    padding = Look.spacing(14px, 16px)
     borderRadius = 12px
-    background = rgb(17, 24, 46)
+    background = Look.rgb(17, 24, 46)
 
 const buttonLook = look:
-    padding = spacing(8px, 12px)
-    border = border(0px, color("transparent"))
+    padding = Look.spacing(8px, 12px)
+    border = Look.border(0px, Look.color("transparent"))
     borderRadius = 9px
-    color = rgb(8, 16, 34)
-    background = rgb(157, 172, 255)
+    color = Look.rgb(8, 16, 34)
+    background = Look.rgb(157, 172, 255)
     cursor = "pointer"
 export component ActivityFeed:
     state message = "Activity has not been refreshed"

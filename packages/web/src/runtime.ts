@@ -2652,10 +2652,14 @@ function browserLanguages(value) {
 function scrollBehavior(value) { value = __velarString(value, "Scroll behavior"); if (!["auto", "smooth", "instant"].includes(value)) throw new TypeError("Scroll behavior must be auto, smooth, or instant"); return value; }
 
 function timerDuration(value, name, positive) {
-  if (!Number.isFinite(value) || value < 0 || value > 2147483647 || (positive && value === 0)) {
-    throw new RangeError(name + (positive ? " requires milliseconds from above 0 through 2147483647" : " requires milliseconds from 0 through 2147483647"));
+  if (typeof value !== "string") throw new TypeError(name + " requires Duration; write a value such as 200ms or 2s");
+  const match = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(ms|s)$/.exec(value);
+  if (!match) throw new TypeError(name + " requires Duration; write a value such as 200ms or 2s");
+  const milliseconds = Number(match[1]) * (match[2] === "s" ? 1000 : 1);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 2147483647 || (positive && milliseconds === 0)) {
+    throw new RangeError(name + (positive ? " requires a Duration above 0ms through 2147483647ms" : " requires a Duration from 0ms through 2147483647ms"));
   }
-  return value;
+  return milliseconds;
 }
 
 function reportTimerFailure(failure, detail) {
@@ -2679,8 +2683,8 @@ async function invokeTimer(callback, detail) {
   catch (error) { reportTimerFailure(error, detail); }
 }
 
-export function after(milliseconds, callback) {
-  const duration = timerDuration(milliseconds, "after", false);
+export function after(value, callback) {
+  const duration = timerDuration(value, "after", false);
   if (typeof callback !== "function") throw new TypeError("after requires a callback");
   let active = true;
   const timer = __velarBrowserCallCaptured(__velarBrowserSetTimeout, __velarBrowserWindow, [() => {
@@ -2691,8 +2695,8 @@ export function after(milliseconds, callback) {
   return () => { active = false; __velarBrowserCallCaptured(__velarBrowserClearTimeout, __velarBrowserWindow, [timer], "clearTimeout"); return null; };
 }
 
-export function every(milliseconds, callback) {
-  const duration = timerDuration(milliseconds, "every", true);
+export function every(value, callback) {
+  const duration = timerDuration(value, "every", true);
   if (typeof callback !== "function") throw new TypeError("every requires a callback");
   let active = true;
   let timer = null;

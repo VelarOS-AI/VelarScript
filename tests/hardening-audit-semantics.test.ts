@@ -383,9 +383,9 @@ test("[ENM-U6] a guarded case does not count toward exhaustiveness, and the diag
   );
 });
 
-test("[COL-I4] the stringify teachings carry the import line", () => {
-  rejects("const items = [1]\nprint(f\"{items}\")\n", /import \{stringify\} from "velar\/json"/u);
-  rejects("const items = [1]\nprint(stringify(items))\n", /import \{stringify\} from "velar\/json"/u);
+test("[COL-I4] the stringify teachings carry the permanent namespace", () => {
+  rejects("const items = [1]\nprint(f\"{items}\")\n", /Json\.stringify\(value\)/u);
+  rejects("const items = [1]\nprint(stringify(items))\n", /Json\.stringify/u);
 });
 
 test("[COL-I5] a named record into Record<T> explains the open-record reason", () => {

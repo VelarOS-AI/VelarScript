@@ -1,28 +1,28 @@
 import {clearError, focusFirstError, setError} from "velar/forms"
 import {frame} from "velar/browser"
-import {border, rgb, spacing, tracks} from "velar/look"
+
 import {findMatch} from "velar/text"
 import {announce} from "velar/web"
 
 const formLook = look:
     display = "grid"
-    gridTemplateColumns = tracks(1fr, "auto")
+    gridTemplateColumns = Look.tracks(1fr, "auto")
     gap = 8px
 
 const labelLook = look:
     gridColumn = "1 / -1"
-    color = rgb(170, 181, 222)
+    color = Look.rgb(170, 181, 222)
 
 const inputLook = look:
     minWidth = 0
-    padding = spacing(10px, 12px)
-    border = border(1px, rgb(66, 82, 143))
+    padding = Look.spacing(10px, 12px)
+    border = Look.border(1px, Look.rgb(66, 82, 143))
     borderRadius = 9px
 
 const buttonLook = look:
     ...inputLook
-    color = rgb(8, 16, 34)
-    background = rgb(157, 172, 255)
+    color = Look.rgb(8, 16, 34)
+    background = Look.rgb(157, 172, 255)
     cursor = "pointer"
 export component Newsletter:
     state email = ""

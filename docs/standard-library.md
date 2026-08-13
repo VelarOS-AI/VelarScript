@@ -140,7 +140,7 @@ VelarScript `null` before becoming observable.
 | `repeat` | Returns a list containing a value a non-negative number of times. |
 
 ```velar fragment
-import {enumerate, groupBy, range} from "velar/collections"
+import {enumerate, groupBy} from "velar/collections"
 
 const pages = enumerate(range(1, 4), 10)
 const descending = range(start=5, end=0, step=-2)
@@ -148,7 +148,8 @@ const byRole = groupBy(users, user => user.role)
 const labeled = enumerate(start=10, values=users)
 ```
 
-`range` deliberately materializes the same checked, at-most-1,000,000-item List
+Core prelude `range` deliberately materializes the same checked,
+at-most-1,000,000-item List
 whether it is used by `for` or as a value. This keeps one public iterable type,
 one named-call contract, and ordinary List reuse; it does not hide a second
 lazy object behind a call-shape optimization.
@@ -312,14 +313,19 @@ cannot redirect validation, snapshots, cloning, ordering, or equality. The
 versioned reactive registry remains the one explicit dynamic seam used to
 unwrap tracked values before JSON inspection.
 
+`Json.parse`, `Json.stringify`, `Json.stableStringify`, and `Json.clone` are
+permanent Core namespace members and need no import. The remaining
+`velar/json` capabilities stay explicit imports because they are outside that
+namespace roster.
+
 ```velar fragment
-import {deepEqual, parse as parseJson} from "velar/json"
+import {deepEqual} from "velar/json"
 
 type User:
     id: string
     name: string
 
-const user = parseJson(source, User)
+const user = Json.parse(source, User)
 const unchanged = deepEqual(user, previousUser)
 ```
 

@@ -1056,7 +1056,7 @@ for (const phrase of [
   if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: missing captured async-pull operation '${phrase}'`);
 }
 for (const phrase of [
-  "const __velarDetachedPromiseThen = Promise.prototype.then",
+  "const __velarDetachedPromiseThen = globalThis.Promise.prototype.then",
   "const __velarDetachedApply = Reflect.apply",
   "function __velarDetachedReport(failure)",
   "function __velarDetachedTask(task)",
@@ -1065,7 +1065,7 @@ for (const phrase of [
 }
 for (const phrase of [
   "const __velarDetachedRegistryKey = Symbol.for(${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)})",
-  "const __velarDetachedPromiseThen = Promise.prototype.then",
+  "const __velarDetachedPromiseThen = globalThis.Promise.prototype.then",
   'phase: \\"detached\\", detail: \\"\\", unhandled: true',
   "function __velarDetachedTask(task)",
 ]) {
