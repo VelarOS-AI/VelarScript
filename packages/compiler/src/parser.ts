@@ -43,7 +43,7 @@ import type {
 } from "./ast.ts";
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
-import { findInterpolatedExpressionEnd, type StringTokenPayload } from "./interpolated-string.ts";
+import { findInterpolatedExpressionEnd, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
 import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-guidance.ts";
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
@@ -224,6 +224,18 @@ export class Parser {
     const exported = this.match("export");
     if (exported && (this.check("leftBrace") || this.check("star"))) {
       return this.parseReExport(start);
+    }
+    // MOD-U2: `export default` is the JavaScript habit; VelarScript modules
+    // have no default export, so the spelling gets one directed answer
+    // instead of the generic export cascade.
+    if (exported && this.check("identifier") && this.current().value === "default") {
+      this.diagnostics.push(diagnostic(
+        "VEL2001",
+        "VelarScript modules have no default export; export the declaration by name — export const name = ..., export def name(...)",
+        this.current().span,
+      ));
+      this.skipMistypedDeclaration();
+      return { kind: "PassStatement", span: this.previous().span };
     }
     const abstract = this.match("abstract");
     const asynchronous = this.match("async");
@@ -448,7 +460,7 @@ export class Parser {
     return { kind: "ForStatement", asynchronous, pattern, secondPattern, iterable, body, span: span(start, body.at(-1)?.span.end ?? iterable.span.end) };
   }
 
-  private parseImport(start: number): ImportDeclaration {
+  private parseImport(start: number): ImportDeclaration | null {
     const javascript = this.match("js");
     const unsafe = javascript && this.match("unsafe");
     const specifiers: ImportSpecifier[] = [];
@@ -473,7 +485,20 @@ export class Parser {
     }
 
     this.expect("from", "Expected 'from' after imports");
+    // MOD-I1 / BRG-D1: a recovered import must never fabricate a dependency.
+    // The synthesized empty-source token used to flow into module resolution
+    // as `''`, whose nonsense "invalid package name" failure buried this
+    // parser's own diagnostics for the same line.
+    const hadSource = this.check("string");
     const source = this.expect("string", "Expected a module path string");
+    if (!hadSource) {
+      this.synchronize();
+      return null;
+    }
+    if (source.value === "") {
+      this.diagnostics.push(diagnostic("VEL2001", "A module path cannot be empty", source.span));
+      return null;
+    }
     return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
   }
 
@@ -500,7 +525,18 @@ export class Parser {
     }
     this.expect("rightBrace", "Expected '}' after re-exported names");
     this.expect("from", "Expected 'from' after re-exported names; VelarScript modules export declarations directly and re-export other modules' names with export {name} from \"./module.vel\"");
+    // MOD-I1 / BRG-D1: like parseImport, a recovered re-export never
+    // fabricates an empty-source dependency.
+    const hadSource = this.check("string");
     const source = this.expect("string", "Expected a module path string");
+    if (!hadSource) {
+      this.synchronize();
+      return null;
+    }
+    if (source.value === "") {
+      this.diagnostics.push(diagnostic("VEL2001", "A module path cannot be empty", source.span));
+      return null;
+    }
     if (specifiers.length === 0) {
       this.diagnostics.push(diagnostic("VEL2029", "A re-export must name at least one export", span(start, source.span.end)));
     }
@@ -543,7 +579,8 @@ export class Parser {
         continue;
       }
       if (!this.match("def")) {
-        this.diagnostics.push(diagnostic("VEL2010", "Extern modules declare functions with 'export def' or read-only values with 'export const name: Type'", this.current().span));
+        // BRG-N2: the legal member list names all three forms.
+        this.diagnostics.push(diagnostic("VEL2010", "Extern modules declare functions with 'export def', read-only values with 'export const name: Type', or classes with 'export class Name:'", this.current().span));
         this.synchronize();
         this.consumeNewlines();
         continue;
@@ -578,6 +615,17 @@ export class Parser {
 
   private parseExternClass(start: number): ExternClassDeclaration {
     const name = this.expect("identifier", "Expected an extern class name");
+    // BRG-U6: a generic extern class gets the same polite rejection as a
+    // source class instead of a bare parse cascade; generic extern `def`
+    // members remain the generic surface.
+    if (this.check("less")) {
+      this.diagnostics.push(diagnostic(
+        "VEL2025",
+        `Extern class '${name.value}' cannot declare type parameters; declare the class without them and use generic 'def' members or 'unknown' where the type varies`,
+        this.current().span,
+      ));
+      this.parseTypeParameters();
+    }
     let parameters: ClassParameter[] = [];
     if (this.check("leftParen")) {
       this.diagnostics.push(diagnostic("VEL2022", `Extern class '${name.value}' declares its constructor in the class body with 'constructor(...)'`, this.current().span));
@@ -2590,9 +2638,23 @@ export class Parser {
       }
 
       const rawFragment = token.value.slice(index + 1, close);
-      const fragment = rawFragment.trim();
+      let fragment = rawFragment.trim();
       const leadingWhitespace = rawFragment.length - rawFragment.trimStart().length;
       const fragmentStart = index + 1 + leadingWhitespace;
+      // TXT-I2: a top-level ':' in an interpolation is the Python
+      // format-spec habit (f"{x:.2f}"). One directed diagnostic teaches the
+      // real spelling, and only the value expression is parsed, so the spec
+      // text never cascades into numeric-unit noise.
+      const specColon = this.interpolationFormatSpecColon(fragment);
+      if (specColon !== null) {
+        const colonOffset = sourceOffset(fragmentStart + specColon);
+        this.diagnostics.push(diagnostic(
+          "VEL2009",
+          "An interpolation holds one expression; VelarScript has no ':' format specs. Format the value first — value.toFixed(2) for fixed decimals, str(value).padStart(size) for width",
+          span(colonOffset, sourceOffset(close)),
+        ));
+        fragment = fragment.slice(0, specColon).trimEnd();
+      }
       const offset = sourceOffset(fragmentStart);
       const fragmentOffsets = payload?.contentOffsets?.slice(fragmentStart, fragmentStart + fragment.length + 1);
       parts.push({ kind: "expression", value: this.parseNestedExpression(fragment, offset, false, fragmentOffsets) });
@@ -2616,6 +2678,35 @@ export class Parser {
       raw: `${negative ? "-" : ""}${token.value}`,
       span: literalSpan,
     };
+  }
+
+  // TXT-I2: the offset of a top-level ':' in an interpolation fragment, or
+  // null. Ternary colons are consumed by their pending '?', bracket and
+  // string contents never count, and '?.'/'??' are not ternary heads — so
+  // the only ':' that survives to depth zero is a format spec.
+  private interpolationFormatSpecColon(fragment: string): number | null {
+    let depth = 0;
+    let pendingTernary = 0;
+    for (let index = 0; index < fragment.length; index += 1) {
+      const literal = scanStringLiteral(fragment, index);
+      if (literal) {
+        if (!literal.closed) return null;
+        index = literal.end - 1;
+        continue;
+      }
+      const character = fragment[index]!;
+      if (character === "(" || character === "[" || character === "{") depth += 1;
+      else if (character === ")" || character === "]" || character === "}") depth -= 1;
+      else if (character === "?" && depth === 0) {
+        const next = fragment[index + 1];
+        if (next === "." || next === "?") index += 1;
+        else pendingTernary += 1;
+      } else if (character === ":" && depth === 0) {
+        if (pendingTernary > 0) pendingTernary -= 1;
+        else return index;
+      }
+    }
+    return null;
   }
 
   private decodeFStringText(value: string, payload: StringTokenPayload | undefined): string {

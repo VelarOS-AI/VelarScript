@@ -120,6 +120,39 @@ function __velarTextReplacementOutputUnits(value, search, replacement, all) {
   return value.length + matches * growth;
 }
 
+// TXT-D1: ordered string comparison uses code-point order (= UTF-8 binary
+// order). UTF-16 code-unit order already agrees when neither operand
+// contains a surrogate, so the native probe keeps the decoded walk on
+// surrogate-bearing strings only.
+function __velarStringCompare(left, right) {
+  left = __velarTextValue(left);
+  right = __velarTextValue(right);
+  if (left === right) return 0;
+  if (__velarTextCall(__velarTextSurrogateExec, __velarTextSurrogatePattern, [left]) === null
+    && __velarTextCall(__velarTextSurrogateExec, __velarTextSurrogatePattern, [right]) === null) {
+    return left < right ? -1 : 1;
+  }
+  let leftOffset = 0;
+  let rightOffset = 0;
+  while (leftOffset < left.length && rightOffset < right.length) {
+    let first = __velarTextCall(__velarNativeStringCharCodeAt, left, [leftOffset]);
+    let firstUnits = 1;
+    if (first >= 0xD800 && first <= 0xDBFF && leftOffset + 1 < left.length) {
+      const trail = __velarTextCall(__velarNativeStringCharCodeAt, left, [leftOffset + 1]);
+      if (trail >= 0xDC00 && trail <= 0xDFFF) { first = (first - 0xD800) * 0x400 + (trail - 0xDC00) + 0x10000; firstUnits = 2; }
+    }
+    let second = __velarTextCall(__velarNativeStringCharCodeAt, right, [rightOffset]);
+    let secondUnits = 1;
+    if (second >= 0xD800 && second <= 0xDBFF && rightOffset + 1 < right.length) {
+      const trail = __velarTextCall(__velarNativeStringCharCodeAt, right, [rightOffset + 1]);
+      if (trail >= 0xDC00 && trail <= 0xDFFF) { second = (second - 0xD800) * 0x400 + (trail - 0xDC00) + 0x10000; secondUnits = 2; }
+    }
+    if (first !== second) return first < second ? -1 : 1;
+    leftOffset += firstUnits;
+    rightOffset += secondUnits;
+  }
+  return leftOffset < left.length ? 1 : rightOffset < right.length ? -1 : 0;
+}
 function __velarStringSize(value) { return __velarTextCodePointLength(__velarTextValue(value)); }
 function __velarStringTrim(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []); }
 function __velarStringIsBlank(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []) === ""; }

@@ -185,7 +185,7 @@ export interface ClassInfo {
   readonly staticMethods: ReadonlyMap<string, ValueType>;
 }
 
-export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "mapSet" | "mapUpdate" | "mapCopy" | "recordSet" | "recordCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
+export type CollectionOperation = "get" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listCopy" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "setAdd" | "setUpdate" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapUpdate" | "mapCopy" | "recordSet" | "recordCopy" | "has" | "remove" | "clear" | "keys" | "values" | "entries";
 
 export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
 
@@ -194,7 +194,7 @@ const listCollectionOperations = new Map<string, CollectionOperation>([
   ["insert", "listInsert"], ["remove", "listRemove"], ["pop", "listPop"],
   ["clear", "clear"], ["copy", "listCopy"], ["has", "has"], ["count", "listCount"],
   ["index", "listIndex"], ["find", "listFind"], ["some", "listSome"], ["every", "listEvery"],
-  ["map", "listMap"], ["filter", "listFilter"], ["reduce", "listReduce"], ["join", "listJoin"],
+  ["map", "listMap"], ["filter", "listFilter"], ["flatMap", "listFlatMap"], ["reduce", "listReduce"], ["join", "listJoin"],
   ["sorted", "listSorted"], ["reversed", "listReversed"], ["sum", "listSum"], ["min", "listMin"], ["max", "listMax"],
 ]);
 const mapCollectionOperations = new Map<string, CollectionOperation>([
@@ -205,6 +205,7 @@ const mapCollectionOperations = new Map<string, CollectionOperation>([
 const setCollectionOperations = new Map<string, CollectionOperation>([
   ["add", "setAdd"], ["update", "setUpdate"], ["has", "has"], ["remove", "remove"],
   ["clear", "clear"], ["copy", "setCopy"], ["values", "values"],
+  ["union", "setUnion"], ["intersection", "setIntersection"], ["difference", "setDifference"],
 ]);
 const recordCollectionOperations = new Map<string, CollectionOperation>([
   ["get", "get"], ["set", "recordSet"], ["has", "has"], ["remove", "remove"],
@@ -228,8 +229,8 @@ const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
 // and user-function purity is deliberately never analyzed (D26 retired that).
 const discardedPureCollectionOperations = new Set<CollectionOperation>([
   "get", "slice", "listCopy", "listCount", "listIndex", "listFind", "listSome", "listEvery",
-  "listMap", "listFilter", "listReduce", "listJoin", "listSorted", "listReversed",
-  "listSum", "listMin", "listMax", "setCopy", "mapCopy", "recordCopy",
+  "listMap", "listFilter", "listFlatMap", "listReduce", "listJoin", "listSorted", "listReversed",
+  "listSum", "listMin", "listMax", "setCopy", "setUnion", "setIntersection", "setDifference", "mapCopy", "recordCopy",
   "has", "keys", "values", "entries",
 ]);
 const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
@@ -311,6 +312,21 @@ export interface LoweringHints {
   readonly sameValueZeroMatchValues: ReadonlySet<string>;
   /** Span identities of calls to the prelude's equals(a, b) (D47 rule 81). */
   readonly equalsCalls: ReadonlySet<string>;
+  /**
+   * Span identities of ordered comparisons (`< <= > >=`, including
+   * comparison-chain links) whose operands are strings. These lower through
+   * the code-point comparator so string order is code-point order everywhere
+   * (TXT-D1); number comparisons keep the plain operator.
+   */
+  readonly stringOrderings: ReadonlySet<string>;
+  /**
+   * Span identities of JavaScript-boundary calls in synchronous
+   * module-initialization position. A non-Error value thrown there would
+   * reach the host uncaught and unnormalized — the last unowned failure
+   * shape at the bridge — so these sites rethrow through the owned Error
+   * normalization channel (BRG-U10).
+   */
+  readonly moduleTopLevelHostCalls: ReadonlySet<string>;
 }
 
 export interface RuntimeNarrowingGuard {
@@ -402,6 +418,14 @@ const coreGlobalGuidance = new Map([
   ["Boolean", "Use an explicit boolean comparison; VelarScript does not expose JavaScript truthiness conversion"],
   ["Number", "Use number(text), typed forms, or validated data instead of JavaScript Number coercion"],
   ["String", "Use str(value) instead of the JavaScript String global"],
+  // COL-U8: Set() and Map() are real constructors, so the List/Array
+  // asymmetry is a trap worth naming: a List is built with a literal.
+  ["List", "Lists are created with a '[]' literal (or [...values] to copy); 'List<T>' is a type name, not a constructor"],
+  ["Array", "Use a '[]' List literal; VelarScript does not expose JavaScript Array construction"],
+  // TXT-I1: the Python spellings.
+  ["len", "Use 'value.size'; strings and collections measure with the size member"],
+  ["parseInt", "Use 'number(text)', then '.floor()' or '.round()' for an integer; VelarScript has one text-to-number conversion"],
+  ["parseFloat", "Use 'number(text)'; VelarScript has one text-to-number conversion"],
   ["stringify", "Add the import: import {stringify} from \"velar/json\""],
   ["parse", "Add the import: import {parse} from \"velar/json\""],
   ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil"]
@@ -486,6 +510,8 @@ export class Analyzer implements TypeEnvironment {
   private readonly sameValueZeroEqualities = new Set<string>();
   private readonly sameValueZeroMatchValues = new Set<string>();
   private readonly equalsCalls = new Set<string>();
+  private readonly stringOrderings = new Set<string>();
+  private readonly moduleTopLevelHostCalls = new Set<string>();
   private readonly stringSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
   private readonly javaScriptBindings = new Set<string>();
@@ -587,6 +613,10 @@ export class Analyzer implements TypeEnvironment {
   private instanceFieldInitializerDepth = 0;
   protected deferredExecutionDepth = 0;
   private readonly importedBindingSources = new Map<Binding, { readonly source: string; readonly imported: string | null }>();
+  // Every import (JavaScript ones included) remembers its module specifier so
+  // assignment and collision diagnostics can say "imported" and name the
+  // owning module (MOD-I3 / MOD-I4).
+  private readonly importedBindingOrigins = new Map<Binding, string>();
   /** Namespace import locals by name, known before signature validation runs (ENM-I9 teaching). */
   private readonly namespaceImportLocals = new Map<string, string>();
   private readonly initializationImportReadSites = new Map<string, InitializationImportRead>();
@@ -884,11 +914,14 @@ export class Analyzer implements TypeEnvironment {
           this.declareBinding(
             specifier.local,
             false,
-            this.importType(statement, specifier.local, specifier.imported, specifier.namespace),
+            this.importType(statement, specifier.local, specifier.imported, specifier.namespace, specifier.span),
             specifier.span,
             false,
+            undefined,
+            statement.source,
           );
           this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
+          this.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
           const reactive = this.reactiveBindings.get(specifier.local);
           if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
         }
@@ -1142,6 +1175,8 @@ export class Analyzer implements TypeEnvironment {
       sameValueZeroEqualities: this.sameValueZeroEqualities,
       sameValueZeroMatchValues: this.sameValueZeroMatchValues,
       equalsCalls: this.equalsCalls,
+      stringOrderings: this.stringOrderings,
+      moduleTopLevelHostCalls: this.moduleTopLevelHostCalls,
     };
   }
 
@@ -1652,24 +1687,40 @@ export class Analyzer implements TypeEnvironment {
     if (this.analyzeExtensionStatement(statement)) return;
     switch (statement.kind) {
       case "ImportDeclaration":
+        // MOD-D1: the whole module-boundary family is module-top-level only.
+        // A block-level import emitted invalid JavaScript, and a
+        // function-body import silently bound `unknown` (the dependency walk
+        // reads program.body only).
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Imports can only be declared at module scope", statement.span));
+        }
         if (!this.predeclared.has(statement)) {
           for (const specifier of statement.specifiers) {
             this.declareBinding(
               specifier.local,
               false,
-              this.importType(statement, specifier.local, specifier.imported, specifier.namespace),
+              this.importType(statement, specifier.local, specifier.imported, specifier.namespace, specifier.span),
               specifier.span,
               false,
+              undefined,
+              statement.source,
             );
             this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
+            this.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
             const reactive = this.reactiveBindings.get(specifier.local);
             if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
           }
         }
         break;
       case "ReExportDeclaration":
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
+        }
         break;
       case "ExternModuleDeclaration":
+        if (this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Extern modules can only be declared at module scope", statement.span));
+        }
         {
           const classNames = new Set(statement.classes.map((declaration) => declaration.name));
           const bases = new Map(statement.classes.map((declaration) => [declaration.name, declaration.base]));
@@ -1857,6 +1908,11 @@ export class Analyzer implements TypeEnvironment {
         this.analyzeClassDeclaration(statement);
         break;
       case "VariableDeclaration": {
+        // MOD-D1: `export const`/`export let` below module scope emitted an
+        // `export` statement inside a block — invalid JavaScript.
+        if (statement.exported && this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
+        }
         const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
         const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
         const aliasedBinding = !annotated && statement.initializer.kind === "IdentifierExpression"
@@ -1895,6 +1951,10 @@ export class Analyzer implements TypeEnvironment {
         break;
       }
       case "FunctionDeclaration":
+        // MOD-D1: `export def` below module scope emitted invalid JavaScript.
+        if (statement.exported && this.scopes.length !== 1) {
+          this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
+        }
         this.analyzeFunctionDeclaration(statement, null);
         break;
       case "ReturnStatement": {
@@ -3300,7 +3360,17 @@ export class Analyzer implements TypeEnvironment {
       this.checkShadowedRead(statement.target.name, statement.target.span);
       if (binding.reactiveKind) this.reactiveReferences.set(spanIdentity(statement.target.span), binding.reactiveKind);
       if (!binding.mutable) {
-        this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to const binding '${statement.target.name}'`, statement.target.span));
+        // MOD-I3: an import is not a const declaration; every import (.vel
+        // and JavaScript alike) says so and names the owning module.
+        const importOrigin = this.importedBindingOrigins.get(binding.storageBinding ?? binding)
+          ?? this.importedBindingOrigins.get(binding);
+        this.diagnostics.push(diagnostic(
+          "VEL3002",
+          importOrigin !== undefined
+            ? `Cannot assign to imported binding '${statement.target.name}'; imports are read-only. Change the value in its owning module (${JSON.stringify(importOrigin)}), or copy it into a local 'let' first`
+            : `Cannot assign to const binding '${statement.target.name}'`,
+          statement.target.span,
+        ));
         targetWritable = false;
       }
       targetBinding = binding;
@@ -3653,6 +3723,20 @@ export class Analyzer implements TypeEnvironment {
           } else {
             containsSpread = true;
             const spread = this.inferExpression(property.value);
+            // COL-D2: spreading a named (open) record into a Record<T>
+            // context smuggles undeclared fields past the value contract —
+            // the exact reason the direct assignment is rejected — so the
+            // spread spelling is rejected the same way, teaching explicit
+            // field copies.
+            if (expectedRecordValue && spread.kind === "named" && this.fieldsOf(spread.identity ?? spread.name)) {
+              const declaredFields = [...this.fieldsOf(spread.identity ?? spread.name)!.keys()];
+              const example = declaredFields.slice(0, 2).map((field) => `${field}: value.${field}`).join(", ") + (declaredFields.length > 2 ? ", ..." : "");
+              this.typeError(
+                `Cannot spread ${describeType(spread)} into a Record value: a named record is open, so the value may carry fields beyond its declaration; copy the declared fields explicitly — {${example}}`,
+                property.span,
+              );
+              continue;
+            }
             const spreadFields = spread.kind === "object" ? spread.fields : spread.kind === "named" ? this.fieldsOf(spread.identity ?? spread.name) : null;
             if (spreadFields) {
               for (const [name, type] of spreadFields) {
@@ -4347,7 +4431,17 @@ export class Analyzer implements TypeEnvironment {
     if (isInvalidType(left) || isInvalidType(right)) return;
     if (left.kind === "any" || right.kind === "any") return;
     const category = this.orderedTypeCategory(left);
-    if (category !== null && category !== "dynamic" && category === this.orderedTypeCategory(right)) return;
+    if (category !== null && category !== "dynamic" && category === this.orderedTypeCategory(right)) {
+      // TXT-D1: a string ordering lowers through the code-point comparator.
+      // Both the binary span and the chain-link span are recorded because
+      // the two emitters key their lookups differently (exactly as the
+      // SameValueZero hint does).
+      if (category === "string") {
+        this.stringOrderings.add(spanIdentity(operationSpan));
+        this.stringOrderings.add(spanIdentity({ start: leftExpression.span.start, end: rightExpression.span.end }));
+      }
+      return;
+    }
     this.typeError(
       `Ordered comparison requires two numbers or two strings, received ${describeType(leftType)} and ${describeType(rightType)}${this.unorderedTypeGuidance(left, right)}`,
       { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) },
@@ -4567,7 +4661,13 @@ export class Analyzer implements TypeEnvironment {
   ): ValueType {
     const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
     const javaScriptBoundary = this.javaScriptBoundaryCallee(calleeExpression);
-    if (javaScriptBoundary) this.javaScriptCallBoundaries.add(spanIdentity(callSpan));
+    if (javaScriptBoundary) {
+      this.javaScriptCallBoundaries.add(spanIdentity(callSpan));
+      // BRG-U10: at module initialization, a synchronous non-Error throw
+      // from an extern call would reach the host raw; the emitter wraps
+      // these sites so the value is normalized through the owned channel.
+      if (this.functionDepth === 0) this.moduleTopLevelHostCalls.add(spanIdentity(callSpan));
+    }
     if (calleeExpression.kind === "SuperExpression") {
       if (optionalCall) this.typeError("A base constructor call cannot be optional", callSpan);
       const baseName = this.currentClass ? this.classes.get(this.currentClass)?.base ?? null : null;
@@ -4745,6 +4845,24 @@ export class Analyzer implements TypeEnvironment {
           `Field initializer constructs '${callee.name}' on every '${this.currentClass}' construction and can never finish; assign it in the constructor from a parameter, or create it lazily`,
           callSpan,
         );
+      }
+      // BRG-U6: extern constructors are not inherited (a derived extern
+      // class without its own `constructor(...)` takes zero arguments —
+      // opposite of JavaScript), so calling one with arguments teaches the
+      // redeclaration instead of a bare arity mismatch.
+      if (info && callee.identity?.startsWith("js:") === true && info.base !== null
+        && info.parameters.length === 0 && info.requiredParameters === 0 && !info.constructorRest
+        && arguments_.length > 0 && !argumentNames?.some((name) => name !== null)) {
+        for (const argument of arguments_) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+        this.typeError(
+          `Extern class '${callee.name}' declares no constructor, and extern constructors are not inherited from the base class; redeclare 'constructor(...)' on '${callee.name}' with the base signature`,
+          callSpan,
+        );
+        return {
+          kind: "class",
+          name: callee.name,
+          ...(callee.identity ? { identity: callee.identity } : {}),
+        };
       }
       this.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
       return {
@@ -5646,22 +5764,54 @@ export class Analyzer implements TypeEnvironment {
       }
     };
     const lowered = object.kind === "list"
-      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
+      ? ["get", "slice", "append", "extend", "insert", "remove", "pop", "clear", "copy", "has", "count", "index", "find", "some", "every", "map", "flatMap", "filter", "reduce", "join", "sorted", "reversed", "sum", "min", "max"].includes(member.property)
       : object.kind === "map" ? ["get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property)
-        : object.kind === "set" ? ["add", "update", "has", "remove", "clear", "copy", "values"].includes(member.property)
+        : object.kind === "set" ? ["add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"].includes(member.property)
           : object.kind === "record" ? ["get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"].includes(member.property) : false;
     if (lowered && arguments_.some((argument) => argument.kind === "SpreadExpression")) {
       this.typeError(`Spread arguments are not supported by ${describeType(object)}.${member.property}`, callSpan);
     }
     if (object.kind === "list") {
-      if (member.property === "map") {
-        this.collectionCalls.set(member.span.end, "listMap");
+      if (member.property === "map" || member.property === "flatMap") {
+        const flat = member.property === "flatMap";
+        this.collectionCalls.set(member.span.end, flat ? "listFlatMap" : "listMap");
         const callbackExpected: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unknownType };
-        const callback = this.concreteCallableFor(inferArgument(0, callbackExpected), callbackExpected);
         const callbackArgument = argumentAt(0);
+        // COL-U9: `(x, i) => ...` is the Python/JS index habit; the arity
+        // mismatch would only say "cannot assign" — teach the two-slot loop.
+        // The body still analyzes with honest slot types so the teaching is
+        // the one diagnostic, not the head of a cascade.
+        if (callbackArgument?.kind === "ArrowFunctionExpression" && callbackArgument.parameters.length === 2) {
+          this.inferExpression(callbackArgument, {
+            kind: "function",
+            parameters: [readonlyElement!, numberType],
+            requiredParameters: 2,
+            result: unknownType,
+          });
+          requireCount(1);
+          this.typeError(
+            `List.${member.property} callbacks receive one value; for index-aware iteration write the two-slot loop — for value, index in values`,
+            callbackArgument.span,
+          );
+          return { kind: "list", element: unknownType };
+        }
+        const callback = this.concreteCallableFor(inferArgument(0, callbackExpected), callbackExpected);
         if (callbackArgument) this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         const result = callback.kind === "function" ? callback.result : unknownType;
         requireCount(1);
+        if (flat) {
+          // COL-U1: flatMap flattens exactly one level, so the transform
+          // must produce a List; the element of that List is the result
+          // element.
+          const expandedResult = this.expandAliases(result);
+          if (callbackArgument && expandedResult.kind !== "list" && expandedResult.kind !== "any" && expandedResult.kind !== "unknown" && !isInvalidType(expandedResult)) {
+            this.typeError(
+              `List.flatMap transform must return a List, received ${describeType(expandedResult)}; use map for one-value transforms`,
+              callbackArgument.span,
+            );
+          }
+          return { kind: "list", element: expandedResult.kind === "list" ? expandedResult.element : unknownType };
+        }
         return { kind: "list", element: result };
       }
       if (member.property === "filter") {
@@ -5673,6 +5823,12 @@ export class Analyzer implements TypeEnvironment {
           this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         }
         requireCount(1);
+        // COL-U3: the exact predicate shape `x => x != null` narrows
+        // List<T?> to List<T>. This is a closed-vocabulary special case (the
+        // NaN twin is already taught); user predicate types stay unanalyzed.
+        if (this.isNullExclusionPredicate(argumentAt(0)) && this.expandAliases(readonlyElement!).kind === "optional") {
+          return { kind: "list", element: nonOptional(this.expandAliases(readonlyElement!)) };
+        }
         return { kind: "list", element: readonlyElement! };
       }
       if (member.property === "reduce") {
@@ -6034,6 +6190,28 @@ export class Analyzer implements TypeEnvironment {
       if (member.property === "copy") {
         this.collectionCalls.set(member.span.end, "setCopy");
         checkCollectionArguments([]);
+        return { kind: "set", element: readonlyElement! };
+      }
+      if (member.property === "union" || member.property === "intersection" || member.property === "difference") {
+        // COL-U2: the Set algebra. Each copies; the other operand's element
+        // domain must intersect this Set's (the same per-member `==`
+        // question the probes ask), so an enum Set never meets a bare-string
+        // Set here.
+        this.collectionCalls.set(
+          member.span.end,
+          member.property === "union" ? "setUnion" : member.property === "intersection" ? "setIntersection" : "setDifference",
+        );
+        const argument = argumentAt(0);
+        const source = argument ? this.expandAliases(inferArgument(0, { kind: "set", element: comparisonElement! })) : unknownType;
+        requireCount(1);
+        if (argument && source.kind === "set") {
+          this.requireMembershipIntersection(source.element, comparisonElement!, argument.span, `Set.${member.property}`);
+        } else if (argument && source.kind !== "any" && !isInvalidType(source)) {
+          this.typeError(`Set.${member.property} requires a Set, received ${describeType(source)}`, argument.span);
+        }
+        if (member.property === "union" && argument && source.kind === "set") {
+          return { kind: "set", element: mergeTypes(readonlyElement!, this.readonlyDataViewOf(source.element)) };
+        }
         return { kind: "set", element: readonlyElement! };
       }
     }
@@ -6525,6 +6703,12 @@ export class Analyzer implements TypeEnvironment {
         return callable([], [], optionalOf(element));
       case "map":
         return callable(["transform"], [transform], { kind: "list", element: unknownType });
+      case "flatMap":
+        return callable(
+          ["transform"],
+          [{ kind: "function", parameters: [element], requiredParameters: 1, result: { kind: "list", element: unknownType } }],
+          { kind: "list", element: unknownType },
+        );
       case "filter":
         return callable(["test"], [test], owned);
       case "reduce":
@@ -6593,6 +6777,22 @@ export class Analyzer implements TypeEnvironment {
   private collectionMemberError(kind: CollectionKind, property: string): string {
     const guidance = collectionMemberGuidance(kind, property);
     return `${kind} has no member '${property}'${guidance ? `; ${guidance.message}` : ""}`;
+  }
+
+  // COL-U3: exactly the predicate `x => x != null` (either operand order).
+  // The closed shape keeps this a vocabulary rule, not a predicate-type
+  // system: any other body — even `x => not (x == null)` — filters without
+  // narrowing.
+  private isNullExclusionPredicate(argument: Expression | null): boolean {
+    if (argument?.kind !== "ArrowFunctionExpression" || argument.asynchronous) return false;
+    const parameter = argument.parameters[0];
+    if (argument.parameters.length !== 1 || !parameter || parameter.rest || parameter.defaultValue) return false;
+    const body = argument.body;
+    if (body.kind !== "BinaryExpression" || body.operator !== "!=") return false;
+    const matches = (name: Expression, literal: Expression): boolean =>
+      name.kind === "IdentifierExpression" && name.name === parameter.name
+      && literal.kind === "LiteralExpression" && literal.value === null;
+    return matches(body.left, body.right) || matches(body.right, body.left);
   }
 
   private mapMember(map: Extract<ValueType, { kind: "map" }>, property: string): ValueType | null {
@@ -6684,6 +6884,13 @@ export class Analyzer implements TypeEnvironment {
         return callable([], [], copy);
       case "values":
         return callable([], [], { kind: "list", element });
+      case "union":
+      case "intersection":
+      case "difference":
+        // COL-U2: the Set algebra copies — like sorted — and never mutates
+        // either operand. The other operand is judged by the same
+        // element-domain comparison question the membership probes use.
+        return callable(["other"], [{ kind: "set", element: comparison }], copy);
       default:
         return null;
     }
@@ -6949,7 +7156,7 @@ export class Analyzer implements TypeEnvironment {
       : this.resolveExternAnnotation(reference, source, classNames);
   }
 
-  private importType(statement: Extract<Statement, { kind: "ImportDeclaration" }>, local: string, imported: string, namespace: boolean): ValueType {
+  private importType(statement: Extract<Statement, { kind: "ImportDeclaration" }>, local: string, imported: string, namespace: boolean, importSpan: Span): ValueType {
     if (!statement.javascript) {
       const type = this.importBindings.get(local) ?? unknownType;
       if (type.kind === "classConstructor" && type.identity) this.classDisplayNames.set(type.identity, local);
@@ -6960,6 +7167,17 @@ export class Analyzer implements TypeEnvironment {
     if (namespace) return declarations
       ? { kind: "object", fields: declarations, readonlyFields: new Set(declarations.keys()) }
       : this.importBindings.get(local) ?? unknownType;
+    // BRG-N1: a manual extern block owns the whole source contract, so an
+    // imported name it does not declare is a check-time error — the same
+    // stance a .vel module already takes — instead of silently binding
+    // unknown (which is how a typo used to disappear).
+    if (declarations && !declarations.has(imported)) {
+      this.typeError(
+        `Extern module '${statement.source}' does not declare '${imported}'; add it to the extern block, or fix the imported name`,
+        importSpan,
+      );
+      return unknownType;
+    }
     const type = declarations?.get(imported) ?? this.importBindings.get(local) ?? unknownType;
     if (type.kind === "classConstructor" && type.identity) {
       this.classDisplayNames.set(type.identity, local);
@@ -7285,7 +7503,10 @@ export class Analyzer implements TypeEnvironment {
     const actualDescription = describeType(actual);
     const expectedDescription = describeType(expected);
     if (actualDescription !== expectedDescription) {
-      this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}`, valueSpan);
+      // COL-U10: a value of one collection family in another family's
+      // position gets the bridge spelling, not a bare mismatch.
+      const bridge = this.collectionBridgeGuidance(expandedActual, expectedCore);
+      this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}${bridge ? `; ${bridge}` : ""}`, valueSpan);
       return;
     }
     // Same-named contracts read identically, so name the declaring sources
@@ -7297,6 +7518,22 @@ export class Analyzer implements TypeEnvironment {
       ? ` (the value is ${actualOrigin ?? "a structural type"} and the target is ${expectedOrigin ?? "a structural type"})`
       : "";
     this.typeError(`Cannot assign ${actualDescription} to a different ${expectedDescription} contract${origins}`, valueSpan);
+  }
+
+  // COL-U10: the collection families never assign across each other; each
+  // rejected pair has one blessed bridge spelling worth naming.
+  private collectionBridgeGuidance(actual: ValueType, expectedCore: ValueType): string | null {
+    if (expectedCore.kind === "list") {
+      if (actual.kind === "set") return "Set.values() returns the members as a List";
+      if (actual.kind === "map") return "Map.keys(), Map.values(), or Map.entries() return the entries as Lists";
+      if (actual.kind === "record") return "Record.keys(), Record.values(), or Record.entries() return the fields as Lists";
+    }
+    if (expectedCore.kind === "set" && (actual.kind === "list")) return "Set(values) builds a Set from a List";
+    if (expectedCore.kind === "map") {
+      if (actual.kind === "record") return "Map(record) builds a string-keyed Map from a record";
+      if (actual.kind === "list") return "Map(entries) builds a Map from a List of [key, value] Lists";
+    }
+    return null;
   }
 
   private freezeEscapedCollectionInference(actual: ValueType, expected: ValueType, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): void {
@@ -8419,6 +8656,7 @@ export class Analyzer implements TypeEnvironment {
     declarationSpan: Span,
     internal = false,
     declaredType = type,
+    importSource?: string,
   ): void {
     this.pendingScopeDeclarations.at(-1)?.delete(name);
     if (!internal) {
@@ -8441,7 +8679,35 @@ export class Analyzer implements TypeEnvironment {
     }
     const scope = this.scopes.at(-1)!;
     if (scope.has(name)) {
-      this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
+      // MOD-I4: an import/local collision blames the declaration that comes
+      // later in the source and names the earlier one's origin. Imports are
+      // predeclared before locals analyze, so the earlier-vs-later question
+      // is answered from the spans, not from the call order.
+      const existing = scope.get(name)!;
+      const existingImport = this.importedBindingOrigins.get(existing);
+      if (existingImport !== undefined && existing.span.start > declarationSpan.start) {
+        this.diagnostics.push(diagnostic(
+          "VEL3004",
+          `Import '${name}' collides with the earlier declaration in this module; alias it — import {${name} as other} from ${JSON.stringify(existingImport)}`,
+          existing.span,
+        ));
+      } else if (existingImport !== undefined) {
+        this.diagnostics.push(diagnostic(
+          "VEL3004",
+          importSource !== undefined
+            ? `Name '${name}' is already imported from ${JSON.stringify(existingImport)}; alias one of the imports — import {${name} as other}`
+            : `Name '${name}' is already imported from ${JSON.stringify(existingImport)}; rename this declaration, or alias the import — import {${name} as other}`,
+          declarationSpan,
+        ));
+      } else if (importSource !== undefined && existing.span.start < declarationSpan.start) {
+        this.diagnostics.push(diagnostic(
+          "VEL3004",
+          `Import '${name}' collides with the earlier declaration in this module; alias it — import {${name} as other} from ${JSON.stringify(importSource)}`,
+          declarationSpan,
+        ));
+      } else {
+        this.diagnostics.push(diagnostic("VEL3004", `Name '${name}' is already declared in this scope`, declarationSpan));
+      }
       return;
     }
     const binding: Binding = {
@@ -8464,6 +8730,15 @@ export class Analyzer implements TypeEnvironment {
     if (javascript) return;
     const binding = this.scopes.at(-1)?.get(local);
     if (binding) this.importedBindingSources.set(binding, { source, imported });
+  }
+
+  private recordImportedBindingOrigin(local: string, source: string, specifierSpan: Span): void {
+    const binding = this.scopes.at(-1)?.get(local);
+    // A failed declaration (collision) leaves the earlier binding in the
+    // scope; tagging that one would misattribute the origin.
+    if (binding && binding.span.start === specifierSpan.start && binding.span.end === specifierSpan.end) {
+      this.importedBindingOrigins.set(binding, source);
+    }
   }
 
   private recordInitializationImportRead(binding: Binding, local: string, span: Span): void {
@@ -8589,10 +8864,10 @@ export class Analyzer implements TypeEnvironment {
       .map((name) => [name, this.stringMember(name)!]));
     if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "toFixed", "isInteger", "isNaN", "isFinite"]
       .map((name) => [name, this.numberMember(name)!]));
-    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
+    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "flatMap", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.listMember(type, name));
     if (type.kind === "map") return available(["size", "get", "set", "update", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.mapMember(type, name));
     if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.recordMember(type, name));
-    if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values"], (name) => this.setMember(type, name));
+    if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"], (name) => this.setMember(type, name));
     if (type.kind === "action") return new Map([
       ["pending", boolType],
       ["error", optionalOf({ kind: "class", name: "Error" })],

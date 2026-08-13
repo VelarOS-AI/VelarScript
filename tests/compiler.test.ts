@@ -2186,11 +2186,15 @@ print(maybeValue == null)
     ["maybeValue", { kind: "optional", inner: { kind: "string" } }],
   ]) } });
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /\(external\(\), null\)/u);
-  assert.match(result.code ?? "", /await __velarNormalizePromiseValue\(externalAsync\(\)\)/u);
-  assert.match(result.code ?? "", /externalOptional\(\) \?\? null/u);
-  assert.match(result.code ?? "", /await __velarNormalizePromiseValue\(externalOptionalAsync\(\)\)/u);
-  assert.match(result.code ?? "", /externalUnknown\(\) \?\? null/u);
+  // BRG-U10: module-initialization calls across the JavaScript boundary
+  // rethrow through the owned Error normalization, so each shape carries the
+  // guard around the same undefined-normalization contract as before.
+  const guarded = (call: string): string => `\\(\\(\\) => \\{ try \\{ return ${call}; \\} catch \\(\\$velarThrown\\) \\{ throw __velarNormalizeError\\(\\$velarThrown\\); \\} \\}\\)\\(\\)`;
+  assert.match(result.code ?? "", new RegExp(`\\(${guarded("external\\(\\)")}, null\\)`, "u"));
+  assert.match(result.code ?? "", new RegExp(`await __velarNormalizePromiseValue\\(${guarded("externalAsync\\(\\)")}\\)`, "u"));
+  assert.match(result.code ?? "", new RegExp(guarded("\\(externalOptional\\(\\) \\?\\? null\\)"), "u"));
+  assert.match(result.code ?? "", new RegExp(`await __velarNormalizePromiseValue\\(${guarded("externalOptionalAsync\\(\\)")}\\)`, "u"));
+  assert.match(result.code ?? "", new RegExp(`\\(${guarded("externalUnknown\\(\\)")} \\?\\? null\\)`, "u"));
   assert.match(result.code ?? "", /maybeValue \?\? null/u);
   const executable = (result.code ?? "").replace(/import .*?;\n+/u, `function external() {}
 async function externalAsync() {}
@@ -7737,7 +7741,10 @@ test("project sessions reuse unaffected modules and invalidate reverse dependenc
 
   await unlink(storePath);
   const missing = await sessions.update(mainPath, new Set([storePath]));
-  assert.ok(missing.project.failures.some((failure) => failure.path === storePath && /ENOENT|no such file/u.test(failure.message)));
+  // MOD-I5 + MOD-U5: the missing module is a positional diagnostic on the
+  // import statement that asked for it, in owned words.
+  assert.ok(missing.project.modules.find((module) => module.inputPath === mainPath)?.result.diagnostics
+    .some((item) => item.code === "VEL6001" && /does not exist/u.test(item.message)), JSON.stringify(missing.project.failures));
   assert.equal(missing.activity.workspaceScans, 0);
   assert.equal(missing.activity.filesRead, 1);
   assert.equal(missing.project.modules.find((module) => module.inputPath === otherPath)?.result, firstOther);
@@ -17097,7 +17104,8 @@ catch error:
   assert.match(result.code ?? "", /__velarCollectionSlice\(values, 1, 3\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "1\n2\n3\n0\nTypeError\n");
+  // COL-I2: every List position error is an IndexError.
+  assert.equal(execution.stdout, "1\n2\n3\n0\nIndexError\n");
 
   const invalid = compile(`
 const values = [1, 2, 3]
@@ -17188,7 +17196,9 @@ const label = join("Velar", 2)
 version = "next"
 `.trimStart());
   assert.equal(invalid.diagnostics.filter((item) => item.code === "VEL4001" && /number to string/.test(item.message)).length, 2);
-  assert.ok(invalid.diagnostics.some((item) => /Cannot assign to const binding 'version'/u.test(item.message)));
+  // MOD-I3: an import is not a const declaration; the write says so and
+  // names the owning module.
+  assert.ok(invalid.diagnostics.some((item) => /Cannot assign to imported binding 'version'; imports are read-only\. Change the value in its owning module \("text-tools"\)/u.test(item.message)));
 
   const duplicate = compile(`
 extern module "text-tools":
@@ -17397,6 +17407,7 @@ test("project compilation shares primitive method runtime without publishing it"
     "numberRound",
     "numberToFixed",
     "stringChar",
+    "stringCompare",
     "stringCount",
     "stringEndsWith",
     "stringHas",
@@ -18959,7 +18970,15 @@ test("TypeScript declarations follow package export subpaths without losing iden
   assert.equal(directClient?.kind, "classConstructor");
   assert.equal(rootClient?.kind === "classConstructor" ? rootClient.identity : null, directClient?.kind === "classConstructor" ? directClient.identity : null);
   assert.equal(feature.exports.get("scale")?.kind, "function");
-  assert.equal(await loadTypeScriptDeclarations("subpath-sdk/escaped", entry), null);
+  // BRG-U3: a declared types path that cannot be used (here: it escapes the
+  // package root, so confinement ignores it) degrades to unknown with the
+  // polite notice instead of degrading in silence. Confinement still holds:
+  // the outside file contributes no contracts.
+  const escaped = await loadTypeScriptDeclarations("subpath-sdk/escaped", entry);
+  assert.ok(escaped);
+  assert.equal(escaped.unreadableDeclaredTypes, true);
+  assert.equal(escaped.exports.size, 0);
+  assert.ok(escaped.warnings.some((warning) => /declares types '\.\.\/outside\.d\.ts', but that is not a readable declaration file inside the package/u.test(warning)), JSON.stringify(escaped.warnings));
 
   await writeFile(entry, `
 import js {Client as RootClient} from "subpath-sdk"

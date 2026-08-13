@@ -1146,6 +1146,10 @@ and browser runtimes and do not define a separate VelarScript memory model.
 - `VEL3xxx`: names, bindings, scopes, and control-flow placement.
 - `VEL4xxx`: types, runtime type declarations, calls, and return contracts.
 - `VEL5xxx`: Web, JSX, directives, DOM, and accessibility contracts.
+- `VEL6xxx`: module resolution and project-graph contracts, positioned on the
+  import statement that caused them (missing modules with near-name
+  suggestions, package resolution, unknown `velar/*` names, self-imports,
+  path-spelling collisions, and `import js` specifier resolution).
 - `VEL9xxx`: toolchain/internal failures surfaced safely to users.
 
 Existing codes are never repurposed. The LSP transports the same compiler

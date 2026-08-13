@@ -12,6 +12,13 @@ export interface TypeScriptDeclarationBridge {
   readonly classes: ReadonlyMap<string, ClassInfo>;
   readonly classRegistry: ReadonlyMap<string, ClassInfo>;
   readonly warnings: readonly string[];
+  /**
+   * BRG-U3: the package declares a `types` entry that cannot be read. The
+   * import degrades to unknown, but with a notice — a broken declared path
+   * is a package defect worth reporting, unlike a package that never
+   * declared types at all.
+   */
+  readonly unreadableDeclaredTypes?: true;
 }
 
 type DeclarationDirection = "to-js" | "from-js" | "invariant";
@@ -60,7 +67,17 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
   const declared = exportedTypes(manifest.exports, subpath)
     ?? (subpath === "." ? stringValue(manifest.types) ?? stringValue(manifest.typings) : null);
   const path = await firstDeclarationEntry(root, declared, entry, subpath === ".");
-  if (!path) return null;
+  if (!path) {
+    // BRG-U3: a declared types path that cannot be read fires the polite
+    // degradation notice instead of degrading in silence.
+    if (declared !== null) {
+      return {
+        ...emptyDeclarationBridge(manifestPath, `package '${packageName}' declares types '${declared}', but that is not a readable declaration file inside the package; the import is typed as unknown`),
+        unreadableDeclaredTypes: true,
+      };
+    }
+    return null;
+  }
   try {
     const bridge = await loadTypeScriptDeclarationGraph(root, path, packageName);
     return { ...bridge, dependencies: [...unique([manifestPath, ...bridge.dependencies])].sort() };

@@ -6,6 +6,39 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The module boundary hardens: imports, every export form, re-exports and
+  extern modules are module-top-level-only statements instead of emitting
+  invalid JavaScript from blocks; two path spellings of one file (case
+  variants, links) are rejected instead of silently double-instantiating
+  the module's state; a module can no longer import from itself past the
+  cycle checker; and `velar check` prints module diagnostics alongside
+  resolution failures, with the parser no longer fabricating the empty
+  `invalid package name ''` dependency that used to hide them. Resolution
+  failures gain diagnostic codes and import-statement spans, near-match
+  suggestions, and unknown `velar/*` imports list the standard modules.
+- `velar test` takes one stance on trust: any unowned error during a test
+  — a detached failure, a module whose initialization touches the DOM in
+  a headless run, an unhandled rejection — fails that test, and the
+  runner continues. Previously the report printed while the suite stayed
+  green. Configuration errors now teach a complete minimal web manifest
+  including the `@velarscript/web` extension identity — the gap that cost
+  the first blind test most of its rework.
+- Ordered string comparison is code-point order everywhere — `<`,
+  `sorted()`, `min`/`max`, and the `by=`/`sortBy` family agree with the
+  language's code-point contract instead of leaking UTF-16 unit order on
+  surrogate-bearing strings. Lists gain `flatMap`, Sets gain `union`,
+  `intersection` and `difference`, `filter(x => x != null)` narrows the
+  element type, and List position errors are uniformly `IndexError`.
+  Spelling guidance now covers the Python column — `len(`, `strip`,
+  `startswith`, `find` and friends teach their VelarScript spellings, and
+  a format-spec `:` inside an f-string teaches `toFixed`/`padStart`
+  instead of cascading.
+- The bridge closes its edges: extern blocks own their import names (a
+  typo is a check-time error, not a silent unknown), bare `import js`
+  package specifiers resolve at check time in both directions, a broken
+  `types` path fires the degradation notice, generic extern classes get a
+  polite rejection, and a top-level sync throw of a non-Error value is
+  normalized instead of reaching the host raw.
 - The bare-string identity door closes on its last surfaces: Map and Set
   key types reject unions mixing different enums or enum with string, the
   membership vocabulary (`in`, `has`, `index`, `count`, `remove`,

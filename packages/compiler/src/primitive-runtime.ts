@@ -26,6 +26,7 @@ export {
   __velarStringPadEnd as stringPadEnd,
   __velarStringRepeat as stringRepeat,
   __velarStringIsBlank as stringIsBlank,
+  __velarStringCompare as stringCompare,
   __velarNumberAbs as numberAbs,
   __velarNumberRound as numberRound,
   __velarNumberFloor as numberFloor,

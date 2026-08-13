@@ -99,11 +99,26 @@ const stringMemberGuidanceEntries = new Map<string, string>([
   ["charAt", "Use '.char(index)'; string positions count Unicode code points"],
   ["at", "Use '.char(index)'; string positions count Unicode code points"],
   ["indexOf", "Use '.index(text, start)'; missing text returns null and string positions count Unicode code points"],
+  ["lastIndexOf", "Use '.index(text, start)' to search forward; VelarScript has no reverse string search member"],
   ["trimStart", "Use trimStart(value) from 'velar/text'; string operations are functions"],
   ["trimEnd", "Use trimEnd(value) from 'velar/text'; string operations are functions"],
   ["toUpperCase", "Use '.upper()'; VelarScript exposes one string uppercase spelling"],
   ["toLowerCase", "Use '.lower()'; VelarScript exposes one string lowercase spelling"],
   ["includes", "Use '.has(text)'; strings and collections share one membership method"],
+  ["toString", "Use 'str(value)' or an f-string; VelarScript has one explicit text conversion spelling"],
+  // TXT-I1: the Python spellings, each pointed at the member or velar/text
+  // function that exists.
+  ["strip", "Use '.trim()'; VelarScript trims whitespace with the trim member"],
+  ["lstrip", "Use trimStart(value) from 'velar/text'; string operations are functions"],
+  ["rstrip", "Use trimEnd(value) from 'velar/text'; string operations are functions"],
+  ["startswith", "Use '.startsWith(text)'; VelarScript member names are camelCase"],
+  ["endswith", "Use '.endsWith(text)'; VelarScript member names are camelCase"],
+  ["find", "Use '.index(text, start)'; missing text returns null instead of -1"],
+  ["splitlines", "Use lines(value) from 'velar/text'; it splits on line boundaries"],
+  ["casefold", "Use '.lower()'; VelarScript exposes simple case mapping, not locale case folding"],
+  ["format", "Use an f-string — f\"Hello {name}\" — VelarScript interpolates values instead of format()"],
+  ["title", "Use title(value) from 'velar/text'; string operations beyond the core members are functions"],
+  ["capitalize", "Use capitalize(value) from 'velar/text'; string operations beyond the core members are functions"],
 ]);
 
 const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<string, string>>([

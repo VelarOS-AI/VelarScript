@@ -22,6 +22,12 @@ const toolchainExtensionPackages = new Set([
   "@velarscript/web",
   "@velarscript/desktop",
 ]);
+/**
+ * BLD-U1: the official web application extension's package identity, exported
+ * so configuration diagnostics can teach a complete manifest while the CLI
+ * composition layer itself never names the package.
+ */
+export const OFFICIAL_WEB_EXTENSION_PACKAGE = "@velarscript/web";
 const toolchainRequire = createRequire(import.meta.url);
 
 export interface ResolvedExtensionPackage {

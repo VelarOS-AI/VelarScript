@@ -344,7 +344,10 @@ structures throw, the same stance `stringify` takes.
 
 Ordered comparisons accept numbers with numbers or strings with strings.
 Ordering is exactly that set — `number`, `string`, and a union whose members
-are all one of those two categories. Enums are excluded: an enum's runtime
+are all one of those two categories. String order is Unicode code-point order
+(identical to UTF-8 byte order) on every ordered surface — the operators,
+`min`/`max`, default `sorted()`, and ordered keys — never UTF-16 code-unit
+order, so an astral character always orders after every basic-plane one. Enums are excluded: an enum's runtime
 value is a bare string, so ordering enum members sorts them by member name,
 which is never the order the author means. One rule answers "is this ordered"
 for `<`, `<=`, `>`, `>=`, `min()`, `max()`, default `sorted()`,
@@ -995,19 +998,20 @@ List members:
 | `has(value)` | Whether the exact value is present. |
 | `append(value)` | Add one value; returns `null`. |
 | `extend(values)` | Add a List atomically; returns `null`. |
-| `insert(index, value)` | Insert at a bounded position; returns `null`. |
+| `insert(index, value)` | Insert at a position from `0` through `size` (inclusive); an out-of-range or non-integer index throws `IndexError`; returns `null`. |
 | `remove(value)` | Remove the first exact value; returns `bool`. |
 | `pop(index=-1)` | Remove and return the value at a position; an empty List, an out-of-range index, or a non-integer index throws `IndexError`. |
 | `clear()` | Remove every value; returns `null`. |
 | `copy()` | Shallow copy. |
-| `slice(start=0, end=size)` | Shallow range copy. |
+| `slice(start=0, end=size)` | Shallow range copy; negative positions count from the end, out-of-range positions clamp, and a non-integer position throws `IndexError`. |
 | `count(value)` | Exact-value count. |
 | `index(value)` | Exact-value position or `null`. |
 | `find(test)` | First matching value or `null`. |
 | `some(test)` | Whether at least one predicate result is true. |
 | `every(test)` | Whether every predicate result is true. |
 | `map(transform)` | Transformed List. |
-| `filter(test)` | Filtered List. |
+| `flatMap(transform)` | Transformed then flattened one level: the transform returns a List for each element and the results concatenate in order. |
+| `filter(test)` | Filtered List; the exact predicate `x => x != null` narrows `List<T?>` to `List<T>`. |
 | `reduce(combine, initial)` | Folded result. |
 | `sum()` | Sum of a `List<number>` from zero. |
 | `min()`, `max()` | Smallest/largest ordered element, or `null` when empty. |
@@ -1052,7 +1056,7 @@ value without mutating their receiver (`copy`, `slice`, the callback family,
 the aggregations, `get`, `has`, `keys`, `values`, `entries`) are compile
 errors as bare expression statements: the result is discarded. Discarding
 `pop()` or `remove(value)` stays legal — they mutate and also report.
-Callback operations (`find`, `some`, `every`, `map`, `filter`, `reduce`, keyed `sorted`,
+Callback operations (`find`, `some`, `every`, `map`, `flatMap`, `filter`, `reduce`, keyed `sorted`,
 `sum`, `min`, and `max`) read one
 checked shallow snapshot, so a callback may mutate the original List without
 changing which values belong to the current operation.
@@ -1071,8 +1075,12 @@ tags.add("web")
 tags.update(["game", "tooling"])
 ```
 
-Set members are `size`, `add`, `update`, `remove`, `has`, `clear`, `copy`, and
-`values`.
+Set members are `size`, `add`, `update`, `remove`, `has`, `clear`, `copy`,
+`values`, `union(other)`, `intersection(other)`, and `difference(other)`. The
+algebra methods take another Set, answer membership by SameValueZero (the
+`==` question per member, with the same static intersection requirement on
+the element domains), and return a new Set — like `sorted`, they never mutate
+either operand.
 
 ### Map
 
@@ -1532,6 +1540,16 @@ export def encode(value: unknown) -> string:
     return stringify(value)
 ```
 
+The whole module-boundary family — `import`, every `export` form, re-exports,
+`import js`, and `extern module` — is module-top-level only, like `type`,
+`class`, and `enum` declarations; writing one inside a block or function body
+is a compile error, never partially-working shadow state. A module cannot
+import from or re-export from itself: the self edge has no valid evaluation
+order, so the answer is to use (or declare) the binding directly. Each module
+file is one instance, so two import spellings that name the same file (a
+casing variant on a case-insensitive filesystem, a path through a link) are
+rejected rather than silently instantiating the module twice.
+
 Relative `.vel` modules and package exports are supported. Project modules are
 checked as one dependency graph. A function or value may carry the shape of an
 unexported or unimported record across that graph, so its fields remain checked,
@@ -1543,6 +1561,12 @@ import {User as Account, loadUser} from "./users.vel"
 
 const user: Account = loadUser()
 ```
+
+VelarScript modules have no default export in either direction: every export
+carries a name, `export default` is rejected with that answer, and a default
+import from a `.vel` module is answered the same way (`import js Name from
+"pkg"` remains the JavaScript-bridge spelling for a package's `default`
+export).
 
 An imported name is read-only in the receiving module, but an `export let`
 remains a live ES-module value: the exporting module can reassign it between

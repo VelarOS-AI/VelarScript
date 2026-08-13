@@ -66,6 +66,11 @@ print(answer())
     assert.deepEqual(inline.failures, []);
     assert.deepEqual(inline.modules.flatMap((module) => module.result.diagnostics), []);
 
+    // BRG-U2: bare specifiers resolve at check time now, so the sanctioned
+    // package form is exercised against an installed package.
+    await mkdir(join(directory, "node_modules", "checked-sdk"), { recursive: true });
+    await writeFile(join(directory, "node_modules", "checked-sdk", "package.json"), JSON.stringify({ name: "checked-sdk", type: "module", exports: "./index.js" }), "utf8");
+    await writeFile(join(directory, "node_modules", "checked-sdk", "index.js"), "export function answer() { return 42; }\n", "utf8");
     const packageEntry = join(directory, "package.vel");
     await writeFile(packageEntry, `
 extern module "checked-sdk":

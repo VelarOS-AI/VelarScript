@@ -148,7 +148,7 @@ export class JavaScriptEmitter {
           ["stringCount", "__velarStringCount"], ["stringStartsWith", "__velarStringStartsWith"], ["stringEndsWith", "__velarStringEndsWith"],
           ["stringSplit", "__velarStringSplit"], ["stringReplace", "__velarStringReplace"], ["stringReplaceAll", "__velarStringReplaceAll"],
           ["stringPadStart", "__velarStringPadStart"], ["stringPadEnd", "__velarStringPadEnd"], ["stringRepeat", "__velarStringRepeat"],
-          ["stringIsBlank", "__velarStringIsBlank"],
+          ["stringIsBlank", "__velarStringIsBlank"], ["stringCompare", "__velarStringCompare"],
           ["numberAbs", "__velarNumberAbs"], ["numberRound", "__velarNumberRound"], ["numberFloor", "__velarNumberFloor"],
           ["numberCeil", "__velarNumberCeil"], ["numberToFixed", "__velarNumberToFixed"],
           ["numberIsInteger", "__velarNumberIsInteger"], ["numberIsNaN", "__velarNumberIsNaN"], ["numberIsFinite", "__velarNumberIsFinite"],
@@ -1591,6 +1591,14 @@ export class JavaScriptEmitter {
           const equality = `__velarSameValueZero(${this.emitBinaryOperand(expression.left)}, ${this.emitBinaryOperand(expression.right)})`;
           return expression.operator === "==" ? equality : `!${equality}`;
         }
+        // TXT-D1: string orderings compare by code point everywhere; the
+        // analyzer marks exactly the ordered comparisons whose operands are
+        // strings, so numbers keep the plain operator.
+        if (["<", "<=", ">", ">="].includes(expression.operator)
+          && this.hints.stringOrderings.has(spanIdentity(expression.span))) {
+          this.needsPrimitiveHelpers = true;
+          return `(__velarStringCompare(${this.emitBinaryOperand(expression.left)}, ${this.emitBinaryOperand(expression.right)}) ${expression.operator} 0)`;
+        }
         const operator = expression.operator === "==" ? "===" : expression.operator === "!=" ? "!==" : expression.operator;
         const left = expression.operator === "**" && expression.left.kind === "UnaryExpression"
           ? `(${this.emitMappedExpression(expression.left)})`
@@ -1723,7 +1731,19 @@ export class JavaScriptEmitter {
         const formRead = this.hints.formReads.get(spanIdentity(expression.span));
         if (formRead) arguments_.push(JSON.stringify(formRead));
         const call = `${callee}(${emitArguments()})`;
-        return this.hints.optionalCalls.has(spanIdentity(expression.span)) ? `(${call} ?? null)` : call;
+        const result = this.hints.optionalCalls.has(spanIdentity(expression.span)) ? `(${call} ?? null)` : call;
+        // BRG-U10: a synchronous non-Error throw from an extern call during
+        // module initialization would reach the host raw (no catch, no
+        // rejection path); rethrowing through the owned normalization keeps
+        // the last bridge failure shape on the Error channel. Calls whose
+        // arguments await are already rejection-owned and stay unwrapped.
+        if (hostBoundary
+          && this.hints.moduleTopLevelHostCalls.has(spanIdentity(expression.span))
+          && !this.expressionContainsDirectAwait(expression)) {
+          this.needsThrownValueHelper = true;
+          return `(() => { try { return ${result}; } catch ($velarThrown) { throw __velarNormalizeError($velarThrown); } })()`;
+        }
+        return result;
       }
       case "MemberExpression": {
         const primitiveHelper = this.primitiveHelper(expression);
@@ -1857,6 +1877,12 @@ export class JavaScriptEmitter {
           : `if (${equality}) return false;`);
         continue;
       }
+      // TXT-D1: string chain links compare by code point too.
+      if (["<", "<=", ">", ">="].includes(sourceOperator) && this.hints.stringOrderings.has(linkSpan)) {
+        this.needsPrimitiveHelpers = true;
+        body.push(`if (!(__velarStringCompare(${prefix}_${index - 1}, ${prefix}_${index}) ${sourceOperator} 0)) return false;`);
+        continue;
+      }
       const operator = sourceOperator === "==" ? "===" : sourceOperator === "!=" ? "!==" : sourceOperator;
       body.push(`if (!(${prefix}_${index - 1} ${operator} ${prefix}_${index})) return false;`);
     }
@@ -1891,6 +1917,7 @@ export class JavaScriptEmitter {
       case "listEvery": return "__velarListEvery";
       case "listMap": return "__velarListMap";
       case "listFilter": return "__velarListFilter";
+      case "listFlatMap": return "__velarListFlatMap";
       case "listReduce": return "__velarListReduce";
       case "listJoin": return "__velarListJoin";
       case "listSorted": return "__velarListSorted";
@@ -1901,6 +1928,9 @@ export class JavaScriptEmitter {
       case "setAdd": return "__velarSetAdd";
       case "setUpdate": return "__velarSetUpdate";
       case "setCopy": return "__velarSetCopy";
+      case "setUnion": return "__velarSetUnion";
+      case "setIntersection": return "__velarSetIntersection";
+      case "setDifference": return "__velarSetDifference";
       case "mapSet": return "__velarMapSet";
       case "mapUpdate": return "__velarMapUpdate";
       case "mapCopy": return "__velarMapCopy";

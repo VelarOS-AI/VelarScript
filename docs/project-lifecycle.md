@@ -112,6 +112,16 @@ stdio to close and reports conventional status 130 or 143 when the child exits
 from the forwarded signal, so terminating the command cannot leave a detached
 VelarScript program holding files, ports, or output streams.
 
+`velar test` holds one trust rule: any unowned error during a test fails that
+test. A detached-task failure report, an uncaught exception or unhandled
+rejection (a module whose initialization touches the DOM in a headless run is
+the canonical case), or anything else that reaches the host error channel
+while a test runs marks that test failed; an unowned error while a test file
+loads fails that file's tests before they can run green. The runner itself
+keeps running — the failure belongs to the test, never to the process — and
+the exit code reports it. A green suite therefore means no test printed an
+error anywhere, not merely that every awaited assertion passed.
+
 `velar test` and `velar run` compile into a short-lived sandbox inside the
 project — `.velar/test-*` and `.velar/run-*` — rather than the system
 temporary directory. Keeping the compiled tree inside the project preserves

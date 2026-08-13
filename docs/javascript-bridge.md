@@ -14,11 +14,23 @@ HTTP server, environment, process signals, or shutdown lifecycle.
 Safe `import js` first uses an explicit local `extern module` when present; the
 manual declaration owns the whole source contract, so the automatic
 TypeScript-declaration probe below neither runs nor prints notices for that
-module's imports of the declared source. If
+module's imports of the declared source. Ownership cuts both ways: importing a
+name the extern block does not declare is a check-time error naming the block
+and the fix — a typo can never silently bind `unknown`. If
 there is no manual declaration, the project compiler may read the npm package's
 `types`, `typings`, export-map `types`, or adjacent declaration entry. Exact and
 single-wildcard package subpaths such as `sdk/client` and `sdk/features/*` use
 their own export-map contract rather than silently falling back to the root.
+A declared `types` path that names an unreadable file degrades to `unknown`
+with the same non-blocking `VEL9002` notice the unsupported shapes use — a
+broken declared path is a package defect worth one line, not silence.
+
+Bare `import js` specifiers resolve at check time in a project compile: a
+package that is not installed next to the importer is a check error instead of
+a raw `ERR_MODULE_NOT_FOUND` pointing at emitted artifacts, and a VelarScript
+source package reached through `import js` is answered with the
+reverse-direction teaching (import it without `js`). Node builtins, `node:`,
+`data:`, and `#`-mapped specifiers are exempt.
 
 Here, safe means statically checked against one trusted declaration contract.
 It does not sandbox JavaScript, attest a package, or automatically inspect every
@@ -119,6 +131,15 @@ extern module "text-tools":
 VelarScript initializer. Functions use the same checked parameter/result syntax as
 ordinary VelarScript functions. `export class` provides a complete
 constructor/instance/static contract directly.
+
+Extern classes take no type parameters — a generic extern class is rejected
+with guidance (declare the class without them; generic `def` members and
+`unknown` carry the varying types), exactly like a generic source class.
+`extends` between extern classes inherits fields, getters, and methods, but
+never the constructor: a derived extern class without its own
+`constructor(...)` line takes zero construction arguments — the opposite of
+JavaScript's default — so a derived class that is constructed with arguments
+redeclares the constructor signature it accepts.
 
 `readonly` does not apply to extern classes, methods, or getters. A manual
 adapter describes their callable shape, but it does not make a purity or
@@ -243,6 +264,13 @@ Direct non-generic interface bases are flattened only when every base resolves
 to a plain object contract. Generic/complex bases, cycles, and declaration
 merging degrade the complete affected interface to `unknown`; the bridge never
 silently drops inherited fields and keeps checking a weaker partial shape.
+
+Thrown non-Error values normalize at the boundary everywhere. Velar `catch`
+normalizes what it catches, async paths normalize through the rejection
+channel, and a synchronous extern call in module-initialization position
+rethrows through the same owned normalization — so a JavaScript library that
+throws a bare string can never reach the host as an unowned raw value, in any
+position.
 
 Untrusted host, network, storage, or plugin data should cross the declaration as
 `unknown`, then enter application code through the existing runtime `Type`

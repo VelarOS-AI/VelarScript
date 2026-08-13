@@ -244,6 +244,11 @@ def isClosing(word: string) -> bool:
     return word in closingWords
 ```
 
+One-liners worth knowing: `values.flatMap(x => x.parts)` maps then flattens
+one level; `values.filter(x => x != null)` — exactly that predicate — drops
+absences and narrows `List<T?>` to `List<T>`; Sets combine with the copying
+algebra `a.union(b)`, `a.intersection(b)`, `a.difference(b)`.
+
 Mutate state directly — deep reactivity is the default, so rebuild-the-list
 spellings are noise: `tasks.append(task)`, `tasks[0].done = true`,
 `panel.open = not panel.open`.

@@ -492,6 +492,44 @@ if (typeof __velarCollectionsApply !== "function") throw new __velarCollectionsN
 function __velarCollectionsCall(operation, receiver, arguments_) { return __velarCollectionsApply(operation, receiver, arguments_); }
 function __velarCollectionsFreeze(value) { return __velarCollectionsCall(__velarCollectionsObjectFreeze, __velarCollectionsNativeObject, [value]); }
 function __velarCollectionsSame(left, right) { return left === right || __velarCollectionsCall(__velarCollectionsObjectIs, __velarCollectionsNativeObject, [left, right]); }
+// TXT-D1: string keys order by code point (= UTF-8 binary order), matching
+// every other ordered surface. Surrogate-free operands keep the native path.
+const __velarCollectionsNativeString = globalThis.String;
+const __velarCollectionsStringPrototype = __velarCollectionsGetOwnPropertyDescriptor(__velarCollectionsNativeString, "prototype")?.value;
+const __velarCollectionsCharCodeAt = __velarCollectionsHostOperation(__velarCollectionsStringPrototype, "charCodeAt");
+const __velarCollectionsSurrogatePattern = /[\uD800-\uDFFF]/;
+const __velarCollectionsRegExpPrototype = __velarCollectionsHostOperation(__velarCollectionsNativeObject, "getPrototypeOf")(__velarCollectionsSurrogatePattern);
+const __velarCollectionsSurrogateExec = __velarCollectionsHostOperation(__velarCollectionsRegExpPrototype, "exec");
+function __velarCollectionsCharCode(value, index) { return __velarCollectionsCall(__velarCollectionsCharCodeAt, value, [index]); }
+function __velarCollectionsHasSurrogate(value) { return __velarCollectionsCall(__velarCollectionsSurrogateExec, __velarCollectionsSurrogatePattern, [value]) !== null; }
+function __velarCollectionsCodePointCompare(left, right) {
+  if (left === right) return 0;
+  if (!__velarCollectionsHasSurrogate(left) && !__velarCollectionsHasSurrogate(right)) return left < right ? -1 : 1;
+  let leftOffset = 0;
+  let rightOffset = 0;
+  while (leftOffset < left.length && rightOffset < right.length) {
+    let first = __velarCollectionsCharCode(left, leftOffset);
+    let firstUnits = 1;
+    if (first >= 0xD800 && first <= 0xDBFF && leftOffset + 1 < left.length) {
+      const trail = __velarCollectionsCharCode(left, leftOffset + 1);
+      if (trail >= 0xDC00 && trail <= 0xDFFF) { first = (first - 0xD800) * 0x400 + (trail - 0xDC00) + 0x10000; firstUnits = 2; }
+    }
+    let second = __velarCollectionsCharCode(right, rightOffset);
+    let secondUnits = 1;
+    if (second >= 0xD800 && second <= 0xDBFF && rightOffset + 1 < right.length) {
+      const trail = __velarCollectionsCharCode(right, rightOffset + 1);
+      if (trail >= 0xDC00 && trail <= 0xDFFF) { second = (second - 0xD800) * 0x400 + (trail - 0xDC00) + 0x10000; secondUnits = 2; }
+    }
+    if (first !== second) return first < second ? -1 : 1;
+    leftOffset += firstUnits;
+    rightOffset += secondUnits;
+  }
+  return leftOffset < left.length ? 1 : rightOffset < right.length ? -1 : 0;
+}
+function __velarCollectionsOrderedCompare(kind, left, right) {
+  if (kind === "string") return __velarCollectionsCodePointCompare(left, right);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 function requireList(value, name) {
   return __velarRequireList(value, name);
 }
@@ -638,7 +676,7 @@ export function sortBy(values, key, descending = false) {
     decorated[index] = { value, index, key: result };
   }
   __velarCollectionsCall(__velarCollectionsArraySort, decorated, [(left, right) => {
-    const order = left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+    const order = __velarCollectionsOrderedCompare(keyType, left.key, right.key);
     return order === 0 ? left.index - right.index : descending ? -order : order;
   }]);
   const output = new __velarCollectionsNativeArray(decorated.length);
@@ -653,7 +691,8 @@ function extremeBy(values, key, direction, name) {
   for (let index = 1; index < values.length; index += 1) {
     const candidate = key(values[index]);
     comparable(candidate, name, keyType);
-    if ((direction < 0 && candidate < selectedKey) || (direction > 0 && candidate > selectedKey)) {
+    const order = __velarCollectionsOrderedCompare(keyType, candidate, selectedKey);
+    if ((direction < 0 && order < 0) || (direction > 0 && order > 0)) {
       selected = values[index]; selectedKey = candidate;
     }
   }
@@ -1098,7 +1137,7 @@ function requireSafePromiseResult(value, name) {
   return value;
 }
 export async function all(values) { values = asyncFanout(values, "async.all"); return promiseAll(promiseList(values, "async.all")); }
-export async function race(values) { values = asyncFanout(values, "async.race"); return promiseRace(promiseList(values, "async.race")); }
+export async function race(values) { values = asyncFanout(values, "async.race"); if (values.length === 0) throw new __velarAsyncRangeError("race requires at least one Promise"); return promiseRace(promiseList(values, "async.race")); }
 export async function timeout(value, milliseconds, message = "Operation timed out") { value = actualPromise(value, "async.timeout"); requireTimer(milliseconds, "timeout"); if (typeof message !== "string") throw new __velarAsyncTypeError("timeout message must be a string"); if (message.length > 65536) throw new __velarAsyncRangeError("timeout messages cannot exceed 64 KiB"); let timer; const timeoutPromise = new __velarAsyncPromise((_, reject) => { timer = __velarAsyncApply(__velarAsyncSetTimeout, __velarAsyncGlobal, [() => reject(new __velarAsyncError(message)), milliseconds]); }); try { return normalize(await promiseRace([value, timeoutPromise])); } finally { if (timer !== undefined) __velarAsyncApply(__velarAsyncClearTimeout, __velarAsyncGlobal, [timer]); } }
 export async function retry(task, attempts = 3) { if (typeof task !== "function") throw new __velarAsyncTypeError("retry requires a function"); if (!__velarAsyncNumberIsSafeInteger(attempts) || attempts < 1 || attempts > 10000) throw new __velarAsyncRangeError("retry attempts must be an integer from 1 through 10000"); let last; for (let attempt = 0; attempt < attempts; attempt += 1) { try { const candidate = normalize(__velarAsyncApply(task, undefined, [])); const pending = optionalActualPromise(candidate); return pending ? await pending : requireSafePromiseResult(candidate, "async.retry"); } catch (error) { last = error; } } throw last; }
 export async function map(values, worker, concurrency = 4) { values = __velarRequireList(values, "async.map"); if (typeof worker !== "function") throw new __velarAsyncTypeError("async.map requires a worker"); if (!__velarAsyncNumberIsSafeInteger(concurrency) || concurrency < 1 || concurrency > 1024) throw new __velarAsyncRangeError("async.map concurrency must be an integer from 1 through 1024"); const output = new __velarListArray(values.length); let cursor = 0; async function run() { while (true) { const index = cursor++; if (index >= values.length) return null; const candidate = normalize(__velarAsyncApply(worker, undefined, [values[index]])); const pending = optionalActualPromise(candidate); output[index] = pending ? await pending : candidate; } } const workerCount = concurrency < values.length ? concurrency : values.length; const workers = new __velarListArray(workerCount); for (let index = 0; index < workerCount; index += 1) workers[index] = run(); await promiseAll(workers); return output; }

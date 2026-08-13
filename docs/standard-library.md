@@ -355,7 +355,7 @@ return value must be actual text.
 | Export | Behavior |
 | --- | --- |
 | `sleep` | Resolves after a non-negative millisecond duration. |
-| `all`, `race` | Typed Promise-list equivalents of JavaScript `Promise.all` and `Promise.race`. |
+| `all`, `race` | Typed Promise-list equivalents of JavaScript `Promise.all` and `Promise.race`. A runtime-empty `race` List throws `RangeError("race requires at least one Promise")` — an empty race would never settle. |
 | `timeout` | Rejects if a Promise does not settle before a duration; accepts an optional message. |
 | `retry` | Runs a zero-argument sync/async task again after failure, up to the retry count. |
 | `map` | Maps a list with a sync/async worker and optional positive concurrency limit while preserving result order. |

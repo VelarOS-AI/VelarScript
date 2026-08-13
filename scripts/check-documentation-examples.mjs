@@ -40,6 +40,9 @@ for (const file of files) {
       sourceRoot: root,
       projectRoot: root,
       extensions: [velarCompilerExtension],
+      // Documentation examples illustrate packages that are deliberately not
+      // installed here; the specifier-existence probe is a project check.
+      resolveJavaScriptSpecifiers: false,
     });
     for (const failure of result.failures) failures.push(`${display(file)}:${line}: ${failure.message}`);
     for (const module of result.modules) {

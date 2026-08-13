@@ -10,6 +10,7 @@ import {
 } from "@velarscript/compiler/framework-host";
 import { hostErrorCode, hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import {
+  OFFICIAL_WEB_EXTENSION_PACKAGE,
   resolveExtensionPackages,
   validateLoadedExtension,
   type ResolvedExtensionPackage,
@@ -21,6 +22,19 @@ import {
 import { bundledExtension } from "./bundled-extension-registry.ts";
 
 export { CURRENT_PROJECT_FORMAT_VERSION } from "./project-format.ts";
+
+// BLD-U1: configuration diagnostics teach one complete, valid manifest —
+// including the web extension's package identity, which is the part authors
+// cannot guess — instead of only naming the missing field.
+const MINIMAL_MANIFEST_EXAMPLE = [
+  "a minimal web-project velar.json is:",
+  "{",
+  `  "formatVersion": ${CURRENT_PROJECT_FORMAT_VERSION},`,
+  "  \"entry\": \"src/main.vel\",",
+  `  "extensions": [${JSON.stringify(OFFICIAL_WEB_EXTENSION_PACKAGE)}]`,
+  "}",
+  "(drop \"extensions\" for a Node/CLI project)",
+].join("\n");
 
 export interface ResolvedFrameworkHost {
   readonly host: FrameworkHostExtension;
@@ -78,8 +92,8 @@ export async function resolveVelarProject(input: string | null, cwd = process.cw
     : await findManifest(resolve(cwd));
   if (!manifestPath || !await ordinaryManifestFile(manifestPath)) {
     throw new Error(input
-      ? `'${input}' is neither a .vel file nor a directory containing velar.json`
-      : "velar.json was not found; run this command in a VelarScript project or pass an entry .vel file");
+      ? `'${input}' is neither a .vel file nor a directory containing velar.json; ${MINIMAL_MANIFEST_EXAMPLE}`
+      : `velar.json was not found; run this command in a VelarScript project or pass an entry .vel file — ${MINIMAL_MANIFEST_EXAMPLE}`);
   }
   return loadManifest(manifestPath);
 }
@@ -105,10 +119,10 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     throw new Error(`Cannot read ${manifestPath}: ${hostErrorMessage(error)}`);
   }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`${manifestPath} must contain a JSON object`);
-  if (manifest.formatVersion === undefined) throw new Error(`${manifestPath}: 'formatVersion' is required; this compiler does not load legacy project formats`);
+  if (manifest.formatVersion === undefined) throw new Error(`${manifestPath}: 'formatVersion' is required; this compiler does not load legacy project formats — ${MINIMAL_MANIFEST_EXAMPLE}`);
   const formatVersion = integerField(manifest.formatVersion, "formatVersion");
   if (formatVersion !== CURRENT_PROJECT_FORMAT_VERSION) {
-    throw new Error(`${manifestPath}: unsupported formatVersion ${formatVersion}; this compiler supports ${CURRENT_PROJECT_FORMAT_VERSION}`);
+    throw new Error(`${manifestPath}: unsupported formatVersion ${formatVersion}; this compiler supports ${CURRENT_PROJECT_FORMAT_VERSION} — ${MINIMAL_MANIFEST_EXAMPLE}`);
   }
   const root = dirname(manifestPath);
   const entry = entryOverride ?? resolveProjectPath(root, stringField(manifest.entry, "entry", "src/main.vel"), "entry");
@@ -165,7 +179,7 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
 
 function extensionList(value: unknown, manifestPath: string): readonly string[] {
   if (!Array.isArray(value)) {
-    throw new Error(`${manifestPath}: 'extensions' must be a list of installed package names`);
+    throw new Error(`${manifestPath}: 'extensions' must be a list of installed package names — [${JSON.stringify(OFFICIAL_WEB_EXTENSION_PACKAGE)}] activates the web target`);
   }
   if (value.length > 16) throw new Error(`${manifestPath}: a project cannot load more than 16 compiler extensions`);
   const names = value.map((item) => {

@@ -1,4 +1,7 @@
+import { findPackageJSON, isBuiltin } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { readdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import {
   analysisTypeIdentity,
   compile,
@@ -18,7 +21,7 @@ import {
 } from "@velarscript/compiler";
 import type { ResolvedFrameworkHost } from "./config.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
-import { isStandardModule, standardModuleInterface } from "./standard-modules.ts";
+import { isStandardModule, standardModuleInterface, standardModuleInterfaces } from "./standard-modules.ts";
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./typescript-declarations.ts";
 import { MAX_VELAR_PROJECT_MODULES, readVelarSourceFile, validateVelarSourceText } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
@@ -82,7 +85,14 @@ export interface ProjectCompilationStats {
 
 function missingExportMessage(source: string, name: string): string {
   const guidance = removedStandardFunctionGuidance(source, name);
-  return guidance ?? `Module '${source}' has no export named '${name}'`;
+  if (guidance) return guidance;
+  // MOD-U2: `import name from "..."` is the JavaScript default-import habit;
+  // .vel modules have no default export, so the answer teaches the named form
+  // instead of implying a default might exist.
+  if (name === "default") {
+    return `VelarScript modules have no default export; import the names you need — import {name} from ${JSON.stringify(source)}`;
+  }
+  return `Module '${source}' has no export named '${name}'`;
 }
 
 export interface CompileProjectOptions {
@@ -93,6 +103,12 @@ export interface CompileProjectOptions {
   readonly extensionConfig?: ReadonlyMap<string, unknown>;
   readonly framework?: ResolvedFrameworkHost | null;
   readonly exportTestFunctions?: boolean;
+  /**
+   * BRG-U2: bare `import js` specifiers resolve at check time by default. A
+   * caller whose sources are illustrations rather than a runnable project
+   * (the documentation-example checker) opts out explicitly.
+   */
+  readonly resolveJavaScriptSpecifiers?: boolean;
 }
 
 interface LoadedModule {
@@ -111,6 +127,19 @@ interface PendingModule {
 
 export function projectImportKey(importerPath: string, source: string): string {
   return `${resolve(importerPath)}\0${source}`;
+}
+
+/**
+ * MOD-I5: a module-resolution failure is a positional diagnostic on the
+ * import statement that caused it — code, span, and owned wording — exactly
+ * like every other compiler failure. The project driver records them here
+ * during the dependency walk and overlays them onto the importer's compile
+ * result next to the initialization-cycle diagnostics.
+ */
+interface ModuleResolutionDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly source: string;
 }
 
 export async function compileProject(
@@ -154,6 +183,21 @@ export async function compileProjectEntries(
   const velarPackages = new Map<string, VelarSourcePackage>();
   const velarImports = new Map<string, string>();
   const unsafeCssOwners = new Map<string, string>();
+  const resolutionDiagnostics = new Map<string, ModuleResolutionDiagnostic[]>();
+  const recordResolution = (importerPath: string, source: string, code: string, message: string): void => {
+    const list = resolutionDiagnostics.get(importerPath) ?? [];
+    list.push({ code, message, source });
+    resolutionDiagnostics.set(importerPath, list);
+  };
+  // The importing statement behind each scheduled module, so a failure that
+  // only surfaces when the target is visited (a missing file, a
+  // case-divergent duplicate) can still land on the import that caused it.
+  const importOrigins = new Map<string, { readonly importer: string; readonly source: string }>();
+  // MOD-D2: one canonical file must be one module. The canonical (real-cased,
+  // symlink-resolved) path of every visited module detects a second spelling
+  // of the same file before it double-instantiates.
+  const canonicalModuleKeys = new Map<string, string>();
+  const javascriptSpecifierVerdicts = new Map<string, ModuleResolutionDiagnostic | null>();
   const canonicalBoundaries = new Map<string, Promise<string>>();
   const canonicalBoundary = (boundary: string): Promise<string> => {
     let pending = canonicalBoundaries.get(boundary);
@@ -195,8 +239,10 @@ export async function compileProjectEntries(
       continue;
     }
     let escapesCanonicalBoundary = false;
+    let canonicalInput: string | null = null;
     try {
-      escapesCanonicalBoundary = escapesRoot(relative(await canonicalBoundary(boundary), await canonicalizePotentialPath(inputPath)));
+      canonicalInput = await canonicalizePotentialPath(inputPath);
+      escapesCanonicalBoundary = escapesRoot(relative(await canonicalBoundary(boundary), canonicalInput));
     } catch (error) {
       failures.push({ path: inputPath, message: hostErrorMessage(error) });
       continue;
@@ -207,6 +253,21 @@ export async function compileProjectEntries(
         : "Relative VelarScript imports cannot escape the entry source directory" });
       continue;
     }
+    // MOD-D2: two spellings of one file (differently cased on a
+    // case-insensitive filesystem, or reached through a link) would silently
+    // instantiate the module twice and split its state. The first spelling
+    // wins; the second is rejected on its import.
+    {
+      const existingSpelling = canonicalModuleKeys.get(canonicalInput);
+      if (existingSpelling !== undefined && existingSpelling !== inputPath) {
+        const origin = importOrigins.get(inputPath);
+        const message = `Module path ${JSON.stringify(origin?.source ?? inputPath)} names the same file as '${existingSpelling}' under a different spelling; a module has one instance, so import it through one spelling (match the on-disk casing)`;
+        if (origin) recordResolution(origin.importer, origin.source, "VEL6005", message);
+        else failures.push({ path: inputPath, message });
+        continue;
+      }
+      canonicalModuleKeys.set(canonicalInput, inputPath);
+    }
     let text: string;
     try {
       const overridden = overrides.get(inputPath);
@@ -214,6 +275,20 @@ export async function compileProjectEntries(
         ? await readVelarSourceFile(inputPath)
         : validateVelarSourceText(overridden, inputPath);
     } catch (error) {
+      // MOD-U5: a missing module lands on the import that asked for it, in
+      // owned words, with the closest on-disk name when one is near.
+      const origin = importOrigins.get(inputPath);
+      if (origin && isHostErrorCode(error, "ENOENT")) {
+        const near = await nearestModuleName(inputPath);
+        const suggestion = near === null ? null : origin.source.slice(0, origin.source.lastIndexOf("/") + 1) + near;
+        recordResolution(
+          origin.importer,
+          origin.source,
+          "VEL6001",
+          `Module ${JSON.stringify(origin.source)} does not exist${suggestion ? `; did you mean ${JSON.stringify(suggestion)}?` : ""}`,
+        );
+        continue;
+      }
       failures.push({ path: inputPath, message: hostErrorMessage(error) });
       continue;
     }
@@ -273,6 +348,22 @@ export async function compileProjectEntries(
             path: inputPath,
             message: `Relative JavaScript import target '${dependency.source}' cannot be emitted; move the JavaScript module into a package and import it by package name`,
           });
+          continue;
+        }
+        // BRG-U2: a bare `import js` specifier resolves at check time. A
+        // mistyped package name used to pass check and crash the run with a
+        // raw ERR_MODULE_NOT_FOUND pointing at emitted artifacts, and a
+        // VelarScript package imported through `import js` crashed the same
+        // way while the mirror mistake had teaching.
+        if (options.resolveJavaScriptSpecifiers !== false
+          && !dependency.source.startsWith("node:") && !dependency.source.startsWith("data:") && !dependency.source.startsWith("#") && !isBuiltin(dependency.source)) {
+          const key = projectImportKey(inputPath, dependency.source);
+          let verdict = javascriptSpecifierVerdicts.get(key);
+          if (verdict === undefined) {
+            verdict = await judgeJavaScriptSpecifier(dependency.source, inputPath);
+            javascriptSpecifierVerdicts.set(key, verdict);
+          }
+          if (verdict) recordResolution(inputPath, dependency.source, verdict.code, verdict.message);
         }
         continue;
       }
@@ -283,37 +374,92 @@ export async function compileProjectEntries(
       }
       if (!dependency.source.startsWith(".")) {
         if (isStandardModule(dependency.source, compilerExtensions)) continue;
+        // MOD-U6: `velar/` is the language's own prefix; an unknown name in
+        // it lists the modules that exist instead of npm-subpath noise.
+        if (dependency.source === "velar" || dependency.source.startsWith("velar/")) {
+          const migratedStandard = migratedStandardPackageDiagnostic(dependency.source);
+          if (migratedStandard) {
+            failures.push({ path: inputPath, message: migratedStandard });
+            continue;
+          }
+          const available = [...standardModuleInterfaces(compilerExtensions).keys()].sort();
+          const near = nearestName(dependency.source, available);
+          recordResolution(
+            inputPath,
+            dependency.source,
+            "VEL6003",
+            `Unknown standard module ${JSON.stringify(dependency.source)}${near ? `; did you mean ${JSON.stringify(near)}?` : ""} The standard modules are: ${available.join(", ")}`,
+          );
+          continue;
+        }
         const migrated = migratedStandardPackageDiagnostic(dependency.source);
         if (migrated) {
           failures.push({ path: inputPath, message: migrated });
+          continue;
+        }
+        // MOD-U5: the two malformed non-package shapes each teach the
+        // relative spelling instead of falling into package resolution.
+        if (isAbsolute(dependency.source)) {
+          recordResolution(
+            inputPath,
+            dependency.source,
+            "VEL6002",
+            `Module paths are relative to the importing file; write './name.vel' — an absolute path is not a portable project input`,
+          );
+          continue;
+        }
+        if (dependency.source.endsWith(".vel")) {
+          recordResolution(
+            inputPath,
+            dependency.source,
+            "VEL6002",
+            `Import ${JSON.stringify(`./${dependency.source}`)}; a module path without './' names an installed package, not a file`,
+          );
           continue;
         }
         try {
           const package_ = await resolveVelarSourcePackage(dependency.source, inputPath);
           const existing = velarPackages.get(package_.name);
           if (existing && existing.root !== package_.root) {
-            failures.push({ path: inputPath, message: `VelarScript package '${package_.name}' resolves to multiple installed versions; use one package instance per application build` });
+            recordResolution(inputPath, dependency.source, "VEL6002", `VelarScript package '${package_.name}' resolves to multiple installed versions; use one package instance per application build`);
             continue;
           }
           velarPackages.set(package_.name, package_);
           velarImports.set(projectImportKey(inputPath, dependency.source), package_.entryPath);
+          importOrigins.set(package_.entryPath, { importer: inputPath, source: dependency.source });
           enqueue({ inputPath: package_.entryPath, package: package_ });
         } catch (error) {
-          failures.push({ path: inputPath, message: `Cannot resolve VelarScript package import '${dependency.source}': ${hostErrorMessage(error)}` });
+          recordResolution(inputPath, dependency.source, "VEL6002", `Cannot resolve VelarScript package import '${dependency.source}': ${hostErrorMessage(error)}`);
         }
         continue;
       }
       if (extname(dependency.source) !== ".vel") {
-        failures.push({ path: inputPath, message: `VelarScript import '${dependency.source}' must use the .vel extension` });
+        recordResolution(inputPath, dependency.source, "VEL6001", `VelarScript import '${dependency.source}' must use the .vel extension`);
         continue;
       }
       const target = resolve(dirname(inputPath), dependency.source);
+      // MOD-D3 / MOD-U8: a module cannot import (or re-export) from itself.
+      // The self edge evades the initialization-cycle checker — evaluation
+      // order cannot place a module after itself — so the binding crashed
+      // with a raw ReferenceError at run time.
+      if (target === inputPath) {
+        recordResolution(
+          inputPath,
+          dependency.source,
+          "VEL6004",
+          dependency.reExport
+            ? "A module cannot re-export from itself; declare the binding under the exported name instead"
+            : "A module cannot import from itself; use the declaration directly (rename it if the import was an alias)",
+        );
+        continue;
+      }
       if (escapesRoot(relative(boundary, target))) {
         failures.push({ path: inputPath, message: pendingModule.package
           ? `Relative import '${dependency.source}' cannot escape VelarScript package '${pendingModule.package.name}'`
           : `Relative import '${dependency.source}' cannot escape the entry source directory` });
         continue;
       }
+      if (!importOrigins.has(target)) importOrigins.set(target, { importer: inputPath, source: dependency.source });
       enqueue({ inputPath: target, package: pendingModule.package });
     }
   }
@@ -397,7 +543,7 @@ export async function compileProjectEntries(
     modules.push(...group.map((module) => passResults.get(module.inputPath)!));
   }
 
-  appendInitializationCycleDiagnostics(modules, loaded, velarImports, entryPath);
+  appendInitializationCycleDiagnostics(modules, loaded, velarImports, entryPath, resolutionDiagnostics);
   modules.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
   if (framework?.host.validateProject) {
     try {
@@ -438,6 +584,83 @@ export async function compileProjectEntries(
   };
 }
 
+/** Levenshtein distance capped at 3 — enough to answer "is this a near miss". */
+function editDistance(left: string, right: string): number {
+  if (Math.abs(left.length - right.length) > 3) return 4;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        previous[rightIndex]! + 1,
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length]!;
+}
+
+function nearestName(requested: string, candidates: readonly string[]): string | null {
+  let best: string | null = null;
+  let bestDistance = 3;
+  for (const candidate of candidates) {
+    if (candidate === requested) continue;
+    const distance = editDistance(requested, candidate);
+    if (distance < bestDistance || (distance === bestDistance && best === null)) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/** The nearest .vel file name next to a missing module target, if any. */
+async function nearestModuleName(targetPath: string): Promise<string | null> {
+  try {
+    const entries = await readdir(dirname(targetPath), { withFileTypes: true });
+    const names = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".vel")).map((entry) => entry.name);
+    const wanted = targetPath.slice(targetPath.lastIndexOf("/") + 1);
+    return nearestName(wanted, names);
+  } catch {
+    return null;
+  }
+}
+
+// BRG-U2: judge a bare `import js` specifier at check time. The package must
+// exist next to the importer, and a VelarScript package reached through
+// `import js` gets the reverse-direction teaching.
+async function judgeJavaScriptSpecifier(source: string, importerPath: string): Promise<ModuleResolutionDiagnostic | null> {
+  let manifestPath: string | undefined;
+  try {
+    manifestPath = findPackageJSON(source, pathToFileURL(importerPath)) ?? undefined;
+  } catch {
+    manifestPath = undefined;
+  }
+  if (manifestPath === undefined) {
+    return {
+      code: "VEL6006",
+      message: `JavaScript package import ${JSON.stringify(source)} does not resolve to an installed package; install it, or fix the specifier`,
+      source,
+    };
+  }
+  try {
+    const manifest = JSON.parse(await readBoundedText(manifestPath, 1024 * 1024, `Package manifest for '${source}'`)) as { velar?: { entry?: unknown } };
+    if (typeof manifest.velar?.entry === "string" && manifest.velar.entry.length > 0) {
+      const packageName = packageNameOf(source);
+      return {
+        code: "VEL6006",
+        message: `'${packageName}' is a VelarScript package; import it without 'js' — import {name} from ${JSON.stringify(packageName)}`,
+        source,
+      };
+    }
+  } catch {
+    // An unreadable manifest is the package's own problem; the import stands.
+  }
+  return null;
+}
+
 function migratedStandardPackageDiagnostic(source: string): string | null {
   if (source === "velar/javascript") {
     return "Standard module 'velar/javascript' moved to package '@velarscript/script-analysis'; install it, then import from '@velarscript/script-analysis'";
@@ -458,7 +681,7 @@ function importedReactiveAssignmentDiagnostics(
 ): CompileResult {
   if (reactiveImports.size === 0) return result;
   const diagnostics = result.diagnostics.map((item) => {
-    if (item.code !== "VEL3002" || !item.message.startsWith("Cannot assign to const binding '")) return item;
+    if (item.code !== "VEL3002" || !item.message.startsWith("Cannot assign to imported binding '")) return item;
     const reference = result.semanticIndex.references.find((candidate) => candidate.write
       && candidate.span.start === item.span.start
       && candidate.span.end === item.span.end);
@@ -595,6 +818,8 @@ function moduleDependencies(
 }
 
 const INITIALIZATION_CYCLE_DIAGNOSTIC = "VEL3019";
+/** MOD-I5: the module-resolution diagnostic family (VEL6xxx). */
+const MODULE_RESOLUTION_DIAGNOSTIC_PREFIX = "VEL6";
 
 // D31 item 23: module initialization cycles are rejected at compile time.
 // The modules of a static import cycle evaluate in the emitted ESM
@@ -617,6 +842,7 @@ function appendInitializationCycleDiagnostics(
   loaded: ReadonlyMap<string, LoadedModule>,
   velarImports: ReadonlyMap<string, string>,
   entryPath: string,
+  resolutions: ReadonlyMap<string, readonly ModuleResolutionDiagnostic[]> = new Map(),
 ): void {
   const resolveDependency = (importerPath: string, source: string): string | null => {
     const target = source.startsWith(".") && extname(source) === ".vel"
@@ -627,37 +853,44 @@ function appendInitializationCycleDiagnostics(
 
   const carriesCycleDiagnostic = (module: ProjectModule): boolean =>
     module.result.diagnostics.some((item) => item.code === INITIALIZATION_CYCLE_DIAGNOSTIC);
+  const carriesResolutionDiagnostic = (module: ProjectModule): boolean =>
+    module.result.diagnostics.some((item) => item.code.startsWith(MODULE_RESOLUTION_DIAGNOSTIC_PREFIX));
   // Nothing to decide and nothing stale to clear: the common project pays only
   // this scan. Every other exit still recomputes from the module's own compile
-  // output, so a diagnostic never outlives the cycle that produced it.
-  if (modules.every((module) => module.result.initializationImportReads.length === 0 && !carriesCycleDiagnostic(module))) return;
+  // output, so a diagnostic never outlives the cycle (or the resolution
+  // failure) that produced it.
+  const cycleRelevant = !modules.every((module) => module.result.initializationImportReads.length === 0 && !carriesCycleDiagnostic(module));
+  const resolutionRelevant = resolutions.size > 0 || modules.some(carriesResolutionDiagnostic);
+  if (!cycleRelevant && !resolutionRelevant) return;
 
   // Static evaluation edges in source order: import and re-export
   // declarations, excluding dynamic imports (they defer evaluation) and
   // JavaScript or standard modules (they are not .vel graph members).
   const staticDependencies = new Map<string, readonly string[]>();
   const dynamicRoots: string[] = [];
-  for (const [path, module] of loaded) {
-    const output: string[] = [];
-    const seen = new Set<string>();
-    for (const reference of module.inspection.semanticIndex.moduleReferences) {
-      const target = resolveDependency(path, reference.source);
-      if (target === null) continue;
-      if (reference.dynamic) {
-        dynamicRoots.push(target);
-        continue;
+  if (cycleRelevant) {
+    for (const [path, module] of loaded) {
+      const output: string[] = [];
+      const seen = new Set<string>();
+      for (const reference of module.inspection.semanticIndex.moduleReferences) {
+        const target = resolveDependency(path, reference.source);
+        if (target === null) continue;
+        if (reference.dynamic) {
+          dynamicRoots.push(target);
+          continue;
+        }
+        if (seen.has(target)) continue;
+        seen.add(target);
+        output.push(target);
       }
-      if (seen.has(target)) continue;
-      seen.add(target);
-      output.push(target);
+      staticDependencies.set(path, output);
     }
-    staticDependencies.set(path, output);
   }
 
   // Tarjan over the static edges: only strongly connected members can read a
   // later-evaluating module, so everything else is skipped immediately.
   const componentOf = new Map<string, number>();
-  {
+  if (cycleRelevant) {
     let nextIndex = 0;
     let componentCount = 0;
     const indexes = new Map<string, number>();
@@ -739,6 +972,22 @@ function appendInitializationCycleDiagnostics(
           `Move this read into a function, or extract the shared value into a third module; '${read.source}' has not initialized when this line runs`,
           read.span,
         ));
+      }
+    }
+    // MOD-I5: resolution failures overlay the same way, on the import
+    // statement that caused them, rebuilt from the clean compile output so
+    // reuse can never duplicate or orphan them.
+    {
+      const pending = resolutions.get(path) ?? [];
+      const seen = new Set<string>();
+      for (const item of pending) {
+        const reference = compiled.semanticIndex.moduleReferences.find((candidate) => candidate.source === item.source)
+          ?? compiled.semanticIndex.moduleReferences[0];
+        const span = reference?.span ?? { start: 0, end: Math.min(1, compiled.source.text.length) };
+        const key = `${item.code}\0${item.message}\0${span.start}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        additions.push(diagnostic(item.code, item.message, span));
       }
     }
     if (additions.length === 0) {
@@ -976,6 +1225,10 @@ async function createAnalysisContext(
       for (const warning of declarations.warnings) {
         notices.push({ path: module.inputPath, message: `${dependency.source}: ${warning}` });
       }
+      // BRG-U3: the broken-types notice is the whole story; per-name
+      // "declaration has no export" noise would blame the import lines for
+      // the package's defect.
+      if (declarations.unreadableDeclaredTypes) continue;
       const aliases = new Map(dependency.specifiers
         .filter((specifier) => !specifier.namespace)
         .map((specifier) => [specifier.imported, specifier.local]));

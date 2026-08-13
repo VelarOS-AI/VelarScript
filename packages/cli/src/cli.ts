@@ -375,16 +375,15 @@ async function main(arguments_: readonly string[]): Promise<number> {
 
   const project = await compileConfiguredProject(projectConfig);
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
-  if (project.failures.length > 0) {
-    for (const failure of project.failures) {
-      process.stderr.write(`${failure.path}: ${failure.message}\n`);
-    }
-    return 1;
-  }
-
-  const diagnostics = project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
-  if (diagnostics.length > 0) {
-    process.stderr.write(`${diagnostics.join("\n\n")}\n`);
+  // MOD-I1: resolution failures and module diagnostics print together —
+  // exactly as `velar run` reports them — so one unresolved import can never
+  // bury the compiler's own diagnostics for everything else.
+  const errors = [
+    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+    ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
+  ];
+  if (errors.length > 0) {
+    process.stderr.write(`${errors.join("\n\n")}\n`);
     return 1;
   }
 
