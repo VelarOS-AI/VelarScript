@@ -17,10 +17,10 @@ export component Counter(start: number = 0):
     watch count as current, previous:
         print(f"{previous} -> {current}")
 
-    mounted:
+    @mounted:
         print("counter mounted")
 
-    cleanup:
+    @cleanup:
         print("counter cleanup")
 
     return <button

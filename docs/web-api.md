@@ -83,7 +83,7 @@ component Editor(initial: string = "draft") exposes EditorHandle:
 component Page:
     let editor: EditorHandle? = null
 
-    mounted:
+    @mounted:
         if editor != null:
             editor.focus()
 
@@ -101,7 +101,7 @@ Component `ref` is a compiler-owned JSX directive rather than a prop. It
 requires a mutable optional `let` binding because cleanup restores `null`.
 Components without `exposes` reject `ref`, and component props cannot be named
 `ref`. The Handle becomes available after the child root has been constructed
-and before the parent's `mounted` block runs.
+and before the parent's `@mounted` block runs.
 
 The runtime creates one shallow-frozen Handle per component instance. Callable
 fields are guarded capabilities: after the instance is destroyed, a saved old
@@ -604,7 +604,7 @@ component RuntimeStatus:
     def failDeliberately() -> null:
         reportError(Error("Manual failure"), "manual", "diagnostic action")
 
-    cleanup:
+    @cleanup:
         stopErrors()
 
     return <button on:click={failDeliberately}>{message}</button>
@@ -626,12 +626,12 @@ component RuntimeStatus:
   initialization too, so post-load changes to Error/Object/Number/Promise/Set
   cannot redirect either manual reports or managed asynchronous failures.
 - The compiler reports failures from initial `mount`, reactive `render` and
-  synchronous `watch` blocks, synchronous or asynchronous events, `mounted`,
-  and `cleanup`. A detached `async` statement reports its rejection through
+  synchronous `watch` blocks, synchronous or asynchronous events, `@mounted`,
+  and `@cleanup`. A detached `async` statement reports its rejection through
   this same chain under the distinct `detached` phase; with no handler
   installed the failure surfaces through the host runtime, never silently.
 - Event handlers and lifecycle callbacks are non-tracking execution boundaries.
-  Reads performed by `mounted` or `cleanup` cannot become dependencies of an
+  Reads performed by `@mounted` or `@cleanup` cannot become dependencies of an
   enclosing conditional/keyed render that happened to mount or destroy the
   component, and a synchronously dispatched event cannot inherit a framework
   observer. State writes still notify their actual render/watch consumers.
@@ -639,7 +639,7 @@ component RuntimeStatus:
   belongs in `resource`; explicit UI operations belong in `action`, declared in
   the component that triggers them or at module scope when a shared store owns
   the operation and its `pending`/`error` surface; setup that must finish after
-  insertion belongs in `mounted`. Process- and page-lifetime work with no UI
+  insertion belongs in `@mounted`. Process- and page-lifetime work with no UI
   surface uses the `async` statement, which runs a checked `Promise<null>`
   expression detached and reports failure through the `velar/app` chain with
   the `detached` phase.
@@ -709,9 +709,9 @@ component RuntimeStatus:
   Incremental Markdown therefore requires a parser-owned stable-prefix/dirty-tail
   contract and a separately designed DOM morph boundary; it is not inferred
   from an arbitrary trusted HTML string.
-- Cleanup remains the sibling `cleanup` block, not a React-style effect. Its
+- Cleanup remains the sibling `@cleanup` block, not a React-style effect. Its
   independent cleanup steps continue after one fails, and every failure is
-  reported. `mounted` may await asynchronous work; `cleanup` remains
+  reported. `@mounted` may await asynchronous work; `@cleanup` remains
   synchronous and should start no unowned background work.
 - An automatic failure with no installed handler is surfaced through the host
   runtime rather than silently discarded. Error handlers therefore own their
@@ -1029,10 +1029,10 @@ component PreferencesPanel:
         preferences.set("settings", settings, 262144)
         await cache.set("settings", settings, 262144)
 
-    mounted:
+    @mounted:
         await save()
 
-    cleanup:
+    @cleanup:
         stopWatching()
 
     return <p>{settings.theme}</p>
@@ -1189,7 +1189,7 @@ component EnvironmentStatus:
     const stopOnline = watchOnline(online => print(online))
     const stopVisibility = watchVisibility(visible => print(visible))
 
-    cleanup:
+    @cleanup:
         stopReady()
         stopHeartbeat()
         stopOnline()
@@ -1210,8 +1210,8 @@ microtask functions are captured at module initialization, so later ambient
 replacement cannot steal scheduling or cancellation.
 
 Timer handles are explicit component resources: start them during component
-setup or `mounted`, retain the returned stop function, and release it from the
-sibling `cleanup` block. VelarScript does not expose `setTimeout`, `setInterval`, or a
+setup or `@mounted`, retain the returned stop function, and release it from the
+sibling `@cleanup` block. VelarScript does not expose `setTimeout`, `setInterval`, or a
 React-style effect API.
 
 - `location()` and `environment()` return typed snapshots rather than exposing
@@ -1335,7 +1335,7 @@ component LiveStatus:
     })
     const updates = eventStream("/api/updates", {message: (text, id) => print(text)})
 
-    cleanup:
+    @cleanup:
         chat.close()
         updates.close()
 
@@ -1379,7 +1379,7 @@ component LiveStatus:
   observing connection state, matching the ordinary `send` argument-first
   contract even on a closed channel.
 - Connections are ordinary owned resources. Applications close them explicitly
-  from sibling component `cleanup`; the API does not introduce React-style
+  from sibling component `@cleanup`; the API does not introduce React-style
   effects or hidden lifecycle behavior.
 
 ## Core `velar/test` and Web `velar/web-test`

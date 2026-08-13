@@ -95,15 +95,14 @@ interface MemberTarget {
 }
 
 function bindingRenameRestrictionMessage(project: ProjectResult, name: string): string | null {
-  const extensionKeywords = new Set(project.compilerExtensions.flatMap((extension) => Object.keys(extension.lexical?.keywords ?? {})));
   const extensionReservedBindings = new Set(project.compilerExtensions.flatMap((extension) => [...extension.analysis?.reservedBindings ?? []]));
-  const restriction = bindingNameRestriction(name, extensionKeywords, extensionReservedBindings);
+  const restriction = bindingNameRestriction(name, extensionReservedBindings);
   if (!restriction) return null;
   if (restriction === "invalid") return "The new name is not a valid VelarScript identifier";
   if (restriction === "keyword") return "The new name is reserved by VelarScript";
   if (restriction === "source") return `The source spelling '${name}' is unavailable in VelarScript`;
   if (restriction === "javascript") return `The new name '${name}' is reserved by JavaScript for lexical bindings`;
-  if (restriction === "compiler") return "The new name uses a reserved compiler prefix ('$velar' or '__velar')";
+  if (restriction === "compiler") return "The new name uses a reserved compiler prefix '__velar'";
   if (restriction === "core") return `The new name '${name}' is a reserved Core binding`;
   return `The new name '${name}' is a reserved extension binding`;
 }

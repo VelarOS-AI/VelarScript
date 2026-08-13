@@ -3,6 +3,18 @@ import { findInterpolatedExpressionEnd } from "@velarscript/compiler/extension";
 import type { CompilerLexicalScanContext, CompilerLexicalScanResult, Token } from "@velarscript/compiler/extension";
 import { WEB_VOID_ELEMENTS } from "./elements.ts";
 
+/**
+ * The words the Web extension owns at a statement or expression head. D30
+ * item 16 made every one of them contextual: the lexer leaves them ordinary
+ * identifiers and the Web parser claims one only where its declaration shape
+ * appears, so `const state = ...` and `component state(...)` can share a
+ * module. The lifecycle hooks are not here — D43 item 67 gave them the
+ * '@mounted:' and '@cleanup:' spellings, which cannot collide at all.
+ */
+export const WEB_CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set([
+  "component", "state", "resource", "action", "watch", "exposes", "expose", "look", "keyframes", "css",
+]);
+
 export const WEB_JSX_TOKEN = "@velarscript/web:jsx";
 export const WEB_LOOK_TOKEN = "@velarscript/web:look";
 export const WEB_KEYFRAMES_TOKEN = "@velarscript/web:keyframes";
@@ -106,8 +118,12 @@ function visualBlockKeyword(tokens: readonly Token[]): "look" | "keyframes" | nu
   while (tokens[index]?.kind === "newline") index -= 1;
   if (tokens[index]?.kind !== "colon") return null;
   index -= 1;
-  if (tokens[index]?.kind !== "extensionKeyword") return null;
-  return tokens[index]?.value === "look" || tokens[index]?.value === "keyframes" ? tokens[index]!.value as "look" | "keyframes" : null;
+  const word = tokens[index];
+  if (word?.kind !== "identifier") return null;
+  // `look:` and `keyframes:` are contextual: the block opens only when the word
+  // is immediately followed by ':' and an indented body, which is a shape no
+  // ordinary read of the same name can take.
+  return word.value === "look" || word.value === "keyframes" ? word.value : null;
 }
 
 function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | "keyframes"): CompilerLexicalScanResult {

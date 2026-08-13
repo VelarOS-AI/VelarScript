@@ -103,7 +103,7 @@ component RealtimeProbe(socketUrl: string, eventsUrl: string):
         error: eventFailed,
     })
 
-    cleanup:
+    @cleanup:
         channel.close()
         events.close()
 
@@ -259,12 +259,12 @@ export component WebCapabilities:
     def connectRealtime() -> null:
         realtimeEnabled = true
 
-    mounted:
+    @mounted:
         await loadCapabilities()
         await verifyRecovery()
         runtimeLog.info("Runtime configured")
 
-    cleanup:
+    @cleanup:
         stopOnline()
         stopVisibility()
         stopMedia()

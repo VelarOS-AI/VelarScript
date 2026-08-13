@@ -36,6 +36,16 @@ const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
 const recoveredDiagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan, recovered: true });
 const renderBlockSpellings = new Set(["render", "show", "view"]);
+const lifecycleHookSpellings = new Set(["mounted", "cleanup"]);
+// The tokens that may follow the declared name in each Web declaration head.
+const componentHeaderShapes = new Set(["leftParen", "colon", "less", "identifier"]);
+const reactiveBindingShapes = new Set(["assign", "colon"]);
+const actionHeaderShapes = new Set(["leftParen"]);
+// Tokens that open a fresh value rather than continuing the expression before
+// them; only these make `expose` the component's expose item.
+const exposeValueStartKinds = new Set([
+  "identifier", "string", "fstring", "number", "unitNumber", "true", "false", "null", "super", "leftBrace", "extensionToken",
+]);
 
 export class VelarWebParser extends Parser {
   private insideComponentProps = 0;
@@ -58,7 +68,19 @@ export class VelarWebParser extends Parser {
     if (!this.check("rightParen")) {
       do {
         if (this.match("ellipsis")) this.diagnostics.push(diagnostic("VEL2016", "Components use named props and do not support rest parameters", this.previous().span));
-        const nameToken = this.check("identifier") ? this.advance() : this.componentPropKeyword();
+        // 'class' and 'look' are the props every component already carries, so
+        // the same message answers both the keyword token and the now-ordinary
+        // name.
+        const universalProp = this.checkWord("look") || this.check("class");
+        if (universalProp) {
+          const token = this.advance();
+          this.diagnostics.push(diagnostic(
+            "VEL2016",
+            `Every component already accepts '${token.value}'; remove it from the prop list and pass it at the call site with ${token.value}={...}`,
+            token.span,
+          ));
+        }
+        const nameToken = universalProp ? this.previous() : this.check("identifier") ? this.advance() : this.componentPropKeyword();
         if (!nameToken) {
           this.diagnostics.push(diagnostic("VEL2016", "A component prop list holds 'name: Type' props separated by commas", this.current().span));
           break;
@@ -97,17 +119,27 @@ export class VelarWebParser extends Parser {
    */
   private componentPropKeyword(): Token | null {
     const token = this.current();
-    if (token.kind !== "extensionKeyword" && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(token.value)) return null;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(token.value)) return null;
     if (token.kind === "identifier" || token.kind === "eof" || token.kind === "newline") return null;
     this.advance();
-    this.diagnostics.push(diagnostic("VEL2016", token.value === "class" || token.value === "look"
-      ? `Every component already accepts '${token.value}'; remove it from the prop list and pass it at the call site with ${token.value}={...}`
-      : `'${token.value}' is a VelarScript keyword and cannot name a component prop; choose another name`, token.span));
+    this.diagnostics.push(diagnostic("VEL2016", `'${token.value}' is a VelarScript keyword and cannot name a component prop; choose another name`, token.span));
     return token;
   }
 
   protected override createNestedParser(tokens: readonly Token[]): Parser {
     return new VelarWebParser(tokens, this.lexicalExtensions);
+  }
+
+  /**
+   * D43 item 67: a component's lifecycle hooks are spelled '@mounted:' and
+   * '@cleanup:'. The '@' marker is what keeps them out of the author's own
+   * namespace, so a hook is only recognized through it.
+   */
+  private matchLifecycleHook(name: string): boolean {
+    if (!this.check("at") || this.peekKind(1) !== "identifier" || this.peekValue(1) !== name) return false;
+    this.advance();
+    this.advance();
+    return true;
   }
 
   protected override validateExtensionTypeArguments(name: string, arguments_: readonly TypeSyntax[], nameSpan: Span): boolean {
@@ -141,8 +173,7 @@ export class VelarWebParser extends Parser {
       this.skipMistypedDeclaration();
       return { kind: "PassStatement", span: span(keyword.span.start, name.span.end) };
     }
-    if (this.current().kind === "extensionKeyword" && this.current().value === "look"
-      && this.peekKind(1) === "identifier" && this.peekKind(2) === "colon") {
+    if (this.checkWord("look") && this.peekKind(1) === "identifier" && this.peekKind(2) === "colon") {
       const keyword = this.advance();
       const name = this.advance();
       this.diagnostics.push(diagnostic(
@@ -153,25 +184,33 @@ export class VelarWebParser extends Parser {
       this.skipMistypedDeclaration();
       return { kind: "PassStatement", span: span(keyword.span.start, name.span.end) };
     }
-    if (this.matchExtensionKeyword("component")) {
+    if (this.namedDeclarationAhead("component", componentHeaderShapes)) {
+      this.advance();
       if (modifiers.abstract) this.diagnostics.push(diagnostic("VEL2013", "Only classes can be declared with 'abstract'", this.previous().span));
       if (modifiers.asynchronous) this.diagnostics.push(diagnostic("VEL2013", "Components are not declared with 'async'", this.previous().span));
       return this.parseComponent(start, modifiers.exported);
     }
     if (modifiers.abstract || modifiers.asynchronous) return undefined;
-    if (this.matchExtensionKeyword("state")) return this.parseStateDeclaration(start, modifiers.exported);
-    if (this.matchExtensionKeyword("resource")) {
+    if (this.namedDeclarationAhead("state", reactiveBindingShapes)) {
+      this.advance();
+      return this.parseStateDeclaration(start, modifiers.exported);
+    }
+    if (this.namedDeclarationAhead("resource", reactiveBindingShapes)) {
+      this.advance();
       if (modifiers.exported) this.diagnostics.push(diagnostic("VEL2018", "A resource is component-owned and cannot be exported", this.previous().span));
       return this.parseResourceDeclaration(start, modifiers.exported);
     }
-    if (this.matchExtensionKeyword("action")) {
+    if (this.namedDeclarationAhead("action", actionHeaderShapes)) {
+      this.advance();
       return this.parseActionDeclaration(start, modifiers.exported);
     }
-    if (this.matchExtensionKeyword("watch")) {
+    if (this.blockHeaderAhead("watch")) {
+      this.advance();
       if (modifiers.exported) this.diagnostics.push(diagnostic("VEL2001", "A watch block cannot be exported", this.previous().span));
       return this.parseWatchDeclaration(start);
     }
-    if (this.matchExtensionKeyword("expose")) {
+    if (this.exposeItemAhead()) {
+      this.advance();
       const value = this.parseExpression();
       this.diagnostics.push(diagnostic("VEL5056", "'expose' is only valid as a top-level component item; declare 'exposes HandleType' on that component", span(start, value.span.end)));
       return { kind: "PassStatement", span: span(start, value.span.end) };
@@ -179,8 +218,54 @@ export class VelarWebParser extends Parser {
     return undefined;
   }
 
+  /**
+   * D30 item 16: a Web declaration head is claimed only in its own declaration
+   * shape — the word, a name, and one of the tokens that can follow it there.
+   * `state = 1`, `state(x)`, and `state.field` all keep the identifier reading.
+   */
+  private namedDeclarationAhead(word: string, shapes: ReadonlySet<string>): boolean {
+    return this.checkWord(word) && this.peekKind(1) === "identifier" && shapes.has(this.peekKind(2));
+  }
+
+  /**
+   * `watch` opens a block: its header line ends in ':' and an indented body
+   * follows. No expression statement can end in ':', so the lookahead is exact
+   * and `watch = 1` / `watch(value)` stay ordinary code.
+   */
+  private blockHeaderAhead(word: string): boolean {
+    if (!this.checkWord(word)) return false;
+    let depth = 0;
+    let offset = 1;
+    for (; ; offset += 1) {
+      const kind = this.peekKind(offset);
+      if (kind === "leftParen" || kind === "leftBracket" || kind === "leftBrace") depth += 1;
+      else if (kind === "rightParen" || kind === "rightBracket" || kind === "rightBrace") depth -= 1;
+      else if (kind === "eof") return false;
+      else if (depth === 0 && (kind === "newline" || kind === "dedent")) break;
+    }
+    if (offset < 3 || this.peekKind(offset - 1) !== "colon") return false;
+    while (this.peekKind(offset) === "newline") offset += 1;
+    return this.peekKind(offset) === "indent";
+  }
+
+  /**
+   * `expose value` is the one Web statement head followed by a bare expression
+   * rather than by a name and a shape token. It is claimed only when the next
+   * token opens a fresh value, so `expose(handle)` reads as a call and
+   * `expose = handle` as an assignment — the identifier reading wins wherever
+   * the two could compete.
+   */
+  private exposeItemAhead(): boolean {
+    return this.checkWord("expose") && exposeValueStartKinds.has(this.peekKind(1));
+  }
+
   protected override parseExtensionImport(start: number): Statement | null | undefined {
-    if (!this.matchExtensionKeyword("css")) return undefined;
+    // `import css unsafe "./file.css"` against `import css from "./module.vel"`:
+    // the CSS boundary is claimed only when the word is followed by the
+    // boundary marker or by the path itself, so a module named `css` still
+    // imports by name.
+    if (!this.checkWord("css") || !(this.peekKind(1) === "unsafe" || this.peekKind(1) === "string")) return undefined;
+    this.advance();
     this.expect("unsafe", "Native CSS is an unsafe boundary; write 'import css unsafe'");
     const source = this.expect("string", "Expected a relative .css path after 'import css unsafe'");
     let placement: "before" | "after" = "before";
@@ -216,8 +301,12 @@ export class VelarWebParser extends Parser {
       const syntax = shiftJsxSyntax(payload, token.span.start - payload.span.start);
       return jsxExpression(syntax, (source) => this.parseJsxEmbedded(source), (item) => this.diagnostics.push(item));
     }
-    if (token.kind === "extensionKeyword" && token.value === "keyframes") return this.parseKeyframesExpression(token);
-    if (token.kind !== "extensionKeyword" || token.value !== "look") return undefined;
+    if (token.kind !== "identifier") return undefined;
+    // `look:` and `keyframes:` open a block-valued expression. Without the ':'
+    // the word is an ordinary name, so `const saved = look` reads a binding.
+    if (!this.check("colon")) return undefined;
+    if (token.value === "keyframes") return this.parseKeyframesExpression(token);
+    if (token.value !== "look") return undefined;
     // LOK-I3: an unfinished Look value used to unravel into six diagnostics as
     // each expectation failed in turn. The shape is checked up front so the
     // reader gets one message naming the whole spelling.
@@ -375,7 +464,7 @@ export class VelarWebParser extends Parser {
     const expression = this.parseExpression();
     let currentName: string | null = null;
     let previousName: string | null = null;
-    if (this.match("as")) {
+    if (this.matchWord("as")) {
       currentName = this.expect("identifier", "Expected the current watch value name").value;
       this.expect("comma", "Expected ',' between watch value names");
       previousName = this.expect("identifier", "Expected the previous watch value name").value;
@@ -409,23 +498,54 @@ export class VelarWebParser extends Parser {
     while (!this.check("dedent") && !this.check("eof")) {
       const itemStart = this.current().span.start;
       let item: ComponentItem | null = null;
-      if (this.matchExtensionKeyword("expose")) {
+      if (this.exposeItemAhead()) {
+        this.advance();
         const value = this.parseExpression();
         item = { kind: "ExtensionStatement:web:expose", value, span: span(itemStart, value.span.end) } satisfies ExposeDeclaration;
-      } else if (this.matchExtensionKeyword("state")) {
+      } else if (this.namedDeclarationAhead("state", reactiveBindingShapes)) {
+        this.advance();
         item = this.parseStateDeclaration(itemStart, false);
-      } else if (this.matchExtensionKeyword("resource")) {
+      } else if (this.namedDeclarationAhead("resource", reactiveBindingShapes)) {
+        this.advance();
         item = this.parseResourceDeclaration(itemStart, false);
-      } else if (this.matchExtensionKeyword("action")) {
+      } else if (this.namedDeclarationAhead("action", actionHeaderShapes)) {
+        this.advance();
         item = this.parseActionDeclaration(itemStart, false);
-      } else if (this.matchExtensionKeyword("watch")) {
+      } else if (this.blockHeaderAhead("watch")) {
+        this.advance();
         item = this.parseWatchDeclaration(itemStart);
-      } else if (this.matchExtensionKeyword("mounted")) {
+      } else if (this.matchLifecycleHook("mounted")) {
         const body = this.parseBlock();
         item = { kind: "ExtensionStatement:web:mounted", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
-      } else if (this.matchExtensionKeyword("cleanup")) {
+      } else if (this.matchLifecycleHook("cleanup")) {
         const body = this.parseBlock();
         item = { kind: "ExtensionStatement:web:cleanup", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
+      } else if (this.check("at")) {
+        const marker = this.advance();
+        const name = this.check("identifier") ? this.advance() : null;
+        this.diagnostics.push(diagnostic(
+          "VEL5061",
+          name
+            ? `A component has no '@${name.value}' block; the lifecycle hooks are '@mounted:' and '@cleanup:'`
+            : "'@' marks a lifecycle hook; a component's hooks are '@mounted:' and '@cleanup:'",
+          span(marker.span.start, (name ?? marker).span.end),
+        ));
+        this.skipMistypedDeclaration();
+      } else if (this.check("identifier") && lifecycleHookSpellings.has(this.current().value) && this.peekKind(1) === "colon") {
+        // D43 item 67: the bare words are ordinary names now, so the removed
+        // hook spelling gets its own directed answer instead of falling into
+        // the statement-boundary message. The block still parses as the hook so
+        // its body keeps analyzing in the same compile.
+        const keyword = this.advance();
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL5061",
+          `Use '@${keyword.value}:'; a lifecycle hook is a language-owned name, which leaves '${keyword.value}' free for your own method`,
+          keyword.span,
+        ));
+        const body = this.parseBlock();
+        item = keyword.value === "mounted"
+          ? { kind: "ExtensionStatement:web:mounted", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) }
+          : { kind: "ExtensionStatement:web:cleanup", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
       } else if (this.check("identifier") && renderBlockSpellings.has(this.current().value) && this.peekKind(1) === "colon") {
         const keyword = this.advance();
         this.diagnostics.push(diagnostic(

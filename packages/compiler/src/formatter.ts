@@ -22,11 +22,15 @@ const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
 const expressionStatementWords = new Set(["return", "throw", "assert"]);
 const parenthesizedKeywordWords = new Set([
-  "if", "while", "for", "match", "case", "catch",
+  "if", "while", "for", "catch",
   ...expressionStatementWords,
   ...binaryWords,
   ...prefixWords,
 ]);
+// D30 item 16: `match` and `case` are contextual keywords, so `match(value)` is
+// a call and must not gain a keyword's space. They keep it only where a
+// keyword can stand — the head of a statement line.
+const statementHeadKeywordWords = new Set(["match", "case"]);
 
 /**
  * Formats VelarScript source without round-tripping through generated JavaScript.
@@ -716,6 +720,7 @@ function needsSpace(
     const memberAccess = tokens[index - 2]?.kind === "dot";
     if (!memberAccess && expressionStatementWords.has(previous.text)) return true;
     if (!memberAccess && current.text === "(" && parenthesizedKeywordWords.has(previous.text)) return true;
+    if (!memberAccess && current.text === "(" && index === 1 && statementHeadKeywordWords.has(previous.text)) return true;
     if (current.generic || current.text === "[" && (previous.kind === "word" || previous.kind === "close")) return false;
     return previous.kind !== "word" && previous.kind !== "close" && previous.kind !== "literal";
   }

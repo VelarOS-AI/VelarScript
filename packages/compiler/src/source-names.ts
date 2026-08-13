@@ -28,7 +28,7 @@ export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIden
   ["elif", forbidden("Use 'else if'; VelarScript keeps ordinary readable if chains", [{ kind: "else", value: "else" }, { kind: "if", value: "if" }])],
   ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
   ["float", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
-  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "match", value: "match" }])],
+  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "identifier", value: "match" }])],
   ["this", forbidden("Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'", [{ kind: "identifier", value: "self" }])],
   ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [])],
   ["eval", forbidden("VelarScript does not expose 'eval'", null)],
@@ -40,8 +40,14 @@ const coreReservedBindings = new Set([
   "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
 ]);
 
+// Spellings JavaScript reserves that VelarScript does not turn into a keyword
+// token. They are ordinary identifiers to the lexer — legal as record fields and
+// member names, which JavaScript also permits — but no binding may spell one,
+// because generated modules must remain valid JavaScript. `case` is here rather
+// than among the contextual keywords for exactly that reason: D30 item 16
+// softened it as a Vel word, and JavaScript still refuses `const case = ...`.
 const javaScriptReservedBindings = new Set([
-  "arguments", "debugger", "default", "delete", "do", "function", "implements", "instanceof", "interface", "package", "protected", "public", "typeof", "void", "yield",
+  "arguments", "case", "debugger", "default", "delete", "do", "function", "implements", "instanceof", "interface", "package", "protected", "public", "typeof", "void", "yield",
 ]);
 
 const forbiddenPrototypeMembers = new Set(["prototype", "__proto__"]);
@@ -64,14 +70,15 @@ export function isSourceIdentifierPart(character: string): boolean {
 
 export function bindingNameRestriction(
   name: string,
-  extensionKeywords: ReadonlySet<string> = new Set(),
   extensionReservedBindings: ReadonlySet<string> = new Set(),
 ): BindingNameRestriction | null {
   if (!isValidSourceIdentifier(name)) return "invalid";
-  if (Object.hasOwn(keywordKinds, name) || extensionKeywords.has(name)) return "keyword";
+  // D30 item 16: an extension's contextual keywords are ordinary names, so only
+  // the hard-reserved spellings are refused here.
+  if (Object.hasOwn(keywordKinds, name)) return "keyword";
   if (forbiddenSourceIdentifiers.has(name)) return "source";
   if (javaScriptReservedBindings.has(name)) return "javascript";
-  if (name.toLowerCase().startsWith("__velar") || name.toLowerCase().startsWith("$velar")) return "compiler";
+  if (name.toLowerCase().startsWith("__velar")) return "compiler";
   if (coreReservedBindings.has(name)) return "core";
   if (extensionReservedBindings.has(name)) return "extension";
   return null;

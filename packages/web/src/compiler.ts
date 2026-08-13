@@ -6,7 +6,7 @@ import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension } from "./editor.ts";
 import { velarWebInspectionExtension } from "./inspection.ts";
 import { VelarWebParser } from "./parser.ts";
-import { scanWebToken } from "./lexer.ts";
+import { scanWebToken, WEB_CONTEXTUAL_KEYWORDS } from "./lexer.ts";
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_TYPES } from "./look.ts";
@@ -512,25 +512,15 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     angleBracketEmbedding: Object.freeze({ voidElements: WEB_VOID_ELEMENTS }),
   }),
   lexical: Object.freeze({
-    keywords: Object.freeze({
-      component: "component",
-      state: "state",
-      resource: "resource",
-      action: "action",
-      watch: "watch",
-      mounted: "mounted",
-      cleanup: "cleanup",
-      exposes: "exposes",
-      expose: "expose",
-      look: "look",
-      keyframes: "keyframes",
-      css: "css",
-    }),
+    // D30 item 16: every word the Web extension adds is contextual. Each is an
+    // ordinary name until its own declaration shape appears, so a Web module
+    // and a Core module accept exactly the same bindings.
+    contextualKeywords: WEB_CONTEXTUAL_KEYWORDS,
     forbiddenIdentifiers: Object.freeze({
-      effect: "Effects are internal to @velarscript/web; use watch, mounted, or cleanup",
-      onMount: "Use the Web extension's component-level 'mounted:' block",
-      onMounted: "Use the Web extension's component-level 'mounted:' block",
-      on_mount: "Use the Web extension's component-level 'mounted:' block",
+      effect: "Effects are internal to @velarscript/web; use watch, @mounted, or @cleanup",
+      onMount: "Use the Web extension's component-level '@mounted:' block",
+      onMounted: "Use the Web extension's component-level '@mounted:' block",
+      on_mount: "Use the Web extension's component-level '@mounted:' block",
     }),
     numericSuffixes: new Set(LOOK_UNIT_TYPES.keys()),
     scan: scanWebToken,
@@ -596,8 +586,8 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       resource: "Declares component-owned asynchronous data with reactive value, loading, ready, error, and reload fields.",
       action: "Declares an asynchronous operation with reactive pending and error fields at module or component scope.",
       watch: "Runs a block after a watched expression changes and DOM updates commit.",
-      mounted: "Runs once after the component DOM is inserted.",
-      cleanup: "Runs once before the component and its owned resources are destroyed.",
+      "@mounted": "Runs once after the component DOM is inserted.",
+      "@cleanup": "Runs once before the component and its owned resources are destroyed.",
       exposes: "Declares the explicit typed control Handle a component makes available through JSX ref.",
       expose: "Provides the component Handle value declared by exposes.",
       look: "Builds a typed, composable Web appearance value.",
@@ -616,7 +606,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),
     completions: Object.freeze([
-      ...["component", "state", "resource", "action", "watch", "mounted", "cleanup", "exposes", "expose", "look", "keyframes"].map((label) => ({ label, kind: 14 })),
+      ...["component", "state", "resource", "action", "watch", "@mounted", "@cleanup", "exposes", "expose", "look", "keyframes"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
       { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },

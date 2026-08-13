@@ -166,7 +166,7 @@ attempts += 1
 - `$` is allowed in identifiers. Teams may use a leading `$` as a visual
   convention for values whose changes can affect the view, in the same spirit
   as `_` for a private-looking field, but the compiler never infers reactivity
-  from the spelling. The `$velar` prefix is the sole exception: it belongs to
+  from the spelling. The `__velar` prefix is the sole exception: it belongs to
   hygienic generated JavaScript and cannot begin a source binding.
 - A binding cannot be declared twice in the same scope.
 - Shadowing follows ordinary lexical lookup everywhere, including module
@@ -191,9 +191,45 @@ attempts += 1
   lexical lookup, so a local or imported `color` or `clamp` naturally wins.
   An extension may reserve an actual runtime entry point such as Web `mount` or
   `tick` when shadowing would make emitted behavior ambiguous.
-- Binding names beginning with `$velar` or `__velar`, case-insensitively, are
+- Binding names beginning with `__velar`, case-insensitively, are
   reserved for hygienic generated helpers. Object fields and JavaScript
   property names are unaffected because they cannot capture a lexical helper.
+- Most declaration words are **contextual**, not reserved. `type`, `match`,
+  `case`, `from`, `as`, and every word the Web extension adds — `component`,
+  `state`, `resource`, `action`, `watch`, `look`, `keyframes`, `css`, `expose`,
+  `exposes` — are ordinary names anywhere a name can stand: a binding, a
+  parameter, a loop binding, a named argument, a record field, a member name,
+  and a record shorthand. Each becomes a declaration only in the shape that
+  declaration has, and nothing else can take that shape. Where the two readings
+  could compete, the name wins: `match(value)` calls a function, `state = 1`
+  assigns a binding, and `look.brand` reads a field. A Web module and a Core
+  module therefore accept exactly the same bindings.
+- The words that stay reserved are the ones JavaScript reserves — including
+  `enum` — the operator words `in`, `is`, `and`, `or`, `not`, and the
+  structural words `def`, `class`, `if`, `else`, `while`, `for`, `return`,
+  `import`, `export`, `const`, `let`, `try`, `catch`, `finally`, `throw`,
+  `async`, `await`, `assert`, `abstract`, `override`, `static`, `private`,
+  `extern`, `unsafe`, `pass`, `break`, `continue`, `extends`, `super`, `self`,
+  `constructor`, and `get`. Using one as a name is reported by name.
+- `@name` is the language's own namespace for members that stand where your
+  names stand: a component's `@mounted:` and `@cleanup:` blocks and a Look
+  block's `@hover`. `@` is not an identifier character, so a component can
+  declare `def mounted()` and an `@mounted:` hook without any collision.
+
+```velar
+const event = {type: "ping", from: "worker"}
+const {type, from} = event          // ordinary names
+const state = "ready"               // an ordinary binding, in a Web module too
+
+type Payload:                       // a name and ':' — the declaration
+    type: string
+
+match type:                         // a header ending in ':' above a block
+    case "ping":
+        print(state + from)
+    case _:
+        pass
+```
 
 Literals are intentionally small:
 
@@ -2033,8 +2069,11 @@ right, then JSX children, then the component function. Native JSX remains an
 owned DOM construction rather than a hidden Core-language operation.
 
 The source package then exposes the following language extension. This list is
-the complete addition — twelve keywords, three reserved global functions, and
-the unit literals; nothing else in a Web module is new syntax:
+the complete addition — ten contextual keywords, two lifecycle hooks, three
+reserved global functions, and the unit literals; nothing else in a Web module
+is new syntax. Every word here is contextual (section 3): it declares only in
+its own shape and remains available as an ordinary name, so the same source
+binds the same names in a Core module and a Web module:
 
 - `component`, with `exposes` on its declaration and `expose` in its body
 - JSX expressions, including fragments and the `host` marker
@@ -2042,8 +2081,8 @@ the unit literals; nothing else in a Web module is new syntax:
 - `resource`
 - `action`
 - `watch`
-- `mounted`
-- `cleanup`
+- `@mounted`
+- `@cleanup`
 - `look`
 - `keyframes`
 - `import css unsafe "./file.css" before|after look`
@@ -2143,7 +2182,7 @@ component Dialog(title: string) exposes DialogHandle:
 component Page:
     let dialog: DialogHandle? = null
 
-    mounted:
+    @mounted:
         if dialog != null:
             dialog.open()
 
@@ -2466,7 +2505,7 @@ names are required when `as` is present, so a body that needs only the new value
 writes `as current, _`. The expression is evaluated immediately to establish the
 dependency and the baseline value; the body does **not** run for that first
 value, only for later changes. A watch body is synchronous. Async component work
-belongs in an `action`; lifecycle setup that must wait belongs in `mounted`.
+belongs in an `action`; lifecycle setup that must wait belongs in `@mounted`.
 For a deep mutation, `current` and `previous` are the same reference; a watch
 does not manufacture an unbounded deep snapshot. Inspect the fields needed by
 the side effect, or store an explicit snapshot when the application requires
@@ -2483,18 +2522,18 @@ Lifecycle is component-owned and deliberately small:
 export component CanvasPanel:
     let canvas: CanvasElement? = null
 
-    mounted:
+    @mounted:
         if canvas != null:
             startCanvas(canvas)
 
-    cleanup:
+    @cleanup:
         stopCanvas()
 
     return <canvas ref={canvas}></canvas>
 ```
 
-`mounted` and `cleanup` are sibling blocks. Cleanup is not nested inside
-mounted and is not returned from an effect callback. The Web runtime owns their
+`@mounted` and `@cleanup` are sibling blocks. Cleanup is not nested inside
+`@mounted` and is not returned from an effect callback. The Web runtime owns their
 ordering and disposes watches, resources, actions, events, refs, and DOM work
 with the component.
 
@@ -2875,7 +2914,7 @@ VelarScript preserves the JavaScript runtime where it matters:
 The compiler adds checked boundaries, bounded collection helpers, runtime data
 validators, optional-chain normalization, readable DOM output, and source maps.
 It does not pretend those additions create a different memory model.
-Compiler-created lexical temporaries use the reserved `$velar...` namespace;
+Compiler-created lexical temporaries use the reserved `__velar...` namespace;
 the analyzer and editor refactors reject source bindings in that namespace, so
 optional lowering, component setup, and JSX callbacks cannot capture a user's
 binding. The explicit `js unsafe` import boundary remains host JavaScript, not
@@ -2943,9 +2982,11 @@ The following are not part of VelarScript:
 
 The source grammar is an allowlist: a syntax addition to JavaScript never
 becomes VelarScript syntax without an explicit language decision, AST node,
-analysis rule, lowering, and proof test. JavaScript reserved words that are not
-already VelarScript keywords cannot be used as binding names because generated
-modules must remain valid JavaScript. Spellings such as `delete`, `default`,
+analysis rule, lowering, and proof test. JavaScript reserved words cannot be
+used as binding names because generated modules must remain valid JavaScript;
+`enum` is reserved for exactly that reason, while `type`, `match`, `case`,
+`from`, and `as` — which JavaScript does not reserve — are contextual keywords
+and stay available as names (section 3). Spellings such as `delete`, `default`,
 and `arguments` remain valid as ordinary record keys and class member names, so
 external data and Web APIs do not need renamed fields. Execution-capability and
 object-model spellings such as `eval`, `prototype`, and `__proto__` stay

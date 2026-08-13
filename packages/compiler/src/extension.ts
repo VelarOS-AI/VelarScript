@@ -110,7 +110,15 @@ export interface CompilerStyleSegments {
 }
 
 export interface CompilerLexicalExtension {
-  readonly keywords?: Readonly<Record<string, string>>;
+  /**
+   * Statement- and expression-head words the extension owns. D30 item 16 made
+   * them contextual: the lexer leaves them ordinary identifiers, so each stays
+   * available as a binding, parameter, field, or argument name, and the
+   * extension's parser claims one only where its declaration shape is
+   * unmistakable. Declaring the vocabulary here is what lets Core recognize an
+   * indentation-owned extension block and an editor document the word.
+   */
+  readonly contextualKeywords?: ReadonlySet<string>;
   readonly forbiddenIdentifiers?: Readonly<Record<string, string>>;
   readonly numericSuffixes?: ReadonlySet<string>;
   readonly scan?: (context: CompilerLexicalScanContext) => CompilerLexicalScanResult | null;

@@ -1225,8 +1225,8 @@ export class VelarWebAnalyzer extends Analyzer {
       }
     }
     if (renders !== 1) this.diagnostics.push(diagnostic("VEL5008", `Component '${statement.name}' must have exactly one top-level return`, statement.span));
-    if (mounted > 1) this.diagnostics.push(diagnostic("VEL5009", `Component '${statement.name}' has more than one mounted block`, statement.span));
-    if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one cleanup block`, statement.span));
+    if (mounted > 1) this.diagnostics.push(diagnostic("VEL5009", `Component '${statement.name}' has more than one '@mounted' block`, statement.span));
+    if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one '@cleanup' block`, statement.span));
     if (exposes > 1) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' has more than one expose declaration`, statement.span));
     if (statement.handleType && exposes === 0) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' declares an exposed Handle but does not provide an expose value`, statement.handleType.span));
     if (renderValue && isWebJsx(renderValue)) this.validateComponentHost(renderValue, statement);

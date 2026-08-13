@@ -13,7 +13,7 @@ const bidirectionalControls = new Set([0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0
 // previous line must end with a token that can end an expression, so block
 // headers, operators, and empty lines never join accidentally.
 const chainContinuationEndKinds = new Set<TokenKind>([
-  "identifier", "extensionKeyword", "number", "unitNumber", "string", "fstring",
+  "identifier", "number", "unitNumber", "string", "fstring",
   "true", "false", "null", "super", "rightParen", "rightBracket", "rightBrace",
   "extensionToken",
 ]);
@@ -25,7 +25,6 @@ export interface LexResult {
 
 export class Lexer {
   private readonly text: string;
-  private readonly extensionKeywords = new Map<string, string>();
   private readonly extensionForbiddenIdentifiers = new Map<string, string>();
   private readonly extensionScanners: NonNullable<CompilerLexicalExtension["scan"]>[] = [];
   // D39-52: milliseconds and seconds are Core duration literals. Extensions
@@ -54,11 +53,6 @@ export class Lexer {
     this.bracketFragment = options.bracketFragment ?? false;
     this.scanSourceHygiene = options.scanSourceHygiene ?? true;
     for (const extension of extensions) {
-      for (const [keyword, value] of Object.entries(extension.keywords ?? {})) {
-        const existing = this.extensionKeywords.get(keyword);
-        if (existing && existing !== value) throw new Error(`Compiler extensions define conflicting keyword '${keyword}'`);
-        this.extensionKeywords.set(keyword, value);
-      }
       for (const [name, guidance] of Object.entries(extension.forbiddenIdentifiers ?? {})) {
         this.extensionForbiddenIdentifiers.set(name, guidance);
       }
@@ -185,6 +179,13 @@ export class Lexer {
           break;
         case ",":
           this.simple("comma", start, 1);
+          break;
+        // D43 item 67: '@name' marks a name the language owns, in the very
+        // positions where a user's own names also appear — class and component
+        // members. '@' is not an identifier character, so the two namespaces
+        // cannot collide however the surrounding words are softened.
+        case "@":
+          this.simple("at", start, 1);
           break;
         case ".":
           if (this.isDigit(this.peek(1))) {
@@ -478,9 +479,8 @@ export class Lexer {
     } else if (isForbiddenPrototypeMember(value) && (previous === "dot" || previous === "optionalDot")) {
       this.diagnostics.push(diagnostic("VEL1005", "VelarScript does not expose prototype manipulation", span(start, this.index)));
     }
-    const extensionKeyword = this.extensionKeywords.get(value);
     const keyword = Object.hasOwn(keywordKinds, value) ? keywordKinds[value] : undefined;
-    this.tokens.push({ kind: keyword ?? (extensionKeyword ? "extensionKeyword" : "identifier"), value: extensionKeyword ?? value, span: span(start, this.index) });
+    this.tokens.push({ kind: keyword ?? "identifier", value, span: span(start, this.index) });
   }
 
   private readNumber(): void {

@@ -47,7 +47,7 @@ import {ProcessOutputChannel, run, start} from "velar/process"
 import {reload} from "velar/web"
 
 component GenerationProbe:
-    mounted:
+    @mounted:
         if get("VELAR_DESKTOP_GENERATION_SMOKE") == "1":
             const root = await projectDirectory()
             const watcher = await watchFiles(root, recursive=true)

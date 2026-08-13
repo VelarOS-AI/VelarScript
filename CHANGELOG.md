@@ -6,6 +6,17 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The statement-head words are contextual, not reserved: `type`, `match`,
+  `from`, `as`, and the Web words `state`, `action`, `resource`, `watch`,
+  `look`, `component`, `computed`, `mounted`, `cleanup`, `keyframes`,
+  `expose` can all be ordinary binding, parameter, field, and argument
+  names — and they now behave identically in Core and Web files, closing
+  the portability break where the same line compiled in one and failed in
+  the other. `case` and `enum` stay out of binding names alone, because
+  JavaScript reserves them and the emitted output must keep the names you
+  wrote. Component lifecycle hooks move to `@mounted:` and `@cleanup:`, so
+  a component can carry both the hook and a method of the same name, and
+  the generated-code prefix consolidates on `__velar`.
 - Parallel async lands: `Promise.all` takes a record of promises and
   resolves the same shape (`{name, count}` in, `{name, count}` out), and
   `Promise.race` over a union of promise types keeps the union narrowable.

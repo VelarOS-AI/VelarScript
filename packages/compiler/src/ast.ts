@@ -608,6 +608,8 @@ export interface ObjectProperty {
   readonly kind: "ObjectProperty";
   readonly name: string;
   readonly value: Expression;
+  /** Written as `{name}`: the field name and the binding it reads are one word. */
+  readonly shorthand?: boolean;
   readonly span: Span;
 }
 

@@ -49,16 +49,19 @@ import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 
-const memberNameKinds = new Set<TokenKind>(["identifier", "extensionKeyword", ...Object.values(keywordKinds)]);
+const memberNameKinds = new Set<TokenKind>(["identifier", ...Object.values(keywordKinds)]);
 // Token kinds that begin a statement but can never begin a record field or
 // appear inside a record literal's field list. A keyword followed by ':' is a
 // keyword-named field, so it never counts as statement evidence.
 const statementStarterKinds = new Set<TokenKind>([
-  "const", "let", "def", "return", "throw", "assert", "if", "match", "for", "while", "break", "continue", "try", "pass",
+  "const", "let", "def", "return", "throw", "assert", "if", "for", "while", "break", "continue", "try", "pass",
 ]);
+// D30 item 16: `match` is a contextual keyword, so statement evidence for it is
+// carried by the word rather than by a token kind.
+const statementStarterWords = new Set(["match"]);
 // Token kinds that legally appear at the top level of a record literal's
 // field list: field names, shorthand entries, and their separators.
-const recordFieldLevelKinds = new Set<TokenKind>(["identifier", "extensionKeyword", "string", "comma", ...Object.values(keywordKinds)]);
+const recordFieldLevelKinds = new Set<TokenKind>(["identifier", "string", "comma", ...Object.values(keywordKinds)]);
 const MAX_PARSE_DEPTH = 512;
 const PARSER_COMPLEXITY_FAILURE = Object.freeze({ kind: "VelarParserComplexityFailure" });
 
@@ -104,11 +107,11 @@ const comparisonOperators: Partial<Record<TokenKind, ComparisonChainExpression["
   greaterEqual: ">=",
 };
 
-// An extension keyword directly followed by ':' opens an indentation-owned
-// extension block whose capture depends on
-// physical lines; a bracket fragment containing one keeps line-sensitive form.
-function containsExtensionBlockStart(tokens: readonly Token[]): boolean {
-  return tokens.some((token, index) => token.kind === "extensionKeyword" && tokens[index + 1]?.kind === "colon");
+// An extension's contextual keyword directly followed by ':' opens an
+// indentation-owned extension block whose capture depends on physical lines; a
+// bracket fragment containing one keeps line-sensitive form.
+function containsExtensionBlockStart(tokens: readonly Token[], words: ReadonlySet<string>): boolean {
+  return tokens.some((token, index) => token.kind === "identifier" && words.has(token.value) && tokens[index + 1]?.kind === "colon");
 }
 
 // Statement-boundary guidance names the leftover token as the author typed it.
@@ -133,12 +136,15 @@ export class Parser {
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
   private readonly genericCallableNames = new Set<string>();
+  /** Extension-owned contextual keywords: names until a shape claims them. */
+  protected readonly contextualKeywords: ReadonlySet<string>;
   private index = 0;
   private parseDepth = 0;
 
   constructor(tokens: readonly Token[], lexicalExtensions: readonly CompilerLexicalExtension[] = []) {
     this.tokens = tokens;
     this.lexicalExtensions = lexicalExtensions;
+    this.contextualKeywords = new Set(lexicalExtensions.flatMap((extension) => [...extension.contextualKeywords ?? []]));
     for (let index = 0; index + 2 < tokens.length; index += 1) {
       if (tokens[index]?.kind === "def" && tokens[index + 1]?.kind === "identifier" && tokens[index + 2]?.kind === "less") {
         this.genericCallableNames.add(tokens[index + 1]!.value);
@@ -274,7 +280,8 @@ export class Parser {
       return null;
     }
 
-    if (this.match("type")) {
+    if (this.typeDeclarationAhead()) {
+      this.advance();
       return this.parseTypeDefinition(start, exported);
     }
 
@@ -288,6 +295,18 @@ export class Parser {
 
     if (this.check("const") || this.check("let")) {
       return this.parseVariable(start, exported);
+    }
+
+    // D30 item 16: `match` is a contextual keyword, recognized only by the
+    // shape no expression can have — a header line ending in ':' whose
+    // indented block opens with `case`. Every other `match` is a name, so
+    // `match(value)` calls a function and `match = 1` assigns a binding. The
+    // decision happens here, ahead of the unknown-declaration guidance, because
+    // `match value:` is otherwise two adjacent identifiers.
+    if (this.matchStatementAhead()) {
+      if (exported) this.diagnostics.push(diagnostic("VEL2001", "A match statement cannot be exported", this.current().span));
+      this.advance();
+      return this.parseMatch(start);
     }
 
     // MIG-4: 'invert x' was the removed toggle statement, and its leftover
@@ -398,9 +417,6 @@ export class Parser {
       return this.parseIf(start);
     }
 
-    if (this.match("match")) {
-      return this.parseMatch(start);
-    }
 
     if (this.match("for")) {
       let asynchronousLoop = false;
@@ -437,7 +453,7 @@ export class Parser {
       return { kind: "PassStatement", span: this.previous().span };
     }
 
-    if (this.check("else") || this.check("case") || this.check("catch") || this.check("finally")) {
+    if (this.check("else") || this.check("catch") || this.check("finally") || this.orphanCaseClauseAhead()) {
       this.diagnostics.push(diagnostic("VEL2001", `'${this.current().value}' does not follow a matching block`, this.current().span));
       return null;
     }
@@ -460,6 +476,62 @@ export class Parser {
     }
 
     return { kind: "ExpressionStatement", expression, span: expression.span };
+  }
+
+  /**
+   * D30 item 16: `type` opens a declaration only in its declaration shape —
+   * the word, a name, and then ':' for a record body, '=' for an alias, or '<'
+   * for the rejected type-parameter spelling. `type = payload.type`,
+   * `type(value)`, and `type.field` all keep the identifier reading.
+   */
+  private typeDeclarationAhead(): boolean {
+    if (!this.checkWord("type") || this.peekKind(1) !== "identifier") return false;
+    const shape = this.peekKind(2);
+    return shape === "colon" || shape === "assign" || shape === "less";
+  }
+
+  /**
+   * A match statement is the one statement whose header ends in ':' and opens
+   * an indented block. No expression statement can end in ':' — a call is
+   * `match(value)` and an assignment is `match = value` — so the two-line
+   * lookahead is exact. D30 item 16 named `case` as the block's first token;
+   * the block's contents are deliberately not inspected, so a malformed first
+   * branch and the `else:` recovery still reach the match block's own
+   * teaching instead of falling back to a bare-name reading.
+   */
+  private matchStatementAhead(): boolean {
+    if (!this.checkWord("match")) return false;
+    let depth = 0;
+    let offset = 1;
+    for (; this.index + offset < this.tokens.length; offset += 1) {
+      const kind = this.tokens[this.index + offset]!.kind;
+      if (kind === "leftParen" || kind === "leftBracket" || kind === "leftBrace") depth += 1;
+      else if (kind === "rightParen" || kind === "rightBracket" || kind === "rightBrace") depth -= 1;
+      else if (depth === 0 && (kind === "newline" || kind === "dedent" || kind === "eof")) break;
+    }
+    if (offset < 3 || this.tokens[this.index + offset - 1]?.kind !== "colon") return false;
+    while (this.peekKind(offset) === "newline") offset += 1;
+    return this.peekKind(offset) === "indent";
+  }
+
+  /**
+   * `case` outside a match block is an ordinary name, but a `case ...:` line
+   * standing alone is the author reaching for a branch that has no header. The
+   * branch shape — the word followed by a pattern and a line-ending ':' — keeps
+   * the existing directed message without claiming the word anywhere else.
+   */
+  private orphanCaseClauseAhead(): boolean {
+    if (!this.checkWord("case") || this.peekKind(1) === "colon") return false;
+    let depth = 0;
+    for (let offset = 1; this.index + offset < this.tokens.length; offset += 1) {
+      const kind = this.tokens[this.index + offset]!.kind;
+      if (kind === "leftParen" || kind === "leftBracket" || kind === "leftBrace") depth += 1;
+      else if (kind === "rightParen" || kind === "rightBracket" || kind === "rightBrace") depth -= 1;
+      else if (depth === 0 && (kind === "newline" || kind === "dedent" || kind === "eof")) {
+        return this.tokens[this.index + offset - 1]?.kind === "colon";
+      }
+    }
+    return false;
   }
 
   private parseForStatement(start: number, asynchronous: boolean): Statement {
@@ -486,14 +558,14 @@ export class Parser {
 
     if (this.match("star")) {
       const star = this.previous();
-      this.expect("as", "Expected 'as' after namespace import");
+      this.expectWord("as", "Expected 'as' after namespace import");
       const local = this.expect("identifier", "Expected a namespace name");
       specifiers.push({ imported: "*", local: local.value, namespace: true, span: span(star.span.start, local.span.end) });
     } else if (this.match("leftBrace")) {
       if (!this.check("rightBrace")) {
         do {
           const imported = this.expect("identifier", "Expected an imported name");
-          const local = this.match("as") ? this.expect("identifier", "Expected a local import name") : imported;
+          const local = this.matchWord("as") ? this.expect("identifier", "Expected a local import name") : imported;
           specifiers.push({ imported: imported.value, local: local.value, namespace: false, span: span(imported.span.start, local.span.end) });
         } while (this.match("comma") && !this.check("rightBrace"));
       }
@@ -503,7 +575,7 @@ export class Parser {
       specifiers.push({ imported: "default", local: local.value, namespace: false, span: local.span });
     }
 
-    this.expect("from", "Expected 'from' after imports");
+    this.expectWord("from", "Expected 'from' after imports");
     // MOD-I1 / BRG-D1: a recovered import must never fabricate a dependency.
     // The synthesized empty-source token used to flow into module resolution
     // as `''`, whose nonsense "invalid package name" failure buried this
@@ -524,8 +596,8 @@ export class Parser {
   private parseReExport(start: number): ReExportDeclaration | null {
     if (this.match("star")) {
       const star = this.previous();
-      if (this.match("as")) this.match("identifier");
-      if (this.match("from")) this.match("string");
+      if (this.matchWord("as")) this.match("identifier");
+      if (this.matchWord("from")) this.match("string");
       this.diagnostics.push(diagnostic(
         "VEL2029",
         "Namespace re-export 'export * from' is not supported; re-export each name explicitly with export {name, other as alias} from \"./module.vel\"",
@@ -538,12 +610,12 @@ export class Parser {
     if (!this.check("rightBrace")) {
       do {
         const imported = this.expect("identifier", "Expected a re-exported name");
-        const alias = this.match("as") ? this.expect("identifier", "Expected a re-export alias") : imported;
+        const alias = this.matchWord("as") ? this.expect("identifier", "Expected a re-export alias") : imported;
         specifiers.push({ imported: imported.value, exported: alias.value, span: span(imported.span.start, alias.span.end) });
       } while (this.match("comma") && !this.check("rightBrace"));
     }
     this.expect("rightBrace", "Expected '}' after re-exported names");
-    this.expect("from", "Expected 'from' after re-exported names; VelarScript modules export declarations directly and re-export other modules' names with export {name} from \"./module.vel\"");
+    this.expectWord("from", "Expected 'from' after re-exported names; VelarScript modules export declarations directly and re-export other modules' names with export {name} from \"./module.vel\"");
     // MOD-I1 / BRG-D1: like parseImport, a recovered re-export never
     // fabricates an empty-source dependency.
     const hadSource = this.check("string");
@@ -843,7 +915,7 @@ export class Parser {
       return { kind: "ListBindingPattern", elements, rest, span: span(open.span.start, close.span.end) };
     }
     const token = this.current();
-    this.diagnostics.push(diagnostic("VEL2011", "Expected a binding name or destructuring pattern", token.span));
+    this.diagnostics.push(diagnostic("VEL2011", this.reservedWordMessage("binding name") ?? "Expected a binding name or destructuring pattern", token.span));
     this.advance();
     return { kind: "NameBindingPattern", name: "_invalid", span: token.span };
   }
@@ -896,7 +968,7 @@ export class Parser {
     if (!this.check("rightParen")) {
       do {
         const rest = this.match("ellipsis");
-        const name = this.expect("identifier", "Expected a parameter name");
+        const name = this.expectBindingName("Expected a parameter name", "parameter name");
         const type = this.match("colon") ? this.parseTypeReference() : null;
         const defaultValue = this.match("assign") ? this.parseExpression() : null;
         const parameterSpan = span(name.span.start, defaultValue?.span.end ?? type?.span.end ?? name.span.end);
@@ -932,7 +1004,7 @@ export class Parser {
         const invalidStatic = this.match("static") ? this.previous() : null;
         if (!private_) private_ = this.match("private");
         const binding = this.match("const") ? "const" : this.match("let") ? "let" : null;
-        const name = this.expect("identifier", "Expected a constructor parameter name");
+        const name = this.expectBindingName("Expected a constructor parameter name", "parameter name");
         const type = this.match("colon") ? this.parseTypeReference() : null;
         const defaultValue = this.match("assign") ? this.parseExpression() : null;
         const parameterSpan = span(name.span.start, defaultValue?.span.end ?? type?.span.end ?? name.span.end);
@@ -980,7 +1052,7 @@ export class Parser {
       do {
         const rest = this.match("ellipsis");
         const binding = this.match("const") ? "const" : this.match("let") ? "let" : null;
-        const name = this.expect("identifier", "Expected an extern class parameter name");
+        const name = this.expectBindingName("Expected an extern class parameter name", "parameter name");
         const type = this.match("colon") ? this.parseTypeReference() : null;
         const defaultValue = this.match("assign") ? this.parseExpression() : null;
         const parameterSpan = span(name.span.start, defaultValue?.span.end ?? type?.span.end ?? name.span.end);
@@ -1448,7 +1520,7 @@ export class Parser {
     this.consumeNewlines();
     while (!this.check("dedent") && !this.check("eof")) {
       const branchStart = this.current().span.start;
-      if (this.match("case")) {
+      if (this.matchWord("case")) {
         const pattern = this.parseMatchPattern(true);
         const guard = this.match("if") ? this.parseExpression() : null;
         const body = this.parseBlock();
@@ -1561,7 +1633,7 @@ export class Parser {
       do {
         const value = this.parseMatchValue();
         if (value) values.push(value);
-      } while (root && this.match("comma") && !this.check("as") && !this.check("if") && !this.check("colon"));
+      } while (root && this.match("comma") && !this.checkWord("as") && !this.check("if") && !this.check("colon"));
       pattern = {
         kind: "MatchValuePattern",
         values,
@@ -1595,7 +1667,7 @@ export class Parser {
       }
     }
 
-    if (this.match("as")) {
+    if (this.matchWord("as")) {
       const binding = this.expect("identifier", "Expected a binding name after 'as'");
       pattern = {
         kind: "MatchAsPattern",
@@ -2161,7 +2233,9 @@ export class Parser {
         continue;
       }
       if (depth !== 1) continue;
-      if (statementStarterKinds.has(kind) && this.tokens[this.index + offset + 1]?.kind !== "colon") return true;
+      const starter = statementStarterKinds.has(kind)
+        || (kind === "identifier" && statementStarterWords.has(token.value));
+      if (starter && this.tokens[this.index + offset + 1]?.kind !== "colon") return true;
       if (kind === "colon" || kind === "ellipsis") return false;
       if (!recordFieldLevelKinds.has(kind)) sawNonRecordToken = true;
     }
@@ -2294,7 +2368,7 @@ export class Parser {
         let sawSpread = false;
         if (!this.check("rightParen")) {
           do {
-            if ((this.check("identifier") || this.check("from")) && this.peekKind(1) === "colon") {
+            if (this.check("identifier") && this.peekKind(1) === "colon") {
               const name = this.advance();
               this.advance();
               this.diagnostics.push(diagnostic("VEL2024", `Write '=' between the name and value for named argument '${name.value}': ${name.value} = value`, name.span));
@@ -2303,7 +2377,7 @@ export class Parser {
               argumentNames.push(name.value);
               arguments_.push(this.parseExpression());
               this.recoverChainedNamedArgument();
-            } else if ((this.check("identifier") || this.check("from")) && this.peekKind(1) === "assign") {
+            } else if (this.check("identifier") && this.peekKind(1) === "assign") {
               const name = this.advance();
               this.advance();
               if (sawSpread) this.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
@@ -2487,23 +2561,27 @@ export class Parser {
         this.diagnostics.push(diagnostic("VEL2002", "No compiler extension accepts this embedded expression", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
       }
-      case "extensionKeyword": {
-        const extensionExpression = this.parseExtensionExpression(token);
-        if (extensionExpression) return extensionExpression;
-        this.diagnostics.push(diagnostic("VEL2002", `Extension keyword '${token.value}' is not valid in this expression`, token.span));
-        return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
-      }
       case "true":
         return { kind: "LiteralExpression", value: true, raw: token.value, span: token.span };
       case "false":
         return { kind: "LiteralExpression", value: false, raw: token.value, span: token.span };
       case "null":
         return { kind: "LiteralExpression", value: null, raw: token.value, span: token.span };
-      case "identifier":
-        if (token.value === "keyframes" && this.check("colon")) {
+      case "identifier": {
+        // An extension's contextual keyword is an ordinary name until its own
+        // parser recognizes the shape it owns; only then does the extension
+        // expression win over the identifier reading.
+        if (this.contextualKeywords.has(token.value)) {
+          const extensionExpression = this.parseExtensionExpression(token);
+          if (extensionExpression) return extensionExpression;
+        }
+        // A block-valued Web word reaching Core means the extension is not
+        // active: the module was moved, or velar.json is missing the entry. One
+        // message names the cause instead of a statement-boundary cascade.
+        if ((token.value === "keyframes" || token.value === "look") && this.check("colon") && this.peekKind(1) === "newline") {
           this.diagnostics.push(diagnostic(
             "VEL2035",
-            "'keyframes:' belongs to @velarscript/web; add \"@velarscript/web\" to velar.json extensions, or move this module into a Web project",
+            `'${token.value}:' belongs to @velarscript/web; add "@velarscript/web" to velar.json extensions, or move this module into a Web project`,
             token.span,
           ));
           this.skipMistypedDeclaration();
@@ -2519,6 +2597,7 @@ export class Parser {
           return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
         }
         return { kind: "IdentifierExpression", name: token.value, span: token.span };
+      }
       case "super":
         return { kind: "SuperExpression", span: token.span };
       case "leftParen": {
@@ -2556,14 +2635,20 @@ export class Parser {
               : this.expect("identifier", "Expected an object field name");
             const hasValue = this.match("colon");
             if (!hasValue && name.kind !== "identifier") {
-              this.diagnostics.push(diagnostic("VEL2020", "A keyword or quoted object field requires ':' and a value", name.span));
+              // D30 item 16 retired this teaching for the softened words; what
+              // remains are the hard keywords and quoted names, and a hard
+              // keyword is named so the reader knows why the shorthand cannot
+              // reach a binding of that spelling.
+              this.diagnostics.push(diagnostic("VEL2020", name.kind === "string"
+                ? "A quoted object field requires ':' and a value"
+                : `'${name.value}' is a VelarScript keyword, so no binding spells it; write '${name.value}: value'`, name.span));
             }
             const value = hasValue
               ? this.parseExpression()
               : name.kind === "identifier"
                 ? { kind: "IdentifierExpression", name: name.value, span: name.span } satisfies IdentifierExpression
                 : { kind: "LiteralExpression", value: null, raw: "null", span: name.span } satisfies Expression;
-            properties.push({ kind: "ObjectProperty", name: name.value, value, span: span(name.span.start, value.span.end) });
+            properties.push({ kind: "ObjectProperty", name: name.value, value, ...(hasValue ? {} : { shorthand: true }), span: span(name.span.start, value.span.end) });
           } while (this.match("comma") && !this.check("rightBrace"));
         }
         const close = this.expect("rightBrace", "Expected '}' after object fields");
@@ -2639,7 +2724,24 @@ export class Parser {
           }
           return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
         }
-        this.diagnostics.push(diagnostic("VEL2002", "Expected an expression", token.span));
+        // D43 item 67: '@name' is the language's own namespace for members that
+        // sit where user names also sit. Outside a declaration body it is not an
+        // expression, so the reader is told what the marker means instead of
+        // receiving a bare 'Expected an expression'.
+        if (token.kind === "at") {
+          const name = this.check("identifier") ? this.advance().value : "";
+          this.diagnostics.push(diagnostic(
+            "VEL2002",
+            `'@${name}' names a language-owned member and appears only inside a declaration body, such as a component's '@mounted:' block`,
+            span(token.span.start, this.previous().span.end),
+          ));
+          this.skipMistypedDeclaration();
+          return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+        }
+        // A hard-reserved word standing where a value belongs is the same
+        // mistake as one standing in a name position, so it gets the same
+        // named message rather than a bare "Expected an expression".
+        this.diagnostics.push(diagnostic("VEL2002", this.reservedWordMessageFor(token, "name") ?? "Expected an expression", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
   }
@@ -2835,7 +2937,7 @@ export class Parser {
     sourceOffsets?: readonly number[],
   ): Expression {
     let lexed = bracketFragment ? new Lexer(fragment, this.lexicalExtensions, { bracketFragment: true, scanSourceHygiene: false }).lex() : null;
-    if (!lexed || containsExtensionBlockStart(lexed.tokens)) {
+    if (!lexed || containsExtensionBlockStart(lexed.tokens, this.contextualKeywords)) {
       lexed = new Lexer(fragment, this.lexicalExtensions, { scanSourceHygiene: false }).lex();
     }
     const mappedSpan = (local: Span): Span => sourceOffsets
@@ -3051,9 +3153,65 @@ export class Parser {
   }
 
   protected matchExtensionKeyword(value: string): boolean {
-    if (this.current().kind !== "extensionKeyword" || this.current().value !== value) return false;
+    return this.matchWord(value);
+  }
+
+  /**
+   * D30 item 16: a contextual keyword is an ordinary identifier token whose
+   * spelling matches. `checkWord` asks the question without consuming; the
+   * declaration shape decides at each statement head, and every other position
+   * keeps the identifier reading.
+   */
+  /**
+   * D30 item 16: the words that stay hard-reserved now say so. A bare
+   * "Expected a binding name" never told the reader that the spelling itself
+   * was the problem, which is exactly the question a reserved word raises.
+   */
+  protected reservedWordMessage(noun: string): string | null {
+    return this.reservedWordMessageFor(this.current(), noun);
+  }
+
+  private reservedWordMessageFor(token: Token, noun: string): string | null {
+    if (token.kind === "identifier" || token.kind === "string" || !/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(token.value)) return null;
+    return `'${token.value}' is a VelarScript keyword and cannot be a ${noun}; choose another name`;
+  }
+
+  protected expectBindingName(message: string, noun: string): Token {
+    if (this.check("identifier")) return this.advance();
+    const token = this.current();
+    const reserved = this.reservedWordMessage(noun);
+    this.diagnostics.push(diagnostic("VEL2001", reserved ?? message, token.span));
+    // A reserved word standing in a name position is a whole, well-formed
+    // token; consuming it lets the rest of the list parse instead of
+    // unravelling into a dozen follow-on expectations.
+    if (reserved) {
+      this.advance();
+      return { kind: "identifier", value: token.value, span: token.span };
+    }
+    return { kind: "identifier", value: "", span: token.span };
+  }
+
+  protected checkWord(value: string): boolean {
+    const token = this.current();
+    return token.kind === "identifier" && token.value === value;
+  }
+
+  protected matchWord(value: string): boolean {
+    if (!this.checkWord(value)) return false;
     this.advance();
     return true;
+  }
+
+  /**
+   * Consumes a contextual keyword that a production requires — `from` in an
+   * import, `as` in a namespace import — and reports it in the same voice as a
+   * missing hard keyword when it is absent.
+   */
+  protected expectWord(value: string, message: string): Token {
+    if (this.checkWord(value)) return this.advance();
+    const token = this.current();
+    this.diagnostics.push(diagnostic("VEL2001", message, token.span));
+    return { kind: "identifier", value: "", span: token.span };
   }
 
   protected check(kind: TokenKind): boolean {
@@ -3062,6 +3220,10 @@ export class Parser {
 
   protected peekKind(distance: number): TokenKind {
     return this.tokens[this.index + distance]?.kind ?? "eof";
+  }
+
+  protected peekValue(distance: number): string {
+    return this.tokens[this.index + distance]?.value ?? "";
   }
 
   protected advance(): Token {

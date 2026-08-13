@@ -14,14 +14,10 @@ export type TokenKind =
   | "await"
   | "export"
   | "import"
-  | "from"
-  | "as"
   | "js"
   | "unsafe"
-  | "extensionKeyword"
   | "extern"
   | "module"
-  | "type"
   | "enum"
   | "abstract"
   | "class"
@@ -35,8 +31,6 @@ export type TokenKind =
   | "assert"
   | "if"
   | "else"
-  | "match"
-  | "case"
   | "for"
   | "in"
   | "while"
@@ -64,6 +58,7 @@ export type TokenKind =
   | "rightBrace"
   | "colon"
   | "comma"
+  | "at"
   | "dot"
   | "ellipsis"
   | "question"
@@ -99,6 +94,14 @@ export interface Token {
   readonly payload?: unknown;
 }
 
+/**
+ * Hard reserved words: spellings the lexer always turns into a keyword token,
+ * so they can never name a binding. D30 item 16 softened the statement-head
+ * words that JavaScript does not reserve — `type`, `match`, `case`, `from`,
+ * `as` — into contextual keywords, which the lexer emits as ordinary
+ * identifiers and the parser recognizes by declaration shape. `enum` stays
+ * here because JavaScript reserves it, and generated JavaScript must be legal.
+ */
 export const keywordKinds: Readonly<Record<string, TokenKind>> = {
   const: "const",
   let: "let",
@@ -107,13 +110,10 @@ export const keywordKinds: Readonly<Record<string, TokenKind>> = {
   await: "await",
   export: "export",
   import: "import",
-  from: "from",
-  as: "as",
   js: "js",
   unsafe: "unsafe",
   extern: "extern",
   module: "module",
-  type: "type",
   enum: "enum",
   abstract: "abstract",
   class: "class",
@@ -127,8 +127,6 @@ export const keywordKinds: Readonly<Record<string, TokenKind>> = {
   assert: "assert",
   if: "if",
   else: "else",
-  match: "match",
-  case: "case",
   for: "for",
   in: "in",
   while: "while",
