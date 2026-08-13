@@ -3375,6 +3375,12 @@ E/F 合流。内容：D49 keyframes 全套、LOK-U1 属性表发布与系统补�
 属性逐个判定收录/排除）、D37-42+42-补 关键字值收紧、WEB-U12 元素名表、
 D41-63.2 扩展文本钩子。编排方在词法合流落地后 merge 分支并解 charter 冲突。
 
+**Codex 第五单（2026-08-13）**：批次 K —— `docs/handoff/CODEX-TASK-K-ASYNC-
+NAMESPACES.md`（Promise.all 记录形、常驻命名空间名册、ASY-D1 输家上报、
+MIG-1(ii) validator-is 收窄、MIG-2 导出边界诊断、sleep/错误码/math 清理）。
+分支 codex/batch-k，基线须含批次 I 合并。两处规格洞呈报不擅裁（命名空间双拼写
+取舍、sleep Duration 的 Core 归属）。
+
 **马拉松工作协议（2026-08-12 用户授权，最高约束，优先于本节其余排期）**：
 
 1. **设计层改动必须先与用户探讨** —— 语言语义/拼写/表面的任何变更，即使发现

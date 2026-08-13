@@ -169,22 +169,28 @@ mount(<div>x</div>, "#app")
   assert.match(nested, /^VEL5037 CSS imports are module-level/u);
 });
 
-test("[LOK-D5] animation names the keyframes boundary and its unsafe-CSS escape", () => {
-  for (const property of ["animation", "animationName"]) {
-    const reported = only(`
+test("[LOK-D5] animation text teaches checked keyframes and longhands name their boundary", () => {
+  const shorthand = only(`
 const box = look:
-    ${property} = "spin 1s linear infinite"
+    animation = "spin 1s linear infinite"
 
 mount(<div look={box}>x</div>, "#app")
 `);
-    assert.match(reported, /^VEL5038 Look has no animation vocabulary/u);
-    assert.match(reported, /@keyframes/u);
-    assert.match(reported, /import css unsafe/u);
-    assert.match(reported, /transition/u);
-  }
+  assert.match(shorthand, /^VEL5038 Look animation does not accept CSS shorthand text/u);
+  assert.match(shorthand, /keyframes:/u);
+  assert.match(shorthand, /animate/u);
+  const longhand = only(`
+const box = look:
+    animationName = "spin"
+
+mount(<div look={box}>x</div>, "#app")
+`);
+  assert.match(longhand, /outside checked Look/u);
+  assert.match(longhand, /keyframes plus animate/u);
+  assert.match(longhand, /import css unsafe/u);
   assert.match(only(`
 mount(<div look:animation="spin 1s">x</div>, "#app")
-`), /^VEL5038 Look has no animation vocabulary/u);
+`), /^VEL5038 Look animation does not accept CSS shorthand text/u);
 });
 
 // ---------------------------------------------------------------------------
@@ -289,16 +295,16 @@ const box = look:
     columnCount = 3
 
 mount(<div look={box}>x</div>, "#app")
-`), /^VEL5038 Unknown Look property 'columnCount'/u);
+`), /^VEL5038 CSS property 'columnCount' is outside checked Look/u);
 
-  assert.match(only(`
+  assert.deepEqual(messages(`
 import {shadow, color} from "velar/look"
 
 const box = look:
     textShadow = shadow(0px, 0px, 2px, color("red"))
 
 mount(<div look={box}>x</div>, "#app")
-`), /^VEL5038 Unknown Look property 'textShadow'/u);
+`), []);
 
   assert.equal(only(`
 const box = look:

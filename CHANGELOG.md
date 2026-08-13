@@ -6,6 +6,25 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Animation enters the language checked: `keyframes:` blocks with
+  `from`/`to`/percent stops reuse the whole Look property machinery, the
+  `animate(...)` builder is compile-checked with `loop=true` standing in
+  for infinite, `animation` accepts only checked Animation values — the
+  string form that browsers accepted and never ran is rejected toward the
+  new form — and the browser regressions assert real rotation via
+  getAnimations in all three engines.
+- The Look property table is published with its inclusion principle: 225
+  explicitly typed properties across fourteen families (up from 123, no
+  stringType fallback anywhere), 36 documented exclusions with reasons,
+  three-tier absence diagnostics with nearest-name suggestions, and the
+  keyword-value tightening queued since D37 — `display = "flexx"`,
+  `padding = "big"`, raw grid-template and gradient strings all reject
+  toward their checked spellings.
+- Unknown element names are compile errors with suggestions against a
+  199-element HTML/SVG/MathML table; custom elements follow the WHATWG
+  valid-name rule, and PascalCase stays component dispatch. Extension
+  types gain text forms: `f"gap: {16px}"` and `str(16px)` render with
+  units, closing the broken escape the unit audit recorded.
 - Strings gain the backtick delimiter: `` `...` `` is the same string as
   `"..."` with inner double quotes unescaped, so the JSON fixture every
   test writes stops being an escape thicket. Prefixes compose across both

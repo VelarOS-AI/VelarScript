@@ -2500,6 +2500,15 @@ export class Parser {
       case "null":
         return { kind: "LiteralExpression", value: null, raw: token.value, span: token.span };
       case "identifier":
+        if (token.value === "keyframes" && this.check("colon")) {
+          this.diagnostics.push(diagnostic(
+            "VEL2035",
+            "'keyframes:' belongs to @velarscript/web; add \"@velarscript/web\" to velar.json extensions, or move this module into a Web project",
+            token.span,
+          ));
+          this.skipMistypedDeclaration();
+          return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+        }
         if (token.value === "function" && (this.check("leftParen") || (this.check("identifier") && this.peekKind(1) === "leftParen"))) {
           this.diagnostics.push(diagnostic(
             "VEL2031",

@@ -7,6 +7,7 @@ import type {
 import {
   isWebExpression,
   isWebJsx,
+  isWebKeyframes,
   isWebLook,
   isWebStatement,
   isWebUnit,
@@ -87,6 +88,10 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
         }
       };
       visit(expression.entries);
+      return true;
+    }
+    if (isWebKeyframes(expression)) {
+      for (const stop of expression.stops) for (const entry of stop.entries) context.visitExpression(entry.value);
       return true;
     }
     return isWebUnit(expression) || (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook");

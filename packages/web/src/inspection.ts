@@ -10,7 +10,7 @@ import {
 import { optionalOf } from "@velarscript/compiler";
 import { LOOK_UNIT_TYPES } from "./look.ts";
 import { exportedLookStaticValues, lookStaticIdentity } from "./look-static.ts";
-import { isWebExpression, isWebJsx, isWebLook, isWebStatement, isWebUnit } from "./ast.ts";
+import { isWebExpression, isWebJsx, isWebKeyframes, isWebLook, isWebStatement, isWebUnit } from "./ast.ts";
 import { isWebComponentConstructor, webComponentConstructor, webNodeType } from "./types.ts";
 
 function visitDependencyExpression(expression: Expression, context: CompilerDependencyContext): boolean {
@@ -26,6 +26,10 @@ function visitDependencyExpression(expression: Expression, context: CompilerDepe
       }
     };
     visit(expression.entries);
+    return true;
+  }
+  if (isWebKeyframes(expression)) {
+    for (const stop of expression.stops) for (const entry of stop.entries) context.visitExpression(entry.value);
     return true;
   }
   if (isWebExpression(expression) && expression.kind === "ExtensionExpression:web:look-hook") return true;
@@ -140,6 +144,7 @@ export const velarWebInspectionExtension: CompilerInspectionExtension = Object.f
   inferPublicExpression(expression: Expression): ValueType | undefined {
     if (isWebJsx(expression)) return webNodeType;
     if (isWebLook(expression)) return { kind: "named", name: "Look" };
+    if (isWebKeyframes(expression)) return { kind: "named", name: "Keyframes" };
     if (isWebUnit(expression)) {
       const name = LOOK_UNIT_TYPES.get(expression.unit);
       return name ? { kind: "named", name } : undefined;

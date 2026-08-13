@@ -41,6 +41,18 @@ async def test_release_studio_recovery() -> null:
     await browser.waitForText("[data-runtime-error]", "render:Render recovery ready")
     expect(await browser.text("[data-render-stable]")).toBe("render-stable")
 
+async def test_checked_keyframes_create_a_running_rotation() -> null:
+    await browser.open("/")
+    const animation = await browser.animation("[data-animation-probe]")
+    expect(animation.count).toBe(1)
+    expect(animation.name.startsWith("velar-kf-")).toBe(true)
+    expect(animation.rotating).toBe(true)
+    const toggle = await browser.animation("[data-animation-toggle-probe]")
+    expect(toggle.count).toBe(1)
+    await browser.click("[data-animation-toggle]")
+    const removed = await browser.animation("[data-animation-toggle-probe]")
+    expect(removed.count).toBe(0)
+
 async def test_native_event_fields_cross_the_real_browser_boundary() -> null:
     await browser.open("/")
     const navigation = await browser.timings()

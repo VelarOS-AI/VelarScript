@@ -96,6 +96,8 @@ export interface TypeEnvironment {
     expected: ExtensionValueType,
     assign: (actual: ValueType, expected: ValueType) => boolean,
   ): boolean | undefined;
+  /** Target-owned total text forms used by f-strings and the built-in `str`. */
+  extensionTextForm?(type: ValueType): boolean | undefined;
   /** Expands declared type aliases; the text-conversion domain checks the expanded shape. */
   expandTypeAliases?(type: ValueType): ValueType;
 }
@@ -123,7 +125,7 @@ export function isTextConvertibleType(type: ValueType, environment: TypeEnvironm
     case "union":
       return expanded.members.every((member) => isTextConvertibleType(member, environment));
     default:
-      return false;
+      return environment.extensionTextForm?.(expanded) === true;
   }
 }
 

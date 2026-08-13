@@ -561,6 +561,10 @@ export const Track = lookType("Track", textVisual);
 export const TrackList = lookType("TrackList", textVisual);
 export const Transition = lookType("Transition", textVisual);
 export const Spacing = lookType("Spacing", textVisual);
+export const Keyframes = lookType("Keyframes", (value) => lookOwnData(value, "__velarKeyframes") === true
+  && typeof lookOwnData(value, "name") === "string");
+export const Animation = lookType("Animation", (value) => lookOwnData(value, "__velarAnimation") === true
+  && typeof lookOwnData(value, "css") === "string");
 
 export function color(value) { return lookText(value, "Color"); }
 export function rgb(red, green, blue) {
@@ -618,6 +622,20 @@ export function min(first, second) { return lookResult("min(" + lookVisual(first
 export function max(first, second) { return lookResult("max(" + lookVisual(first, "max value") + ", " + lookVisual(second, "max value") + ")"); }
 export function clamp(minimum, preferred, maximum) {
   return lookResult("clamp(" + lookVisual(minimum, "clamp minimum") + ", " + lookVisual(preferred, "clamp preferred") + ", " + lookVisual(maximum, "clamp maximum") + ")");
+}
+export function animate(frames, duration, easing = "ease", delay = "0ms", count = 1, loop = false, direction = "normal", fill = "none") {
+  if (lookOwnData(frames, "__velarKeyframes") !== true) throw new TypeError("animate frames must be a Keyframes value");
+  const name = lookText(lookOwnData(frames, "name"), "Keyframes name");
+  if (!lookMatches(durationPattern, duration)) throw new TypeError("Animation duration must be a Duration value");
+  if (!lookMatches(durationPattern, delay)) throw new TypeError("Animation delay must be a Duration value");
+  if (!["linear", "ease", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end"].includes(easing)) throw new TypeError("Animation easing is invalid");
+  if (!["normal", "reverse", "alternate", "alternate-reverse"].includes(direction)) throw new TypeError("Animation direction is invalid");
+  if (!["none", "forwards", "backwards", "both"].includes(fill)) throw new TypeError("Animation fill is invalid");
+  if (typeof loop !== "boolean") throw new TypeError("Animation loop must be bool");
+  count = lookFinite(count, "Animation count");
+  if (!Number.isInteger(count) || count <= 0 || count > 1000000) throw new RangeError("Animation count must be a positive integer no greater than 1000000");
+  const css = [name, duration, easing, delay, loop ? "infinite" : String(count), direction, fill].join(" ");
+  return Object.freeze({ __velarAnimation: true, css: lookResult(css) });
 }
   `.trimStart()],
   ["velar/app", String.raw`
@@ -3288,6 +3306,7 @@ export const browser = Object.freeze({
   currentPath() { return browserRuntime().currentPath(); },
   viewport(width, height) { return browserRuntime().viewport(width, height); },
   timings() { return browserRuntime().timings(); },
+  animation(selector) { return browserRuntime().animation(selector); },
   measureClick(selector) { return browserRuntime().measureClick(selector); },
   measureFill(selector, value) { return browserRuntime().measureFill(selector, value); },
   measurePress(selector, key) { return browserRuntime().measurePress(selector, key); },

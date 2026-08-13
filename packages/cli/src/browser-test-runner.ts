@@ -630,6 +630,23 @@ function installBrowserRuntime(page: Page, origin: string, base: string, runtime
       }, browserPerformanceRuntimeKey);
       return navigationTiming(value);
     },
+    async animation(selector: unknown) {
+      return locator(selector).evaluate(async (element) => {
+        const animations = element.getAnimations();
+        const first = animations[0] as CSSAnimation | undefined;
+        if (!first) return { count: animations.length, name: "", rotating: false };
+        const beforeTime = Number(first.currentTime ?? 0);
+        const before = getComputedStyle(element).rotate;
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        const afterTime = Number(first.currentTime ?? 0);
+        const after = getComputedStyle(element).rotate;
+        return {
+          count: animations.length,
+          name: typeof first.animationName === "string" ? first.animationName : "",
+          rotating: afterTime > beforeTime && after !== before,
+        };
+      });
+    },
     async measureClick(selector: unknown) {
       const target = locator(selector);
       return measureBrowserInteraction(page, target, "click", async () => { await target.click(); });

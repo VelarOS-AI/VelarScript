@@ -147,6 +147,12 @@ export interface CompilerAnalysisExtension {
   ) => boolean | undefined;
   /** Resolve target-owned runtime members; null means the target owns the type but the member is absent. */
   readonly memberType?: (type: ExtensionValueType, property: string) => ValueType | null | undefined;
+  /**
+   * Declare whether a target-owned value has a total, hook-free text form.
+   * `true` admits the value to f-strings and `str()`, `false` records an owned
+   * rejection, and `undefined` leaves the type for another extension or Core.
+   */
+  readonly textForm?: (type: ValueType) => boolean | undefined;
   readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
 }
 

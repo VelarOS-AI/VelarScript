@@ -7929,7 +7929,7 @@ test("0.10 Web APIs have one versioned typed compiler/runtime contract", async (
   assert.equal(browserTestController?.kind, "object");
   if (browserTestController?.kind === "object") {
     assert.deepEqual([...browserTestController.fields.keys()].sort(), [
-      "attribute", "click", "count", "currentPath", "fill", "measureClick", "measureFill", "measurePress", "namespace", "open", "press", "reload", "scroll", "select", "text", "timings", "viewport", "visible", "waitFor", "waitForText",
+      "animation", "attribute", "click", "count", "currentPath", "fill", "measureClick", "measureFill", "measurePress", "namespace", "open", "press", "reload", "scroll", "select", "text", "timings", "viewport", "visible", "waitFor", "waitForText",
     ]);
   }
   const webRuntime = standardModuleSource("velar/web", { base: "/studio/" }) ?? "";
@@ -10467,7 +10467,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 280);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 283);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 20);

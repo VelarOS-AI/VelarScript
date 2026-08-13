@@ -1,6 +1,7 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
+import { WEB_VOID_ELEMENTS } from "./elements.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension } from "./editor.ts";
 import { velarWebInspectionExtension } from "./inspection.ts";
@@ -12,8 +13,6 @@ import { LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_T
 import { isWebTypeAssignable, resolveWebTypeSyntax, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
-
-const webVoidElements = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
 const anyType: ValueType = { kind: "any" };
 const nullType: ValueType = { kind: "null" };
@@ -39,6 +38,8 @@ const imageType: ValueType = { kind: "named", name: "Image" };
 const trackType: ValueType = { kind: "named", name: "Track" };
 const trackListType: ValueType = { kind: "named", name: "TrackList" };
 const transitionType: ValueType = { kind: "named", name: "Transition" };
+const keyframesType: ValueType = { kind: "named", name: "Keyframes" };
+const animationType: ValueType = { kind: "named", name: "Animation" };
 const durationType: ValueType = { kind: "named", name: "Duration" };
 const angleType: ValueType = { kind: "named", name: "Angle" };
 const spacingType: ValueType = { kind: "named", name: "Spacing" };
@@ -84,6 +85,19 @@ const lookModuleExports = new Map<string, ValueType>([
   ["min", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
   ["max", namedFunction(["first", "second"], [lengthType, lengthType], lengthType)],
   ["clamp", namedFunction(["minimum", "preferred", "maximum"], [lengthType, lengthType, lengthType], lengthType)],
+  ["animate", namedFunction(
+    ["frames", "duration", "easing", "delay", "count", "loop", "direction", "fill"],
+    [keyframesType, durationType, stringType, durationType, numberType, boolType, stringType, stringType],
+    animationType,
+    2,
+  )],
+]);
+
+const webTextFormTypes = new Set(LOOK_UNIT_TYPES.values());
+const webOwnedNamedTypes = new Set([
+  "WebNode", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement",
+  "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent",
+  ...LOOK_PUBLIC_TYPE_NAMES,
 ]);
 
 function functionType(parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
@@ -267,6 +281,11 @@ const browserTestInteractionTimingType = object({
   processingDurationMs: numberType,
   nextFrameMs: numberType,
 });
+const browserTestAnimationType = object({
+  count: numberType,
+  name: stringType,
+  rotating: boolType,
+});
 const browserTestControllerType = object({
   open: namedFunction(["path"], [stringType], promise(nullType), 0),
   reload: namedFunction([], [], promise(nullType)),
@@ -285,6 +304,7 @@ const browserTestControllerType = object({
   currentPath: namedFunction([], [], promise(stringType)),
   viewport: namedFunction(["width", "height"], [numberType, numberType], promise(nullType)),
   timings: namedFunction([], [], promise(browserTestNavigationTimingType)),
+  animation: namedFunction(["selector"], [stringType], promise(browserTestAnimationType)),
   measureClick: namedFunction(["selector"], [stringType], promise(browserTestInteractionTimingType)),
   measureFill: namedFunction(["selector", "value"], [stringType, stringType], promise(browserTestInteractionTimingType)),
   measurePress: namedFunction(["selector", "key"], [stringType, stringType], promise(browserTestInteractionTimingType)),
@@ -477,7 +497,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   contract: Object.freeze({ protocolVersion: 1, apiVersion: VELAR_WEB_API_VERSION, kind: "application", extends: Object.freeze({}) }),
   capabilities: Object.freeze(["web"]),
   formatting: Object.freeze({
-    angleBracketEmbedding: Object.freeze({ voidElements: webVoidElements }),
+    angleBracketEmbedding: Object.freeze({ voidElements: WEB_VOID_ELEMENTS }),
   }),
   lexical: Object.freeze({
     keywords: Object.freeze({
@@ -491,6 +511,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       exposes: "exposes",
       expose: "expose",
       look: "look",
+      keyframes: "keyframes",
       css: "css",
     }),
     forbiddenIdentifiers: Object.freeze({
@@ -548,6 +569,11 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     ]),
     resolveTypeSyntax: resolveWebTypeSyntax,
     isTypeAssignable: isWebTypeAssignable,
+    textForm(type: ValueType): boolean | undefined {
+      if (type.kind === "extension" && type.extensionId === "@velarscript/web") return false;
+      if (type.kind !== "named" || !webOwnedNamedTypes.has(type.name)) return undefined;
+      return webTextFormTypes.has(type.name as "Length" | "Percentage" | "TrackFraction" | "Duration" | "Angle");
+    },
     inferIntrinsic: inferWebIntrinsic,
   }),
   editor: Object.freeze({
@@ -563,6 +589,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       exposes: "Declares the explicit typed control Handle a component makes available through JSX ref.",
       expose: "Provides the component Handle value declared by exposes.",
       look: "Builds a typed, composable Web appearance value.",
+      keyframes: "Builds checked CSS animation stops as a first-class Keyframes value.",
     }),
     typeDocumentation: Object.freeze({
       WebNode: "A value that can be rendered as component or JSX children.",
@@ -577,7 +604,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       Look: "A typed, composable Web appearance value applied through JSX look={...}.",
     }),
     completions: Object.freeze([
-      ...["component", "state", "resource", "action", "watch", "mounted", "cleanup", "exposes", "expose", "look"].map((label) => ({ label, kind: 14 })),
+      ...["component", "state", "resource", "action", "watch", "mounted", "cleanup", "exposes", "expose", "look", "keyframes"].map((label) => ({ label, kind: 14 })),
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
       { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },
