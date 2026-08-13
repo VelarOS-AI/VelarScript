@@ -175,7 +175,23 @@ component SaveButton(children: WebNode):
     return <button look={buttonLook} type="button">{children}</button>
 ```
 
-A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Look has no `animation`: use `transition` for state changes, or load `@keyframes` through a module-level `import css unsafe "./motion.css" before look` and attach that class.
+A `look:` literal is built once, so its conditions and values cannot read state; put a reactive visual on the element with `look={active ? a : b}` or `look:color={...}`. Declare checked motion as a module-level `keyframes:` value and pass it to `animate`; disable nonessential motion at the CSS layer:
+
+```velar
+import {animate} from "velar/look"
+
+const spin = keyframes:
+    from:
+        rotate = 0deg
+    to:
+        rotate = 1turn
+
+const rotatingLook = look:
+    if not motion.reduced:
+        animation = animate(spin, 1s, easing="linear", loop=true)
+```
+
+The `animation` property accepts only `Animation`, `List<Animation>`, or `null`; a CSS animation string is rejected. Bind a changing animation on the element with `look:animation={active ? animate(spin, 1s) : null}`. Native animation longhands remain outside Look because `animate` owns the checked contract.
 
 Form state binds with `bind:value={name}` (also a writable path such as `bind:value={form.email}`), `bind:checked={flag}`, and `bind:group={choice}` — radio state holds the selected input's `value`, checkbox `List<string>` state holds the checked values; the event object has no `target`.
 
@@ -298,7 +314,7 @@ mystery: `buttonLook(dangerous=true)`, never `buttonLook(true)`.
 
 ### Strings
 
-Build text with f-strings — numbers, bools, and enums interpolate directly.
+Build text with f-strings — numbers, bools, enums, and Web unit values with a declared text form interpolate directly.
 Data becomes text through `stringify` from `velar/json`. Multi-line text is
 a layout string, not a stack of `\n` escapes:
 
@@ -306,12 +322,15 @@ a layout string, not a stack of `\n` escapes:
 import {stringify} from "velar/json"
 
 const count = 3
+const gap = 16px
 const summary = f"{count} open tickets"
+const gapLabel = f"gap: {gap}"
 const usage = "
     velar check
     velar test
 "
 print(summary)
+print(gapLabel)
 print(usage)
 print(stringify({open: count}))
 ```

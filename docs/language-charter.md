@@ -2413,3 +2413,117 @@ those strings as data keys.
 
 When a removed spelling is common enough to be a likely mistake, the compiler
 reports the direct current spelling. It does not keep the old behavior alive.
+
+## Appendix to section 17: published Web visual vocabulary
+
+This appendix is the current checked Web contract and supersedes the earlier
+section 17 note that animation had no Look spelling. Look admits a CSS property
+only when it is standard, not obsolete, and its value model can be described
+honestly by a Look type family. The compiler owns the table below: every one of
+the 225 names has an explicit value kind; there is no fallback to an unchecked
+string type.
+
+| Family | Look properties |
+| --- | --- |
+| Layout and containment | `display`, `position`, `boxSizing`, `isolation`, `contain`, `visibility`, `zIndex`, `overflow`, `overflowX`, `overflowY`, `resize`, `clip`, `clipPath`, `objectFit`, `objectPosition`, `aspectRatio` |
+| Grid | `gridTemplateColumns`, `gridTemplateRows`, `gridTemplateAreas`, `gridAutoColumns`, `gridAutoRows`, `gridAutoFlow`, `gridColumn`, `gridColumnStart`, `gridColumnEnd`, `gridRow`, `gridRowStart`, `gridRowEnd`, `gridArea` |
+| Flex and alignment | `flex`, `flexDirection`, `flexGrow`, `flexShrink`, `flexBasis`, `flexWrap`, `order`, `gap`, `rowGap`, `columnGap`, `alignItems`, `justifyItems`, `justifyContent`, `alignContent`, `alignSelf`, `justifySelf`, `placeItems`, `placeContent`, `placeSelf` |
+| Size and inset | `width`, `height`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `inlineSize`, `blockSize`, `minInlineSize`, `maxInlineSize`, `minBlockSize`, `maxBlockSize`, `inset`, `top`, `right`, `bottom`, `left`, `insetInline`, `insetBlock`, `insetInlineStart`, `insetInlineEnd`, `insetBlockStart`, `insetBlockEnd` |
+| Spacing | `padding`, `paddingTop`, `paddingRight`, `paddingBottom`, `paddingLeft`, `paddingInline`, `paddingBlock`, `paddingInlineStart`, `paddingInlineEnd`, `paddingBlockStart`, `paddingBlockEnd`, `margin`, `marginTop`, `marginRight`, `marginBottom`, `marginLeft`, `marginInline`, `marginBlock`, `marginInlineStart`, `marginInlineEnd`, `marginBlockStart`, `marginBlockEnd` |
+| Background | `background`, `backgroundColor`, `backgroundImage`, `backgroundPosition`, `backgroundSize`, `backgroundRepeat`, `backgroundAttachment`, `backgroundClip`, `backgroundOrigin`, `backgroundBlendMode` |
+| Border and outline | `border`, `borderWidth`, `borderStyle`, `borderColor`, `borderTop`, `borderRight`, `borderBottom`, `borderLeft`, `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`, `borderTopStyle`, `borderRightStyle`, `borderBottomStyle`, `borderLeftStyle`, `borderTopColor`, `borderRightColor`, `borderBottomColor`, `borderLeftColor`, `borderRadius`, `borderTopLeftRadius`, `borderTopRightRadius`, `borderBottomRightRadius`, `borderBottomLeftRadius`, `outline`, `outlineWidth`, `outlineStyle`, `outlineColor`, `outlineOffset` |
+| Effects | `boxShadow`, `textShadow`, `opacity`, `filter`, `backdropFilter`, `content` |
+| Typography and international text | `color`, `font`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `fontStretch`, `fontVariant`, `fontKerning`, `fontOpticalSizing`, `fontFeatureSettings`, `fontVariationSettings`, `lineHeight`, `letterSpacing`, `wordSpacing`, `textAlign`, `textIndent`, `textDecoration`, `textDecorationColor`, `textDecorationLine`, `textDecorationStyle`, `textDecorationThickness`, `textUnderlineOffset`, `textUnderlinePosition`, `textTransform`, `textRendering`, `whiteSpace`, `textOverflow`, `textWrap`, `overflowWrap`, `wordBreak`, `hyphens`, `tabSize`, `writingMode`, `textOrientation`, `direction`, `unicodeBidi` |
+| Lists | `listStyle`, `listStyleType`, `listStylePosition`, `listStyleImage` |
+| SVG paint | `fill`, `stroke`, `strokeWidth`, `strokeLinecap`, `strokeLinejoin`, `strokeDasharray`, `strokeDashoffset` |
+| Transform and transition | `translate`, `scale`, `rotate`, `transform`, `transformOrigin`, `transition`, `transitionProperty`, `transitionDuration`, `transitionDelay`, `transitionTimingFunction`, `animation` |
+| Interaction and form theme | `cursor`, `pointerEvents`, `userSelect`, `touchAction`, `appearance`, `accentColor`, `caretColor`, `colorScheme` |
+| Scroll | `scrollBehavior`, `scrollMargin`, `scrollMarginTop`, `scrollMarginRight`, `scrollMarginBottom`, `scrollMarginLeft`, `scrollPadding`, `scrollPaddingTop`, `scrollPaddingRight`, `scrollPaddingBottom`, `scrollPaddingLeft`, `scrollSnapAlign`, `scrollSnapStop`, `scrollSnapType`, `overscrollBehavior`, `overscrollBehaviorX`, `overscrollBehaviorY`, `scrollbarColor`, `scrollbarWidth` |
+
+Keyword-valued properties accept a closed set of CSS keywords. Metrics use unit
+literals and typed builders, colours use `Color`, images use `Image`, tracks
+use `Track` or `TrackList`, and motion uses `Transition` or `Animation`.
+Consequently, spellings such as `display = "flexx"`, `padding = "big"`,
+`padding = "12px"`, `color = "reddish"`, a raw grid-template string, and a
+raw gradient string fail while the module compiles. Use `12px`,
+`tracks(minmax(...))`, and `linearGradient(...)` respectively.
+
+The following 36 real CSS properties are deliberately outside checked Look.
+Their diagnostics name this boundary and point to module-level
+`import css unsafe` as the escape hatch.
+
+| Excluded family | Properties | Reason |
+| --- | --- | --- |
+| Float layout | `float`, `clear` | Legacy float layout is outside the Grid and Flex model. |
+| Table formatting | `tableLayout`, `borderCollapse`, `borderSpacing`, `captionSide`, `emptyCells` | A typed table-layout contract needs evidence before admission. |
+| Multi-column layout | `columns`, `columnCount`, `columnWidth`, `columnFill`, `columnRule`, `columnRuleColor`, `columnRuleStyle`, `columnRuleWidth`, `columnSpan` | Its value and fragmentation model is not yet typed. |
+| Animation longhands | `animationName`, `animationDuration`, `animationTimingFunction`, `animationDelay`, `animationIterationCount`, `animationDirection`, `animationFillMode`, `animationPlayState`, `animationTimeline`, `animationRangeStart`, `animationRangeEnd` | `keyframes:` plus `animate(...)` owns the checked animation contract. |
+| Generated content | `counterIncrement`, `counterReset`, `counterSet`, `quotes` | Counters and quoting are not modeled as checked Look values. |
+| Paged fragmentation | `breakAfter`, `breakBefore`, `breakInside`, `orphans`, `widows` | Paged and fragmented media are outside the Web application target. |
+
+### Checked keyframes and animation
+
+A module-level `keyframes:` expression is an ordinary exportable `Keyframes`
+value. A stop is `from:`, `to:`, or an integer percentage from `1%` through
+`99%`; comma-separated stops share a body. Stops may not repeat and declaration
+groups must progress in ascending order. A body contains direct, statically
+lowerable Look properties only. It reuses the Look property and value checker,
+rejects non-interpolating properties, and cannot read reactive state. Equal
+keyframe structures receive one stable generated CSS name and one emitted rule,
+including when used through another module's checked interface.
+
+```velar
+import {animate} from "velar/look"
+
+export const spin = keyframes:
+    from:
+        rotate = 0deg
+    50%:
+        rotate = 0.5turn
+    to:
+        rotate = 1turn
+
+export const spinningLook = look:
+    if not motion.reduced:
+        animation = animate(spin, 1s, easing="linear", loop=true)
+```
+
+`animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
+returns `Animation`. Duration must be positive, delay cannot be negative,
+`count` is a positive integer, and `count` and `loop=true` are mutually
+exclusive. Easing is one of `linear`, `ease`, `ease-in`, `ease-out`,
+`ease-in-out`, `step-start`, and `step-end`; direction is `normal`, `reverse`,
+`alternate`, or `alternate-reverse`; fill is `none`, `forwards`, `backwards`,
+or `both`. Literal options are checked during compilation. Look `animation`
+accepts `Animation`, `List<Animation>`, or `null`, never a CSS animation string.
+An element binding such as
+`look:animation={active ? animate(spin, 1s) : null}` adds and removes the native
+animation as reactive state changes.
+
+### Native elements and extension text forms
+
+Web JSX accepts the standard non-obsolete HTML, SVG, and MathML element tables.
+An unknown native spelling is a compile error with a nearby suggestion, so
+`<dvi>` teaches `<div>`. A custom element is intentionally open only under the
+platform convention: its name is lowercase, begins with a letter, and contains
+at least one hyphen, as in `<user-card>`. PascalCase names remain component
+invocations. The retired hyphenated names reserved by the
+[HTML Standard](https://html.spec.whatwg.org/multipage/custom-elements.html#valid-custom-element-name)
+remain rejected.
+
+Compiler extensions may declare that an extension value has a total text form.
+The Web extension does so for `Length`, `Percentage`, `TrackFraction`,
+`Duration`, and `Angle`, preserving the source unit in both f-strings and
+`str(...)`:
+
+```velar
+const gap = 16px
+const duration = 250ms
+
+print(f"gap: {gap}")
+print(str(duration))
+```
+
+An extension value without a declared text form remains outside `str` and
+f-string interpolation. `print(value)` is the inspection exit; structured data
+text still uses `stringify` from `velar/json`.
