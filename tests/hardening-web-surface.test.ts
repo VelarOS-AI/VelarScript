@@ -660,11 +660,19 @@ mount(<Chip class="a" />, "#app")
 `), "VEL2016 Every component already accepts 'class'; remove it from the prop list and pass it at the call site with class={...}");
 
   assert.equal(only(`
-component Chip(match: string):
+component Chip(enum: string):
     return <div>label</div>
 
-mount(<Chip match="a" />, "#app")
-`), "VEL2016 'match' is a VelarScript keyword and cannot name a component prop; choose another name");
+mount(<Chip enum="a" />, "#app")
+`), "VEL2016 'enum' is a VelarScript keyword and cannot name a component prop; choose another name");
+
+  // D30 item 16: the softened statement-head words are ordinary prop names.
+  clean(`
+component Chip(match: string, type: string):
+    return <div>{match}{type}</div>
+
+mount(<Chip match="a" type="b" />, "#app")
+`);
 
   assert.equal(only(`
 component Chip(compact?: bool):

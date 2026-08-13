@@ -388,7 +388,7 @@ export class VelarWebParser extends Parser {
     const expression = this.parseExpression();
     let currentName: string | null = null;
     let previousName: string | null = null;
-    if (this.match("as")) {
+    if (this.matchWord("as")) {
       currentName = this.expect("identifier", "Expected the current watch value name").value;
       this.expect("comma", "Expected ',' between watch value names");
       previousName = this.expect("identifier", "Expected the previous watch value name").value;

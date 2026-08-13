@@ -28,7 +28,7 @@ export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIden
   ["elif", forbidden("Use 'else if'; VelarScript keeps ordinary readable if chains", [{ kind: "else", value: "else" }, { kind: "if", value: "if" }])],
   ["int", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
   ["float", forbidden("Use 'number'; VelarScript has one JavaScript numeric type", [{ kind: "identifier", value: "number" }])],
-  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "match", value: "match" }])],
+  ["switch", forbidden("Use 'match' for strict pattern dispatch", [{ kind: "identifier", value: "match" }])],
   ["this", forbidden("Use explicit 'self' inside methods; VelarScript does not expose dynamic 'this'", [{ kind: "identifier", value: "self" }])],
   ["new", forbidden("Call a class directly; VelarScript does not expose 'new'", [])],
   ["eval", forbidden("VelarScript does not expose 'eval'", null)],
