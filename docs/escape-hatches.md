@@ -135,6 +135,37 @@ import css unsafe "./overrides.css" after look
 `before look` and `after look` set source order only; specificity and
 `!important` remain the stylesheet author's responsibility.
 
+### A stylesheet that ships inside an npm package
+
+`import css unsafe` takes a relative project path — `"./legacy.css"` — and
+nothing else. There is no `import css unsafe "some-package/dist/style.css"`, so a
+component library whose CSS lives in `node_modules` is brought in by copying it
+into the project, which is a two-line build step and a deliberate one: the file
+becomes a reviewable artifact whose version is visible in the repository instead
+of a silent dependency of the visual layer.
+
+```json
+{
+  "scripts": {
+    "sync:vendor-css": "cp node_modules/some-ui/dist/style.css src/vendor/some-ui.css",
+    "prebuild": "npm run sync:vendor-css"
+  }
+}
+```
+
+```velar fragment
+import css unsafe "./vendor/some-ui.css" before look
+```
+
+Three points make this workflow honest rather than a workaround. Import the copy
+`before look` so the application's own Look wins equal-specificity conflicts.
+Commit the copied file, and re-run the copy when the package updates — a
+`prebuild` (or `postinstall`) script keeps that mechanical. And treat the copy as
+read-only: local edits belong in a second stylesheet imported `after look`, or in
+Look itself, so the next sync does not silently discard them. Blessing package
+CSS paths directly is a possible future addition; today the copy is the supported
+path.
+
 Trusted HTML renders through the string-only `unsafe:html` boundary. It is a
 wholesale `innerHTML` assignment on every reactive update, and it cannot be
 combined with children. Style that markup through the unsafe CSS route

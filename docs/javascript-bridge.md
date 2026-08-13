@@ -25,12 +25,30 @@ A declared `types` path that names an unreadable file degrades to `unknown`
 with the same non-blocking `VEL9002` notice the unsupported shapes use — a
 broken declared path is a package defect worth one line, not silence.
 
+An `import js` specifier names a module the host can resolve on its own, and the
+legal space is exactly three shapes:
+
+- a **package** specifier — `"lodash"`, `"@scope/name"`, or a package subpath
+  such as `"highlight.js/lib/common"`;
+- a **host builtin** — `"node:process"` and the other `node:` modules, plus the
+  bare builtin names;
+- a **`data:` URL** — `"data:text/javascript,export const x = 1"`, which is how
+  first-party tests declare a tiny module inline.
+
+A `#`-mapped import from the importing package's own `imports` map resolves too.
+A **relative path is not legal**: `import js {x} from "./local.js"` is refused,
+because the emitted program is a directory of modules whose relative structure
+belongs to the compiler, and a hand-written sibling `.js` file has no place in
+it. Move that JavaScript into a package — a workspace package is enough — and
+import it by name.
+
 Bare `import js` specifiers resolve at check time in a project compile: a
 package that is not installed next to the importer is a check error instead of
 a raw `ERR_MODULE_NOT_FOUND` pointing at emitted artifacts, and a VelarScript
 source package reached through `import js` is answered with the
 reverse-direction teaching (import it without `js`). Node builtins, `node:`,
-`data:`, and `#`-mapped specifiers are exempt.
+`data:`, and `#`-mapped specifiers are exempt from that existence probe because
+the host owns their resolution.
 
 Here, safe means statically checked against one trusted declaration contract.
 It does not sandbox JavaScript, attest a package, or automatically inspect every
@@ -170,6 +188,17 @@ runtime schema. A declared export whose value is legitimately `undefined`
 still loads, because the boundary is membership in the module namespace, not
 the bound value.
 
+An import of a name the package does not export therefore has two failure
+shapes, and which one an author sees depends on whether a declaration governs
+the source. Under an `extern module` block, a name the block does not declare is
+a check error naming the block, and a name the block declares but the package
+does not export is the owned initialization error above — both name the source,
+the export, and the fix. Without a declaration, the failure is the host's:
+`import js unsafe` of a missing export produces the native ES-module
+`SyntaxError: The requested module 'pkg' does not provide an export named 'x'`.
+That message is source-mapped but unowned, which is one more reason to promote a
+stabilizing boundary to `extern module`.
+
 Default-export-only packages are declared with the export name `default`. This
 is a supported contract, not a parser accident: `default` is not a VelarScript
 keyword, so it names the extern export directly, and the bare `import js Name
@@ -292,6 +321,101 @@ const user = User.parse(loadUser())
 Declaring `loadUser() -> User` instead is an assertion that the JavaScript
 package already owns and guarantees that runtime contract. It is not a request
 for the compiler to wrap the package with implicit validation.
+
+## `any`: the operational model
+
+`import js unsafe` admits a value as `any`. The charter's section 12 owns the
+rule; this is what it means while writing code against a package.
+
+**Operations on an `any` are raw JavaScript, with no adaptation.** Member reads
+and writes, calls, indexing, arithmetic, `match`, and `is` go straight to the
+host. The `undefined`-to-`null` normalization that every checked type receives
+does not apply, so the language's one presence test lies about an `any`: an `any`
+holding `undefined` answers `false` to `== null` and `true` to `!= null`.
+Assigning it into a checked optional first — `const value: string? = raw` —
+restores the normalization, which is a reason to annotate at the edge rather than
+to test in place. Four operations are refused instead of passed through, because
+each one would let raw JavaScript semantics back into checked code silently: an
+f-string and `str()` (JavaScript coercion would run foreign conversion hooks), a
+condition (JavaScript truthiness would send `0` and `""` to the `else` branch),
+and `await` (an unchecked thenable runs foreign hooks and can resolve to raw
+`undefined`).
+
+**An `any` is assignable to every type, and nothing is checked at run time.**
+
+```velar fragment
+import js unsafe {payload} from "legacy-package"
+
+const label: string = payload.title
+```
+
+That compiles, emits no check, and believes the annotation. If `payload.title` is
+an object, `label + "!"` produces `"[object Object]!"` — the implicit conversion
+the language exists to reject, reintroduced by one unvalidated assignment.
+Validation happens only where validation already happens: `Type.parse`,
+`Type.is`, a checked collection operation, a `match` pattern.
+
+**So the import statement is the only correctness boundary that exists.**
+Validate there — `Config.parse(payload)` — and let only checked values inward.
+An `any` carried deeper into a program carries the absence of guarantees with it,
+and the eventual failure appears wherever the value is finally used, not where it
+entered.
+
+## The adapter module
+
+An `extern module` declaration is **module-local**. It governs the `import js`
+statements in the file that contains it and nowhere else: a second module that
+writes `import js {…} from "text-tools"` without its own declaration gets
+`unknown` bindings, and an extern class name is not a type that other modules
+can import. The naive consequence is an extern block pasted into every consumer,
+which is four copies of one contract to keep in sync.
+
+Declare it once instead, in an adapter module that owns the boundary and
+re-exports a checked surface:
+
+```velar
+extern module "text-tools":
+    export const version: string
+    export def format(value: string) -> string
+
+    export class Formatter:
+        let precision: number
+        constructor(prefix: string, precision: number = 1)
+        def format(value: number) -> string
+
+import js {Formatter, format, version} from "text-tools"
+
+/// The package's version, as an ordinary checked export.
+export const textToolsVersion = version
+
+/// A function export is a value: re-export it directly.
+export const formatText = format
+
+/// A class is not a value, so construction crosses through a factory...
+export def formatter(prefix: string, precision: number = 1) -> Formatter:
+    return Formatter(prefix, precision)
+
+/// ...and an alias publishes the instance type for annotations.
+export type TextFormatter = Formatter
+```
+
+Consumers then import ordinary VelarScript:
+
+```velar fragment
+import {TextFormatter, formatText, formatter} from "./text-tools.vel"
+
+const shared: TextFormatter = formatter(">", precision=2)
+
+print(formatText("value"))
+print(shared.format(3.14159))
+```
+
+Every call, construction, and member access on the consumer side is checked, and
+the package name appears exactly once in the project. The adapter is also where
+narrowing belongs: an export declared `-> unknown` is validated with
+`Type.parse` inside the adapter, so consumers receive the application's own
+types and never an unvalidated value. When the package's contract changes, one
+file changes.
 
 Declaration files and JavaScript files in installed npm packages are watched by
 the development server. A declaration change performs a full safe reanalysis;

@@ -84,7 +84,7 @@ component Page:
     let editor: EditorHandle? = null
 
     mounted:
-        if editor:
+        if editor != null:
             editor.focus()
 
     return <Editor ref={editor} look:borderWidth={1px} />
@@ -132,6 +132,82 @@ Handle compatibility is covariant: a constructor used as `Component<Props,
 Handle>` must expose a value assignable to `Handle`. Omitting the second type
 argument means callers cannot request a ref through that structural contract.
 
+## Hosts, fragments, and JSX directives
+
+A component invocation may attach `class`, `class:*`, `look`, `look:*`, and
+`style:*` without knowing the component's internals. Those land on the
+component's **host** element. When the component returns a single native
+element, that element is the host; when it returns another component, the
+forwarding continues into that component's host. When it returns a fragment —
+`<>...</>`, several roots with no wrapper element — there is nothing to infer
+from, so exactly one native element in the returned tree carries the valueless
+`host` marker:
+
+```velar fragment
+component Field(label: string, value: string):
+    return <>
+        <label>{label}</label>
+        <input host value={value} />
+    </>
+
+component Form:
+    return <Field label="Name" value="Ada" class="field" look:marginBlock={8px} />
+```
+
+Two markers in one component, a marker with a value, and a multi-root component
+with no marker are each a compile error, and the runtime raises the same
+requirement for a dynamically constructed root. `host` also belongs on a
+single-root component whose root is not the element that should receive host
+styling — mark the intended element and the root stops being the default.
+
+The directives a native element accepts are `on:event`, `bind:value`,
+`bind:checked`, `bind:group`, `class`, `class:name`, `look`, `look:property`,
+`style:property`, `ref`, `key`, and `unsafe:html`.
+
+`class:name={condition}` toggles one class name from a `bool`. It composes with
+`class={...}`: the bound list and the toggles are independent contributions to
+the element's class attribute, so a static class, a reactive class list, and
+several toggles coexist. The value must be `bool` — an optional or a truthy
+value is rejected.
+
+```velar fragment
+component Tab(label: string, selected: bool, disabled: bool):
+    return <button class="tab" class:selected={selected} class:muted={disabled} type="button">{label}</button>
+```
+
+An event directive may carry modifiers, appended with dots. There are exactly
+five, an unknown one is a compile error, and none may repeat:
+
+| Modifier | Effect |
+| --- | --- |
+| `prevent` | Calls `preventDefault()` before the handler runs. |
+| `stop` | Calls `stopPropagation()` before the handler runs. |
+| `self` | Ignores the event unless this element is the event's target. |
+| `capture` | Registers the listener for the capture phase. |
+| `once` | Removes the listener after one dispatch. |
+
+```velar fragment
+component Dialog(close: () -> null, submit: () -> null):
+    return <div class="backdrop" role="presentation" on:click.self={close}>
+        <form on:submit.prevent.stop={submit}>
+            <button type="submit">Save</button>
+        </form>
+    </div>
+```
+
+`self` is the supported way to ask the question the absent `event.target` would
+have answered — "was this the element itself, or a descendant?" — which is what
+a backdrop-dismiss handler needs.
+
+JSX text is normalized before it becomes a text node. Every whitespace run
+inside a text child collapses to one space; whitespace that exists only because
+the source wrapped is then dropped, so a text run beginning at a line break
+loses its leading whitespace and one ending at a line break loses its trailing
+whitespace. The consequence is the useful one: indentation never adds spaces to
+the rendered output, while a deliberate space between two inline elements on the
+same line survives. A text child that normalizes to nothing produces no node,
+and text that must be preserved exactly belongs in an interpolated string.
+
 ## `velar/look`
 
 Visual unit suffixes are language syntax and require no import. `px`, `rem`,
@@ -160,7 +236,8 @@ export const panelLook = look:
 
 Available named functions are `color`, `rgb`, `rgba`, `hsl`, `alpha`,
 `lighten`, `darken`, `border`, `shadow`, `linearGradient`, `asset`, `minmax`,
-`repeat`, `tracks`, `transition`, `spacing`, `min`, `max`, and `clamp`. Because
+`repeat`, `tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and
+`clamp`. Because
 they are module values, aliases and higher-order use retain the same checked
 signature. There are no implicit Look builder globals.
 
@@ -179,6 +256,24 @@ after any `look={value}` composition. Duplicate directives fail checking and a
 pseudo-elements, and spreads remain exclusive to a named or local full Look;
 forms such as `look:hover:color` do not exist.
 
+Across a component boundary the caller wins. A `look` or `look:*` written on a
+component invocation is composed after the look the component itself put on its
+host, so a property both of them set takes the caller's value while every
+property only one of them sets survives. That is what makes a component's
+visuals adjustable without a prop per property; a component whose visuals must
+not be overridden that way keeps them on an inner element rather than on its
+host.
+
+A Look is an ordinary value with reference identity: `==` on two Looks compares
+identity, not declarations, so two identical `look:` literals are not equal even
+though they compile to one shared rule. Choose between named Look values, or
+compare the inputs that produced them.
+
+`content` is written as CSS text. A string value is emitted quoted — `content =
+"•"` produces `content: "•"` — and only the bare keywords `none` and `normal`
+pass through unquoted. `attr(...)`, `counter(...)`, `url(...)`, and `open-quote`
+are therefore outside checked Look; reach them through the unsafe CSS boundary.
+
 Checked `style:property="text"` and `style:property={expression}` directives
 exist only as a native inline-priority compatibility layer. They reuse Look's
 camelCase property table, property types, visual builders, safe serialization,
@@ -188,31 +283,56 @@ overrides normal Look and class declarations for the same property, including
 stateful Look rules. Raw `style="..."`, Style objects, conditional directive
 names, and reusable Style values remain unsupported.
 
-### The animation boundary and its escape
+### Motion: transitions and checked keyframes
 
-Look owns no animation vocabulary. There is no `@keyframes` target, so an
-animation name written in Look could never resolve, and `animation` and
-`animationName` are rejected at compile time with the boundary named. The
-supported spellings are:
+Motion has two checked spellings:
 
 - `transition` (and `transitionProperty`, `transitionDuration`,
   `transitionDelay`, `transitionTimingFunction`) for state changes — a hover
-  colour, an opening panel, a fading toast. This covers most product motion and
-  stays inside the checked language.
-- keyframe animation through the unsafe CSS boundary: declare the keyframes and
-  the class that uses them in a real stylesheet, import it at module level with
-  an explicit order, and attach the class from JSX.
+  colour, an opening panel, a fading toast.
+- a module-level `keyframes:` value passed to `animate(...)` from `velar/look`
+  for keyframe motion. The `animation` property accepts `Animation`,
+  `List<Animation>`, or `null`; a raw CSS animation string is rejected, and the
+  animation longhands (`animationName`, `animationDuration`, and the rest) stay
+  outside Look because `animate` owns the checked contract.
+
+```velar
+import {animate} from "velar/look"
+
+export const spin = keyframes:
+    from:
+        rotate = 0deg
+    to:
+        rotate = 1turn
+
+const spinnerLook = look:
+    if not motion.reduced:
+        animation = animate(spin, 1s, easing="linear", loop=true)
+
+export component Spinner:
+    return <span look={spinnerLook} role="status" aria-label="Loading" />
+```
+
+Equal keyframe structures share one generated CSS name and one emitted rule,
+including across module boundaries. Bind a changing animation on the element
+with `look:animation={active ? animate(spin, 1s) : null}`; `null` removes the
+native animation. The charter's appendix to section 17 defines the stop grammar
+and every `animate` option.
+
+The CSS `@keyframes` at-rule itself is still not a Look target. A stylesheet
+that must own its own keyframes — one shipped by a design system, or a
+name-dependent third-party class — crosses the unsafe CSS boundary like any
+other native CSS:
 
 ```velar fragment
 import css unsafe "./motion.css" before look
 
-component Spinner:
-    return <span class="spinner" role="status" aria-label="Loading" />
+component LegacyBadge:
+    return <span class="pulsing" role="status" aria-label="Syncing" />
 ```
 
 That stylesheet is unchecked native CSS by design: its class names, keyframe
-names, and cascade are the stylesheet author's responsibility. A checked
-`keyframes` declaration is not part of Web API 0.10.
+names, and cascade are the stylesheet author's responsibility.
 
 Media conditions cover `viewport.width`, `viewport.height`, `scheme.dark`,
 `scheme.light`, and `motion.reduced` — the last lowering to
@@ -273,6 +393,107 @@ cannot replace a constructor or prototype method to bypass unknown-field,
 accessor, sparse-List, or reactive-List handling. This is a runtime ownership
 rule, not a new source-level collection type: ordinary VelarScript records and
 Lists keep their documented identities.
+
+## Resources, actions, computed values, and watches
+
+### A resource loads once and reloads only when asked
+
+This is the most common source of surprise in a data-driven component, so it is
+stated plainly: **a resource does not refetch when its inputs change.**
+
+- The initializer runs when the component's scope mounts, not when the
+  declaration is reached. Before that, `value` is `null`, `loading` is `true`,
+  `ready` is `false`, and `error` is `null`.
+- The initializer is a load, not a formula. When a prop or state it reads
+  changes, nothing reloads: the old value stays on screen and `loading` does not
+  turn back on. A component rendered with `userId="alice"` and then updated to
+  `userId="bob"` keeps showing alice's data until something calls `reload()`.
+- `reload()` re-evaluates the initializer against the inputs it reads *now* and
+  answers `Promise<null>`. It sets `loading` and clears `error` as it starts.
+- Every load supersedes the previous one. A result that lands after a newer
+  reload started is discarded, as is one that lands after the component is
+  destroyed; a reload on a destroyed resource is a resolved no-op.
+- A failed load **keeps the last successful `value`** and publishes the failure
+  in `error`, with `ready` `true` and `loading` `false`. The same failure is
+  reported through `velar/app` under phase `resource` with the resource's
+  declared name as the detail, so `error` and the application error chain agree.
+
+Refetch-on-change is therefore written, not assumed. The spelling is a `watch`
+on the input plus a `reload()`; because a watch body is synchronous, the reload
+is started with the detached `async` statement:
+
+```velar fragment
+component Profile(userId: string):
+    resource profile: User = loadUser(userId)
+
+    watch userId:
+        async profile.reload()
+
+    return <section>
+        {profile.loading ? <p aria-busy="true">Loading…</p> : <h2>{profile.value?.name ?? "Unknown"}</h2>}
+        {profile.error != null ? <p role="alert">{profile.error.message}</p> : null}
+    </section>
+```
+
+Watch the narrowest thing that should trigger a refetch — one prop, or a record
+of query inputs — and remember that a deep mutation inside a watched value is
+itself a change.
+
+### Actions run in parallel
+
+An action does not serialize, queue, or debounce its calls. A second call starts
+while the first is in flight, and both run to completion.
+
+- `pending` is true while *any* call is active and becomes false when the last
+  one settles, so it is a "busy" flag rather than a per-call state.
+- `error` belongs to the newest call: it clears when a call starts and is written
+  only by the newest generation. An older failure that a newer call superseded is
+  still reported through `velar/app` exactly once, with the action's name as its
+  detail, but it does not own the public `error` field.
+- Every failure both reports and rejects the call, so a caller that owns recovery
+  uses `try`/`catch`.
+- After the owning component is destroyed, calling the action rejects with an
+  owned `Error` instead of starting application work.
+
+When overlapping runs are wrong for an operation — a save, a submit — the
+application says so: `disabled={save.pending}` on the control, or an explicit
+`if not save.pending:` guard.
+
+### Computed callbacks are checked for shape, not for purity
+
+`computed` requires a synchronous zero-argument function, and that is the whole
+requirement. A callback may write state, and the write publishes like any other.
+The compiler does not prove purity, so the runtime budget is what stands between
+an impure derivation and a frozen page: a computed, render, or watch that
+invalidates itself more than 100 times is stopped and reported through
+`velar/app`. Keep derived values pure regardless — a `computed` that mutates is a
+side effect hiding inside a cache, and `watch` is the declaration that says so
+out loud.
+
+### Watch forms and lifetime
+
+`watch expression:` runs its body when the tracked value changes.
+`watch expression as current, previous:` names the new and old values; both names
+are required with `as`, so a body that needs only the new value writes
+`as current, _`. The expression is evaluated immediately to register the
+dependency and record the baseline — the body does not run for that first value.
+For a deep mutation, `current` and `previous` are the same reference.
+
+A component watch is disposed with its component. A **module-scope watch is never
+disposed**: like a module `action`, it lives for the life of the page. That is
+the right lifetime for an application-wide fact — persisting a store to
+`velar/storage`, syncing a document title — and the wrong one for anything a
+component owns.
+
+### `mount` and `tick`
+
+`mount(node, target)` attaches one root and returns `null`; `target` is a CSS
+selector string or an element. The root is constructed synchronously, so a direct
+`await` in the argument is rejected — await module-level preload work into a
+binding first. `tick()` answers `Promise<null>` that resolves after the pending
+reactive flush settles, and rejects if that flush reported a failure no handler
+claimed, so an awaited `tick()` cannot step over a broken update. Both names are
+reserved in a Web module and cannot be shadowed by a local binding.
 
 ## Performance contracts
 
@@ -888,7 +1109,7 @@ component PreferencesPanel:
 ## `velar/forms`
 
 ```velar
-import {checkedValue, clearErrors, errors, fieldValues, focusFirstError, numberValue, read, reset, setError, setPending, textValue, values} from "velar/forms"
+import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, focusFirstError, numberValue, read, reset, setError, setPending, textValue, values} from "velar/forms"
 ```
 
 - `values(form)` returns `Map<string, unknown>` from native form data;

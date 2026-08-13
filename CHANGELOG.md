@@ -6,6 +6,20 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The documentation catches up with twenty waves of behavior. Newly
+  written down where only the compiler knew: module initialization order
+  (including that statements above an import still run after the
+  dependency), dynamic import, the twelve-row operator precedence table,
+  iteration order and mutation-during-iteration per collection family,
+  the resource contract (props do not refetch; `watch` plus
+  `async reload()` is the idiom), action concurrency, the `host` marker,
+  fragments, `class:` toggles, event modifiers, cross-component Look
+  precedence, what `any` actually means operationally, and the adapter
+  module pattern for JavaScript packages. The skill brief gains a project
+  setup section — the gap that cost the first blind test fourteen rework
+  rounds. A cross-document sweep found and fixed ten prose
+  contradictions, including one illegal example that the documentation
+  gate had been accepting.
 - Animation enters the language checked: `keyframes:` blocks with
   `from`/`to`/percent stops reuse the whole Look property machinery, the
   `animate(...)` builder is compile-checked with `loop=true` standing in

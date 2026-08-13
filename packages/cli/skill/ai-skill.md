@@ -29,6 +29,84 @@ The working loop:
 Do not invent workarounds for a diagnostic; it is the language telling you
 the canonical spelling.
 
+## Project setup
+
+A VelarScript project is a directory containing a `velar.json` manifest. The
+shortest true path is to let the toolchain write it:
+
+```sh
+velar create my-app                    # Web application (the default template)
+velar create my-tool --template node   # Node/CLI application
+velar create my-lib --template library # reusable source library
+```
+
+The templates are `web`, `node`, `desktop`, `docs`, `library`, and `component`.
+Each writes `velar.json`, a `package.json` whose scripts are the gates, a `src/`
+tree, a passing test, and an `AGENTS.md`. Use it instead of hand-assembling a
+project.
+
+When you must write the manifest yourself, these are the complete minimums.
+`formatVersion` and `extensions` are both required — omitting `extensions` is an
+error, not a default — while `entry` defaults to `src/main.vel`, `outDir` to
+`dist`, and `publicDir` to `public`.
+
+A Core project (CLI, library, Node) loads no extensions:
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "extensions": []
+}
+```
+
+A Web project activates the Web extension **by package name**. That one line is
+what turns on `component`, JSX, `state`, `computed`, `resource`, `action`,
+`watch`, `look`, and `mount`; without it `component` is an unknown declaration
+keyword and every JSX token is a parse error:
+
+```json
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "extensions": ["@velarscript/web"]
+}
+```
+
+An extension also owns its own manifest key: `"web": {"title": "My App"}` sets
+the document title. Anything else in `velar.json` is rejected by name, so add
+fields only from the documented set.
+
+**Files the toolchain owns.** `dist/` is build output, and in a Web build the
+toolchain writes `dist/index.html` itself — the title comes from `web.title`, the
+mount host is `<div id="app"></div>`, and assets are content-hashed. Never author
+that file; a `public/index.html` is overwritten by the generated one, while
+everything else in `public/` is copied through. `.velar/` is the compiler's
+scratch directory. Both belong in `.gitignore`.
+
+**Tests.** `velar test` finds every `*.test.vel` file under the project (skipping
+`outDir` and `publicDir`) and runs the top-level functions whose names start with
+`test_`. No `export` is needed, and a `.test.vel` file containing no `test_*`
+function is a failure rather than a skip. `velar test --browser` is a separate
+suite: `*.browser.test.vel` files, run in a real browser through
+`velar/web-test`.
+
+**Separate the mounted entrypoint from testable code.** A test runs in Node with
+no DOM, so a headless test that imports the module calling `mount` fails on
+`document`. Keep the entry trivial and put everything worth testing in modules it
+imports:
+
+```velar fragment
+// src/main.vel — the mounted entrypoint; no test imports this file
+import {App} from "./app.vel"
+
+mount(<App />, "#app")
+```
+
+Components, functions, and types live in `src/app.vel` and its neighbours;
+`src/app.test.vel` imports those exports and tests them headlessly, and
+`src/app.browser.test.vel` drives the mounted application in a browser.
+
 ## The traps your reflexes will hit
 
 Everything in this table was hit by real models writing Vel blind. All but
@@ -359,12 +437,24 @@ component TicketPanel(id: string):
     action save() -> null:
         await saveDraft(id, draft)
 
+    watch id:
+        async ticket.reload()
+
     return <section>
         <h2>{heading()}</h2>
         <textarea bind:value={draft}></textarea>
         <button disabled={save.pending} on:click={save}>Save</button>
     </section>
 ```
+
+**A resource loads once, at mount, and does not refetch when its inputs
+change** — a new `id` prop leaves the old data on screen. "Refetch when the
+input changes" is the `watch` above: watch the input, and start `reload()` with
+the detached `async` statement, because a watch body is synchronous. `reload()`
+re-evaluates the initializer against the current inputs, keeps the last value if
+it fails, and puts the failure in `error`. Actions do not queue either: two
+clicks run two calls, `pending` means any call is active, so guard with
+`disabled={save.pending}`.
 
 Conditional rendering is an ordinary expression — there are no magic JSX
 control-flow attributes:
@@ -425,8 +515,40 @@ const payload = Payload.parse(load())
 print(payload.id)
 ```
 
-2. **Quick raw access** — `import js unsafe` admits the value as `any`;
-   validate it with `Type.parse` at the edge before it touches typed code.
+An `extern module` block governs only the file that contains it, so **declare it
+once in an adapter module** and re-export a checked surface. Do not paste extern
+blocks across consumers:
+
+```velar
+extern module "text-tools":
+    export def format(value: string) -> string
+
+    export class Formatter:
+        constructor(prefix: string)
+        def format(value: number) -> string
+
+import js {Formatter, format} from "text-tools"
+
+export const formatText = format
+export type TextFormatter = Formatter
+
+export def formatter(prefix: string) -> Formatter:
+    return Formatter(prefix)
+```
+
+Consumers then write ordinary Vel — `import {TextFormatter, formatText,
+formatter} from "./text-tools.vel"` — and every call, construction, and
+annotation is checked. A function export re-exports directly as a value; a class
+needs a factory `def` (a class name is not a value) plus an exported `type`
+alias so consumers can annotate. Validate anything declared `-> unknown` inside
+the adapter, so only checked types leave it.
+
+2. **Quick raw access** — `import js unsafe` admits the value as `any`.
+   Operations on an `any` are raw JavaScript with no runtime check anywhere: it
+   is assignable to every type without validation, and an `any` holding
+   `undefined` even answers `false` to `== null`. The import statement is the
+   only correctness boundary — validate with `Type.parse` there, before the
+   value touches typed code.
 3. **Styling beyond Look** — `import css unsafe "./file.css" before look`
    (or `after look`); trusted markup renders through `unsafe:html`.
 4. **A suspected compiler defect blocking you** — build a minimal repro,

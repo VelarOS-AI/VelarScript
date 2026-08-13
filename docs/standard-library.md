@@ -80,10 +80,13 @@ installable library, even when it is implemented entirely in VelarScript.
   ambient constructor/prototype or class `Symbol.hasInstance` replacement without conflating validation
   execution with registry identity.
 - Core conversion is deliberately asymmetric and small: `str(value)` performs
-  explicit display conversion, while `number(text) -> number?` strictly parses
-  one complete finite decimal. JavaScript `Boolean`, `Number`, and `String`
-  globals are not source bindings, so truthiness, empty-string-to-zero, partial
-  parsing, and `NaN` do not re-enter through ambient coercion.
+  explicit display conversion, while `number(text) -> number?` parses one
+  complete finite decimal after trimming surrounding whitespace and answers
+  `null` for everything else — a partial parse, a radix form, a digit separator,
+  `"Infinity"`, or an overflow. The charter's section 7 states the exact
+  grammar. JavaScript `Boolean`, `Number`, and `String` globals are not source
+  bindings, so truthiness, empty-string-to-zero, partial parsing, and `NaN` do
+  not re-enter through ambient coercion.
 - Core Node builds copy only imported official modules beside the generated
   output. Portable modules also bundle and tree-shake in Web builds. Local
   platform modules (`velar/serve`, `velar/fs`, `velar/env`, `velar/host`,
@@ -301,6 +304,15 @@ operation or an invalid random result fails explicitly.
 | `clone` | Strictly JSON-clones a value and optionally validates the result with a VelarScript `type`. |
 | `isSerializable` | Reports whether a value is losslessly representable as JSON data. |
 | `deepEqual` | Recursively compares VelarScript records and Lists, Map values with native key identity, and Sets with native membership; non-data objects keep reference identity and distinct cycles safely compare false. |
+
+`deepEqual` is the JSON-shaped comparison and shares this module's boundary: it
+accepts any value, compares a non-data object such as a class instance by
+reference, and answers `false` for distinct cycles. The prelude `equals(a, b)`
+(charter section 4) is the general companion to `==` and is stricter by design:
+it needs no import, requires its operands to intersect statically, rejects class
+instances, functions, Promises, and unvalidated `unknown`/`any` at compile time,
+and throws on a cycle. Reach for `equals` when comparing application data and
+for `deepEqual` when comparing values that came through a JSON boundary.
 
 Strict JSON is a compiler-owned runtime shared by Core and platform consumers.
 It captures parsing/serialization, Array/Set traversal, reflection and data

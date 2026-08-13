@@ -111,6 +111,31 @@ const urgent = tasks
     .map(task => task.title)
 ```
 
+Inside brackets the newline is not a statement boundary at all. While `(`,
+`[`, or `{` is open — a call's arguments, a parenthesized expression, a List, a
+record, and the `{...}` of a JSX interpolation — line breaks and indentation are
+insignificant, exactly as in JavaScript and Python, so a long expression wraps by
+opening a bracket. A type argument list is not a bracket context: `Map<K, V>`
+stays on one line.
+
+```velar fragment
+const total = (
+    basePrice
+    + shipping
+    - discount
+)
+const rows = [
+    {label: "open", count: 3},
+    {label: "done", count: 7},
+]
+```
+
+Those two rules are the whole story: leading `.`/`?.` continues a statement,
+and an open bracket suspends the line rule until it closes. A bare operator at
+the end of a line does not continue anything — `const total = basePrice +`
+ends the statement after `+` and is reported there, so wrap the expression in
+parentheses instead of trailing the operator.
+
 A statement exists to do something. An expression statement is therefore
 restricted to the shapes that can: a call, an assignment, `await`, and the
 detached `async` statement. A statement whose whole content is a value —
@@ -356,10 +381,13 @@ The fallback is checked only for the null path and receives the expected result
 type. This keeps direct fallbacks such as `names ?? []`, `scores ?? Map()`, and
 `callback ?? (value => value)` fully typed without extra annotations.
 
-Logical operators are `and`, `or`, and `not`. They require checked boolean or
-optional conditions; they are not general value-selection operators. `and` and
-`or` short-circuit in source order. The right side receives facts established
-by the path that reaches it, so `user and user.active` and
+Logical operators are `and`, `or`, and `not`. Their operands are `bool` or
+`bool?` — an absent `bool?` behaves as `false` — and they are not general
+value-selection operators: an operand of any other optional type is rejected,
+because a condition judges truth rather than presence (section 9). `and` and
+`or` short-circuit in source order, and the right side receives the facts
+established by the path that reaches it, so an explicit presence test narrows
+for the rest of the expression: `user != null and user.active` and
 `user == null or not user.active` need no optional-access workaround.
 
 `??` never shares one bare chain with `and` or `or`: the two possible
@@ -503,6 +531,44 @@ source uses `value not in collection` and `value is not Type`. An `is` target
 is always a concrete runtime type; `null` is a value, so a null test is
 spelled `== null` or `!= null`, and the removed `is null` / `is not null`
 spellings receive guidance to the equality form.
+
+### Precedence and associativity
+
+This is the complete table, loosest binding first. Nothing else participates:
+assignment is a statement rather than an expression, and there are no bitwise
+or comma operators to place.
+
+| Level | Operators | Associativity and notes |
+| --- | --- | --- |
+| 1 | `=>` | The arrow body extends as far as it can; a multi-statement body needs a named `def`. |
+| 2 | `?:` | Right-nesting, so `a ? b : c ? d : e` groups as `a ? b : (c ? d : e)`. As an operand of any binary operator it must be parenthesized. |
+| 3 | `??` | Left to right. Never shares a bare chain with `and`/`or`. |
+| 4 | `or` | Left to right, short-circuit. |
+| 5 | `and` | Left to right, short-circuit. |
+| 6 | `== != < <= > >=`, `is`, `in` | The comparison layer. `<`/`<=` chain with each other and `>`/`>=` chain with each other; `==`/`!=` never chain, and a mixed-direction chain is rejected. `is` and `in` are not chain links: inside another comparison they must be parenthesized. |
+| 7 | `+ -` (binary) | Left to right. |
+| 8 | `* / %` | Left to right. `%` keeps JavaScript's sign, so `-3 % 2` is `-1`. |
+| 9 | `not`, unary `+ -` | Binds *looser* than `**`. |
+| 10 | `**` | Right to left, so `2 ** 3 ** 2` is `512`. |
+| 11 | `await` | Prefix, tighter than every operator above. |
+| 12 | `()`, `.`, `?.`, `[]` | Postfix, left to right; the tightest level. |
+
+Two rows have consequences worth stating outright.
+
+Unary minus is looser than `**`, so `-2 ** 2` is `-4` — Python's grouping,
+`-(2 ** 2)`. Write `(-2) ** 2` for `4`.
+
+Member access is tighter than unary minus, so `-2.abs()` is `-2`: the method
+runs on `2` and the sign applies to the result. Write `(-2).abs()` for `2`.
+Member access on a number literal needs no ceremony either — `1.abs()`,
+`1 .abs()`, and `(1).abs()` are all legal and all mean the same thing, because
+`1.` is not a number literal in this language (section 3) and therefore cannot
+swallow the dot.
+
+`//` is always a comment, in every position. There is no floor-division
+operator, and `7 // 2` is not a mistake the compiler can see: the comment
+starts at `//`, the statement before it is already complete, and the value is
+`7`. Floor division is `(a / b).floor()`.
 
 ## 5. Core types
 
@@ -960,6 +1026,13 @@ const doubled = values.map(value => value * 2)
 const load = async id => await fetchUser(id)
 ```
 
+An arrow body is one expression. After `=>`, `{` opens a **record**, never a
+block — `() => {id: "a"}` is a record factory and `() => {}` builds an empty
+record. There is no braced arrow body in this language, so a callback that needs
+two statements becomes a named `def` and is passed by name. A function that
+should do nothing is `() => null`; an empty record where a `null` result is
+expected is reported rather than silently accepted.
+
 ### Checked value methods
 
 Everyday string and number operations use the same dot-method surface as
@@ -980,14 +1053,40 @@ String members are:
 | `index(text, start=0)` | First code-point position at or after `start`, or `null`; negative starts count from the end and out-of-range starts clamp. |
 | `count(text)` | Non-overlapping occurrence count; an empty search has `size + 1` positions. |
 | `split(separator)` | `List<string>`. An empty separator splits per Unicode code point, so `"a😀b".split("")` is `["a", "😀", "b"]` — the character-list spelling; `"".split("")` is `[]`. |
-| `replace(from, to)`, `replaceAll(from, to)` | Replaced string. |
+| `replace(from, to)` | The **first** occurrence of `from` replaced by `to`. |
+| `replaceAll(from, to)` | Every occurrence replaced. |
 | `padStart(size, fill=" ")`, `padEnd(size, fill=" ")` | Padded string. |
 | `repeat(count)` | Repeated string. |
+
+`replace` and `replaceAll` follow JavaScript here, not Python: `replace` stops
+after one hit, so `"a-b-a".replace("a", "z")` is `"z-b-a"` while
+`replaceAll` gives `"z-b-z"`. Both search for literal text and insert literal
+text — `$&`, `$1`, and the other JavaScript replacement patterns are ordinary
+characters in `to`.
 
 `"ad" in title` is the operator form of substring membership and follows the
 same left-then-right evaluation order as collection membership. Direct string
 indexing is intentionally absent; use `text.char(index)` when absence is an
 expected result.
+
+A `string` is a sequence of Unicode code points, and the value space is the
+whole one JavaScript admits: any code point, including `U+0000`, and including
+an unpaired surrogate that arrives from a JavaScript boundary. `size`,
+iteration, `split("")`, `slice`, and every other member count a valid surrogate
+pair as one character and an unpaired half as one character; no member fails on
+such a value. Source literals stay narrower than the value space on purpose:
+`\u{D800}`–`\u{DFFF}` are rejected (section 3), so a lone surrogate can only
+enter a program across a JavaScript boundary, never from Velar text.
+
+Case-insensitive comparison is spelled `a.lower() == b.lower()`, and that is an
+approximation rather than Unicode case folding: `"STRASSE".lower()` is
+`"strasse"` while `"straße".lower()` is unchanged, so the two do not compare
+equal. `lower()` and `upper()` may also change a string's length —
+`"İ".lower()` is two code points. Full case folding and locale-aware collation
+are deliberately absent: ordering is code-point order everywhere (section 4),
+never a language-sensitive collation, so a user-facing alphabetical order for a
+specific language is an application concern and crosses a JavaScript boundary
+explicitly.
 
 Number members are `abs()`, `round()`, `floor()`, `ceil()`,
 `toFixed(digits) -> string`, and the three predicates
@@ -1001,6 +1100,27 @@ spelling. Conversion still has one spelling: use
 text-conversion contract — values outside strings, numbers, bools, enums, and
 `null` (with their optionals and unions) are rejected, and data is formatted
 explicitly.
+
+Number text is JavaScript's number text, which is what a reader of the emitted
+program sees. `str(-0)` is `"0"`, `str(1e21)` is `"1e+21"` (the exponent form
+takes over at 1e21 and below 1e-6), `str(0.1 + 0.2)` is
+`"0.30000000000000004"`, and `str(1 / 0)` and `str(0 / 0)` are `"Infinity"` and
+`"NaN"`. Fixed decimal places are `value.toFixed(digits)`.
+
+The one inbound conversion is the prelude function `number(text) -> number?`,
+and its grammar is closed. The text is trimmed first — leading and trailing
+whitespace, including newlines and tabs, is ignored — and what remains must be
+one complete decimal number: an optional `+` or `-`, then digits with an
+optional fractional part (`42`, `4.`, `.5`, `4.5`), then an optional `e`/`E`
+exponent with an optional sign. Anything else answers `null` rather than
+throwing or guessing: an empty or blank string, a partial parse (`"12ab"`), a
+digit separator (`"1_000"`), a radix form (`"0x10"`), the words `"Infinity"`
+and `"NaN"`, and a value that overflows to infinity (`"1e999"`). A non-string
+argument is a compile error, or a `TypeError` when it arrives as `any`. The
+accepted grammar is deliberately wider than the source literal grammar in one
+place — `"4."` and `".5"` parse even though `4.` and `.5` are rejected as
+literals — because the input is data from outside the program, not source a
+person wrote.
 
 Every string and number method above returns a new value and never modifies
 its receiver. An expression statement that calls one and discards the result
@@ -1273,6 +1393,57 @@ replaceable iterator. Direct `await` remains valid in any part of an async List
 expression and does not cause non-awaited Promise values in other items to be
 adopted accidentally.
 
+### Iteration order
+
+Order is insertion order, everywhere. A `List` visits positions `0` upward; a
+`Set`, `Map`, and `Record` visit their members, keys, and fields in the order
+they were first added. Replacing the value at an existing key keeps that key's
+position, so `scores.set("a", 9)` on an existing `"a"` does not move it.
+Removing a key and adding it again does move it to the end — the second `add`
+or `set` is a first insertion for a key that no longer existed.
+
+`Record` has one exception, inherited from the JavaScript object it is: keys
+that spell a non-negative integer come first, in ascending numeric order,
+ahead of every other key. `{"2": …, "1": …, "b": …, "a": …}` therefore iterates
+`1`, `2`, `b`, `a`, and a JSON object keyed by numeric IDs is silently
+reordered by every `for`, `keys()`, and re-serialization. When the order of
+such keys carries meaning, hold them in a `Map` instead — `Map(record)` and
+`Map(entries)` both keep true insertion order for keys of any spelling:
+
+```velar fragment
+const byId: Record<string> = {"2": "second", "1": "first"}
+const ordered = Map([["2", "second"], ["1", "first"]])
+```
+
+### Mutation during iteration
+
+Mutating a collection while a `for` loop walks it is legal and each family has
+one stated contract. It is still worth avoiding in new code — iterate a `copy()`
+or build a new collection when the body must add and remove — but the behavior
+is defined rather than accidental.
+
+- **List** — the loop is index-live. It re-reads the size and the element at
+  the current position on every step, so a value appended during the loop is
+  visited, and removing a value shifts the tail left and skips the element that
+  moved into the current position. `for value in values: values.append(value)`
+  therefore runs until the 1,000,000-item ceiling fails the append, exactly as
+  the same loop diverges in JavaScript and Python.
+- **Set and Map** — the loop holds a live native iterator. A member or key
+  added during the loop is visited; one removed before the loop reaches it is
+  skipped. A `Map`'s two-slot `for` reads each value at the moment its key is
+  visited.
+- **Record** — the loop takes a snapshot of the field names when it starts, so
+  a field added during the loop is never visited. A field removed before it is
+  reached is skipped by the two-slot form; the one-slot form still yields that
+  name, and reading it answers `null` like any other absent key.
+
+A JavaScript boundary is not a special case: a foreign function that grows a
+`List` while a Velar loop is walking it extends that loop, and one that
+shortens the List ends the loop early and silently, because the size is read
+per step. Replacing an element with a hole or an accessor is the one foreign
+change that fails instead: the per-element check refuses it rather than reading
+an invented value.
+
 ## 9. Control flow
 
 ### If
@@ -1285,6 +1456,14 @@ else if score >= 80:
 else:
     grade = "C"
 ```
+
+A condition judges truth, not presence. `if`, `else if`, `while`, `assert`, the
+`?:` test, and the operands of `and`/`or`/`not` accept `bool` and `bool?`, where
+an absent `bool?` is `false`. Every other type is rejected, including optionals:
+JavaScript truthiness would make `0`, `""`, and an empty collection take the
+`else` branch, so a presence test is written `value != null` and an emptiness
+test is written `values.size == 0`. The diagnostic names the explicit form for
+the value's type.
 
 Inline conditions use the JavaScript-shaped `condition ? then : else` form.
 Python's sentence-like inline `x if condition else y` form is not used.
@@ -1657,6 +1836,30 @@ file is one instance, so two import spellings that name the same file (a
 casing variant on a case-insensitive filesystem, a path through a link) are
 rejected rather than silently instantiating the module twice.
 
+Initialization follows the ES modules the program compiles to, and the rules
+are worth stating because one of them surprises Python readers. Every module
+initializes at most once per program, however many modules import it: a diamond
+does not run its shared dependency twice, and a module reached both statically
+and dynamically is still one instance. A module's dependencies are fully
+initialized before its own first statement runs, in the textual order of its
+import declarations. Import declarations are hoisted above every other
+statement in the file, so a statement written *above* an import still runs
+*after* that dependency has initialized — if `./dependency.vel` prints
+`"first"`, this module prints `"second"` and `"third"` after it:
+
+```velar fragment
+print("second")
+import {name} from "./dependency.vel"
+
+print(f"third: {name}")
+```
+
+The formatter keeps imports where they are written, so a mid-file import is
+legal and its position never changes what runs first. Write imports at the top
+of the file so the reading order matches the running order. A top-level `await`
+suspends only its own module's completion: the modules that import it wait for
+it, and unrelated modules continue to initialize.
+
 Relative `.vel` modules and package exports are supported. Project modules are
 checked as one dependency graph. A function or value may carry the shape of an
 unexported or unimported record across that graph, so its fields remain checked,
@@ -1674,6 +1877,12 @@ carries a name, `export default` is rejected with that answer, and a default
 import from a `.vel` module is answered the same way (`import js Name from
 "pkg"` remains the JavaScript-bridge spelling for a package's `default`
 export).
+
+An unused import is not an error and produces no warning. The language has no
+warning level, so an error on a name the author is about to use would shout in
+the middle of an edit; a future `velar fix` removes them mechanically instead.
+The import still runs the module, so a module imported only for its
+initialization side effects behaves exactly as written.
 
 An imported name is read-only in the receiving module, but an `export let`
 remains a live ES-module value: the exporting module can reassign it between
@@ -1695,6 +1904,44 @@ export {renderMarkdown, highlightFence as highlight} from "./markdown.vel"
 
 Different modules may use the same record display name; their field metadata is
 kept separate until ordinary structural assignability is checked.
+
+### Dynamic import
+
+`import(path)` loads a module on demand and answers a Promise of that module's
+namespace:
+
+```velar fragment
+const reports = await import("./reports.vel")
+
+print(reports.title)
+```
+
+The path is a literal relative `.vel` path — never a package name, a `velar/*`
+module, or a computed string — because the module graph must stay decidable at
+compile time. A path that does not resolve is a compile error with the nearby
+name suggested, not a runtime surprise. The result is the module's checked interface rather than a dynamic
+object: `reports.title` has the exported binding's type, and reading a name the
+module does not export is a compile error.
+
+Failure is ordinary and catchable. A dynamically imported module that throws
+while initializing rejects the Promise with that error, so a `try`/`catch`
+around the `await` owns it:
+
+```velar fragment
+try:
+    const plugin = await import("./plugin.vel")
+    plugin.install()
+catch error:
+    print(f"plugin unavailable: {error.message}")
+```
+
+Caching is the module graph's, and it is deterministic: the first load
+initializes the module, every later `import(...)` of the same path answers the
+same already-initialized namespace, and a module reached statically elsewhere is
+not initialized a second time by a dynamic import. An initialization failure is
+remembered the same way: a module whose body threw answers every later import of
+that path with the same error instead of running its body again, so re-importing
+is not a way to retry the module itself.
 
 Enum singleton identities follow the declaring enum through named imports,
 renamed imports, re-exports, and aliases. Renaming `EventKind` to `Kind` changes
@@ -1739,6 +1986,41 @@ class field. Values that are not already guaranteed by their package should
 enter as `unknown` and be validated explicitly with the application's runtime
 `Type`.
 
+### What `any` means
+
+A value imported with `import js unsafe` has the type `any`, and `any` is the
+one place in the language where the compiler makes no promise. Its operational
+model is three sentences, and every one of them matters:
+
+1. **Operations on `any` are raw JavaScript.** Member reads and writes, calls,
+   arithmetic, indexing, `match`, and `is` all pass through to the host with
+   JavaScript's own semantics and no adaptation. In particular the
+   `undefined`-to-`null` normalization every checked type receives does not
+   happen, and that breaks the language's one null test: an `any` holding
+   `undefined` answers `false` to `== null` and `true` to `!= null`, so a
+   missing value reads as present. Assigning it into a checked optional
+   normalizes it — after `const value: string? = raw`, `value == null` is
+   `true` — which is one more reason the annotation belongs at the boundary.
+   Four operations are refused outright rather than passed through. An f-string
+   and `str()` reject `any`, because JavaScript coercion would invent text by
+   running foreign hooks. A condition rejects it, because JavaScript truthiness
+   would send `0` and `""` down the `else` branch while section 9 judges `bool`.
+   And `await` rejects it, because an unchecked thenable runs foreign hooks and
+   can resolve to raw `undefined`.
+2. **`any` is assignable to every type, with no runtime check.** `const label:
+   string = someAny` compiles and does nothing at run time. Nothing verifies the
+   value; the annotation is simply believed. Validation happens only at the
+   operations that already validate — `Type.parse`, `Type.is`, a checked
+   collection operation, a `match` pattern — so a leaked `any` is laundered into
+   a type that then behaves like a lie. That is how a compile error the language
+   otherwise guarantees comes back: after that assignment, `label + "!"` produces
+   `"[object Object]!"`, the exact implicit conversion section 5 exists to
+   reject.
+3. **Therefore the import site is the only correctness boundary.** Validate at
+   the edge — `Config.parse(legacyValue)` — and let only checked values inward.
+   An `any` that travels further into the program takes the compiler's
+   guarantees with it wherever it stops.
+
 ## 13. Web extension boundary
 
 Core does not contain JSX, components, reactivity, lifecycle, or styling.
@@ -1747,18 +2029,23 @@ Component JSX follows JavaScript evaluation order: props evaluate from left to
 right, then JSX children, then the component function. Native JSX remains an
 owned DOM construction rather than a hidden Core-language operation.
 
-The source package then exposes the following language extension:
+The source package then exposes the following language extension. This list is
+the complete addition — twelve keywords, three reserved global functions, and
+the unit literals; nothing else in a Web module is new syntax:
 
-- `component`
-- JSX expressions
+- `component`, with `exposes` on its declaration and `expose` in its body
+- JSX expressions, including fragments and the `host` marker
 - `state`
-- the global `computed(() => value)` derived-cache function
 - `resource`
 - `action`
 - `watch`
 - `mounted`
 - `cleanup`
 - `look`
+- `keyframes`
+- `import css unsafe "./file.css" before|after look`
+- the reserved globals `computed(() => value)`, `mount(node, target)`, and
+  `tick()`
 - unit literals such as `12px`, `1rem`, and `200ms`
 
 This keeps the compiler independently usable for Core libraries while making
@@ -1914,6 +2201,7 @@ Magic JSX `if`, `else-if`, and `else` attributes are not part of the language.
 Important native directives include:
 
 - `on:click={handler}` and other typed events; a handler returns `null`
+- `class:name={condition}` to add or remove one class name as a `bool` changes
 - `bind:value={state}` for supported form controls, and `bind:checked={flag}`
   for a single checkbox
 - `bind:group={choice}` on `<input type="radio">`, where the state holds the
@@ -1945,6 +2233,44 @@ path. A list rendered with `.map(...)` in that position requires a key on its
 root element, and a `key` anywhere else — inside an interpolation or on an
 element in a fixed position — is a diagnostic rather than a silently ignored
 attribute.
+
+An event directive may carry modifiers, appended with dots:
+`on:click.prevent.stop={submit}`. There are exactly five, and no others are
+accepted: `prevent` calls `preventDefault`, `stop` calls `stopPropagation`,
+`self` ignores the event unless this element is its target, `capture` listens
+during the capture phase, and `once` removes the listener after one dispatch.
+They apply in that order — `self` filters first, then `prevent`, then `stop`,
+then the handler runs — and a modifier cannot be repeated. `self` is how a
+handler asks the question the missing `event.target` would have answered.
+
+A component may return a fragment, `<>...</>`, when its markup has several
+roots and no wrapper element belongs in the DOM. A fragment has no attributes
+of its own, so a multi-root component must mark exactly one native element with
+the valueless `host` directive:
+
+```velar fragment
+component Field(label: string, value: string):
+    return <>
+        <label>{label}</label>
+        <input host value={value} />
+    </>
+```
+
+`host` names the element that receives what an invocation attaches to the
+component: `class`, `class:*`, `look`, `look:*`, and `style:*`. A component
+whose root is a single native element or another component needs no marker —
+that root is the host, and a component root forwards to its own host in turn.
+Two `host` markers in one component, a `host` with a value, and a multi-root
+component with no marker are each a compile error.
+
+JSX text is normalized the way a reader expects markup to behave: every run of
+whitespace inside a text child becomes one space, and whitespace that only
+exists because the source wrapped across lines disappears — a text run that
+begins at a line break loses its leading whitespace, and one that ends at a
+line break loses its trailing whitespace. A space that shares a line with
+content survives as one space, so `<b>bold</b> <i>italic</i>` keeps the space
+between the words while indented markup adds none. A text child that
+normalizes to nothing creates no text node.
 
 `<` begins JSX only where a value can begin. The decision is made from the
 preceding token, and the positions are: the start of a module, after a newline
@@ -2071,6 +2397,36 @@ operations are captured when the generated Web module initializes, so later
 ambient replacement cannot redirect a load or make its managed start escape
 synchronously.
 
+A resource loads exactly when its component mounts, and it is not a formula
+over its inputs. The initializer is a load, not a dependency: when a prop or
+state the initializer reads changes, **the resource does not reload**. The
+existing value stays on screen and `loading` never turns back on. Reloading is
+an explicit call — `reload()` re-evaluates the initializer against the inputs it
+reads *now* and answers a Promise of `null` — so "refetch when the input
+changes" is spelled by saying so:
+
+```velar fragment
+export component Profile(userId: string):
+    resource profile: User = loadUser(userId)
+
+    watch userId:
+        async profile.reload()
+
+    return <p>{profile.value?.name ?? "Loading…"}</p>
+```
+
+A watch body is synchronous, so the reload is started with the detached `async`
+statement rather than awaited; its failure still reports through the resource's
+own `error` field and the Web error chain.
+
+Each load supersedes the one before it: a result that arrives after a newer
+reload started is discarded, and so is one that arrives after the component is
+destroyed. A failed load keeps the last successful `value` — a reload that fails
+does not blank the screen — and publishes the failure in `error` while `ready`
+becomes `true` and `loading` becomes `false`. The same failure is reported
+through the Web error chain under phase `resource` with the resource's declared
+name as its detail. A successful reload clears `error` at the moment it starts.
+
 An action is an async UI operation with reactive `pending` and `error` fields.
 It reports the failure through the Web error chain and still rejects its call;
 errors are never silently converted into successful `null` results. Use
@@ -2083,13 +2439,37 @@ destruction. Component actions use the same initialization-owned async host;
 after destruction, a call rejects with an owned `Error` instead of starting
 application work.
 
-`watch expression as current, previous:` runs an explicit side effect when the
-tracked value changes. A watch body is synchronous. Async component work belongs
-in an `action`; lifecycle setup that must wait belongs in `mounted`.
+Actions do not serialize their calls. A second click starts a second run while
+the first is still in flight — there is no implicit queue, drop, or debounce —
+so `pending` means *some* call is active and turns `false` only when the last
+one settles. `error` belongs to the newest call: it clears when a call starts
+and is written only by that generation, while an older failure that a newer call
+superseded is still reported through the error chain exactly once. When
+overlapping runs are wrong for the operation, guard it in the application —
+`if not save.pending:` — or disable the control with `disabled={save.pending}`.
+
+`computed` accepts a synchronous function, but "synchronous" is the only
+requirement: a `computed` callback may write state, and the write publishes
+normally. The compiler does not enforce purity, and a derived value that also
+mutates is legal — which is why the self-invalidation budget exists. A `computed`
+that invalidates itself is stopped and reported after 100 rounds rather than
+freezing the page. Keep derivations pure anyway; a `computed` that writes is a
+side effect hiding in a cache, and `watch` is the spelling that says so.
+
+`watch expression:` runs an explicit side effect when the tracked value changes,
+and `watch expression as current, previous:` names the new and old values. Both
+names are required when `as` is present, so a body that needs only the new value
+writes `as current, _`. The expression is evaluated immediately to establish the
+dependency and the baseline value; the body does **not** run for that first
+value, only for later changes. A watch body is synchronous. Async component work
+belongs in an `action`; lifecycle setup that must wait belongs in `mounted`.
 For a deep mutation, `current` and `previous` are the same reference; a watch
 does not manufacture an unbounded deep snapshot. Inspect the fields needed by
 the side effect, or store an explicit snapshot when the application requires
-one.
+one. A component watch is disposed with its component. A module-scope watch is
+never disposed — it lives for the life of the page, like a module `action` — so
+a module watch is for application-wide facts, not for anything a component
+owns.
 
 ## 16. Lifecycle
 
@@ -2115,6 +2495,25 @@ ordering and disposes watches, resources, actions, events, refs, and DOM work
 with the component.
 
 There is no public React-style `effect` API.
+
+Two entry points belong to the application rather than to a component, and both
+are reserved Web names that a local binding cannot shadow:
+
+`mount(node, target)` attaches one root to the document and returns `null`. The
+target is a CSS selector string or an element. The root is constructed
+synchronously so the runtime can own its failure as one transaction — a direct
+`await` inside the argument is rejected, so module-level preload work is awaited
+into a binding first. Failure never leaves a blank page: a setup throw, a
+dynamic region that throws while it is first built, and a missing target all
+report through `velar/app` and render an accessible fatal state instead. One
+component instance mounts exactly once; a repeated mount fails explicitly rather
+than moving DOM silently.
+
+`tick()` answers `Promise<null>` that resolves after the pending reactive flush
+has settled, which is how a test observes the DOM that a state write produces.
+It is also the point where an unowned failure surfaces: if the flush reported a
+failure that no handler claimed, `tick()` rejects with it, so awaiting `tick()`
+cannot step over a broken update.
 
 ## 17. Look: controlled visual language
 
@@ -2182,7 +2581,7 @@ The module provides a small checked builder set:
 - colors: `color`, `rgb`, `rgba`, `hsl`, `alpha`, `lighten`, `darken`
 - visuals: `border`, `shadow`, `linearGradient`, `asset`
 - layout: `minmax`, `repeat`, `tracks`, `spacing`, `min`, `max`, `clamp`
-- motion: `transition`
+- motion: `transition`, `animate`
 
 Named arguments work normally:
 
@@ -2346,6 +2745,21 @@ export const primaryControlLook = look:
 Later declarations in the composed result follow normal CSS cascade order.
 Duplicate properties in the same Look scope are reported instead of hidden.
 
+Composition crosses a component boundary in one direction. A `look` written on
+a component invocation composes *after* the look the component applies to its
+own host, so the caller wins every property both of them set, and every property
+only one of them sets survives. That is what makes a component's visual defaults
+overridable without the component declaring a prop for each one; a component
+that must not be restyled that way keeps the look on an inner element instead of
+its host.
+
+A Look value is an ordinary value with reference identity, so `==` on two Looks
+asks whether they are the same value, never whether they describe the same
+declarations. Two separately written `look:` literals with identical bodies are
+not equal — they do compile to one shared generated rule, but that is output
+deduplication, not value equality. Compare the inputs that produced a Look, or
+choose between named Looks, rather than comparing Look values.
+
 ### Conditions, hooks, and targets
 
 Ordinary conditions use `if`, `else if`, `else`, `and`, `or`, and `not`.
@@ -2388,8 +2802,30 @@ Pseudo-element targets also use `@` but own a block:
 `@before`, `@after`, `@backdrop`, `@placeholder`, `@selection`, `@marker`, and
 `@fileSelectorButton`.
 
-Targets cannot be nested. Conditions may appear inside a target, but a target
-cannot appear inside another target.
+Targets cannot be nested. Conditions may appear inside a target, and a target
+may appear inside a condition — both directions are legal and mean what they
+read as — but a target cannot appear inside another target.
+
+```velar fragment
+const badgeLook = look:
+    @before:
+        content = "•"
+
+        if @hover:
+            content = "▸"
+
+    if viewport.width <= 720px:
+        @after:
+            content = ""
+```
+
+`content` is text, and Look writes it as text: a string value is emitted as a
+CSS string, so `content = "•"` produces `content: "•"` and needs no quoting of
+its own. The two bare keywords `none` and `normal` pass through unquoted. Every
+other CSS `content` form — `attr(...)`, `counter(...)`, `url(...)`,
+`open-quote` — is therefore outside checked Look: written as a string it becomes
+literal text, and generated-content counters have no Look spelling at all.
+Reach those through a module-level `import css unsafe`.
 
 A `look:` literal is built once, where it is written: its conditions become CSS
 selectors and media queries, and its values are read at construction. A
@@ -2401,10 +2837,11 @@ live on the element, where the whole attribute is re-read on change:
 subjects, and their combinations remain live in a literal because they are CSS
 conditions rather than program values.
 
-Look has no animation vocabulary. `@keyframes` cannot be written in Look, so
-`animation` and `animationName` are rejected with the boundary named: load
-keyframes through a module-level `import css unsafe` and reference them from
-that stylesheet, or express state changes with `transition`.
+Motion has two checked spellings and no third. `transition` describes a state
+change. Keyframe motion is a module-level `keyframes:` value passed to
+`animate(...)`, which the `animation` property accepts; the CSS `@keyframes`
+at-rule and the animation longhands are not Look spellings, and a raw CSS
+animation string is rejected. The appendix to this section defines both.
 
 ### Stable output and external overrides
 
@@ -2528,8 +2965,7 @@ reports the direct current spelling. It does not keep the old behavior alive.
 
 ## Appendix to section 17: published Web visual vocabulary
 
-This appendix is the current checked Web contract and supersedes the earlier
-section 17 note that animation had no Look spelling. Look admits a CSS property
+This appendix is the current checked Web contract. Look admits a CSS property
 only when it is standard, not obsolete, and its value model can be described
 honestly by a Look type family. The compiler owns the table below: every one of
 the 225 names has an explicit value kind; there is no fallback to an unchecked
