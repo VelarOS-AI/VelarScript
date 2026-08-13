@@ -2079,6 +2079,30 @@ interpolation braces are a bracket context: the expression inside `{...}`
 continues across physical lines without parentheses, exactly as it would
 inside a call's parentheses.
 
+`velar format` owns the layout of an element that opens and closes on one
+line. Such an element is written on that line while it fits within 120
+columns, and takes the block shape when it does not: the open tag, one child
+per line indented one level, and the closing tag at the element's own
+indentation. Attributes follow the same rule one level down — they stay on the
+open tag until the open tag alone overflows, and then take one line each.
+
+```velar fragment
+component Toolbar(count: number):
+    return <div class="toolbar">
+        <span class="count">{count}</span>
+        <button type="button">Refresh</button>
+    </div>
+```
+
+Two things are never reflowed, because in markup they are content rather than
+layout. Text between children is program text — markup drops a line break with
+its indentation but keeps a written space — so an element whose children
+include text keeps them on one line unless no text child carries a leading or
+trailing space, and text itself is never re-wrapped. And an element the author
+spread across lines keeps that structure, exactly like every other construct
+in the language: the formatter canonicalizes spelling, not the author's line
+breaks. A `{...}` hole is code, and code keeps its line.
+
 Components are first-class constructor values, but they are not ordinary
 functions and they are not rendered `WebNode` values. The Web extension owns a
 structural `Component` type for passing those constructors through props,

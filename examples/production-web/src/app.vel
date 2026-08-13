@@ -48,4 +48,11 @@ const navLinkLook = look:
         background = Look.rgb(40, 53, 111)
 
 export component App:
-    return <div class="shell" look={shellLook}><nav look={navLook} data-release-primary aria-label="Application pages"><NavLink to="/" exact={true} look={navLinkLook}>Home</NavLink><NavLink to="/about" exact={true} look={navLinkLook}>About</NavLink><NavLink to="/construction-failure" exact={true} look={navLinkLook}>Failure probe</NavLink></nav><Router routes={routes} fallback={RouteNotFound} /></div>
+    return <div class="shell" look={shellLook}>
+        <nav look={navLook} data-release-primary aria-label="Application pages">
+            <NavLink to="/" exact={true} look={navLinkLook}>Home</NavLink>
+            <NavLink to="/about" exact={true} look={navLinkLook}>About</NavLink>
+            <NavLink to="/construction-failure" exact={true} look={navLinkLook}>Failure probe</NavLink>
+        </nav>
+        <Router routes={routes} fallback={RouteNotFound} />
+    </div>

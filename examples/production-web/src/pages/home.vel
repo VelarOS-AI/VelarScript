@@ -77,7 +77,13 @@ component AnimationToggle():
         active = not active
 
     return <button data-animation-toggle aria-label="Toggle animation probe" look={animationToggleLook} on:click={toggle}>
-        <span data-animation-toggle-probe aria-hidden="true" look:animation={active ? Look.animate(probeSpin, 2s, easing="linear", loop=true) : null}>↻</span>
+        <span
+            data-animation-toggle-probe
+            aria-hidden="true"
+            look:animation={active ? Look.animate(probeSpin, 2s, easing = "linear", loop = true) : null}
+        >
+            ↻
+        </span>
     </button>
 
 def themeButtonLook(active: bool) -> Look:
@@ -90,7 +96,14 @@ def themeButtonLook(active: bool) -> Look:
         cursor = "pointer"
 export component Home:
     return <main class="page" look={pageLook}>
-        <Head title="VelarScript Release Studio" description="VelarScript 0.10 Web platform application" canonical={previewConfig.canonicalUrl} robots="index,follow" image={previewConfig.socialImage} themeColor="#0b1020" />
+        <Head
+            title="VelarScript Release Studio"
+            description="VelarScript 0.10 Web platform application"
+            canonical={previewConfig.canonicalUrl}
+            robots="index,follow"
+            image={previewConfig.socialImage}
+            themeColor="#0b1020"
+        />
         <header class="header" look={headerLook}>
             <div>
                 <p class="eyebrow" look={eyebrowLook}>VelarScript 0.10 · Web API 0.10</p>
@@ -100,7 +113,9 @@ export component Home:
                 <span data-animation-probe aria-hidden="true" look={animationProbeLook}></span>
                 <AnimationToggle />
                 <StatusBadge theme={theme} />
-                <button class={dark() ? "active" : null} look={themeButtonLook(dark())} on:click={toggleTheme}>Toggle theme</button>
+                <button class={dark() ? "active" : null} look={themeButtonLook(dark())} on:click={toggleTheme}>
+                    Toggle theme
+                </button>
             </nav>
         </header>
         <Metrics projects={projectCount()} />

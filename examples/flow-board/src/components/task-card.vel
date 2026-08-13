@@ -71,7 +71,18 @@ export component TaskCard(task: Task, onAdvance: TaskIdHandler, onDelete: TaskId
             <time look={timeLook}>{format(task.updatedAt)}</time>
         </div>
         <div class="actions" look={rowLook}>
-            <button class="move" look={actionLook()} data-move-task type="button" on:click={() => onAdvance(task.id)}>{statusAction(task.status)}</button>
-            <button class="delete" look={actionLook(true)} data-delete-task type="button" aria-label={f"Delete {task.title}"} on:click={() => onDelete(task.id)}>Delete</button>
+            <button class="move" look={actionLook()} data-move-task type="button" on:click={() => onAdvance(task.id)}>
+                {statusAction(task.status)}
+            </button>
+            <button
+                class="delete"
+                look={actionLook(true)}
+                data-delete-task
+                type="button"
+                aria-label={f"Delete {task.title}"}
+                on:click={() => onDelete(task.id)}
+            >
+                Delete
+            </button>
         </div>
     </article>

@@ -47,10 +47,17 @@ const linkLook = look:
 export component TicketCard(ticket: Ticket):
     return <article look={cardLook} data-ticket data-ticket-id={ticket.id}>
         <div class="meta" look={rowLook}>
-            <div class="badges" look={badgesLook}><span class="badge" look={badgeLook()}>{ticket.status}</span><span class="badge" look={badgeLook()}>{ticket.priority}</span>{ticket.urgent ? <span class="badge urgent" look={badgeLook(true)}>Urgent</span> : null}</div>
+            <div class="badges" look={badgesLook}>
+                <span class="badge" look={badgeLook()}>{ticket.status}</span>
+                <span class="badge" look={badgeLook()}>{ticket.priority}</span>
+                {ticket.urgent ? <span class="badge urgent" look={badgeLook(true)}>Urgent</span> : null}
+            </div>
             <span class="badge" look={badgeLook()}>{ticket.estimate} min</span>
         </div>
         <h2 look={titleLook} data-ticket-title>{ticket.title}</h2>
         <p look={bodyLook}>{ticket.summary}</p>
-        <div class="footer" look={rowLook}><p look={bodyLook}>{ticket.requester} · <time>{format(ticket.updatedAt, "en-US", "UTC")}</time></p><Link look={linkLook} to={f"/tickets/{ticket.id}"}>View ticket</Link></div>
+        <div class="footer" look={rowLook}>
+            <p look={bodyLook}>{ticket.requester} · <time>{format(ticket.updatedAt, "en-US", "UTC")}</time></p>
+            <Link look={linkLook} to={f"/tickets/{ticket.id}"}>View ticket</Link>
+        </div>
     </article>

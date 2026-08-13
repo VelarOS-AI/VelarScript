@@ -45,6 +45,9 @@ export component BoardColumn(title: string, status: TaskStatus, tasks: List<Task
     const items = computed(() => tasks.filter(task => task.status == status))
 
     return <section class="column" look={columnLook} data-column={status}>
-        <header class="heading" look={headingLook}><h2 look={titleLook}>{title}</h2><span class="count" look={countLook}>{items().size}</span></header>
+        <header class="heading" look={headingLook}>
+            <h2 look={titleLook}>{title}</h2>
+            <span class="count" look={countLook}>{items().size}</span>
+        </header>
         {items().size == 0 ? <p class="empty" look={emptyLook}>No matching tasks</p> : <>{items().map(task => <TaskCard key={task.id} task={task} onAdvance={onAdvance} onDelete={onDelete} />)}</>}
     </section>
