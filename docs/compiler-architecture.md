@@ -1028,7 +1028,7 @@ and browser runtimes and do not define a separate VelarScript memory model.
   cleanup reports a failing independent step and continues the remaining steps.
 - Event and lifecycle callbacks lower through an explicit untracked boundary.
   Mounting or destroying a child while a conditional/keyed observer is active
-  therefore cannot make child-local `mounted`/`cleanup` reads invalidate and
+  therefore cannot make child-local `@mounted`/`@cleanup` reads invalidate and
   reconstruct the parent position.
 - Lazy components cache successful module resolution, retry failed loads,
   replace loading/resolved/error children with deterministic mount and destroy

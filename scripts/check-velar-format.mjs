@@ -14,7 +14,7 @@ const failures = [];
 
 for (const file of files) {
   const source = await readFile(file, "utf8");
-  const webOwned = /(?:^|\n)\s*(?:component|state|resource|action|watch|mounted|cleanup)\b|<[A-Za-z][A-Za-z0-9_.:-]*(?:\s|\/?>)/u.test(source);
+  const webOwned = /(?:^|\n)\s*(?:component|state|resource|action|watch|@mounted|@cleanup)\b|<[A-Za-z][A-Za-z0-9_.:-]*(?:\s|\/?>)/u.test(source);
   if (formatSource(source, { extensions: webOwned ? [webCompilerExtension] : [] }) !== source) failures.push(relative(root, file));
 }
 

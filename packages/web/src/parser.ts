@@ -36,6 +36,7 @@ const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
 const recoveredDiagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan, recovered: true });
 const renderBlockSpellings = new Set(["render", "show", "view"]);
+const lifecycleHookSpellings = new Set(["mounted", "cleanup"]);
 
 export class VelarWebParser extends Parser {
   private insideComponentProps = 0;
@@ -108,6 +109,18 @@ export class VelarWebParser extends Parser {
 
   protected override createNestedParser(tokens: readonly Token[]): Parser {
     return new VelarWebParser(tokens, this.lexicalExtensions);
+  }
+
+  /**
+   * D43 item 67: a component's lifecycle hooks are spelled '@mounted:' and
+   * '@cleanup:'. The '@' marker is what keeps them out of the author's own
+   * namespace, so a hook is only recognized through it.
+   */
+  private matchLifecycleHook(name: string): boolean {
+    if (!this.check("at") || this.peekKind(1) !== "identifier" || this.peekValue(1) !== name) return false;
+    this.advance();
+    this.advance();
+    return true;
   }
 
   protected override validateExtensionTypeArguments(name: string, arguments_: readonly TypeSyntax[], nameSpan: Span): boolean {
@@ -420,12 +433,38 @@ export class VelarWebParser extends Parser {
         item = this.parseActionDeclaration(itemStart, false);
       } else if (this.matchExtensionKeyword("watch")) {
         item = this.parseWatchDeclaration(itemStart);
-      } else if (this.matchExtensionKeyword("mounted")) {
+      } else if (this.matchLifecycleHook("mounted")) {
         const body = this.parseBlock();
         item = { kind: "ExtensionStatement:web:mounted", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
-      } else if (this.matchExtensionKeyword("cleanup")) {
+      } else if (this.matchLifecycleHook("cleanup")) {
         const body = this.parseBlock();
         item = { kind: "ExtensionStatement:web:cleanup", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
+      } else if (this.check("at")) {
+        const marker = this.advance();
+        const name = this.check("identifier") ? this.advance() : null;
+        this.diagnostics.push(diagnostic(
+          "VEL5061",
+          name
+            ? `A component has no '@${name.value}' block; the lifecycle hooks are '@mounted:' and '@cleanup:'`
+            : "'@' marks a lifecycle hook; a component's hooks are '@mounted:' and '@cleanup:'",
+          span(marker.span.start, (name ?? marker).span.end),
+        ));
+        this.skipMistypedDeclaration();
+      } else if (this.check("identifier") && lifecycleHookSpellings.has(this.current().value) && this.peekKind(1) === "colon") {
+        // D43 item 67: the bare words are ordinary names now, so the removed
+        // hook spelling gets its own directed answer instead of falling into
+        // the statement-boundary message. The block still parses as the hook so
+        // its body keeps analyzing in the same compile.
+        const keyword = this.advance();
+        this.diagnostics.push(recoveredDiagnostic(
+          "VEL5061",
+          `Use '@${keyword.value}:'; a lifecycle hook is a language-owned name, which leaves '${keyword.value}' free for your own method`,
+          keyword.span,
+        ));
+        const body = this.parseBlock();
+        item = keyword.value === "mounted"
+          ? { kind: "ExtensionStatement:web:mounted", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) }
+          : { kind: "ExtensionStatement:web:cleanup", body, span: span(itemStart, body.at(-1)?.span.end ?? itemStart) };
       } else if (this.check("identifier") && renderBlockSpellings.has(this.current().value) && this.peekKind(1) === "colon") {
         const keyword = this.advance();
         this.diagnostics.push(diagnostic(

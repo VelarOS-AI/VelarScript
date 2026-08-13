@@ -2042,8 +2042,8 @@ the unit literals; nothing else in a Web module is new syntax:
 - `resource`
 - `action`
 - `watch`
-- `mounted`
-- `cleanup`
+- `@mounted`
+- `@cleanup`
 - `look`
 - `keyframes`
 - `import css unsafe "./file.css" before|after look`
@@ -2143,7 +2143,7 @@ component Dialog(title: string) exposes DialogHandle:
 component Page:
     let dialog: DialogHandle? = null
 
-    mounted:
+    @mounted:
         if dialog != null:
             dialog.open()
 
@@ -2466,7 +2466,7 @@ names are required when `as` is present, so a body that needs only the new value
 writes `as current, _`. The expression is evaluated immediately to establish the
 dependency and the baseline value; the body does **not** run for that first
 value, only for later changes. A watch body is synchronous. Async component work
-belongs in an `action`; lifecycle setup that must wait belongs in `mounted`.
+belongs in an `action`; lifecycle setup that must wait belongs in `@mounted`.
 For a deep mutation, `current` and `previous` are the same reference; a watch
 does not manufacture an unbounded deep snapshot. Inspect the fields needed by
 the side effect, or store an explicit snapshot when the application requires
@@ -2483,18 +2483,18 @@ Lifecycle is component-owned and deliberately small:
 export component CanvasPanel:
     let canvas: CanvasElement? = null
 
-    mounted:
+    @mounted:
         if canvas != null:
             startCanvas(canvas)
 
-    cleanup:
+    @cleanup:
         stopCanvas()
 
     return <canvas ref={canvas}></canvas>
 ```
 
-`mounted` and `cleanup` are sibling blocks. Cleanup is not nested inside
-mounted and is not returned from an effect callback. The Web runtime owns their
+`@mounted` and `@cleanup` are sibling blocks. Cleanup is not nested inside
+`@mounted` and is not returned from an effect callback. The Web runtime owns their
 ordering and disposes watches, resources, actions, events, refs, and DOM work
 with the component.
 

@@ -2639,6 +2639,20 @@ export class Parser {
           }
           return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
         }
+        // D43 item 67: '@name' is the language's own namespace for members that
+        // sit where user names also sit. Outside a declaration body it is not an
+        // expression, so the reader is told what the marker means instead of
+        // receiving a bare 'Expected an expression'.
+        if (token.kind === "at") {
+          const name = this.check("identifier") ? this.advance().value : "";
+          this.diagnostics.push(diagnostic(
+            "VEL2002",
+            `'@${name}' names a language-owned member and appears only inside a declaration body, such as a component's '@mounted:' block`,
+            span(token.span.start, this.previous().span.end),
+          ));
+          this.skipMistypedDeclaration();
+          return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+        }
         this.diagnostics.push(diagnostic("VEL2002", "Expected an expression", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
@@ -3062,6 +3076,10 @@ export class Parser {
 
   protected peekKind(distance: number): TokenKind {
     return this.tokens[this.index + distance]?.kind ?? "eof";
+  }
+
+  protected peekValue(distance: number): string {
+    return this.tokens[this.index + distance]?.value ?? "";
   }
 
   protected advance(): Token {

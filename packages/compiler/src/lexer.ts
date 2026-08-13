@@ -186,6 +186,13 @@ export class Lexer {
         case ",":
           this.simple("comma", start, 1);
           break;
+        // D43 item 67: '@name' marks a name the language owns, in the very
+        // positions where a user's own names also appear — class and component
+        // members. '@' is not an identifier character, so the two namespaces
+        // cannot collide however the surrounding words are softened.
+        case "@":
+          this.simple("at", start, 1);
+          break;
         case ".":
           if (this.isDigit(this.peek(1))) {
             this.readLeadingDotNumber();

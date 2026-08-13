@@ -5,7 +5,7 @@ def failIfLeaked() -> null:
 
 export component ConstructionFailure:
     const stopTimer = every(25ms, failIfLeaked)
-    cleanup:
+    @cleanup:
         stopTimer()
     throw Error("Route construction failed")
     return <main><h1>This route must not replace the current page</h1></main>

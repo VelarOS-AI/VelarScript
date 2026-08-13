@@ -531,11 +531,11 @@ component BuildStatus:
     const buildLog = logger("build")
     const stopCapture = useSink(record => sendRecord(record.message))
 
-    mounted:
+    @mounted:
         setLevel("debug")
         buildLog.info("Compilation ready")
 
-    cleanup:
+    @cleanup:
         stopCapture()
 
     return <p>Ready</p>

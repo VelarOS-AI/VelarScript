@@ -4813,7 +4813,7 @@ test("rejects legacy and discarded design surface with intentional diagnostics",
     ["const value = true || false\n", /Use 'or'.*readable logical/],
     ["const value = !false\n", /Use 'not'.*readable logical/],
     ["effect count:\n    print(count)\n", /internal to @velarscript\/web.*watch.*mounted.*cleanup/],
-    ["onMounted()\n", /component-level 'mounted:'/],
+    ["onMounted()\n", /component-level '@mounted:'/],
   ]);
 
   for (const [source, message] of cases) {
@@ -19895,7 +19895,7 @@ test("documentation example checker analyzes fragments, not just their syntax", 
     ["reserved any annotation", "let value: any = 1\nprint(value)\n", /'any' is reserved for explicit unsafe JavaScript boundaries/u],
     [
       "web semantics",
-      "type EditorHandle:\n    focus: () -> null\n\ncomponent Page:\n    let editor: EditorHandle? = null\n\n    mounted:\n        if editor:\n            editor.focus()\n\n    return <Editor ref={editor} />\n",
+      "type EditorHandle:\n    focus: () -> null\n\ncomponent Page:\n    let editor: EditorHandle? = null\n\n    @mounted:\n        if editor:\n            editor.focus()\n\n    return <Editor ref={editor} />\n",
       /A condition judges truth, not presence/u,
     ],
   ] as const;
@@ -24497,10 +24497,10 @@ component Counter(start: number = 0):
     watch count as current, previous:
         print(f"{previous} -> {current}")
 
-    mounted:
+    @mounted:
         print("mounted")
 
-    cleanup:
+    @cleanup:
         print("cleanup")
 
     return <button class="counter" look={counterLook} class:active={count > 0} on:click={increment}>{count} / {doubled()}</button>
@@ -24909,7 +24909,7 @@ component Counter exposes CounterHandle:
 
     expose {increment, value}
 
-    cleanup:
+    @cleanup:
         print("counter-cleanup")
 
     return <button>{count}</button>
@@ -24925,7 +24925,7 @@ component Alternate exposes CounterHandle:
 
     expose {increment, value}
 
-    cleanup:
+    @cleanup:
         print("alternate-cleanup")
 
     return <button>{count}</button>
@@ -24934,7 +24934,7 @@ component Host(View: CounterView):
     return <View ref={selectedCounter} />
 
 component App:
-    mounted:
+    @mounted:
         if conditionalCounter != null:
             print("parent-mounted")
             conditionalCounter.increment()
@@ -26104,13 +26104,13 @@ component App:
 test("enforces component lifecycle cardinality", () => {
   const duplicate = compile(`
 component App:
-    mounted:
+    @mounted:
         print("first")
-    mounted:
+    @mounted:
         print("second")
-    cleanup:
+    @cleanup:
         print("first")
-    cleanup:
+    @cleanup:
         print("second")
     return <main></main>
 `.trimStart());
@@ -26120,8 +26120,8 @@ component App:
 
   const nested = compile(`
 component App:
-    mounted:
-        cleanup:
+    @mounted:
+        @cleanup:
             print("nested")
     return <main></main>
 `.trimStart());
@@ -26133,7 +26133,7 @@ async def prepare() -> null:
     return null
 
 component App:
-    mounted:
+    @mounted:
         await prepare()
     return <main>ready</main>
 `.trimStart());
@@ -26145,7 +26145,7 @@ async def dispose() -> null:
     return null
 
 component App:
-    cleanup:
+    @cleanup:
         await dispose()
     return <main>ready</main>
 `.trimStart());
@@ -26155,9 +26155,9 @@ component App:
 test("runs mounted and cleanup exactly once", () => {
   const result = compile(`
 component App:
-    mounted:
+    @mounted:
         print("mounted")
-    cleanup:
+    @cleanup:
         print("cleanup")
     return <main></main>
 `.trimStart());
@@ -26195,12 +26195,12 @@ component Workspace:
     def scroll() -> null:
         viewportStart += 1
     childUpdate = scroll
-    mounted:
+    @mounted:
         const initialViewport = viewportStart
     return <main><div look:top={f"{viewportStart}px"}>{[viewportStart].map(row => <span key={row}>{row}</span>)}</div></main>
 
 component App:
-    cleanup:
+    @cleanup:
         print("cleanup")
     return projectOpen ? <Workspace /> : <section>welcome</section>
 `.trimStart());
@@ -26298,7 +26298,7 @@ def acquireHandle() -> () -> null:
 
 component Broken:
     const stopHandle = acquireHandle()
-    cleanup:
+    @cleanup:
         print("construction-cleanup")
         throw Error("Construction cleanup failed")
         stopHandle()
@@ -26312,7 +26312,7 @@ print(activeHandles)
 
   const cleanup = compile(`
 component Recovering:
-    cleanup:
+    @cleanup:
         print("cleanup-before")
         throw Error("Cleanup failed")
         print("cleanup-after")
@@ -26840,18 +26840,18 @@ component Field(label: string, busy: bool = false):
         draft = draft + "|" + label + ":" + (busy ? "on" : "off")
     watch draft:
         print("draft:" + draft)
-    mounted:
+    @mounted:
         print("mounted:" + label)
-    cleanup:
+    @cleanup:
         print("cleanup:" + label)
     return <section data-busy={busy ? "yes" : "no"}>{draft}</section>
 
 component RowView(row: Row):
     stamps += 1
     const stamp = stamps
-    mounted:
+    @mounted:
         print("row-mounted:" + row.id)
-    cleanup:
+    @cleanup:
         print("row-cleanup:" + row.id)
     return <article data-id={row.id} data-stamp={stamp}></article>
 
@@ -27017,18 +27017,18 @@ const outerLook = look:
 component Alpha(label: string):
     alphaBuilds += 1
     const stamp = alphaBuilds
-    mounted:
+    @mounted:
         print("mounted:alpha")
-    cleanup:
+    @cleanup:
         print("cleanup:alpha")
     return <article class="alpha" data-stamp={stamp}>{label}</article>
 
 component Beta(label: string):
     betaBuilds += 1
     const stamp = betaBuilds
-    mounted:
+    @mounted:
         print("mounted:beta")
-    cleanup:
+    @cleanup:
         print("cleanup:beta")
     return <section class="beta" data-stamp={stamp}>{label}</section>
 

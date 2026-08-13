@@ -64,6 +64,7 @@ export type TokenKind =
   | "rightBrace"
   | "colon"
   | "comma"
+  | "at"
   | "dot"
   | "ellipsis"
   | "question"
