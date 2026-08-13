@@ -307,7 +307,7 @@ function embeddedStart(source: string): number {
 function formatInline(
   source: string,
   embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
-  layout: MarkupLayout = inlineOnlyLayout,
+  layout: MarkupLayout = heldLayoutFor(embedding),
 ): string {
   const tokens = tokenizeInline(source, embedding, layout);
   if (tokens.length === 0) return "";
@@ -332,7 +332,7 @@ function lastLineWidth(output: string): number {
 function tokenizeInline(
   source: string,
   embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
-  layout: MarkupLayout = inlineOnlyLayout,
+  layout: MarkupLayout = heldLayoutFor(embedding),
 ): InlineToken[] {
   const tokens: InlineToken[] = [];
   const genericStack: boolean[] = [];
@@ -818,7 +818,15 @@ interface MarkupLayout {
   readonly embedding: MarkupEmbedding;
 }
 
-const inlineOnlyLayout: MarkupLayout = { indentWidth: 4, column: 0, breakable: false, embedding: null };
+/**
+ * The layout of markup that cannot take a line of its own — inside a string
+ * interpolation, or inside a `{...}` hole. It still carries the embedding, so
+ * markup nested further in is recognized as markup rather than re-spaced as
+ * comparison operators.
+ */
+function heldLayoutFor(embedding: MarkupEmbedding): MarkupLayout {
+  return { indentWidth: 4, column: 0, breakable: false, embedding };
+}
 
 function markupLayout(indentWidth: number, column: number, embedding: MarkupEmbedding): MarkupLayout {
   return { indentWidth, column, breakable: true, embedding };

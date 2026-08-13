@@ -276,6 +276,10 @@ Error: module initialization failed
 2. **无名裸 `[...]` 被当成类型实参重写**：`counts: [number]` 的诊断会给出 `<number>`，
    把一个语法错误改成另一个。现在只在括号前有真名字时才登记重写。
 3. **模板不在格式门禁内**（见上）。
+4. **嵌套嵌入丢失扩展**：f-string 洞里的 markup 再套一层洞，内层 markup 会因为
+   layout 里的 embedding 为 null 而被当成比较运算符重新加空格
+   （`<b>{tag.name}</b>` → `< b > {tag.name} < / b >`，**改坏源码**）。本波自查发现，
+   已改为默认 layout 从 embedding 参数构造，并加回归。
 
 ---
 

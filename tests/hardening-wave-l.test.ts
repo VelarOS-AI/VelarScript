@@ -353,7 +353,10 @@ test("[D39 §54] markup takes its canonical shape and formatting stays idempoten
   assert.equal(round(authored), authored);
 
   // Markup inside a string interpolation never breaks: a newline there would
-  // change the string.
+  // change the string. Markup nested further in is still markup, not a run of
+  // comparison operators to be re-spaced.
   const interpolated = 'component Label:\n    const text = f"{items.map(item => item.name)}"\n    return <p>{text}</p>\n';
   assert.equal(round(interpolated), interpolated);
+  const nested = 'component Tags:\n    const label = f"{tags.map(tag => <li>{tag.hot ? <b>{tag.name}</b> : null}</li>)}"\n    return <p>{label}</p>\n';
+  assert.equal(round(nested), nested);
 });
