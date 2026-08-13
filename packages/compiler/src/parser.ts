@@ -1831,7 +1831,11 @@ export class Parser {
       }
       if (squareArguments) {
         this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end),
-          mechanicalEdits([{ span: open.span, text: "<" }, { span: close.span, text: ">" }], "Use angle brackets for generic type arguments")));
+          // Brackets that follow a real type name are that name's arguments;
+          // a bare '[...]' is some other mistake and names no rewrite.
+          name.value === ""
+            ? undefined
+            : mechanicalEdits([{ span: open.span, text: "<" }, { span: close.span, text: ">" }], "Use angle brackets for generic type arguments")));
       }
       const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
       if (this.validateExtensionTypeArguments(typeName, arguments_, name.span)) {

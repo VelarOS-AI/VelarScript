@@ -253,14 +253,14 @@ export class Lexer {
             this.simple("notEqual", start, 2);
           } else {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'not'; VelarScript uses readable logical operators", span(start, start + 1),
-              mechanicalFix(span(start, start + 1), "not", "Use readable 'not'")));
+              this.wordOperatorFix(start, start + 1, "not", "Use readable 'not'")));
             this.simple("not", start, 1);
           }
           break;
         case "&":
           if (this.peek(1) === "&") {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2),
-              mechanicalFix(span(start, start + 2), "and", "Use readable 'and'")));
+              this.wordOperatorFix(start, start + 2, "and", "Use readable 'and'")));
             this.simple("and", start, 2);
           } else {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Combine conditions with 'and'; VelarScript has no bitwise '&'", span(start, start + 1)));
@@ -280,7 +280,7 @@ export class Lexer {
         case "|":
           if (this.peek(1) === "|") {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2),
-              mechanicalFix(span(start, start + 2), "or", "Use readable 'or'")));
+              this.wordOperatorFix(start, start + 2, "or", "Use readable 'or'")));
             this.simple("or", start, 2);
           } else {
             this.simple("pipe", start, 1);
@@ -778,6 +778,19 @@ export class Lexer {
 
   private operator(single: TokenKind, compound: TokenKind, start: number): void {
     this.simple(this.peek(1) === "=" ? compound : single, start, this.peek(1) === "=" ? 2 : 1);
+  }
+
+  /**
+   * The rewrite of a symbol operator to its word spelling. A word needs air on
+   * either side that a symbol did not: 'a&&b' becomes 'a and b', while
+   * 'a && b' keeps the spacing it already had.
+   */
+  private wordOperatorFix(start: number, end: number, word: string, title: string): DiagnosticFix {
+    const before = this.text[start - 1];
+    const after = this.text[end];
+    const left = before !== undefined && !/[\s([{,]/u.test(before) ? " " : "";
+    const right = after !== undefined && !/[\s)\]},]/u.test(after) ? " " : "";
+    return mechanicalFix(span(start, end), `${left}${word}${right}`, title);
   }
 
   private skipHorizontalWhitespace(index: number): number {
