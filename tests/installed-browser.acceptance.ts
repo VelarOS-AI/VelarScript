@@ -85,12 +85,12 @@ mount(<App />, "#app")
   await runNpm(["run", "format:check"], application);
   await runNpm(["run", "check"], application);
   const core = await runNpm(["test"], application);
-  assert.match(core.stdout, /app\.test\.vel :: test_application_contract/u);
+  assert.match(core.stdout, /app\.test\.vel :: application contract/u);
   await runNpm(["run", "build"], application);
   const verification = await runNpm(["run", "verify"], application);
   assert.match(verification.stdout, /Verified production web build [a-f0-9]{64}/u);
   const result = await runNpm(["run", "test:browser", "--", "chromium"], application);
-  assert.match(result.stdout, /chromium :: src\/app\.browser\.test\.vel :: test_home_page/u);
+  assert.match(result.stdout, /chromium :: src\/app\.browser\.test\.vel :: home page/u);
   assert.match(result.stdout, /1 passed, 0 failed/u);
 
   const documentation = join(directory, "Product Docs");
@@ -116,7 +116,7 @@ mount(<App />, "#app")
   await runNpm(["run", "build"], documentation);
   await runNpm(["run", "verify"], documentation);
   const docsBrowser = await runNpm(["run", "test:browser", "--", "chromium"], documentation);
-  assert.match(docsBrowser.stdout, /chromium :: src\/app\.browser\.test\.vel :: test_guide_route/u);
+  assert.match(docsBrowser.stdout, /chromium :: src\/app\.browser\.test\.vel :: guide route/u);
   assert.match(docsBrowser.stdout, /1 passed, 0 failed/u);
 
   const component = join(directory, "Info Card");
@@ -150,7 +150,7 @@ mount(<App />, "#app")
   await runNpm(["run", "build"], component);
   await runNpm(["run", "verify"], component);
   const componentBrowser = await runNpm(["run", "test:browser", "--", "chromium"], component);
-  assert.match(componentBrowser.stdout, /chromium :: src\/demo\.browser\.test\.vel :: test_component_preview/u);
+  assert.match(componentBrowser.stdout, /chromium :: src\/demo\.browser\.test\.vel :: component preview/u);
   assert.match(componentBrowser.stdout, /1 passed, 0 failed/u);
   process.stdout.write("Installed VelarScript browser-project acceptance passed\n");
 } finally {

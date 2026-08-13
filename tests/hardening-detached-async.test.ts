@@ -313,13 +313,13 @@ const browserTests = `
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_detached_failure_reports_with_the_detached_phase() -> null:
+test "detached failure reports with the detached phase":
     await browser.open("/")
     expect(await browser.text("[data-detached]")).toBe("none")
     await browser.click("[data-fire]")
     await browser.waitForText("[data-detached]", "detached:detached boom")
 
-async def test_the_page_survives_a_detached_failure() -> null:
+test "the page survives a detached failure":
     await browser.open("/")
     await browser.click("[data-fire]")
     await browser.waitForText("[data-detached]", "detached:detached boom")

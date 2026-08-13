@@ -242,7 +242,7 @@ test("[ASY-D2 + BLD-D1] any unowned error during a test fails that test; the run
     "node_modules/dom-toucher/package.json": JSON.stringify({ name: "dom-toucher", type: "module", exports: "./index.js" }),
     "node_modules/dom-toucher/index.js": "export const ready = true;\nPromise.resolve().then(() => { globalThis.document.createElement(\"div\"); });\n",
     "app.vel": "extern module \"dom-toucher\":\n    export const ready: bool\n\nimport js {ready} from \"dom-toucher\"\n\nexport def isReady() -> bool:\n    return ready\n",
-    "app.test.vel": "import {isReady} from \"./app.vel\"\n\ndef test_ready() -> null:\n    assert isReady()\n    return null\n",
+    "app.test.vel": "import {isReady} from \"./app.vel\"\n\ntest \"the app is ready\":\n    assert isReady()\n",
   }, ["test", "<dir>/app.test.vel"]);
   assert.equal(domInit.status, 1, domInit.stdout + domInit.stderr);
   assert.match(domInit.stdout, /0 passed, 1 failed/u);
@@ -255,7 +255,7 @@ test("[ASY-D2 + BLD-D1] any unowned error during a test fails that test; the run
     "node_modules/dom-timer/package.json": JSON.stringify({ name: "dom-timer", type: "module", exports: "./index.js" }),
     "node_modules/dom-timer/index.js": "export const ready = true;\nsetTimeout(() => { globalThis.document.createElement(\"div\"); }, 0);\n",
     "app.vel": "extern module \"dom-timer\":\n    export const ready: bool\n\nimport js {ready} from \"dom-timer\"\n\nexport def isReady() -> bool:\n    return ready\n",
-    "app.test.vel": "import {isReady} from \"./app.vel\"\n\ndef test_ready() -> null:\n    assert isReady()\n    return null\n",
+    "app.test.vel": "import {isReady} from \"./app.vel\"\n\ntest \"the app is ready\":\n    assert isReady()\n",
   }, ["test", "<dir>/app.test.vel"]);
   assert.equal(timerInit.status, 1, timerInit.stdout + timerInit.stderr);
   assert.match(timerInit.stdout, /1 failed/u);
@@ -263,12 +263,12 @@ test("[ASY-D2 + BLD-D1] any unowned error during a test fails that test; the run
 
   // A detached failure during one test fails that test; later tests still run.
   const detached = await runCli({
-    "boom.test.vel": "async def boom() -> null:\n    throw Error(\"detached failure\")\n\ndef test_green() -> null:\n    async boom()\n    return null\n\ndef test_still_runs() -> null:\n    return null\n",
+    "boom.test.vel": "async def boom() -> null:\n    throw Error(\"detached failure\")\n\ntest \"green\":\n    async boom()\n\ntest \"still runs\":\n    pass\n",
   }, ["test", "<dir>/boom.test.vel"]);
   assert.equal(detached.status, 1, detached.stdout + detached.stderr);
-  assert.match(detached.stderr, /test_green/u);
+  assert.match(detached.stderr, /green/u);
   assert.match(detached.stderr, /an unowned error was reported while this test ran/u);
-  assert.match(detached.stdout, /✓.*test_still_runs/u);
+  assert.match(detached.stdout, /✓.*still runs/u);
   assert.match(detached.stdout, /1 passed, 1 failed/u);
 });
 
