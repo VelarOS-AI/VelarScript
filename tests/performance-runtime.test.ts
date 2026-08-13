@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import test from "node:test";
+import test, { after } from "node:test";
+import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+
+after(removeTemporaryDirectories);
+
 
 // Runtime performance gate. `tests/performance.test.ts` bounds compile-time
 // work; this file bounds the wall-clock cost of the code the emitter produces,
@@ -54,7 +58,7 @@ function dimension(samples: ReadonlyMap<string, number[]>, label: string): numbe
 
 /** Compiles a single-module VelarScript program and runs the emitted JavaScript under Node. */
 async function benchmarkProgram(prefix: string, source: string): Promise<{ samples: Map<string, number[]>; code: string }> {
-  const directory = await mkdtemp(join(tmpdir(), prefix));
+  const directory = await makeTemporaryDirectory(prefix);
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
@@ -82,7 +86,7 @@ async function benchmarkProgram(prefix: string, source: string): Promise<{ sampl
  * reactivity regressions still run in Chromium through the browser gate.
  */
 async function benchmarkWebProgram(prefix: string, source: string): Promise<Map<string, number[]>> {
-  const directory = await mkdtemp(join(tmpdir(), prefix));
+  const directory = await makeTemporaryDirectory(prefix);
   await mkdir(join(directory, "src"), { recursive: true });
   await mkdir(join(directory, "node_modules", "@velarscript"), { recursive: true });
   await symlink(join(root, "packages", "web"), join(directory, "node_modules", "@velarscript", "web"), "dir");

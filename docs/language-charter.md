@@ -755,9 +755,13 @@ facts persist on the fall-through path. A terminating guard therefore reads
 naturally:
 
 ```velar fragment
-if user == null:
-    return "Missing"
-return user.name
+type User:
+    name: string
+
+def label(user: User?) -> string:
+    if user == null:
+        return "Missing"
+    return user.name
 ```
 
 Narrowing is flow-based and deliberately practical. A fact established by a
@@ -2191,9 +2195,10 @@ cannot be combined with children.
 Use ordinary conditional expressions or functions for conditional children:
 
 ```velar fragment
-return <section>
-    {loading ? <p aria-busy="true">Loading…</p> : <Results items={items} />}
-</section>
+component Panel:
+    return <section>
+        {loading ? <p aria-busy="true">Loading…</p> : <Results items={items} />}
+    </section>
 ```
 
 Magic JSX `if`, `else-if`, and `else` attributes are not part of the language.

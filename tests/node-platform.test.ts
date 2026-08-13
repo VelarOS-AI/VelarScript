@@ -64,6 +64,30 @@ async function materializeNodeRuntimeDependencies(
   await writeFile(join(root, "package.json"), JSON.stringify({name: "velar", private: true, type: "module", exports: exports_}), "utf8");
 }
 
+const WATCHED_CHANGE_RETRIGGER_MS = 250;
+const WATCHED_CHANGE_TIMEOUT_MS = 30_000;
+
+/**
+ * Awaits one reported filesystem change, re-triggering it while the pull is
+ * outstanding. `fs.watch` with `recursive: true` arms its macOS FSEvents
+ * stream asynchronously on another thread, so a write that lands before the
+ * stream starts is never reported — under concurrent load that happens for
+ * roughly one pull in ten, and the pull then never settles.
+ */
+async function reportedChange<T>(pull: Promise<T>, change: () => Promise<unknown>, path: string, label: string): Promise<T> {
+  let settled = false;
+  const outcome = pull.finally(() => { settled = true; });
+  const deadline = Date.now() + WATCHED_CHANGE_TIMEOUT_MS;
+  while (!settled) {
+    await change();
+    if (Date.now() >= deadline) {
+      throw new Error(`${label} never reported ${path} within ${WATCHED_CHANGE_TIMEOUT_MS} milliseconds of repeated changes; the operating-system watch is not delivering notifications for this root.`);
+    }
+    await Promise.race([outcome.catch(() => {}), new Promise((resolveWait) => setTimeout(resolveWait, WATCHED_CHANGE_RETRIGGER_MS))]);
+  }
+  return outcome;
+}
+
 function registerRuntimeType<T extends object>(value: T): T {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for(VELAR_TYPE_REGISTRY_KEY));
   assert.ok(descriptor && "value" in descriptor);
@@ -1109,8 +1133,12 @@ test("Node filesystem and path runtimes keep destructive operations bounded and 
       const firstChange = watcher.next();
       await assert.rejects(watcher.next(), /already has an active pull/u);
       const watched = path.join([nested, "watched.txt"]);
-      await fs.writeText(watched, "watched");
-      const batch = await firstChange;
+      const batch = await reportedChange(
+        firstChange,
+        () => fs.writeText(watched, "watched"),
+        watched,
+        "the recursive Node file watch",
+      );
       assert.ok(batch !== null);
       assert.equal(batch.rescan, false);
       assert.equal(Object.isFrozen(batch.paths), false);
@@ -1287,8 +1315,24 @@ const blob = await fs.readBlob(file);
 const missing = await fs.exists(root + "/missing.txt");
 const watcher = await fs.watchFiles(root, true);
 const pendingWatch = watcher.next();
+// The macOS FSEvents stream behind a recursive watch arms asynchronously, so a
+// single write can land before it starts and is then never reported. Re-trigger
+// on a timer instead of racing the pull: every combinator that could observe it
+// here (Promise.race, .finally, .catch) reads the poisoned Promise.prototype.then.
+let watchReported = false;
+const watchDeadline = Date.now() + 30000;
+const retriggerWatch = async () => {
+  if (watchReported) return;
+  // Closing settles the outstanding pull with null, so a watch that never
+  // reports fails the observed-output assertion instead of hanging the suite.
+  if (Date.now() >= watchDeadline) { try { await watcher.close(); } catch {} return; }
+  try { await fs.writeText(root + "/watched.txt", "watch"); } catch {}
+  if (!watchReported) setTimeout(retriggerWatch, 250);
+};
 await fs.writeText(root + "/watched.txt", "watch");
+setTimeout(retriggerWatch, 250);
 const watchBatch = await pendingWatch;
+watchReported = true;
 await watcher.close();
 const observed = [text, names[0], info?.kind, String(blob instanceof fs.Blob), String(missing), String(watchBatch?.paths.length > 0), String(poisonCalls)].join("|");
 

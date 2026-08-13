@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import test from "node:test";
+import test, { after } from "node:test";
 import { join, resolve } from "node:path";
 import { compile } from "@velarscript/compiler";
 import { compileProject, compileProjectEntries, type ProjectResult } from "../packages/cli/src/project.ts";
+import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+
+after(removeTemporaryDirectories);
+
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 
@@ -495,7 +499,7 @@ for value in values:
  * program exercises state, collections, and `watch` headlessly.
  */
 async function runWebProgram(prefix: string, source: string): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), prefix));
+  const directory = await makeTemporaryDirectory(prefix);
   await mkdir(join(directory, "src"), { recursive: true });
   await mkdir(join(directory, "node_modules", "@velarscript"), { recursive: true });
   await symlink(join(root, "packages", "web"), join(directory, "node_modules", "@velarscript", "web"), "dir");

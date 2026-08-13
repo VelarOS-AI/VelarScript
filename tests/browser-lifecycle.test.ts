@@ -3,11 +3,15 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { promisify } from "node:util";
 import { runBrowserTests } from "../packages/cli/src/browser-test-runner.ts";
 import { superviseBrowserWorker } from "../packages/cli/src/browser-process-owner.ts";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
+import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+
+after(removeTemporaryDirectories);
+
 
 const execFileAsync = promisify(execFile);
 const cli = resolve("packages/cli/src/cli.ts");
@@ -180,7 +184,7 @@ test("the direct browser acceptance matrix drains its server and renderer owners
 });
 
 async function browserFixture(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "velar-browser-lifecycle-"));
+  const directory = await makeTemporaryDirectory("velar-browser-lifecycle-");
   await mkdir(join(directory, "src"), { recursive: true });
   await writeFile(join(directory, "velar.json"), JSON.stringify({
     formatVersion: 2,

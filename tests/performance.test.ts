@@ -3,13 +3,17 @@ import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import test from "node:test";
+import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
 import { WorkspaceIndexCancelledError, WorkspaceTextIndex } from "../packages/cli/src/workspace-index.ts";
+import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+
+after(removeTemporaryDirectories);
+
 
 test("application-scale incremental budget recompiles only the reverse dependency closure", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-scale-"));
+  const directory = await makeTemporaryDirectory("velar-scale-");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
   await writeFile(join(directory, "main.vel"), "import {value} from \"./chain-0.vel\"\nprint(value)\n", "utf8");
 
@@ -111,7 +115,7 @@ test("session-persistent workspace search meets the 20k-file first and complete-
 });
 
 test("pure VelarScript script service bounds 1 MiB initial and tail-update work", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-script-scale-"));
+  const directory = await makeTemporaryDirectory("velar-script-scale-");
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   const packageScope = join(directory, "node_modules", "@velarscript");

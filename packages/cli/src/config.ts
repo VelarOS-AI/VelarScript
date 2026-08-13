@@ -178,6 +178,12 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
 }
 
 function extensionList(value: unknown, manifestPath: string): readonly string[] {
+  // BLD-U1: a Core (Node/CLI) project loads no compiler extensions, and the
+  // manifest diagnostics above teach exactly that by telling authors to drop
+  // the key. An absent 'extensions' is therefore the empty list — following the
+  // teaching has to produce a working manifest, not a second error. An explicit
+  // `"extensions": []` stays equally valid; every other shape is a mistake.
+  if (value === undefined) return Object.freeze([]);
   if (!Array.isArray(value)) {
     throw new Error(`${manifestPath}: 'extensions' must be a list of installed package names — [${JSON.stringify(OFFICIAL_WEB_EXTENSION_PACKAGE)}] activates the web target`);
   }

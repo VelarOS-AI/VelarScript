@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { SourceMap } from "node:module";
-import test from "node:test";
+import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { compile as compileCore, describeType, formatDiagnostic, formatSource, inspectModule as inspectCoreModule, MAX_VELAR_SOURCE_CODE_UNITS, semanticVisibleSymbolsAt, SourceText, type CompilerExtension } from "@velarscript/compiler";
@@ -16,6 +16,7 @@ import { compileProject as compileProjectCore, moduleInterfaceIdentity, type Com
 import { projectStyles } from "../packages/cli/src/framework-host.ts";
 import { VelarProjectSessions } from "../packages/cli/src/project-session.ts";
 import {
+
   projectCompletionsAt,
   projectCompletionContextAt,
   projectDefinitionAt,
@@ -43,6 +44,9 @@ import { parseDependencyArguments, runDependencyCommand } from "../packages/cli/
 import { asHostError, hostErrorCode, hostErrorMessage, hostErrorStack } from "../packages/cli/src/host-error.ts";
 import { validateApplicationPackageResult } from "../packages/cli/src/application-package-host.ts";
 import { WorkspaceIndexCancelledError, WorkspaceTextIndex } from "../packages/cli/src/workspace-index.ts";
+import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+
+after(removeTemporaryDirectories);
 
 const webCompilerExtensions = Object.freeze([velarCompilerExtension]);
 const webFormatOptions = Object.freeze({ extensions: webCompilerExtensions });
@@ -127,6 +131,31 @@ async function stopDevServer(child: ReturnType<typeof spawn>): Promise<void> {
     });
     child.kill("SIGTERM");
   });
+}
+
+const WATCHED_CHANGE_RETRIGGER_MS = 250;
+const WATCHED_CHANGE_TIMEOUT_MS = 30_000;
+
+/**
+ * Writes a change the dev server can only learn about from the operating
+ * system, re-writing it until the server reacts. `fs.watch` with
+ * `recursive: true` arms its macOS FSEvents stream asynchronously on another
+ * thread, and the dev server prints its banner without waiting for that, so a
+ * single write can land before the stream starts and is then never reported at
+ * all. Only the first change on a given watched root needs this: once one
+ * notification has been delivered the stream is armed for the rest of the run.
+ */
+async function reportedChange(path: string, contents: string, reacted: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + WATCHED_CHANGE_TIMEOUT_MS;
+  for (;;) {
+    await writeFile(path, contents, "utf8");
+    const retriggerAt = Date.now() + WATCHED_CHANGE_RETRIGGER_MS;
+    while (!reacted() && Date.now() < retriggerAt) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    if (reacted()) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`${label} never reported ${path} within ${WATCHED_CHANGE_TIMEOUT_MS} milliseconds of repeated changes; the operating-system watch is not delivering notifications for this root.`);
+    }
+  }
 }
 
 async function linkWorkspaceWebExtension(projectRoot: string): Promise<void> {
@@ -640,7 +669,7 @@ wrapped("wrapped")
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "ready\nwritten\ntrue\nnumber:4\nwrapped\n");
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-type-wrapper-contract-"));
+  const directory = await makeTemporaryDirectory("velar-type-wrapper-contract-");
   const libraryPath = join(directory, "library.vel");
   const consumerPath = join(directory, "consumer.vel");
   await writeFile(libraryPath, `
@@ -1076,7 +1105,7 @@ print((await loadOuter()).inner.then())
 });
 
 test("async result guards survive cross-module contract widening without invoking then getters", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-async-result-widening-"));
+  const directory = await makeTemporaryDirectory("velar-async-result-widening-");
   const modelsPath = join(directory, "models.vel");
   const servicePath = join(directory, "service.vel");
   const mainPath = join(directory, "main.vel");
@@ -1130,7 +1159,7 @@ print(reads())
 });
 
 test("async arrow contracts cross module and editor boundaries", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-async-arrow-editor-"));
+  const directory = await makeTemporaryDirectory("velar-async-arrow-editor-");
   const servicePath = join(directory, "service.vel");
   const callbacksPath = join(directory, "callbacks.vel");
   const consumerPath = join(directory, "consumer.vel");
@@ -1630,7 +1659,7 @@ const value: string? = pick([1, 2, 3])
 });
 
 test("generic functions cross module boundaries with renamed imports", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-generic-modules-"));
+  const directory = await makeTemporaryDirectory("velar-generic-modules-");
   const libraryPath = join(directory, "library.vel");
   const consumerPath = join(directory, "consumer.vel");
   await writeFile(libraryPath, `
@@ -5255,7 +5284,7 @@ test("compiler and CLI reject oversized source modules before parsing", async ()
   assert.ok(limitedBeforeExtension.diagnostics.some((item) => item.code === "VEL1006"));
   assert.equal(extensionParserCalled, false);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-source-limit-"));
+  const directory = await makeTemporaryDirectory("velar-source-limit-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, oversized, "utf8");
   const execution = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "check", entry], {
@@ -5314,7 +5343,7 @@ test("compiler APIs contain deterministic malformed input without escaping inter
 });
 
 test("CLI builds a real .vel file", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-compiler-"));
+  const directory = await makeTemporaryDirectory("velar-compiler-");
   const sourcePath = join(directory, "main.vel");
   const outputPath = join(directory, "main.js");
   await writeFile(sourcePath, "const answer = 40 + 2\n", "utf8");
@@ -5339,7 +5368,7 @@ test("CLI builds a real .vel file", async () => {
 
 test("CLI runs Core programs on Node with forwarded arguments and propagated exit codes", async () => {
   const cli = resolve("packages/cli/src/cli.ts");
-  const directory = await mkdtemp(join(tmpdir(), "velar-run-"));
+  const directory = await makeTemporaryDirectory("velar-run-");
 
   const printPath = join(directory, "printing.vel");
   await writeFile(printPath, `
@@ -5387,7 +5416,7 @@ print(iso(0))
 
 test("CLI run forwards termination to the compiled program and closes inherited streams", { skip: process.platform === "win32" }, async () => {
   const cli = resolve("packages/cli/src/cli.ts");
-  const directory = await mkdtemp(join(tmpdir(), "velar-run-signal-"));
+  const directory = await makeTemporaryDirectory("velar-run-signal-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {sleep} from "velar/async"
@@ -5445,7 +5474,7 @@ while true:
 });
 
 test("CLI run rejects web framework projects and points to dev and build", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-run-web-"));
+  const directory = await makeTemporaryDirectory("velar-run-web-");
   const projectRoot = join(directory, "web-app");
   await mkdir(join(projectRoot, "src"), { recursive: true });
   await writeFile(join(projectRoot, "velar.json"), JSON.stringify({
@@ -5506,7 +5535,7 @@ test("dev server exits cleanly after browser requests", async (context) => {
 });
 
 test("dev server keeps the last good app behind compile-error overlays", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-overlay-"));
+  const directory = await makeTemporaryDirectory("velar-dev-overlay-");
   const mainPath = join(directory, "main.vel");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
@@ -5526,8 +5555,12 @@ test("dev server keeps the last good app behind compile-error overlays", async (
   await waitForOutput(/VelarScript dev server:/u);
   const first = await fetch("http://127.0.0.1:42880/");
   assert.equal(first.status, 200);
-  await writeFile(mainPath, "component App:\n    return <img />\n", "utf8");
-  await waitForOutput(/VelarScript app has \d+ error/u);
+  await reportedChange(
+    mainPath,
+    "component App:\n    return <img />\n",
+    () => /VelarScript app has \d+ error/u.test(output),
+    "the dev-server project watch",
+  );
   const retained = await fetch("http://127.0.0.1:42880/");
   assert.equal(retained.status, 200);
   assert.match(await retained.text(), /data-velar-error-overlay/u);
@@ -5537,7 +5570,7 @@ test("dev server keeps the last good app behind compile-error overlays", async (
 });
 
 test("dev server contains unexpected rebuild failures and recovers on the next edit", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-rebuild-recovery-"));
+  const directory = await makeTemporaryDirectory("velar-dev-rebuild-recovery-");
   const mainPath = join(directory, "main.vel");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
@@ -5563,8 +5596,12 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
       { length: 4_097 },
       (_, index) => `import js unsafe {value as value${index}} from "overflow-${index}"`,
     ).join("\n");
-    await writeFile(mainPath, `${excessiveImports}\n${validSource("Too many")}`, "utf8");
-    await waitForOutput(/VelarScript rebuild failed: A browser project cannot import more than 4096 JavaScript packages/u, () => errors);
+    await reportedChange(
+      mainPath,
+      `${excessiveImports}\n${validSource("Too many")}`,
+      () => /VelarScript rebuild failed: A browser project cannot import more than 4096 JavaScript packages/u.test(errors),
+      "the dev-server project watch",
+    );
     await waitForOutput(/VelarScript app has 1 error/u);
     assert.equal(child.exitCode, null);
     const failed = await (await fetch("http://127.0.0.1:42881/__velar/status")).json() as {
@@ -5607,7 +5644,7 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
 });
 
 test("dev server polling watcher reports project changes without native file events", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-polling-"));
+  const directory = await makeTemporaryDirectory("velar-dev-polling-");
   const mainPath = join(directory, "main.vel");
   const preloadPath = join(directory, "force-windows-platform.mjs");
   await linkWorkspaceWebExtension(directory);
@@ -5643,7 +5680,7 @@ test("dev server polling watcher reports project changes without native file eve
 });
 
 test("dev server exposes incremental compilation status and reuses unaffected modules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-incremental-"));
+  const directory = await makeTemporaryDirectory("velar-dev-incremental-");
   const mainPath = join(directory, "main.vel");
   const storePath = join(directory, "store.vel");
   await linkWorkspaceWebExtension(directory);
@@ -5679,8 +5716,12 @@ mount(<App />, "#app")
     assert.equal(initial.apiVersion, "0.10");
     assert.deepEqual(initial.compilation, { ...initial.compilation, moduleCount: 3, compiledModules: 3, reusedModules: 0 });
 
-    await writeFile(storePath, "export const label = \"Updated\"\n", "utf8");
-    await waitForOutput(/VelarScript app rebuilt in .*\(2 compiled, 1 reused\)/u);
+    await reportedChange(
+      storePath,
+      "export const label = \"Updated\"\n",
+      () => /VelarScript app rebuilt in .*\(2 compiled, 1 reused\)/u.test(output),
+      "the dev-server project watch",
+    );
     const updated = await (await fetch("http://127.0.0.1:42883/__velar/status")).json() as {
       compilation: { compiledModules: number; reusedModules: number; affectedModules: number };
     };
@@ -5698,7 +5739,7 @@ mount(<App />, "#app")
 });
 
 test("dev server watches installed VelarScript source package roots", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-package-"));
+  const directory = await makeTemporaryDirectory("velar-dev-package-");
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "library");
   await mkdir(join(projectRoot, "node_modules"), { recursive: true });
@@ -5732,15 +5773,19 @@ mount(<App />, "#app")
     assert.match(output, pattern);
   };
   await waitForOutput(/VelarScript dev server:/u);
-  await writeFile(packageEntry, "export const label = \"Updated library\"\n", "utf8");
-  await waitForOutput(/VelarScript app rebuilt in .*\(2 compiled, 0 reused\)/u);
+  await reportedChange(
+    packageEntry,
+    "export const label = \"Updated library\"\n",
+    () => /VelarScript app rebuilt in .*\(2 compiled, 0 reused\)/u.test(output),
+    "the dev-server installed-package watch",
+  );
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
 test("dev server watches JavaScript package subpath declarations and reanalyzes safe imports", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-js-types-"));
+  const directory = await makeTemporaryDirectory("velar-dev-js-types-");
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "typed-library");
   await mkdir(join(projectRoot, "node_modules"), { recursive: true });
@@ -5778,15 +5823,19 @@ mount(<App />, "#app")
     assert.match(output, pattern);
   };
   await waitForOutput(/VelarScript dev server:/u);
-  await writeFile(declarationPath, "export declare function format(value: string): string;\n", "utf8");
-  await waitForOutput(/VelarScript app has 1 error/u);
+  await reportedChange(
+    declarationPath,
+    "export declare function format(value: string): string;\n",
+    () => /VelarScript app has 1 error/u.test(output),
+    "the dev-server installed-package watch",
+  );
   child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
   assertDevServerExit(exitCode, String(child.stderr.read() ?? ""));
 });
 
 test("dev server serves dual CJS/ESM packages through their import condition", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-dual-esm-"));
+  const directory = await makeTemporaryDirectory("velar-dev-dual-esm-");
   const projectRoot = join(directory, "app");
   await mkdir(join(projectRoot, "node_modules", "dual-lib"), { recursive: true });
   await mkdir(join(projectRoot, "node_modules", "dual-dep"), { recursive: true });
@@ -5870,7 +5919,7 @@ mount(<App />, "#app")
 });
 
 test("dev server names genuinely CommonJS-only packages in its refusal", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-cjs-only-"));
+  const directory = await makeTemporaryDirectory("velar-dev-cjs-only-");
   const projectRoot = join(directory, "app");
   await mkdir(join(projectRoot, "node_modules", "legacy-lib"), { recursive: true });
   await writeFile(join(projectRoot, "node_modules", "legacy-lib", "package.json"), JSON.stringify({
@@ -5919,7 +5968,7 @@ test("dev server prebundles dual packages whose ESM entry wraps CommonJS interna
   // the "import"-condition entry is real ESM that default-imports the
   // package's own CommonJS internals, which native browser ESM cannot load
   // raw. The dev prebundle converts the internals exactly like 'velar build'.
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-cjs-wrapper-"));
+  const directory = await makeTemporaryDirectory("velar-dev-cjs-wrapper-");
   const projectRoot = join(directory, "app");
   await mkdir(join(projectRoot, "node_modules", "wrapper-lib", "es"), { recursive: true });
   await mkdir(join(projectRoot, "node_modules", "wrapper-lib", "lib"), { recursive: true });
@@ -6021,7 +6070,7 @@ mount(<App />, "#app")
 });
 
 test("dev server names genuinely broken packages instead of serving raw module errors", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dev-broken-npm-"));
+  const directory = await makeTemporaryDirectory("velar-dev-broken-npm-");
   const projectRoot = join(directory, "app");
   await mkdir(join(projectRoot, "node_modules", "broken-lib"), { recursive: true });
   await writeFile(join(projectRoot, "node_modules", "broken-lib", "package.json"), JSON.stringify({
@@ -6146,7 +6195,7 @@ const id = randomUUID()
 });
 
 test("type-checks literal dynamic VelarScript imports and lazy components", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dynamic-import-"));
+  const directory = await makeTemporaryDirectory("velar-dynamic-import-");
   const mainPath = join(directory, "main.vel");
   const pagePath = join(directory, "page.vel");
   const stablePath = join(directory, "stable.vel");
@@ -6204,7 +6253,7 @@ test("dynamic imports fail closed for unchecked paths, missing exports, and reac
     assert.ok(result.diagnostics.some((item) => item.code === "VEL2014" || /literal relative \.vel path/u.test(item.message)), source);
   }
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-dynamic-refusal-"));
+  const directory = await makeTemporaryDirectory("velar-dynamic-refusal-");
   const mainPath = join(directory, "main.vel");
   await writeFile(join(directory, "feature.vel"), "export const value = 42\n", "utf8");
   await writeFile(mainPath, `
@@ -6236,7 +6285,7 @@ const Feature = lazy(() => import("./feature.vel"), "Feature", BadLoading, BadFa
 });
 
 test("production builds emit separately verified chunks for lazy VelarScript components", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dynamic-build-"));
+  const directory = await makeTemporaryDirectory("velar-dynamic-build-");
   const output = join(directory, "dist");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
@@ -6623,7 +6672,7 @@ export def commit() -> null:
 });
 
 test("cross-module interfaces no longer carry memo purity markers", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-auto-memo-project-"));
+  const directory = await makeTemporaryDirectory("velar-auto-memo-project-");
   const domainPath = join(directory, "domain.vel");
   const barrelPath = join(directory, "barrel.vel");
   const mainPath = join(directory, "main.vel");
@@ -6899,7 +6948,7 @@ test("the shared runtime preserves proxy identity across Web bundles and skips h
   const second = compile("state second = 2\n");
   assert.deepEqual(first.diagnostics, []);
   assert.deepEqual(second.diagnostics, []);
-  const directory = await mkdtemp(join(tmpdir(), "velar-reactive-bundles-"));
+  const directory = await makeTemporaryDirectory("velar-reactive-bundles-");
   const firstPath = join(directory, "first.mjs");
   const secondPath = join(directory, "second.mjs");
   const mainPath = join(directory, "main.mjs");
@@ -7334,7 +7383,7 @@ console.log(__velarGraphWeakMapRead(__velarRuntime.parents, current) == null ? "
 });
 
 test("reactive module imports lower reads and reject ambiguous access", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-reactive-modules-"));
+  const directory = await makeTemporaryDirectory("velar-reactive-modules-");
   const storePath = join(directory, "store.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(storePath, `
@@ -7436,7 +7485,7 @@ type Handler = (User: string, current: (User), values: List<User>) -> User
 });
 
 test("project member navigation follows explicit type-alias targets", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-alias-navigation-"));
+  const directory = await makeTemporaryDirectory("velar-alias-navigation-");
   const modelsPath = join(directory, "models.vel");
   const mainPath = join(directory, "main.vel");
   const modelsSource = `export type User:
@@ -7499,7 +7548,7 @@ class Counter:
   assert.equal(boundedDocumentation.length, 16_384);
   assert.ok(boundedDocumentation.endsWith("…"));
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-documentation-"));
+  const directory = await makeTemporaryDirectory("velar-documentation-");
   const apiPath = join(directory, "api.vel");
   const mainPath = join(directory, "main.vel");
   const apiSource = `
@@ -7556,7 +7605,7 @@ print(profile.name)
 });
 
 test("project semantics resolve imports and keep alias rename fail-closed", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-semantics-"));
+  const directory = await makeTemporaryDirectory("velar-semantics-");
   const modelsPath = join(directory, "models.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(modelsPath, `
@@ -7718,7 +7767,7 @@ const label = greet(ada)
 });
 
 test("project sessions reuse unaffected modules and invalidate reverse dependencies", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-session-"));
+  const directory = await makeTemporaryDirectory("velar-session-");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] }), "utf8");
   const storePath = join(directory, "store.vel");
   const mainPath = join(directory, "main.vel");
@@ -7797,7 +7846,7 @@ test("project sessions reuse unaffected modules and invalidate reverse dependenc
 });
 
 test("project sessions keep the manifest entry stable across multiple documents", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-session-documents-"));
+  const directory = await makeTemporaryDirectory("velar-session-documents-");
   const manifestPath = join(directory, "velar.json");
   const mainPath = join(directory, "main.vel");
   const featurePath = join(directory, "feature.vel");
@@ -7815,7 +7864,7 @@ test("project sessions keep the manifest entry stable across multiple documents"
 });
 
 test("project sessions invalidate safe JavaScript imports when declaration graphs change", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-session-dts-"));
+  const directory = await makeTemporaryDirectory("velar-session-dts-");
   const packageRoot = join(directory, "node_modules", "session-sdk");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] }), "utf8");
@@ -7852,7 +7901,7 @@ test("project sessions invalidate safe JavaScript imports when declaration graph
 });
 
 test("project sessions surface invalid manifests instead of silently compiling standalone", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-session-config-"));
+  const directory = await makeTemporaryDirectory("velar-session-config-");
   const mainPath = join(directory, "main.vel");
   await writeFile(mainPath, "const value = 1\n", "utf8");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 1, entry: "main.vel", extensions: [] }), "utf8");
@@ -7860,7 +7909,7 @@ test("project sessions surface invalid manifests instead of silently compiling s
 });
 
 test("project sessions key reuse by the exact manifest identity", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-session-manifest-"));
+  const directory = await makeTemporaryDirectory("velar-session-manifest-");
   const mainPath = join(directory, "main.vel");
   const manifestPath = join(directory, "velar.json");
   const manifest = { formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] };
@@ -7879,7 +7928,7 @@ test("project sessions key reuse by the exact manifest identity", async () => {
 });
 
 test("project sessions keep nested manifest sources under their nearest owner", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-session-nested-"));
+  const directory = await makeTemporaryDirectory("velar-session-nested-");
   const mainPath = join(directory, "main.vel");
   const nestedRoot = join(directory, "nested");
   const nestedPath = join(nestedRoot, "main.vel");
@@ -7951,7 +8000,7 @@ console.log(getterReads);
   assert.match(configRuntime, /const source = \{"apiBase":"https:\/\/api\.example\.com"\}/u);
   assert.doesNotMatch(configRuntime, /__VELAR_PUBLIC_CONFIG__/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-web-api-"));
+  const directory = await makeTemporaryDirectory("velar-web-api-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {Head, RouteContext, Router, Link, NavLink, announce, back, currentRoute, domId, forward, navigate, redirect, reload, route} from "velar/web"
@@ -8284,7 +8333,7 @@ test("the official Web package owns the framework contract and CLI only composes
 });
 
 test("fixed Web APIs share the language named-argument ABI", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-named-web-api-"));
+  const directory = await makeTemporaryDirectory("velar-named-web-api-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {publicConfig} from "velar/config"
@@ -8393,7 +8442,7 @@ def inspectCanvas(canvas: CanvasElement) -> null:
 });
 
 test("Web host values are opaque and expose only intentional writable fields", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-opaque-web-values-"));
+  const directory = await makeTemporaryDirectory("velar-opaque-web-values-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {pick, readText} from "velar/files"
@@ -10094,7 +10143,7 @@ console.log(reports.sort().join("|"));
 });
 
 test("browser npm assets cannot escape a package through symbolic links", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-npm-asset-"));
+  const directory = await makeTemporaryDirectory("velar-npm-asset-");
   const root = join(directory, "package");
   await mkdir(root);
   await writeFile(join(root, "inside.js"), "export const safe = true\n", "utf8");
@@ -10167,7 +10216,7 @@ const reads = () => coercions;
 });
 
 test("0.10 Web APIs reject invalid typed boundaries before browser execution", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-web-api-invalid-"));
+  const directory = await makeTemporaryDirectory("velar-web-api-invalid-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {formBody, http} from "velar/http"
@@ -10269,7 +10318,7 @@ blur("missing")
 });
 
 test("typed form reads preserve record aliases and enum fields across modules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-form-record-"));
+  const directory = await makeTemporaryDirectory("velar-form-record-");
   const typesPath = join(directory, "form-types.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(typesPath, `
@@ -10308,7 +10357,7 @@ component Signup:
 });
 
 test("compiler-known runtime Type identity crosses modules and accepts records, aliases, and enums", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-runtime-type-identity-"));
+  const directory = await makeTemporaryDirectory("velar-runtime-type-identity-");
   const typesPath = join(directory, "types.vel");
   const mainPath = join(directory, "main.vel");
   const output = join(directory, "dist");
@@ -10346,7 +10395,7 @@ print(status == ItemState.ready)
 });
 
 test("Record<T> models dynamic JSON object keys without turning Map into wire data", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dynamic-record-"));
+  const directory = await makeTemporaryDirectory("velar-dynamic-record-");
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
@@ -10486,7 +10535,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/path"], ["basename", "contains", "dirname", "extension", "fromFileUrl", "isAbsolute", "join", "normalize", "relative", "resolve", "toFileUrl"]);
   assert.deepEqual(api.modules["velar/process"], ["Process", "ProcessOutputChannel", "run", "start"]);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-standard-library-"));
+  const directory = await makeTemporaryDirectory("velar-standard-library-");
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
@@ -10643,7 +10692,7 @@ print(logLevel())
 });
 
 test("evicted editor modules teach their installable package replacements", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-evicted-editor-modules-"));
+  const directory = await makeTemporaryDirectory("velar-evicted-editor-modules-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {ScriptDocument} from "velar/javascript"
@@ -10658,7 +10707,7 @@ import {TextBuffer} from "velar/text-buffer"
 });
 
 test("pure VelarScript text buffer ships a balanced rope with code-point positions", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-text-buffer-"));
+  const directory = await makeTemporaryDirectory("velar-text-buffer-");
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await linkWorkspaceEditorPackages(directory);
@@ -10827,7 +10876,7 @@ print(buffer.pieces)
 });
 
 test("pure VelarScript JavaScript service owns incremental lexing and local semantics", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-javascript-service-"));
+  const directory = await makeTemporaryDirectory("velar-javascript-service-");
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await linkWorkspaceEditorPackages(directory);
@@ -10917,7 +10966,7 @@ service.activity().revision = 2
 });
 
 test("TextBuffer keeps repeated 1 MiB middle edits below the piece-table regression budget", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-text-buffer-performance-"));
+  const directory = await makeTemporaryDirectory("velar-text-buffer-performance-");
   const entry = join(directory, "main.vel");
   await linkWorkspaceEditorPackages(directory);
   await writeFile(entry, `
@@ -10978,7 +11027,7 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
     }
   }
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-named-standard-library-"));
+  const directory = await makeTemporaryDirectory("velar-named-standard-library-");
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
@@ -11050,7 +11099,7 @@ Set(values=[])
 });
 
 test("local platform modules are typed Core APIs and refuse browser targets", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-local-platform-types-"));
+  const directory = await makeTemporaryDirectory("velar-local-platform-types-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {RequestBodyTooLargeError, ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
@@ -11092,11 +11141,11 @@ print(configured)
 });
 
 test("local filesystem and environment modules keep their runtime boundaries bounded and opaque", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-local-platform-fs-"));
+  const directory = await makeTemporaryDirectory("velar-local-platform-fs-");
   const textPath = join(directory, "note.txt");
   const invalidPath = join(directory, "invalid.txt");
   const fsRuntime = standardModuleSourceCore("velar/fs") ?? "";
-  const runtimeDirectory = await mkdtemp(join(tmpdir(), "velar-local-platform-runtime-"));
+  const runtimeDirectory = await makeTemporaryDirectory("velar-local-platform-runtime-");
   const runtimeRoot = join(runtimeDirectory, "node_modules", "velar");
   await mkdir(runtimeRoot, {recursive: true});
   const runtimeExports: Record<string, string> = {};
@@ -11151,7 +11200,7 @@ test("local filesystem and environment modules keep their runtime boundaries bou
 
 test("velar run serves checked responses, bounded static files, streams, and ordered shutdown", { skip: process.platform === "win32" }, async () => {
   const cli = resolve("packages/cli/src/cli.ts");
-  const directory = await mkdtemp(join(tmpdir(), "velar-local-platform-run-"));
+  const directory = await makeTemporaryDirectory("velar-local-platform-run-");
   const publicRoot = join(directory, "public");
   await mkdir(publicRoot, { recursive: true });
   await writeFile(join(publicRoot, "index.html"), "<h1>Velar local platform</h1>\n", "utf8");
@@ -11507,7 +11556,7 @@ console.log(await passesAsync(() => expect(hostileThenable).toReject()), thenGet
     "true false", "true false", "true", "true", "false", "false", "false", "false 0", "",
   ].join("\n"));
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-test-matchers-"));
+  const directory = await makeTemporaryDirectory("velar-test-matchers-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {expect} from "velar/test"
@@ -11737,7 +11786,7 @@ for (const operation of [
     "2", "2", "2", "2", "2", "2", "2", "1", "",
   ].join("\n"));
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-collection-keys-"));
+  const directory = await makeTemporaryDirectory("velar-collection-keys-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {maxBy, minBy, sortBy} from "velar/collections"
@@ -14028,7 +14077,7 @@ console.log(ambientReads);
 });
 
 test("known lossy JSON inputs fail during checking", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-json-types-"));
+  const directory = await makeTemporaryDirectory("velar-json-types-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {clone, stringify} from "velar/json"
@@ -14078,7 +14127,7 @@ channel.sendJson(unique)
 });
 
 test("velar/id uses secure host UUIDs without an insecure fallback", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-id-"));
+  const directory = await makeTemporaryDirectory("velar-id-");
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
@@ -14146,7 +14195,7 @@ console.log(uuidGetterReads);
 });
 
 test("0.5 Core standard library rejects invalid typed calls before runtime", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-standard-library-invalid-"));
+  const directory = await makeTemporaryDirectory("velar-standard-library-invalid-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {flatten, sum} from "velar/collections"
@@ -14176,7 +14225,7 @@ const options = matches("42", "[0-9]+", {ignoreCase: "yes"})
 });
 
 test("npm packages publish VelarScript source through package.json velar.entry", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-source-package-"));
+  const directory = await makeTemporaryDirectory("velar-source-package-");
   const packageRoot = join(directory, "node_modules", "velar-greeter");
   await linkWorkspaceWebExtension(directory);
   await mkdir(join(packageRoot, "src"), { recursive: true });
@@ -14227,7 +14276,7 @@ mount(<App />, "#app")
 });
 
 test("VelarScript source packages cannot escape their package root", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-package-boundary-"));
+  const directory = await makeTemporaryDirectory("velar-package-boundary-");
   const packageRoot = join(directory, "node_modules", "unsafe-package");
   await mkdir(join(packageRoot, "src"), { recursive: true });
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({
@@ -14244,7 +14293,7 @@ test("VelarScript source packages cannot escape their package root", async () =>
 });
 
 test("project compilation rejects source symlinks that escape the lexical project root", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-project-source-symlink-"));
+  const directory = await makeTemporaryDirectory("velar-project-source-symlink-");
   const projectRoot = join(directory, "project");
   await mkdir(projectRoot);
   const outside = join(directory, "outside.vel");
@@ -14887,7 +14936,7 @@ const callback: () -> null = () => null
 });
 
 test("velar.json defines a self-contained Web project and standard modules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-config-project-"));
+  const directory = await makeTemporaryDirectory("velar-config-project-");
   await mkdir(join(directory, "src"), { recursive: true });
   await mkdir(join(directory, "assets"), { recursive: true });
   await linkWorkspaceWebExtension(directory);
@@ -15004,7 +15053,7 @@ mount(<App />, "#app")
 });
 
 test("project configuration rejects destructive output layouts and unsafe CSP origins", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-secure-config-"));
+  const directory = await makeTemporaryDirectory("velar-secure-config-");
   await writeFile(join(directory, "main.vel"), "const value = 1\n", "utf8");
   await linkWorkspaceWebExtension(directory);
   const manifestPath = join(directory, "velar.json");
@@ -15055,7 +15104,7 @@ test("project configuration rejects destructive output layouts and unsafe CSP or
 });
 
 test("project framework hosts are versioned, capability-bound, and singular", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-framework-host-config-"));
+  const directory = await makeTemporaryDirectory("velar-framework-host-config-");
   await writeFile(join(directory, "main.vel"), "const value = 1\n", "utf8");
   const writeExtension = async (name: string, protocolVersion: number, compilerCapability: string, hostCapability = compilerCapability): Promise<void> => {
     const root = join(directory, "node_modules", name);
@@ -15104,7 +15153,7 @@ export const velarFrameworkHost = {
 });
 
 test("extension packages resolve a deterministic semantic dependency graph", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-extension-graph-"));
+  const directory = await makeTemporaryDirectory("velar-extension-graph-");
   await writeFile(join(directory, "main.vel"), "const value = 1\n", "utf8");
   const writeExtension = async (
     name: string,
@@ -15282,7 +15331,7 @@ test("application package results stay bounded inside the project owner", () => 
 });
 
 test("extension resolution never skips an invalid nearer package manifest", async () => {
-  const sandbox = await mkdtemp(join(tmpdir(), "velar-extension-shadow-"));
+  const sandbox = await makeTemporaryDirectory("velar-extension-shadow-");
   const project = join(sandbox, "project");
   const localManifest = join(project, "node_modules", "shadow-extension", "package.json");
   const ancestorPackage = join(sandbox, "node_modules", "shadow-extension");
@@ -15316,7 +15365,7 @@ export const velarProjectExtension = Object.freeze({id: "shadow-extension", mani
 });
 
 test("project discovery never skips an invalid nearer manifest or accepts manifest symlinks", async () => {
-  const sandbox = await mkdtemp(join(tmpdir(), "velar-project-shadow-"));
+  const sandbox = await makeTemporaryDirectory("velar-project-shadow-");
   const child = join(sandbox, "child");
   const localManifest = join(child, "velar.json");
   await mkdir(join(child, "src"), { recursive: true });
@@ -15348,7 +15397,7 @@ test("project discovery never skips an invalid nearer manifest or accepts manife
 });
 
 test("compiler extension loading reports hostile thrown values deterministically", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-hostile-extension-"));
+  const directory = await makeTemporaryDirectory("velar-hostile-extension-");
   await writeFile(join(directory, "main.vel"), "const value = 1\n", "utf8");
   const root = join(directory, "node_modules", "hostile-extension");
   await mkdir(root, { recursive: true });
@@ -15378,7 +15427,7 @@ throw {
 });
 
 test("Netlify adapter translates the root static deployment contract", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-netlify-"));
+  const directory = await makeTemporaryDirectory("velar-netlify-");
   await mkdir(join(directory, "src"), { recursive: true });
   await writeFile(join(directory, "src", "main.vel"), `component App:\n    return <main><h1>Netlify Velar</h1></main>\n\nmount(<App />, "#app")\n`, "utf8");
   await linkWorkspaceWebExtension(directory);
@@ -15584,7 +15633,7 @@ test("Netlify adapter translates the root static deployment contract", async () 
 });
 
 test("CLI creates explicit format-v2 projects and rejects legacy manifests without overwriting user files", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-lifecycle-"));
+  const directory = await makeTemporaryDirectory("velar-lifecycle-");
   const projectRoot = join(directory, "my-app");
   const created = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", projectRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(created.status, 0, created.stderr);
@@ -15838,7 +15887,7 @@ test("VelarScript dependency commands keep npm authoritative and project extensi
   assert.match(String(parseDependencyArguments("update", ["--dev"])), /available only/u);
   assert.match(String(parseDependencyArguments("add", ["tiny-lib", "tiny-lib@next"])), /cannot be repeated/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-dependency-command-"));
+  const directory = await makeTemporaryDirectory("velar-dependency-command-");
   const root = join(directory, "project");
   const extensionRoot = join(root, "node_modules", "@example", "feature");
   await mkdir(join(root, "src"), { recursive: true });
@@ -15910,7 +15959,7 @@ export const velarProjectExtension = Object.freeze({id: "@example/feature", mani
 });
 
 test("VelarScript dependency activation rolls back only the project manifest on an invalid extension", async () => {
-  const root = await mkdtemp(join(tmpdir(), "velar-dependency-rollback-"));
+  const root = await makeTemporaryDirectory("velar-dependency-rollback-");
   const extensionRoot = join(root, "node_modules", "invalid-extension");
   await mkdir(join(root, "src"), { recursive: true });
   await mkdir(extensionRoot, { recursive: true });
@@ -15986,7 +16035,7 @@ export const velarProjectExtension = Object.freeze({id: "invalid-extension", man
 });
 
 test("dependency removal prunes only orphaned inherited extension configuration", async () => {
-  const root = await mkdtemp(join(tmpdir(), "velar-extension-remove-"));
+  const root = await makeTemporaryDirectory("velar-extension-remove-");
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "extension-remove-project", private: true, type: "module" }), "utf8");
   await writeFile(join(root, "src", "main.vel"), "const answer = 42\n", "utf8");
@@ -16117,7 +16166,7 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
 });
 
 test("velar test discovers test_* functions without requiring exports", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-test-project-"));
+  const directory = await makeTemporaryDirectory("velar-test-project-");
   await mkdir(join(directory, "src"), { recursive: true });
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel", extensions: [] }), "utf8");
   await writeFile(join(directory, "src", "main.vel"), "export def add(left: number, right: number) -> number:\n    return left + right\n", "utf8");
@@ -16143,7 +16192,7 @@ async def test_async_code() -> null:
 });
 
 test("velar test executes transitive installed VelarScript source packages", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-test-packages-"));
+  const directory = await makeTemporaryDirectory("velar-test-packages-");
   const suffixRoot = join(directory, "node_modules", "velar-suffix");
   const greeterRoot = join(directory, "node_modules", "velar-greeter");
   await mkdir(join(directory, "src"), { recursive: true });
@@ -16538,7 +16587,7 @@ component Icon:
 });
 
 test("CLI checks and builds a multi-module project", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-modules-"));
+  const directory = await makeTemporaryDirectory("velar-modules-");
   const execution = spawnSync(process.execPath, [
     "packages/cli/src/cli.ts",
     "build",
@@ -16558,7 +16607,7 @@ test("CLI checks and builds a multi-module project", async () => {
 });
 
 test("unbundled builds replace their owned output without retaining ghost modules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-clean-build-"));
+  const directory = await makeTemporaryDirectory("velar-clean-build-");
   const output = join(directory, "dist");
   const mainPath = join(directory, "main.vel");
   const dependencyPath = join(directory, "dependency.vel");
@@ -16595,7 +16644,7 @@ test("unbundled builds replace their owned output without retaining ghost module
 });
 
 test("single-file builds synchronize only their marked runtime package and owned CSS", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-single-clean-build-"));
+  const directory = await makeTemporaryDirectory("velar-single-clean-build-");
   const sourcePath = join(directory, "main.vel");
   const outputPath = join(directory, "bundle.js");
   const packageRoot = join(directory, "node_modules", "velar");
@@ -17356,7 +17405,7 @@ test("project compilation shares compiler runtime modules while standalone compi
   assert.ok(!(shared.code ?? "").includes(`from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)}`));
   assert.doesNotMatch(shared.code ?? "", /function __velarResolveReactiveBridge/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-compiler-runtime-"));
+  const directory = await makeTemporaryDirectory("velar-shared-compiler-runtime-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, "export def count() -> number:\n    const values = [1]\n    values.append(2)\n    return values.size\n", "utf8");
@@ -17414,7 +17463,7 @@ test("project compilation shares primitive method runtime without publishing it"
   assert.doesNotMatch(shared.code ?? "", /const __velarTextNativeString = globalThis\.String/u);
   assert.doesNotMatch(shared.code ?? "", /const __velarNumberNativeNumber = globalThis\.Number/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-primitive-runtime-"));
+  const directory = await makeTemporaryDirectory("velar-shared-primitive-runtime-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, "export def format(value: string) -> string:\n    return value.trim().upper()\n", "utf8");
@@ -17528,7 +17577,7 @@ print(Probe.own)
   assert.ok((shared.code ?? "").includes(`from ${JSON.stringify(VELAR_CLASS_FIELD_MODULE)}`));
   assert.doesNotMatch(shared.code ?? "", /const __velarClassNativeObject = globalThis\.Object/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-class-field-runtime-"));
+  const directory = await makeTemporaryDirectory("velar-shared-class-field-runtime-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, `
@@ -17639,7 +17688,7 @@ try { stale(); } catch (error) { console.log(error.name); }
   assert.ok((shared.code ?? "").includes(`from ${JSON.stringify(VELAR_NARROWING_MODULE)}`));
   assert.doesNotMatch(shared.code ?? "", /class __VelarNarrowingError/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-narrowing-runtime-"));
+  const directory = await makeTemporaryDirectory("velar-shared-narrowing-runtime-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, `
@@ -17738,7 +17787,7 @@ print(root.length)
   assert.match(shared.code ?? "", /validationIsInstance as __velarValidationIsInstance/u);
   assert.doesNotMatch(shared.code ?? "", /function __velarValidationIsInstance/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-class-narrowing-runtime-"));
+  const directory = await makeTemporaryDirectory("velar-class-narrowing-runtime-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, source, "utf8");
   const run = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "run", entry], {
@@ -17786,7 +17835,7 @@ component App():
   assert.match(sharedWeb.code ?? "", /errorApply as __velarErrorApply, isError as __velarIsError, normalizeError as __velarNormalizeError/u);
   assert.doesNotMatch(sharedWeb.code ?? "", /const __velarErrorNativeError = globalThis\.Error/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-error-runtime-"));
+  const directory = await makeTemporaryDirectory("velar-shared-error-runtime-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, `
@@ -17897,7 +17946,7 @@ export type Boxed:
   assert.doesNotMatch(shared.code ?? "", /const __velarValidationNativeWeakMap = globalThis\.WeakMap/u);
   assert.doesNotMatch(shared.code ?? "", /const __velarRuntimeTypeRegistryKey/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-runtime-types-"));
+  const directory = await makeTemporaryDirectory("velar-shared-runtime-types-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, `
@@ -18050,7 +18099,7 @@ async def load() -> Base:
   assert.match(shared.code ?? "", /asyncResolvedValue as __velarAsyncResolvedValue/u);
   assert.doesNotMatch(shared.code ?? "", /const __velarNormalizeNativeWeakMap = globalThis\.WeakMap/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-promise-runtime-"));
+  const directory = await makeTemporaryDirectory("velar-shared-promise-runtime-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, `
@@ -18188,7 +18237,7 @@ export def optionalIndex(values: List<number>?) -> number?:
   assert.doesNotMatch(shared.code ?? "", /class __VelarIndexError/u);
   assert.doesNotMatch(shared.code ?? "", /function __velarIndex/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-shared-collection-host-"));
+  const directory = await makeTemporaryDirectory("velar-shared-collection-host-");
   const dependencyPath = join(directory, "dependency.vel");
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, `
@@ -18427,7 +18476,7 @@ print(seven)
   assert.equal(presentExecution.stdout, "7\n");
 
   // velar run reports the same refusal for a project entry.
-  const directory = await mkdtemp(join(tmpdir(), "velar-extern-presence-"));
+  const directory = await makeTemporaryDirectory("velar-extern-presence-");
   const entryPath = join(directory, "main.vel");
   await writeFile(entryPath, missingSource, "utf8");
   const ran = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run", entryPath], { cwd: process.cwd(), encoding: "utf8" });
@@ -18749,7 +18798,7 @@ if mutableValue != null:
     "Cannot assign through readonly { name: string }; it is a read-only view",
   ]);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-dts-"));
+  const directory = await makeTemporaryDirectory("velar-dts-");
   const packageRoot = join(directory, "node_modules", "typed-format");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({
@@ -18807,7 +18856,7 @@ if mutableValue != null:
 });
 
 test("TypeScript declaration re-exports stay package-confined, bounded, and identity-preserving", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dts-graph-"));
+  const directory = await makeTemporaryDirectory("velar-dts-graph-");
   const sourceRoot = join(directory, "src");
   const packageRoot = join(directory, "node_modules", "graph-sdk");
   await mkdir(sourceRoot, { recursive: true });
@@ -18877,7 +18926,7 @@ export {leaked} from "./leak";
 });
 
 test("TypeScript declaration local export tables preserve runtime and type boundaries", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dts-local-exports-"));
+  const directory = await makeTemporaryDirectory("velar-dts-local-exports-");
   const sourceRoot = join(directory, "src");
   const packageRoot = join(directory, "node_modules", "bundled-sdk");
   await mkdir(sourceRoot, { recursive: true });
@@ -18968,7 +19017,7 @@ const standardLabel: string = Client.standard.label
 });
 
 test("TypeScript declarations follow package export subpaths without losing identity or confinement", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-dts-subpaths-"));
+  const directory = await makeTemporaryDirectory("velar-dts-subpaths-");
   const sourceRoot = join(directory, "src");
   const packageRoot = join(directory, "node_modules", "subpath-sdk");
   await mkdir(sourceRoot, { recursive: true });
@@ -19527,7 +19576,7 @@ Promise.prototype.then = () => { throw new Error("poisoned then"); };
   assert.equal(capturedAbiExecution.status, 0, String(capturedAbiExecution.stderr));
   assert.equal(capturedAbiExecution.stdout, "safe\n");
 
-  const projectRoot = await mkdtemp(join(tmpdir(), "velar-async-pull-"));
+  const projectRoot = await makeTemporaryDirectory("velar-async-pull-");
   const producerPath = join(projectRoot, "producer.vel");
   const mainPath = join(projectRoot, "main.vel");
   await writeFile(producerPath, `
@@ -19820,7 +19869,7 @@ component App:
 });
 
 test("CLI format supports write and check modes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-format-"));
+  const directory = await makeTemporaryDirectory("velar-format-");
   const sourcePath = join(directory, "main.vel");
   await writeFile(sourcePath, "def main() -> null:  \n  return null  \n", "utf8");
 
@@ -19834,7 +19883,7 @@ test("CLI format supports write and check modes", async () => {
 });
 
 test("documentation example checker rejects invalid complete examples", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-doc-example-"));
+  const directory = await makeTemporaryDirectory("velar-doc-example-");
   const markdownPath = join(directory, "guide.md");
   await writeFile(markdownPath, "```velar\nconst enabled = True\n```\n", "utf8");
 
@@ -19846,8 +19895,74 @@ test("documentation example checker rejects invalid complete examples", async ()
   assert.match(execution.stderr, /VEL1005/u);
 });
 
+test("documentation example checker analyzes fragments, not just their syntax", async () => {
+  const directory = await makeTemporaryDirectory("velar-doc-fragment-");
+  // Every one of these parses cleanly, so a parse-level fragment check reported
+  // nothing; each is rejected by `velar check`, so the gate must reject it too.
+  const rejected = [
+    ["assignment type", "const x: string = 1\n", /Cannot assign number to string/u],
+    ["bare optional condition", "def label(name: string?) -> string:\n    if name:\n        return name\n    return \"anonymous\"\n", /A condition judges truth, not presence/u],
+    ["optional operand", "def ready(name: string?, active: bool) -> bool:\n    return name and active\n", /A condition judges truth, not presence/u],
+    ["reserved any annotation", "let value: any = 1\nprint(value)\n", /'any' is reserved for explicit unsafe JavaScript boundaries/u],
+    [
+      "web semantics",
+      "type EditorHandle:\n    focus: () -> null\n\ncomponent Page:\n    let editor: EditorHandle? = null\n\n    mounted:\n        if editor:\n            editor.focus()\n\n    return <Editor ref={editor} />\n",
+      /A condition judges truth, not presence/u,
+    ],
+  ] as const;
+  for (const [name, source, expected] of rejected) {
+    const path = join(directory, `${name.replaceAll(" ", "-")}.md`);
+    await writeFile(path, `\`\`\`velar fragment\n${source}\`\`\`\n`, "utf8");
+    const execution = spawnSync(process.execPath, ["scripts/check-documentation-examples.mjs", path], { cwd: process.cwd(), encoding: "utf8" });
+    assert.equal(execution.status, 1, `${name}: ${execution.stdout}${execution.stderr}`);
+    assert.match(execution.stderr, expected);
+  }
+
+  // A real fragment is full of unresolved names; the suppression that keeps
+  // those quiet must not swallow the violation standing next to them.
+  const mixed = join(directory, "mixed.md");
+  await writeFile(mixed, [
+    "```velar fragment",
+    "import {Widget} from \"./widget.vel\"",
+    "",
+    "print(ticket.title)",
+    "const x: string = 1",
+    "for item in items:",
+    "    print(f\"{item.name}\")",
+    "print(Widget)",
+    "```",
+    "",
+  ].join("\n"), "utf8");
+  const mixedExecution = spawnSync(process.execPath, ["scripts/check-documentation-examples.mjs", mixed], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(mixedExecution.status, 1);
+  assert.equal(mixedExecution.stderr.trim().split("\n").length, 1, mixedExecution.stderr);
+  assert.match(mixedExecution.stderr, /Cannot assign number to string/u);
+
+  // What a fragment legitimately omits is its surrounding declarations: the
+  // unresolved names, the neighbouring module, and the asset that only exists
+  // in the prose stay accepted, together with the whole cascade they cause.
+  const accepted = join(directory, "accepted.md");
+  await writeFile(accepted, [
+    "```velar fragment",
+    "import {formatTicket} from \"./format.vel\"",
+    "",
+    "print(formatTicket(ticket))",
+    "for item in items:",
+    "    print(f\"{item.name}\")",
+    "```",
+    "",
+    "```velar fragment",
+    "import css unsafe \"./legacy.css\" before look",
+    "```",
+    "",
+  ].join("\n"), "utf8");
+  const clean = spawnSync(process.execPath, ["scripts/check-documentation-examples.mjs", accepted], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(clean.status, 0, clean.stdout + clean.stderr);
+  assert.match(clean.stdout, /2 fragments/u);
+});
+
 test("project builds enforce imported VelarScript signatures", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-module-types-"));
+  const directory = await makeTemporaryDirectory("velar-module-types-");
   const library = join(directory, "models.vel");
   const entry = join(directory, "main.vel");
   await writeFile(library, `
@@ -19869,7 +19984,7 @@ print(greet(person))
 });
 
 test("module interfaces keep live imports guarded without call-effect metadata", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-live-imports-"));
+  const directory = await makeTemporaryDirectory("velar-live-imports-");
   const storePath = join(directory, "store.vel");
   const entryPath = join(directory, "main.vel");
   const namespacePath = join(directory, "namespace.vel");
@@ -19944,7 +20059,7 @@ def live() -> string:
 });
 
 test("component callback types cross module and editor boundaries", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-callback-props-"));
+  const directory = await makeTemporaryDirectory("velar-callback-props-");
   const domainPath = join(directory, "domain.vel");
   const itemPath = join(directory, "item.vel");
   const validPath = join(directory, "valid.vel");
@@ -20080,7 +20195,7 @@ component Chart:
 });
 
 test("project builds preserve enum identities and aliases across modules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-enum-module-"));
+  const directory = await makeTemporaryDirectory("velar-enum-module-");
   const library = join(directory, "workflow.vel");
   const otherLibrary = join(directory, "other-workflow.vel");
   const store = join(directory, "store.vel");
@@ -20166,7 +20281,7 @@ const current: WorkflowStatus = OtherStatus.todo
 });
 
 test("project interfaces use analyzed export types through dependency chains and cycles", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-analyzed-interface-"));
+  const directory = await makeTemporaryDirectory("velar-analyzed-interface-");
   const leaf = join(directory, "leaf.vel");
   const middle = join(directory, "middle.vel");
   const entry = join(directory, "main.vel");
@@ -20208,7 +20323,7 @@ test("project interfaces use analyzed export types through dependency chains and
 });
 
 test("readonly record contracts and hidden nested types survive module re-export chains", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-readonly-interface-"));
+  const directory = await makeTemporaryDirectory("velar-readonly-interface-");
   const model = join(directory, "model.vel");
   const api = join(directory, "api.vel");
   const entry = join(directory, "main.vel");
@@ -20252,7 +20367,7 @@ mutable.id = "changed"
 });
 
 test("module namespace fields project exported data deeply without runtime freezing", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-readonly-namespace-"));
+  const directory = await makeTemporaryDirectory("velar-readonly-namespace-");
   const model = join(directory, "model.vel");
   const entry = join(directory, "main.vel");
   await writeFile(model, `
@@ -20347,7 +20462,7 @@ export class Widget:
 });
 
 test("record metadata keeps module identity without creating implicit type imports", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-record-module-"));
+  const directory = await makeTemporaryDirectory("velar-record-module-");
   const leftLibrary = join(directory, "left.vel");
   const rightLibrary = join(directory, "right.vel");
   const entry = join(directory, "main.vel");
@@ -20400,7 +20515,7 @@ print(right.right)
 });
 
 test("same-named record types from different modules use their structural contracts", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-record-contract-"));
+  const directory = await makeTemporaryDirectory("velar-record-contract-");
   const consumerPath = join(directory, "consumer.vel");
   const producerPath = join(directory, "producer.vel");
   const mainPath = join(directory, "main.vel");
@@ -20442,7 +20557,7 @@ export def make() -> Item:
 });
 
 test("null normalization follows checked types across Velar module exports", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-host-reexport-"));
+  const directory = await makeTemporaryDirectory("velar-host-reexport-");
   const packageRoot = join(directory, "node_modules", "boundary-sdk");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({
@@ -20505,7 +20620,7 @@ test("null normalization follows checked types across Velar module exports", asy
 });
 
 test("rest signatures retain class element types across module and editor boundaries", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-rest-module-"));
+  const directory = await makeTemporaryDirectory("velar-rest-module-");
   const library = join(directory, "items.vel");
   const entry = join(directory, "main.vel");
   await writeFile(library, `
@@ -20545,7 +20660,7 @@ print(count(first, "wrong"))
 });
 
 test("Set element contracts cross module aliases and signature help", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-set-module-"));
+  const directory = await makeTemporaryDirectory("velar-set-module-");
   const library = join(directory, "tags.vel");
   const entry = join(directory, "main.vel");
   await writeFile(library, `
@@ -20691,7 +20806,7 @@ print(mapped.get(1))
 });
 
 test("CLI source maps lead runtime stacks back to .vel source", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-source-map-"));
+  const directory = await makeTemporaryDirectory("velar-source-map-");
   const sourcePath = join(directory, "main.vel");
   const outputPath = join(directory, "main.js");
   await writeFile(sourcePath, "const values = [1]\nprint(values[4])\n", "utf8");
@@ -20780,7 +20895,7 @@ component App:
 });
 
 test("imported classes preserve construction, aliases, and nominal checks", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-module-class-"));
+  const directory = await makeTemporaryDirectory("velar-module-class-");
   const output = join(directory, "dist");
   await writeFile(join(directory, "models.vel"), `
 export class Player:
@@ -20806,7 +20921,7 @@ print(player is Hero)
 });
 
 test("VelarScript classes use module identities instead of colliding display names", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-class-identity-"));
+  const directory = await makeTemporaryDirectory("velar-class-identity-");
   await writeFile(join(directory, "first.vel"), "export class Session:\n    const id: string\n\n    constructor(id: string):\n        self.id = id\n", "utf8");
   await writeFile(join(directory, "second.vel"), "export class Session:\n    const id: string\n\n    constructor(id: string):\n        self.id = id\n", "utf8");
   const entry = join(directory, "main.vel");
@@ -21716,7 +21831,7 @@ print(Box().private)
 });
 
 test("private members stay inside their class across project and editor semantics", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-private-members-"));
+  const directory = await makeTemporaryDirectory("velar-private-members-");
   const modelPath = join(directory, "model.vel");
   const mainPath = join(directory, "main.vel");
   const modelSource = `
@@ -21781,7 +21896,7 @@ print(Vault.kind())
 });
 
 test("class getters cross module and editor boundaries as documented properties", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-class-getters-"));
+  const directory = await makeTemporaryDirectory("velar-class-getters-");
   const modelPath = join(directory, "model.vel");
   const mainPath = join(directory, "main.vel");
   const modelSource = `
@@ -21836,7 +21951,7 @@ print(card.summary)
 });
 
 test("abstract getter contracts retain identity across VelarScript modules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-inherited-getters-"));
+  const directory = await makeTemporaryDirectory("velar-inherited-getters-");
   const basePath = join(directory, "base.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(basePath, `
@@ -21862,7 +21977,7 @@ print(item.label)
 });
 
 test("class body fields cross module and editor boundaries", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-class-fields-"));
+  const directory = await makeTemporaryDirectory("velar-class-fields-");
   const modelPath = join(directory, "model.vel");
   const mainPath = join(directory, "main.vel");
   const modelSource = `
@@ -21976,7 +22091,7 @@ test("class inheritance rejects unsafe or incomplete object contracts", () => {
 });
 
 test("inheritance metadata crosses VelarScript module boundaries", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-module-inheritance-"));
+  const directory = await makeTemporaryDirectory("velar-module-inheritance-");
   const output = join(directory, "dist");
   const basePath = join(directory, "base.vel");
   const playerPath = join(directory, "player.vel");
@@ -23386,7 +23501,7 @@ def unrelated() -> string:
 });
 
 test("runtime narrowing guards cross direct and namespace module calls", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-call-effects-"));
+  const directory = await makeTemporaryDirectory("velar-call-effects-");
   const storePath = join(directory, "store.vel");
   const namespaceStorePath = join(directory, "namespace-store.vel");
   const directPath = join(directory, "direct.vel");
@@ -24531,7 +24646,7 @@ component Host(View: RowView):
 });
 
 test("Component contracts retain their props across project module interfaces", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-component-contract-"));
+  const directory = await makeTemporaryDirectory("velar-component-contract-");
   const libraryPath = join(directory, "views.vel");
   const appPath = join(directory, "app.vel");
   await writeFile(libraryPath, `
@@ -24728,7 +24843,7 @@ component Nested exposes Handle:
 });
 
 test("component Handle contracts survive project module interfaces", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-component-handle-contract-"));
+  const directory = await makeTemporaryDirectory("velar-component-handle-contract-");
   const libraryPath = join(directory, "dialog.vel");
   const appPath = join(directory, "app.vel");
   await writeFile(libraryPath, `
@@ -25555,7 +25670,7 @@ component Valid:
 });
 
 test("project CSS has one explicit before-Look-after order across module boundaries", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-look-order-"));
+  const directory = await makeTemporaryDirectory("velar-look-order-");
   const entry = join(directory, "main.vel");
   await writeFile(join(directory, "base.css"), ".base { order: 1; }", "utf8");
   await writeFile(join(directory, "base-after.css"), ".base-after { order: 4; }", "utf8");
@@ -25589,7 +25704,7 @@ component App:
 });
 
 test("viewport breakpoints accept reusable local and imported const unit tokens", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-look-breakpoints-"));
+  const directory = await makeTemporaryDirectory("velar-look-breakpoints-");
   const entry = join(directory, "main.vel");
   await writeFile(join(directory, "tokens.vel"), `
 const base = 360px
@@ -25626,7 +25741,7 @@ const pageLook = look:
 });
 
 test("unsafe CSS has one project owner", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-look-owner-"));
+  const directory = await makeTemporaryDirectory("velar-look-owner-");
   const entry = join(directory, "main.vel");
   await writeFile(join(directory, "shared.css"), ".shared { color: black; }", "utf8");
   await writeFile(join(directory, "feature.vel"), 'import css unsafe "./shared.css" before look\nexport const value = 1\n', "utf8");
@@ -25977,7 +26092,7 @@ export action save(note: string) -> string:
 `.trimStart()).moduleInterface;
   assert.match(describeType(syntaxInterface.exports.get("save")!), /^action \(note: string\) -> Promise<string>$/u);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-module-actions-"));
+  const directory = await makeTemporaryDirectory("velar-module-actions-");
   const storePath = join(directory, "store.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(storePath, `
@@ -27086,7 +27201,7 @@ component App:
 });
 
 test("CLI emits complete Web application assets", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-web-build-"));
+  const directory = await makeTemporaryDirectory("velar-web-build-");
   const execution = spawnSync(process.execPath, [
     "packages/cli/src/cli.ts",
     "build",
@@ -27153,7 +27268,7 @@ test("CLI emits complete Web application assets", async () => {
 });
 
 test("workspace text index retains bounded sources and applies exact changes and open overlays", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-workspace-index-"));
+  const directory = await makeTemporaryDirectory("velar-workspace-index-");
   const sourceDirectory = join(directory, "src");
   const mainPath = join(sourceDirectory, "main.vel");
   const scriptPath = join(sourceDirectory, "feature.ts");
@@ -27211,7 +27326,7 @@ test("workspace text index retains bounded sources and applies exact changes and
 });
 
 test("language server publishes diagnostics, hover, and completion", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-lsp-project-"));
+  const directory = await makeTemporaryDirectory("velar-lsp-project-");
   const modelsPath = join(directory, "models.vel");
   const mainPath = join(directory, "main.vel");
   const mainText = [
@@ -28080,7 +28195,7 @@ print(abs(1))
   assert.ok(messages.some((message) => /Use 'value\.trim\(\)'/u.test(message)));
   assert.ok(messages.some((message) => /Use 'value\.abs\(\)'/u.test(message)));
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-method-guidance-"));
+  const directory = await makeTemporaryDirectory("velar-method-guidance-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `import {trim} from "velar/text"\nimport {round} from "velar/math"\nprint(trim("x"))\nprint(round(1))\n`, "utf8");
   const project = await compileProject(entry);
@@ -28153,7 +28268,7 @@ test("multi-token Look shorthand strings are rejected with builder guidance", ()
 });
 
 test("named re-exports join the module interface with aliases and live-export flags", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-re-export-"));
+  const directory = await makeTemporaryDirectory("velar-re-export-");
   const libraryPath = join(directory, "library.vel");
   const barrelPath = join(directory, "barrel.vel");
   const consumerPath = join(directory, "consumer.vel");
@@ -28210,7 +28325,7 @@ print(report.total)
 });
 
 test("named re-exports work from package sources and package barrels", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-re-export-package-"));
+  const directory = await makeTemporaryDirectory("velar-re-export-package-");
   const packageRoot = join(directory, "node_modules", "velar-lib");
   await mkdir(join(directory, "src"), { recursive: true });
   await mkdir(join(packageRoot, "src"), { recursive: true });
@@ -28260,7 +28375,7 @@ test("re-exports reject namespace form, duplicates, and missing origin names", a
   const aliased = compile(`export const value = 1\nexport {value as shared} from "./library.vel"\n`);
   assert.deepEqual(aliased.diagnostics, []);
 
-  const directory = await mkdtemp(join(tmpdir(), "velar-re-export-missing-"));
+  const directory = await makeTemporaryDirectory("velar-re-export-missing-");
   const libraryPath = join(directory, "library.vel");
   const barrelPath = join(directory, "barrel.vel");
   await writeFile(libraryPath, "export const present = 1\n", "utf8");
@@ -28320,7 +28435,7 @@ print(banner)
 });
 
 test("a manual extern module silences the declaration probe for its source", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-extern-probe-"));
+  const directory = await makeTemporaryDirectory("velar-extern-probe-");
   const packageRoot = join(directory, "node_modules", "manual-owned");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({
@@ -28357,7 +28472,7 @@ print(helper())
 });
 
 test("extern classes share one contract across modules and conflicting redeclarations are reported", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-extern-contract-"));
+  const directory = await makeTemporaryDirectory("velar-extern-contract-");
   const libraryPath = join(directory, "library.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(libraryPath, `
@@ -28441,7 +28556,7 @@ print(describe(message))
 
 test("velar test and velar run resolve bridged npm dependencies from the project", async () => {
   const cli = resolve("packages/cli/src/cli.ts");
-  const directory = await mkdtemp(join(tmpdir(), "velar-bridged-sandbox-"));
+  const directory = await makeTemporaryDirectory("velar-bridged-sandbox-");
   const packageRoot = join(directory, "node_modules", "word-count");
   await mkdir(join(directory, "src"), { recursive: true });
   await mkdir(packageRoot, { recursive: true });
@@ -28490,7 +28605,7 @@ def test_bridged_dependency() -> null:
 });
 
 test("route components check without importing RouteContext at the call site", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "velar-route-context-"));
+  const directory = await makeTemporaryDirectory("velar-route-context-");
   const pagePath = join(directory, "page.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(pagePath, `

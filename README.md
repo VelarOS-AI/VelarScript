@@ -196,6 +196,10 @@ match response:
 ```
 
 ```velar fragment
+enum EventKind:
+    text
+    tool
+
 type TextEvent:
     kind: EventKind.text
     text: string

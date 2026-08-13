@@ -306,6 +306,21 @@ test("[BLD-U1] configuration diagnostics teach a complete valid web manifest", a
   assert.equal(incomplete.status, 1);
   assert.match(incomplete.stderr, /'formatVersion' is required/u);
   assert.match(incomplete.stderr, /"extensions": \["@velarscript\/web"\]/u);
+  // The example teaches dropping the key for a Node/CLI project, so a manifest
+  // that follows the teaching has to check — not report a second error.
+  assert.match(missing.stderr, /\(drop "extensions" for a Node\/CLI project\)/u);
+  const core = await runCli({
+    "velar.json": JSON.stringify({ formatVersion: 2, entry: "src/main.vel" }),
+    "src/main.vel": "print(\"k\")\n",
+  }, ["check", "<dir>"]);
+  assert.equal(core.status, 0, core.stdout + core.stderr);
+  // Only an absent key is the empty list; a malformed one still teaches.
+  const malformed = await runCli({
+    "velar.json": JSON.stringify({ formatVersion: 2, entry: "src/main.vel", extensions: null }),
+    "src/main.vel": "print(\"k\")\n",
+  }, ["check", "<dir>"]);
+  assert.equal(malformed.status, 1);
+  assert.match(malformed.stderr, /'extensions' must be a list of installed package names/u);
 });
 
 // ---------------------------------------------------------------------------

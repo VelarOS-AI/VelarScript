@@ -576,9 +576,10 @@ def appendChunk(replyId: string, chunk: string) -> null:
     if reply:
         reply.text += chunk
 
-return <ul>{sessions.map(session =>
-    <SessionRow key={session.id} preview={messagePreview(latestBySession.get(session.id))} />
-)}</ul>
+component SessionList:
+    return <ul>{sessions.map(session =>
+        <SessionRow key={session.id} preview={messagePreview(latestBySession.get(session.id))} />
+    )}</ul>
 ```
 
 Appending a chunk performs one `Map.get` and one property assignment. Only the

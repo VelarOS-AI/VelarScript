@@ -460,12 +460,13 @@ Conditional rendering is an ordinary expression — there are no magic JSX
 control-flow attributes:
 
 ```velar fragment
-return <section>
-    {loading ? <p aria-busy="true">Loading…</p> : <Results items={items} />}
-    <ul>
-        {items.map(item => <li key={item.id}>{item.title}</li>)}
-    </ul>
-</section>
+component Panel:
+    return <section>
+        {loading ? <p aria-busy="true">Loading…</p> : <Results items={items} />}
+        <ul>
+            {items.map(item => <li key={item.id}>{item.title}</li>)}
+        </ul>
+    </section>
 ```
 
 ### Errors and async

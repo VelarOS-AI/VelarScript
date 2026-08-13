@@ -6,6 +6,20 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The documentation gate now analyzes every example, not just parses the
+  fragments. Ninety-eight of the hundred and seventy-two examples were
+  parse-checked only, which is how an illegal condition survived in
+  web-api.md until a human sweep found it; fragments now run the same
+  full project analysis as complete examples, with suppression limited to
+  what is inherent to being a fragment — an unresolved name declared in
+  the surrounding prose, a neighbouring module that exists only in the
+  narrative — decided structurally by span and provenance rather than by
+  matching message text. Seven real violations surfaced and are fixed.
+  Examples that import Node-only modules are analyzed against the Core
+  target instead of being failed by a Web-target mismatch.
+- A Core project no longer has to declare an empty `extensions` list: the
+  key may be absent, which is what the configuration diagnostic already
+  promised and what previously produced a second, different error.
 - The Desktop worker test suite can no longer freeze the gate. The hang
   that cost several runs was a macOS FSEvents arming race — a recursive
   watch started just before a write never receives that notification at
