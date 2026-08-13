@@ -3361,6 +3361,13 @@ count/loop 互斥；实参含字面量编译期检查）。停靠点体复用 Lo
 compiler.test.ts/examples 等共享文件按「树干净才动、否则列 Deferred 清单」
 规则延迟 —— 编排方在 N-2c 落地后合流验收。
 
+**Codex 第三单（2026-08-13）**：VelarOS-Lite 迁移到马拉松 HEAD ——
+`docs/handoff/CODEX-TASK-LITE-MIGRATION.md`。裁判上场：钉住提交 `db629df`
+worktree 构建（不碰活树），把约三十项破坏性收紧全量吃一遍，**每条诊断记录
+「是否一步教会」**（MIGRATION-NOTES.md）—— 教学质量的真实 KPI 数据；同时完成
+D48 的编辑器侧收尾（改用 @velarscript/script-analysis 与 text-buffer 包）。
+VelarScript 仓库零改动、零撞车。
+
 **马拉松工作协议（2026-08-12 用户授权，最高约束，优先于本节其余排期）**：
 
 1. **设计层改动必须先与用户探讨** —— 语言语义/拼写/表面的任何变更，即使发现
