@@ -3,7 +3,7 @@ import {
   type ApplicationPackageInput,
   type ApplicationPackageHost,
 } from "@velarscript/compiler/application-package-host";
-import { buildDesktopApplication } from "./build.ts";
+import { buildDesktopApplication, formatDesktopBytes as formatBytes } from "./build.ts";
 import { VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
 
 export const velarApplicationPackageHost: ApplicationPackageHost = Object.freeze({
@@ -27,9 +27,3 @@ export const velarApplicationPackageHost: ApplicationPackageHost = Object.freeze
     });
   },
 });
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  return `${(value / 1024 / 1024).toFixed(2)} MiB`;
-}

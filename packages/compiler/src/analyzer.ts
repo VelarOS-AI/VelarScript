@@ -19,11 +19,11 @@ import type {
   TypeReference,
   TypeSyntax,
 } from "./ast.ts";
-import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import { diagnostic, mechanicalFix, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
 import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
 import { bindingNameRestriction } from "./source-names.ts";
-import { spanIdentity, type Span } from "./source.ts";
+import { span, spanIdentity, type Span } from "./source.ts";
 import {
   analysisTypeIdentity,
   anyType,
@@ -6585,15 +6585,15 @@ export class Analyzer implements TypeEnvironment {
     } else if (object.kind === "list") {
       result = this.listMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("List", property), memberSpan);
+      if (result.kind === "unknown") this.typeError(this.collectionMemberError("List", property), memberSpan, this.collectionMemberFix("List", property, memberSpan));
     } else if (object.kind === "set") {
       result = this.setMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Set", property), memberSpan);
+      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Set", property), memberSpan, this.collectionMemberFix("Set", property, memberSpan));
     } else if (object.kind === "map") {
       result = this.mapMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
-      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Map", property), memberSpan);
+      if (result.kind === "unknown") this.typeError(this.collectionMemberError("Map", property), memberSpan, this.collectionMemberFix("Map", property, memberSpan));
     } else if (object.kind === "record") {
       result = this.recordMember(object, property) ?? unknownType;
       if (property === "size") this.collectionSizes.add(memberSpan.end);
@@ -6960,6 +6960,16 @@ export class Analyzer implements TypeEnvironment {
   private collectionMemberError(kind: CollectionKind, property: string): string {
     const guidance = collectionMemberGuidance(kind, property);
     return `${kind} has no member '${property}'${guidance ? `; ${guidance.message}` : ""}`;
+  }
+
+  /**
+   * D38 §48: a retired collection member whose guidance names one successor
+   * member is a mechanical rename of the member name itself.
+   */
+  private collectionMemberFix(kind: CollectionKind, property: string, memberSpan: Span): DiagnosticFix | undefined {
+    const guidance = collectionMemberGuidance(kind, property);
+    if (!guidance?.replacement || !guidance.title || memberSpan.end - memberSpan.start < property.length) return undefined;
+    return mechanicalFix(span(memberSpan.end - property.length, memberSpan.end), guidance.replacement, guidance.title);
   }
 
   // COL-U3: exactly the predicate `x => x != null` (either operand order).
@@ -8279,8 +8289,8 @@ export class Analyzer implements TypeEnvironment {
     return valid;
   }
 
-  protected typeError(message: string, errorSpan: Span): void {
-    this.diagnostics.push(diagnostic("VEL4001", message, errorSpan));
+  protected typeError(message: string, errorSpan: Span, fix?: DiagnosticFix): void {
+    this.diagnostics.push(diagnostic("VEL4001", message, errorSpan, fix));
   }
 
   private analyzeMatchPattern(

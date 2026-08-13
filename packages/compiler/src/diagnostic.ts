@@ -1,5 +1,26 @@
 import type { SourceText, Span } from "./source.ts";
 
+/**
+ * D38 §48: the mechanical rewrite a diagnostic already knows. A fix is
+ * registered only where the diagnostic names one correct replacement and no
+ * judgment is involved, so applying it is a spelling change and never a guess
+ * about intent. `velar fix` applies these, and an editor offers each one as a
+ * quick fix; every other diagnostic stays advice the author acts on.
+ */
+export interface DiagnosticEdit {
+  /** The replaced range. It may be wider than the diagnostic span (surrounding whitespace a deletion should take with it), and empty to insert. */
+  readonly span: Span;
+  /** The exact replacement text; the empty string deletes the range. */
+  readonly text: string;
+}
+
+export interface DiagnosticFix {
+  /** The edits of one rewrite; they never overlap and are applied together or not at all. */
+  readonly edits: readonly DiagnosticEdit[];
+  /** Imperative editor title, e.g. "Use VelarScript strict equality '=='". */
+  readonly title: string;
+}
+
 export interface Diagnostic {
   readonly code: string;
   readonly message: string;
@@ -11,14 +32,26 @@ export interface Diagnostic {
    * diagnostics count toward the zero-diagnostics gate for code generation.
    */
   readonly recovered?: boolean;
+  /** The mechanical rewrite this diagnostic names, when it names exactly one. */
+  readonly fix?: DiagnosticFix;
 }
 
-export function diagnostic(code: string, message: string, span: Span): Diagnostic {
-  return { code, message, span };
+export function diagnostic(code: string, message: string, span: Span, fix?: DiagnosticFix): Diagnostic {
+  return fix ? { code, message, span, fix } : { code, message, span };
 }
 
-export function recoveredDiagnostic(code: string, message: string, span: Span): Diagnostic {
-  return { code, message, span, recovered: true };
+export function recoveredDiagnostic(code: string, message: string, span: Span, fix?: DiagnosticFix): Diagnostic {
+  return fix ? { code, message, span, recovered: true, fix } : { code, message, span, recovered: true };
+}
+
+/** Builds the one-edit mechanical rewrite of `span` to `text`. */
+export function mechanicalFix(span: Span, text: string, title: string): DiagnosticFix {
+  return { edits: [{ span, text }], title };
+}
+
+/** Builds a mechanical rewrite whose one spelling change needs more than one edit. */
+export function mechanicalEdits(edits: readonly DiagnosticEdit[], title: string): DiagnosticFix {
+  return { edits, title };
 }
 
 export function formatDiagnostic(source: SourceText, item: Diagnostic): string {

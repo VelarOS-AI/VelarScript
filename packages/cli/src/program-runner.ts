@@ -1,16 +1,29 @@
 import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { prepareStandardModules } from "./test-runner.ts";
+import { uncaughtProgramEntrySource } from "./uncaught-program-error.ts";
 
 // velar/host owns a 30-second in-program graceful-shutdown window. The outer
 // launcher must not truncate that public contract; this margin only catches a
 // child that ignored the signal or failed to exit after its own deadline.
 const runShutdownDeadlineMs = 35_000;
 
-export async function runProgram(config: VelarProjectConfig, programArguments: readonly string[]): Promise<number> {
+export interface RunProgramOptions {
+  /** MOD-U10: prints the unfiltered Node.js stack instead of the owned frames. */
+  readonly fullStack?: boolean;
+}
+
+export async function runProgram(
+  config: VelarProjectConfig,
+  programArguments: readonly string[],
+  options: RunProgramOptions = {},
+): Promise<number> {
   const project = await compileProject(config.entryPath, new Map(), {
     sourceRoot: config.root,
     projectRoot: config.root,
@@ -38,7 +51,17 @@ export async function runProgram(config: VelarProjectConfig, programArguments: r
   try {
     await prepareStandardModules(temporary, config);
     await writeCompiledTestProject(project, temporary);
-    return await executeNodeProgram(compiledTestModulePath(project, entry, temporary), programArguments);
+    // MOD-U10: the program is entered through a VelarScript-owned launcher so an
+    // uncaught initialization or entry error prints as a VelarScript failure —
+    // the source-mapped .vel frames without Node's module-loader frames or its
+    // version banner — instead of a raw Node.js crash dump.
+    const launcher = join(temporary, ".velar-run-entry.mjs");
+    await writeFile(launcher, uncaughtProgramEntrySource({
+      entryUrl: pathToFileURL(compiledTestModulePath(project, entry, temporary)).href,
+      sourcePath: entry.inputPath,
+      fullStack: options.fullStack === true,
+    }), "utf8");
+    return await executeNodeProgram(launcher, programArguments);
   } finally {
     await removeCompiledSandbox(temporary);
   }

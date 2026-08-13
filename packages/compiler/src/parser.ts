@@ -41,7 +41,7 @@ import type {
   TypeSyntax,
   VariableDeclaration,
 } from "./ast.ts";
-import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
+import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringTokenPayload } from "./interpolated-string.ts";
 import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-guidance.ts";
@@ -318,12 +318,14 @@ export class Parser {
         // the same compile instead of hiding behind the skipped block.
         const shape = this.peekKind(2);
         if (guidance.keyword === "def" && (shape === "leftParen" || shape === "less")) {
-          this.diagnostics.push(recoveredDiagnostic("VEL2026", guidance.message, first.span));
+          this.diagnostics.push(recoveredDiagnostic("VEL2026", guidance.message, first.span,
+            mechanicalFix(first.span, guidance.keyword, `Use '${guidance.keyword}'`)));
           this.advance();
           return this.parseFunction(start, exported, asynchronous);
         }
         if (guidance.keyword === "type" && (shape === "colon" || shape === "assign")) {
-          this.diagnostics.push(recoveredDiagnostic("VEL2026", guidance.message, first.span));
+          this.diagnostics.push(recoveredDiagnostic("VEL2026", guidance.message, first.span,
+            mechanicalFix(first.span, guidance.keyword, `Use '${guidance.keyword}'`)));
           this.advance();
           return this.parseTypeDefinition(start, exported);
         }
@@ -384,6 +386,8 @@ export class Parser {
           "VEL2017",
           "Use 'assert condition else message'; an assertion message belongs to the failing branch",
           separator.span,
+          // The next token's start absorbs whatever spacing followed the comma.
+          this.atStatementEnd() ? undefined : mechanicalFix(span(separator.span.start, this.current().span.start), " else ", "Use 'assert condition else message'"),
         ));
         if (this.atStatementEnd()) {
           this.diagnostics.push(diagnostic("VEL2017", "'assert' requires a message after 'else'", separator.span));
@@ -404,12 +408,17 @@ export class Parser {
 
     if (this.match("for")) {
       let asynchronousLoop = false;
+      const forKeyword = this.previous();
       if (this.match("await")) {
         asynchronousLoop = true;
         this.diagnostics.push(recoveredDiagnostic(
           "VEL2017",
           "Use 'async for value in source'; the async marker precedes the loop",
           this.previous().span,
+          mechanicalEdits([
+            { span: span(forKeyword.span.start, forKeyword.span.start), text: "async " },
+            { span: span(this.previous().span.start, this.current().span.start), text: "" },
+          ], "Use 'async for value in source'"),
         ));
       }
       return this.parseForStatement(start, asynchronousLoop);
@@ -1261,7 +1270,8 @@ export class Parser {
         if (keywordGuidance) {
           const shape = this.peekKind(2);
           if (keywordGuidance.keyword === "def" && (shape === "leftParen" || shape === "less")) {
-            this.diagnostics.push(recoveredDiagnostic("VEL2026", keywordGuidance.message, this.current().span));
+            this.diagnostics.push(recoveredDiagnostic("VEL2026", keywordGuidance.message, this.current().span,
+              mechanicalFix(this.current().span, keywordGuidance.keyword, `Use '${keywordGuidance.keyword}'`)));
             this.advance();
             methods.push(this.parseClassMethod(methodStart, asynchronous, methodAbstract, methodOverride, methodStatic, methodPrivate));
             this.consumeNewlines();
@@ -1462,6 +1472,7 @@ export class Parser {
           "VEL2035",
           "Use 'case _:' for the fallback case; 'match' has no 'else' clause",
           keyword.span,
+          mechanicalFix(keyword.span, "case _", "Use 'case _:' for the fallback case"),
         ));
         const body = this.parseBlock();
         cases.push({
@@ -1770,8 +1781,9 @@ export class Parser {
     if (nameGuidance) {
       // A guidance spelling with a replacement recovers as the guided type
       // name so semantic analysis still runs and reports its own guidance.
-      this.diagnostics.push(nameGuidance.replacement
-        ? recoveredDiagnostic("VEL2012", nameGuidance.message, name.span)
+      this.diagnostics.push(nameGuidance.replacement && nameGuidance.title
+        ? recoveredDiagnostic("VEL2012", nameGuidance.message, name.span,
+          mechanicalFix(name.span, nameGuidance.replacement, nameGuidance.title))
         : diagnostic("VEL2012", nameGuidance.message, name.span));
     }
     const typeName = nameGuidance?.replacement ?? name.value;
@@ -1807,6 +1819,7 @@ export class Parser {
           "VEL2012",
           `Use 'List<${name.value}>' for ordered collections; VelarScript has no postfix '[]' array types`,
           span(name.span.start, close.span.end),
+          mechanicalFix(span(name.span.start, close.span.end), `List<${name.value}>`, `Use 'List<${name.value}>'`),
         ));
         return this.finishTypeReferenceSuffix({
           kind: "GenericTypeSyntax",
@@ -1817,7 +1830,8 @@ export class Parser {
         }, allowTrailingOptional);
       }
       if (squareArguments) {
-        this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end)));
+        this.diagnostics.push(recoveredDiagnostic("VEL2012", "Generic type arguments use '<...>', not '[...]'", span(open.span.start, close.span.end),
+          mechanicalEdits([{ span: open.span, text: "<" }, { span: close.span, text: ">" }], "Use angle brackets for generic type arguments")));
       }
       const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
       if (this.validateExtensionTypeArguments(typeName, arguments_, name.span)) {
@@ -1845,7 +1859,8 @@ export class Parser {
 
   private makeOptionalTypeSyntax(inner: TypeSyntax, optionalSpan: Span): TypeSyntax {
     if (inner.kind === "NamedTypeSyntax" && inner.name === "null") {
-      this.diagnostics.push(recoveredDiagnostic("VEL2012", "'null?' is redundant; use 'null'", optionalSpan));
+      this.diagnostics.push(recoveredDiagnostic("VEL2012", "'null?' is redundant; use 'null'", optionalSpan,
+        mechanicalFix(span(inner.span.end, optionalSpan.end), "", "Remove the redundant '?'")));
       return { ...inner, span: optionalSpan };
     }
     return { kind: "OptionalTypeSyntax", inner, span: optionalSpan };
@@ -1979,6 +1994,7 @@ export class Parser {
             "VEL2031",
             "Use 'is' for a type test; VelarScript does not expose JavaScript 'instanceof'",
             operator.span,
+            mechanicalFix(operator.span, "is", "Use 'is' for the type test"),
           ));
         }
         const negated = this.match("not");
@@ -2000,6 +2016,7 @@ export class Parser {
               ? "Use '!= null' to test for a value; 'is' tests runtime types"
               : "Use '== null' to test for a value; 'is' tests runtime types",
             span(operator.span.start, end),
+            mechanicalFix(span(operator.span.start, end), negated ? "!= null" : "== null", `Use '${negated ? "!=" : "=="} null' to test for a value`),
           ));
           left = {
             kind: "BinaryExpression",
@@ -2207,6 +2224,11 @@ export class Parser {
         "VEL2031",
         `VelarScript has no '${operator}${operator}'; write '${name} ${operator}= 1'`,
         span(first.span.start, this.tokens[this.index + 1]!.span.end),
+        // Only the prefix spelling '++value' reaches here, so the whole
+        // '++name' text is replaced by the compound assignment statement.
+        target?.kind === "identifier"
+          ? mechanicalFix(span(first.span.start, target.span.end), `${name} ${operator}= 1`, `Write '${name} ${operator}= 1'`)
+          : undefined,
       ));
       this.advance();
       this.advance();
@@ -2274,6 +2296,7 @@ export class Parser {
           "VEL2031",
           `Type arguments are inferred at each call site; write '${name}(...)' without '<...>'`,
           span(start, this.previous().span.end),
+          mechanicalFix(span(start, this.previous().span.end), "", "Remove the explicit type arguments"),
         ));
         continue;
       }
@@ -2297,7 +2320,8 @@ export class Parser {
             if ((this.check("identifier") || this.check("from")) && this.peekKind(1) === "colon") {
               const name = this.advance();
               this.advance();
-              this.diagnostics.push(diagnostic("VEL2024", `Write '=' between the name and value for named argument '${name.value}': ${name.value} = value`, name.span));
+              this.diagnostics.push(diagnostic("VEL2024", `Write '=' between the name and value for named argument '${name.value}': ${name.value} = value`, name.span,
+                mechanicalFix(this.previous().span, "=", "Use '=' for the named argument")));
               if (sawSpread) this.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
               sawNamed = true;
               argumentNames.push(name.value);

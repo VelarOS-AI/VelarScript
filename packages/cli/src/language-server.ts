@@ -1,7 +1,7 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isAbsolute, relative, resolve } from "node:path";
-import { collectionMemberGuidance, compile, formatSource, isSourceIdentifierPart, sourceTypeNameGuidance, type CollectionKind, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
-import type { ProjectResult } from "./project.ts";
+import { compile, formatSource, isSourceIdentifierPart, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
+import type { ProjectModule, ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
@@ -864,7 +864,11 @@ export async function runLanguageServer(): Promise<void> {
           break;
         }
         const acceptsQuickFix = !context?.only || context.only.some((kind) => kind === "quickfix" || kind.startsWith("quickfix."));
-        respond(message.id, document && acceptsQuickFix ? quickFixes(document, context?.diagnostics ?? []) : []);
+        const fixPath = pathOf(descriptor.uri);
+        const fixProject = document && acceptsQuickFix ? await projectFor(document) : null;
+        respond(message.id, document && acceptsQuickFix
+          ? quickFixes(document, fixProject && fixPath ? fixProject.modules.find((item) => item.inputPath === fixPath) ?? null : null, context?.diagnostics ?? [])
+          : []);
         break;
       }
       case "textDocument/formatting": {
@@ -1193,83 +1197,48 @@ function scriptLexicalTokenType(kind: ScriptAnalysis["tokens"][number]["kind"]):
   }
 }
 
-function quickFixes(document: TextDocument, diagnostics: readonly unknown[]): unknown[] {
+/**
+ * D38 §48: an editor quick fix is the same mechanical rewrite `velar fix`
+ * applies, read from the diagnostic that named it. The compiler registers the
+ * rewrite where it reports the diagnostic, so the editor never re-derives one
+ * from message text and the two surfaces can never drift apart.
+ */
+function quickFixes(document: TextDocument, module: ProjectModule | null, diagnostics: readonly unknown[]): unknown[] {
+  if (!module) return [];
+  const source = module.result.source;
+  const registered = module.result.diagnostics
+    .filter((item) => item.fix && item.fix.edits.length > 0)
+    .map((item) => ({ code: item.code, range: lspRange(source, boundedDiagnosticSpan(source, item.span)), fix: item.fix! }));
+  if (registered.length === 0) return [];
   const actions: unknown[] = [];
   for (const value of diagnostics.slice(0, MAX_LSP_RESULT_ITEMS)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    const diagnostic = value as { readonly code?: unknown; readonly message?: unknown; readonly range?: unknown };
+    const diagnostic = value as { readonly code?: unknown; readonly range?: unknown };
     if (!diagnostic.range || typeof diagnostic.range !== "object" || Array.isArray(diagnostic.range)) continue;
     const range = diagnostic.range as Range;
-    const start = offsetAt(document.text, range.start);
-    const end = offsetAt(document.text, range.end);
-    const original = document.text.slice(start, end);
-    let replacement: string | null = null;
-    let title: string | null = null;
-    let editRange = range;
-    if (diagnostic.code === "VEL1005" && original === "===") {
-      replacement = "==";
-      title = "Use VelarScript strict equality '=='";
-    } else if (diagnostic.code === "VEL1005" && original === "!==") {
-      replacement = "!=";
-      title = "Use VelarScript strict inequality '!='";
-    } else if (diagnostic.code === "VEL1002" && original === "\t") {
-      replacement = "    ";
-      title = "Replace the indentation tab with four spaces";
-    } else if (diagnostic.code === "VEL1005" && original === "#" && typeof diagnostic.message === "string"
-      && diagnostic.message.includes("JavaScript private identifiers")) {
-      replacement = "";
-      title = "Remove the JavaScript private marker";
-    } else if (diagnostic.code === "VEL1005") {
-      const direct = new Map<string, readonly [string, string]>([
-        ["undefined", ["null", "Use VelarScript null"]],
-        ["none", ["null", "Use VelarScript null"]],
-        ["None", ["null", "Use VelarScript null"]],
-        ["True", ["true", "Use lowercase true"]],
-        ["False", ["false", "Use lowercase false"]],
-        ["elif", ["else if", "Use 'else if'"]],
-        ["int", ["number", "Use the VelarScript number type"]],
-        ["float", ["number", "Use the VelarScript number type"]],
-        ["&&", ["and", "Use readable 'and'"]],
-        ["||", ["or", "Use readable 'or'"]],
-        ["!", ["not", "Use readable 'not'"]],
-      ]).get(original);
-      if (direct) [replacement, title] = direct;
-    } else if (diagnostic.code === "VEL2012" && typeof diagnostic.message === "string") {
-      const typeGuidance = sourceTypeNameGuidance(original);
-      if (typeGuidance?.replacement && typeGuidance.title) {
-        replacement = typeGuidance.replacement;
-        title = typeGuidance.title;
-      } else if (diagnostic.message.includes("Generic type arguments use") && original.startsWith("[") && original.endsWith("]")) {
-        replacement = `<${original.slice(1, -1)}>`;
-        title = "Use angle brackets for generic type arguments";
-      }
-    } else if (diagnostic.code === "VEL2024") {
-      let colon = end;
-      while (colon < document.text.length && (document.text[colon] === " " || document.text[colon] === "\t")) colon += 1;
-      if (document.text[colon] === ":") {
-        editRange = { start: positionAt(document.text, colon), end: positionAt(document.text, colon + 1) };
-        replacement = "=";
-        title = "Use '=' for the named argument";
-      }
-    } else if (diagnostic.code === "VEL4001" && typeof diagnostic.message === "string") {
-      const member = /\.([A-Za-z_$][A-Za-z0-9_$]*)$/u.exec(original);
-      const owner = /^(List|Set|Map) has no member/u.exec(diagnostic.message)?.[1] as CollectionKind | undefined;
-      const guidance = member && owner ? collectionMemberGuidance(owner, member[1]!) : null;
-      if (member && guidance?.replacement && guidance.title) {
-        editRange = { start: positionAt(document.text, end - member[1]!.length), end: positionAt(document.text, end) };
-        replacement = guidance.replacement;
-        title = guidance.title;
-      }
-    }
-    if (replacement === null || !title) continue;
+    const match = registered.find((item) => item.code === diagnostic.code && sameLspRange(item.range, range));
+    if (!match) continue;
     actions.push({
-      title,
+      title: match.fix.title,
       kind: "quickfix",
       isPreferred: true,
-      edit: { changes: { [document.uri]: [{ range: editRange, newText: replacement }] } },
+      edit: {
+        changes: {
+          [document.uri]: match.fix.edits.map((edit) => ({ range: lspRange(source, edit.span), newText: edit.text })),
+        },
+      },
     });
   }
   return actions;
+}
+
+function boundedDiagnosticSpan(source: SourceText, span: Span): Span {
+  return { start: span.start, end: Math.max(span.start + 1, span.end) > source.text.length ? span.end : Math.max(span.start + 1, span.end) };
+}
+
+function sameLspRange(left: Range, right: Range): boolean {
+  return left.start.line === right.start?.line && left.start.character === right.start?.character
+    && left.end.line === right.end?.line && left.end.character === right.end?.character;
 }
 
 function projectInlayHints(project: ProjectResult, path: string, text: string, range?: Range): unknown[] {

@@ -1,4 +1,4 @@
-import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
+import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
 import { forbiddenSourceIdentifiers, isForbiddenPrototypeMember, isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
@@ -180,7 +180,16 @@ export class Lexer {
           }
           break;
         case ";":
-          this.diagnostics.push(recoveredDiagnostic("VEL1005", "A statement ends at its newline; VelarScript does not use ';'", span(start, start + 1)));
+          this.diagnostics.push(recoveredDiagnostic(
+            "VEL1005",
+            "A statement ends at its newline; VelarScript does not use ';'",
+            span(start, start + 1),
+            // Only a semicolon the line ends with is mechanical: deleting it
+            // leaves the same one statement. A semicolon between two
+            // statements asks for a line break instead, which is a change of
+            // layout rather than of spelling, so it stays advice.
+            this.trailingSemicolonFix(start),
+          ));
           this.advance();
           break;
         case ",":
@@ -228,7 +237,8 @@ export class Lexer {
           if (this.peek(1) === ">") {
             this.simple("fatArrow", start, 2);
           } else if (this.peek(1) === "=" && this.peek(2) === "=") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '=='; equality is already strict in VelarScript", span(start, start + 3)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '=='; equality is already strict in VelarScript", span(start, start + 3),
+              mechanicalFix(span(start, start + 3), "==", "Use VelarScript strict equality '=='")));
             this.simple("equal", start, 3);
           } else {
             this.simple(this.peek(1) === "=" ? "equal" : "assign", start, this.peek(1) === "=" ? 2 : 1);
@@ -236,18 +246,21 @@ export class Lexer {
           break;
         case "!":
           if (this.peek(1) === "=" && this.peek(2) === "=") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '!='; inequality is already strict in VelarScript", span(start, start + 3)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '!='; inequality is already strict in VelarScript", span(start, start + 3),
+              mechanicalFix(span(start, start + 3), "!=", "Use VelarScript strict inequality '!='")));
             this.simple("notEqual", start, 3);
           } else if (this.peek(1) === "=") {
             this.simple("notEqual", start, 2);
           } else {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'not'; VelarScript uses readable logical operators", span(start, start + 1)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'not'; VelarScript uses readable logical operators", span(start, start + 1),
+              mechanicalFix(span(start, start + 1), "not", "Use readable 'not'")));
             this.simple("not", start, 1);
           }
           break;
         case "&":
           if (this.peek(1) === "&") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2),
+              mechanicalFix(span(start, start + 2), "and", "Use readable 'and'")));
             this.simple("and", start, 2);
           } else {
             this.diagnostics.push(recoveredDiagnostic("VEL1005", "Combine conditions with 'and'; VelarScript has no bitwise '&'", span(start, start + 1)));
@@ -266,7 +279,8 @@ export class Lexer {
           break;
         case "|":
           if (this.peek(1) === "|") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2)));
+            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2),
+              mechanicalFix(span(start, start + 2), "or", "Use readable 'or'")));
             this.simple("or", start, 2);
           } else {
             this.simple("pipe", start, 1);
@@ -306,7 +320,8 @@ export class Lexer {
         width += 1;
         this.advance();
       } else if (this.peek() === "\t") {
-        this.diagnostics.push(diagnostic("VEL1002", "Tabs are not allowed for indentation", span(this.index, this.index + 1)));
+        this.diagnostics.push(diagnostic("VEL1002", "Tabs are not allowed for indentation", span(this.index, this.index + 1),
+          mechanicalFix(span(this.index, this.index + 1), "    ", "Replace the indentation tab with four spaces")));
         width += 4;
         this.advance();
       } else {
@@ -466,7 +481,14 @@ export class Lexer {
     }
     if (rule) {
       if (rule.recovery) {
-        this.diagnostics.push(recoveredDiagnostic("VEL1005", rule.guidance, span(start, this.index)));
+        // The rule carries its successor only when the guidance names exactly
+        // one ('var' names 'let' or 'const', so it names none).
+        this.diagnostics.push(recoveredDiagnostic("VEL1005", rule.guidance, span(start, this.index),
+          rule.fix === null ? undefined : mechanicalFix(
+            span(start, rule.fix === "" ? this.skipHorizontalWhitespace(this.index) : this.index),
+            rule.fix,
+            rule.fix === "" ? `Remove '${value}'` : `Use '${rule.fix}'`,
+          )));
         for (const item of rule.recovery) {
           this.tokens.push({ kind: item.kind, value: item.value, span: span(start, this.index) });
         }
@@ -505,6 +527,7 @@ export class Lexer {
         "VEL1007",
         `Write '${integer}.0'; decimal literals require a digit after the point`,
         span(point, this.index),
+        mechanicalFix(span(point, this.index), ".0", `Write '${integer}.0'`),
       ));
     }
     if ((this.peek() === "e" || this.peek() === "E")
@@ -554,6 +577,7 @@ export class Lexer {
       "VEL1007",
       `Write '${value}'; decimal literals require a digit before the point`,
       span(start, this.index),
+      mechanicalFix(span(start, this.index), value, `Write '${value}'`),
     ));
     this.tokens.push({ kind: "number", value, span: span(start, this.index) });
   }
@@ -599,7 +623,8 @@ export class Lexer {
       ));
     }
     if (!scanned.canonical) {
-      this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'rf' rather than 'fr' for raw interpolated strings", span(start, start + scanned.prefixLength)));
+      this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'rf' rather than 'fr' for raw interpolated strings", span(start, start + scanned.prefixLength),
+        mechanicalFix(span(start, start + scanned.prefixLength), "rf", "Use the 'rf' raw interpolated string prefix")));
     }
     if (scanned.quote === "'") {
       this.diagnostics.push(diagnostic(
@@ -755,6 +780,29 @@ export class Lexer {
     this.simple(this.peek(1) === "=" ? compound : single, start, this.peek(1) === "=" ? 2 : 1);
   }
 
+  private skipHorizontalWhitespace(index: number): number {
+    let end = index;
+    while (this.text[end] === " " || this.text[end] === "\t") end += 1;
+    return end;
+  }
+
+  /**
+   * The deletion of a line-ending semicolon, including the blank space it would
+   * leave behind. A semicolon followed by anything except further semicolons,
+   * spaces, or a comment separates two statements: putting those on their own
+   * lines is a change of layout rather than of spelling, so it carries no fix.
+   */
+  private trailingSemicolonFix(start: number): DiagnosticFix | undefined {
+    let end = start + 1;
+    while (this.text[end] === ";" || this.text[end] === " " || this.text[end] === "\t") end += 1;
+    const rest = this.text.slice(end, this.lineEnd(end));
+    if (rest.length > 0 && !rest.startsWith("//") && !rest.startsWith("/*")) return undefined;
+    let from = start;
+    while (from > 0 && (this.text[from - 1] === " " || this.text[from - 1] === "\t")) from -= 1;
+    // Indentation is not the semicolon's whitespace to take.
+    return mechanicalFix(span(Math.max(from, this.lineStart(start)), start + 1), "", "Remove the semicolon");
+  }
+
   private simple(kind: TokenKind, start: number, length: number): void {
     this.index += length;
     this.tokens.push({ kind, value: this.text.slice(start, this.index), span: span(start, this.index) });
@@ -775,6 +823,7 @@ export class Lexer {
       "VEL1005",
       `Use '"${text}"'; VelarScript writes hex colors as quoted strings or color builders such as rgb(...)`,
       span(start, end),
+      mechanicalFix(span(start, end), `"${text}"`, `Quote the hex color as '"${text}"'`),
     ));
     this.tokens.push({ kind: "string", value: text, span: span(start, end) });
     this.index = end;
@@ -794,6 +843,7 @@ export class Lexer {
       "VEL1005",
       "Remove '#'; VelarScript owns class privacy and does not expose JavaScript private identifiers",
       span(start, start + 1),
+      mechanicalFix(span(start, start + 1), "", "Remove the JavaScript private marker"),
     ));
     this.tokens.push({ kind: "identifier", value: this.text.slice(nameStart, this.index), span: span(nameStart, this.index) });
     return true;
@@ -807,7 +857,8 @@ export class Lexer {
     const previous = this.tokens.at(-1)?.kind;
     const lineStart = previous === undefined || previous === "newline" || previous === "indent" || previous === "dedent";
     if (!lineStart) return false;
-    this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '//' for comments; VelarScript comments start with '//'", span(start, start + 1)));
+    this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '//' for comments; VelarScript comments start with '//'", span(start, start + 1),
+      mechanicalFix(span(start, start + 1), "//", "Use '//' to start the comment")));
     this.index = start;
     this.advance();
     this.readComment();
