@@ -570,6 +570,19 @@ const __velarFoundationDate = globalThis.Date;
 const __velarFoundationDateNow = typeof __velarFoundationDate === "function"
   ? Object.getOwnPropertyDescriptor(__velarFoundationDate, "now")?.value
   : null;
+const __velarFoundationConsole = globalThis.console ?? null;
+const __velarFoundationConsoleError = __velarFoundationConsole !== null
+  ? Object.getOwnPropertyDescriptor(__velarFoundationConsole, "error")?.value ?? null
+  : null;
+function __velarFoundationTrace(error) {
+  if (typeof __velarFoundationConsoleError !== "function" || typeof __velarFoundationReflectApply !== "function") return;
+  let trace = "An unhandled VelarScript failure was reported";
+  try { const stack = error.stack; if (typeof stack === "string" && stack !== "") trace = stack; } catch {}
+  if (trace === "An unhandled VelarScript failure was reported") {
+    try { const message = error.message; if (typeof message === "string" && message !== "") trace = message; } catch {}
+  }
+  try { __velarFoundationReflectApply(__velarFoundationConsoleError, __velarFoundationConsole, ["Unhandled VelarScript error report: " + trace]); } catch {}
+}
 function __velarEnqueue(callback) {
   if (typeof __velarFoundationQueueMicrotask !== "function" || typeof __velarFoundationReflectApply !== "function") {
     throw new TypeError("The browser queueMicrotask API is unavailable");
@@ -584,10 +597,10 @@ function __velarNow() {
 }
 const __velarRuntimeFields = Object.freeze([
   "version", "domQueue", "watchQueue", "flushPending", "activeObserver", "errorHandlers",
-  "actionFailures", "lookSources", "classSources", "dependencies", "rawToProxy", "proxyToRaw",
+  "actionFailures", "unhandledFailures", "lookSources", "classSources", "dependencies", "rawToProxy", "proxyToRaw",
   "versions", "parents", "toRaw", "reactive", "track", "trackDeep", "trigger", "versionOf",
   "collectionRead", "collectionTrigger", "collectionUnlink", "trackSubscribers", "runTracked", "cleanupObserver", "computed",
-  "report", "applyLook", "installLook",
+  "schedule", "report", "applyLook", "installLook",
 ]);
 
 function __velarRuntimeCollection(value, kind) {
@@ -631,6 +644,7 @@ function __velarCreateRuntime() {
   const domQueue = Object.freeze(__velarGraphCreateSet());
   const watchQueue = Object.freeze(__velarGraphCreateSet());
   const errorHandlers = Object.freeze(__velarGraphCreateSet());
+  const unhandledFailures = Object.freeze(__velarGraphCreateSet());
   const actionFailures = Object.freeze(__velarGraphCreateWeakSet());
   const lookSources = Object.freeze(__velarGraphCreateWeakMap());
   const classSources = Object.freeze(__velarGraphCreateWeakMap());
@@ -670,8 +684,11 @@ function __velarCreateRuntime() {
       runtime.activeObserver = previousObserver;
       for (const subscribers of __velarGraphSetItems(previousDependencies)) {
         if (__velarGraphSetContains(observer.dependencies, subscribers)) continue;
-        __velarGraphSetRemove(subscribers, observer);
-        if (__velarGraphSetCount(subscribers) === 0) {
+        // A stop fires exactly when an actual removal empties the set. Firing
+        // on an already-empty set would let two detaching computeds whose
+        // cleanups have not yet emptied their dependency sets re-trigger each
+        // other without bound.
+        if (__velarGraphSetRemove(subscribers, observer) && __velarGraphSetCount(subscribers) === 0) {
           const stop = __velarGraphWeakMapRead(subscriptionStops, subscribers);
           if (stop) stop();
         }
@@ -682,8 +699,7 @@ function __velarCreateRuntime() {
   };
   const cleanupObserver = (observer) => {
     for (const subscribers of __velarGraphSetItems(observer.dependencies)) {
-      __velarGraphSetRemove(subscribers, observer);
-      if (__velarGraphSetCount(subscribers) === 0) {
+      if (__velarGraphSetRemove(subscribers, observer) && __velarGraphSetCount(subscribers) === 0) {
         const stop = __velarGraphWeakMapRead(subscriptionStops, subscribers);
         if (stop) stop();
       }
@@ -944,6 +960,7 @@ function __velarCreateRuntime() {
     if (typeof read !== "function") throw new TypeError("computed requires a function");
     let dirty = true;
     let evaluating = false;
+    let recursed = false;
     let initialized = false;
     let value;
     let failed = false;
@@ -960,15 +977,38 @@ function __velarCreateRuntime() {
     const observer = {
       mode: "computed",
       stopped: false,
+      running: false,
+      selfInvalidations: 0,
       dependencies: __velarGraphCreateSet(),
       notify() {
+        // Stopping is shared discipline with DOM and watch observers: a flush
+        // overflow marks queued computed observers stopped, and a stopped
+        // observer must go inert instead of re-entering the storm on the next
+        // write.
+        if (observer.stopped) return;
+        // The 100 self-invalidation cap covers computed observers too. A
+        // computed whose own turn (evaluation plus dependent notification)
+        // keeps invalidating it is stopped with the same owned report a
+        // render or watch observer gets, instead of running to the whole
+        // flush budget.
+        if (observer.running) {
+          observer.selfInvalidations += 1;
+          if (observer.selfInvalidations > 100) {
+            observer.stopped = true;
+            cleanupObserver(observer);
+            reportUntracked(new RangeError("A computed value cannot invalidate itself more than 100 times"));
+            return;
+          }
+        } else {
+          observer.selfInvalidations = 0;
+        }
         if (dirty) return;
         dirty = true;
         if (__velarGraphSetCount(subscribers) === 0) {
           cleanupObserver(observer);
           return;
         }
-        __velarSchedule(observer);
+        schedule(observer);
         // A downstream computed must become dirty immediately so a same-turn
         // read cannot observe its cached result while an upstream dependency
         // is already stale. DOM and watch observers still wait for evaluation
@@ -976,8 +1016,11 @@ function __velarCreateRuntime() {
         invalidateComputedDependents();
       },
       run() {
-        if (!dirty || __velarGraphSetCount(subscribers) === 0) return;
-        if (evaluate(false)) notifyDependents();
+        if (observer.stopped || !dirty || __velarGraphSetCount(subscribers) === 0) return;
+        observer.running = true;
+        try {
+          if (evaluate(false)) notifyDependents();
+        } finally { observer.running = false; }
       },
     };
     const detach = () => {
@@ -986,12 +1029,16 @@ function __velarCreateRuntime() {
     };
     __velarGraphWeakMapWrite(subscriptionStops, subscribers, detach);
     const evaluate = (throwFailure) => {
-      if (evaluating) throw new RangeError("A computed value cannot read itself recursively");
+      if (evaluating) {
+        recursed = true;
+        throw new RangeError("A computed value cannot read itself recursively");
+      }
       const previous = value;
       const previouslyFailed = failed;
       const previousFailure = failure;
       const hadValue = initialized;
       evaluating = true;
+      recursed = false;
       failed = false;
       failure = undefined;
       try { value = runTracked(observer, read); }
@@ -1001,7 +1048,15 @@ function __velarCreateRuntime() {
         initialized = true;
         dirty = false;
       }
-      if (__velarGraphSetCount(subscribers) === 0) detach();
+      // A computed that failed because its own recursion guard tripped sits on
+      // a dependency cycle. The failure is cached and served, but the cyclic
+      // edges must not persist: two failed computeds that keep notifying each
+      // other would otherwise ping-pong the next flush into the whole-flush
+      // budget. Detaching unwinds the cycle (a peer whose last subscriber
+      // leaves detaches with it) and a later read simply re-attempts.
+      if (failed && recursed) detach();
+      else if (__velarGraphSetCount(subscribers) === 0) detach();
+      recursed = false;
       const changed = !hadValue || previouslyFailed !== failed || (failed ? previousFailure !== failure : !__velarGraphSame(previous, value));
       if (throwFailure && failed) throw failure;
       return changed;
@@ -1009,14 +1064,34 @@ function __velarCreateRuntime() {
     const access = () => {
       const consumer = runtime.activeObserver;
       if (consumer !== observer) trackSubscribers(subscribers);
-      if (dirty) {
-        const changed = evaluate(false);
-        if (changed && initialized) notifyDependents(consumer);
+      if (dirty && !observer.stopped) {
+        // A cyclic read re-enters access while the outer evaluation is still
+        // running, so the running span is restored, never cleared.
+        const wasRunning = observer.running;
+        observer.running = true;
+        try {
+          const changed = evaluate(false);
+          if (changed && initialized) notifyDependents(consumer);
+        } finally { observer.running = wasRunning; }
       }
       if (failed) throw failure;
       return value;
     };
     return __velarGraphFreeze(access);
+  };
+  // The loud channel for a failure nothing owns. In a browser the microtask
+  // throw reaches the host error event and the page survives it; in a
+  // non-browser host (a headless 'velar test' process, a worker) the same
+  // throw terminates the process, which is the program termination the
+  // runtime boundary forbids. There the failure is traced to the console and
+  // parked so the next tick() fails its awaiting caller instead.
+  const escalate = (error) => {
+    if (__velarDomDocument !== null) {
+      __velarEnqueue(() => { throw error; });
+      return;
+    }
+    if (__velarGraphSetCount(unhandledFailures) < 100) __velarGraphSetInsert(unhandledFailures, error);
+    __velarFoundationTrace(error);
   };
   const report = (value, options) => {
     const error = __velarNormalizeError(value);
@@ -1035,11 +1110,66 @@ function __velarCreateRuntime() {
       handled = true;
       try {
         const result = handler(errorReport);
-        __velarObservePromise(result, (failure) => __velarEnqueue(() => { throw __velarNormalizeError(failure); }));
-      } catch (failure) { __velarEnqueue(() => { throw __velarNormalizeError(failure); }); }
+        __velarObservePromise(result, (failure) => escalate(__velarNormalizeError(failure)));
+      } catch (failure) { escalate(__velarNormalizeError(failure)); }
     }
-    if (checked.unhandled && !handled) __velarEnqueue(() => { throw error; });
+    if (checked.unhandled && !handled) escalate(error);
     return errorReport;
+  };
+  // A report raised from inside a tracked evaluation (the computed cap) must
+  // not let handler reads become dependencies of the failing observer.
+  const reportUntracked = (error) => {
+    const previousObserver = runtime.activeObserver;
+    runtime.activeObserver = null;
+    try { report(error, { phase: "update", detail: "", component: "", unhandled: true }); }
+    finally { runtime.activeObserver = previousObserver; }
+  };
+  // The scheduler lives on the runtime registry itself: computed observers are
+  // created by whichever module stamped the registry first (velar/app under
+  // ESM import order, or the application prelude), and their notifications
+  // must schedule correctly no matter which module that was. The emitted
+  // application prelude keeps its own identical drain for the observers it
+  // creates; the shared flushPending flag keeps exactly one flush microtask
+  // enqueued whichever side scheduled first, and either drain runs every
+  // queued observer.
+  const scheduleFlush = () => {
+    if (runtime.flushPending) return;
+    runtime.flushPending = true;
+    __velarEnqueue(flush);
+  };
+  const flushOverflow = () => {
+    const stalled = [];
+    for (const observer of __velarGraphSetItems(domQueue)) stalled[stalled.length] = observer;
+    for (const observer of __velarGraphSetItems(watchQueue)) stalled[stalled.length] = observer;
+    __velarGraphSetEmpty(domQueue);
+    __velarGraphSetEmpty(watchQueue);
+    for (let index = 0; index < stalled.length; index += 1) {
+      const observer = stalled[index];
+      if (typeof observer.stop === "function") observer.stop();
+      else observer.stopped = true;
+    }
+    report(new RangeError("Reactive updates cannot run more than 100000 observers in one flush"), { phase: "update", detail: "", component: "", unhandled: true });
+  };
+  const flush = () => {
+    runtime.flushPending = false;
+    let budget = 100000;
+    for (const observer of __velarGraphSetItems(domQueue)) {
+      __velarGraphSetRemove(domQueue, observer);
+      if ((budget -= 1) < 0) { flushOverflow(); return; }
+      observer.run();
+    }
+    for (const observer of __velarGraphSetItems(watchQueue)) {
+      __velarGraphSetRemove(watchQueue, observer);
+      if ((budget -= 1) < 0) { flushOverflow(); return; }
+      observer.run();
+    }
+    if (__velarGraphSetCount(domQueue) || __velarGraphSetCount(watchQueue)) scheduleFlush();
+  };
+  const schedule = (observer) => {
+    const queue = observer.mode === "watch" ? watchQueue : domQueue;
+    if (!__velarGraphSetContains(queue, observer) && __velarGraphSetCount(queue) >= 100000) throw new RangeError("VelarScript reactive queues cannot exceed 100000 observers");
+    __velarGraphSetInsert(queue, observer);
+    scheduleFlush();
   };
   const applyLook = (...arguments_) => {
     if (!lookImplementation) throw new TypeError("Link Look requires the VelarScript Web runtime");
@@ -1052,10 +1182,10 @@ function __velarCreateRuntime() {
   };
   const fields = {
     version: ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}, domQueue, watchQueue, flushPending: false, activeObserver: null, errorHandlers,
-    actionFailures, lookSources, classSources, dependencies, rawToProxy, proxyToRaw, versions, parents,
+    actionFailures, unhandledFailures, lookSources, classSources, dependencies, rawToProxy, proxyToRaw, versions, parents,
     toRaw, reactive, track, trackDeep, trigger, versionOf, collectionRead, collectionTrigger, collectionUnlink,
     trackSubscribers, runTracked, cleanupObserver, computed,
-    report, applyLook, installLook,
+    schedule, report, applyLook, installLook,
   };
   for (const name of __velarRuntimeFields) Object.defineProperty(runtime, name, {
     value: fields[name],
@@ -1084,6 +1214,7 @@ function __velarRequireRuntime(value) {
     || !__velarRuntimeCollection(value.domQueue, "Set") || !__velarRuntimeCollection(value.watchQueue, "Set")
     || typeof value.flushPending !== "boolean" || (value.activeObserver !== null && typeof value.activeObserver !== "object")
     || !__velarRuntimeCollection(value.errorHandlers, "Set") || !__velarRuntimeCollection(value.actionFailures, "WeakSet")
+    || !__velarRuntimeCollection(value.unhandledFailures, "Set")
     || !__velarRuntimeCollection(value.lookSources, "WeakMap") || !__velarRuntimeCollection(value.classSources, "WeakMap")
     || !__velarRuntimeCollection(value.dependencies, "WeakMap") || !__velarRuntimeCollection(value.rawToProxy, "WeakMap")
     || !__velarRuntimeCollection(value.proxyToRaw, "WeakMap") || !__velarRuntimeCollection(value.versions, "WeakMap")
@@ -1092,7 +1223,7 @@ function __velarRequireRuntime(value) {
     || typeof value.trackDeep !== "function" || typeof value.trigger !== "function" || typeof value.versionOf !== "function"
     || typeof value.collectionRead !== "function" || typeof value.collectionTrigger !== "function" || typeof value.collectionUnlink !== "function"
     || typeof value.trackSubscribers !== "function" || typeof value.runTracked !== "function"
-    || typeof value.cleanupObserver !== "function" || typeof value.computed !== "function"
+    || typeof value.cleanupObserver !== "function" || typeof value.computed !== "function" || typeof value.schedule !== "function"
     || typeof value.report !== "function" || typeof value.applyLook !== "function" || typeof value.installLook !== "function") {
     throw new TypeError("VelarScript Web runtime values are invalid");
   }

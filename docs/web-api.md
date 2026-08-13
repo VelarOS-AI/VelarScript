@@ -353,6 +353,13 @@ component RuntimeStatus:
   surface uses the `async` statement, which runs a checked `Promise<null>`
   expression detached and reports failure through the `velar/app` chain with
   the `detached` phase.
+- An `action` failure reports exactly once, through the `action` phase with the
+  action's name as its detail -- including a failure superseded by a newer call
+  of the same action, whose report carries the same detail while only the
+  newest generation owns the public `error` field. The event or detached
+  observer of that same rejection skips the already-reported failure instead
+  of reporting it a second time, and the caller still receives the thrown
+  error.
 - A `computed` failure is cached as part of the derived result state and is
   rethrown to its managed consumer. Recovery from failure to a value is a real
   result transition even when that value equals the last successful value, so
@@ -375,13 +382,18 @@ component RuntimeStatus:
   as unowned native event failures.
 - Root mounting is lazy. If the initial render fails, the application receives
   the report and renders a compiler-owned accessible fatal state instead of a
-  blank page. Component setup and initial JSX construction are transactional:
-  failure runs sibling cleanup, destroys the incomplete scope, and preserves
-  the original error. Dynamic and keyed updates build the replacement first,
-  so a failed update retains the last valid DOM and discards its incomplete
-  scope. Ordinary and keyed JSX Lists both read one checked dense List snapshot;
-  mutation during rendering and JavaScript iterator overrides cannot change the
-  values participating in that update. A keyed update moves only the rows whose
+  blank page. That covers every initial-render path in every build: a setup
+  throw, a dynamic or keyed region that throws while it is first constructed,
+  and a mount target that does not exist -- the last one reports through the
+  `mount` phase and renders the fatal state into the document body, since the
+  requested target is exactly what is missing. Component setup and initial JSX
+  construction are transactional: failure runs sibling cleanup, destroys the
+  incomplete scope, and preserves the original error. Dynamic and keyed
+  updates build the replacement first, so a failed update retains the last
+  valid DOM and discards its incomplete scope. Ordinary and keyed JSX Lists
+  both read one checked dense List snapshot; mutation during rendering and
+  JavaScript iterator overrides cannot change the values participating in
+  that update. A keyed update moves only the rows whose
   position actually changed: a row already standing where the new order wants it
   is left attached, so the focused `<input>` in it keeps focus, an in-flight IME
   composition survives, and no transient subtree state is reset.

@@ -219,6 +219,12 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       "  const error = __velarNormalizeError(failure);",
       "  const runtime = globalThis[__velarDetachedRegistryKey];",
       "  if (runtime && typeof runtime.report === \"function\") {",
+      "    // An action reports its own failure once, in the action phase with",
+      "    // the action's name as detail. The detached observer of that same",
+      "    // rejection must not report it a second time.",
+      "    try {",
+      "      if (__velarIsError(failure) && __velarGraphWeakSetRemove(runtime.actionFailures, failure)) return;",
+      "    } catch {}",
       "    runtime.report(error, { phase: \"detached\", detail: \"\", unhandled: true });",
       "    return;",
       "  }",
@@ -1176,6 +1182,11 @@ function __velarEventCall(value, name, nativeMethod) {
   return __velarEventReflectApply(method, value, []);
 }
 
+// This scheduler has a twin inside the runtime registry (runtime.schedule in
+// packages/web/src/runtime-foundation.ts) so registry-owned computed
+// observers schedule correctly no matter which module stamped the registry.
+// Both sides drain the same shared queues under the shared flushPending flag;
+// their budgets and overflow behavior must stay identical.
 function __velarSchedule(observer) {
   const queue = observer.mode === "watch" ? __velarRuntime.watchQueue : __velarRuntime.domQueue;
   if (!__velarGraphSetContains(queue, observer) && __velarGraphSetCount(queue) >= 100000) throw new RangeError("VelarScript reactive queues cannot exceed 100000 observers");
@@ -1248,6 +1259,13 @@ function __velarCleanupObserver(observer) {
 }
 
 function __velarObserver(read, mode, scope) {
+  // The first run of a DOM observer executes while its JSX position is being
+  // constructed, and construction is transactional: the failure must reach
+  // the surrounding owner (the mount transaction at the root, the containing
+  // child position otherwise) so the promised fatal state or contained
+  // placeholder appears instead of a silently empty region. Later runs are
+  // updates; their failures are reported and the last valid DOM survives.
+  let initial = mode === "dom";
   const observer = {
     mode,
     stopped: false,
@@ -1258,8 +1276,14 @@ function __velarObserver(read, mode, scope) {
       if (observer.stopped) return;
       observer.running = true;
       try { __velarRuntime.runTracked(observer, read); }
-      catch (error) { __velarReport(error, mode === "watch" ? "watch" : "render", scope); }
-      finally { observer.running = false; }
+      catch (error) {
+        if (initial) throw error;
+        __velarReport(error, mode === "watch" ? "watch" : "render", scope);
+      }
+      finally {
+        observer.running = false;
+        initial = false;
+      }
     },
     notify() {
       if (observer.stopped) return;
@@ -1397,12 +1421,16 @@ function __velarAction(execute, scope, name) {
         let actionError = __velarNormalizeError(failure);
         if (!disposed) {
           pending.set(active > 0);
-          if (current === generation) {
-            const report = __velarRuntime.report(failure, { phase: "action", detail: name, component: scope.component, unhandled: false });
-            error.set(report.error);
-            actionError = report.error;
-            __velarGraphWeakSetInsert(__velarRuntime.actionFailures, actionError);
-          }
+          // Every action failure reports exactly once, through the action
+          // phase, carrying the action's name as its detail -- including a
+          // failure superseded by a newer call. Only the newest generation
+          // owns the public error field. The actionFailures mark lets the
+          // event and detached observers of the same rejection skip an
+          // already-reported failure instead of reporting it a second time.
+          const report = __velarRuntime.report(failure, { phase: "action", detail: name, component: scope.component, unhandled: false });
+          actionError = report.error;
+          __velarGraphWeakSetInsert(__velarRuntime.actionFailures, actionError);
+          if (current === generation) error.set(report.error);
         }
         throw actionError;
       },
@@ -1588,7 +1616,18 @@ function __velarMount(evaluate, fallbackTarget = null) {
   const value = values[0];
   const target = values[1];
   const parent = typeof target === "string" ? __velarDomQuerySelector(target) : target;
-  if (!parent) throw new Error("VelarScript mount target was not found");
+  if (!parent) {
+    // A missing mount target must keep the no-blank-page promise in every
+    // build: the failure is reported through velar/app and the fatal state
+    // renders into the document body, since the requested target is exactly
+    // what does not exist.
+    const report = __velarReport(new Error("VelarScript mount target was not found"), "mount", null);
+    try {
+      const body = __velarDomQuerySelector("body");
+      if (body) __velarFatal(body, report.error);
+    } catch {}
+    return null;
+  }
   try {
     if (value && value.__velarComponent) {
       const result = value.mount(parent);
@@ -2369,8 +2408,29 @@ function __velarChild(component, thunks, children, scope, namespace, setRef) {
   }
 }
 
-function __velarTick() {
+function __velarSettled() {
   return __velarManagedAsyncCreate((resolve) => __velarEnqueue(resolve));
+}
+
+function __velarTakeUnhandledFailure() {
+  for (const failure of __velarGraphSetItems(__velarRuntime.unhandledFailures)) {
+    __velarGraphSetRemove(__velarRuntime.unhandledFailures, failure);
+    return failure;
+  }
+  return null;
+}
+
+// In a non-browser host an unhandled report cannot throw from a microtask
+// without ending the whole process, so the runtime parks it. tick() is where
+// an awaiting caller meets the reactive queue, which makes it the owned place
+// for that parked failure to surface: the test that awaited the flush fails
+// with the real error and the process -- the test runner -- continues.
+function __velarTick() {
+  return __velarManagedAsyncThen(__velarSettled(), () => {
+    const failure = __velarTakeUnhandledFailure();
+    if (failure !== null) throw failure;
+    return null;
+  });
 }
 `.trim();
 

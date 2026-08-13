@@ -25765,6 +25765,10 @@ catch (error) { console.log(error.message + ":" + pending.length); }
     "false:null",
     "true:null",
     "new:true:null",
+    // The superseded older call still reports -- exactly once, through the
+    // action phase, carrying the action's name -- while only the newest
+    // generation owns the public error field (it stays null here).
+    "action:save:Stale failure",
     "Stale failure:false:null",
     "action:save:Save failed",
     "Save failed:false:Save failed",

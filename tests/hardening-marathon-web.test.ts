@@ -426,6 +426,49 @@ function runCommand(command: string, arguments_: readonly string[]): Promise<str
   });
 }
 
+test("[WEB-D1] importing velar/app keeps every observed computed scheduling", { timeout: 180_000 }, async () => {
+  // The first velar/app browser test. Under ESM import order the generated
+  // velar/app module stamps the shared runtime registry before the
+  // application prelude runs, so registry-owned computed observers resolve
+  // their scheduler in velar/app's module scope. That scheduler used to live
+  // only in the emitter prelude: one `import {onError} from "velar/app"` made
+  // every observed computed throw `__velarSchedule is not defined` on its
+  // first invalidation and froze the DOM forever. The scheduler now lives on
+  // the registry itself, so whichever module stamps it, notify works.
+  const output = await runBrowserFixture("velar-marathon-web-app-computed-", {
+    application: `
+import {onError} from "velar/app"
+
+component App:
+    state count = 0
+    const label = computed(() => f"count is {count}")
+
+    def bump() -> null:
+        count += 1
+
+    return <div>
+        <p data-label>{label()}</p>
+        <button data-bump on:click={bump}>inc</button>
+    </div>
+
+mount(<App />, "#app")
+`,
+    tests: `
+import {expect} from "velar/test"
+import {browser} from "velar/web-test"
+
+async def test_observed_computed_updates_after_state_write() -> null:
+    await browser.open("/")
+    expect(await browser.text("[data-label]")).toBe("count is 0")
+    await browser.click("[data-bump]")
+    await browser.waitForText("[data-label]", "count is 1")
+    await browser.click("[data-bump]")
+    await browser.waitForText("[data-label]", "count is 2")
+`,
+  });
+  assert.match(output, /1 passed, 0 failed/u);
+});
+
 test("[beta-4] two watches that invalidate each other are bounded and reported", { timeout: 180_000 }, async () => {
   // The self-invalidation cap only counted while an observer was running, so a
   // pair of watches that write each other's state never tripped it: the live

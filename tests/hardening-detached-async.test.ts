@@ -216,7 +216,7 @@ print("web module continues")
   assert.equal(String(execution.stderr), "");
 });
 
-test("Web output without an application runtime keeps a detached failure loud", () => {
+test("Web output without an error handler keeps a detached failure loud and the host process alive", () => {
   const result = compile(`
 state ready = true
 
@@ -226,8 +226,14 @@ async def boom() -> null:
 async boom()
 `.trimStart(), { extensions: [velarCompilerExtension] });
   assert.deepEqual(result.diagnostics, []);
+  // With no onError handler installed the report escalates. In a browser that
+  // is the host error event; in a non-browser host the same microtask throw
+  // would end the whole process (under `velar test`, the whole suite), so the
+  // runtime traces the failure to the console and parks it for the next
+  // tick() instead: loud on stderr, and the process survives.
   const execution = executeModule(result.code ?? "");
-  assert.notEqual(execution.status, 0);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.match(String(execution.stderr), /Unhandled VelarScript error report/u);
   assert.match(String(execution.stderr), /pre-runtime failure/u);
 });
 

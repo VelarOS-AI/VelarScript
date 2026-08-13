@@ -6,6 +6,21 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Importing `velar/app` no longer breaks reactivity. The runtime registry
+  now owns its scheduler, so an application whose module graph stamps the
+  registry from the generated `velar/app` module keeps every observed
+  `computed` updating — previously one import line froze the DOM on the
+  first state write, in development and production builds alike. The first
+  velar/app browser regression pins it.
+- A recursive `computed` detaches its dependency edges after the owned
+  recursion error instead of storming the whole-flush budget, computed
+  observers share the documented 100 self-invalidation cap, and an
+  unhandled reactive failure during `velar test` fails that one test
+  instead of killing the process. The no-blank-page promise now holds on
+  all three paths — a dynamic-region failure during the initial render and
+  a missing mount target both show the accessible fatal state instead of
+  an empty page. A detached action failure reports exactly once, and a
+  superseded action failure carries its detail.
 - `readonly` accepts only pure data, at every depth. A class type anywhere
   inside a readonly-annotated shape rejects the declaration itself with
   the two ways out, so a readonly view can no longer hand back a freely
