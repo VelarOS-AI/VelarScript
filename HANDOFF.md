@@ -3368,6 +3368,13 @@ worktree 构建（不碰活树），把约三十项破坏性收紧全量吃一�
 D48 的编辑器侧收尾（改用 @velarscript/script-analysis 与 text-buffer 包）。
 VelarScript 仓库零改动、零撞车。
 
+**Codex 第四单（2026-08-13）**：批次 I Web 词汇大波 ——
+`docs/handoff/CODEX-TASK-I-WEB-VOCAB.md`。**分支隔离**：worktree + 专属分支
+`codex/batch-i`（基线 44c3eaa），自行提交到分支、不碰 main —— 主树正在跑
+E/F 合流。内容：D49 keyframes 全套、LOK-U1 属性表发布与系统补录（~55 缺席
+属性逐个判定收录/排除）、D37-42+42-补 关键字值收紧、WEB-U12 元素名表、
+D41-63.2 扩展文本钩子。编排方在词法合流落地后 merge 分支并解 charter 冲突。
+
 **马拉松工作协议（2026-08-12 用户授权，最高约束，优先于本节其余排期）**：
 
 1. **设计层改动必须先与用户探讨** —— 语言语义/拼写/表面的任何变更，即使发现
