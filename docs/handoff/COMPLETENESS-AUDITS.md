@@ -995,3 +995,21 @@ watch 启动并发的变更 —— **Desktop 应用若在 `watchFiles` 之后立
 永远看不到那次变更**。选项：(a) 成文「监视器只观察武装之后的变更」；
 (b) `watchStart` 自探测直到武装完成（代价：一次虚假事件 + 需要对根目录的写
 权限）；(c) 保持现状不成文。实施者推荐 **(a)**，未改任何语义。
+
+
+---
+
+## 运维记录：并发门禁的 fd 串扰（2026-08-14）
+
+多个 worktree 同时跑 `npm test` 时，`tests/node-platform.test.ts` 的
+「compiled VelarScript CLI reads arguments and terminal input without a
+JavaScript bridge」间歇失败，实际输出多出一行 Node 警告：
+`Warning: File descriptor 13 closed but not opened in unmanaged mode`。
+**隔离复跑 25/25 通过** —— 是并发串扰，不是回归。
+
+与 desktop-worker 挂起（已于 2026-08-13 关闭根因）同一族运维问题：
+**本仓的测试套件对「同一台机器上多个 checkout 并发跑门禁」不安全**。
+desktop 波的报告已把「让并发门禁运行在单 checkout 下安全」列为后续工单。
+
+**编排纪律（即刻生效）**：并行波各自在 worktree 内跑门禁**仅作自检**；
+**合并后的权威门禁必须在主树串行独跑**，其间不派新波跑测试。
