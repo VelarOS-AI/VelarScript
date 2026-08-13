@@ -1198,6 +1198,8 @@ async function createAnalysisContext(
       })();
       if (interface_) {
         for (const specifier of dependency.specifiers) {
+          const migration = permanentNamespaceImportMessage(dependency.source, interface_, specifier.imported);
+          if (migration) failures.push({ path: module.inputPath, message: migration });
           if (!interface_.exports.has(specifier.imported)) {
             failures.push({ path: module.inputPath, message: missingExportMessage(dependency.source, specifier.imported) });
           }
@@ -1554,6 +1556,8 @@ function importInterface(
         });
         continue;
       }
+      const migration = permanentNamespaceImportMessage(dependency.source, interface_, specifier.imported);
+      if (migration) failures.push({ path: module.inputPath, message: migration });
       const exported = interface_.exports.get(specifier.imported);
       if (!exported) {
         failures.push({ path: module.inputPath, message: missingExportMessage(dependency.source, specifier.imported) });
@@ -1564,6 +1568,15 @@ function importInterface(
       const reactive = interface_.reactiveExports.get(specifier.imported);
       if (reactive) reactiveImports.set(specifier.local, reactive);
     }
+}
+
+function permanentNamespaceImportMessage(source: string, interface_: ModuleInspection["moduleInterface"], imported: string): string | null {
+  if (source === "velar/collections" && imported === "range") {
+    return "Use range(...) directly; the Core prelude needs no import";
+  }
+  const namespace = interface_.permanentNamespace;
+  if (!namespace?.members.has(imported)) return null;
+  return `Use ${namespace.name}.${imported} directly; VelarScript's pure namespaces need no import`;
 }
 
 function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): ClassInfo {

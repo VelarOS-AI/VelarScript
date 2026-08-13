@@ -231,7 +231,7 @@ JSON body, an HTML fragment, or a quoted attribute selector is written once
 instead of escaped character by character.
 
 ```velar fragment
-const payload = parseJson(`{"name":"Nova","role":"admin"}`, User)
+const payload = Json.parse(`{"name":"Nova","role":"admin"}`, User)
 ```
 
 Single-quoted strings are rejected, with a message naming both legal
@@ -808,7 +808,7 @@ enums render their runtime string value, and non-finite numbers print
 honestly. Records, collections, functions, class instances, `unknown`, and
 `any` never convert implicitly: JavaScript string coercion would execute
 conversion hooks such as a `toString` field, so those values are rejected at
-compile time — `print(value)` inspects a value, and `stringify(value)` from
+compile time — `print(value)` inspects a value, and `Json.stringify(value)` from
 `velar/json` builds data text. `str(value)` and JSX text positions apply this
 same contract.
 
@@ -1822,12 +1822,11 @@ invalidate facts on the successful continuation.
 VelarScript modules use explicit imports and exports:
 
 ```velar
-import {parse as parseJson, stringify} from "velar/json"
 import * as math from "velar/math"
 
 export const version = "1"
 export def encode(value: unknown) -> string:
-    return stringify(value)
+    return Json.stringify(value)
 ```
 
 The whole module-boundary family — `import`, every `export` form, re-exports,
@@ -2527,19 +2526,17 @@ property names, VelarScript expressions, typed unit values, composition, conditi
 element states, and explicit pseudo-element targets.
 
 ```velar
-import {alpha, border, rgb, spacing} from "velar/look"
-
 const colors = {
-    text: rgb(24, 31, 46),
-    surface: rgb(248, 250, 255),
-    active: rgb(228, 235, 255),
+    text: Look.rgb(24, 31, 46),
+    surface: Look.rgb(248, 250, 255),
+    active: Look.rgb(228, 235, 255),
 }
 
 export const cardLook = look:
     display = "grid"
     gap = 12px
-    padding = spacing(16px, 20px)
-    border = border(1px, alpha(colors.text, 0.12))
+    padding = Look.spacing(16px, 20px)
+    border = Look.border(1px, Look.alpha(colors.text, 0.12))
     borderRadius = 14px
     color = colors.text
     background = colors.surface
@@ -2591,9 +2588,7 @@ The module provides a small checked builder set:
 Named arguments work normally:
 
 ```velar
-import {rgba, shadow} from "velar/look"
-
-const raised = shadow(0px, 12px, 32px, rgba(0, 0, 0, 0.16), spread=0px, inset=false)
+const raised = Look.shadow(0px, 12px, 32px, Look.rgba(0, 0, 0, 0.16), spread=0px, inset=false)
 ```
 
 Builder inputs are checked visual values, not JavaScript coercion points.
@@ -2650,10 +2645,8 @@ Simple one-off base properties may be written as JSX directives. They use the
 same camelCase property names and property types as a full Look:
 
 ```velar
-import {rgb, spacing} from "velar/look"
-
-const paper = rgb(251, 250, 247)
-const primary = rgb(45, 79, 190)
+const paper = Look.rgb(251, 250, 247)
+const primary = Look.rgb(45, 79, 190)
 
 const controlLook = look:
     display = "inline-flex"
@@ -2664,7 +2657,7 @@ export component Example:
         <div
             look:display="grid"
             look:gap={12px}
-            look:padding={spacing(16px, 20px)}
+            look:padding={Look.spacing(16px, 20px)}
             look:borderRadius={14px}
         >Content</div>
         <button
@@ -2689,9 +2682,7 @@ VelarScript also accepts checked property-level inline Style when an existing
 Web integration requires native inline priority:
 
 ```velar
-import {rgb} from "velar/look"
-
-const text = rgb(35, 39, 47)
+const text = Look.rgb(35, 39, 47)
 const cardLook = look:
     borderRadius = 12px
 
@@ -2735,16 +2726,14 @@ Look values are ordinary exportable values and may be composed once at their
 outer level:
 
 ```velar
-import {rgb, spacing} from "velar/look"
-
 export const controlLook = look:
-    padding = spacing(10px, 14px)
+    padding = Look.spacing(10px, 14px)
     borderRadius = 10px
 
 export const primaryControlLook = look:
     ...controlLook
-    color = rgb(255, 255, 255)
-    background = rgb(45, 79, 190)
+    color = Look.rgb(255, 255, 255)
+    background = Look.rgb(45, 79, 190)
 ```
 
 Later declarations in the composed result follow normal CSS cascade order.
@@ -2788,15 +2777,13 @@ whole media vocabulary; container queries, print, and orientation have no Look
 spelling. Media subjects compose with element states and each other:
 
 ```velar
-import {rgb} from "velar/look"
-
 const compact = 720px
 
 const panelLook = look:
-    background = rgb(255, 255, 255)
+    background = Look.rgb(255, 255, 255)
 
     if scheme.dark:
-        background = rgb(29, 32, 41)
+        background = Look.rgb(29, 32, 41)
 
     if scheme.dark and viewport.width <= compact:
         padding = 12px
@@ -3010,7 +2997,7 @@ Their diagnostics name this boundary and point to module-level
 | Float layout | `float`, `clear` | Legacy float layout is outside the Grid and Flex model. |
 | Table formatting | `tableLayout`, `borderCollapse`, `borderSpacing`, `captionSide`, `emptyCells` | A typed table-layout contract needs evidence before admission. |
 | Multi-column layout | `columns`, `columnCount`, `columnWidth`, `columnFill`, `columnRule`, `columnRuleColor`, `columnRuleStyle`, `columnRuleWidth`, `columnSpan` | Its value and fragmentation model is not yet typed. |
-| Animation longhands | `animationName`, `animationDuration`, `animationTimingFunction`, `animationDelay`, `animationIterationCount`, `animationDirection`, `animationFillMode`, `animationPlayState`, `animationTimeline`, `animationRangeStart`, `animationRangeEnd` | `keyframes:` plus `animate(...)` owns the checked animation contract. |
+| Animation longhands | `animationName`, `animationDuration`, `animationTimingFunction`, `animationDelay`, `animationIterationCount`, `animationDirection`, `animationFillMode`, `animationPlayState`, `animationTimeline`, `animationRangeStart`, `animationRangeEnd` | `keyframes:` plus `Look.animate(...)` owns the checked animation contract. |
 | Generated content | `counterIncrement`, `counterReset`, `counterSet`, `quotes` | Counters and quoting are not modeled as checked Look values. |
 | Paged fragmentation | `breakAfter`, `breakBefore`, `breakInside`, `orphans`, `widows` | Paged and fragmented media are outside the Web application target. |
 
@@ -3026,8 +3013,6 @@ keyframe structures receive one stable generated CSS name and one emitted rule,
 including when used through another module's checked interface.
 
 ```velar
-import {animate} from "velar/look"
-
 export const spin = keyframes:
     from:
         rotate = 0deg
@@ -3038,10 +3023,10 @@ export const spin = keyframes:
 
 export const spinningLook = look:
     if not motion.reduced:
-        animation = animate(spin, 1s, easing="linear", loop=true)
+        animation = Look.animate(spin, 1s, easing="linear", loop=true)
 ```
 
-`animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
+`Look.animate(frames, duration, easing?, delay?, count?, loop?, direction?, fill?)`
 returns `Animation`. Duration must be positive, delay cannot be negative,
 `count` is a positive integer, and `count` and `loop=true` are mutually
 exclusive. Easing is one of `linear`, `ease`, `ease-in`, `ease-out`,
@@ -3050,7 +3035,7 @@ exclusive. Easing is one of `linear`, `ease`, `ease-in`, `ease-out`,
 or `both`. Literal options are checked during compilation. Look `animation`
 accepts `Animation`, `List<Animation>`, or `null`, never a CSS animation string.
 An element binding such as
-`look:animation={active ? animate(spin, 1s) : null}` adds and removes the native
+`look:animation={active ? Look.animate(spin, 1s) : null}` adds and removes the native
 animation as reactive state changes.
 
 ### Native elements and extension text forms
@@ -3079,4 +3064,28 @@ print(str(duration))
 
 An extension value without a declared text form remains outside `str` and
 f-string interpolation. `print(value)` is the inspection exit; structured data
-text still uses `stringify` from `velar/json`.
+text uses `Json.stringify`.
+
+## Core permanent namespaces and durations
+
+Pure standard helpers with a language-wide identity live at permanent names,
+without source imports. Core provides `Json.parse`, `Json.stringify`,
+`Json.stableStringify`, and `Json.clone`; `Promise.all`, `Promise.race`,
+`Promise.sleep`, `Promise.timeout`, `Promise.retry`, `Promise.map`, and
+`Promise.series`; and the prelude function `range`. Web adds the existing Look
+builder roster under `Look.*`. A lexical declaration may shadow any permanent
+namespace, and imports remain the contract for capability-bearing modules.
+Named imports of these permanent members are retired and receive a diagnostic
+that teaches the namespace spelling.
+
+`Duration` is a Core value type written with `ms` or `s`. Core async timing and
+Web `after`/`every` accept `Duration`, never a bare number. Duration addition,
+subtraction, and numeric scaling preserve the unit-bearing value rather than
+exposing JavaScript milliseconds as an untyped number.
+
+`Kind.is(value)` and record `Type.is(value)` are first-class validators: a true
+branch narrows `value` to the validated type. An exported `computed` value must
+declare its public accessor result at the export site, for example
+`export const name: () -> T = computed(...)`. Numeric finiteness and integer
+tests use `value.isFinite()` and `value.isInteger()`; the duplicate
+`velar/math` functions are not part of the module surface.

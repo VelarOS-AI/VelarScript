@@ -1,13 +1,11 @@
-import {border, color, rgb, spacing} from "velar/look"
-
 def counterLook(active: bool) -> Look:
     return look:
-        padding = spacing(10px, 14px)
-        border = border(0px, color("transparent"))
+        padding = Look.spacing(10px, 14px)
+        border = Look.border(0px, Look.color("transparent"))
         borderRadius = 10px
 
         if active:
-            color = rgb(37, 99, 235)
+            color = Look.rgb(37, 99, 235)
 
 export component Counter(start: number = 0):
     state count = start

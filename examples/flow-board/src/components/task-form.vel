@@ -1,42 +1,41 @@
-import {border, color, minmax, rgb, rgba, shadow, spacing, tracks} from "velar/look"
 import {CreateTaskHandler, TaskPriority} from "../domain.vel"
 
 const composerLook = look:
     display = "grid"
-    gridTemplateColumns = tracks(minmax(180px, 1.4fr), minmax(220px, 2fr), 140px, "auto")
+    gridTemplateColumns = Look.tracks(Look.minmax(180px, 1.4fr), Look.minmax(220px, 2fr), 140px, "auto")
     gap = 10px
     padding = 14px
-    border = border(1px, rgb(220, 227, 239))
+    border = Look.border(1px, Look.rgb(220, 227, 239))
     borderRadius = 18px
-    background = rgba(255, 255, 255, 0.9)
-    boxShadow = shadow(0px, 16px, 45px, rgba(35, 50, 82, 0.08))
+    background = Look.rgba(255, 255, 255, 0.9)
+    boxShadow = Look.shadow(0px, 16px, 45px, Look.rgba(35, 50, 82, 0.08))
 
     if viewport.width <= 820px:
-        gridTemplateColumns = tracks(1fr)
+        gridTemplateColumns = Look.tracks(1fr)
 
 const fieldLook = look:
     minWidth = 0px
     minHeight = 42px
-    border = border(1px, rgb(207, 216, 232))
+    border = Look.border(1px, Look.rgb(207, 216, 232))
     borderRadius = 11px
-    padding = spacing(0px, 12px)
-    color = rgb(23, 32, 51)
-    background = rgb(255, 255, 255)
+    padding = Look.spacing(0px, 12px)
+    color = Look.rgb(23, 32, 51)
+    background = Look.rgb(255, 255, 255)
 
 const submitLook = look:
     minWidth = 0px
     minHeight = 42px
-    border = border(0px, color("transparent"))
+    border = Look.border(0px, Look.color("transparent"))
     borderRadius = 11px
-    padding = spacing(0px, 18px)
-    color = rgb(255, 255, 255)
-    background = rgb(49, 87, 213)
+    padding = Look.spacing(0px, 18px)
+    color = Look.rgb(255, 255, 255)
+    background = Look.rgb(49, 87, 213)
     fontWeight = 700
     cursor = "pointer"
 const errorLook = look:
     gridColumn = "1 / -1"
     margin = 0
-    color = rgb(180, 35, 24)
+    color = Look.rgb(180, 35, 24)
     fontSize = 14px
 
 export component TaskForm(onCreate: CreateTaskHandler):

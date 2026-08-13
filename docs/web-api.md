@@ -218,17 +218,17 @@ They can be bound, exported, imported, and calculated outside a `look:` block.
 The constructors are ordinary named module functions:
 
 ```velar
-import {border, clamp, rgb, spacing} from "velar/look"
+
 
 export const compact = 40rem
-const accent = rgb(45, 79, 190)
+const accent = Look.rgb(45, 79, 190)
 const fluidWidth: LengthPercentage = 100% - 32px
 
 export const panelLook = look:
     width = fluidWidth
-    padding = spacing(24px, 16px)
-    border = border(1px, accent)
-    fontSize = clamp(16px, 3vw, 24px)
+    padding = Look.spacing(24px, 16px)
+    border = Look.border(1px, accent)
+    fontSize = Look.clamp(16px, 3vw, 24px)
 
     if viewport.width <= compact:
         padding = 12px
@@ -290,15 +290,13 @@ Motion has two checked spellings:
 - `transition` (and `transitionProperty`, `transitionDuration`,
   `transitionDelay`, `transitionTimingFunction`) for state changes — a hover
   colour, an opening panel, a fading toast.
-- a module-level `keyframes:` value passed to `animate(...)` from `velar/look`
+- a module-level `keyframes:` value passed to the permanent `Look.animate(...)`
   for keyframe motion. The `animation` property accepts `Animation`,
   `List<Animation>`, or `null`; a raw CSS animation string is rejected, and the
   animation longhands (`animationName`, `animationDuration`, and the rest) stay
   outside Look because `animate` owns the checked contract.
 
 ```velar
-import {animate} from "velar/look"
-
 export const spin = keyframes:
     from:
         rotate = 0deg
@@ -307,7 +305,7 @@ export const spin = keyframes:
 
 const spinnerLook = look:
     if not motion.reduced:
-        animation = animate(spin, 1s, easing="linear", loop=true)
+        animation = Look.animate(spin, 1s, easing="linear", loop=true)
 
 export component Spinner:
     return <span look={spinnerLook} role="status" aria-label="Loading" />
@@ -315,7 +313,7 @@ export component Spinner:
 
 Equal keyframe structures share one generated CSS name and one emitted rule,
 including across module boundaries. Bind a changing animation on the element
-with `look:animation={active ? animate(spin, 1s) : null}`; `null` removes the
+with `look:animation={active ? Look.animate(spin, 1s) : null}`; `null` removes the
 native animation. The charter's appendix to section 17 defines the stop grammar
 and every `animate` option.
 
@@ -1186,8 +1184,8 @@ import {checkedValue, clearError, clearErrors, errors, fieldValue, fieldValues, 
 import {after, blur, closeDialog, dialogResult, environment, every, focus, scrollElementTo, scrollMetrics, setTextSelection, showDialog, textSelection, watchOnline, watchVisibility} from "velar/browser"
 
 component EnvironmentStatus:
-    const stopReady = after(250, () => print("ready"))
-    const stopHeartbeat = every(1000, () => print("heartbeat"))
+    const stopReady = after(250ms, () => print("ready"))
+    const stopHeartbeat = every(1s, () => print("heartbeat"))
     const stopOnline = watchOnline(online => print(online))
     const stopVisibility = watchVisibility(visible => print(visible))
 
@@ -1200,10 +1198,10 @@ component EnvironmentStatus:
     return <p>{environment().online ? "online" : "offline"}</p>
 ```
 
-`after(milliseconds, callback)` schedules one callback and `every(milliseconds,
+`after(duration, callback)` schedules one callback and `every(duration,
 callback)` schedules repeated work. Each returns an idempotent `() -> null`
-stop function. Durations must be finite and non-negative; `every` requires a
-positive duration. Repeating work schedules its next turn only after the
+stop function. Durations use Core `ms` or `s` values and must be non-negative;
+`every` requires a positive duration. Repeating work schedules its next turn only after the
 current synchronous or asynchronous callback settles, so slow polling cannot
 overlap itself. Stopping cannot abort a callback that has already started, but
 prevents every later turn. Callback failures are normalized through

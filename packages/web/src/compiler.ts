@@ -93,6 +93,15 @@ const lookModuleExports = new Map<string, ValueType>([
   )],
 ]);
 
+// D35: Look's existing pure builders are also available through the permanent
+// Look namespace. The module interface remains the single roster; no builder
+// name is invented here.
+webGlobals.set("Look", {
+  kind: "object",
+  fields: new Map([...LOOK_BUILDERS].map((name) => [name, lookModuleExports.get(name)!])),
+  readonlyFields: new Set(LOOK_BUILDERS),
+});
+
 const webTextFormTypes = new Set(LOOK_UNIT_TYPES.values());
 const webOwnedNamedTypes = new Set([
   "WebNode", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement",
@@ -322,7 +331,10 @@ const browserTestNetworkControllerType = object({
 
 
 export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map([
-  ["velar/look", moduleInterface(lookModuleExports)],
+  ["velar/look", {
+    ...moduleInterface(lookModuleExports),
+    permanentNamespace: { name: "Look", members: new Set(LOOK_BUILDERS) },
+  }],
   ["velar/app", moduleInterface(new Map([
     ["onError", namedFunction(["handler"], [functionType([appErrorType], unknownType)], cleanupType)],
     ["reportError", namedFunction(["error", "phase", "detail"], [errorType, stringType, stringType], nullType, 1)],
@@ -435,7 +447,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["reset", namedFunction(["form"], [elementType], nullType)],
   ]))],
   ["velar/browser", moduleInterface(new Map([
-    ["after", namedFunction(["milliseconds", "callback"], [numberType, functionType([], unknownType)], cleanupType)],
+    ["after", namedFunction(["duration", "callback"], [durationType, functionType([], unknownType)], cleanupType)],
     ["location", namedFunction([], [], browserLocationType)],
     ["environment", namedFunction([], [], browserEnvironmentType)],
     ["copyText", namedFunction(["value"], [stringType], promise(nullType))],
@@ -461,7 +473,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["showDialog", namedFunction(["dialog"], [dialogElementType], nullType)],
     ["closeDialog", namedFunction(["dialog", "result"], [dialogElementType, stringType], nullType, 1)],
     ["dialogResult", namedFunction(["dialog"], [dialogElementType], stringType)],
-    ["every", namedFunction(["milliseconds", "callback"], [numberType, functionType([], unknownType)], cleanupType)],
+    ["every", namedFunction(["duration", "callback"], [durationType, functionType([], unknownType)], cleanupType)],
     ["frame", namedFunction([], [], promise(numberType))],
   ]))],
   ["velar/files", moduleInterface(new Map([
@@ -536,7 +548,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   semantic: velarWebSemanticExtension,
   inspection: velarWebInspectionExtension,
   analysis: Object.freeze({
-    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent", ...LOOK_PUBLIC_TYPE_NAMES]),
+    primitiveTypes: new Set(["WebNode", "Component", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement", "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent", ...LOOK_PUBLIC_TYPE_NAMES.filter((name) => name !== "Duration")]),
     primitiveParents: new Map([
       ["InputElement", new Set(["Element"])],
       ["TextAreaElement", new Set(["InputElement"])],
@@ -559,7 +571,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     // three names are reserved in a Web module.
     reservedBindings: new Set(["mount", "tick", "computed", ...LOOK_MEDIA_SUBJECTS.keys()]),
     globalGuidance: new Map([
-      ...[...LOOK_BUILDERS].map((name) => [name, `Import '${name}' by name from \"velar/look\"`] as const),
+      ...[...LOOK_BUILDERS].map((name) => [name, `Use Look.${name}(...) directly; VelarScript's pure namespaces need no import`] as const),
       ["document", "Use JSX, refs, and velar/browser instead of the untyped document global"],
       ["window", "Use velar/browser or an explicit JavaScript boundary instead of the untyped window global"],
       ["navigator", "Use velar/browser instead of the navigator global"],
@@ -608,6 +620,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "mount", kind: 3, detail: "mount(node, target) -> null" },
       { label: "tick", kind: 3, detail: "tick() -> Promise<null>" },
       { label: "computed", kind: 3, detail: "computed(() => T) -> () -> T" },
+      { label: "Look", kind: 6, detail: "Permanent namespace for typed visual builders" },
       { label: "bind:value", kind: 10, detail: "Two-way string state binding" },
       { label: "bind:checked", kind: 10, detail: "Two-way boolean state binding" },
       { label: "bind:group", kind: 10, detail: "Two-way radio or checkbox group binding" },

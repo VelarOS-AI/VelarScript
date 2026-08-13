@@ -97,7 +97,6 @@ test("keyframes reject malformed stops, interpolation gaps, state reads, and nes
 
 test("animate validates literal options and animation text teaches keyframes", () => {
   const prefix = `
-import {animate} from "velar/look"
 const frames = keyframes:
     from:
         opacity = 0
@@ -105,11 +104,11 @@ const frames = keyframes:
         opacity = 1
 `;
   const cases: readonly [string, RegExp][] = [
-    [`${prefix}const value = animate(frames, 0ms)\n`, /duration must be greater than zero/u],
-    [`${prefix}const value = animate(frames, 1s, delay=-1ms)\n`, /delay cannot be negative/u],
-    [`${prefix}const value = animate(frames, 1s, count=1.5)\n`, /count must be a positive integer/u],
-    [`${prefix}const value = animate(frames, 1s, count=2, loop=true)\n`, /either count or loop/u],
-    [`${prefix}const value = animate(frames, 1s, easing="spring")\n`, /easing 'spring' is not supported/u],
+    [`${prefix}const value = Look.animate(frames, 0ms)\n`, /duration must be greater than zero/u],
+    [`${prefix}const value = Look.animate(frames, 1s, delay=-1ms)\n`, /delay cannot be negative/u],
+    [`${prefix}const value = Look.animate(frames, 1s, count=1.5)\n`, /count must be a positive integer/u],
+    [`${prefix}const value = Look.animate(frames, 1s, count=2, loop=true)\n`, /either count or loop/u],
+    [`${prefix}const value = Look.animate(frames, 1s, easing="spring")\n`, /easing 'spring' is not supported/u],
     ["const broken = look:\n    animation = \"spin 1s linear\"\n", /declare a checked 'keyframes:' value/u],
   ];
   for (const [source, expected] of cases) {
@@ -123,7 +122,7 @@ test("exported keyframes keep their checked type across a module interface", asy
   const main = join(root, "main.vel");
   const project = await compileProject(main, new Map([
     [frames, "export const pulse = keyframes:\n    from:\n        opacity = 0\n    to:\n        opacity = 1\n"],
-    [main, "import {animate} from \"velar/look\"\nimport {pulse} from \"./frames.vel\"\nconst page = look:\n    animation = animate(pulse, 1s)\ncomponent App():\n    return <main look={page}>ok</main>\n"],
+    [main, "import {pulse} from \"./frames.vel\"\nconst page = look:\n    animation = Look.animate(pulse, 1s)\ncomponent App():\n    return <main look={page}>ok</main>\n"],
   ]), { extensions: [velarCompilerExtension] });
   assert.deepEqual(project.failures, []);
   assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);

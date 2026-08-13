@@ -2812,8 +2812,15 @@ export class Parser {
     return undefined;
   }
 
-  protected parseExtensionNumericLiteral(_token: Token, _value: number, _unit: string): Expression | undefined {
-    return undefined;
+  protected parseExtensionNumericLiteral(token: Token, value: number, unit: string): Expression | undefined {
+    if (unit !== "ms" && unit !== "s") return undefined;
+    return {
+      kind: "ExtensionExpression:core:duration",
+      value,
+      unit,
+      raw: token.value,
+      span: token.span,
+    } as Expression;
   }
 
   // An extension-owned bracket fragment lexes with insignificant

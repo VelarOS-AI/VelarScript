@@ -395,11 +395,10 @@ print(line ?? "closed")
 
     const overflowEntry = join(directory, "overflow.vel");
     await writeFile(overflowEntry, `
-import {sleep} from "velar/async"
 import {terminal} from "velar/terminal"
 
 print(await terminal.readLine() ?? "missing")
-await sleep(20)
+await Promise.sleep(20ms)
 try:
     await terminal.readLine()
     print("unexpected")

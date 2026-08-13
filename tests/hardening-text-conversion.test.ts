@@ -7,7 +7,7 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 const CONTRACT = "VEL4026";
 const F_STRING_LEAD = /^An f-string renders strings, numbers, bools, enums, null, and extension values with a declared text form; format /u;
 const STR_LEAD = /^str\(\) converts strings, numbers, bools, enums, null, and extension values with a declared text form; format /u;
-const TWO_EXITS = /print\(value\) to inspect it, or stringify\(value\) for data text \(import \{stringify\} from "velar\/json"\)$/u;
+const TWO_EXITS = /print\(value\) to inspect it, or Json\.stringify\(value\) for data text$/u;
 
 function executeModule(code: string): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, ["--input-type=module"], {

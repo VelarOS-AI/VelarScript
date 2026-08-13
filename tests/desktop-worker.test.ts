@@ -429,7 +429,7 @@ test("Desktop owns bounded packaged project tasks without executable grants", { 
     }
     assert.equal((await readFile(join(project, "dist", "main.js"), "utf8")).includes("project-task-run"), true);
 
-    await writeFile(join(project, "main.vel"), "import {sleep} from \"velar/async\"\nprint(\"started\")\nawait sleep(60000)\n", "utf8");
+    await writeFile(join(project, "main.vel"), "print(\"started\")\nawait Promise.sleep(60000ms)\n", "utf8");
     const running = await client.call("project-task", "start", ["run", [], { timeout: 0, maxOutputBytes: 65536 }]) as { handle: number; pid: number };
     runningPid = running.pid;
     const first = await client.call("project-task", "read", [running.handle]) as { channel: string; text: string };

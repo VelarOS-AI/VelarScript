@@ -351,13 +351,19 @@ function numericLiteral(expression: Expression | null): number | null {
   return null;
 }
 
+function coreDurationLiteral(expression: Expression | null): { readonly value: number; readonly unit: "ms" | "s"; readonly raw: string } | null {
+  if (expression?.kind !== "ExtensionExpression:core:duration") return null;
+  return expression as Expression & { readonly value: number; readonly unit: "ms" | "s"; readonly raw: string };
+}
+
 function lookDurationLiteral(expression: Expression | null): number | null {
-  if (expression && isWebUnit(expression) && (expression.unit === "ms" || expression.unit === "s")) {
-    return expression.value * (expression.unit === "s" ? 1000 : 1);
+  const direct = coreDurationLiteral(expression);
+  if (direct) {
+    return direct.value * (direct.unit === "s" ? 1000 : 1);
   }
-  if (expression?.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
-    && isWebUnit(expression.operand) && (expression.operand.unit === "ms" || expression.operand.unit === "s")) {
-    const value = expression.operand.value * (expression.operand.unit === "s" ? 1000 : 1);
+  const operand = expression?.kind === "UnaryExpression" ? coreDurationLiteral(expression.operand) : null;
+  if (expression?.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-") && operand) {
+    const value = operand.value * (operand.unit === "s" ? 1000 : 1);
     return expression.operator === "-" ? -value : value;
   }
   return null;
@@ -957,7 +963,6 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   protected override inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
-    if (expression.kind === "CallExpression") this.checkLookBuilderCall(expression);
     // Operands probed for Look arithmetic are re-requested by the core analyzer immediately after the
     // probe declines; reusing the probe result (consume-once) keeps operand analysis single-run so
     // operand diagnostics are not reported twice.
@@ -967,7 +972,9 @@ export class VelarWebAnalyzer extends Analyzer {
       this.probedOperandTypes.delete(key);
       return probed;
     }
-    return super.inferExpression(expression, contextualType);
+    const result = super.inferExpression(expression, contextualType);
+    if (expression.kind === "CallExpression") this.checkLookBuilderCall(expression);
+    return result;
   }
 
   // A name refers to writable reactive state only when ordinary lexical lookup
@@ -1420,8 +1427,15 @@ export class VelarWebAnalyzer extends Analyzer {
    * module compiles; dynamic arguments keep the runtime guard.
    */
   private checkLookBuilderCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
-    if (expression.callee.kind !== "IdentifierExpression") return;
-    const builder = this.lookBuilderNames.get(expression.callee.name);
+    const builder = expression.callee.kind === "IdentifierExpression"
+      ? this.lookBuilderNames.get(expression.callee.name)
+      : expression.callee.kind === "MemberExpression"
+        && expression.callee.object.kind === "IdentifierExpression"
+        && expression.callee.object.name === "Look"
+        && this.isBuiltinValueReference(expression.callee.object, "Look")
+        && LOOK_BUILDERS.has(expression.callee.property)
+        ? expression.callee.property
+        : undefined;
     if (!builder) return;
     const key = spanIdentity(expression.span);
     if (this.checkedBuilderCalls.has(key)) return;

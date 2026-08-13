@@ -6,6 +6,27 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Parallel async lands: `Promise.all` takes a record of promises and
+  resolves the same shape (`{name, count}` in, `{name, count}` out), and
+  `Promise.race` over a union of promise types keeps the union narrowable.
+  Pure standard helpers become permanent namespaces needing no import —
+  `Json.parse`/`stringify`/`stableStringify`/`clone`, the `Promise.*`
+  family, and the Web `Look.*` builders — while capability modules like
+  `velar/http` still require their explicit import, because reaching the
+  outside world should be visible. The old member imports retire with
+  migration diagnostics, and JavaScript's `JSON.`/`Object.`/`Math.`
+  spellings get directed guidance.
+- Durations are Core: `250ms` and `2s` are values with arithmetic, and
+  `Promise.sleep`, `Promise.timeout`, `Promise.retry`, and the Web timers
+  take them — a bare number is a type error that teaches the unit.
+- Combinator losers no longer lose their failures: after `race`, `timeout`,
+  or `all` settles, a later rejection from another input is reported
+  through the detached channel instead of vanishing, and `map` stops
+  claiming new items after the first failure. `Kind.is(raw)` and
+  `User.is(raw)` now narrow in the true branch, so the open-protocol
+  pattern is a first-class spelling, and an untyped exported `computed` is
+  diagnosed at its export with the annotation to add rather than as
+  `unknown` at every consumer.
 - The documentation gate now analyzes every example, not just parses the
   fragments. Ninety-eight of the hundred and seventy-two examples were
   parse-checked only, which is how an illegal condition survived in

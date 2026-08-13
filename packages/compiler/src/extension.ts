@@ -288,6 +288,8 @@ export interface CompilerAnalyzerFactory {
 
 export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
+  /** Pure exports retired from source imports and exposed through one permanent namespace. */
+  readonly permanentNamespace?: { readonly name: string; readonly members: ReadonlySet<string> };
   readonly mutableExports: ReadonlySet<string>;
   readonly reactiveExports: ReadonlyMap<string, "state">;
   /** Named re-exports (`export {name} from "source"`), keyed by the exported alias. */

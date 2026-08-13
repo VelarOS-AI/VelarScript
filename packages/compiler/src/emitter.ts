@@ -105,6 +105,55 @@ export class JavaScriptEmitter {
       || this.needsObjectBindingHelpers
       || this.needsListBindingHelpers;
     const helpers: string[] = [...this.additionalHelpers(program)];
+    const builtinValues = new Set(this.hints.builtinValueReferences.values());
+    if (builtinValues.has("Json")) {
+      helpers.push('import * as __velarJsonNamespace from "velar/json";');
+      this.requiredRuntimeModules.add("velar/json");
+    }
+    if (builtinValues.has("Promise")) {
+      helpers.push('import * as __velarPromiseNamespace from "velar/async";');
+      this.requiredRuntimeModules.add("velar/async");
+    }
+    if (builtinValues.has("Look")) {
+      helpers.push('import * as __velarLookNamespace from "velar/look";');
+      this.requiredRuntimeModules.add("velar/look");
+    }
+    if (builtinValues.has("range")) {
+      helpers.push('import { range as __velarRange } from "velar/collections";');
+      this.requiredRuntimeModules.add("velar/collections");
+    }
+    if ([...this.hints.extensionCalls.values()].includes("core.duration-arithmetic")) helpers.push([
+      "const __velarDurationApply = Reflect.apply;",
+      "const __velarDurationPattern = /^([+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+))(ms|s)$/;",
+      "const __velarDurationRegExpExec = RegExp.prototype.exec;",
+      "const __velarDurationNumber = Number;",
+      "const __velarDurationNumberIsFinite = Number.isFinite;",
+      "const __velarDurationObjectIs = Object.is;",
+      "const __velarDurationString = String;",
+      "const __velarDurationTypeError = TypeError;",
+      "const __velarDurationRangeError = RangeError;",
+      "function __velarDurationMilliseconds(value) {",
+      "  if (typeof value !== \"string\") throw new __velarDurationTypeError(\"Duration arithmetic requires Duration values\");",
+      "  const match = __velarDurationApply(__velarDurationRegExpExec, __velarDurationPattern, [value]);",
+      "  if (!match) throw new __velarDurationTypeError(\"Duration arithmetic requires Duration values\");",
+      "  const milliseconds = __velarDurationNumber(match[1]) * (match[2] === \"s\" ? 1000 : 1);",
+      "  if (!__velarDurationNumberIsFinite(milliseconds)) throw new __velarDurationRangeError(\"Duration arithmetic must produce a finite value\");",
+      "  return milliseconds;",
+      "}",
+      "function __velarDurationValue(milliseconds) {",
+      "  if (!__velarDurationNumberIsFinite(milliseconds)) throw new __velarDurationRangeError(\"Duration arithmetic must produce a finite value\");",
+      "  return __velarDurationString(__velarDurationObjectIs(milliseconds, -0) ? 0 : milliseconds) + \"ms\";",
+      "}",
+      "function __velarDurationUnary(operator, value) { const milliseconds = __velarDurationMilliseconds(value); return __velarDurationValue(operator === \"-\" ? -milliseconds : milliseconds); }",
+      "function __velarDurationMath(operator, left, right) {",
+      "  if (operator === \"+\" || operator === \"-\") { const a = __velarDurationMilliseconds(left), b = __velarDurationMilliseconds(right); return __velarDurationValue(operator === \"+\" ? a + b : a - b); }",
+      "  if (operator === \"*\" && typeof left === \"number\") return __velarDurationValue(left * __velarDurationMilliseconds(right));",
+      "  const milliseconds = __velarDurationMilliseconds(left);",
+      "  if (typeof right !== \"number\" || !__velarDurationNumberIsFinite(right)) throw new __velarDurationTypeError(\"Duration scaling requires a finite number\");",
+      "  if (operator === \"/\" && right === 0) throw new __velarDurationRangeError(\"Duration arithmetic cannot divide by zero\");",
+      "  return __velarDurationValue(operator === \"*\" ? milliseconds * right : milliseconds / right);",
+      "}",
+    ].join("\n"));
     helpers.push(...this.reactiveBridgeHelpers(
       this.hints.javaScriptCallBoundaries.size > 0,
       this.sharedRuntimeModules ? needsDirectCollectionInfrastructure : this.needsCollectionHelpers,
@@ -561,7 +610,7 @@ export class JavaScriptEmitter {
   // from adopting the task is observed rather than discarded.
   protected detachedTaskHelpers(): readonly string[] {
     return [[
-      "const __velarDetachedPromiseThen = Promise.prototype.then;",
+      "const __velarDetachedPromiseThen = globalThis.Promise.prototype.then;",
       "const __velarDetachedApply = Reflect.apply;",
       "const __velarDetachedConsole = globalThis.console;",
       "const __velarDetachedConsoleError = __velarDetachedConsole ? __velarDetachedConsole.error : null;",
@@ -1293,6 +1342,7 @@ export class JavaScriptEmitter {
       case "promise":
         return `__velarValidationIsPromise(${value})`;
       case "named":
+        if (type.name === "Duration") return `typeof ${value} === "string" && /^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:ms|s)$/.test(${value})`;
         if (this.hints.enumNames.has(type.name)) return `${type.name}.is(${value})`;
         if (this.hints.classNames.has(type.name)) {
           return `__velarValidationIsInstance(${value}, ${this.builtinErrorRuntimeName(type.name) ?? type.name})`;
@@ -1331,6 +1381,7 @@ export class JavaScriptEmitter {
   }
 
   protected emitIsCheck(type: ValueType, value: string): string {
+    if (type.kind === "named" && type.name === "Duration") return `typeof ${value} === "string" && /^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:ms|s)$/.test(${value})`;
     return type.kind === "named"
       ? `${type.name}.is(${value})`
       : this.emitTypeCheck(type, value);
@@ -1509,12 +1560,30 @@ export class JavaScriptEmitter {
   }
 
   protected emitExpression(expression: Expression): string {
+    if (expression.kind === "ExtensionExpression:core:duration") {
+      return JSON.stringify((expression as Expression & { readonly raw: string }).raw);
+    }
+    if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
+      && this.hints.extensionCalls.get(spanIdentity(expression.span)) === "core.duration-arithmetic") {
+      return `__velarDurationUnary(${JSON.stringify(expression.operator)}, ${this.emitMappedExpression(expression.operand)})`;
+    }
+    if (expression.kind === "BinaryExpression"
+      && this.hints.extensionCalls.get(spanIdentity(expression.span)) === "core.duration-arithmetic") {
+      return `__velarDurationMath(${JSON.stringify(expression.operator)}, ${this.emitMappedExpression(expression.left)}, ${this.emitMappedExpression(expression.right)})`;
+    }
     switch (expression.kind) {
       case "LiteralExpression":
         return expression.value === null ? "null" : typeof expression.value === "string" ? JSON.stringify(expression.value) : String(expression.value);
       case "FStringExpression":
         return `\`${expression.parts.map((part) => part.kind === "text" ? this.escapeTemplateText(part.value) : `\${${this.emitMappedExpression(part.value)}}`).join("")}\``;
       case "IdentifierExpression":
+        {
+          const builtin = this.hints.builtinValueReferences.get(spanIdentity(expression.span));
+          if (builtin === "Json") return "__velarJsonNamespace";
+          if (builtin === "Promise") return "__velarPromiseNamespace";
+          if (builtin === "Look") return "__velarLookNamespace";
+          if (builtin === "range") return "__velarRange";
+        }
         if (expression.name === "number") {
           this.needsNumberHelper = true;
           return "__velarNumber";

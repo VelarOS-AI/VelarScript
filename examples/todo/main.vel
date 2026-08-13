@@ -1,23 +1,21 @@
-import {border, color, rgb, rgba, shadow, spacing, tracks} from "velar/look"
-
 type Todo:
     id: number
     title: string
     done: bool
 
-const ink = rgb(23, 32, 51)
-const inkSoft = rgb(116, 129, 152)
-const paper = rgb(244, 247, 251)
-const surface = rgb(255, 255, 255)
-const surfaceSoft = rgb(247, 249, 253)
-const rule = rgb(220, 228, 240)
-const fieldRule = rgb(201, 213, 229)
-const primary = rgb(35, 87, 217)
-const danger = rgb(226, 75, 75)
+const ink = Look.rgb(23, 32, 51)
+const inkSoft = Look.rgb(116, 129, 152)
+const paper = Look.rgb(244, 247, 251)
+const surface = Look.rgb(255, 255, 255)
+const surfaceSoft = Look.rgb(247, 249, 253)
+const rule = Look.rgb(220, 228, 240)
+const fieldRule = Look.rgb(201, 213, 229)
+const primary = Look.rgb(35, 87, 217)
+const danger = Look.rgb(226, 75, 75)
 
 const pageLook = look:
     minHeight = 100vh
-    padding = spacing(64px, 16px)
+    padding = Look.spacing(64px, 16px)
     color = ink
     background = paper
     fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
@@ -27,26 +25,26 @@ const cardLook = look:
     maxWidth = 680px
     marginInline = "auto"
     padding = 28px
-    border = border(1px, rule)
+    border = Look.border(1px, rule)
     borderRadius = 20px
     background = surface
-    boxShadow = shadow(0px, 18px, 60px, rgba(31, 58, 95, 0.1))
+    boxShadow = Look.shadow(0px, 18px, 60px, Look.rgba(31, 58, 95, 0.1))
 
 const composerLook = look:
     display = "grid"
-    gridTemplateColumns = tracks(1fr, "auto")
+    gridTemplateColumns = Look.tracks(1fr, "auto")
     gap = 10px
 
 const inputLook = look:
     minWidth = 0
-    padding = spacing(12px, 14px)
-    border = border(1px, fieldRule)
+    padding = Look.spacing(12px, 14px)
+    border = Look.border(1px, fieldRule)
     borderRadius = 10px
 
 def buttonLook(dangerous: bool = false) -> Look:
     return look:
-        padding = spacing(10px, 14px)
-        border = border(0px, color("transparent"))
+        padding = Look.spacing(10px, 14px)
+        border = Look.border(0px, Look.color("transparent"))
         borderRadius = 10px
         color = surface
         background = dangerous ? danger : primary
@@ -62,7 +60,7 @@ const todosLook = look:
     listStyle = "none"
 const todoLook = look:
     display = "grid"
-    gridTemplateColumns = tracks("auto", 1fr, "auto")
+    gridTemplateColumns = Look.tracks("auto", 1fr, "auto")
     alignItems = "center"
     gap = 12px
     padding = 12px

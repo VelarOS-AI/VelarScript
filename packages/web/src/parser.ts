@@ -119,6 +119,8 @@ export class VelarWebParser extends Parser {
   }
 
   protected override parseExtensionNumericLiteral(token: Token, value: number, unit: string): Expression {
+    const core = super.parseExtensionNumericLiteral(token, value, unit);
+    if (core) return core;
     const expression = { kind: "ExtensionExpression:web:unit", value, unit, raw: token.value, span: token.span } as const;
     return expression;
   }

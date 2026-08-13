@@ -1,4 +1,3 @@
-import {range} from "velar/collections"
 import {expect} from "velar/test"
 import {browser, localStorage, sessionStorage} from "velar/web-test"
 

@@ -36,7 +36,7 @@ export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIden
 ]);
 
 const coreReservedBindings = new Set([
-  "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
+  "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "RangeError", "Reflect", "Set", "String",
   "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
 ]);
 

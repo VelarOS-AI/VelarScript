@@ -121,6 +121,7 @@ const builtinTypeDocumentation = new Map<string, string>([
   ["Record", "A JSON-safe plain record with dynamic string keys and one checked value type."],
   ["Set", "An insertion-ordered JavaScript Set with one checked element type."],
   ["Promise", "A JavaScript Promise with one checked resolved-value type."],
+  ["Duration", "A Core duration value written with an ms or s suffix."],
 ]);
 
 const coreCompletionItems = [
@@ -128,6 +129,9 @@ const coreCompletionItems = [
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
   { label: "str", kind: 3, detail: "str(value) -> string" },
   { label: "print", kind: 3, detail: "print(value) -> null" },
+  { label: "range", kind: 3, detail: "range(stop) or range(start, stop, step) -> List<number>" },
+  { label: "Json", kind: 6, detail: "Permanent namespace for parse, stringify, stableStringify, and clone" },
+  { label: "Promise", kind: 6, detail: "Permanent namespace for all, race, sleep, timeout, retry, map, and series" },
   { label: "velar/collections", kind: 9, detail: "Typed collection transforms and Python-style iteration helpers" },
   { label: "velar/text", kind: 9, detail: "Unicode-aware text normalization and formatting helpers" },
   { label: "velar/math", kind: 9, detail: "Numeric constants, transforms, and random helpers" },

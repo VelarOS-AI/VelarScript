@@ -205,10 +205,8 @@ component App:
 mount(<App />, "#app")
 `.trimStart(), "utf8");
   await writeFile(join(directory, "src", "app.browser.test.vel"), `
-import {sleep} from "velar/async"
-
 async def test_never_settles() -> null:
-    await sleep(60000)
+    await Promise.sleep(60000ms)
 `.trimStart(), "utf8");
   return directory;
 }

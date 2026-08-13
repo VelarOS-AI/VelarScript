@@ -705,10 +705,10 @@ print(wrapped("Velar"))
   assert.ok(invalidPromise.diagnostics.some((item) => /Type 'Promise' expects 1 type argument/u.test(item.message)));
   const nestedPromise = compileCore("async def invalid() -> Promise:\n    pass\n");
   assert.ok(nestedPromise.diagnostics.some((item) => item.code === "VEL4018" && /not '-> Promise<T>'/u.test(item.message)));
-  for (const runtimeName of ["Function", "Promise"]) {
-    const runtimeConstructor = compileCore(`${runtimeName}()\n`);
-    assert.ok(runtimeConstructor.diagnostics.some((item) => item.message === `Unknown name '${runtimeName}'`));
-  }
+  const runtimeFunction = compileCore("Function()\n");
+  assert.ok(runtimeFunction.diagnostics.some((item) => item.message === "Unknown name 'Function'"));
+  const runtimePromise = compileCore("Promise()\n");
+  assert.ok(runtimePromise.diagnostics.some((item) => /not callable/u.test(item.message)));
 
   const formatted = formatSource("const callback: Function < string, number, bool > = (text, size) => true\n");
   assert.equal(formatted, "const callback: Function<string, number, bool> = (text, size) => true\n");
@@ -4706,7 +4706,7 @@ test("rejects ambient JavaScript coercion globals with intentional replacements"
 
 test("compiler host capabilities stay protected while extension conveniences follow lexical scope", () => {
   const hostBindings = [
-    "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "Promise", "RangeError", "Reflect", "Set", "String",
+    "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "RangeError", "Reflect", "Set", "String",
     "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "queueMicrotask",
   ];
   for (const name of hostBindings) {
@@ -5180,7 +5180,7 @@ test("rejects untyped browser globals with official module guidance", () => {
   const cases = new Map([
     ["fetch(\"/api\")\n", /velar\/http.*raw fetch/],
     ["const body = document.body\n", /JSX.*refs.*velar\/browser/],
-    ["const value = JSON.parse(\"{}\")\n", /velar\/json/],
+    ["const value = JSON.parse(\"{}\")\n", /Json\.parse/],
     ["const value = Date.now()\n", /velar\/time/],
   ]);
   for (const [source, message] of cases) {
@@ -5372,11 +5372,10 @@ test("CLI runs Core programs on Node with forwarded arguments and propagated exi
 
   const printPath = join(directory, "printing.vel");
   await writeFile(printPath, `
-import {stringify} from "velar/json"
 import {clamp} from "velar/math"
 import {iso} from "velar/time"
 
-print(stringify({limit: clamp(12, 0, 10)}))
+print(Json.stringify({limit: clamp(12, 0, 10)}))
 print(iso(0))
 `.trimStart(), "utf8");
   const printed = spawnSync(process.execPath, [cli, "run", printPath], { cwd: process.cwd(), encoding: "utf8" });
@@ -5419,7 +5418,6 @@ test("CLI run forwards termination to the compiled program and closes inherited 
   const directory = await makeTemporaryDirectory("velar-run-signal-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
-import {sleep} from "velar/async"
 import {onShutdown} from "velar/host"
 
 async def shutdown() -> null:
@@ -5428,7 +5426,7 @@ async def shutdown() -> null:
 onShutdown(shutdown)
 print("ready")
 while true:
-    await sleep(1000)
+    await Promise.sleep(1s)
 `.trimStart(), "utf8");
 
   const child = spawn(process.execPath, [cli, "run", entry], {
@@ -6322,7 +6320,7 @@ mount(<App />, "#app")
 test("module state, computed values, and watches form a reactive module", () => {
   const result = compile(`
 export state count: number = 0
-export const doubled = computed(() => count * 2)
+export const doubled: () -> number = computed(() => count * 2)
 
 export def increment() -> null:
     count += 1
@@ -6433,7 +6431,7 @@ mount(target="#app", node=<App />)
 });
 
 test("computed alone installs its runtime and retired declaration syntax has one migration diagnostic", () => {
-  const result = compile("export const one = computed(() => 1)\n");
+  const result = compile("export const one: () -> number = computed(() => 1)\n");
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const __velarRuntimeKey/u);
   const execution = executeModule(`${result.code ?? ""}\nconsole.log(one());\n`);
@@ -8113,8 +8111,8 @@ const stopSession = session.watch("item", Item, (next, previous) => print(previo
 const stopMedia = watchMedia("(prefers-color-scheme: dark)", matches => print(matches))
 const stopOnline = watchOnline(online => print(online))
 const stopVisibility = watchVisibility(visible => print(visible))
-const stopAfter = after(10, () => print("after"))
-const stopEvery = every(10, () => print("every"))
+const stopAfter = after(10ms, () => print("after"))
+const stopEvery = every(10ms, () => print("every"))
 const response = await http.head("/api/items").response()
 const parsed = await http.get("/api/items").parse(Item)
 const selected = await pick()
@@ -8519,21 +8517,21 @@ globalThis[Symbol.for("velar.runtime.v1")] = { report(error, options) { reports.
 let afterCount = 0;
 let cancelledCount = 0;
 let everyCount = 0;
-const cancelAfter = after(20, () => { cancelledCount += 1; });
+const cancelAfter = after("20ms", () => { cancelledCount += 1; });
 cancelAfter();
 cancelAfter();
-after(5, () => { afterCount += 1; });
+after("5ms", () => { afterCount += 1; });
 let activeWorkers = 0;
 let maxWorkers = 0;
-const stopEvery = every(5, async () => {
+const stopEvery = every("5ms", async () => {
   activeWorkers += 1;
   maxWorkers = Math.max(maxWorkers, activeWorkers);
   await new Promise((resolve) => setTimeout(resolve, 12));
   everyCount += 1;
   activeWorkers -= 1;
 });
-after(1, () => { throw new Error("sync failure"); });
-after(1, async () => { throw new Error("async failure"); });
+after("1ms", () => { throw new Error("sync failure"); });
+after("1ms", async () => { throw new Error("async failure"); });
 await new Promise((resolve) => setTimeout(resolve, 48));
 stopEvery();
 await new Promise((resolve) => setTimeout(resolve, 20));
@@ -8541,8 +8539,8 @@ const stoppedCount = everyCount;
 await new Promise((resolve) => setTimeout(resolve, 24));
 console.log([afterCount, cancelledCount, everyCount >= 2, everyCount === stoppedCount, maxWorkers].join(":"));
 console.log(reports.sort().join("|"));
-try { every(0, () => null); } catch (error) { console.log(error.name); }
-try { after(-1, () => null); } catch (error) { console.log(error.name); }
+try { every("0ms", () => null); } catch (error) { console.log(error.name); }
+try { after("-1ms", () => null); } catch (error) { console.log(error.name); }
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, "1:0:true:true:1\ntimer:after:async failure|timer:after:sync failure\nRangeError\nRangeError\n");
@@ -9651,7 +9649,7 @@ matcher.addEventListener = () => { poisoned += 1; };
 matcher.removeEventListener = () => { poisoned += 1; };
 documentValue.addEventListener = () => { poisoned += 1; };
 documentValue.removeEventListener = () => { poisoned += 1; };
-const cancel = after(5, () => null);
+const cancel = after("5ms", () => null);
 cancel();
 console.log(media("screen"));
 const stopMedia = watchMedia("screen", () => null);
@@ -10372,11 +10370,10 @@ export enum ItemState:
     done
 `.trimStart(), "utf8");
   await writeFile(mainPath, `
-import {parse} from "velar/json"
 import {ItemPayload, ItemState} from "./types.vel"
 
-const item = parse("{\\"value\\":7}", ItemPayload)
-const status = parse("\\"ready\\"", ItemState)
+const item = Json.parse("{\\"value\\":7}", ItemPayload)
+const status = Json.parse("\\"ready\\"", ItemState)
 print(item.value)
 print(status == ItemState.ready)
 `.trimStart(), "utf8");
@@ -10399,8 +10396,6 @@ test("Record<T> models dynamic JSON object keys without turning Map into wire da
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
-import {parse, stringify} from "velar/json"
-
 type Property:
     type: string
     description: string
@@ -10432,9 +10427,9 @@ print(visited)
 const copied = properties.copy()
 print(copied.remove("mode"))
 print(copied.has("mode"))
-print(stringify(properties))
+print(Json.stringify(properties))
 
-const parsed = parse("{\\"name\\":{\\"type\\":\\"string\\",\\"description\\":\\"Display name\\"}}", Properties)
+const parsed = Json.parse("{\\"name\\":{\\"type\\":\\"string\\",\\"description\\":\\"Display name\\"}}", Properties)
 print(parsed["name"]?.type ?? "missing")
 print(Properties.is({broken: {type: "string"}}))
 `.trimStart(), "utf8");
@@ -10516,11 +10511,11 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 283);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 281);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 117);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 20);
-  assert.equal(api.modules["velar/math"]?.length, 32);
+  assert.equal(api.modules["velar/math"]?.length, 30);
   assert.deepEqual(api.modules["velar/json"], ["clone", "deepEqual", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
   assert.deepEqual(api.modules["velar/url"], ["decode", "encode", "isExternal", "join", "normalize", "parse", "parseQuery", "query", "withHash", "withQuery"]);
@@ -10539,11 +10534,10 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const entry = join(directory, "main.vel");
   const output = join(directory, "dist");
   await writeFile(entry, `
-import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, range, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
+import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
 import {capitalize, chunks, escapeHtml, findMatch, findMatches, lines, lineStarts, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, utf8Size, words} from "velar/text"
 import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians} from "velar/math"
-import {clone as cloneJson, deepEqual, parse as parseJson, stableStringify, stringify, tryParse} from "velar/json"
-import {all as allAsync, map as asyncMap, retry, series, sleep, timeout} from "velar/async"
+import {deepEqual, tryParse} from "velar/json"
 import {decode, encode, isExternal, join as joinUrl, parse as parseUrl, parseQuery, query, withHash, withQuery} from "velar/url"
 import {iso, parse as parseTime, parts, utc} from "velar/time"
 import {level as logLevel, log, logger, setLevel, useSink} from "velar/log"
@@ -10624,12 +10618,12 @@ print(degrees(radians(90)).round())
 print(gcd(18, 12))
 print(lcm(6, 8))
 
-const parsed = parseJson("{\\"name\\":\\"Nova\\",\\"role\\":\\"admin\\"}", User)
-const copied = cloneJson(parsed, User)
+const parsed = Json.parse("{\\"name\\":\\"Nova\\",\\"role\\":\\"admin\\"}", User)
+const copied = Json.clone(parsed, User)
 print(copied.name)
 print(tryParse("bad", User)?.name ?? "fallback")
-print(stableStringify({z: 1, a: 2}))
-print(stringify([1, 2]))
+print(Json.stableStringify({z: 1, a: 2}))
+print(Json.stringify([1, 2]))
 print(deepEqual(parsed, copied))
 print(deepEqual(parsed, {name: "Nova", role: "member"}))
 
@@ -10639,11 +10633,11 @@ async def double(value: number) -> number:
 def ready() -> number:
     return 7
 
-const doubled = await asyncMap([1, 2, 3], double, 2)
-const waited = await allAsync([sleep(1), sleep(1)])
-const retried = await retry(ready, 2)
-const serial = await series([ready, ready])
-await timeout(sleep(1), 100)
+const doubled = await Promise.map([1, 2, 3], double, 2)
+const waited = await Promise.all([Promise.sleep(1ms), Promise.sleep(1ms)])
+const retried = await Promise.retry(ready, 2)
+const serial = await Promise.series([ready, ready])
+await Promise.timeout(Promise.sleep(1ms), 100ms)
 print(doubled[2])
 print(waited.size)
 print(retried)
@@ -11032,8 +11026,6 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {enumerate, join as joinItems} from "velar/collections"
-import {parse as parseJson} from "velar/json"
-import {map as asyncMap} from "velar/async"
 import {expect} from "velar/test"
 
 type User:
@@ -11056,7 +11048,7 @@ print(value=enumerate(start=10, values=["x"])[0].index)
 print(value=3.14159.toFixed(digits=2))
 print(value=" Velar ".trim())
 
-const parsed = parseJson(target=User, text="{\\\"name\\\":\\\"Ada\\\"}")
+const parsed = Json.parse(target=User, text="{\\\"name\\\":\\\"Ada\\\"}")
 const typed = User.parse(value={name: "Lin"})
 print(value=parsed.name)
 print(value=typed.name)
@@ -11072,7 +11064,7 @@ const tags = Set(source=["web"])
 print(value=copied.get("Ada") ?? 0)
 print(value=tags.has("web"))
 
-const doubled = await asyncMap(concurrency=2, worker=async value => value * 2, values=[1, 2])
+const doubled = await Promise.map(concurrency=2, worker=async value => value * 2, values=[1, 2])
 expect(actual=doubled).toHaveLength(length=2)
 print(value=doubled[1])
 `.trimStart(), "utf8");
@@ -11208,7 +11200,6 @@ test("velar run serves checked responses, bounded static files, streams, and ord
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
   await writeFile(join(directory, "main.vel"), `
 import {RequestBodyTooLargeError, ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
-import {sleep} from "velar/async"
 import {onShutdown} from "velar/host"
 
 type Body:
@@ -11216,7 +11207,7 @@ type Body:
 
 async def chunks(write: (chunk: string) -> Promise<null>) -> null:
     await write("first")
-    await sleep(40)
+    await Promise.sleep(40ms)
     await write("second")
     return null
 
@@ -11871,18 +11862,18 @@ const extended = [Promise.resolve(1)]; extended.label = "hidden";
 for (const [name, callback] of [["all", () => all(sparse)], ["race", () => race(extended)], ["map", () => map(sparse, value => value)], ["series", () => series(extended)]]) {
   try { await callback(); console.log("accepted"); } catch (error) { console.log(name, error.name); }
 }
-try { await timeout(Promise.resolve(1), 1, 42); console.log("accepted"); } catch (error) { console.log("timeout", error.name); }
+try { await timeout(Promise.resolve(1), "1ms", 42); console.log("accepted"); } catch (error) { console.log("timeout", error.name); }
 try { await retry(() => 1, Number.MAX_SAFE_INTEGER + 1); console.log("accepted"); } catch (error) { console.log("retry", error.name); }
 let asyncThenReads = 0;
 const fakePromise = Object.defineProperty({}, "then", { get() { asyncThenReads += 1; return resolve => resolve(1); } });
-for (const [name, callback] of [["all-value", () => all([1])], ["race-thenable", () => race([fakePromise])], ["timeout-value", () => timeout(1, 1)]]) {
+for (const [name, callback] of [["all-value", () => all([1])], ["race-thenable", () => race([fakePromise])], ["timeout-value", () => timeout(1, "1ms")]]) {
   try { await callback(); console.log("accepted"); } catch (error) { console.log(name, error.name); }
 }
 console.log(asyncThenReads);
 console.log(
   (await all([Promise.resolve(undefined)]))[0] === null,
   await race([Promise.resolve(undefined)]) === null,
-  await timeout(Promise.resolve(undefined), 1) === null,
+  await timeout(Promise.resolve(undefined), "1ms") === null,
   await retry(async () => undefined) === null,
   (await map([1], () => undefined))[0] === null,
   (await series([() => undefined]))[0] === null,
@@ -11964,15 +11955,17 @@ Object.getOwnPropertySymbols = poison;
 Object.getPrototypeOf = poison;
 Number.isFinite = poison;
 Number.isSafeInteger = poison;
+RegExp.prototype.exec = poison;
+globalThis.Number = poison;
 globalThis.setTimeout = poison;
 globalThis.clearTimeout = poison;
 console.log((await all([first]))[0]);
 console.log(await race([second]));
-console.log(await timeout(Promise.resolve(10), 100));
+console.log(await timeout(Promise.resolve(10), "100ms"));
 console.log(await retry(() => 11, 1));
 console.log((await map([12], value => value + 1, 1))[0]);
 console.log((await series([() => 14]))[0]);
-console.log(await sleep(0) === null, poisonedCalls);
+console.log(await sleep("0ms") === null, poisonedCalls);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
@@ -12130,7 +12123,7 @@ globalThis.TypeError = class PoisonTypeError extends Error {};
 globalThis.RangeError = class PoisonRangeError extends Error {};
 const sample = random();
 const integer = randomInt(10);
-console.log(sign(-2), min(4, 2), max(4, 2), clamp(3, 1, 2), gcd(54, 24), lcm(6, 8), isFinite(1), isInteger(1), sample >= 0 && sample < 1, integer >= 0 && integer < 10);
+console.log(sign(-2), min(4, 2), max(4, 2), clamp(3, 1, 2), gcd(54, 24), lcm(6, 8), sample >= 0 && sample < 1, integer >= 0 && integer < 10);
 try { sign("2"); console.log("accepted"); } catch (error) { console.log(error instanceof OriginalTypeError); }
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
@@ -12138,7 +12131,7 @@ try { sign("2"); console.log("accepted"); } catch (error) { console.log(error in
     "6 24",
     "TypeError", "TypeError", "TypeError", "TypeError", "TypeError",
     "TypeError", "RangeError", "TypeError", "RangeError",
-    "-1 2 4 2 6 24 true true true true", "true", "",
+    "-1 2 4 2 6 24 true true", "true", "",
   ].join("\n"));
 
   for (const [replacement, expected] of [["1", "RangeError"], ['"0.5"', "TypeError"]]) {
@@ -12546,7 +12539,7 @@ globalThis.URL = NativeUrl;
   const asyncModule = standardModuleSource("velar/async") ?? "";
   const asyncExecution = executeModule(`${asyncModule}
 const operations = new Array(10001).fill(Promise.resolve(null));
-for (const operation of [() => all(operations), () => race(operations), () => timeout(Promise.resolve(null), 1, "x".repeat(65537))]) {
+for (const operation of [() => all(operations), () => race(operations), () => timeout(Promise.resolve(null), "1ms", "x".repeat(65537))]) {
   try { await operation(); console.log("accepted"); } catch (error) { console.log(error.name); }
 }
 `);
@@ -12557,7 +12550,7 @@ for (const operation of [() => all(operations), () => race(operations), () => ti
   const browserExecution = executeModule(`let timerCalls = 0;
 globalThis.setTimeout = () => { timerCalls += 1; return 1; };
 ${browser}
-try { after(2147483648, () => null); console.log("accepted"); } catch (error) { console.log(error.name); }
+try { after("2147483648ms", () => null); console.log("accepted"); } catch (error) { console.log(error.name); }
 console.log(timerCalls);
 `);
   assert.equal(browserExecution.status, 0, String(browserExecution.stderr));
@@ -12710,7 +12703,7 @@ console.log(reports.join("|"));
   const timerExecution = executeModule(`${browserSource}
 let thenReads = 0;
 const fakeThenable = Object.defineProperty({}, "then", { get() { thenReads += 1; return () => null; } });
-after(0, () => fakeThenable);
+after("0ms", () => fakeThenable);
 await new Promise((resolve) => setTimeout(resolve, 10));
 console.log(thenReads);
 `);
@@ -14080,7 +14073,6 @@ test("known lossy JSON inputs fail during checking", async () => {
   const directory = await makeTemporaryDirectory("velar-json-types-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
-import {clone, stringify} from "velar/json"
 import {http} from "velar/http"
 import {socket} from "velar/realtime"
 import {database, storage} from "velar/storage"
@@ -14096,15 +14088,15 @@ class Box:
         self.value = value
 
 const tree: Tree = {name: "root", children: []}
-const valid = stringify(tree)
+const valid = Json.stringify(tree)
 const mapping = Map()
 mapping.set("value", 1)
 const unique = Set([1, 2])
 const callback = () => 1
-const badMap = stringify(mapping)
-const badSet = clone(unique)
-const badClass = stringify(Box(1))
-const badFunction = stringify(callback)
+const badMap = Json.stringify(mapping)
+const badSet = Json.clone(unique)
+const badClass = Json.stringify(Box(1))
+const badFunction = Json.stringify(callback)
 const badHttp = http.post("/items", {body: mapping})
 storage.set("mapping", mapping)
 database("cache").set("unique", unique)
@@ -14199,15 +14191,13 @@ test("0.5 Core standard library rejects invalid typed calls before runtime", asy
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {flatten, sum} from "velar/collections"
-import {parse as parseJson} from "velar/json"
-import {all as allAsync, map as asyncMap} from "velar/async"
 import {matches} from "velar/text"
 
 const total = sum(["one", "two"])
 const flat = flatten([1, 2])
-const parsed = parseJson("{}", 42)
-const resolved = await allAsync([1, 2])
-const mapped = await asyncMap([1, 2], value => value, "many")
+const parsed = Json.parse("{}", 42)
+const resolved = await Promise.all([1, 2])
+const mapped = await Promise.map([1, 2], value => value, "many")
 const pattern = matches(42, "[0-9]+")
 const options = matches("42", "[0-9]+", {ignoreCase: "yes"})
 `.trimStart(), "utf8");
@@ -16172,14 +16162,13 @@ test("velar test discovers test_* functions without requiring exports", async ()
   await writeFile(join(directory, "src", "main.vel"), "export def add(left: number, right: number) -> number:\n    return left + right\n", "utf8");
   await writeFile(join(directory, "src", "math.test.vel"), `
 import {expect} from "velar/test"
-import {sleep} from "velar/async"
 import {add} from "./main.vel"
 
 def test_adds_numbers() -> null:
     expect(add(2, 3)).toEqual(5)
 
 async def test_async_code() -> null:
-    await sleep(0)
+    await Promise.sleep(0ms)
     const value = "ready"
     expect(value).toEqual("ready")
 `.trimStart(), "utf8");
@@ -25594,14 +25583,9 @@ const broken = look:
   assert.match(dynamic.code ?? "", /if \(value == null\) __velarDomStyleClear\(element, /u);
 });
 
-test("Look builders are named module values and units calculate outside Look", () => {
-  const missingImport = compile("const danger = rgb(226, 75, 75)\n");
-  assert.ok(missingImport.diagnostics.some((item) => /Import 'rgb' by name from "velar\/look"/u.test(item.message)));
-
+test("Look builders use the permanent namespace and units calculate outside Look", () => {
   const result = compile(`
-import {rgb as makeColor, spacing} from "velar/look"
-
-const danger = makeColor(226, 75, 75)
+const danger = Look.rgb(226, 75, 75)
 const base: Length = 8px
 const wide: Length = base * 2
 const viewportWide: Length = 25vw * 2
@@ -25609,7 +25593,7 @@ const ratio: Percentage = 75%
 const fluid: LengthPercentage = ratio - 2rem
 const duration: Duration = 1s + 200ms
 const angle: Angle = 0.5turn + 90deg
-const padding = spacing(fluid, wide)
+const padding = Look.spacing(fluid, wide)
 
 print(danger)
 print(viewportWide)
@@ -25618,7 +25602,7 @@ print(angle)
 print(padding)
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /import \{ rgb as makeColor, spacing \} from "velar\/look"/u);
+  assert.match(result.code ?? "", /import \* as __velarLookNamespace from "velar\/look"/u);
   assert.doesNotMatch(result.code ?? "", /__velarLookCall/u);
   assert.match(result.code ?? "", /__velarLookMath/u);
   const execution = executeWithLookModule(result.code ?? "");
@@ -25677,19 +25661,17 @@ test("project CSS has one explicit before-Look-after order across module boundar
   await writeFile(join(directory, "feature.css"), ".feature { order: 2; }", "utf8");
   await writeFile(join(directory, "feature-after.css"), ".feature-after { order: 5; }", "utf8");
   await writeFile(join(directory, "feature.vel"), `
-import {rgb} from "velar/look"
 import css unsafe "./feature.css" before look
 import css unsafe "./feature-after.css" after look
 export const featureLook = look:
-    color = rgb(1, 2, 3)
+    color = Look.rgb(1, 2, 3)
 `.trimStart(), "utf8");
   await writeFile(entry, `
-import {rgb} from "velar/look"
 import {featureLook} from "./feature.vel"
 import css unsafe "./base.css" before look
 import css unsafe "./base-after.css" after look
 const appLook = look:
-    background = rgb(4, 5, 6)
+    background = Look.rgb(4, 5, 6)
 component App:
     return <main look={[featureLook, appLook]}>App</main>
 `.trimStart(), "utf8");

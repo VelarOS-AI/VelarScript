@@ -299,8 +299,6 @@ test(
 
 const browserApplication = `
 import {onError} from "velar/app"
-import {range} from "velar/collections"
-import {stringify} from "velar/json"
 
 type Box:
     done: bool
@@ -442,8 +440,8 @@ component App:
         <p data-match-record>{matchedRecord(box)}</p>
         <p data-match-list>{matchedList(boxes)}</p>
         <p data-spread>{spreadLabel(box)}</p>
-        <p data-json-root>{stringify(root)}</p>
-        <p data-json-list>{stringify(jsonItems)}</p>
+        <p data-json-root>{Json.stringify(root)}</p>
+        <p data-json-list>{Json.stringify(jsonItems)}</p>
         <p data-arriving>{arriving.get(0) ?? "missing"}</p>
         <ul>{rows.filter(row => row.id != "" or revision >= 0).map(row => <li key={row.id}>{row.title}</li>)}</ul>
         <p data-render-error>{renderError}</p>
@@ -467,8 +465,6 @@ mount(<App />, "#app")
 const browserTests = `
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
-import {range} from "velar/collections"
-
 async def test_empty_collection_iteration() -> null:
     await browser.open("/")
     await browser.click("[data-add-empty]")
