@@ -64,6 +64,8 @@ export type TokenKind =
   | "rightBrace"
   | "colon"
   | "comma"
+  /** D43 item 67: `@name` marks a name the language owns, not the author. */
+  | "at"
   | "dot"
   | "ellipsis"
   | "question"

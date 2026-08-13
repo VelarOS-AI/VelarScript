@@ -15,6 +15,7 @@ export type CoreStatement =
   | EnumDeclaration
   | ClassDeclaration
   | VariableDeclaration
+  | UsingDeclaration
   | FunctionDeclaration
   | ReturnStatement
   | ThrowStatement
@@ -186,6 +187,20 @@ export interface ClassDeclaration {
   readonly initialization: ClassInitBlock | null;
   readonly getters: readonly ClassGetterDeclaration[];
   readonly methods: readonly ClassMethodDeclaration[];
+  /** D43 item 69: the compiler-known `@dispose:` release contract, if declared. */
+  readonly dispose: ClassDisposeBlock | null;
+  readonly span: Span;
+}
+
+/**
+ * D43 item 69: `@dispose:` is a compiler-known class member, not a method. It
+ * cannot be called from source — it is the ownership contract `using` runs, and
+ * a second spelling of `close()` is exactly what it exists to avoid.
+ */
+export interface ClassDisposeBlock {
+  readonly kind: "ClassDisposeBlock";
+  readonly body: readonly Statement[];
+  readonly keywordSpan: Span;
   readonly span: Span;
 }
 
@@ -237,6 +252,20 @@ export interface VariableDeclaration {
   readonly exported: boolean;
   readonly pattern: BindingPattern;
   readonly type: TypeReference | null;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+/**
+ * D43 item 69: `using name = expression` takes ownership of a resource for the
+ * enclosing scope. The binding is const, and every exit from the scope —
+ * normal, `return`, `break`, `continue`, or a throw — releases it through its
+ * type's `@dispose` contract, in reverse declaration order.
+ */
+export interface UsingDeclaration {
+  readonly kind: "UsingDeclaration";
+  readonly name: string;
+  readonly nameSpan: Span;
   readonly initializer: Expression;
   readonly span: Span;
 }
@@ -717,6 +746,61 @@ export interface IndexExpression {
   readonly index: Expression;
   readonly optional: boolean;
   readonly span: Span;
+}
+
+/**
+ * Whether a block awaits in its own frame. A nested function or arrow owns its
+ * awaits, so the walk stops at every declaration boundary. D43 item 69 uses
+ * this to decide whether releasing a `@dispose` value needs an async scope.
+ */
+export function blockContainsDirectAwait(
+  statements: readonly Statement[],
+  extension: (value: Expression) => boolean | undefined = () => undefined,
+): boolean {
+  return statements.some((statement) => statementContainsDirectAwait(statement, extension));
+}
+
+export function statementContainsDirectAwait(
+  statement: Statement,
+  extension: (value: Expression) => boolean | undefined = () => undefined,
+): boolean {
+  const expression = (value: Expression): boolean => expressionContainsDirectAwait(value, extension);
+  const block = (values: readonly Statement[]): boolean => blockContainsDirectAwait(values, extension);
+  switch (statement.kind) {
+    case "VariableDeclaration":
+      return expression(statement.initializer);
+    case "UsingDeclaration":
+      return expression(statement.initializer);
+    case "ReturnStatement":
+      return statement.value !== null && expression(statement.value);
+    case "ThrowStatement":
+      return expression(statement.value);
+    case "AssertStatement":
+      return expression(statement.condition) || (statement.message !== null && expression(statement.message));
+    case "IfStatement":
+      return expression(statement.condition) || block(statement.thenBody) || (statement.elseBody !== null && block(statement.elseBody));
+    case "MatchStatement":
+      return expression(statement.value)
+        || statement.cases.some((branch) => (branch.guard !== null && expression(branch.guard)) || block(branch.body));
+    case "ForStatement":
+      // An `async for` awaits its own pulls even when the body does not.
+      return statement.asynchronous || expression(statement.iterable) || block(statement.body);
+    case "WhileStatement":
+      return expression(statement.condition) || block(statement.body);
+    case "TryStatement":
+      return block(statement.tryBody)
+        || (statement.catchBody !== null && block(statement.catchBody))
+        || (statement.finallyBody !== null && block(statement.finallyBody));
+    case "AssignmentStatement":
+      return expression(statement.target) || expression(statement.value);
+    case "ExpressionStatement":
+      return expression(statement.expression);
+    case "AsyncStatement":
+      // Detached execution does not wait, so it never makes its frame async.
+      return false;
+    default:
+      return false;
+  }
 }
 
 export function expressionContainsDirectAwait(

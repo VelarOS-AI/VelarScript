@@ -1659,8 +1659,10 @@ an index. `break` performs no further pull.
 The loop does not invent resource ownership. It never calls `close`, `return`,
 or another cleanup hook when it exhausts, breaks, throws, or is cancelled.
 Sources that own files, sockets, processes, or request cancellation expose and
-document an explicit operation; the caller remains responsible for it, normally
-with `try`/`finally`. `async for` is a small checked pull protocol, not the
+document an explicit operation; the caller remains responsible for it, and the
+spelling for that responsibility is `using` (section 9, *Owned resources*):
+`using source = await openSource()` above the loop releases it on every exit,
+including the loop's `break`. `async for` is a small checked pull protocol, not the
 JavaScript `Symbol.asyncIterator` protocol and not an implicit generator model.
 The JavaScript spelling `for await` is rejected with guidance to put the async
 marker before the Velar loop.
@@ -1705,6 +1707,61 @@ result even when some iterations continue forever. A `break` in a nested loop
 does not make the outer loop fall through; a reachable break owned by the outer
 loop does.
 
+### Owned resources
+
+`using name = expression` says that this scope owns the value and is
+responsible for releasing it. The binding is immutable, and every exit from the
+enclosing scope — falling off the end, `return`, `break`, `continue`, or a
+throw — releases it. Several owned resources release in reverse declaration
+order.
+
+```velar fragment
+async def collect(path: string) -> number:
+    using source = await openLog(path)
+    let lines = 0
+    async for line in source:
+        lines += 1
+    return lines
+```
+
+Three ideas stay separate. `using` is ownership. `@dispose:` is the release
+contract. `close()` and `stop()` are ordinary public verbs that mean what they
+say. A type never has to be renamed to participate.
+
+A class declares its own contract as a compiler-known `@dispose:` block, which
+usually delegates to the verb the class already publishes:
+
+```velar fragment
+class Terminal:
+    def close() -> null:
+        releaseHandle()
+
+    @dispose:
+        self.close()
+```
+
+`@dispose` cannot be called from source — it is the ownership contract, not a
+second spelling of `close()` — and it may coexist with an ordinary method
+named `dispose`. It must be safe to run twice, so releasing after an explicit
+`close()` is harmless and no early-exit syntax is needed. The compiler supplies
+the contract for the standard capability handles, delegating to the verb each
+one already has, so `using` works on them with no declaration at all.
+
+The `@dispose:` body may `await`. When it does, releasing awaits too, and the
+`using` must sit in an async scope; acquiring is ordinary async work written as
+`using name = await open(...)`. A record cannot be owned: a record is data, and
+releasing is behavior.
+
+A release failure never hides a real error. When an error is already in flight
+the original error is what propagates and the release failure is reported
+through the host error channel; with no error in flight, a failing release
+throws normally, exactly as a `finally` would.
+
+Ownership needs a scope that ends, so `using` is rejected where none does: the
+module top level lives until the process ends, and a component body builds the
+component rather than finishing. Function bodies, methods, actions, and loop
+bodies — which release on every iteration — are all ordinary owning scopes.
+
 ## 10. Classes
 
 Classes use typed body fields and one explicit constructor.
@@ -1742,6 +1799,10 @@ class Session:
 - Instances are called directly: `Session("session-1")`.
 - `self` is explicit in method bodies.
 - Getters read as ordinary properties.
+- `@dispose:` is the one compiler-known class member. It declares the release
+  contract `using` runs (section 9, *Owned resources*), it is not callable from
+  source, and a class may declare at most one. `@` marks names the language
+  owns, so a member the author declares can never collide with one.
 
 Inheritance is explicit:
 

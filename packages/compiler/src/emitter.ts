@@ -9,14 +9,15 @@ import type {
   Statement,
   TypeAliasDeclaration,
   TypeDeclaration,
+  UsingDeclaration,
   TypeReference,
 } from "./ast.ts";
-import { expressionContainsDirectAwait as containsDirectAwait } from "./ast.ts";
+import { blockContainsDirectAwait, expressionContainsDirectAwait as containsDirectAwait } from "./ast.ts";
 import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
 import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 import { describeType, formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
-import type { LoweringHints } from "./analyzer.ts";
+import { disposeMemberKey, type LoweringHints } from "./analyzer.ts";
 import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
 import type { CompilerEmitterOptions } from "./extension.ts";
 import { VELAR_NARROWING_MODULE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
@@ -77,6 +78,7 @@ export class JavaScriptEmitter {
   private needsNumberHelper = false;
   private needsThrownValueHelper = false;
   private needsDetachedTaskHelper = false;
+  private needsDisposalHelper = false;
   private needsNarrowingErrorClass = false;
   private suppressPromiseNormalization = 0;
   private nextJavaScriptNodeId = 0;
@@ -284,6 +286,9 @@ export class JavaScriptEmitter {
     }
     if (this.needsDetachedTaskHelper) {
       helpers.push(...this.detachedTaskHelpers());
+    }
+    if (this.needsDisposalHelper) {
+      helpers.push(...this.disposalHelpers());
     }
     if (this.needsThrownValueHelper && !this.includesErrorNormalizationRuntime()) {
       if (this.sharedRuntimeModules) {
@@ -641,6 +646,36 @@ export class JavaScriptEmitter {
     ].join("\n")];
   }
 
+  /**
+   * D43 item 69 rule 8: a release that fails while an error is already in
+   * flight must not replace it. The original error keeps the throw; the release
+   * failure is normalized and reported through the host channel. The reporter
+   * itself never fails outward, for the same reason the detached-task reporter
+   * does not — a throw inside it would end the process.
+   */
+  protected disposalHelpers(): readonly string[] {
+    return [[
+      "const __velarDisposalApply = Reflect.apply;",
+      "const __velarDisposalConsole = globalThis.console;",
+      "const __velarDisposalConsoleError = __velarDisposalConsole ? __velarDisposalConsole.error : null;",
+      "function __velarDisposalTrace(error) {",
+      "  try { const trace = error.stack; if (typeof trace === \"string\" && trace !== \"\") return trace; } catch {}",
+      "  try { const message = error.message; if (typeof message === \"string\" && message !== \"\") return message; } catch {}",
+      "  return \"A resource release failed\";",
+      "}",
+      "function __velarDisposalReport(failure) {",
+      "  try {",
+      "    if (typeof __velarDisposalConsoleError !== \"function\") return null;",
+      "    let error = null;",
+      "    try { error = __velarNormalizeError(failure); } catch {}",
+      "    const trace = error === null ? \"A resource release failed\" : __velarDisposalTrace(error);",
+      "    __velarDisposalApply(__velarDisposalConsoleError, __velarDisposalConsole, [\"Resource release failed while another error was in flight: \" + trace]);",
+      "  } catch {}",
+      "  return null;",
+      "}",
+    ].join("\n")];
+  }
+
   protected requireRuntimeModule(source: string): void {
     this.requiredRuntimeModules.add(source);
   }
@@ -765,6 +800,13 @@ export class JavaScriptEmitter {
       if (this.visitExtensionRuntimeStatement(statement, visitExpression, visitStatement)) return;
       switch (statement.kind) {
         case "VariableDeclaration": visitExpression(statement.initializer); break;
+        case "UsingDeclaration":
+          // Releasing a resource reports its own failure through the host
+          // channel, which carries the error-normalization runtime with it.
+          this.needsDisposalHelper = true;
+          this.needsThrownValueHelper = true;
+          visitExpression(statement.initializer);
+          break;
         case "FunctionDeclaration": statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); }); statement.body.forEach(visitStatement); break;
         case "ClassDeclaration":
           statement.parameters.forEach((parameter) => { if (parameter.defaultValue) visitExpression(parameter.defaultValue); });
@@ -773,6 +815,7 @@ export class JavaScriptEmitter {
           statement.initialization?.body.forEach(visitStatement);
           statement.getters.forEach(visitStatement);
           statement.methods.forEach(visitStatement);
+          statement.dispose?.body.forEach(visitStatement);
           break;
         case "ReturnStatement": if (statement.value) visitExpression(statement.value); break;
         case "ThrowStatement": visitExpression(statement.value); break;
@@ -880,6 +923,57 @@ export class JavaScriptEmitter {
     return this.emitMappedJavaScript(statement.span, () => this.emitStatement(statement, depth));
   }
 
+  /**
+   * D43 item 69: a `using` binding owns the rest of its block, so a statement
+   * list is emitted as a whole. Everything after the binding moves inside the
+   * release frame; a second `using` nests inside the first, which is what makes
+   * release order the reverse of declaration order.
+   */
+  protected emitStatementLines(statements: readonly Statement[], depth: number): readonly string[] {
+    const owned = statements.findIndex((statement) => statement.kind === "UsingDeclaration");
+    const plain = (values: readonly Statement[]): string[] =>
+      values.map((child) => this.emitMappedStatement(child, depth)).filter(Boolean);
+    if (owned < 0) return plain(statements);
+    return [
+      ...plain(statements.slice(0, owned)),
+      ...this.emitUsingScope(statements[owned] as UsingDeclaration, statements.slice(owned + 1), depth),
+    ];
+  }
+
+  private emitUsingScope(statement: UsingDeclaration, rest: readonly Statement[], depth: number): readonly string[] {
+    const indentation = "  ".repeat(depth);
+    const contract = this.hints.usingDisposals.get(spanIdentity(statement.span));
+    const initializer = this.emitMappedJavaScript(statement.span, () => `const ${statement.name} = ${this.emitMappedExpression(statement.initializer)};`);
+    // A value with no resolved contract was already diagnosed; emitting the
+    // binding alone keeps the rest of the block readable in a failed compile.
+    if (!contract) return [`${indentation}${initializer}`, ...this.emitStatementLines(rest, depth)];
+    const body = this.emitStatementLines(rest, depth + 1);
+    this.needsDisposalHelper = true;
+    const suffix = statement.span.start;
+    const member = contract.owner === "class" ? `[${JSON.stringify(contract.member)}]` : `.${contract.member}`;
+    const call = `${contract.asynchronous ? "await " : ""}${statement.name}${member}()`;
+    const released = `__velarReleased${suffix}`;
+    const failure = `__velarUsingFailure${suffix}`;
+    return [
+      `${indentation}${initializer}`,
+      `${indentation}let ${released} = false;`,
+      `${indentation}try {`,
+      ...body,
+      // An error already in flight owns the failure: the release still runs,
+      // but its own failure is reported to the host instead of replacing the
+      // error the author is about to see (D43 item 69 rule 8).
+      `${indentation}} catch (${failure}) {`,
+      `${indentation}  ${released} = true;`,
+      `${indentation}  try { ${call}; } catch (__velarDisposeFailure${suffix}) { __velarDisposalReport(__velarDisposeFailure${suffix}); }`,
+      `${indentation}  throw ${failure};`,
+      `${indentation}} finally {`,
+      // Normal completion, `return`, `break`, and `continue` all arrive here,
+      // and a release failure on those paths throws normally.
+      `${indentation}  if (!${released}) ${call};`,
+      `${indentation}}`,
+    ];
+  }
+
   protected emitStatement(statement: Statement, depth: number): string {
     const indentation = "  ".repeat(depth);
     switch (statement.kind) {
@@ -923,7 +1017,7 @@ export class JavaScriptEmitter {
       case "FunctionDeclaration": {
         const prefix = `${statement.exported || this.forcedFunctionExports.has(statement.name) ? "export " : ""}${statement.asynchronous ? "async " : ""}function`;
         const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-        const lines = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean);
+        const lines = [...this.emitStatementLines(statement.body, depth + 1)];
         if (!this.blockAlwaysReturns(statement.body)) lines.push(`${"  ".repeat(depth + 1)}return null;`);
         const body = lines.join("\n");
         return `${indentation}${prefix} ${statement.name}(${parameters}) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
@@ -946,7 +1040,7 @@ export class JavaScriptEmitter {
         ].join("\n");
       }
       case "IfStatement": {
-        const thenBody = statement.thenBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const thenBody = this.emitStatementLines(statement.thenBody, depth + 1).join("\n");
         let output = `${indentation}if (${this.emitCondition(statement.condition)}) {${thenBody.length > 0 ? `\n${thenBody}\n${indentation}` : ""}}`;
         if (statement.elseBody) {
           const chained = statement.elseBody.length === 1 && statement.elseBody[0]?.kind === "IfStatement"
@@ -955,7 +1049,7 @@ export class JavaScriptEmitter {
           if (chained) {
             output += ` else ${chained}`;
           } else {
-            const elseBody = statement.elseBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+            const elseBody = this.emitStatementLines(statement.elseBody, depth + 1).join("\n");
             output += ` else {${elseBody.length > 0 ? `\n${elseBody}\n${indentation}` : ""}}`;
           }
         }
@@ -984,11 +1078,11 @@ export class JavaScriptEmitter {
           if (branch.guard) {
             lines.push(`${indentation}    if (${this.emitCondition(branch.guard)}) {`);
             lines.push(`${indentation}      ${matchedName} = true;`);
-            lines.push(...branch.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean));
+            lines.push(...this.emitStatementLines(branch.body, depth + 3));
             lines.push(`${indentation}    }`);
           } else {
             lines.push(`${indentation}    ${matchedName} = true;`);
-            lines.push(...branch.body.map((child) => this.emitMappedStatement(child, depth + 2)).filter(Boolean));
+            lines.push(...this.emitStatementLines(branch.body, depth + 2));
           }
           lines.push(`${indentation}  }`);
         }
@@ -1016,7 +1110,7 @@ export class JavaScriptEmitter {
               ? this.emitBindingPatternStatements(statement.secondPattern, indexName, "const", false, bodyDepth, "Async for second slot")
               : []),
             `${"  ".repeat(bodyDepth)}${indexName} += 1;`,
-            ...statement.body.map((child) => this.emitMappedStatement(child, bodyDepth)).filter(Boolean),
+            ...this.emitStatementLines(statement.body, bodyDepth),
             `${"  ".repeat(depth + 1)}}`,
             `${indentation}}`,
           ];
@@ -1025,7 +1119,7 @@ export class JavaScriptEmitter {
         this.needsCollectionHelpers = true;
         const iterable = this.emitMappedExpression(statement.iterable);
         if (!statement.secondPattern && statement.pattern.kind === "NameBindingPattern") {
-          const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+          const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
           return `${indentation}for (const ${statement.pattern.name} of __velarCollectionIterator(${iterable})) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
         }
         if (statement.secondPattern) {
@@ -1033,19 +1127,19 @@ export class JavaScriptEmitter {
           const lines = [
             ...this.emitBindingPatternStatements(statement.pattern, `${pairName}[0]`, "const", false, depth + 1, "For first slot"),
             ...this.emitBindingPatternStatements(statement.secondPattern, `${pairName}[1]`, "const", false, depth + 1, "For second slot"),
-            ...statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean),
+            ...this.emitStatementLines(statement.body, depth + 1),
           ];
           return `${indentation}for (const ${pairName} of __velarCollectionPairIterator(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
         }
         const valueName = `__velarForValue${statement.pattern.span.start}`;
         const lines = [
           ...this.emitBindingPatternStatements(statement.pattern, valueName, "const", false, depth + 1, "For"),
-          ...statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean),
+          ...this.emitStatementLines(statement.body, depth + 1),
         ];
         return `${indentation}for (const ${valueName} of __velarCollectionIterator(${iterable})) {${lines.length > 0 ? `\n${lines.join("\n")}\n${indentation}` : ""}}`;
       }
       case "WhileStatement": {
-        const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
         return `${indentation}while (${this.emitCondition(statement.condition)}) {${body.length > 0 ? `\n${body}\n${indentation}` : ""}}`;
       }
       case "BreakStatement":
@@ -1055,17 +1149,17 @@ export class JavaScriptEmitter {
       case "PassStatement":
         return "";
       case "TryStatement": {
-        const tryBody = statement.tryBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const tryBody = this.emitStatementLines(statement.tryBody, depth + 1).join("\n");
         let output = `${indentation}try {${tryBody.length > 0 ? `\n${tryBody}\n${indentation}` : ""}}`;
         if (statement.catchBody) {
           this.needsThrownValueHelper = true;
-          const catchBody = statement.catchBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+          const catchBody = this.emitStatementLines(statement.catchBody, depth + 1).join("\n");
           const catchName = statement.catchName ?? "error";
           const normalization = `${"  ".repeat(depth + 1)}${catchName} = __velarNormalizeError(${catchName});`;
           output += ` catch (${catchName}) {\n${normalization}${catchBody.length > 0 ? `\n${catchBody}` : ""}\n${indentation}}`;
         }
         if (statement.finallyBody) {
-          const finallyBody = statement.finallyBody.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+          const finallyBody = this.emitStatementLines(statement.finallyBody, depth + 1).join("\n");
           output += ` finally {${finallyBody.length > 0 ? `\n${finallyBody}\n${indentation}` : ""}}`;
         }
         return output;
@@ -1479,7 +1573,7 @@ export class JavaScriptEmitter {
     }
     if (statement.initialization) {
       constructorLines.push(`${indentation}    const self = this;`);
-      constructorLines.push(...constructorBody.map((child) => this.emitMappedStatement(child, depth + 2)).filter(Boolean));
+      constructorLines.push(...this.emitStatementLines(constructorBody, depth + 2));
     }
     const constructor = [
       `${indentation}  constructor(${parameters}) {`,
@@ -1491,7 +1585,7 @@ export class JavaScriptEmitter {
         ? [`${"  ".repeat(methodDepth)}throw new Error(${JSON.stringify(`Abstract ${"accessor" in method ? "getter" : "method"} ${statement.name}.${method.name}${"accessor" in method ? "" : "()"} must be implemented`)});`]
         : [
           ...(method.static ? [] : [`${"  ".repeat(methodDepth)}const self = this;`]),
-          ...method.body.map((child) => this.emitMappedStatement(child, methodDepth)).filter(Boolean),
+          ...this.emitStatementLines(method.body, methodDepth),
         ];
       if (!method.abstract && !this.blockAlwaysReturns(method.body)) lines.push(`${"  ".repeat(methodDepth)}return null;`);
       return lines;
@@ -1517,8 +1611,22 @@ export class JavaScriptEmitter {
     const staticFields = statement.fields
       .filter((field) => field.static)
       .map((field) => `${indentation}  static ${field.private ? "#" : ""}${field.name} = ${field.initializer ? this.emitMappedExpression(field.initializer) : "null"};`);
+    // D43 item 69: `@dispose:` becomes one prototype member under a key no
+    // source member name can spell, so the release contract cannot be called
+    // from source and cannot collide with a member the author declares.
+    const dispose: string[] = [];
+    if (statement.dispose) {
+      const disposeDepth = depth + 2;
+      const lines = [
+        `${"  ".repeat(disposeDepth)}const self = this;`,
+        ...this.emitStatementLines(statement.dispose.body, disposeDepth),
+        `${"  ".repeat(disposeDepth)}return null;`,
+      ];
+      const asynchronous = blockContainsDirectAwait(statement.dispose.body, (value) => this.extensionExpressionContainsDirectAwait(value));
+      dispose.push(`${indentation}  ${asynchronous ? "async " : ""}[${JSON.stringify(disposeMemberKey)}]() {\n${lines.join("\n")}\n${indentation}  }`);
+    }
     const extension = statement.base ? ` extends ${statement.base.name}` : "";
-    return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods].join("\n\n")}\n${indentation}}`;
+    return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods, ...dispose].join("\n\n")}\n${indentation}}`;
   }
 
   protected emitParameter(name: string, defaultValue: Expression | null, rest = false): string {

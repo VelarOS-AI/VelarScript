@@ -1,9 +1,11 @@
+import { blockContainsDirectAwait } from "./ast.ts";
 import type {
   ArrowFunctionExpression,
   AssignmentStatement,
   AsyncStatement,
   BindingPattern,
   ClassDeclaration,
+  ClassDisposeBlock,
   Expression,
   ExternClassDeclaration,
   ExternFunctionDeclaration,
@@ -18,6 +20,7 @@ import type {
   TypeParameterDeclaration,
   TypeReference,
   TypeSyntax,
+  UsingDeclaration,
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
@@ -175,6 +178,8 @@ export interface ClassField {
 
 export interface ClassInfo {
   readonly identity?: string;
+  /** D43 item 69: the class declares `@dispose:`, and whether releasing awaits. */
+  readonly dispose?: "sync" | "async";
   readonly parameters: readonly ValueType[];
   readonly parameterNames?: readonly string[];
   readonly requiredParameters: number;
@@ -335,6 +340,12 @@ export interface LoweringHints {
    */
   readonly dynamicOrderings: ReadonlySet<string>;
   /**
+   * How each `using` statement releases its value, keyed by the statement's
+   * span identity (D43 item 69). The analyzer resolves the contract because it
+   * is the only stage that knows the value's type.
+   */
+  readonly usingDisposals: ReadonlyMap<string, DisposalContract>;
+  /**
    * Span identities of JavaScript-boundary calls in synchronous
    * module-initialization position. A non-Error value thrown there would
    * reach the host uncaught and unnormalized — the last unowned failure
@@ -424,6 +435,20 @@ function sameInferredResult(left: ValueType, right: ValueType): boolean {
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
 const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
 const memberNarrowingPrefix = "\u0000member:";
+/**
+ * D43 item 69: the emitted member behind a class's `@dispose:` block. The key
+ * is not a source-shaped identifier, so no author member can collide with it —
+ * `@dispose` is the language's name, not a name in the author's namespace.
+ */
+export const disposeMemberKey = "__velar:dispose";
+
+/** How a `using` binding releases its value at scope exit. */
+export interface DisposalContract {
+  readonly member: string;
+  readonly asynchronous: boolean;
+  readonly owner: "class" | "capability";
+}
+
 /** What each bound admits, written the way a rejected call needs to hear it. */
 const boundVocabularyGuidance: Readonly<Record<TypeParameterBound, string>> = {
   Text: "a Text parameter accepts the types with a hook-free text form — strings, numbers, bools, enums, and null",
@@ -569,6 +594,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly stringOrderings = new Set<string>();
   private readonly dynamicOrderings = new Set<string>();
   private readonly reportedBoundViolations = new Set<string>();
+  private readonly usingDisposals = new Map<string, DisposalContract>();
   private readonly moduleTopLevelHostCalls = new Set<string>();
   private readonly stringSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
@@ -1237,6 +1263,7 @@ export class Analyzer implements TypeEnvironment {
       equalsCalls: this.equalsCalls,
       stringOrderings: this.stringOrderings,
       dynamicOrderings: this.dynamicOrderings,
+      usingDisposals: this.usingDisposals,
       moduleTopLevelHostCalls: this.moduleTopLevelHostCalls,
     };
   }
@@ -1735,6 +1762,9 @@ export class Analyzer implements TypeEnvironment {
       this.privateStaticGetters.set(statement.name, privateStaticGetters);
       this.privateStaticMethods.set(statement.name, privateStaticMethods);
       this.classes.set(statement.name, {
+        ...(statement.dispose
+          ? { dispose: blockContainsDirectAwait(statement.dispose.body) ? "async" : "sync" }
+          : {}),
         parameters: statement.parameters.map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
@@ -2030,6 +2060,9 @@ export class Analyzer implements TypeEnvironment {
         }
         break;
       }
+      case "UsingDeclaration":
+        this.analyzeUsingDeclaration(statement);
+        break;
       case "FunctionDeclaration":
         // MOD-D1: `export def` below module scope emitted invalid JavaScript.
         if (statement.exported && this.scopes.length !== 1) {
@@ -2799,6 +2832,7 @@ export class Analyzer implements TypeEnvironment {
     }
     this.validateConstructorShape(statement);
     if (statement.initialization) this.analyzeClassInitialization(statement);
+    if (statement.dispose) this.analyzeClassDispose(statement, statement.dispose);
     this.superMemberContext = null;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -3047,6 +3081,134 @@ export class Analyzer implements TypeEnvironment {
     this.loopDepth = previousLoopDepth;
     this.finallyLoopDepths = previousFinallyLoopDepths;
     this.unreachableDiagnosticDepth = previousUnreachableDiagnosticDepth;
+    this.functionDepth -= 1;
+    this.flowFrameDepth -= 1;
+    this.exitScope();
+  }
+
+  /**
+   * D43 item 69: `using name = expression` claims ownership of a resource for
+   * the enclosing scope. The value's type must declare the release contract,
+   * the scope must be able to run it, and the module top level — which lives
+   * until the process ends — has no scope exit to release at.
+   */
+  private analyzeUsingDeclaration(statement: UsingDeclaration): void {
+    const value = this.inferExpression(statement.initializer);
+    const rejection = this.ownershipScopeRejection();
+    if (rejection !== null) this.diagnostics.push(diagnostic("VEL3018", rejection, statement.span));
+    const contract = this.disposalContract(value);
+    if (contract === null) {
+      if (!isInvalidType(this.expandAliases(value)) && this.expandAliases(value).kind !== "any") {
+        this.diagnostics.push(diagnostic(
+          "VEL4032",
+          `'using' releases a value whose type declares '@dispose'; ${describeType(value)} does not${this.disposalGuidance(value)}`,
+          statement.initializer.span,
+        ));
+      }
+    } else {
+      if (contract.asynchronous && this.asynchronousFunctions.at(-1) !== true) {
+        this.diagnostics.push(diagnostic(
+          "VEL4033",
+          `Releasing ${describeType(value)} awaits, so its 'using' needs an async scope; declare the enclosing function 'async def'`,
+          statement.span,
+        ));
+      }
+      this.usingDisposals.set(spanIdentity(statement.span), contract);
+    }
+    this.declareBinding(statement.name, false, value, statement.nameSpan);
+  }
+
+  /**
+   * The release contract of a value's type: a class's own `@dispose:` block, or
+   * a standard capability handle, which delegates to the verb it already
+   * publishes (`close()` or `stop()`) rather than being renamed for `using`.
+   */
+  private disposalContract(source: ValueType): DisposalContract | null {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    if (type.kind === "class") {
+      let current: string | null = type.identity ?? type.name;
+      const visited = new Set<string>();
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        const info: ClassInfo | undefined = this.classes.get(current);
+        if (info?.dispose) return { member: disposeMemberKey, asynchronous: info.dispose === "async", owner: "class" };
+        current = info?.base ?? null;
+      }
+      return null;
+    }
+    if (type.kind !== "named") return null;
+    // A standard capability module owns its handle types (`velar/fs#type:...`);
+    // a module's own `type` declaration is identified as `velar:<path>#...`, so
+    // a plain record can never reach the built-in contract.
+    const identity = type.identity ?? type.name;
+    if (!identity.startsWith("velar/")) return null;
+    const fields = this.fieldsOf(identity);
+    if (!fields) return null;
+    for (const verb of ["close", "stop"]) {
+      const member = fields.get(verb);
+      if (!member || (member.kind !== "function" && member.kind !== "action" && member.kind !== "intrinsic")) continue;
+      if (member.requiredParameters > 0) continue;
+      const result = this.expandAliases(member.result);
+      if (result.kind === "null") return { member: verb, asynchronous: false, owner: "capability" };
+      if (result.kind === "promise" && this.expandAliases(result.value).kind === "null") {
+        return { member: verb, asynchronous: true, owner: "capability" };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * D43 item 69 rule 6: `using` needs a scope exit to release at. The module
+   * top level has none — it lives until the process ends. An extension whose
+   * body is not an ordinary scope adds its own answer.
+   */
+  protected ownershipScopeRejection(): string | null {
+    return this.inModuleInitializationPosition()
+      ? "A module lives until the process ends, so a module-level 'using' has no scope to release at; own the resource inside a function, or use 'const' and release it explicitly"
+      : null;
+  }
+
+  private disposalGuidance(source: ValueType): string {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    if (type.kind === "promise") {
+      return this.disposalContract(type.value) === null
+        ? ""
+        : "; acquisition is ordinary async work — write 'using name = await ...' so the scope owns the handle, not the Promise";
+    }
+    if (type.kind === "class") return "; declare an '@dispose:' block on the class to say how it releases itself";
+    if (type.kind === "named" || type.kind === "object" || type.kind === "record") {
+      return "; a record is data, so it has nothing to release — own the handle it came from instead";
+    }
+    return "";
+  }
+
+  /**
+   * D43 item 69: the `@dispose:` body is a release contract, not a method. It
+   * runs with `self` in scope and may `await`; whether it actually does is what
+   * decides that a `using` of this class needs an async scope.
+   */
+  private analyzeClassDispose(statement: ClassDeclaration, block: ClassDisposeBlock): void {
+    this.enterScope();
+    this.flowFrameDepth += 1;
+    this.functionDepth += 1;
+    const previousLoopDepth = this.loopDepth;
+    this.loopDepth = 0;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
+    const previousClass = this.currentClass;
+    const previousSuperMemberContext = this.superMemberContext;
+    this.currentClass = statement.name;
+    this.superMemberContext = "instance";
+    this.asynchronousFunctions.push(true);
+    this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
+    this.declareBinding("self", false, { kind: "class", name: statement.name }, block.span, true);
+    this.analyzeStatements(block.body);
+    this.returnContexts.pop();
+    this.asynchronousFunctions.pop();
+    this.currentClass = previousClass;
+    this.superMemberContext = previousSuperMemberContext;
+    this.loopDepth = previousLoopDepth;
+    this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -9141,6 +9303,11 @@ export class Analyzer implements TypeEnvironment {
   // initializers. Function, action, method, arrow, constructor, and component
   // bodies — and per-construction positions such as parameter defaults and
   // instance field initializers — are deferred.
+  /** True while analysis is directly in a declaration body rather than a function frame. */
+  protected inComponentSetupPosition(): boolean {
+    return this.functionDepth === 0;
+  }
+
   protected inModuleInitializationPosition(): boolean {
     return this.functionDepth === 0
       && this.parameterDefaultDepth === 0

@@ -1582,6 +1582,7 @@ function permanentNamespaceImportMessage(source: string, interface_: ModuleInspe
 function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): ClassInfo {
   return {
     ...(info.identity ? { identity: info.identity } : {}),
+    ...(info.dispose ? { dispose: info.dispose } : {}),
     parameters: info.parameters.map((type) => renameType(type, aliases)),
     ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
     requiredParameters: info.requiredParameters,

@@ -237,6 +237,23 @@ the boundary with `Type.parse`, then trust the types inward. `await` every
 call whose result or completion you depend on — a dropped promise is a bug,
 and the compiler treats it as one.
 
+Every handle a scope opens, that scope owns: write `using` and delete the
+`try`/`finally` you were about to write. It covers the exits that are easy to
+forget — an early `return`, a `break` out of a pull loop, a throw from three
+frames down:
+
+```velar fragment
+async def tail(path: string) -> null:
+    using watcher = await watchFiles(path)
+    async for batch in watcher:
+        if batch.rescan:
+            return null
+```
+
+Give a class an `@dispose:` block only when it truly owns something a scope
+should release; delegate it to the `close()` or `stop()` the class already
+publishes rather than inventing a second verb, and keep it safe to run twice.
+
 ## 9. Modules
 
 Export and import by name. A package's public face is a barrel of explicit

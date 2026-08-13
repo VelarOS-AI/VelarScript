@@ -6,6 +6,7 @@ import type {
   ClassDeclaration,
   ClassFieldDeclaration,
   ClassGetterDeclaration,
+  ClassDisposeBlock,
   ClassInitBlock,
   ClassMethodDeclaration,
   ClassParameter,
@@ -39,6 +40,7 @@ import type {
   TypeParameterDeclaration,
   TypeReference,
   TypeSyntax,
+  UsingDeclaration,
   VariableDeclaration,
 } from "./ast.ts";
 import { diagnostic, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
@@ -288,6 +290,27 @@ export class Parser {
 
     if (this.check("const") || this.check("let")) {
       return this.parseVariable(start, exported);
+    }
+
+    // D43 item 69: `using` is a contextual keyword — statement head, an
+    // identifier, then `=`. Everywhere else `using` stays an ordinary name.
+    if (this.check("identifier") && this.current().value === "using" && this.peekKind(1) === "identifier") {
+      if (this.peekKind(2) === "assign") {
+        const keyword = this.advance();
+        if (exported) this.diagnostics.push(diagnostic("VEL2001", "A 'using' binding cannot be exported; it is released when its scope ends", keyword.span));
+        return this.parseUsing(keyword.span.start);
+      }
+      if (this.peekKind(2) === "colon") {
+        const keyword = this.current();
+        const end = this.tokens[this.index + 2]?.span.end ?? keyword.span.end;
+        this.diagnostics.push(diagnostic(
+          "VEL2036",
+          "A 'using' binding takes its type from the initializer; write 'using name = expression'",
+          span(keyword.span.start, end),
+        ));
+        this.synchronize();
+        return { kind: "PassStatement", span: keyword.span };
+      }
     }
 
     // MIG-4: 'invert x' was the removed toggle statement, and its leftover
@@ -783,6 +806,19 @@ export class Parser {
     };
   }
 
+  private parseUsing(start: number): UsingDeclaration {
+    const name = this.expect("identifier", "Expected a name after 'using'");
+    this.expect("assign", "Expected '=' after a 'using' name");
+    const initializer = this.parseExpression();
+    return {
+      kind: "UsingDeclaration",
+      name: name.value,
+      nameSpan: name.span,
+      initializer,
+      span: span(start, initializer.span.end),
+    };
+  }
+
   private parseBindingPattern(): BindingPattern {
     return this.withParseDepth(() => this.parseBindingPatternBody());
   }
@@ -1181,12 +1217,44 @@ export class Parser {
     this.expect("indent", "Expected an indented class body");
     const fields: ClassFieldDeclaration[] = [];
     let initialization: ClassInitBlock | null = null;
+    let dispose: ClassDisposeBlock | null = null;
     const getters: ClassGetterDeclaration[] = [];
     const methods: ClassMethodDeclaration[] = [];
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
       const methodStart = this.current().span.start;
+      // D43 item 67/69: an `@name` member belongs to the language. `@dispose:`
+      // is the only one a class declares today; anything else gets the closed
+      // vocabulary named back.
+      if (this.check("at")) {
+        const marker = this.advance();
+        const memberName = this.expect("identifier", "Expected a compiler-known class member name after '@'");
+        const keywordSpan = span(marker.span.start, memberName.span.end);
+        if (memberName.value !== "dispose") {
+          this.diagnostics.push(diagnostic(
+            "VEL2022",
+            `Unknown language member '@${memberName.value}'; a class declares '@dispose:' as its only '@' member`,
+            keywordSpan,
+          ));
+        }
+        const body = this.parseBlock();
+        const block = {
+          kind: "ClassDisposeBlock",
+          body,
+          keywordSpan,
+          span: span(methodStart, body.at(-1)?.span.end ?? this.previous().span.end),
+        } satisfies ClassDisposeBlock;
+        if (memberName.value === "dispose") {
+          if (dispose) {
+            this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' has more than one '@dispose' block`, block.span));
+          } else {
+            dispose = block;
+          }
+        }
+        this.consumeNewlines();
+        continue;
+      }
       let methodAbstract = false;
       let methodOverride = false;
       let methodStatic = false;
@@ -1306,7 +1374,8 @@ export class Parser {
       initialization,
       getters,
       methods,
-      span: span(start, Math.max(methods.at(-1)?.span.end ?? 0, getters.at(-1)?.span.end ?? 0, fields.at(-1)?.span.end ?? 0, initialization?.span.end ?? 0, close.span.end)),
+      dispose,
+      span: span(start, Math.max(methods.at(-1)?.span.end ?? 0, getters.at(-1)?.span.end ?? 0, fields.at(-1)?.span.end ?? 0, initialization?.span.end ?? 0, dispose?.span.end ?? 0, close.span.end)),
     };
   }
 

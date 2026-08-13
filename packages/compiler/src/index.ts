@@ -1,4 +1,5 @@
 import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo, type InitializationImportRead } from "./analyzer.ts";
+import { blockContainsDirectAwait } from "./ast.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
@@ -661,6 +662,9 @@ function interfaceOf(
       const identity = classIdentities.get(statement.name)!;
       classes.set(statement.name, {
         identity,
+        // D43 item 69: the release contract crosses the module boundary with
+        // the class, so an imported handle stays usable with `using`.
+        ...(statement.dispose ? { dispose: blockContainsDirectAwait(statement.dispose.body) ? "async" : "sync" } as const : {}),
         parameters: statement.parameters.map((parameter) => resolve(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,

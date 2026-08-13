@@ -234,8 +234,27 @@ class Session:
     def close() -> null:
         self.active = false
 
+    @dispose:
+        self.close()
+
 const session = Session("session-1")
 session.close()
+```
+
+`@name` members belong to the language, so they can never collide with a
+member you declare. `@dispose:` is the release contract — never called
+directly — that `using name = expression` runs on every exit from the owning
+scope (end of block, `return`, `break`, `continue`, or a throw), in reverse
+declaration order. The standard capability handles already have it, delegating
+to their own `close()`/`stop()`:
+
+```velar fragment
+async def collect(path: string) -> number:
+    using watcher = await watchFiles(path)
+    let seen = 0
+    async for batch in watcher:
+        seen += batch.paths.size
+    return seen
 ```
 
 Components (Web extension) return JSX directly — there is no `render` block.
