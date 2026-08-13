@@ -746,3 +746,76 @@ string/脚本惰性/无消毒如文档/禁 children）、SSR/hydration **已决�
 N3、N5。**待用户裁决**：N1+N2+U11 合并的「表单与事件故事」。N-2b：N4、C1、U15、
 U13 诊断。N-3 成文块：U1-U8、U10、U14（U1 与 U7、U8 进 AI 简报）。批次 I 追加：
 U12 元素名表（与既排队的属性表/事件表同族）。可否决：U9 嵌套组件祝福成文。
+
+
+---
+
+## 审计十 —— Look 系统（2026-08-13，快照 + Chromium，词汇表逐项核对）
+
+**基础事实**：全部词汇活在 `packages/web/src/look.ts`（117 属性 / 9 钩子 /
+7 目标 / 18 构建器 / 13 单位后缀），charter 对钩子/目标/构建器/单位四表
+**与代码完全一致**；属性表**从未发布**，且未列类型的属性一律回落 `stringType`。
+
+### DEFECT（浏览器证据）
+
+| ID | 现象 | 处置 |
+|---|---|---|
+| **LOK-D1（头条，最阴的静默陷阱）** | **读组件状态的 `look:` 字面量在声明时冻结**：`const l = look:` 内 `if active:` 编译干净、**永不更新**（浏览器实证：状态翻转后 look 块条件仍红，而 `look={active ? a : b}` 与 `look:color={...}` 都变绿）。同一个 `if` 语法四种主体寿命各异 —— `@hover`/viewport/scheme 永活（CSS），运行时状态是一次性快照。charter 零时序警示、套件零覆盖 | 修（可否决）：look 字面量快照位置内的响应式状态读**诊断拒绝**，教两种已证活的形态（`look={cond ? a : b}` / 指令值）—— 把静默陷阱变响亮，与既有「条件是 CSS 主体」的设计读法一致。归 N-2c |
+| **LOK-D2** | **组件作用域的 `import css unsafe` 被静默丢弃**（charter 明文 cannot；实测过检查、过构建、CSS 出现在**任何输出中零处**）—— 既不兑现也不拒绝 | 修：解析/分析层拒绝 + 教移到模块顶层。归 N-2c（也是 CHARTER-DRIFT C-1） |
+| **LOK-D3** | **裸数字产出死 CSS**：`width = 100` → computed `auto`；`padding={16}` → `0px`；且 CSS 变量降级使垃圾值**重置到属性初始值而非 UA 默认**（`display = "flexx"` → `inline`，div 丢块级默认！）。charter 还承诺「layout builders accept finite numbers」（C-2） | 修：length 联合**去掉 number**（仅 lineHeight/opacity/zIndex/fontWeight/flexGrow 等无单位合法集保留）；spacing/tracks/minmax 拒非零裸数。补上排队中 D37-42 关键字表管不到的数字半边。归 N-2c |
+| **LOK-D4** | `viewport`/`scheme` **反向遮蔽用户绑定**：`const viewport = {...}` 后条件里仍走真媒体查询、零诊断（名字模式匹配先于词法解析，仅在 look 条件内） | 修：web 模块保留这两个名字（或碰撞处诊断）。归 N-2c |
+| **LOK-D5** | `animation = "spin 1s ..."` 编译通过、浏览器算出 animation-name、**永不动**（keyframes 不存在，见 U-2）—— 编译/运行/console 三层全静默 | 与 U-2 一并处置 |
+
+### 待用户裁决（一条）
+
+**LOK-U2 —— keyframes 完全没有故事（真实应用之墙，预判命中）**：全 docs 零次
+出现 "keyframes"；`@keyframes` 目标裸报未知；唯一可行路径是 `import css unsafe`
+载入 —— 而这条**唯一逃生路无任何文档**。spinner/骨架屏/toast 是第一次会话就要
+的功能；简报教了 transition 却没法让 AI 知道 animation 是死路（D5 证明失败
+端到端静默）。**选项**：(a) 近期 —— §19/web-api 明文边界 + `animation`/
+`animationName` 定向诊断教 unsafe-CSS 逃生（编排代理即可做）；(b) 设计一个
+受检的 `keyframes` 声明形态（新语法，归批次 I/M）。**推荐先 (a) 后 (b)**，
+(b) 的形态设计等你拍板。
+
+### UNDEFINED（其余）
+
+| ID | 未定 | 处置 |
+|---|---|---|
+| **LOK-U1（完整性核心）** | **属性表从未发布、无收录原则**：~55 个真实 CSS 属性缺席（textShadow 缺而 boxShadow 在、动画长手全缺、滚动/表单主题/i18n/多列缺……而冷门 isolation/contain 在）；每个缺席与打错字得到同一条裸 VEL5038、**无就近建议**（属性表是三表中唯一没有建议机制的） | 定案（可否决）：发布属性表 + 收录原则（charter §17 附录 + 简报）、诊断分三级（打错字→就近建议 / 真 CSS 但域外→边界声明 + 逃生 / 未知）；缺席清单按原则系统补录或明文排除 —— 规格由编排代理草拟，与 D37-42/42-补/元素名表并成批次 I 的「词汇表大波」 |
+| LOK-U3 | 媒体主体集合封闭但未声明封闭：**motion.reduced 缺席最刺眼**（框架处处强制 a11y，标准 a11y 媒体特性却无拼写）；container/print/orientation 裸报 | 定案（可否决）：加 `motion.reduced`（词汇补完，与 viewport/scheme 同族）；其余成文缺席 + 定向诊断 |
+| LOK-U4 | 跨组件 look 优先级已实现未言明（调用方 look 赢过子组件自身根 look，非冲突属性存活 —— 浏览器实证） | N-3 一句 |
+| LOK-U5/U6/U7 | look 值身份语义 / content 恒 JSON 引号（attr()/counter() 不可写是边界）/ 目标可在条件内（合法方向没写） | N-3 各一句 |
+| LOK-U8 | 构建器范围检查纯运行时**含字面量**：`rgb(300,0,0)` 编译干净、模块顶层直接白屏（测试钉住的既有决定，但先于使命 KPI） | 定案（可否决）：字面量实参编译期检查，动态保留运行时 |
+
+### INCONSISTENT（诊断层，全归 N-2c）
+
+I-1 噪音叠报（VEL5038 + 误导的 stringType 回落赋值错；VEL5042 + 联合倾倒
+共燃）；I-2 指引不对称（`if @before:` 无重定向、viewport 比较翻转无教学）；
+I-3 貌似合理尝试的级联（`look: Look` prop 14 连、空 look 块 5 连）；I-4 重复
+检测洞（两个兄弟 `@hover:` 同属性静默后写胜 —— charter 的重复承诺只在单作用域
+内成立）；I-5 Core 文件单位拼写双轨失败（`16px` 无 web 指引、`50%` 裸报）；
+I-6 `look={[]}` 消息混乱。
+
+### 已排队项状态核对（不重报）
+
+D37-42 关键字收紧未落地（flexx/big/12px 仍过）；42-补未落地（grid-template
+字符串仍过，**新增登记数据**：`backgroundImage = "linear-gradient(...)"` 同族）；
+D40-60 三处如记录。
+
+### DECIDED-AND-CORRECT（压缩）
+
+四表 charter↔代码完全一致；16 个钩子/目标 CSS 降级正确（含 aria 配对选择器）；
+组合全家（展开仅外层、源序合并、列表后胜、指令胜组合、style: 胜 look、状态/
+媒体规则以构造特异性胜基础、before/after look 源序契约在构建产物中成立 ——
+全部浏览器实证）；条件全家（and/or/not、else 反转、范围媒体查询、双向嵌套、
+32 项上限带定向消息、编译期阈值检查含常量算术与导入 token）；值家族（typed
+rotate 拒字符串、content 引号、运行时混合单位 calc 正确、s→ms 换算、VEL5042
+点名双维度、1e309px 拒）；JSX 接口全家；运行时响亮失败（构建器范围/强转 ——
+测试钉住）；输出稳定可读 token、每模块规则去重、无随机类名、SVG fill 可用；
+**JSX 表达式位置的 look 响应性正确且已证活**。
+
+### 处置总结
+
+D1-D4 + I1-I6 → **新增波 N-2c（Web 分析器/诊断）**，与 D47 第 84 条（bind
+成员路径，同为 web 面）合并；D5+U2 → 近期教学归 N-2c、keyframes 形态**待用户**；
+U1/U3/U8 决案可否决（U1 并入批次 I 词汇表大波）；U4-U7 → N-3。
