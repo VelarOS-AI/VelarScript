@@ -71,7 +71,7 @@ export function bindingNameRestriction(
   if (Object.hasOwn(keywordKinds, name) || extensionKeywords.has(name)) return "keyword";
   if (forbiddenSourceIdentifiers.has(name)) return "source";
   if (javaScriptReservedBindings.has(name)) return "javascript";
-  if (name.toLowerCase().startsWith("__velar") || name.toLowerCase().startsWith("$velar")) return "compiler";
+  if (name.toLowerCase().startsWith("__velar")) return "compiler";
   if (coreReservedBindings.has(name)) return "core";
   if (extensionReservedBindings.has(name)) return "extension";
   return null;

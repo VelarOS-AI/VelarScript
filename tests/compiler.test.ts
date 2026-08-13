@@ -238,7 +238,7 @@ const label = describe(excited=true, name=mark("name"), count=2)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /describe\(\.\.\.\(\(\$velarNamedArguments\) => \[\$velarNamedArguments\[1\], \$velarNamedArguments\[2\], \$velarNamedArguments\[0\]\]\)\(\[true, mark\("name"\), 2\]\)\)/u);
+  assert.match(result.code ?? "", /describe\(\.\.\.\(\(__velarNamedArguments\) => \[__velarNamedArguments\[1\], __velarNamedArguments\[2\], __velarNamedArguments\[0\]\]\)\(\[true, mark\("name"\), 2\]\)\)/u);
   const signature = result.moduleInterface.exports.get("describe");
   assert.equal(signature, undefined);
 
@@ -403,7 +403,7 @@ print(describe(2, null))
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /\} else if \(\(\(\$velarValue => __velarNarrow/u);
+  assert.match(result.code ?? "", /\} else if \(\(\(__velarValue => __velarNarrow/u);
   assert.match(result.code ?? "", /\} else if \(\(\(fallback \?\? null\) !== null\)\) \{/u);
   assert.doesNotMatch(result.code ?? "", /else \{\s+if/u);
   const execution = executeModule(result.code ?? "");
@@ -470,7 +470,7 @@ print(typeTestReads)
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /!\(\(\$velarIs\d+ =>/u);
+  assert.match(result.code ?? "", /!\(\(__velarIs\d+ =>/u);
   assert.match(result.code ?? "", /dynamicValue\(\)/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
@@ -2239,7 +2239,7 @@ print(maybeValue == null)
   // BRG-U10: module-initialization calls across the JavaScript boundary
   // rethrow through the owned Error normalization, so each shape carries the
   // guard around the same undefined-normalization contract as before.
-  const guarded = (call: string): string => `\\(\\(\\) => \\{ try \\{ return ${call}; \\} catch \\(\\$velarThrown\\) \\{ throw __velarNormalizeError\\(\\$velarThrown\\); \\} \\}\\)\\(\\)`;
+  const guarded = (call: string): string => `\\(\\(\\) => \\{ try \\{ return ${call}; \\} catch \\(__velarThrown\\) \\{ throw __velarNormalizeError\\(__velarThrown\\); \\} \\}\\)\\(\\)`;
   assert.match(result.code ?? "", new RegExp(`\\(${guarded("external\\(\\)")}, null\\)`, "u"));
   assert.match(result.code ?? "", new RegExp(`await __velarNormalizePromiseValue\\(${guarded("externalAsync\\(\\)")}\\)`, "u"));
   assert.match(result.code ?? "", new RegExp(guarded("\\(externalOptional\\(\\) \\?\\? null\\)"), "u"));
@@ -3330,7 +3330,7 @@ print(order[7])
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /\$velarCompare/u);
+  assert.match(result.code ?? "", /__velarCompare/u);
   assert.match(result.code ?? "", /await \(async \(\) =>/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
@@ -4719,7 +4719,7 @@ test("compiler host capabilities stay protected while extension conveniences fol
   assert.deepEqual(compileCore("const mount = 1\n").diagnostics, []);
   assert.deepEqual(compile("const color = \"brand\"\ntype Node:\n    id: string\n").diagnostics, []);
 
-  for (const source of ["const __velarIndex = 1\n", "def run(__velarScope: number) -> null:\n    pass\n", "type __VelarRecord:\n    id: string\n", "const $velarRoot = 1\n"]) {
+  for (const source of ["const __velarIndex = 1\n", "def run(__velarScope: number) -> null:\n    pass\n", "type __VelarRecord:\n    id: string\n", "const __velarRoot = 1\n"]) {
     const result = compile(source);
     assert.ok(result.diagnostics.some((item) => item.code === "VEL3007" && /reserved compiler prefix/u.test(item.message)));
   }
@@ -4731,11 +4731,11 @@ test("compiler host capabilities stay protected while extension conveniences fol
 
   const collidingExtension: CompilerExtension = {
     id: "test-internal-name-collision",
-    analysis: { globals: new Map([["$velarValue", { kind: "number" }]]) },
+    analysis: { globals: new Map([["__velarValue", { kind: "number" }]]) },
   };
   assert.throws(
     () => compileCore("pass\n", { extensions: [collidingExtension] }),
-    /declares invalid global '\$velarValue'/u,
+    /declares invalid global '__velarValue'/u,
   );
 
   // N-2b: IndexError is nameable (a reserved Core binding), so a user class
@@ -6401,7 +6401,7 @@ def target() -> string:
 mount(node=root(), target=target())
 `.trimStart());
   assert.deepEqual(namedMount.diagnostics, []);
-  assert.match(namedMount.code ?? "", /__velarMount\(\(\) => \(\(\$velarNamedArguments\) => \[\$velarNamedArguments\[0\], \$velarNamedArguments\[1\]\]\)\(\[root\(\), target\(\)\]\), null\)/u);
+  assert.match(namedMount.code ?? "", /__velarMount\(\(\) => \(\(__velarNamedArguments\) => \[__velarNamedArguments\[0\], __velarNamedArguments\[1\]\]\)\(\[root\(\), target\(\)\]\), null\)/u);
   const mountExecution = executeModule(`
 class FakeNode {
   append(node) { this.child = node; }
@@ -6427,7 +6427,7 @@ component App:
 mount(target="#app", node=<App />)
 `.trimStart());
   assert.deepEqual(reorderedMount.diagnostics, []);
-  assert.match(reorderedMount.code ?? "", /\$velarNamedArguments\[1\], \$velarNamedArguments\[0\]/u);
+  assert.match(reorderedMount.code ?? "", /__velarNamedArguments\[1\], __velarNamedArguments\[0\]/u);
 });
 
 test("computed alone installs its runtime and retired declaration syntax has one migration diagnostic", () => {
@@ -7655,7 +7655,7 @@ const label = greet(ada)
   assert.match(String(projectRenameAt(project, mainPath, personUse + 1, "delete")), /reserved by JavaScript.*lexical bindings/u);
   assert.match(String(projectRenameAt(project, mainPath, personUse + 1, "Array")), /reserved Core binding/u);
   assert.match(String(projectRenameAt(project, mainPath, personUse + 1, "eval")), /unavailable in VelarScript/u);
-  assert.match(String(projectRenameAt(project, mainPath, personUse + 1, "$velarRoot")), /reserved compiler prefix/u);
+  assert.match(String(projectRenameAt(project, mainPath, personUse + 1, "__velarRoot")), /reserved compiler prefix/u);
 
   const importedUser = mainSource.indexOf("User as");
   const exportedRename = projectRenameAt(project, mainPath, importedUser + 1, "Member");
@@ -16554,9 +16554,9 @@ component Chart:
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /__velarCreateElement\("svg", "svg"\)/u);
   assert.match(result.code ?? "", /__velarCreateElement\("g", "svg"\)/u);
-  assert.match(result.code ?? "", /__velarChild\(Point, \{ x: \(\) => \(12\), y: \(\) => \(20\) \}, undefined, \$velarScope, "svg"\)/u);
-  assert.match(result.code ?? "", /__velarCreateElement\("circle", \$velarNamespace\)/u);
-  assert.match(result.code ?? "", /__velarCreateElement\("foreignObject", \$velarNamespace\)/u);
+  assert.match(result.code ?? "", /__velarChild\(Point, \{ x: \(\) => \(12\), y: \(\) => \(20\) \}, undefined, __velarComponentScope, "svg"\)/u);
+  assert.match(result.code ?? "", /__velarCreateElement\("circle", __velarNamespace\)/u);
+  assert.match(result.code ?? "", /__velarCreateElement\("foreignObject", __velarNamespace\)/u);
   assert.match(result.code ?? "", /__velarCreateElement\("div", "html"\)/u);
   assert.match(result.code ?? "", /__velarStaticAttr\([^;]+, "xlink:href", "#marker"\)/u);
   assert.match(result.code ?? "", /__velarDomSetAttributeNS\(element, __velarXlinkNamespace, name, value\)/u);
@@ -20874,7 +20874,7 @@ component App:
 
   assertMapped('__velarCreateElement("main"', source.indexOf("<main"));
   assertMapped('__velarCreateElement("section"', source.indexOf("<section"));
-  assertMapped("__velarStaticAttr($velarElement", source.indexOf("aria-label"));
+  assertMapped("__velarStaticAttr(__velarElement", source.indexOf("aria-label"));
   assertMapped("__velarChild(Child,", source.indexOf("<Child"));
   assertMapped("label:", source.indexOf("label={"));
   assertMapped('__velarCreateElement("p"', source.indexOf("<p>"));
@@ -22512,7 +22512,7 @@ print(text?.char(__value))
 print(values?.get(__value))
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /\$velarValue/u);
+  assert.match(result.code ?? "", /__velarValue/u);
   assert.doesNotMatch(result.code ?? "", /\(__value =>/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
@@ -24514,7 +24514,7 @@ mount(<Counter start={1} />, "#app")
   assert.match(result.code ?? "", /const doubled = __velarRuntime\.computed/);
   assert.match(result.code ?? "", /__velarWatch/);
   assert.match(result.code ?? "", /count\.set\(count\.get\(\) \+ 1\)/);
-  assert.match(result.code ?? "", /__velarCreateElement\("button", \$velarNamespace\)/);
+  assert.match(result.code ?? "", /__velarCreateElement\("button", __velarNamespace\)/);
   assert.match(result.css ?? "", /\[data-velar-look~="hover:color"\]\[data-velar-look\]:where\(:hover\)\{color:var\(--velar-look-hover-color\)\}/);
   assert.match(result.code ?? "", /__velarLookBind/);
   assert.match(result.code ?? "", /proxy = new __velarGraphNativeProxy\(value/u);
@@ -24539,9 +24539,9 @@ component Hygiene:
     return <div>{__el1 + __childScope + __scope + __namespace}</div>
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /function Hygiene\(\$velarProps = \{\}, \$velarNamespace = "html"\)/u);
-  assert.match(result.code ?? "", /const \$velarRoot = \(\(\) => \{ const \$velarElement1/u);
-  assert.match(result.code ?? "", /\(\$velarChildScope\) => .*__el1.*__childScope.*__scope.*__namespace/u);
+  assert.match(result.code ?? "", /function Hygiene\(__velarProps = \{\}, __velarNamespace = "html"\)/u);
+  assert.match(result.code ?? "", /const __velarRoot = \(\(\) => \{ const __velarElement1/u);
+  assert.match(result.code ?? "", /\(__velarChildScope\) => .*__el1.*__childScope.*__scope.*__namespace/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
 });
@@ -24573,7 +24573,7 @@ component App:
   const tagStart = source.indexOf("<View") + 1;
   assert.ok(result.semanticIndex.references.some((reference) => reference.name === "View"
     && reference.span.start === tagStart && reference.span.end === tagStart + "View".length));
-  assert.match(result.code ?? "", /__velarDynamicComponent\(\(\$velarDynamicScope\) => __velarChild\(View\.get\(\)/u);
+  assert.match(result.code ?? "", /__velarDynamicComponent\(\(__velarDynamicScope\) => __velarChild\(View\.get\(\)/u);
   assert.match(formatSource("type View = Component<(label: string, compact?: bool) -> WebNode>\n"), /compact\?: bool/u);
 
   const incompatible = compile(`
@@ -24716,7 +24716,7 @@ component App(View: EditorView = Editor):
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.semanticIndex.symbols.find((symbol) => symbol.name === "EditorView")?.type,
     "Component<(initial?: string) -> WebNode, EditorHandle>");
-  assert.match(result.code ?? "", /const \$velarHandle = __velarComponentHandle\(\{ focus: focusEditor, reset: reset, value: value \}, "Editor"\)/u);
+  assert.match(result.code ?? "", /const __velarHandle = __velarComponentHandle\(\{ focus: focusEditor, reset: reset, value: value \}, "Editor"\)/u);
   assert.match(result.code ?? "", /__velarChild\(View\.get\(\), \{ class: \(\) => \("compact"\), look: \(\) => \(__velarLook/u);
   assert.match(result.code ?? "", /\(next, previous\) => \{ if \(previous === undefined \|\| editor === previous\) editor = next; \}/u);
   assert.doesNotMatch(result.code ?? "", /\{ ref: \(\) =>/u);
@@ -24737,8 +24737,8 @@ component AfterReturn exposes Handle:
   assert.deepEqual(afterReturn.diagnostics, []);
   const afterReturnCode = afterReturn.code ?? "";
   const afterReturnStart = afterReturnCode.indexOf("function AfterReturn");
-  const rootIndex = afterReturnCode.indexOf("const $velarRoot =", afterReturnStart);
-  const handleIndex = afterReturnCode.indexOf("const $velarHandle =", afterReturnStart);
+  const rootIndex = afterReturnCode.indexOf("const __velarRoot =", afterReturnStart);
+  const handleIndex = afterReturnCode.indexOf("const __velarHandle =", afterReturnStart);
   assert.ok(afterReturnStart >= 0 && rootIndex > afterReturnStart && handleIndex > rootIndex,
     afterReturnCode.slice(Math.max(0, afterReturnStart), handleIndex + 80));
 
@@ -25169,7 +25169,7 @@ component App:
 mount(<App />, "#app")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarCreateElement\("div", \$velarNamespace\)/u);
+  assert.match(result.code ?? "", /__velarCreateElement\("div", __velarNamespace\)/u);
 
   // One-off base properties use JSX Look directives instead of nesting the
   // indentation-owned Look language inside an attribute expression.
@@ -25476,7 +25476,7 @@ component ActionButton:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /surface\(\.\.\.\(\(\$velarNamedArguments\) => \[\$velarNamedArguments\[1\], \$velarNamedArguments\[0\]\]/u);
+  assert.match(result.code ?? "", /surface\(\.\.\.\(\(__velarNamedArguments\) => \[__velarNamedArguments\[1\], __velarNamedArguments\[0\]\]/u);
   assert.match(result.code ?? "", /__velarLook\(\[/u);
   assert.match(result.css ?? "", /focus-visible:outline"\]\[data-velar-look\]:where\(:focus-visible\)/u);
   assert.match(result.css ?? "", /base:resize"\]\{resize:var\(--velar-look-base-resize\)\}/u);
@@ -25639,8 +25639,8 @@ component App:
     return <Card class="featured" look={callerLook} />
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /if \(\$velarProps\.class !== undefined\) __velarClassBindRoot/u);
-  assert.match(result.code ?? "", /if \(\$velarProps\.look !== undefined\) __velarLookBindRoot/u);
+  assert.match(result.code ?? "", /if \(__velarProps\.class !== undefined\) __velarClassBindRoot/u);
+  assert.match(result.code ?? "", /if \(__velarProps\.look !== undefined\) __velarLookBindRoot/u);
 
   const fragment = compile(`
 component Broken:
@@ -25753,7 +25753,7 @@ component App:
 `.trimStart());
 
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /const label = __velarResource\(\(\) => __velarNormalizePromiseValue\(loadLabel\(\)\), \$velarScope, "label"\)/u);
+  assert.match(result.code ?? "", /const label = __velarResource\(\(\) => __velarNormalizePromiseValue\(loadLabel\(\)\), __velarComponentScope, "label"\)/u);
   const symbol = result.semanticIndex.symbols.find((item) => item.kind === "extension:variable:web-resource" && item.name === "label");
   assert.match(symbol?.type ?? "", /value: string\?/u);
   assert.match(symbol?.type ?? "", /reload: \(\) -> Promise<null>/u);
@@ -26205,7 +26205,7 @@ component App:
     return projectOpen ? <Workspace /> : <section>welcome</section>
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarDynamicComponent\(\(\$velarDynamicScope\) => \(projectOpen\.get\(\) \?/u);
+  assert.match(result.code ?? "", /__velarDynamicComponent\(\(__velarDynamicScope\) => \(projectOpen\.get\(\) \?/u);
 
   const dom = `
 class FakeNode {
@@ -26365,7 +26365,7 @@ component App:
     return <main><Badge label={label} /></main>
 `.trimStart());
   assert.deepEqual(reactiveProps.diagnostics, []);
-  assert.match(reactiveProps.code ?? "", /__velarAppend\(\$velarElement\d+, __velarChild\(Badge, \{ label: \(\) => \(label\.get\(\)\) \}, undefined, \$velarScope, \$velarNamespace\)\)/u);
+  assert.match(reactiveProps.code ?? "", /__velarAppend\(__velarElement\d+, __velarChild\(Badge, \{ label: \(\) => \(label\.get\(\)\) \}, undefined, __velarComponentScope, __velarNamespace\)\)/u);
 
   const props = compile(`
 component Badge(label: string):
@@ -26401,7 +26401,7 @@ component DialogView:
     return <dialog ref={dialog}>Confirm</dialog>
 `.trimStart());
   assert.deepEqual(correctRef.diagnostics, []);
-  assert.match(correctRef.code ?? "", /__velarAppendOwned\(\$velarScope\.cleanups, \(\) => \{ if \(canvas === \$velarElement\d+\) canvas = null; \}\)/u);
+  assert.match(correctRef.code ?? "", /__velarAppendOwned\(__velarComponentScope\.cleanups, \(\) => \{ if \(canvas === __velarElement\d+\) canvas = null; \}\)/u);
 
   const wrongRef = compile(`
 component CanvasView:
@@ -26506,7 +26506,7 @@ component Controls:
   assert.ok(contextual.some((item) => item.type === "PointerEvent"));
   assert.match(result.code ?? "", /typeof CompositionEvent !== "undefined"/u);
   assert.match(result.code ?? "", /typeof ClipboardEvent !== "undefined"/u);
-  assert.match(result.code ?? "", /__velarOn\(\$velarElement\d+, "keydown"/u);
+  assert.match(result.code ?? "", /__velarOn\(__velarElement\d+, "keydown"/u);
   assert.match(result.code ?? "", /typeof KeyboardEvent !== "undefined"/u);
   assert.doesNotMatch(result.code ?? "", /new (?:Keyboard|Pointer|Input)Event/u);
 
@@ -26651,23 +26651,23 @@ component Flow(messages: List<Message>):
     return <section>{messages.size == 0 ? <p>empty</p> : messages.map(message => <article key={message.id}>{message.text}</article>)}</section>
 `.trimStart());
   assert.deepEqual(ternary.diagnostics, []);
-  assert.match(ternary.code ?? "", /__velarDynamic\(\$velarElement\d+, \(\$velarChildScope\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \(/u);
-  assert.match(ternary.code ?? "", /__velarKeyed\(\$velarElement\d+, \(\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \[\] : \(messages\.get\(\)\)/u);
+  assert.match(ternary.code ?? "", /__velarDynamic\(__velarElement\d+, \(__velarChildScope\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \(/u);
+  assert.match(ternary.code ?? "", /__velarKeyed\(__velarElement\d+, \(\) => \(\(__velarCollectionSize\(messages\.get\(\)\) === 0\)\) \? \[\] : \(messages\.get\(\)\)/u);
 
   const bothKeyed = compile(`
 component Flow(on: bool, alpha: List<string>, beta: List<string>):
     return <ul>{on ? alpha.map(name => <li key={name}>{name}</li>) : beta.map(name => <li key={name}>{name}</li>)}</ul>
 `.trimStart());
   assert.deepEqual(bothKeyed.diagnostics, []);
-  assert.equal(((bothKeyed.code ?? "").match(/__velarKeyed\(\$velarElement1,/gu) ?? []).length, 2);
+  assert.equal(((bothKeyed.code ?? "").match(/__velarKeyed\(__velarElement1,/gu) ?? []).length, 2);
 
   const chain = compile(`
 component Flow(on: bool, alpha: List<string>, beta: List<string>):
     return <ul>{on ? alpha.map(name => <li key={name}>{name}</li>) : beta.size == 0 ? <li>none</li> : beta.map(name => <li key={name}>{name}</li>)}</ul>
 `.trimStart());
   assert.deepEqual(chain.diagnostics, []);
-  assert.equal(((chain.code ?? "").match(/__velarKeyed\(\$velarElement1,/gu) ?? []).length, 2);
-  assert.equal(((chain.code ?? "").match(/__velarDynamic\(\$velarElement1,/gu) ?? []).length, 1);
+  assert.equal(((chain.code ?? "").match(/__velarKeyed\(__velarElement1,/gu) ?? []).length, 2);
+  assert.equal(((chain.code ?? "").match(/__velarDynamic\(__velarElement1,/gu) ?? []).length, 1);
 
   // A conditional without a keyed list stays one dynamic region.
   const plain = compile(`
@@ -26675,8 +26675,8 @@ component Flow(on: bool):
     return <div>{on ? <p>a</p> : <p>b</p>}</div>
 `.trimStart());
   assert.deepEqual(plain.diagnostics, []);
-  assert.doesNotMatch(plain.code ?? "", /__velarKeyed\(\$velarElement/u);
-  assert.equal(((plain.code ?? "").match(/__velarDynamic\(\$velarElement1,/gu) ?? []).length, 1);
+  assert.doesNotMatch(plain.code ?? "", /__velarKeyed\(__velarElement/u);
+  assert.equal(((plain.code ?? "").match(/__velarDynamic\(__velarElement1,/gu) ?? []).length, 1);
 });
 
 test("an empty-state ternary keeps keyed identity across branch flips", () => {
@@ -26872,10 +26872,10 @@ mount(<ListApp />, "#list")
 
   // A component element becomes a stable child instance fed by per-prop
   // observers; the child function itself must not run inside a tracked read.
-  assert.match(result.code ?? "", /__velarChild\(Field, \{ label: \(\) => \("alpha"\), busy: \(\) => \(busy\.get\(\)\) \}, undefined, \$velarScope, \$velarNamespace\)/u);
-  assert.match(result.code ?? "", /const busy = __velarProp\(\$velarProps, "busy", \(\) => \(false\)\);/u);
-  assert.match(result.code ?? "", /const label = __velarRequiredProp\(\$velarProps, "label", "Field"\);/u);
-  assert.doesNotMatch(result.code ?? "", /__velarDynamic\(\$velarElement\d+, \(\$velarChildScope\) => __velarChild/u);
+  assert.match(result.code ?? "", /__velarChild\(Field, \{ label: \(\) => \("alpha"\), busy: \(\) => \(busy\.get\(\)\) \}, undefined, __velarComponentScope, __velarNamespace\)/u);
+  assert.match(result.code ?? "", /const busy = __velarProp\(__velarProps, "busy", \(\) => \(false\)\);/u);
+  assert.match(result.code ?? "", /const label = __velarRequiredProp\(__velarProps, "label", "Field"\);/u);
+  assert.doesNotMatch(result.code ?? "", /__velarDynamic\(__velarElement\d+, \(__velarChildScope\) => __velarChild/u);
 
   const dom = `
 class FakeNode {
@@ -27041,7 +27041,7 @@ component App:
 mount(<App />, "#app")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code ?? "", /__velarDynamicComponent\(\(\$velarDynamicScope\) => __velarChild\(View\.get\(\)/u);
+  assert.match(result.code ?? "", /__velarDynamicComponent\(\(__velarDynamicScope\) => __velarChild\(View\.get\(\)/u);
 
   const dom = `
 class FakeNode {

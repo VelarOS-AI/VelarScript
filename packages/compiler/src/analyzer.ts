@@ -8877,7 +8877,7 @@ export class Analyzer implements TypeEnvironment {
             ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
             : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`
           : restriction === "compiler"
-            ? `'${name}' uses a reserved compiler prefix ('$velar' or '__velar')`
+            ? `'${name}' uses a reserved compiler prefix '__velar'`
             : restriction === "core"
               ? `'${name}' is a reserved Core binding`
               : restriction === "extension"

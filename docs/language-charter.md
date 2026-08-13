@@ -166,7 +166,7 @@ attempts += 1
 - `$` is allowed in identifiers. Teams may use a leading `$` as a visual
   convention for values whose changes can affect the view, in the same spirit
   as `_` for a private-looking field, but the compiler never infers reactivity
-  from the spelling. The `$velar` prefix is the sole exception: it belongs to
+  from the spelling. The `__velar` prefix is the sole exception: it belongs to
   hygienic generated JavaScript and cannot begin a source binding.
 - A binding cannot be declared twice in the same scope.
 - Shadowing follows ordinary lexical lookup everywhere, including module
@@ -191,7 +191,7 @@ attempts += 1
   lexical lookup, so a local or imported `color` or `clamp` naturally wins.
   An extension may reserve an actual runtime entry point such as Web `mount` or
   `tick` when shadowing would make emitted behavior ambiguous.
-- Binding names beginning with `$velar` or `__velar`, case-insensitively, are
+- Binding names beginning with `__velar`, case-insensitively, are
   reserved for hygienic generated helpers. Object fields and JavaScript
   property names are unaffected because they cannot capture a lexical helper.
 
@@ -2875,7 +2875,7 @@ VelarScript preserves the JavaScript runtime where it matters:
 The compiler adds checked boundaries, bounded collection helpers, runtime data
 validators, optional-chain normalization, readable DOM output, and source maps.
 It does not pretend those additions create a different memory model.
-Compiler-created lexical temporaries use the reserved `$velar...` namespace;
+Compiler-created lexical temporaries use the reserved `__velar...` namespace;
 the analyzer and editor refactors reject source bindings in that namespace, so
 optional lowering, component setup, and JSX callbacks cannot capture a user's
 binding. The explicit `js unsafe` import boundary remains host JavaScript, not

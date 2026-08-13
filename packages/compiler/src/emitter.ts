@@ -1080,8 +1080,8 @@ export class JavaScriptEmitter {
             return `${indentation}__velarSetIndex(${object}, ${index}, ${this.emitMappedExpression(statement.value)});`;
           }
           const suffix = statement.span.start;
-          const objectName = `$velarIndexObject${suffix}`;
-          const keyName = `$velarIndexKey${suffix}`;
+          const objectName = `__velarIndexObject${suffix}`;
+          const keyName = `__velarIndexKey${suffix}`;
           const value = this.emitMappedExpression(statement.value);
           return [
             `${indentation}{`,
@@ -1098,7 +1098,7 @@ export class JavaScriptEmitter {
           const guardedPrivateField = this.hints.privateInstanceFieldReads.has(key);
           if (staticFieldOwnerDepth !== undefined || guardedInstanceField || guardedPrivateField) {
             const suffix = statement.span.start;
-            const objectName = `$velarMemberObject${suffix}`;
+            const objectName = `__velarMemberObject${suffix}`;
             const privateProperty = this.hints.privateMembers.has(key);
             const property = `${privateProperty ? "#" : ""}${statement.target.property}`;
             const read = staticFieldOwnerDepth !== undefined
@@ -1541,7 +1541,7 @@ export class JavaScriptEmitter {
       }
       const narrowing = this.hints.runtimeNarrowings.get(key);
       if (narrowing) {
-        emitted = `($velarValue => __velarNarrow($velarValue, ${this.emitNarrowingCheck(narrowing.expected, "$velarValue")}, ${JSON.stringify(describeType(narrowing.expected))}, ${JSON.stringify(narrowing.description)}, ${expression.span.start}))(${emitted})`;
+        emitted = `(__velarValue => __velarNarrow(__velarValue, ${this.emitNarrowingCheck(narrowing.expected, "__velarValue")}, ${JSON.stringify(describeType(narrowing.expected))}, ${JSON.stringify(narrowing.description)}, ${expression.span.start}))(${emitted})`;
       }
       if (!normalizeNull) return emitted;
       if (normalizePromise) return `__velarNormalizePromiseValue(${emitted})`;
@@ -1680,7 +1680,7 @@ export class JavaScriptEmitter {
         return `(${this.emitCondition(expression.condition)} ? ${this.emitMappedExpression(expression.thenValue)} : ${this.emitMappedExpression(expression.elseValue)})`;
       case "IsExpression":
         {
-          const value = `$velarIs${expression.span.start}`;
+          const value = `__velarIs${expression.span.start}`;
           const checked = resolveTypeReference(expression.type);
           const classCheck = this.hints.classChecks.has(spanIdentity(expression.span));
           const test = classCheck
@@ -1721,15 +1721,15 @@ export class JavaScriptEmitter {
             const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
             const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
             const arguments_ = namedOrder
-              ? namedOrder.map((source) => source === -1 ? "undefined" : `$velarNamedArguments[${source}]`)
+              ? namedOrder.map((source) => source === -1 ? "undefined" : `__velarNamedArguments[${source}]`)
               : sourceArguments;
             const emittedArguments = namedOrder
-              ? `...(($velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+              ? `...((__velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
               : arguments_.join(", ");
             const suffix = arguments_.length > 0 ? `, ${emittedArguments}` : "";
-            const invocation = `${primitiveHelper}($velarValue${suffix})`;
+            const invocation = `${primitiveHelper}(__velarValue${suffix})`;
             return this.hints.optionalCallees.has(spanIdentity(expression.span))
-              ? `($velarValue => $velarValue == null ? null : ${invocation})(${object})`
+              ? `(__velarValue => __velarValue == null ? null : ${invocation})(${object})`
               : `${primitiveHelper}(${object}${suffix})`;
           }
           const helper = this.collectionHelper(expression.callee);
@@ -1739,15 +1739,15 @@ export class JavaScriptEmitter {
             const sourceArguments = expression.arguments.map((argument) => this.emitMappedExpression(argument));
             const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
             const arguments_ = namedOrder
-              ? namedOrder.map((source) => source === -1 ? "undefined" : `$velarNamedArguments[${source}]`)
+              ? namedOrder.map((source) => source === -1 ? "undefined" : `__velarNamedArguments[${source}]`)
               : sourceArguments;
             const emitArguments = (): string => namedOrder
-              ? `...(($velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+              ? `...((__velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
               : arguments_.join(", ");
             const suffix = arguments_.length > 0 ? `, ${emitArguments()}` : "";
             if (this.hints.optionalCallees.has(spanIdentity(expression.span))) {
-              const invocation = `${helper}($velarValue${suffix})`;
-              return `(__velarOptionalCollection(${object}, $velarValue => ${invocation}) ?? null)`;
+              const invocation = `${helper}(__velarValue${suffix})`;
+              return `(__velarOptionalCollection(${object}, __velarValue => ${invocation}) ?? null)`;
             }
             return `${helper}(${object}${suffix})`;
           }
@@ -1759,10 +1759,10 @@ export class JavaScriptEmitter {
         });
         const namedOrder = this.hints.namedArgumentOrders.get(spanIdentity(expression.span));
         const arguments_ = namedOrder
-          ? namedOrder.map((source) => source === -1 ? "undefined" : `$velarNamedArguments[${source}]`)
+          ? namedOrder.map((source) => source === -1 ? "undefined" : `__velarNamedArguments[${source}]`)
           : sourceArguments;
         const emitArguments = (): string => namedOrder
-          ? `...(($velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
+          ? `...((__velarNamedArguments) => [${arguments_.join(", ")}])([${sourceArguments.join(", ")}])`
           : arguments_.join(", ");
         if (this.hints.optionalCallees.has(spanIdentity(expression.span))) {
           const call = expression.callee.kind === "MemberExpression"
@@ -1810,7 +1810,7 @@ export class JavaScriptEmitter {
           && this.hints.moduleTopLevelHostCalls.has(spanIdentity(expression.span))
           && !this.expressionContainsDirectAwait(expression)) {
           this.needsThrownValueHelper = true;
-          return `(() => { try { return ${result}; } catch ($velarThrown) { throw __velarNormalizeError($velarThrown); } })()`;
+          return `(() => { try { return ${result}; } catch (__velarThrown) { throw __velarNormalizeError(__velarThrown); } })()`;
         }
         return result;
       }
@@ -1819,26 +1819,26 @@ export class JavaScriptEmitter {
         if (primitiveHelper) {
           this.needsPrimitiveHelpers = true;
           const object = this.emitMappedExpression(expression.object);
-          const bound = `(...__velarArguments) => ${primitiveHelper}($velarValue, ...__velarArguments)`;
+          const bound = `(...__velarArguments) => ${primitiveHelper}(__velarValue, ...__velarArguments)`;
           return expression.optional
-            ? `($velarValue => $velarValue == null ? null : ${bound})(${object})`
-            : `($velarValue => ${bound})(${object})`;
+            ? `(__velarValue => __velarValue == null ? null : ${bound})(${object})`
+            : `(__velarValue => ${bound})(${object})`;
         }
         if (this.hints.stringSizes.has(expression.span.end)) {
           this.needsPrimitiveHelpers = true;
           const object = this.emitMappedExpression(expression.object);
           return expression.optional
-            ? `($velarValue => $velarValue == null ? null : __velarStringSize($velarValue))(${object})`
+            ? `(__velarValue => __velarValue == null ? null : __velarStringSize(__velarValue))(${object})`
             : `__velarStringSize(${object})`;
         }
         const collectionHelper = this.collectionHelper(expression);
         if (collectionHelper) {
           this.needsCollectionHelpers = true;
           const object = this.emitMappedExpression(expression.object);
-          const bound = `(...__velarArguments) => ${collectionHelper}($velarValue, ...__velarArguments)`;
+          const bound = `(...__velarArguments) => ${collectionHelper}(__velarValue, ...__velarArguments)`;
           return expression.optional
-            ? `($velarValue => $velarValue == null ? null : ${bound})(${object})`
-            : `($velarValue => ${bound})(${object})`;
+            ? `(__velarValue => __velarValue == null ? null : ${bound})(${object})`
+            : `(__velarValue => ${bound})(${object})`;
         }
         if (this.hints.collectionSizes.has(expression.span.end)) {
           this.needsCollectionHelpers = true;
@@ -1850,23 +1850,23 @@ export class JavaScriptEmitter {
         const staticFieldOwnerDepth = this.hints.staticFieldReads.get(spanIdentity(expression.span));
         if (staticFieldOwnerDepth !== undefined) {
           const object = this.emitMappedExpression(expression.object);
-          const read = `__velarReadStaticField($velarValue, ${JSON.stringify(expression.property)}, ${staticFieldOwnerDepth})`;
+          const read = `__velarReadStaticField(__velarValue, ${JSON.stringify(expression.property)}, ${staticFieldOwnerDepth})`;
           return expression.optional
-            ? `($velarValue => $velarValue == null ? null : ${read})(${object})`
+            ? `(__velarValue => __velarValue == null ? null : ${read})(${object})`
             : `__velarReadStaticField(${object}, ${JSON.stringify(expression.property)}, ${staticFieldOwnerDepth})`;
         }
         if (this.hints.instanceFieldReads.has(spanIdentity(expression.span))) {
           const object = this.emitMappedExpression(expression.object);
-          const read = `__velarReadInstanceField($velarValue, ${JSON.stringify(expression.property)})`;
+          const read = `__velarReadInstanceField(__velarValue, ${JSON.stringify(expression.property)})`;
           return expression.optional
-            ? `($velarValue => $velarValue == null ? null : ${read})(${object})`
+            ? `(__velarValue => __velarValue == null ? null : ${read})(${object})`
             : `__velarReadInstanceField(${object}, ${JSON.stringify(expression.property)})`;
         }
         if (this.hints.privateInstanceFieldReads.has(spanIdentity(expression.span))) {
           if (expression.optional) {
             const object = this.emitMappedExpression(expression.object);
-            const read = `__velarReadPrivateField($velarValue.#${expression.property}, ${JSON.stringify(expression.property)})`;
-            return `($velarValue => $velarValue == null ? null : ${read})(${object})`;
+            const read = `__velarReadPrivateField(__velarValue.#${expression.property}, ${JSON.stringify(expression.property)})`;
+            return `(__velarValue => __velarValue == null ? null : ${read})(${object})`;
           }
           return `__velarReadPrivateField(${this.emitPostfixReceiver(expression.object)}.#${expression.property}, ${JSON.stringify(expression.property)})`;
         }
@@ -1880,10 +1880,10 @@ export class JavaScriptEmitter {
             return `super.${property}.bind(this)`;
           }
           const object = this.emitMappedExpression(expression.object);
-          const bound = `$velarValue.${property}.bind($velarValue)`;
+          const bound = `__velarValue.${property}.bind(__velarValue)`;
           return expression.optional
-            ? `($velarValue => $velarValue == null ? null : ${bound})(${object})`
-            : `($velarValue => ${bound})(${object})`;
+            ? `(__velarValue => __velarValue == null ? null : ${bound})(${object})`
+            : `(__velarValue => ${bound})(${object})`;
         }
         const publicProperty = expression.property;
         const property = `${this.hints.privateMembers.has(spanIdentity(expression.span)) ? "#" : ""}${publicProperty}`;
@@ -1926,7 +1926,7 @@ export class JavaScriptEmitter {
   }
 
   private emitComparisonChain(expression: Extract<Expression, { kind: "ComparisonChainExpression" }>): string {
-    const prefix = `$velarCompare${expression.span.start}`;
+    const prefix = `__velarCompare${expression.span.start}`;
     const body = [`const ${prefix}_0 = ${this.emitMappedExpression(expression.operands[0]!)};`];
     for (let index = 1; index < expression.operands.length; index += 1) {
       body.push(`const ${prefix}_${index} = ${this.emitMappedExpression(expression.operands[index]!)};`);

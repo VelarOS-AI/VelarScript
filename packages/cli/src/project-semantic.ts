@@ -103,7 +103,7 @@ function bindingRenameRestrictionMessage(project: ProjectResult, name: string): 
   if (restriction === "keyword") return "The new name is reserved by VelarScript";
   if (restriction === "source") return `The source spelling '${name}' is unavailable in VelarScript`;
   if (restriction === "javascript") return `The new name '${name}' is reserved by JavaScript for lexical bindings`;
-  if (restriction === "compiler") return "The new name uses a reserved compiler prefix ('$velar' or '__velar')";
+  if (restriction === "compiler") return "The new name uses a reserved compiler prefix '__velar'";
   if (restriction === "core") return `The new name '${name}' is a reserved Core binding`;
   return `The new name '${name}' is a reserved extension binding`;
 }

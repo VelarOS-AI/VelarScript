@@ -559,9 +559,9 @@ component App:
         <input bind:value={items[0]} aria-label="First" />
     </form>
 `);
-  assert.match(result.code ?? "", /__velarBindValue\(\$velarElement\d+, \{ get: \(\) => \(form\.get\(\)\.name\), set: \(\$velarBindNext\) => \{ form\.get\(\)\.name = \$velarBindNext; \} \}/u);
+  assert.match(result.code ?? "", /__velarBindValue\(__velarElement\d+, \{ get: \(\) => \(form\.get\(\)\.name\), set: \(__velarBindNext\) => \{ form\.get\(\)\.name = __velarBindNext; \} \}/u);
   assert.match(result.code ?? "", /get: \(\) => \(form\.get\(\)\.theme\.mode\)/u);
-  assert.match(result.code ?? "", /get: \(\) => \(__velarIndex\(items\.get\(\), 0\)\), set: \(\$velarBindNext\) => \{ __velarSetIndex\(items\.get\(\), 0, \$velarBindNext\); \}/u);
+  assert.match(result.code ?? "", /get: \(\) => \(__velarIndex\(items\.get\(\), 0\)\), set: \(__velarBindNext\) => \{ __velarSetIndex\(items\.get\(\), 0, __velarBindNext\); \}/u);
 });
 
 test("[D47-84] computed, const, and non-reactive bind targets keep their rejection", () => {
@@ -599,8 +599,8 @@ component App:
         <input type="checkbox" value="digest" bind:group={extras} />
     </form>
 `);
-  assert.match(result.code ?? "", /__velarBindGroup\(\$velarElement\d+, plan, \$velarScope, false\)/u);
-  assert.match(result.code ?? "", /__velarBindGroup\(\$velarElement\d+, extras, \$velarScope, true\)/u);
+  assert.match(result.code ?? "", /__velarBindGroup\(__velarElement\d+, plan, __velarComponentScope, false\)/u);
+  assert.match(result.code ?? "", /__velarBindGroup\(__velarElement\d+, extras, __velarComponentScope, true\)/u);
 
   assert.match(only(`
 component App:
