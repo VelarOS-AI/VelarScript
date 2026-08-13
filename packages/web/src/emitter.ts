@@ -9,17 +9,20 @@ import type {
 } from "@velarscript/compiler/extension";
 import { cssPropertyName, LOOK_ARITHMETIC_HINT, LOOK_MEDIA_LENGTH_UNITS, LOOK_PROPERTIES } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
+import { keyframeCssValue, keyframesCanonical, keyframesName } from "./keyframes.ts";
 import { JavaScriptEmitter, spanIdentity, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_RUNTIME_REGISTRY_KEY } from "@velarscript/compiler/extension";
 import { WEB_RUNTIME_FOUNDATION, WEB_RUNTIME_FOUNDATION_SHARED_ERROR } from "./runtime-foundation.ts";
 import {
   isWebExpression,
   isWebJsx,
+  isWebKeyframes,
   isWebLook,
   isWebStatement,
   isWebUnit,
   type WebComponentDeclaration as ComponentDeclaration,
   type WebJsxAttribute as JSXAttribute,
   type WebJsxElementExpression as JSXElementExpression,
+  type WebKeyframesExpression as KeyframesExpression,
   type WebLookEntry as LookEntry,
   type WebLookExpression as LookExpression,
 } from "./ast.ts";
@@ -92,6 +95,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
   private readonly importedLookStaticValues: ReadonlyMap<string, LookStaticValue>;
   private lookStaticValues: ReadonlyMap<string, LookStaticValue> = new Map();
   private jsxId = 0;
+  private readonly keyframeNames = new Map<string, string>();
 
   constructor(
     hints: LoweringHints,
@@ -239,6 +243,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   protected override visitExtensionRuntimeExpression(expression: Expression, visitExpression: (expression: Expression) => void): boolean {
     if (isWebUnit(expression)) return true;
+    if (isWebKeyframes(expression)) {
+      for (const stop of expression.stops) for (const entry of stop.entries) visitExpression(entry.value);
+      return true;
+    }
     if (isWebLook(expression)) {
       visitLookExpressions(expression.entries, visitExpression);
       return true;
@@ -294,6 +302,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   protected override extensionExpressionContainsDirectAwait(expression: Expression): boolean | undefined {
     if (isWebUnit(expression)) return false;
+    if (isWebKeyframes(expression)) return expression.stops.some((stop) => stop.entries.some((entry) => this.expressionContainsDirectAwait(entry.value)));
     if (isWebLook(expression)) return lookExpressions(expression.entries).some((value) => this.expressionContainsDirectAwait(value));
     if (!isWebJsx(expression)) return undefined;
     return expression.attributes.some((attribute) => typeof attribute.value !== "string"
@@ -340,6 +349,10 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   protected override emitExpression(expression: Expression): string {
     if (isWebUnit(expression)) return JSON.stringify(expression.raw);
+    if (isWebKeyframes(expression)) {
+      const name = this.keyframeNames.get(spanIdentity(expression.span)) ?? keyframesName(keyframesCanonical(expression));
+      return `__velarKeyframesValue(${JSON.stringify(name)})`;
+    }
     if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
       && (isWebUnit(expression.operand)
         || this.hints.extensionCalls.get(spanIdentity(expression.span)) === LOOK_ARITHMETIC_HINT)) {
@@ -794,6 +807,8 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
 
   private prepareLooks(program: Program): void {
     const rules = new Map<string, LookRule>();
+    const keyframeRules = new Map<string, string>();
+    this.keyframeNames.clear();
     const visit = (value: unknown): void => {
       if (!value || typeof value !== "object") return;
       const record = value as Record<string, unknown>;
@@ -827,6 +842,27 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         };
         collect(record.entries as LookExpression["entries"]);
       }
+      if (record.kind === "ExtensionExpression:web:keyframes") {
+        const expression = record as unknown as KeyframesExpression;
+        const canonical = keyframesCanonical(expression);
+        const name = keyframesName(canonical);
+        this.keyframeNames.set(spanIdentity(expression.span), name);
+        if (!keyframeRules.has(name)) {
+          const stops = [...expression.stops]
+            .sort((left, right) => Math.min(...left.offsets) - Math.min(...right.offsets))
+            .map((stop) => {
+              const selectors = [...stop.offsets].sort((left, right) => left - right)
+                .map((offset) => offset === 0 ? "from" : offset === 100 ? "to" : `${offset}%`)
+                .join(",");
+              const declarations = stop.entries.map((entry) => {
+                const css = keyframeCssValue(entry.value);
+                return css === null ? "" : `${cssPropertyName(entry.name)}:${css}`;
+              }).filter(Boolean).join(";");
+              return `${selectors}{${declarations}}`;
+            }).join("");
+          keyframeRules.set(name, `@keyframes ${name}{${stops}}`);
+        }
+      }
       for (const child of Object.values(record)) {
         if (Array.isArray(child)) child.forEach(visit);
         else visit(child);
@@ -854,7 +890,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     }
     this.cssSegments = {
       before: before.filter(Boolean).join("\n\n"),
-      controlled: lookCss.filter(Boolean).join("\n\n"),
+      controlled: [...keyframeRules.values(), ...lookCss].filter(Boolean).join("\n\n"),
       after: after.filter(Boolean).join("\n\n"),
     };
     this.cssOutput = [this.cssSegments.before, this.cssSegments.controlled, this.cssSegments.after].filter(Boolean).join("\n\n");
@@ -1087,7 +1123,7 @@ function containsUnitLiteral(value: unknown): boolean {
 function containsWebSyntax(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  if (record.kind === "ExtensionStatement:web:component" || record.kind === "ExtensionStatement:web:expose" || record.kind === "ExtensionStatement:web:unsafe-css" || record.kind === "ExtensionExpression:web:look" || record.kind === "ExtensionExpression:web:jsx"
+  if (record.kind === "ExtensionStatement:web:component" || record.kind === "ExtensionStatement:web:expose" || record.kind === "ExtensionStatement:web:unsafe-css" || record.kind === "ExtensionExpression:web:look" || record.kind === "ExtensionExpression:web:keyframes" || record.kind === "ExtensionExpression:web:jsx"
     || record.kind === "ExtensionStatement:web:state" || record.kind === "ExtensionStatement:web:resource" || record.kind === "ExtensionStatement:web:action" || record.kind === "ExtensionStatement:web:watch") return true;
   if (record.kind === "IdentifierExpression" && (record.name === "mount" || record.name === "tick" || record.name === "computed")) return true;
   return Object.values(record).some((child) => Array.isArray(child) ? child.some(containsWebSyntax) : containsWebSyntax(child));
@@ -1913,11 +1949,17 @@ function __velarLook(parts) {
   return __velarGraphFreeze({ __velarLook: true, rules: __velarGraphFreeze(rules) });
 }
 
+function __velarKeyframesValue(name) {
+  if (typeof name !== "string" || !/^velar-kf-[0-9a-f]{8}$/.test(name)) throw new TypeError("Generated keyframes name is invalid");
+  return __velarGraphFreeze({ __velarKeyframes: true, name });
+}
+
 function __velarLookVariable(token) {
   return "--velar-look-" + token.replace(/[^A-Za-z0-9_-]+/g, "-");
 }
 
 function __velarLookValue(token, value) {
+  if (token.endsWith(":animation")) return __velarAnimationLookValue(value);
   if (typeof value === "number") {
     if (!__velarDomIsFinite(value)) throw new TypeError("Look properties require finite numbers");
     return __velarDomString(value);
@@ -1926,6 +1968,29 @@ function __velarLookValue(token, value) {
   if (value.length > 1024 * 1024) throw new RangeError("A Look property value cannot exceed 1 MiB");
   if (token.endsWith(":content") && typeof value === "string" && value !== "none" && value !== "normal") return __velarQuotedText(value);
   return value;
+}
+
+function __velarAnimationLookValue(value) {
+  const parts = [];
+  const add = (item) => {
+    if (__velarGraphIsList(item)) {
+      for (let index = 0; index < item.length; index += 1) add(item[index]);
+      return;
+    }
+    const marker = item && (typeof item === "object" || typeof item === "function")
+      ? __velarGraphOwnDescriptor(item, "__velarAnimation") : null;
+    const css = item && (typeof item === "object" || typeof item === "function")
+      ? __velarGraphOwnDescriptor(item, "css") : null;
+    if (!marker || !("value" in marker) || marker.value !== true || !css || !("value" in css) || typeof css.value !== "string") {
+      throw new TypeError("Look animation requires Animation or a List of Animation values from animate()");
+    }
+    __velarAppendOwned(parts, css.value);
+  };
+  add(value);
+  if (parts.length === 0) throw new TypeError("A Look animation list cannot be empty");
+  let output = parts[0];
+  for (let index = 1; index < parts.length; index += 1) output += ", " + parts[index];
+  return output;
 }
 
 const __velarInlineStyleProperties = __velarGraphCreateSet(${JSON.stringify([...LOOK_PROPERTIES].map(cssPropertyName))});

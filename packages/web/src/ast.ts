@@ -111,6 +111,18 @@ export interface WebLookExpression {
   readonly span: Span;
 }
 
+export interface WebKeyframesExpression {
+  readonly kind: "ExtensionExpression:web:keyframes";
+  readonly stops: readonly WebKeyframeStop[];
+  readonly span: Span;
+}
+
+export interface WebKeyframeStop {
+  readonly offsets: readonly number[];
+  readonly entries: readonly WebLookProperty[];
+  readonly span: Span;
+}
+
 export type WebLookEntry = WebLookProperty | WebLookSpread | WebLookIf | WebLookTarget;
 
 export interface WebLookProperty {
@@ -174,6 +186,7 @@ export type WebExpression =
   | WebUnitLiteralExpression
   | WebLookHookExpression
   | WebLookExpression
+  | WebKeyframesExpression
   | WebJsxElementExpression;
 
 export type WebAwareExpression = CoreExpression | WebExpression;
@@ -198,6 +211,10 @@ export function isWebJsx(expression: Expression | WebAwareExpression): expressio
 
 export function isWebLook(expression: Expression | WebAwareExpression): expression is WebLookExpression {
   return expression.kind === "ExtensionExpression:web:look";
+}
+
+export function isWebKeyframes(expression: Expression | WebAwareExpression): expression is WebKeyframesExpression {
+  return expression.kind === "ExtensionExpression:web:keyframes";
 }
 
 export function isWebUnit(expression: Expression | WebAwareExpression): expression is WebUnitLiteralExpression {

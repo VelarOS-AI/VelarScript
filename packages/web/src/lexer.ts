@@ -1,9 +1,11 @@
 import type { Diagnostic, Span } from "@velarscript/compiler";
 import { findInterpolatedExpressionEnd } from "@velarscript/compiler/extension";
 import type { CompilerLexicalScanContext, CompilerLexicalScanResult, Token } from "@velarscript/compiler/extension";
+import { WEB_VOID_ELEMENTS } from "./elements.ts";
 
 export const WEB_JSX_TOKEN = "@velarscript/web:jsx";
 export const WEB_LOOK_TOKEN = "@velarscript/web:look";
+export const WEB_KEYFRAMES_TOKEN = "@velarscript/web:keyframes";
 
 export interface WebExpressionSource {
   readonly source: string;
@@ -54,10 +56,15 @@ export interface WebLookBlockSyntax {
   readonly span: Span;
 }
 
-const voidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+export interface WebKeyframesBlockSyntax {
+  readonly kind: "WebKeyframesBlockSyntax";
+  readonly lines: readonly WebLookLineSyntax[];
+  readonly span: Span;
+}
 
 export function scanWebToken(context: CompilerLexicalScanContext): CompilerLexicalScanResult | null {
-  if (isLookBlockStart(context.tokens)) return scanLookBlock(context);
+  const visualBlock = visualBlockKeyword(context.tokens);
+  if (visualBlock) return scanVisualBlock(context, visualBlock);
   if (context.source[context.offset] !== "<" || !shouldStartJsx(context)) return null;
   const scanner = new WebJsxScanner(context.source, context.offset);
   const syntax = scanner.scan();
@@ -92,17 +99,18 @@ function shouldStartJsx(context: CompilerLexicalScanContext): boolean {
 // leaves no token of its own), so every newline in between is skipped; without
 // that, a comment as the first line inside a Look block left the block
 // untokenized and unravelled into a five-diagnostic cascade.
-function isLookBlockStart(tokens: readonly Token[]): boolean {
-  if (tokens.at(-1)?.kind !== "indent") return false;
+function visualBlockKeyword(tokens: readonly Token[]): "look" | "keyframes" | null {
+  if (tokens.at(-1)?.kind !== "indent") return null;
   let index = tokens.length - 2;
-  if (tokens[index]?.kind !== "newline") return false;
+  if (tokens[index]?.kind !== "newline") return null;
   while (tokens[index]?.kind === "newline") index -= 1;
-  if (tokens[index]?.kind !== "colon") return false;
+  if (tokens[index]?.kind !== "colon") return null;
   index -= 1;
-  return tokens[index]?.kind === "extensionKeyword" && tokens[index]?.value === "look";
+  if (tokens[index]?.kind !== "extensionKeyword") return null;
+  return tokens[index]?.value === "look" || tokens[index]?.value === "keyframes" ? tokens[index]!.value as "look" | "keyframes" : null;
 }
 
-function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScanResult {
+function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | "keyframes"): CompilerLexicalScanResult {
   const lines: WebLookLineSyntax[] = [];
   const diagnostics: Diagnostic[] = [];
   let cursor = context.offset;
@@ -168,7 +176,9 @@ function scanLookBlock(context: CompilerLexicalScanContext): CompilerLexicalScan
 
   const tokenSpan = { start: context.offset, end: cursor };
   return {
-    token: extensionToken(WEB_LOOK_TOKEN, tokenSpan, { kind: "WebLookBlockSyntax", lines, span: tokenSpan } satisfies WebLookBlockSyntax),
+    token: keyword === "look"
+      ? extensionToken(WEB_LOOK_TOKEN, tokenSpan, { kind: "WebLookBlockSyntax", lines, span: tokenSpan } satisfies WebLookBlockSyntax)
+      : extensionToken(WEB_KEYFRAMES_TOKEN, tokenSpan, { kind: "WebKeyframesBlockSyntax", lines, span: tokenSpan } satisfies WebKeyframesBlockSyntax),
     nextOffset: cursor,
     diagnostics,
     startsLine: cursor < context.source.length,
@@ -285,7 +295,7 @@ class WebJsxScanner {
     }
 
     const children: WebJsxChildSyntax[] = [];
-    if (!selfClosing && !(tag === tag.toLowerCase() && voidTags.has(tag))) {
+    if (!selfClosing && !(tag === tag.toLowerCase() && WEB_VOID_ELEMENTS.has(tag))) {
       while (this.index < this.source.length && !this.source.startsWith("</", this.index)) {
         // WEB-U13: an HTML comment inside markup is the first thing a Web author
         // reaches for. It has no JSX spelling, so it is skipped with one message

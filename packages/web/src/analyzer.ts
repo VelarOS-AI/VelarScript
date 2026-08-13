@@ -28,25 +28,36 @@ import {
 import {
   LOOK_ABSENT_MEDIA_SUBJECTS,
   LOOK_ARITHMETIC_HINT,
+  LOOK_ANIMATION_DIRECTIONS,
+  LOOK_ANIMATION_EASINGS,
+  LOOK_ANIMATION_FILLS,
   LOOK_BORDER_STYLE_NAMES,
   LOOK_BUILDER_NUMERIC_RANGES,
   LOOK_BUILDERS,
+  LOOK_EXCLUDED_PROPERTIES,
   LOOK_HOOKS,
   LOOK_LENGTH_BUILDERS,
   LOOK_MEDIA_LENGTH_UNITS,
   LOOK_MEDIA_SUBJECTS,
   LOOK_NUMERIC_TYPE_NAMES,
+  LOOK_NON_ANIMATABLE_PROPERTIES,
   LOOK_PROPERTIES,
+  LOOK_PROPERTY_KEYWORDS,
+  LOOK_PROPERTY_VALUE_KINDS,
   LOOK_TARGETS,
   LOOK_UNIT_TYPES,
   LOOK_UNITLESS_PROPERTIES,
   nearestLookName,
+  type LookPropertyValueKind,
 } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, type LookStaticValue } from "./look-static.ts";
+import { keyframeCssValue } from "./keyframes.ts";
 import { dynamicChildLeaves } from "./emitter.ts";
+import { isWebCustomElementName, WEB_NATIVE_ELEMENTS } from "./elements.ts";
 import {
   isWebExpression,
   isWebJsx,
+  isWebKeyframes,
   isWebLook,
   isWebStatement,
   isWebUnit,
@@ -54,6 +65,7 @@ import {
   type WebComponentDeclaration as ComponentDeclaration,
   type WebJsxAttribute as JSXAttribute,
   type WebJsxElementExpression as JSXElementExpression,
+  type WebKeyframesExpression,
   type WebLookExpression,
   type WebResourceDeclaration as ResourceDeclaration,
 } from "./ast.ts";
@@ -111,19 +123,34 @@ const lookDuration: ValueType = { kind: "named", name: "Duration" };
 const lookAngle: ValueType = { kind: "named", name: "Angle" };
 const lookTrackList: ValueType = { kind: "named", name: "TrackList" };
 const lookTransition: ValueType = { kind: "named", name: "Transition" };
+const lookAnimation: ValueType = { kind: "named", name: "Animation" };
 const lookSpacing: ValueType = { kind: "named", name: "Spacing" };
 const lookMetricOrSpacing: ValueType = { kind: "union", members: [lookMetric, lookSpacing] };
-const LOOK_PROPERTY_TYPES = new Map<string, ValueType>([
-  ...["gap", "rowGap", "columnGap", "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "inset", "top", "right", "bottom", "left", "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock", "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "borderRadius", "fontSize", "letterSpacing", "translate", "flexBasis", "borderWidth"].map((name) => [name, { kind: "union", members: [lookMetricOrSpacing, stringType] } as ValueType] as const),
-  ["gridTemplateColumns", { kind: "union", members: [lookTrackList, stringType] }], ["gridTemplateRows", { kind: "union", members: [lookTrackList, stringType] }],
-  ["background", { kind: "union", members: [lookColor, lookImage, stringType] }], ["backgroundColor", { kind: "union", members: [lookColor, stringType] }], ["backgroundImage", { kind: "union", members: [lookImage, stringType] }], ["fill", { kind: "union", members: [lookColor, stringType] }], ["stroke", { kind: "union", members: [lookColor, stringType] }], ["strokeWidth", { kind: "union", members: [lookMetric, stringType] }],
-  ["border", { kind: "union", members: [lookBorder, stringType] }], ["borderTop", { kind: "union", members: [lookBorder, stringType] }], ["borderRight", { kind: "union", members: [lookBorder, stringType] }], ["borderBottom", { kind: "union", members: [lookBorder, stringType] }], ["borderLeft", { kind: "union", members: [lookBorder, stringType] }], ["outline", { kind: "union", members: [lookBorder, stringType] }], ["boxShadow", { kind: "union", members: [lookShadow, stringType] }],
-  ["color", { kind: "union", members: [lookColor, stringType] }], ["content", stringType], ["font", stringType], ["fontFamily", stringType],
-  ["opacity", numberType], ["zIndex", numberType], ["fontWeight", { kind: "union", members: [numberType, stringType] }], ["aspectRatio", { kind: "union", members: [numberType, stringType] }], ["scale", { kind: "union", members: [numberType, lookSpacing, stringType] }], ["flex", { kind: "union", members: [numberType, stringType] }],
-  ["flexGrow", numberType], ["flexShrink", numberType], ["order", numberType],
-  ["lineHeight", { kind: "union", members: [numberType, lookLength] }], ["rotate", lookAngle],
-  ["transition", { kind: "union", members: [lookTransition, stringType] }], ["transitionDuration", lookDuration], ["transitionDelay", lookDuration], ["animation", stringType], ["backdropFilter", stringType],
-]);
+const lookPropertyType = (kind: LookPropertyValueKind): ValueType => {
+  switch (kind) {
+    case "animation": return { kind: "union", members: [lookAnimation, { kind: "list", element: lookAnimation }] };
+    case "angle": return lookAngle;
+    case "background": return { kind: "union", members: [lookColor, lookImage, stringType] };
+    case "border": return { kind: "union", members: [lookBorder, stringType] };
+    case "color": return { kind: "union", members: [lookColor, stringType] };
+    case "duration": return lookDuration;
+    case "image": return { kind: "union", members: [lookImage, stringType] };
+    case "line-height": return { kind: "union", members: [numberType, lookLength, stringType] };
+    case "metric": return { kind: "union", members: [lookMetricOrSpacing, stringType] };
+    case "number": return numberType;
+    case "number-keyword": return { kind: "union", members: [numberType, lookSpacing, stringType] };
+    case "shadow": return { kind: "union", members: [lookShadow, stringType] };
+    case "track": return { kind: "union", members: [lookTrackList, stringType] };
+    case "transition": return { kind: "union", members: [lookTransition, stringType] };
+    case "filter":
+    case "keyword":
+    case "text":
+    case "transform":
+      return stringType;
+  }
+};
+const LOOK_PROPERTY_TYPES = new Map([...LOOK_PROPERTY_VALUE_KINDS]
+  .map(([name, kind]) => [name, lookPropertyType(kind)] as const));
 
 export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
   const { intrinsic, argumentAt, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
@@ -315,6 +342,27 @@ function lookBuilderToken(token: string): string {
   return `"${token}"`;
 }
 
+function numericLiteral(expression: Expression | null): number | null {
+  if (expression?.kind === "LiteralExpression" && typeof expression.value === "number") return expression.value;
+  if (expression?.kind === "UnaryExpression" && expression.operator === "-"
+    && expression.operand.kind === "LiteralExpression" && typeof expression.operand.value === "number") {
+    return -expression.operand.value;
+  }
+  return null;
+}
+
+function lookDurationLiteral(expression: Expression | null): number | null {
+  if (expression && isWebUnit(expression) && (expression.unit === "ms" || expression.unit === "s")) {
+    return expression.value * (expression.unit === "s" ? 1000 : 1);
+  }
+  if (expression?.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
+    && isWebUnit(expression.operand) && (expression.operand.unit === "ms" || expression.operand.unit === "s")) {
+    const value = expression.operand.value * (expression.operand.unit === "s" ? 1000 : 1);
+    return expression.operator === "-" ? -value : value;
+  }
+  return null;
+}
+
 function lookBorderCall(tokens: readonly string[]): string | null {
   let width: string | null = null;
   let style: string | null = null;
@@ -334,6 +382,12 @@ function lookBorderCall(tokens: readonly string[]): string | null {
 function lookShorthandStringGuidance(name: string, value: Expression): string | null {
   if (value.kind !== "LiteralExpression" || typeof value.value !== "string") return null;
   const text = value.value.trim();
+  if ((name === "gridTemplateColumns" || name === "gridTemplateRows") && text !== "none") {
+    return "Use the tracks(...) builder for grid templates; for example, write tracks(240px, minmax(0px, 1fr)) instead of CSS track-list text";
+  }
+  if (name === "backgroundImage" && /^linear-gradient\s*\(/iu.test(text)) {
+    return "Use linearGradient(angle, start, end); for example linearGradient(90deg, color(\"red\"), color(\"blue\")) instead of gradient text";
+  }
   if (!/\s/u.test(text)) return null;
   const tokens = text.split(/\s+/u);
   if (lookSpacingFamily.test(name) || lookSpacingProperties.has(name)) {
@@ -358,6 +412,29 @@ function lookShorthandStringGuidance(name: string, value: Expression): string | 
       return `Use 'transition(${buildArguments.join(", ")})'; Look transition shorthand is written with the transition builder`;
     }
     return "Use the 'transition(property, duration, easing, delay)' builder; multi-part transition strings bypass the checked Look system";
+  }
+  return null;
+}
+
+const lookCssWideKeywords = new Set(["inherit", "initial", "revert", "revert-layer", "unset"]);
+const lookMetricKeywords = new Set([...lookCssWideKeywords, "auto", "none", "normal", "min-content", "max-content", "fit-content", "stretch"]);
+const lookDefaultKeywords = new Set([
+  ...lookCssWideKeywords, "auto", "none", "normal", "start", "end", "center", "left", "right", "top", "bottom",
+  "solid", "dashed", "dotted", "double", "hidden", "visible", "round", "square", "butt", "miter", "bevel",
+  "row", "column", "dense", "both", "mandatory", "proximity", "always", "smooth", "thin", "light", "dark",
+  "disc", "circle", "decimal", "inside", "outside", "bold", "bolder", "lighter", "small-caps",
+]);
+const lookColorKeywords = new Set([
+  ...lookCssWideKeywords, "transparent", "currentColor", "black", "silver", "gray", "white", "maroon", "red", "purple",
+  "fuchsia", "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua", "orange", "aliceblue", "rebeccapurple",
+]);
+
+function literalLookStrings(expression: Expression): readonly string[] | null {
+  if (expression.kind === "LiteralExpression") return typeof expression.value === "string" ? [expression.value] : [];
+  if (expression.kind === "ConditionalExpression") {
+    const thenValues = literalLookStrings(expression.thenValue);
+    const elseValues = literalLookStrings(expression.elseValue);
+    return thenValues && elseValues ? [...thenValues, ...elseValues] : null;
   }
   return null;
 }
@@ -854,6 +931,10 @@ export class VelarWebAnalyzer extends Analyzer {
       }
     }
     if (isWebJsx(expression)) return this.inferJsx(expression);
+    if (isWebKeyframes(expression)) {
+      this.analyzeKeyframes(expression);
+      return { kind: "named", name: "Keyframes" };
+    }
     if (isWebLook(expression)) {
       this.lookLiteralDepth += 1;
       try {
@@ -1345,6 +1426,10 @@ export class VelarWebAnalyzer extends Analyzer {
     const key = spanIdentity(expression.span);
     if (this.checkedBuilderCalls.has(key)) return;
     this.checkedBuilderCalls.add(key);
+    if (builder === "animate") {
+      this.checkAnimateBuilderCall(expression);
+      return;
+    }
     const ranges = LOOK_BUILDER_NUMERIC_RANGES.get(builder);
     for (const [index, argument] of expression.arguments.entries()) {
       const named = expression.argumentNames?.[index] ?? null;
@@ -1376,6 +1461,100 @@ export class VelarWebAnalyzer extends Analyzer {
     }
   }
 
+  private checkAnimateBuilderCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
+    const argument = (name: string, position: number): Expression | null => {
+      const named = expression.argumentNames?.findIndex((candidate) => candidate === name) ?? -1;
+      if (named >= 0) return expression.arguments[named] ?? null;
+      const sourceName = expression.argumentNames?.[position];
+      return sourceName === null || sourceName === undefined ? expression.arguments[position] ?? null : null;
+    };
+    const duration = argument("duration", 1);
+    const delay = argument("delay", 3);
+    const count = argument("count", 4);
+    const loop = argument("loop", 5);
+    const easing = argument("easing", 2);
+    const direction = argument("direction", 6);
+    const fill = argument("fill", 7);
+    const durationValue = lookDurationLiteral(duration);
+    const delayValue = lookDurationLiteral(delay);
+    if (durationValue !== null && durationValue <= 0) {
+      this.diagnostics.push(diagnostic("VEL5060", "Animation duration must be greater than zero", duration!.span));
+    }
+    if (delayValue !== null && delayValue < 0) {
+      this.diagnostics.push(diagnostic("VEL5060", "Animation delay cannot be negative", delay!.span));
+    }
+    const countValue = numericLiteral(count);
+    if (countValue !== null && (!Number.isInteger(countValue) || countValue <= 0 || countValue > 1_000_000)) {
+      this.diagnostics.push(diagnostic("VEL5060", "Animation count must be a positive integer no greater than 1000000", count!.span));
+    }
+    if (count && loop) {
+      this.diagnostics.push(diagnostic("VEL5060", "animate accepts either count or loop, not both; use loop=true for an infinite animation", expression.span));
+    }
+    this.checkAnimationKeyword(easing, "easing", LOOK_ANIMATION_EASINGS);
+    this.checkAnimationKeyword(direction, "direction", LOOK_ANIMATION_DIRECTIONS);
+    this.checkAnimationKeyword(fill, "fill", LOOK_ANIMATION_FILLS);
+  }
+
+  private checkAnimationKeyword(value: Expression | null, name: string, vocabulary: ReadonlySet<string>): void {
+    if (!value || value.kind !== "LiteralExpression" || typeof value.value !== "string") return;
+    if (!vocabulary.has(value.value)) {
+      this.diagnostics.push(diagnostic("VEL5060", `Animation ${name} '${value.value}' is not supported; use one of ${[...vocabulary].join(", ")}`, value.span));
+    }
+  }
+
+  private analyzeKeyframes(expression: WebKeyframesExpression): void {
+    for (const stop of expression.stops) {
+      const properties = new Set<string>();
+      for (const entry of stop.entries) {
+        if (properties.has(entry.name)) {
+          this.diagnostics.push(diagnostic("VEL5039", `Keyframe property '${entry.name}' is defined more than once at the same stop`, entry.span));
+          continue;
+        }
+        properties.add(entry.name);
+        if (LOOK_NON_ANIMATABLE_PROPERTIES.has(entry.name)) {
+          this.diagnostics.push(diagnostic("VEL5060", `Look property '${entry.name}' does not participate in animation interpolation`, entry.span));
+          this.inferExpression(entry.value);
+          continue;
+        }
+        if (!this.analyzeLookValue(entry.name, entry.value, entry.span, null)) continue;
+        const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? stringType;
+        const actual = this.inferExpression(entry.value, expected);
+        this.reportKeyframeSnapshotReads(entry.value);
+        if (keyframeCssValue(entry.value) === null) {
+          this.diagnostics.push(diagnostic(
+            "VEL5060",
+            "A keyframe value must resolve to static CSS from literals, unit values, arithmetic, or velar/look builders",
+            entry.value.span,
+          ));
+        }
+        if (mentionsLookUnitType(expected) && lookLiteralZero(entry.value)) continue;
+        if (this.reportLookNumberWithoutUnit(entry.name, actual, expected, entry.value.span)) continue;
+        if (actual.kind !== "null" && expected.kind !== "unknown") this.requireAssignable(actual, expected, entry.value.span);
+      }
+    }
+  }
+
+  private reportKeyframeSnapshotReads(expression: Expression): void {
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) { value.forEach(visit); return; }
+      if (!value || typeof value !== "object") return;
+      const record = value as Record<string, unknown>;
+      if (record.kind === "IdentifierExpression" && typeof record.name === "string") {
+        const name = record.name;
+        if (this.reactiveBindingKind(name) !== null || this.derivedReactiveRead(name)) {
+          this.diagnostics.push(diagnostic(
+            "VEL5060",
+            `Keyframes generate static CSS, so reactive '${name}' cannot be read inside a stop; make animation presence dynamic with look:animation={condition ? animate(frames, 1s) : null}`,
+            record.span as Span,
+          ));
+        }
+        return;
+      }
+      for (const [key, child] of Object.entries(record)) if (key !== "span") visit(child);
+    };
+    visit(expression);
+  }
+
   /**
    * Records one entry in its lowered scope (condition signature plus target) so
    * two sibling blocks with the same condition report the property they both
@@ -1399,10 +1578,10 @@ export class VelarWebAnalyzer extends Analyzer {
   private analyzeLookValue(name: string, value: Expression, entrySpan: Span, directive: "look" | "style" | null): boolean {
     const inline = directive !== null;
     const label = directive === "style" ? "inline Style" : directive === "look" ? "inline Look" : "Look";
-    if (name === "animation" || name === "animationName") {
+    if (name === "animation" && value.kind === "LiteralExpression" && typeof value.value === "string") {
       this.diagnostics.push(diagnostic(
         "VEL5038",
-        `Look has no animation vocabulary: '@keyframes' cannot be written in Look, so an animation name would never resolve. Load the keyframes with a module-level 'import css unsafe "./motion.css" before look' and set '${name}' from that stylesheet, or express state changes with 'transition'`,
+        "Look animation does not accept CSS shorthand text; declare a checked 'keyframes:' value and pass animate(frames, duration, ...) instead",
         entrySpan,
       ));
       if (!inline) this.inferExpression(value);
@@ -1410,9 +1589,12 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     if (!LOOK_PROPERTIES.has(name)) {
       const nearest = nearestLookName(name, LOOK_PROPERTIES);
-      this.diagnostics.push(diagnostic("VEL5038", nearest
-        ? `Unknown ${label} property '${name}'; did you mean '${nearest}'?`
-        : `Unknown ${label} property '${name}'; ${inline ? `${directive!}:* uses the same camelCase property names as a Look block` : "Look properties use the DOM camelCase spelling of a CSS property"}`, entrySpan));
+      const exclusion = LOOK_EXCLUDED_PROPERTIES.get(name);
+      this.diagnostics.push(diagnostic("VEL5038", exclusion
+        ? `CSS property '${name}' is outside checked Look: ${exclusion}. Use a module-level 'import css unsafe "./styles.css" before look' when that boundary is intentional`
+        : nearest
+          ? `Unknown ${label} property '${name}'; did you mean '${nearest}'?`
+          : `Unknown ${label} property '${name}'; ${inline ? `${directive!}:* uses the same camelCase property names as a Look block` : "Look properties use the DOM camelCase spelling of a CSS property"}`, entrySpan));
       if (!inline) this.inferExpression(value);
       return false;
     }
@@ -1420,6 +1602,43 @@ export class VelarWebAnalyzer extends Analyzer {
     if (shorthandGuidance) {
       this.diagnostics.push(diagnostic("VEL5038", shorthandGuidance, value.span));
       return false;
+    }
+    if (!this.validateLookStringVocabulary(name, value)) return false;
+    return true;
+  }
+
+  private validateLookStringVocabulary(name: string, value: Expression): boolean {
+    const kind = LOOK_PROPERTY_VALUE_KINDS.get(name);
+    if (!kind || kind === "text" || kind === "filter" || kind === "transform" || kind === "animation") return true;
+    const values = literalLookStrings(value);
+    if (values === null) return true;
+    for (const text of values) {
+      const normalized = text.trim();
+      if (kind === "metric" && /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|vw|vh|vmin|vmax|%|fr|ms|s|deg|turn)$/u.test(normalized)) {
+        this.diagnostics.push(diagnostic(
+          "VEL5038",
+          `Use the unit literal ${normalized}; quoted unit values are not part of Look`,
+          value.span,
+        ));
+        return false;
+      }
+      let accepted: boolean;
+      if (kind === "metric") accepted = lookMetricKeywords.has(normalized);
+      else if (kind === "color" || kind === "background") accepted = lookColorKeywords.has(normalized) || /^#[0-9a-f]{3,8}$/iu.test(normalized);
+      else if (kind === "image" || kind === "border" || kind === "shadow") accepted = lookCssWideKeywords.has(normalized) || normalized === "none";
+      else if (kind === "number-keyword" || kind === "line-height") accepted = lookDefaultKeywords.has(normalized);
+      else {
+        const propertyKeywords = LOOK_PROPERTY_KEYWORDS.get(name);
+        accepted = propertyKeywords?.has(normalized) ?? lookDefaultKeywords.has(normalized);
+      }
+      if (!accepted) {
+        const expected = kind === "color" || kind === "background" ? "a checked color() or color keyword"
+          : kind === "image" ? "a checked image builder such as linearGradient() or asset()"
+            : kind === "metric" ? "a unit value or one of the property's CSS keywords"
+              : `one of the closed ${name} keywords`;
+        this.diagnostics.push(diagnostic("VEL5038", `Look property '${name}' does not accept '${normalized}'; use ${expected}`, value.span));
+        return false;
+      }
     }
     return true;
   }
@@ -1522,6 +1741,16 @@ export class VelarWebAnalyzer extends Analyzer {
     this.jsxDepth += 1;
     const attributes = new Map(expression.attributes.map((attribute) => [attribute.name, attribute]));
     const component = /^[A-Z]/u.test(expression.tag);
+    if (expression.tag && !component && !WEB_NATIVE_ELEMENTS.has(expression.tag) && !isWebCustomElementName(expression.tag)) {
+      const nearest = nearestLookName(expression.tag, WEB_NATIVE_ELEMENTS);
+      this.diagnostics.push(diagnostic(
+        "VEL5061",
+        nearest
+          ? `Unknown native element '<${expression.tag}>'; did you mean '<${nearest}>'?`
+          : `Unknown native element '<${expression.tag}>'; use a standard HTML, SVG, or MathML element, or a lowercase hyphenated custom element such as '<user-card>'`,
+        expression.tagSpan,
+      ));
+    }
     if (attributes.size !== expression.attributes.length) this.diagnostics.push(diagnostic("VEL5014", `JSX element '${expression.tag}' has duplicate attributes`, expression.span));
     for (const attribute of expression.attributes) {
       if (removedJsxControlAttributes.has(attribute.name)) {
