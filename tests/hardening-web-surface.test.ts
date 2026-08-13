@@ -926,7 +926,7 @@ const surfaceTests = String.raw`
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_reactive_look_forms_stay_live_and_lengths_reach_layout() -> null:
+test "reactive look forms stay live and lengths reach layout":
     await browser.open("/")
     await browser.click("[data-sample]")
     // 40px wide from the composed Look and the look: directive; the unitless
@@ -936,7 +936,7 @@ async def test_reactive_look_forms_stay_live_and_lengths_reach_layout() -> null:
     await browser.click("[data-sample]")
     await browser.waitForText("[data-reading]", "120|120|30|start")
 
-async def test_bind_member_path_binds_both_directions() -> null:
+test "bind member path binds both directions":
     await browser.open("/")
     expect(await browser.text("[data-name-echo]")).toBe("start")
     await browser.fill("[data-name]", "typed")
@@ -946,7 +946,7 @@ async def test_bind_member_path_binds_both_directions() -> null:
     await browser.click("[data-sample]")
     await browser.waitForText("[data-reading]", "40|40|30|written")
 
-async def test_radio_group_switches_three_ways() -> null:
+test "radio group switches three ways":
     await browser.open("/")
     expect(await browser.text("[data-plan]")).toBe("team")
     await browser.click("[data-solo]")
@@ -956,7 +956,7 @@ async def test_radio_group_switches_three_ways() -> null:
     await browser.click("[data-team]")
     await browser.waitForText("[data-plan]", "team")
 
-async def test_checkbox_group_adds_and_removes_members() -> null:
+test "checkbox group adds and removes members":
     await browser.open("/")
     expect(await browser.text("[data-extras]")).toBe("0:")
     await browser.click("[data-digest]")

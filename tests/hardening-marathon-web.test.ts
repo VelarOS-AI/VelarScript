@@ -457,7 +457,7 @@ mount(<App />, "#app")
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_observed_computed_updates_after_state_write() -> null:
+test "observed computed updates after state write":
     await browser.open("/")
     expect(await browser.text("[data-label]")).toBe("count is 0")
     await browser.click("[data-bump]")
@@ -514,7 +514,7 @@ mount(<App />, "#app")
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_cross_observer_invalidation_is_reported() -> null:
+test "cross observer invalidation is reported":
     await browser.open("/")
     await browser.click("[data-start]")
     await browser.waitForText("[data-failure]", "update:Reactive updates cannot run more than 100000 observers in one flush")
@@ -564,7 +564,7 @@ mount(<App />, "#app")
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_identical_keys_keep_focus() -> null:
+test "identical keys keep focus":
     await browser.open("/")
     await browser.press("[data-row='b']", "x")
     await browser.waitForText("[data-renders]", "1")
@@ -574,7 +574,7 @@ async def test_identical_keys_keep_focus() -> null:
     expect(await browser.text("[data-blurs]")).toBe("0")
     expect(await browser.count("li")).toBe(3)
 
-async def test_the_blur_probe_can_observe_a_real_blur() -> null:
+test "the blur probe can observe a real blur":
     await browser.open("/")
     await browser.press("[data-row='b']", "x")
     await browser.waitForText("[data-renders]", "1")

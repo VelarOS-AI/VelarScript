@@ -32,7 +32,7 @@ function moduleInterface(
     typeAliases: new Map(),
     enums,
     classes: new Map(),
-    testFunctions: [],
+    tests: [],
     extensionExports: new Map(),
     extensionData: new Map(),
   };

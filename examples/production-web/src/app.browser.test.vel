@@ -1,7 +1,7 @@
 import {expect} from "velar/test"
 import {browser, localStorage, sessionStorage} from "velar/web-test"
 
-async def test_browser_storage_controls_raw_state_without_product_seams() -> null:
+test "browser storage controls raw state without product seams":
     await browser.open("/")
     await localStorage.set("velar-test:malformed", "{oops")
     await sessionStorage.set("velar-test:draft", "half-written")
@@ -12,7 +12,7 @@ async def test_browser_storage_controls_raw_state_without_product_seams() -> nul
     await sessionStorage.clear()
     expect(await sessionStorage.get("velar-test:draft")).toBe(null)
 
-async def test_release_studio_recovery() -> null:
+test "release studio recovery":
     await browser.open("/")
     expect(await browser.text("h1")).toBe("VelarScript Release Studio")
     expect(await browser.attribute(`[data-release-primary] a[href="/app/"]`, "aria-current")).toBe("page")
@@ -40,7 +40,7 @@ async def test_release_studio_recovery() -> null:
     await browser.waitForText("[data-runtime-error]", "render:Render recovery ready")
     expect(await browser.text("[data-render-stable]")).toBe("render-stable")
 
-async def test_checked_keyframes_create_a_running_rotation() -> null:
+test "checked keyframes create a running rotation":
     await browser.open("/")
     const animation = await browser.animation("[data-animation-probe]")
     expect(animation.count).toBe(1)
@@ -52,7 +52,7 @@ async def test_checked_keyframes_create_a_running_rotation() -> null:
     const removed = await browser.animation("[data-animation-toggle-probe]")
     expect(removed.count).toBe(0)
 
-async def test_native_event_fields_cross_the_real_browser_boundary() -> null:
+test "native event fields cross the real browser boundary":
     await browser.open("/")
     const navigation = await browser.timings()
     expect(navigation.domContentLoadedMs >= 0).toBe(true)
@@ -66,7 +66,7 @@ async def test_native_event_fields_cross_the_real_browser_boundary() -> null:
     await browser.click("[data-pointer-probe]")
     await browser.waitForText("[data-pointer-event]", "mouse")
 
-async def test_repeated_route_cleanup() -> null:
+test "repeated route cleanup":
     await browser.open("/")
     for index in range(8):
         await browser.click(`[data-release-primary] a[href="/app/about"]`)
@@ -79,7 +79,7 @@ async def test_repeated_route_cleanup() -> null:
         expect(await browser.currentPath()).toBe("/")
         expect(await browser.attribute(`[data-release-primary] a[href="/app/"]`, "aria-current")).toBe("page")
 
-async def test_lazy_route_failure_fallback_and_retry() -> null:
+test "lazy route failure fallback and retry":
     await browser.open("/lazy-failure")
     await browser.waitForText("h1", "Page unavailable")
     expect(await browser.text(`[role="alert"] p`)).toBe("Lazy route failed")
@@ -89,7 +89,7 @@ async def test_lazy_route_failure_fallback_and_retry() -> null:
     await browser.waitForText("h1", "Page unavailable")
     expect(await browser.text(`[role="alert"] p`)).toBe("Lazy route failed")
 
-async def test_route_construction_failure_keeps_current_page() -> null:
+test "route construction failure keeps current page":
     await browser.open("/")
     await browser.waitForText("h1", "VelarScript Release Studio")
     await browser.click(`[data-release-primary] a[href="/app/construction-failure"]`)
@@ -100,7 +100,7 @@ async def test_route_construction_failure_keeps_current_page() -> null:
     await browser.waitForText("h1", "VelarScript Release Studio")
     expect(await browser.currentPath()).toBe("/")
 
-async def test_unknown_route_renders_typed_fallback_and_recovers() -> null:
+test "unknown route renders typed fallback and recovers":
     await browser.open("/missing-release")
     await browser.waitForText("[data-route-not-found] h1", "Page not found")
     expect(await browser.text("[data-route-not-found] p")).toBe("No Release Studio page matches /missing-release.")
@@ -113,7 +113,7 @@ async def test_unknown_route_renders_typed_fallback_and_recovers() -> null:
     await browser.waitForText("h1", "VelarScript Release Studio")
     expect(await browser.currentPath()).toBe("/")
 
-async def test_reactive_props_update_children_in_place() -> null:
+test "reactive props update children in place":
     await browser.open("/state-lab")
     // (a) A reactive bool prop flips while a half-typed draft sits in the
     // child; the child instance must survive with its state intact.
@@ -136,7 +136,7 @@ async def test_reactive_props_update_children_in_place() -> null:
     expect(await browser.text("[data-draft-panel='second'] [data-draft-busy]")).toBe("busy")
     expect(await browser.text("[data-draft-panel='second'] [data-draft-dark]")).toBe("dark")
 
-async def test_keyed_reorder_preserves_component_instances() -> null:
+test "keyed reorder preserves component instances":
     await browser.open("/state-lab")
     // (d) Per-key component state accumulates, then a reorder moves the
     // instances without resetting any of them.

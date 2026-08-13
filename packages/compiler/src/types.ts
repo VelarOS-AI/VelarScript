@@ -70,9 +70,9 @@ export type ValueType =
   | { readonly kind: "runtimeType"; readonly value: ValueType }
   | { readonly kind: "classConstructor"; readonly name: string; readonly identity?: string }
   | ExtensionValueType
-  | { readonly kind: "function"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "action"; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
-  | { readonly kind: "intrinsic"; readonly name: string; readonly typeParameterNames?: readonly string[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "function"; readonly typeParameterNames?: readonly string[]; readonly typeParameterBounds?: readonly (TypeParameterBound | null)[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "action"; readonly typeParameterNames?: readonly string[]; readonly typeParameterBounds?: readonly (TypeParameterBound | null)[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
+  | { readonly kind: "intrinsic"; readonly name: string; readonly typeParameterNames?: readonly string[]; readonly typeParameterBounds?: readonly (TypeParameterBound | null)[]; readonly parameters: readonly ValueType[]; readonly parameterNames?: readonly string[]; readonly requiredParameters: number; readonly rest?: ValueType; readonly result: ValueType }
   | { readonly kind: "union"; readonly members: readonly ValueType[] };
 
 export const unknownType: ValueType = { kind: "unknown" };
@@ -84,6 +84,51 @@ export const nullType: ValueType = { kind: "null" };
 export const stringType: ValueType = { kind: "string" };
 export const numberType: ValueType = { kind: "number" };
 export const boolType: ValueType = { kind: "bool" };
+
+/**
+ * D41 item 61: the complete, closed bound vocabulary. A bound is a name the
+ * compiler owns; users cannot define one, and there is no syntax for combining
+ * two. The three form one containment chain — `Comparable ⊂ Text ⊂ Data` — so
+ * a single word always suffices.
+ */
+export const typeParameterBoundNames = Object.freeze(["Comparable", "Text", "Data"] as const);
+
+export type TypeParameterBound = (typeof typeParameterBoundNames)[number];
+
+/** The capabilities a bound unlocks inside the declaring body. */
+export type BoundCapability = "text" | "order" | "data";
+
+/**
+ * The 4x3 capability-grant table (D41 item 61). Every check reads this
+ * constant; nothing computes a relation between two bounds, so the rule
+ * "bounds have no subtyping" holds literally even though the grants encode
+ * the chain.
+ */
+const boundCapabilityGrants: Readonly<Record<TypeParameterBound, Readonly<Record<BoundCapability, boolean>>>> = Object.freeze({
+  Data: Object.freeze({ text: false, order: false, data: true }),
+  Text: Object.freeze({ text: true, order: false, data: true }),
+  Comparable: Object.freeze({ text: true, order: true, data: true }),
+});
+
+export function isTypeParameterBound(name: string): name is TypeParameterBound {
+  return (typeParameterBoundNames as readonly string[]).includes(name);
+}
+
+/** Reads the grant table. An unbounded parameter (`null`) grants nothing. */
+export function boundGrants(bound: TypeParameterBound | null | undefined, capability: BoundCapability): boolean {
+  return bound ? boundCapabilityGrants[bound][capability] : false;
+}
+
+/**
+ * A callable carrying `actual` bounds may stand where `expected` bounds are
+ * declared only when it demands no capability the target does not promise —
+ * decided by the same grant table, one capability at a time.
+ */
+export function boundAccepts(actual: TypeParameterBound | null, expected: TypeParameterBound | null): boolean {
+  if (actual === expected) return true;
+  return (["text", "order", "data"] as const).every((capability) =>
+    !boundGrants(actual, capability) || boundGrants(expected, capability));
+}
 
 export interface TypeEnvironment {
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
@@ -100,6 +145,15 @@ export interface TypeEnvironment {
   extensionTextForm?(type: ValueType): boolean | undefined;
   /** Expands declared type aliases; the text-conversion domain checks the expanded shape. */
   expandTypeAliases?(type: ValueType): ValueType;
+  /**
+   * D41 item 61 risk 2: the declared bound of a type parameter in scope. The
+   * bound deliberately lives outside the `parameter` type kind (whose identity
+   * encodes only its De Bruijn index), so the environment answers it from the
+   * declaration frame the annotation was resolved in.
+   */
+  boundOf?(type: Extract<ValueType, { kind: "parameter" }>): TypeParameterBound | null;
+  /** Decides whether a solved type argument satisfies a declared bound. */
+  satisfiesBound?(type: ValueType, bound: TypeParameterBound): boolean;
 }
 
 /**
@@ -124,6 +178,10 @@ export function isTextConvertibleType(type: ValueType, environment: TypeEnvironm
       return isTextConvertibleType(expanded.inner, environment);
     case "union":
       return expanded.members.every((member) => isTextConvertibleType(member, environment));
+    // D41 item 61: a `Text`-bounded parameter promises every value it can hold
+    // is already in this whitelist, so the body may interpolate it.
+    case "parameter":
+      return boundGrants(environment.boundOf?.(expanded) ?? null, "text");
     default:
       return environment.extensionTextForm?.(expanded) === true;
   }
@@ -484,8 +542,14 @@ export function isAssignable(actual: ValueType, expected: ValueType, environment
     const expectedTypeParameters = expected.typeParameterNames?.length ?? 0;
     if (actualTypeParameters !== expectedTypeParameters) {
       if (expectedTypeParameters !== 0) return false;
-      return isAssignable(instantiateGenericCallable(actual, expected, environment), expected, environment, seen);
+      // D41 item 61 check site 2: the first-class path erases the parameters
+      // silently, so an unsatisfied bound has to make the value unassignable
+      // here; the analyzer wrapper turns the same fact into a directed message.
+      const violations: GenericBoundViolation[] = [];
+      const concrete = instantiateGenericCallable(actual, expected, environment, violations);
+      return violations.length === 0 && isAssignable(concrete, expected, environment, seen);
     }
+    if (actualTypeParameters > 0 && !typeParameterBoundsAccept(actual, expected)) return false;
     return callableInputsAssignable(actual, expected, environment, seen)
       && isAssignable(actual.result, expected.result, environment, seen);
   }
@@ -565,6 +629,13 @@ function typeIdentity(type: ValueType, includeCallableParameterNames = true): st
       return identityNode(type.kind, [
         type.kind === "intrinsic" ? type.name : "",
         type.typeParameterNames?.length ? String(type.typeParameterNames.length) : "",
+        // D41 item 61 risk 1: the bound cannot live in the `parameter` kind's
+        // identity without breaking its De Bruijn contract, so the callable
+        // carries it — otherwise `<T: Text>(T) -> T` and `<U>(U) -> U` would
+        // share one identity and assignment between them would go unchecked.
+        type.typeParameterBounds?.some((bound) => bound !== null)
+          ? identityNode("bounds", type.typeParameterBounds.map((bound) => bound ?? ""))
+          : "",
         identityNode("parameter-names", includeCallableParameterNames ? type.parameterNames ?? [] : []),
         String(type.requiredParameters),
         identityNode("parameters", type.parameters.map(nested)),
@@ -923,10 +994,54 @@ export function unifyTypeParameters(
   }
 }
 
+/** A type argument solved for a bounded parameter that the bound rejects. */
+export interface GenericBoundViolation {
+  readonly index: number;
+  readonly name: string;
+  readonly bound: TypeParameterBound;
+  readonly solved: ValueType;
+}
+
+/** Every declared bound of `actual` must be promised by `expected`'s. */
+function typeParameterBoundsAccept(actual: CallableType, expected: CallableType): boolean {
+  const count = actual.typeParameterNames?.length ?? 0;
+  for (let index = 0; index < count; index += 1) {
+    if (!boundAccepts(actual.typeParameterBounds?.[index] ?? null, expected.typeParameterBounds?.[index] ?? null)) return false;
+  }
+  return true;
+}
+
+/**
+ * Reports every solved binding its declared bound rejects. `satisfiesBound` is
+ * the environment's decision procedure, so the three predicates that answer a
+ * bound live in exactly one place (the analyzer).
+ */
+export function collectGenericBoundViolations(
+  callable: CallableType,
+  bindings: readonly (ValueType | null)[],
+  satisfiesBound: (type: ValueType, bound: TypeParameterBound) => boolean,
+): readonly GenericBoundViolation[] {
+  const bounds = callable.typeParameterBounds;
+  if (!bounds?.some((bound) => bound !== null)) return [];
+  const violations: GenericBoundViolation[] = [];
+  for (let index = 0; index < bounds.length; index += 1) {
+    const bound = bounds[index];
+    const solved = bindings[index];
+    // An unsolved parameter substitutes `unknown`, which satisfies nothing;
+    // checking it would report every call that leaves a parameter open.
+    if (!bound || solved == null) continue;
+    if (!satisfiesBound(solved, bound)) {
+      violations.push({ index, name: callable.typeParameterNames?.[index] ?? `#${index + 1}`, bound, solved });
+    }
+  }
+  return violations;
+}
+
 export function instantiateGenericCallable(
   actual: CallableType,
   expected: CallableType,
   environment: TypeEnvironment,
+  violations?: GenericBoundViolation[],
 ): CallableType {
   const bindings: (ValueType | null)[] = Array.from({ length: actual.typeParameterNames?.length ?? 0 }, () => null);
   const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => environment.fieldsOf(identity);
@@ -941,7 +1056,11 @@ export function instantiateGenericCallable(
     if (expected.rest) unifyTypeParameters(actual.rest, expected.rest, bindings, fieldsOf);
   }
   unifyTypeParameters(actual.result, expected.result, bindings, fieldsOf);
-  const { typeParameterNames: _erased, ...base } = actual;
+  if (violations && environment.satisfiesBound) {
+    const decide = environment.satisfiesBound.bind(environment);
+    violations.push(...collectGenericBoundViolations(actual, bindings, decide));
+  }
+  const { typeParameterNames: _erased, typeParameterBounds: _erasedBounds, ...base } = actual;
   return {
     ...base,
     parameters: actual.parameters.map((parameter) => substituteTypeParameters(parameter, bindings)),

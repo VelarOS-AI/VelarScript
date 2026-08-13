@@ -205,7 +205,7 @@ component App:
 mount(<App />, "#app")
 `.trimStart(), "utf8");
   await writeFile(join(directory, "src", "app.browser.test.vel"), `
-async def test_never_settles() -> null:
+test "never settles":
     await Promise.sleep(60000ms)
 `.trimStart(), "utf8");
   return directory;

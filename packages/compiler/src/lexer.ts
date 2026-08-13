@@ -287,6 +287,12 @@ export class Lexer {
             this.simple("pipe", start, 1);
           }
           break;
+        // D43 item 67: `@name` is the one spelling for a name the language
+        // owns in a position where an author's own name may also appear. '@'
+        // is not an identifier character, so the two can never collide.
+        case "@":
+          this.simple("at", start, 1);
+          break;
         case "#":
           if (this.readJavaScriptPrivateIdentifier(start)) break;
           if (this.readHexColor(start)) break;

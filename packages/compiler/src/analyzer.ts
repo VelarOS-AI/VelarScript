@@ -1,9 +1,11 @@
+import { blockContainsDirectAwait } from "./ast.ts";
 import type {
   ArrowFunctionExpression,
   AssignmentStatement,
   AsyncStatement,
   BindingPattern,
   ClassDeclaration,
+  ClassDisposeBlock,
   Expression,
   ExternClassDeclaration,
   ExternFunctionDeclaration,
@@ -16,8 +18,10 @@ import type {
   TypeDeclaration,
   TypeAliasDeclaration,
   TypeParameterDeclaration,
+  TestDeclaration,
   TypeReference,
   TypeSyntax,
+  UsingDeclaration,
 } from "./ast.ts";
 import { diagnostic, mechanicalFix, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
@@ -28,6 +32,8 @@ import {
   analysisTypeIdentity,
   anyType,
   boolType,
+  boundGrants,
+  collectGenericBoundViolations,
   describeType,
   instantiateGenericCallable,
   invalidType,
@@ -35,6 +41,8 @@ import {
   isAssignable,
   isReadonlyView,
   isTextConvertibleType,
+  isTypeParameterBound,
+  typeParameterBoundNames,
   mergeTypes,
   mutableViewOf,
   nullType,
@@ -57,7 +65,9 @@ import {
   unknownType,
   type EnumInfo,
   type ExtensionValueType,
+  type GenericBoundViolation,
   type TypeEnvironment,
+  type TypeParameterBound,
   type ValueType,
 } from "./types.ts";
 
@@ -169,6 +179,8 @@ export interface ClassField {
 
 export interface ClassInfo {
   readonly identity?: string;
+  /** D43 item 69: the class declares `@dispose:`, and whether releasing awaits. */
+  readonly dispose?: "sync" | "async";
   readonly parameters: readonly ValueType[];
   readonly parameterNames?: readonly string[];
   readonly requiredParameters: number;
@@ -322,6 +334,19 @@ export interface LoweringHints {
    */
   readonly stringOrderings: ReadonlySet<string>;
   /**
+   * Span identities of ordered comparisons between `Comparable`-bounded type
+   * parameters (D41 item 61). The runtime category is not known statically,
+   * so these lower through the dispatching comparator, which keeps a string
+   * pair in code-point order exactly as a monomorphic string comparison is.
+   */
+  readonly dynamicOrderings: ReadonlySet<string>;
+  /**
+   * How each `using` statement releases its value, keyed by the statement's
+   * span identity (D43 item 69). The analyzer resolves the contract because it
+   * is the only stage that knows the value's type.
+   */
+  readonly usingDisposals: ReadonlyMap<string, DisposalContract>;
+  /**
    * Span identities of JavaScript-boundary calls in synchronous
    * module-initialization position. A non-Error value thrown there would
    * reach the host uncaught and unnormalized — the last unowned failure
@@ -353,6 +378,8 @@ export interface AnalysisContext {
   readonly inferredFunctionResults?: ReadonlyMap<string, ValueType>;
   /** True only for the final semantic pass after result inference converges. */
   readonly finalizeFunctionResultInference?: boolean;
+  /** The module's own path; `test "name":` is only declared in a `*.test.vel` module. */
+  readonly path?: string;
 }
 
 /**
@@ -411,6 +438,26 @@ function sameInferredResult(left: ValueType, right: ValueType): boolean {
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
 const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
 const memberNarrowingPrefix = "\u0000member:";
+/**
+ * D43 item 69: the emitted member behind a class's `@dispose:` block. The key
+ * is not a source-shaped identifier, so no author member can collide with it —
+ * `@dispose` is the language's name, not a name in the author's namespace.
+ */
+export const disposeMemberKey = "__velar:dispose";
+
+/** How a `using` binding releases its value at scope exit. */
+export interface DisposalContract {
+  readonly member: string;
+  readonly asynchronous: boolean;
+  readonly owner: "class" | "capability";
+}
+
+/** What each bound admits, written the way a rejected call needs to hear it. */
+const boundVocabularyGuidance: Readonly<Record<TypeParameterBound, string>> = {
+  Text: "a Text parameter accepts the types with a hook-free text form — strings, numbers, bools, enums, and null",
+  Comparable: "a Comparable parameter accepts the types with a runtime order — numbers and strings",
+  Data: "a Data parameter accepts JSON-shaped data — strings, numbers, bools, null, enums, and the Lists, records, and Records built from them",
+};
 const coreGlobalGuidance = new Map([
   ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
   ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
@@ -531,6 +578,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly invalidDeclaredTypes = new Set<string>();
   private readonly typeReferenceValidity = new WeakMap<TypeReference, boolean>();
   private readonly typeParameterFrames: ReadonlyMap<string, ValueType>[] = [];
+  private readonly typeParameterFrameBounds = new WeakMap<ReadonlyMap<string, ValueType>, ReadonlyMap<string, TypeParameterBound>>();
   private readonly invalidExternTypeReferences = new WeakSet<TypeReference>();
   private readonly enums = new Map<string, EnumInfo>();
   private readonly classes = new Map<string, ClassInfo>();
@@ -547,6 +595,10 @@ export class Analyzer implements TypeEnvironment {
   private readonly sameValueZeroMatchValues = new Set<string>();
   private readonly equalsCalls = new Set<string>();
   private readonly stringOrderings = new Set<string>();
+  private readonly dynamicOrderings = new Set<string>();
+  private readonly reportedBoundViolations = new Set<string>();
+  private readonly usingDisposals = new Map<string, DisposalContract>();
+  private readonly declaredTestTitles = new Set<string>();
   private readonly moduleTopLevelHostCalls = new Set<string>();
   private readonly stringSizes = new Set<number>();
   private readonly constructorCalls = new Set<string>();
@@ -736,6 +788,7 @@ export class Analyzer implements TypeEnvironment {
         staticMethods: new Map(),
       });
     }
+    this.modulePath = context.path ?? null;
     this.importBindings = new Map(context.imports);
     this.dynamicImports = new Map(context.dynamicImports);
     for (const [name, kind] of context.reactiveImports ?? []) this.reactiveBindings.set(name, kind);
@@ -763,6 +816,7 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  private readonly modulePath: string | null;
   private readonly importBindings: ReadonlyMap<string, ValueType>;
   private readonly dynamicImports: ReadonlyMap<string, ValueType>;
 
@@ -1214,6 +1268,8 @@ export class Analyzer implements TypeEnvironment {
       sameValueZeroMatchValues: this.sameValueZeroMatchValues,
       equalsCalls: this.equalsCalls,
       stringOrderings: this.stringOrderings,
+      dynamicOrderings: this.dynamicOrderings,
+      usingDisposals: this.usingDisposals,
       moduleTopLevelHostCalls: this.moduleTopLevelHostCalls,
     };
   }
@@ -1712,6 +1768,9 @@ export class Analyzer implements TypeEnvironment {
       this.privateStaticGetters.set(statement.name, privateStaticGetters);
       this.privateStaticMethods.set(statement.name, privateStaticMethods);
       this.classes.set(statement.name, {
+        ...(statement.dispose
+          ? { dispose: blockContainsDirectAwait(statement.dispose.body) ? "async" : "sync" }
+          : {}),
         parameters: statement.parameters.map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
@@ -2007,10 +2066,25 @@ export class Analyzer implements TypeEnvironment {
         }
         break;
       }
+      case "UsingDeclaration":
+        this.analyzeUsingDeclaration(statement);
+        break;
+      case "TestDeclaration":
+        this.analyzeTestDeclaration(statement);
+        break;
       case "FunctionDeclaration":
         // MOD-D1: `export def` below module scope emitted invalid JavaScript.
         if (statement.exported && this.scopes.length !== 1) {
           this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
+        }
+        // D39 item 53: one spelling. `def test_*` discovery is retired, so the
+        // name that used to mean "this is a test" gets pointed at the block.
+        if (statement.name.startsWith("test_") && this.scopes.length === 1 && (this.modulePath ?? "").endsWith(".test.vel")) {
+          this.diagnostics.push(diagnostic(
+            "VEL3019",
+            `Write 'test "${statement.name.slice("test_".length).replaceAll("_", " ")}":' and move the body into it; a test's name is a sentence the owner reads, and 'def test_*' discovery is retired`,
+            statement.signatureSpan,
+          ));
         }
         this.analyzeFunctionDeclaration(statement, null);
         break;
@@ -2564,6 +2638,20 @@ export class Analyzer implements TypeEnvironment {
         this.analyzeAssignment(statement);
         break;
       case "ExpressionStatement": {
+        // D39 item 51: a bare `try` statement is a swallow nobody can see. The
+        // result has to be consumed; deliberately ignoring a failure is
+        // try/catch, which says so.
+        if (statement.expression.kind === "TryExpression") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            "A 'try' result must be consumed — bind it, test it, or supply a fallback with '??'; to run something and ignore its failure on purpose, use a try/catch block",
+            statement.span,
+          ));
+          // One mistake, one diagnostic: the generic discarded-result message
+          // would repeat this in weaker words.
+          this.inferExpression(statement.expression);
+          break;
+        }
         const type = this.inferExpression(statement.expression);
         this.checkFloatingPromiseStatement(type, statement.expression);
         this.checkDiscardedExpressionResult(statement.expression, type);
@@ -2776,6 +2864,7 @@ export class Analyzer implements TypeEnvironment {
     }
     this.validateConstructorShape(statement);
     if (statement.initialization) this.analyzeClassInitialization(statement);
+    if (statement.dispose) this.analyzeClassDispose(statement, statement.dispose);
     this.superMemberContext = null;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -3024,6 +3113,180 @@ export class Analyzer implements TypeEnvironment {
     this.loopDepth = previousLoopDepth;
     this.finallyLoopDepths = previousFinallyLoopDepths;
     this.unreachableDiagnosticDepth = previousUnreachableDiagnosticDepth;
+    this.functionDepth -= 1;
+    this.flowFrameDepth -= 1;
+    this.exitScope();
+  }
+
+  /**
+   * D39 item 53: `test "name":` is one test. Its body is an async frame — a
+   * test awaits its own work — and its name is the product specification a
+   * person reads, so it must be present, unique in the module, and declared
+   * where the runner actually looks.
+   */
+  private analyzeTestDeclaration(statement: TestDeclaration): void {
+    if (!this.inModuleInitializationPosition() || this.scopes.length !== 1) {
+      this.diagnostics.push(diagnostic("VEL3019", "A test is declared at module top level", statement.span));
+    } else if (!(this.modulePath ?? "").endsWith(".test.vel")) {
+      this.diagnostics.push(diagnostic(
+        "VEL3019",
+        "Tests live in a '*.test.vel' module, which is where the runner looks; move this test beside the code it specifies",
+        statement.span,
+      ));
+    }
+    if (statement.title.trim() === "") {
+      this.diagnostics.push(diagnostic("VEL3019", "A test name states what the code must do; this one is empty", statement.titleSpan));
+    } else if (this.declaredTestTitles.has(statement.title)) {
+      this.diagnostics.push(diagnostic(
+        "VEL3019",
+        `This module already declares a test named ${JSON.stringify(statement.title)}; a report has to be able to name one failing test`,
+        statement.titleSpan,
+      ));
+    }
+    this.declaredTestTitles.add(statement.title);
+
+    this.enterScope();
+    this.flowFrameDepth += 1;
+    this.functionDepth += 1;
+    const previousLoopDepth = this.loopDepth;
+    this.loopDepth = 0;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
+    this.asynchronousFunctions.push(true);
+    this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
+    this.analyzeStatements(statement.body);
+    this.returnContexts.pop();
+    this.asynchronousFunctions.pop();
+    this.loopDepth = previousLoopDepth;
+    this.finallyLoopDepths = previousFinallyLoopDepths;
+    this.functionDepth -= 1;
+    this.flowFrameDepth -= 1;
+    this.exitScope();
+  }
+
+  /**
+   * D43 item 69: `using name = expression` claims ownership of a resource for
+   * the enclosing scope. The value's type must declare the release contract,
+   * the scope must be able to run it, and the module top level — which lives
+   * until the process ends — has no scope exit to release at.
+   */
+  private analyzeUsingDeclaration(statement: UsingDeclaration): void {
+    const value = this.inferExpression(statement.initializer);
+    const rejection = this.ownershipScopeRejection();
+    if (rejection !== null) this.diagnostics.push(diagnostic("VEL3018", rejection, statement.span));
+    const contract = this.disposalContract(value);
+    if (contract === null) {
+      if (!isInvalidType(this.expandAliases(value)) && this.expandAliases(value).kind !== "any") {
+        this.diagnostics.push(diagnostic(
+          "VEL4032",
+          `'using' releases a value whose type declares '@dispose'; ${describeType(value)} does not${this.disposalGuidance(value)}`,
+          statement.initializer.span,
+        ));
+      }
+    } else {
+      if (contract.asynchronous && this.asynchronousFunctions.at(-1) !== true) {
+        this.diagnostics.push(diagnostic(
+          "VEL4033",
+          `Releasing ${describeType(value)} awaits, so its 'using' needs an async scope; declare the enclosing function 'async def'`,
+          statement.span,
+        ));
+      }
+      this.usingDisposals.set(spanIdentity(statement.span), contract);
+    }
+    this.declareBinding(statement.name, false, value, statement.nameSpan);
+  }
+
+  /**
+   * The release contract of a value's type: a class's own `@dispose:` block, or
+   * a standard capability handle, which delegates to the verb it already
+   * publishes (`close()` or `stop()`) rather than being renamed for `using`.
+   */
+  private disposalContract(source: ValueType): DisposalContract | null {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    if (type.kind === "class") {
+      let current: string | null = type.identity ?? type.name;
+      const visited = new Set<string>();
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        const info: ClassInfo | undefined = this.classes.get(current);
+        if (info?.dispose) return { member: disposeMemberKey, asynchronous: info.dispose === "async", owner: "class" };
+        current = info?.base ?? null;
+      }
+      return null;
+    }
+    if (type.kind !== "named") return null;
+    // A standard capability module owns its handle types (`velar/fs#type:...`);
+    // a module's own `type` declaration is identified as `velar:<path>#...`, so
+    // a plain record can never reach the built-in contract.
+    const identity = type.identity ?? type.name;
+    if (!identity.startsWith("velar/")) return null;
+    const fields = this.fieldsOf(identity);
+    if (!fields) return null;
+    for (const verb of ["close", "stop"]) {
+      const member = fields.get(verb);
+      if (!member || (member.kind !== "function" && member.kind !== "action" && member.kind !== "intrinsic")) continue;
+      if (member.requiredParameters > 0) continue;
+      const result = this.expandAliases(member.result);
+      if (result.kind === "null") return { member: verb, asynchronous: false, owner: "capability" };
+      if (result.kind === "promise" && this.expandAliases(result.value).kind === "null") {
+        return { member: verb, asynchronous: true, owner: "capability" };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * D43 item 69 rule 6: `using` needs a scope exit to release at. The module
+   * top level has none — it lives until the process ends. An extension whose
+   * body is not an ordinary scope adds its own answer.
+   */
+  protected ownershipScopeRejection(): string | null {
+    return this.inModuleInitializationPosition()
+      ? "A module lives until the process ends, so a module-level 'using' has no scope to release at; own the resource inside a function, or use 'const' and release it explicitly"
+      : null;
+  }
+
+  private disposalGuidance(source: ValueType): string {
+    const type = this.resolveNamedClasses(this.expandAliases(source));
+    if (type.kind === "promise") {
+      return this.disposalContract(type.value) === null
+        ? ""
+        : "; acquisition is ordinary async work — write 'using name = await ...' so the scope owns the handle, not the Promise";
+    }
+    if (type.kind === "class") return "; declare an '@dispose:' block on the class to say how it releases itself";
+    if (type.kind === "named" || type.kind === "object" || type.kind === "record") {
+      return "; a record is data, so it has nothing to release — own the handle it came from instead";
+    }
+    return "";
+  }
+
+  /**
+   * D43 item 69: the `@dispose:` body is a release contract, not a method. It
+   * runs with `self` in scope and may `await`; whether it actually does is what
+   * decides that a `using` of this class needs an async scope.
+   */
+  private analyzeClassDispose(statement: ClassDeclaration, block: ClassDisposeBlock): void {
+    this.enterScope();
+    this.flowFrameDepth += 1;
+    this.functionDepth += 1;
+    const previousLoopDepth = this.loopDepth;
+    this.loopDepth = 0;
+    const previousFinallyLoopDepths = this.finallyLoopDepths;
+    this.finallyLoopDepths = [];
+    const previousClass = this.currentClass;
+    const previousSuperMemberContext = this.superMemberContext;
+    this.currentClass = statement.name;
+    this.superMemberContext = "instance";
+    this.asynchronousFunctions.push(true);
+    this.returnContexts.push({ expected: nullType, inferredReturns: null, declarationKind: "Function" });
+    this.declareBinding("self", false, { kind: "class", name: statement.name }, block.span, true);
+    this.analyzeStatements(block.body);
+    this.returnContexts.pop();
+    this.asynchronousFunctions.pop();
+    this.currentClass = previousClass;
+    this.superMemberContext = previousSuperMemberContext;
+    this.loopDepth = previousLoopDepth;
+    this.finallyLoopDepths = previousFinallyLoopDepths;
     this.functionDepth -= 1;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -3924,6 +4187,37 @@ export class Analyzer implements TypeEnvironment {
         this.requireAssignable(operand, numberType, expression.operand.span);
         return numberType;
       }
+      case "TryExpression": {
+        // D39 item 51: an expected failure is an optional. The inner
+        // expression is checked against the non-optional shape of whatever the
+        // consumer wants, because failure is what supplies the null.
+        if (expression.value.kind === "TryExpression") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            "'try try' says nothing the first 'try' has not already said; one 'try' turns any failure in the whole chain into null",
+            expression.span,
+          ));
+        }
+        const attempted = this.inferExpression(expression.value, nonOptional(this.expandAliases(contextualType)));
+        if (isInvalidType(attempted)) return invalidType;
+        const resolved = this.expandAliases(attempted);
+        if (resolved.kind === "null") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            "This expression produces null on success, so a 'try' result cannot tell success from failure; use try/catch to handle the failure",
+            expression.span,
+          ));
+          return invalidType;
+        }
+        if (resolved.kind === "promise") {
+          this.diagnostics.push(diagnostic(
+            "VEL4034",
+            `'try' catches a failure while the expression runs, but this expression is ${describeType(attempted)}; write 'try await ...' so the rejection is what is caught`,
+            expression.span,
+          ));
+        }
+        return optionalOf(attempted);
+      }
       case "BinaryExpression":
         return this.inferBinary(expression.left, expression.operator, expression.right, expression.span, contextualType);
       case "AssignmentExpression": {
@@ -4586,9 +4880,10 @@ export class Analyzer implements TypeEnvironment {
       // Both the binary span and the chain-link span are recorded because
       // the two emitters key their lookups differently (exactly as the
       // SameValueZero hint does).
-      if (category === "string") {
-        this.stringOrderings.add(spanIdentity(operationSpan));
-        this.stringOrderings.add(spanIdentity({ start: leftExpression.span.start, end: rightExpression.span.end }));
+      const marked = category === "string" ? this.stringOrderings : category === "comparable" ? this.dynamicOrderings : null;
+      if (marked) {
+        marked.add(spanIdentity(operationSpan));
+        marked.add(spanIdentity({ start: leftExpression.span.start, end: rightExpression.span.end }));
       }
       return;
     }
@@ -5197,6 +5492,7 @@ export class Analyzer implements TypeEnvironment {
       actuals.set(item, actual);
       if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf);
     }
+    this.reportGenericBoundViolations(callee, bindings, planned, callSpan);
     for (const item of planned) {
       const actual = actuals.get(item) ?? unknownType;
       if (!item.declared) continue;
@@ -5211,14 +5507,80 @@ export class Analyzer implements TypeEnvironment {
     return substitute(callee.result);
   }
 
+  /**
+   * D41 item 61 check site 1: once the two-phase inference has solved the
+   * bindings, every bound is verified before the ordinary assignability loop
+   * runs, so a rejected type argument is reported once, at its cause.
+   */
+  private reportGenericBoundViolations(
+    callee: Extract<ValueType, { kind: "function" | "action" | "intrinsic" }>,
+    bindings: readonly (ValueType | null)[],
+    planned: readonly { readonly declared: ValueType | null; readonly errorSpan: Span }[],
+    callSpan: Span,
+  ): void {
+    const violations = collectGenericBoundViolations(callee, bindings, (type, bound) => this.satisfiesBound(type, bound));
+    for (const violation of violations) {
+      // "Report at the cause" (D31 item 27). The one shape it cannot serve is
+      // a parameter several arguments merged into: there is no single cause,
+      // so the call itself reports and names the type that was solved.
+      const causes = planned.filter((item) => item.declared !== null
+        && typeContainsParameter(item.declared, (parameter) => parameter.index === violation.index));
+      const guidance = boundVocabularyGuidance[violation.bound];
+      this.diagnostics.push(causes.length === 1
+        ? diagnostic(
+          "VEL4031",
+          `Type parameter '${violation.name}' is bound by ${violation.bound}, so this argument cannot be ${describeType(violation.solved)}; ${guidance}`,
+          causes[0]!.errorSpan,
+        )
+        : diagnostic(
+          "VEL4031",
+          `Type parameter '${violation.name}' is bound by ${violation.bound} but the arguments solve it to ${describeType(violation.solved)}; ${guidance}`,
+          callSpan,
+        ));
+    }
+  }
+
+  /**
+   * D41 item 61 check site 2: a generic callable used as a value is solved and
+   * erased silently, so the wrapper re-asks the bound question and turns the
+   * rejection into a directed message at the value's own span.
+   */
+  private genericBoundViolation(actual: ValueType, expected: ValueType): GenericBoundViolation | null {
+    if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return null;
+    if (!actual.typeParameterBounds?.some((bound) => bound !== null)) return null;
+    if (expected.kind !== "function" && expected.kind !== "action" && expected.kind !== "intrinsic") return null;
+    if (expected.typeParameterNames?.length) return null;
+    const violations: GenericBoundViolation[] = [];
+    instantiateGenericCallable(actual, expected, this, violations);
+    return violations[0] ?? null;
+  }
+
   // A generic callable used where a concrete callback is expected must not
   // leak its parameter kinds into surrounding inference; instantiate it
   // against the expected shape before reading its result.
-  private concreteCallableFor(actual: ValueType, expected: ValueType): ValueType {
+  private concreteCallableFor(actual: ValueType, expected: ValueType, errorSpan?: Span): ValueType {
     if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return actual;
     if (!actual.typeParameterNames?.length) return actual;
     if (expected.kind !== "function" && expected.kind !== "action" && expected.kind !== "intrinsic") return actual;
+    // The erasure happens here, so this is the last place a rejected bound is
+    // still visible; without the report the callback would silently compile.
+    if (errorSpan) this.reportFirstClassBoundViolation(actual, expected, errorSpan);
     return instantiateGenericCallable(actual, expected, this);
+  }
+
+  /** One diagnostic per site, whichever of the two value paths reaches it first. */
+  private reportFirstClassBoundViolation(actual: ValueType, expected: ValueType, errorSpan: Span): boolean {
+    const violation = this.genericBoundViolation(actual, expected);
+    if (!violation) return false;
+    const site = spanIdentity(errorSpan);
+    if (this.reportedBoundViolations.has(site)) return true;
+    this.reportedBoundViolations.add(site);
+    this.diagnostics.push(diagnostic(
+      "VEL4031",
+      `Type parameter '${violation.name}' is bound by ${violation.bound}, but this ${describeType(expected)} contract solves it to ${describeType(violation.solved)}; ${boundVocabularyGuidance[violation.bound]}`,
+      errorSpan,
+    ));
+    return true;
   }
 
   private inferIntrinsicCall(
@@ -5294,7 +5656,7 @@ export class Analyzer implements TypeEnvironment {
     };
     const callbackAt = (index: number, parameters: readonly ValueType[], result: ValueType): ValueType => {
       const expected: ValueType = { kind: "function", parameters, requiredParameters: parameters.length, result };
-      return this.concreteCallableFor(inferAt(index, expected), expected);
+      return this.concreteCallableFor(inferAt(index, expected), expected, argumentAt(index)?.span);
     };
     const callbackResult = (type: ValueType): ValueType => type.kind === "function" || type.kind === "action" || type.kind === "intrinsic" ? type.result : type.kind === "any" ? anyType : unknownType;
     const promiseValue = (type: ValueType, index: number): ValueType => {
@@ -5982,7 +6344,7 @@ export class Analyzer implements TypeEnvironment {
           );
           return { kind: "list", element: unknownType };
         }
-        const callback = this.concreteCallableFor(inferArgument(0, callbackExpected), callbackExpected);
+        const callback = this.concreteCallableFor(inferArgument(0, callbackExpected), callbackExpected, callbackArgument?.span);
         if (callbackArgument) this.requireAssignable(callback, callbackExpected, callbackArgument.span);
         const result = callback.kind === "function" ? callback.result : unknownType;
         requireCount(1);
@@ -6090,6 +6452,11 @@ export class Analyzer implements TypeEnvironment {
         this.collectionCalls.set(member.span.end, "listSorted");
         const comparator: ValueType = { kind: "function", parameters: [readonlyElement!, readonlyElement!], requiredParameters: 2, result: numberType };
         const selector: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unionOf([numberType, stringType]) };
+        // D42 item 65 / D41 item 61: the selector's shape is what assignability
+        // judges; whether its key is ordered is asked once below, by the single
+        // ordering authority — otherwise a `Comparable`-bounded key would be
+        // refused by the union spelling that predates bounds.
+        const selectorShape: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unknownType };
         const compareArgument = argumentAt(0);
         const byArgument = argumentAt(1);
         const positionalSelector = !namedPreanalyzed
@@ -6101,7 +6468,7 @@ export class Analyzer implements TypeEnvironment {
           if (compareArgument) this.requireAssignable(inferArgument(0, positionalSelector ? selector : comparator), positionalSelector ? selector : comparator, compareArgument.span);
           if (byArgument) {
             byType = inferArgument(1, selector);
-            this.requireAssignable(byType, selector, byArgument.span);
+            this.requireAssignable(byType, selectorShape, byArgument.span);
           }
           if (arguments_.length > 2) {
             for (const extra of arguments_.slice(2)) this.inferExpression(extra);
@@ -6111,7 +6478,7 @@ export class Analyzer implements TypeEnvironment {
           if (compareArgument) this.requireAssignable(this.inferredExpressionType(compareArgument), comparator, compareArgument.span);
           if (byArgument) {
             byType = this.inferredExpressionType(byArgument);
-            this.requireAssignable(byType, selector, byArgument.span);
+            this.requireAssignable(byType, selectorShape, byArgument.span);
           }
         }
         // ORD-3: assignability admits an enum key, because an enum member is
@@ -6126,7 +6493,7 @@ export class Analyzer implements TypeEnvironment {
           : byCallable !== null && (byCallable.kind === "function" || byCallable.kind === "action" || byCallable.kind === "intrinsic")
             ? byCallable.result
             : null;
-        if (byArgument && byKey !== null && isAssignable(byType!, selector, this) && this.orderedTypeCategory(byKey) === null) {
+        if (byArgument && byKey !== null && isAssignable(byType!, selectorShape, this) && this.orderedTypeCategory(byKey) === null) {
           this.typeError(
             `sorted(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
             byArgument.span,
@@ -7274,12 +7641,14 @@ export class Analyzer implements TypeEnvironment {
 
   private functionType(statement: FunctionDeclaration): ValueType {
     const frame = this.typeParameterFrame(statement.typeParameters);
+    const bounds = this.typeParameterBoundVector(statement.typeParameters);
     return this.withTypeParameterFrame(frame, () => {
       const result = this.inferredFunctionResult(statement);
       const rest = statement.parameters.find((parameter) => parameter.rest);
       return {
         kind: "function",
         ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
+        ...(frame.size > 0 && bounds ? { typeParameterBounds: bounds } : {}),
         parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
         parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
@@ -7294,6 +7663,7 @@ export class Analyzer implements TypeEnvironment {
     resolve: (reference: TypeReference | null) => ValueType = (reference) => this.resolveAnnotation(reference),
   ): ValueType {
     const frame = this.typeParameterFrame(statement.typeParameters);
+    const bounds = this.typeParameterBoundVector(statement.typeParameters);
     return this.withTypeParameterFrame(frame, () => {
       const result = statement.returnType ? resolve(statement.returnType) : invalidType;
       const rest = statement.parameters.find((parameter) => parameter.rest);
@@ -7301,6 +7671,7 @@ export class Analyzer implements TypeEnvironment {
       return {
         kind: "function",
         ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
+        ...(frame.size > 0 && bounds ? { typeParameterBounds: bounds } : {}),
         parameters,
         parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
@@ -7742,6 +8113,9 @@ export class Analyzer implements TypeEnvironment {
         : "Use 'Map({...})' to convert record fields into string-keyed entries; a record literal '{...}' builds a record, not a Map", valueSpan);
       return;
     }
+    // D41 item 61: a bounded generic used as a first-class value fails
+    // assignability for one specific reason worth naming.
+    if (this.reportFirstClassBoundViolation(expandedActual, expectedCore, valueSpan)) return;
     const actualDescription = describeType(actual);
     const expectedDescription = describeType(expected);
     if (actualDescription !== expectedDescription) {
@@ -7943,6 +8317,8 @@ export class Analyzer implements TypeEnvironment {
     if (type.kind === "record") return this.jsonSerializable(type.value, seen);
     if (type.kind === "union") return this.combineJsonStatuses(type.members.map((member) => this.jsonSerializable(member, seen)));
     if (type.kind === "object") return this.combineJsonStatuses([...type.fields.values()].map((field) => this.jsonSerializable(field, seen)));
+    // D41 item 61: a `Data`-bounded parameter promises a strict JSON shape.
+    if (type.kind === "parameter") return boundGrants(this.boundOf(type), "data");
     if (type.kind === "named") {
       const identity = type.identity ?? type.name;
       if (seen.has(identity)) return true;
@@ -7969,16 +8345,22 @@ export class Analyzer implements TypeEnvironment {
   // ordering them silently yields member-name alphabetical order. `any` and
   // `unknown` answer "dynamic" instead of an order, and each caller decides
   // whether an unchecked boundary value is admissible there.
-  private orderedTypeCategory(source: ValueType): "number" | "string" | "dynamic" | null {
+  private orderedTypeCategory(source: ValueType): "number" | "string" | "comparable" | "dynamic" | null {
     const type = this.resolveNamedClasses(this.expandAliases(source));
     if (type.kind === "any" || type.kind === "unknown") return "dynamic";
     if (type.kind === "number") return "number";
     if (type.kind === "string") return "string";
+    // D41 item 61: a `Comparable`-bounded parameter has an order, but not one
+    // category statically — two of them compare through the runtime
+    // comparator, which keeps string ordering by code point (TXT-D1).
+    if (type.kind === "parameter") return boundGrants(this.boundOf(type), "order") ? "comparable" : null;
     if (type.kind !== "union" || type.members.length === 0) return null;
     let category: "number" | "string" | null = null;
     for (const member of type.members) {
       const memberCategory = this.orderedTypeCategory(member);
-      if (memberCategory === null || memberCategory === "dynamic") return null;
+      // A union mixing a bounded parameter with a concrete category has no
+      // single order, exactly as a number/string union has none.
+      if (memberCategory === null || memberCategory === "dynamic" || memberCategory === "comparable") return null;
       if (category !== null && category !== memberCategory) return null;
       category = memberCategory;
     }
@@ -7994,10 +8376,64 @@ export class Analyzer implements TypeEnvironment {
   // resolved, never from ambient scope, so predeclare-time resolution works.
   private typeParameterFrame(declarations: readonly TypeParameterDeclaration[] | undefined): ReadonlyMap<string, ValueType> {
     const frame = new Map<string, ValueType>();
+    const bounds = new Map<string, TypeParameterBound>();
     for (const declaration of declarations ?? []) {
-      if (!frame.has(declaration.name)) frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+      if (frame.has(declaration.name)) continue;
+      frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+      if (declaration.bound && isTypeParameterBound(declaration.bound)) bounds.set(declaration.name, declaration.bound);
     }
+    // D41 item 61 risk 2: the bounds ride alongside the frame instead of
+    // inside the `parameter` type, and every push/pop of a frame carries them
+    // automatically because they are keyed by the frame itself.
+    if (bounds.size > 0) this.typeParameterFrameBounds.set(frame, bounds);
     return frame;
+  }
+
+  /** D41 item 61: the ordered bound vector of a declaration, for its callable type. */
+  private typeParameterBoundVector(
+    declarations: readonly TypeParameterDeclaration[] | undefined,
+  ): readonly (TypeParameterBound | null)[] | null {
+    const bounds: (TypeParameterBound | null)[] = [];
+    const seen = new Set<string>();
+    for (const declaration of declarations ?? []) {
+      if (seen.has(declaration.name)) continue;
+      seen.add(declaration.name);
+      bounds.push(declaration.bound && isTypeParameterBound(declaration.bound) ? declaration.bound : null);
+    }
+    return bounds.some((bound) => bound !== null) ? bounds : null;
+  }
+
+  /**
+   * D41 item 61 risk 2: only the innermost frame is consulted. A nested `def`
+   * may not name an enclosing declaration's type parameter (VEL4021 rejects
+   * it), so one frame is the whole visible scope.
+   */
+  boundOf(type: Extract<ValueType, { kind: "parameter" }>): TypeParameterBound | null {
+    const frame = this.typeParameterFrames.at(-1);
+    if (!frame || frame.get(type.name)?.kind !== "parameter") return null;
+    return this.typeParameterFrameBounds.get(frame)?.get(type.name) ?? null;
+  }
+
+  /**
+   * The one decision procedure for "does this solved type argument satisfy
+   * this bound", shared by the call site and the first-class value path. Each
+   * bound reuses the predicate that already governs its capability.
+   */
+  satisfiesBound(type: ValueType, bound: TypeParameterBound): boolean {
+    const expanded = this.expandAliases(type);
+    if (isInvalidType(expanded)) return true;
+    // `any` is the declared escape hatch every capability site already admits;
+    // `unknown` is the unvalidated boundary value none of them admit.
+    if (expanded.kind === "any") return true;
+    if (expanded.kind === "unknown") return false;
+    switch (bound) {
+      case "Text":
+        return this.isTextConvertible(expanded);
+      case "Comparable":
+        return this.orderedTypeCategory(expanded) !== null;
+      case "Data":
+        return this.jsonSerializable(expanded) !== false;
+    }
   }
 
   private withTypeParameterFrame<T>(frame: ReadonlyMap<string, ValueType>, action: () => T): T {
@@ -8023,6 +8459,16 @@ export class Analyzer implements TypeEnvironment {
       seen.add(declaration.name);
       if (this.isDeclaredTypeName(declaration.name)) {
         this.diagnostics.push(diagnostic("VEL4021", `Type parameter '${declaration.name}' shadows an existing type name; choose another name`, declaration.span));
+      }
+      if (declaration.bound !== undefined && !isTypeParameterBound(declaration.bound)) {
+        const vocabulary = typeParameterBoundNames.join(", ");
+        this.diagnostics.push(diagnostic(
+          "VEL4021",
+          this.isDeclaredTypeName(declaration.bound)
+            ? `'${declaration.bound}' cannot bound a type parameter; a bound is one of the compiler's own names — ${vocabulary} — never an arbitrary type`
+            : `Unknown type parameter bound '${declaration.bound}'; the bounds are ${vocabulary}`,
+          declaration.boundSpan ?? declaration.span,
+        ));
       }
     }
   }
@@ -9005,6 +9451,11 @@ export class Analyzer implements TypeEnvironment {
   // initializers. Function, action, method, arrow, constructor, and component
   // bodies — and per-construction positions such as parameter defaults and
   // instance field initializers — are deferred.
+  /** True while analysis is directly in a declaration body rather than a function frame. */
+  protected inComponentSetupPosition(): boolean {
+    return this.functionDepth === 0;
+  }
+
   protected inModuleInitializationPosition(): boolean {
     return this.functionDepth === 0
       && this.parameterDefaultDepth === 0
@@ -9254,6 +9705,10 @@ export class Analyzer implements TypeEnvironment {
         this.collectPatternNames(statement.pattern, (name) => {
           if (!pending.has(name)) pending.set(name, { span: statement.span, loopHead: false });
         });
+      } else if (statement.kind === "UsingDeclaration") {
+        // An owned binding declares a name in this scope exactly as `const`
+        // does, so a read above it is the same shadow hazard.
+        if (!pending.has(statement.name)) pending.set(statement.name, { span: statement.span, loopHead: false });
       } else {
         const extension = this.prescanExtensionScopeDeclaration(statement);
         if (extension && !pending.has(extension.name)) pending.set(extension.name, { span: extension.span, loopHead: false });

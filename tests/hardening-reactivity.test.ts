@@ -465,14 +465,14 @@ mount(<App />, "#app")
 const browserTests = `
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
-async def test_empty_collection_iteration() -> null:
+test "empty collection iteration":
     await browser.open("/")
     await browser.click("[data-add-empty]")
     expect(await browser.text("[data-empty-list]")).toBe("L")
     expect(await browser.text("[data-empty-set]")).toBe("S")
     expect(await browser.text("[data-empty-map]")).toBe("M=1;")
 
-async def test_two_slot_map_tracks_add_and_clear() -> null:
+test "two slot map tracks add and clear":
     await browser.open("/")
     await browser.click("[data-add-pair]")
     expect(await browser.text("[data-pairs]")).toBe("a=1;b=2;")
@@ -481,7 +481,7 @@ async def test_two_slot_map_tracks_add_and_clear() -> null:
     await browser.click("[data-edit-object-key]")
     expect(await browser.text("[data-object-keys]")).toBe("changed=1;")
 
-async def test_descriptor_based_deep_reads() -> null:
+test "descriptor based deep reads":
     await browser.open("/")
     await browser.click("[data-flip]")
     expect(await browser.text("[data-destructure]")).toBe("done")
@@ -489,31 +489,31 @@ async def test_descriptor_based_deep_reads() -> null:
     expect(await browser.text("[data-match-list]")).toBe("done")
     expect(await browser.text("[data-spread]")).toBe("done")
 
-async def test_json_tracks_nested_records_and_lists() -> null:
+test "json tracks nested records and lists":
     await browser.open("/")
     await browser.click("[data-json]")
     expect(await browser.text("[data-json-root]")).toBe(\`{"inner":{"done":true}}\`)
     expect(await browser.text("[data-json-list]")).toBe(\`["a","b"]\`)
 
-async def test_out_of_range_list_get_tracks_arrival() -> null:
+test "out of range list get tracks arrival":
     await browser.open("/")
     await browser.click("[data-arrive]")
     expect(await browser.text("[data-arriving]")).toBe("first")
 
-async def test_pop_keeps_record_reactive() -> null:
+test "pop keeps record reactive":
     await browser.open("/")
     await browser.click("[data-take]")
     await browser.click("[data-edit-held]")
     expect(await browser.text("li")).toBe("EDITED")
 
-async def test_keyed_churn_keeps_current_row_reactive() -> null:
+test "keyed churn keeps current row reactive":
     await browser.open("/")
     for index in range(50):
         await browser.click("[data-churn]")
     await browser.click("[data-edit-row]")
     expect(await browser.text("li")).toBe("BOUND")
 
-async def test_render_self_invalidation_is_bounded_and_reported() -> null:
+test "render self invalidation is bounded and reported":
     await browser.open("/")
     await browser.waitForText("[data-render-error]", "render:A reactive render cannot invalidate itself more than 100 times")
     expect(await browser.text("[data-loop]")).toBe("102")

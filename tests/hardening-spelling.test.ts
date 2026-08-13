@@ -213,7 +213,7 @@ const browserTests = `
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_self_negation_publishes_updates() -> null:
+test "self negation publishes updates":
     await browser.open("/")
     expect(await browser.text("[data-busy]")).toBe("off")
     expect(await browser.text("[data-panel]")).toBe("off")

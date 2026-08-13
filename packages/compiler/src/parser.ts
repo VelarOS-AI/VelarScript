@@ -6,6 +6,7 @@ import type {
   ClassDeclaration,
   ClassFieldDeclaration,
   ClassGetterDeclaration,
+  ClassDisposeBlock,
   ClassInitBlock,
   ClassMethodDeclaration,
   ClassParameter,
@@ -38,7 +39,9 @@ import type {
   TypeField,
   TypeParameterDeclaration,
   TypeReference,
+  TestDeclaration,
   TypeSyntax,
+  UsingDeclaration,
   VariableDeclaration,
 } from "./ast.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "./diagnostic.ts";
@@ -309,6 +312,44 @@ export class Parser {
       return this.parseMatch(start);
     }
 
+    // D39 item 53: `test "name":` is a contextual keyword — statement head, a
+    // string literal, then a block. `test` stays an ordinary name everywhere
+    // else, including `test(...)` and `const test = ...`.
+    if (this.check("identifier") && this.current().value === "test"
+      && this.peekKind(1) === "string" && this.peekKind(2) === "colon") {
+      const keyword = this.advance();
+      if (exported) this.diagnostics.push(diagnostic("VEL2001", "A test is discovered by the runner and is not exported", keyword.span));
+      const title = this.advance();
+      const body = this.parseBlock();
+      return {
+        kind: "TestDeclaration",
+        title: title.value,
+        titleSpan: title.span,
+        body,
+        span: span(start, body.at(-1)?.span.end ?? title.span.end),
+      };
+    }
+
+    // D43 item 69: `using` is a contextual keyword — statement head, an
+    // identifier, then `=`. Everywhere else `using` stays an ordinary name.
+    if (this.check("identifier") && this.current().value === "using" && this.peekKind(1) === "identifier") {
+      if (this.peekKind(2) === "assign") {
+        const keyword = this.advance();
+        if (exported) this.diagnostics.push(diagnostic("VEL2001", "A 'using' binding cannot be exported; it is released when its scope ends", keyword.span));
+        return this.parseUsing(keyword.span.start);
+      }
+      if (this.peekKind(2) === "colon") {
+        const keyword = this.current();
+        const end = this.tokens[this.index + 2]?.span.end ?? keyword.span.end;
+        this.diagnostics.push(diagnostic(
+          "VEL2036",
+          "A 'using' binding takes its type from the initializer; write 'using name = expression'",
+          span(keyword.span.start, end),
+        ));
+        this.synchronize();
+        return { kind: "PassStatement", span: keyword.span };
+      }    }
+
     // MIG-4: 'invert x' was the removed toggle statement, and its leftover
     // operand otherwise falls into the generic statement-boundary message,
     // which never names the assignment that replaced it. 'invert' stayed an
@@ -454,7 +495,11 @@ export class Parser {
       return { kind: "ContinueStatement", span: this.previous().span };
     }
 
-    if (this.match("try")) {
+    // D39 item 51: the statement-head `try` is the block form only when a
+    // block follows it. Anything else is the expression form, which reaches
+    // the expression parser below and must be consumed by something.
+    if (this.check("try") && this.peekKind(1) === "colon") {
+      this.advance();
       return this.parseTry(start);
     }
 
@@ -864,6 +909,19 @@ export class Parser {
     };
   }
 
+  private parseUsing(start: number): UsingDeclaration {
+    const name = this.expect("identifier", "Expected a name after 'using'");
+    this.expect("assign", "Expected '=' after a 'using' name");
+    const initializer = this.parseExpression();
+    return {
+      kind: "UsingDeclaration",
+      name: name.value,
+      nameSpan: name.span,
+      initializer,
+      span: span(start, initializer.span.end),
+    };
+  }
+
   private parseBindingPattern(): BindingPattern {
     return this.withParseDepth(() => this.parseBindingPatternBody());
   }
@@ -959,7 +1017,20 @@ export class Parser {
     if (!this.check("greater")) {
       do {
         const name = this.expect("identifier", "Expected a type parameter name");
-        if (name.value) parameters.push({ name: name.value, span: name.span });
+        // D41 item 61: `<T: Bound>` names one word from the compiler's closed
+        // bound vocabulary. The name is taken here and judged by the analyzer,
+        // so an unknown word gets a directed diagnostic instead of a parse
+        // cascade.
+        const bound = this.match("colon")
+          ? this.expect("identifier", "Expected a type parameter bound name after ':'")
+          : null;
+        if (name.value) {
+          parameters.push({
+            name: name.value,
+            ...(bound?.value ? { bound: bound.value, boundSpan: bound.span } : {}),
+            span: name.span,
+          });
+        }
       } while (this.match("comma") && !this.check("greater"));
     }
     const close = this.expect("greater", "Expected '>' after type parameters");
@@ -1249,12 +1320,44 @@ export class Parser {
     this.expect("indent", "Expected an indented class body");
     const fields: ClassFieldDeclaration[] = [];
     let initialization: ClassInitBlock | null = null;
+    let dispose: ClassDisposeBlock | null = null;
     const getters: ClassGetterDeclaration[] = [];
     const methods: ClassMethodDeclaration[] = [];
     this.consumeNewlines();
 
     while (!this.check("dedent") && !this.check("eof")) {
       const methodStart = this.current().span.start;
+      // D43 item 67/69: an `@name` member belongs to the language. `@dispose:`
+      // is the only one a class declares today; anything else gets the closed
+      // vocabulary named back.
+      if (this.check("at")) {
+        const marker = this.advance();
+        const memberName = this.expect("identifier", "Expected a compiler-known class member name after '@'");
+        const keywordSpan = span(marker.span.start, memberName.span.end);
+        if (memberName.value !== "dispose") {
+          this.diagnostics.push(diagnostic(
+            "VEL2022",
+            `Unknown language member '@${memberName.value}'; a class declares '@dispose:' as its only '@' member`,
+            keywordSpan,
+          ));
+        }
+        const body = this.parseBlock();
+        const block = {
+          kind: "ClassDisposeBlock",
+          body,
+          keywordSpan,
+          span: span(methodStart, body.at(-1)?.span.end ?? this.previous().span.end),
+        } satisfies ClassDisposeBlock;
+        if (memberName.value === "dispose") {
+          if (dispose) {
+            this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' has more than one '@dispose' block`, block.span));
+          } else {
+            dispose = block;
+          }
+        }
+        this.consumeNewlines();
+        continue;
+      }
       let methodAbstract = false;
       let methodOverride = false;
       let methodStatic = false;
@@ -1375,7 +1478,8 @@ export class Parser {
       initialization,
       getters,
       methods,
-      span: span(start, Math.max(methods.at(-1)?.span.end ?? 0, getters.at(-1)?.span.end ?? 0, fields.at(-1)?.span.end ?? 0, initialization?.span.end ?? 0, close.span.end)),
+      dispose,
+      span: span(start, Math.max(methods.at(-1)?.span.end ?? 0, getters.at(-1)?.span.end ?? 0, fields.at(-1)?.span.end ?? 0, initialization?.span.end ?? 0, dispose?.span.end ?? 0, close.span.end)),
     };
   }
 
@@ -2344,6 +2448,16 @@ export class Parser {
   }
 
   private parsePowerBase(): Expression {
+    // D39 item 51: `try` reaches exactly as far as `await` does — the whole
+    // postfix chain — so `try User.parse(raw)` and `try await load()` both
+    // read as one attempt.
+    if (this.match("try")) {
+      const keyword = this.previous();
+      return this.withParseDepth(() => {
+        const value = this.parsePowerBase();
+        return { kind: "TryExpression", value, span: span(keyword.span.start, value.span.end) };
+      });
+    }
     if (!this.match("await")) return this.parsePostfix();
     const operator = this.previous();
     return this.withParseDepth(() => {

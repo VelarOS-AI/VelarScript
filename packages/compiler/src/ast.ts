@@ -15,6 +15,8 @@ export type CoreStatement =
   | EnumDeclaration
   | ClassDeclaration
   | VariableDeclaration
+  | UsingDeclaration
+  | TestDeclaration
   | FunctionDeclaration
   | ReturnStatement
   | ThrowStatement
@@ -186,6 +188,20 @@ export interface ClassDeclaration {
   readonly initialization: ClassInitBlock | null;
   readonly getters: readonly ClassGetterDeclaration[];
   readonly methods: readonly ClassMethodDeclaration[];
+  /** D43 item 69: the compiler-known `@dispose:` release contract, if declared. */
+  readonly dispose: ClassDisposeBlock | null;
+  readonly span: Span;
+}
+
+/**
+ * D43 item 69: `@dispose:` is a compiler-known class member, not a method. It
+ * cannot be called from source — it is the ownership contract `using` runs, and
+ * a second spelling of `close()` is exactly what it exists to avoid.
+ */
+export interface ClassDisposeBlock {
+  readonly kind: "ClassDisposeBlock";
+  readonly body: readonly Statement[];
+  readonly keywordSpan: Span;
   readonly span: Span;
 }
 
@@ -241,6 +257,38 @@ export interface VariableDeclaration {
   readonly span: Span;
 }
 
+/**
+ * D43 item 69: `using name = expression` takes ownership of a resource for the
+ * enclosing scope. The binding is const, and every exit from the scope —
+ * normal, `return`, `break`, `continue`, or a throw — releases it through its
+ * type's `@dispose` contract, in reverse declaration order.
+ */
+export interface UsingDeclaration {
+  readonly kind: "UsingDeclaration";
+  readonly name: string;
+  readonly nameSpan: Span;
+  readonly initializer: Expression;
+  readonly span: Span;
+}
+
+/**
+ * D39 item 53: `test "name":` declares one test. The name is a string literal
+ * the reporter quotes verbatim, because a test is the product specification a
+ * human reads, not a machine-shaped function name.
+ */
+export interface TestDeclaration {
+  readonly kind: "TestDeclaration";
+  readonly title: string;
+  readonly titleSpan: Span;
+  readonly body: readonly Statement[];
+  readonly span: Span;
+}
+
+/** The generated function name a `test "name":` block emits and the runner calls. */
+export function testFunctionName(statement: TestDeclaration): string {
+  return `__velarTest${statement.span.start}`;
+}
+
 export type BindingPattern = NameBindingPattern | ObjectBindingPattern | ListBindingPattern;
 
 export interface NameBindingPattern {
@@ -284,6 +332,9 @@ export interface FunctionDeclaration {
 
 export interface TypeParameterDeclaration {
   readonly name: string;
+  /** The bound written as `<T: Text>`; always a name from the closed vocabulary. */
+  readonly bound?: string;
+  readonly boundSpan?: Span;
   readonly span: Span;
 }
 
@@ -537,6 +588,7 @@ export type CoreExpression =
   | ObjectExpression
   | SpreadExpression
   | UnaryExpression
+  | TryExpression
   | BinaryExpression
   | AssignmentExpression
   | ComparisonChainExpression
@@ -632,6 +684,18 @@ export interface UnaryExpression {
   readonly span: Span;
 }
 
+/**
+ * D39 item 51: `try <postfix-expression>` turns an expected failure into
+ * `null`. It carries the same reach as `await` — the whole postfix chain — and
+ * its result must be consumed, so a swallowed failure is always visible where
+ * it is handled.
+ */
+export interface TryExpression {
+  readonly kind: "TryExpression";
+  readonly value: Expression;
+  readonly span: Span;
+}
+
 export interface BinaryExpression {
   readonly kind: "BinaryExpression";
   readonly left: Expression;
@@ -718,6 +782,64 @@ export interface IndexExpression {
   readonly span: Span;
 }
 
+/**
+ * Whether a block awaits in its own frame. A nested function or arrow owns its
+ * awaits, so the walk stops at every declaration boundary. D43 item 69 uses
+ * this to decide whether releasing a `@dispose` value needs an async scope.
+ */
+export function blockContainsDirectAwait(
+  statements: readonly Statement[],
+  extension: (value: Expression) => boolean | undefined = () => undefined,
+): boolean {
+  return statements.some((statement) => statementContainsDirectAwait(statement, extension));
+}
+
+export function statementContainsDirectAwait(
+  statement: Statement,
+  extension: (value: Expression) => boolean | undefined = () => undefined,
+): boolean {
+  const expression = (value: Expression): boolean => expressionContainsDirectAwait(value, extension);
+  const block = (values: readonly Statement[]): boolean => blockContainsDirectAwait(values, extension);
+  switch (statement.kind) {
+    case "VariableDeclaration":
+      return expression(statement.initializer);
+    case "UsingDeclaration":
+      return expression(statement.initializer);
+    case "TestDeclaration":
+      // A test body is its own async frame.
+      return false;
+    case "ReturnStatement":
+      return statement.value !== null && expression(statement.value);
+    case "ThrowStatement":
+      return expression(statement.value);
+    case "AssertStatement":
+      return expression(statement.condition) || (statement.message !== null && expression(statement.message));
+    case "IfStatement":
+      return expression(statement.condition) || block(statement.thenBody) || (statement.elseBody !== null && block(statement.elseBody));
+    case "MatchStatement":
+      return expression(statement.value)
+        || statement.cases.some((branch) => (branch.guard !== null && expression(branch.guard)) || block(branch.body));
+    case "ForStatement":
+      // An `async for` awaits its own pulls even when the body does not.
+      return statement.asynchronous || expression(statement.iterable) || block(statement.body);
+    case "WhileStatement":
+      return expression(statement.condition) || block(statement.body);
+    case "TryStatement":
+      return block(statement.tryBody)
+        || (statement.catchBody !== null && block(statement.catchBody))
+        || (statement.finallyBody !== null && block(statement.finallyBody));
+    case "AssignmentStatement":
+      return expression(statement.target) || expression(statement.value);
+    case "ExpressionStatement":
+      return expression(statement.expression);
+    case "AsyncStatement":
+      // Detached execution does not wait, so it never makes its frame async.
+      return false;
+    default:
+      return false;
+  }
+}
+
 export function expressionContainsDirectAwait(
   expression: Expression,
   extension: (value: Expression) => boolean | undefined = () => undefined,
@@ -727,6 +849,11 @@ export function expressionContainsDirectAwait(
   switch (expression.kind) {
     case "UnaryExpression":
       return expression.operator === "await" || expressionContainsDirectAwait(expression.operand, extension);
+    case "TryExpression":
+      // The wrapper is emitted as an async immediately-invoked function only
+      // when its own body awaits, and that await belongs to the frame around
+      // it either way.
+      return expressionContainsDirectAwait(expression.value, extension);
     case "FStringExpression":
       return expression.parts.some((part) => part.kind === "expression" && expressionContainsDirectAwait(part.value, extension));
     case "ListExpression":

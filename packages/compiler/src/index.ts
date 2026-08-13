@@ -1,8 +1,9 @@
 import { Analyzer, inferredResultPlaceholderType, isCorePrimitiveName, type AnalysisContext, type ClassField, type ClassInfo, type InitializationImportRead } from "./analyzer.ts";
+import { blockContainsDirectAwait, testFunctionName } from "./ast.ts";
 import type { BindingPattern, Expression, FunctionDeclaration, MatchPattern, Program, Statement, TypeReference } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
 import { JavaScriptEmitter } from "./emitter.ts";
-import type { CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface } from "./extension.ts";
+import type { CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest } from "./extension.ts";
 import { Lexer } from "./lexer.ts";
 import { isParserComplexityFailure, Parser } from "./parser.ts";
 import { SourceText } from "./source.ts";
@@ -13,6 +14,7 @@ import {
   bindNamedTypeParameters,
   boolType,
   invalidType,
+  isTypeParameterBound,
   mergeTypes,
   nullType,
   numberType,
@@ -23,6 +25,7 @@ import {
   stringType,
   unknownType,
   type EnumInfo,
+  type TypeParameterBound,
   type ValueType,
 } from "./types.ts";
 
@@ -34,7 +37,7 @@ export { SourceText, type Span } from "./source.ts";
 export { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 export { bindingNameRestriction, isCoreReservedBinding, isForbiddenPrototypeMember, isJavaScriptReservedBinding, isSourceIdentifierPart, isSourceIdentifierStart, isValidSourceIdentifier, memberNameRestriction, type BindingNameRestriction, type MemberNameRestriction } from "./source-names.ts";
 export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
-export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
+export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { analysisTypeIdentity, describeType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "./types.ts";
 export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead } from "./analyzer.ts";
@@ -124,6 +127,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   const analysisResources = options.resourceContents ?? options.analysis?.resources;
   const analysisContext: AnalysisContext = {
     ...options.analysis,
+    path: parsed.source.path,
     ...(analysisResources ? { resources: analysisResources } : {}),
   };
   const createAnalyzer = (
@@ -614,7 +618,7 @@ function interfaceOf(
   const mutableExports = new Set<string>();
   const reactiveExports = new Map<string, "state">();
   const inspectionExtensions = extensions.flatMap((extension) => extension.inspection ? [extension.inspection] : []);
-  const testFunctions: string[] = [];
+  const tests: ModuleTest[] = [];
   const extensionExports = new Map(extensions.map((extension) => [extension.id, new Map<string, unknown>()] as const));
   const extensionData = new Map<string, unknown>();
   for (const extension of extensions) {
@@ -659,6 +663,9 @@ function interfaceOf(
       const identity = classIdentities.get(statement.name)!;
       classes.set(statement.name, {
         identity,
+        // D43 item 69: the release contract crosses the module boundary with
+        // the class, so an imported handle stays usable with `using`.
+        ...(statement.dispose ? { dispose: blockContainsDirectAwait(statement.dispose.body) ? "async" : "sync" } as const : {}),
         parameters: statement.parameters.map((parameter) => resolve(parameter.type)),
         parameterNames: statement.parameters.map((parameter) => parameter.name),
         requiredParameters: statement.parameters.filter((parameter) => !parameter.defaultValue).length,
@@ -744,8 +751,8 @@ function interfaceOf(
           staticMethods,
         });
       }
-    } else if (statement.kind === "FunctionDeclaration" && statement.name.startsWith("test_")) {
-      testFunctions.push(statement.name);
+    } else if (statement.kind === "TestDeclaration") {
+      tests.push({ name: testFunctionName(statement), title: statement.title });
     }
   }
 
@@ -821,7 +828,7 @@ function interfaceOf(
     typeAliases,
     enums,
     classes,
-    testFunctions,
+    tests,
     extensionExports: new Map([...extensionExports].filter(([, values]) => values.size > 0)),
     extensionData,
   };
@@ -832,9 +839,15 @@ function functionSignature(
   resolve: (reference: TypeReference | null) => ValueType,
 ): ValueType {
   const frame = new Map<string, ValueType>();
+  // D41 item 61 risk 4: this is the cross-module export interface. A bound
+  // dropped here would silently disappear from every imported generic.
+  const bounds: (TypeParameterBound | null)[] = [];
   for (const declaration of statement.typeParameters ?? []) {
-    if (!frame.has(declaration.name)) frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+    if (frame.has(declaration.name)) continue;
+    frame.set(declaration.name, { kind: "parameter", name: declaration.name, index: frame.size });
+    bounds.push(declaration.bound && isTypeParameterBound(declaration.bound) ? declaration.bound : null);
   }
+  const boundVector = bounds.some((bound) => bound !== null) ? bounds : null;
   const resolveBound = (reference: TypeReference | null): ValueType =>
     frame.size === 0 ? resolve(reference) : bindNamedTypeParameters(resolve(reference), frame);
   const result = statement.returnType
@@ -844,6 +857,7 @@ function functionSignature(
   return {
     kind: "function",
     ...(frame.size > 0 ? { typeParameterNames: [...frame.keys()] } : {}),
+    ...(frame.size > 0 && boundVector ? { typeParameterBounds: boundVector } : {}),
     parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => resolveBound(parameter.type)),
     parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
     requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,

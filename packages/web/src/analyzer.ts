@@ -1055,6 +1055,19 @@ export class VelarWebAnalyzer extends Analyzer {
     return valid && argumentsValid;
   }
 
+  /**
+   * D43 item 69: a component body is a construction section, not a scope with
+   * an exit — its resources live until unmount. Ownership belongs to the
+   * lifecycle hook or to a function inside the component, so the setup section
+   * says so instead of releasing at the wrong moment.
+   */
+  protected override ownershipScopeRejection(): string | null {
+    if (this.componentStates !== null && this.mountedDepth === 0 && this.inComponentSetupPosition()) {
+      return "A component body builds the component and does not end, so a 'using' here has no scope to release at; own the resource inside an action, a method, or the cleanup hook";
+    }
+    return super.ownershipScopeRejection();
+  }
+
   protected override invalidExtensionAwaitContext(): boolean {
     return this.synchronousReactiveDepth > 0 || this.jsxDepth > 0
       || (this.componentStates !== null && this.mountedDepth === 0);

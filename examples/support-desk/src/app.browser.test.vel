@@ -6,7 +6,7 @@ async def openDesk() -> null:
     await browser.waitForText("[data-support-desk]", "Cannot sign in after password reset")
     expect(await browser.attribute("[data-primary] a", "aria-current")).toBe("page")
 
-async def test_dialog_cancel_restores_trigger_focus() -> null:
+test "dialog cancel restores trigger focus":
     await browser.open("/tickets/ticket-auth")
     await browser.waitForText("[data-ticket-detail]", "Cannot sign in after password reset")
     await browser.click("[data-resolve]")
@@ -16,7 +16,7 @@ async def test_dialog_cancel_restores_trigger_focus() -> null:
     await browser.waitFor("[data-resolve]:focus")
     expect(await browser.count("[data-resolve]:focus")).toBe(1)
 
-async def test_support_desk_http_filter_and_pagination() -> null:
+test "support desk http filter and pagination":
     await openDesk()
     expect(await browser.count("[data-ticket]")).toBe(4)
     expect(await browser.text("[data-page]")).toBe("Page 1 of 2")
@@ -31,7 +31,7 @@ async def test_support_desk_http_filter_and_pagination() -> null:
     await browser.select("[data-filter]", "resolved")
     await browser.waitForText("[data-result-count]", "2 tickets")
 
-async def test_typed_form_route_context_and_persistence() -> null:
+test "typed form route context and persistence":
     await openDesk()
     await browser.click("[data-create-ticket]")
     expect(await browser.attribute("[data-title]", "aria-invalid")).toBe("true")
@@ -60,7 +60,7 @@ async def test_typed_form_route_context_and_persistence() -> null:
     await browser.reload()
     await browser.waitForText("[data-support-desk]", "Keyboard shortcut stops working")
 
-async def test_direct_detail_route_recovers_data() -> null:
+test "direct detail route recovers data":
     await browser.open("/tickets/ticket-auth")
     await browser.waitForText("[data-ticket-detail]", "Cannot sign in after password reset")
     expect(await browser.text("[data-route-id]")).toBe("Route ID: ticket-auth")
@@ -69,7 +69,7 @@ async def test_direct_detail_route_recovers_data() -> null:
     await browser.waitForText("[data-ticket-detail]", "Ticket not found")
     expect(await browser.count("[data-route-id]")).toBe(0)
 
-async def test_query_page_uses_strict_optional_number_parsing() -> null:
+test "query page uses strict optional number parsing":
     await browser.open("/?page=2")
     await browser.waitForText("[data-page]", "Page 2 of 2")
     expect(await browser.count("[data-ticket]")).toBe(3)

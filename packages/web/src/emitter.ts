@@ -328,7 +328,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         // its lifetime is the module and no component disposal applies.
         const indentation = "  ".repeat(depth);
         const parameters = statement.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-        const actionLines = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean);
+        const actionLines = [...this.emitStatementLines(statement.body, depth + 1)];
         if (!this.blockAlwaysReturns(statement.body)) actionLines.push(`${"  ".repeat(depth + 1)}return null;`);
         const actionBody = actionLines.join("\n");
         return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${indentation}` : ""}}, __velarGlobalScope, ${JSON.stringify(statement.name)});`;
@@ -336,7 +336,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       if (statement.kind === "ExtensionStatement:web:watch") {
         const indentation = "  ".repeat(depth);
         const parameters = [statement.currentName, statement.previousName].filter((name): name is string => name !== null).join(", ");
-        const body = statement.body.map((child) => this.emitMappedStatement(child, depth + 1)).filter(Boolean).join("\n");
+        const body = this.emitStatementLines(statement.body, depth + 1).join("\n");
         return `${indentation}__velarWatch(() => ${this.emitMappedExpression(statement.expression)}, (${parameters}) => {${body ? `\n${body}\n${indentation}` : ""}}, __velarGlobalScope);`;
       }
     }
@@ -481,15 +481,14 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
         lines.push(`${bodyIndent}const ${item.name} = __velarResource(() => ${this.emitMappedExpression(item.initializer)}, __velarComponentScope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "ExtensionStatement:web:action") {
         const parameters = item.parameters.map((parameter) => this.emitParameter(parameter.name, parameter.defaultValue, parameter.rest)).join(", ");
-        const actionLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean);
+        const actionLines = [...this.emitStatementLines(item.body, depth + 3)];
         if (!this.blockAlwaysReturns(item.body)) actionLines.push(`${"  ".repeat(depth + 3)}return null;`);
         const actionBody = actionLines.join("\n");
         lines.push(`${bodyIndent}const ${item.name} = __velarAction(async (${parameters}) => {${actionBody ? `\n${actionBody}\n${bodyIndent}` : ""}}, __velarComponentScope, ${JSON.stringify(item.name)});`);
       } else if (item.kind === "ExtensionStatement:web:watch") {
         const parameters = [item.currentName, item.previousName].filter((name): name is string => name !== null).join(", ");
-        const watchLines = item.body.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
-        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __velarComponentScope);`);
-      } else if (item.kind === "ExtensionStatement:web:expose") {
+        const watchLines = this.emitStatementLines(item.body, depth + 3).join("\n");
+        lines.push(`${bodyIndent}__velarWatch(() => ${this.emitMappedExpression(item.expression)}, (${parameters}) => {${watchLines ? `\n${watchLines}\n${bodyIndent}` : ""}}, __velarComponentScope);`);      } else if (item.kind === "ExtensionStatement:web:expose") {
         expose ??= item.value;
       } else if (item.kind === "ExtensionStatement:web:mounted") {
         mountedBody = item.body;
@@ -524,8 +523,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     lines.push(`${bodyIndent}if (__velarProps.class !== undefined) __velarClassBindRoot(__velarRoot, () => __velarProps.class, __velarComponentScope);`);
     lines.push(`${bodyIndent}if (__velarProps.look !== undefined) __velarLookBindRoot(__velarRoot, () => __velarProps.look, __velarComponentScope);`);
     lines.push(`${bodyIndent}if (__velarProps.__velarStyle !== undefined) __velarStyleBindRoot(__velarRoot, () => __velarProps.__velarStyle, __velarComponentScope);`);
-    const mounted = mountedBody.map((child) => this.emitMappedStatement(child, depth + 3)).filter(Boolean).join("\n");
-    const cleanup = cleanupBody.map((child) => {
+    const mounted = this.emitStatementLines(mountedBody, depth + 3).join("\n");    const cleanup = cleanupBody.map((child) => {
       if (["VariableDeclaration", "FunctionDeclaration", "ClassDeclaration", "TypeDeclaration", "EnumDeclaration"].includes(child.kind)) {
         return this.emitMappedStatement(child, depth + 3);
       }

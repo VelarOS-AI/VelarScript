@@ -519,7 +519,7 @@ export async function compileProjectEntries(
           extensions: compilerExtensions,
           resourceContents: module.resourceContents,
           sharedRuntimeModules: true,
-          ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.testFunctions) } : {}),
+          ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.tests.map((item) => item.name)) } : {}),
         }), analysis.reactiveImports ?? new Map());
         nextResults.set(module.inputPath, { inputPath: module.inputPath, relativePath: module.relativePath, result });
       }
@@ -1130,7 +1130,7 @@ export function moduleInterfaceIdentity(
     node("re-exports", [...interface_.reExports]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, target]) => node("re-export", [name, target.source, target.imported]))),
-    node("tests", [...interface_.testFunctions].sort()),
+    node("tests", interface_.tests.map((item) => `${item.name}\u0000${item.title}`).sort()),
     extensionExports,
   ]);
 }
@@ -1582,6 +1582,7 @@ function permanentNamespaceImportMessage(source: string, interface_: ModuleInspe
 function renameClass(info: ClassInfo, aliases: ReadonlyMap<string, string>): ClassInfo {
   return {
     ...(info.identity ? { identity: info.identity } : {}),
+    ...(info.dispose ? { dispose: info.dispose } : {}),
     parameters: info.parameters.map((type) => renameType(type, aliases)),
     ...(info.parameterNames ? { parameterNames: info.parameterNames } : {}),
     requiredParameters: info.requiredParameters,

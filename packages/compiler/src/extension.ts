@@ -294,6 +294,11 @@ export interface CompilerAnalyzerFactory {
   readonly create: (context: AnalysisContext, extensions: readonly CompilerAnalysisExtension[]) => Analyzer;
 }
 
+export interface ModuleTest {
+  readonly name: string;
+  readonly title: string;
+}
+
 export interface ModuleInterface {
   readonly exports: ReadonlyMap<string, ValueType>;
   /** Pure exports retired from source imports and exposed through one permanent namespace. */
@@ -316,7 +321,12 @@ export interface ModuleInterface {
   readonly typeAliases: ReadonlyMap<string, ValueType>;
   readonly enums: ReadonlyMap<string, EnumInfo>;
   readonly classes: ReadonlyMap<string, ClassInfo>;
-  readonly testFunctions: readonly string[];
+  /**
+   * D39 item 53: the module's `test "name":` declarations. `name` is the
+   * emitted function the runner calls; `title` is the author's name for the
+   * test, which the reporter quotes verbatim.
+   */
+  readonly tests: readonly ModuleTest[];
   readonly extensionExports: ReadonlyMap<string, ReadonlyMap<string, unknown>>;
   readonly extensionData: ReadonlyMap<string, unknown>;
 }

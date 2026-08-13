@@ -6,6 +6,16 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Four language features land together. A generic function can now say what
+  its type parameter must support — `def label<T: Text>(value: T)` — from a
+  closed vocabulary of three compiler-owned bounds, so a body that orders,
+  interpolates, or serializes its parameter is finally writable. `using`
+  binds a resource whose `@dispose` runs when the scope exits, in reverse
+  order, on every exit path including throws; a component body rejects it
+  and teaches `@cleanup:`, because a component ends at unmount rather than
+  at its last statement. `try` becomes an expression, and tests are written
+  `test "the name you want in the report":` — the `def test_*` spelling
+  retires.
 - `velar fix` applies the mechanical corrections: a diagnostic now carries
   its own replacement where one is provably equivalent, so the command,
   the editor quick fix, and the message all come from one source instead

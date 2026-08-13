@@ -9,16 +9,15 @@ from the language.
 ## What VelarScript is
 
 VelarScript (Vel) is a language AI writes and maintains, and humans read and
-own. The person who owns the product supplies intent and reads the result;
-you write the Vel and every later change to it; the compiler guards each
-change. Vel's parents are JavaScript and Python — the two languages you
-already know best. JavaScript is the mother: the program runs inside her, so
-behavior defers to JS. Python is the father: the visible spelling follows
-him. When unsure about behavior, ask the mother; when unsure about spelling,
-follow the father. **Write on your priors, and the compiler will teach you
-the rest**: where JS offers five spellings, Vel keeps one, and every removed
-or mistaken spelling gets a diagnostic that names the one current spelling.
-Expect to self-correct in one round.
+own. The owner supplies intent and reads the result; you write the Vel and
+every later change to it; the compiler guards each change. Vel's parents are
+JavaScript and Python. JavaScript is the mother: the program runs inside her,
+so behavior defers to JS. Python is the father: the visible spelling follows
+him. When unsure about behavior ask the mother, about spelling the father.
+**Write on your priors, and the compiler will teach you the rest**: where JS
+offers five spellings Vel keeps one, and every removed or mistaken spelling
+gets a diagnostic naming the one current spelling. Expect to self-correct in
+one round.
 
 The working loop:
 
@@ -44,18 +43,11 @@ use `ms` or `s`, so write `await Promise.sleep(250ms)`, not a bare number.
 
 ## Project setup
 
-A VelarScript project is a directory containing a `velar.json` manifest. The
-shortest true path is to let the toolchain write it:
-
-```sh
-velar create my-app                    # Web application (the default template)
-velar create my-tool --template node   # Node/CLI application
-velar create my-lib --template library # reusable source library
-```
-
-The templates are `web`, `node`, `desktop`, `docs`, `library`, and `component`;
-each writes `velar.json`, a `package.json` whose scripts are the gates, a `src/`
-tree, a passing test, and an `AGENTS.md`. Use it instead of hand-assembling.
+A VelarScript project is a directory containing a `velar.json` manifest. Let
+the toolchain write it — `velar create my-app` scaffolds the Web template, and
+`--template node|desktop|docs|library|component` picks another. Each writes
+`velar.json`, a `package.json` whose scripts are the gates, a `src/` tree, a
+passing test, and an `AGENTS.md`.
 
 Writing the manifest yourself: `formatVersion` is required, `extensions` may be
 omitted by a project that loads none, `entry` defaults to `src/main.vel`,
@@ -84,23 +76,20 @@ keyword and every JSX token is a parse error:
 }
 ```
 
-An extension also owns its own manifest key: `"web": {"title": "My App"}` sets
-the document title. Anything else in `velar.json` is rejected by name, so add
-fields only from the documented set.
+An extension owns its own manifest key — `"web": {"title": "My App"}` sets the
+document title. Anything else in `velar.json` is rejected by name.
 
 **Files the toolchain owns.** `dist/` is build output, and in a Web build the
 toolchain writes `dist/index.html` itself — the title comes from `web.title`, the
 mount host is `<div id="app"></div>`, and assets are content-hashed. Never author
 that file; a `public/index.html` is overwritten by the generated one, while
-everything else in `public/` is copied through. `.velar/` is the compiler's
-scratch directory. Both belong in `.gitignore`.
+everything else in `public/` is copied through. `.velar/` is scratch; both belong in `.gitignore`.
 
 **Tests.** `velar test` finds every `*.test.vel` file under the project (skipping
-`outDir` and `publicDir`) and runs the top-level functions whose names start with
-`test_`. No `export` is needed, and a `.test.vel` file containing no `test_*`
-function is a failure rather than a skip. `velar test --browser` is a separate
-suite: `*.browser.test.vel` files, run in a real browser through
-`velar/web-test`.
+`outDir` and `publicDir`) and runs its `test "name":` blocks. The name is a
+sentence about the code, quoted verbatim by the reporter and unique in its
+module; the body may `await` directly and needs no `export`. A file that declares no tests is a failure rather than a skip.
+`velar test --browser` runs `*.browser.test.vel` in a real browser.
 
 **Separate the mounted entrypoint from testable code.** A test runs in Node with
 no DOM, so a headless test that imports the module calling `mount` fails on
@@ -115,8 +104,8 @@ mount(<App />, "#app")
 ```
 
 Components, functions, and types live in `src/app.vel` and its neighbours;
-`src/app.test.vel` imports those exports and tests them headlessly, and
-`src/app.browser.test.vel` drives the mounted application in a browser.
+`src/app.test.vel` tests those exports headlessly and
+`src/app.browser.test.vel` drives the mounted application.
 
 ## The traps your reflexes will hit
 
@@ -180,7 +169,11 @@ print(formatName("ada"))
 print(formatName("ada", prefix="#"))
 ```
 
-`type` declares record shapes and aliases; `T?` is optional; every record
+A generic body that must order, interpolate, or serialize its type parameter
+names a bound — `def label<T: Text>(value: T)`; the diagnostic names the one
+you need.
+
+`type` declares record shapes and aliases, `T?` is optional, and every record
 type carries a runtime validator for untrusted data:
 
 ```velar
@@ -212,8 +205,8 @@ const status: Status = Status.active
 print(ProviderEventKind.textDelta)
 ```
 
-Classes use typed body fields, one explicit constructor, and explicit
-`self`; instances are called directly, without `new`:
+Classes use typed body fields, one explicit constructor, and explicit `self`;
+instances are called directly, without `new`:
 
 ```velar
 class Session:
@@ -225,9 +218,18 @@ class Session:
     def close() -> null:
         self.active = false
 
+    @dispose:
+        self.close()
+
 const session = Session("session-1")
-session.close()
 ```
+
+`@name` members belong to the language and can never collide with yours.
+`@dispose:` is the release contract — never called directly — that
+`using name = expression` runs on every exit from the owning scope (block end,
+`return`, `break`, `continue`, throw), in reverse declaration order. Standard
+handles already have it, so `using watcher = await watchFiles(path)` above an
+`async for` needs no `try`/`finally`.
 
 Components (Web extension) return JSX directly — there is no `render` block.
 `state` holds a fact, `computed(() => ...)` derives, `action` performs a
@@ -517,14 +519,14 @@ def parseConfig(raw: unknown) -> Config:
     return config
 ```
 
+An expected failure is an optional, not a block: `try expression` produces
+`null` when anything in the chain throws, and its result must be consumed —
+`const settings = try Settings.parse(raw) ?? defaults`. Use `try`/`catch` when the details matter.
+
 ### Modules
 
 Export and import by name; a package's public face is a barrel of explicit
-re-exports:
-
-```velar fragment
-export {measure, firstLine} from "./text.vel"
-```
+re-exports — `export {measure, firstLine} from "./text.vel"`.
 
 ## When Vel is in your way
 
@@ -543,8 +545,7 @@ extern module "some-sdk":
 
 import js {load} from "some-sdk"
 
-const payload = Payload.parse(load())
-print(payload.id)
+print(Payload.parse(load()).id)
 ```
 
 An `extern module` block governs only the file that contains it, so **declare it

@@ -153,6 +153,14 @@ function __velarStringCompare(left, right) {
   }
   return leftOffset < left.length ? 1 : rightOffset < right.length ? -1 : 0;
 }
+// D41 item 61: two 'Comparable'-bounded values hold numbers or strings, and
+// which one is known only at runtime. A string pair keeps code-point order
+// (TXT-D1); everything else uses the plain relational order, exactly as a
+// monomorphic comparison of that category would.
+function __velarOrderCompare(left, right) {
+  if (typeof left === "string" && typeof right === "string") return __velarStringCompare(left, right);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 function __velarStringSize(value) { return __velarTextCodePointLength(__velarTextValue(value)); }
 function __velarStringTrim(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []); }
 function __velarStringIsBlank(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []) === ""; }

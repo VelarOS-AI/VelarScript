@@ -110,7 +110,7 @@ def readB() -> number:
 const b = computed(readB)
 bRef = b
 
-async def test_cycle_yields_the_owned_error_and_the_flush_survives() -> null:
+test "cycle yields the owned error and the flush survives":
     let first = "none"
     try:
         print(f"unexpected value {a()}")
@@ -127,7 +127,7 @@ async def test_cycle_yields_the_owned_error_and_the_flush_survives() -> null:
         second = error.message
     expect(second).toBe("A computed value cannot read itself recursively")
 
-def test_the_process_survived_the_cycle() -> null:
+test "the process survived the cycle":
     expect(1 + 1).toBe(2)
 `,
   }, false);
@@ -164,7 +164,7 @@ const loud = computed(noisy)
 watch loud() as current, previous:
     reports.append(f"watched {current}")
 
-async def test_computed_self_invalidation_stops_at_the_cap() -> null:
+test "computed self invalidation stops at the cap":
     expect(loud()).toBe(150)
     await tick()
     expect(reports.size).toBe(1)
@@ -202,18 +202,18 @@ watch count as current, previous:
     if current > 0:
         throw Error("watch exploded")
 
-async def test_flush_failure_fails_this_test() -> null:
+test "flush failure fails this test":
     count = 1
     await tick()
     print("this line must not be reached")
 
-def test_runner_continues_after_the_failure() -> null:
+test "runner continues after the failure":
     expect(1 + 1).toBe(2)
 `,
   }, false);
-  assert.match(result.output, /✗ .*test_flush_failure_fails_this_test/u, result.output);
+  assert.match(result.output, /✗ .*flush failure fails this test/u, result.output);
   assert.match(result.output, /watch exploded/u, result.output);
-  assert.match(result.output, /✓ .*test_runner_continues_after_the_failure/u, result.output);
+  assert.match(result.output, /✓ .*runner continues after the failure/u, result.output);
   assert.match(result.output, /1 passed, 1 failed/u, result.output);
   // The suite failed, but as a counted test failure -- not a dead process.
   assert.equal(result.code, 1, result.output);
@@ -244,7 +244,7 @@ action fires(tag: string, delay: Duration) -> null:
     await Promise.sleep(delay)
     throw Error(f"bang {tag}")
 
-async def test_fire_and_forget_failures_report_once_with_detail() -> null:
+test "fire and forget failures report once with detail":
     async fires("old", 20ms)
     async fires("new", 60ms)
     await Promise.sleep(150ms)
@@ -289,7 +289,7 @@ mount(<App />, "#app")
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_initial_render_failure_shows_the_fatal_state() -> null:
+test "initial render failure shows the fatal state":
     await browser.open("/")
     expect(await browser.count("[data-velar-fatal]")).toBe(1)
     expect(await browser.text("[data-velar-fatal]")).toContain("construction boom")
@@ -320,7 +320,7 @@ mount(<App />, "#missing")
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def test_missing_mount_target_shows_the_fatal_state() -> null:
+test "missing mount target shows the fatal state":
     await browser.open("/")
     expect(await browser.count("[data-velar-fatal]")).toBe(1)
     expect(await browser.text("[data-velar-fatal]")).toContain("mount target was not found")

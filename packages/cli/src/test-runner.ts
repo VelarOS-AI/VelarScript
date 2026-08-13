@@ -73,10 +73,10 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
       await writeCompiledTestProject(project, temporary);
 
       const entry = project.modules.find((module) => module.inputPath === file);
-      const tests = entry?.result.moduleInterface.testFunctions ?? [];
+      const tests = entry?.result.moduleInterface.tests ?? [];
       if (tests.length === 0) {
         failed += 1;
-        process.stderr.write(`✗ ${relative(config.root, file)} contains no test_* functions\n`);
+        process.stderr.write(`✗ ${relative(config.root, file)} declares no tests\n`);
         continue;
       }
       const outputEntry = entry ? compiledTestModulePath(project, entry, temporary) : join(temporary, relative(config.root, file).replace(/\.vel$/u, ".js"));
@@ -98,11 +98,13 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
         process.stderr.write(`✗ ${relative(config.root, file)} reported an unowned error while loading\n${loadTimeErrors.join("\n")}\n`);
         continue;
       }
-      for (const name of tests) {
-        const test = namespace[name];
+      for (const declared of tests) {
+        // D39 item 53: the reporter quotes the author's name for the test.
+        const name = declared.title;
+        const test = namespace[declared.name];
         try {
-          if (typeof test !== "function") throw new Error(`Test function '${name}' was not emitted`);
-          if (test.length !== 0) throw new Error(`Test function '${name}' cannot declare parameters`);
+          if (typeof test !== "function") throw new Error(`Test ${JSON.stringify(name)} was not emitted`);
+          if (test.length !== 0) throw new Error(`Test ${JSON.stringify(name)} cannot declare parameters`);
           await test();
           const testErrors = await drainUnowned();
           if (testErrors.length > 0) {

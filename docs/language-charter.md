@@ -1239,8 +1239,46 @@ A parameter the call leaves unsolved becomes `unknown`. Type parameters are
 erased at runtime, so `is T`, `case T`, and every other runtime-checked
 position require a concrete type instead. Only `def` declarations — top-level,
 exported, extern, and class methods — take type parameters; generic `type`,
-`class`, and `component` declarations, bounds, and variance are deliberately
-out of scope.
+`class`, and `component` declarations and variance are deliberately out of
+scope.
+
+#### Bounds
+
+A type parameter may name one bound, written `<T: Bound>`. A bound does two
+things and nothing else: the call site checks the type the parameter solved
+to, and the body may use the capability the bound promises. There are no
+conditional types, mapped types, operations between bounds, inferred bounds,
+or default bounds — the type-level programming rule 4 excludes stays excluded.
+
+The bound vocabulary is closed and the compiler owns it. There are exactly
+three, and they form one containment chain — every `Comparable` type is also a
+`Text` type, and every `Text` type is also a `Data` type — so one word is
+always enough and there is no syntax for combining two:
+
+| Bound | Promise | What the body may do |
+| --- | --- | --- |
+| `Comparable` | the type has a runtime order | `<` `<=` `>` `>=`, `sorted()`, `min()`, `max()`, `sorted(by=)`, and `sortBy`/`minBy`/`maxBy` keys, plus everything `Text` allows |
+| `Text` | the type has a hook-free text form | f-string interpolation, `str(value)`, passing `str` itself, plus everything `Data` allows |
+| `Data` | the type is JSON-shaped | `Json.stringify`, `Json.stableStringify`, `Json.clone`, request bodies, stored values |
+
+```velar fragment
+def label<T: Text>(value: T) -> string:
+    return f"{value}"
+
+def ranked<T: Comparable>(values: List<T>) -> List<T>:
+    return values.sorted()
+
+print(label(5))
+print(ranked(["b", "a"]).size)
+```
+
+A user type is never a bound: `<T: User>` is rejected, and so is any name
+outside the three. The vocabulary is closed for the same reason user-defined
+decorators are absent — a library must not be able to change what a
+declaration means. An unbounded type parameter behaves exactly as before, a
+bound survives export so an imported generic keeps its contract, and the
+rejected call names the argument that solved the parameter to the type the
+bound refuses.
 
 ## 8. Collections
 
@@ -1657,8 +1695,10 @@ an index. `break` performs no further pull.
 The loop does not invent resource ownership. It never calls `close`, `return`,
 or another cleanup hook when it exhausts, breaks, throws, or is cancelled.
 Sources that own files, sockets, processes, or request cancellation expose and
-document an explicit operation; the caller remains responsible for it, normally
-with `try`/`finally`. `async for` is a small checked pull protocol, not the
+document an explicit operation; the caller remains responsible for it, and the
+spelling for that responsibility is `using` (section 9, *Owned resources*):
+`using source = await openSource()` above the loop releases it on every exit,
+including the loop's `break`. `async for` is a small checked pull protocol, not the
 JavaScript `Symbol.asyncIterator` protocol and not an implicit generator model.
 The JavaScript spelling `for await` is rejected with guidance to put the async
 marker before the Velar loop.
@@ -1703,6 +1743,61 @@ result even when some iterations continue forever. A `break` in a nested loop
 does not make the outer loop fall through; a reachable break owned by the outer
 loop does.
 
+### Owned resources
+
+`using name = expression` says that this scope owns the value and is
+responsible for releasing it. The binding is immutable, and every exit from the
+enclosing scope — falling off the end, `return`, `break`, `continue`, or a
+throw — releases it. Several owned resources release in reverse declaration
+order.
+
+```velar fragment
+async def collect(path: string) -> number:
+    using source = await openLog(path)
+    let lines = 0
+    async for line in source:
+        lines += 1
+    return lines
+```
+
+Three ideas stay separate. `using` is ownership. `@dispose:` is the release
+contract. `close()` and `stop()` are ordinary public verbs that mean what they
+say. A type never has to be renamed to participate.
+
+A class declares its own contract as a compiler-known `@dispose:` block, which
+usually delegates to the verb the class already publishes:
+
+```velar fragment
+class Terminal:
+    def close() -> null:
+        releaseHandle()
+
+    @dispose:
+        self.close()
+```
+
+`@dispose` cannot be called from source — it is the ownership contract, not a
+second spelling of `close()` — and it may coexist with an ordinary method
+named `dispose`. It must be safe to run twice, so releasing after an explicit
+`close()` is harmless and no early-exit syntax is needed. The compiler supplies
+the contract for the standard capability handles, delegating to the verb each
+one already has, so `using` works on them with no declaration at all.
+
+The `@dispose:` body may `await`. When it does, releasing awaits too, and the
+`using` must sit in an async scope; acquiring is ordinary async work written as
+`using name = await open(...)`. A record cannot be owned: a record is data, and
+releasing is behavior.
+
+A release failure never hides a real error. When an error is already in flight
+the original error is what propagates and the release failure is reported
+through the host error channel; with no error in flight, a failing release
+throws normally, exactly as a `finally` would.
+
+Ownership needs a scope that ends, so `using` is rejected where none does: the
+module top level lives until the process ends, and a component body builds the
+component rather than finishing. Function bodies, methods, actions, and loop
+bodies — which release on every iteration — are all ordinary owning scopes.
+
 ## 10. Classes
 
 Classes use typed body fields and one explicit constructor.
@@ -1740,6 +1835,10 @@ class Session:
 - Instances are called directly: `Session("session-1")`.
 - `self` is explicit in method bodies.
 - Getters read as ordinary properties.
+- `@dispose:` is the one compiler-known class member. It declares the release
+  contract `using` runs (section 9, *Owned resources*), it is not callable from
+  source, and a class may declare at most one. `@` marks names the language
+  owns, so a member the author declares can never collide with one.
 
 Inheritance is explicit:
 
@@ -1841,6 +1940,30 @@ use `break`/`continue` to leave the block, because those operations can silently
 replace a pending return or exception. A loop wholly inside `finally` may still
 use its own `break` and `continue`. Finish cleanup normally or `throw` an
 explicit cleanup error, then return after the `try` statement.
+
+### Expected failure as an optional
+
+A failure the caller already expects is an optional, not a control-flow block.
+`try expression` evaluates the expression and produces `null` if anything in it
+throws:
+
+```velar fragment
+const parsed = try User.parse(untrusted)
+const port = try readPort() ?? 8080
+const body = try await load(url)
+```
+
+`try` reaches exactly as far as `await` does — the whole postfix chain — so a
+failure anywhere in `try a().b().c()` produces one `null`. The result type is
+`T?`; an already-optional result stays itself, because failure and an absent
+value merge. `try try` is rejected, and so is a `try` whose expression produces
+`null` on success, since that result could not tell the two apart.
+
+The result must be consumed: a bare `try` statement is rejected, because a
+swallowed failure with no visible consumer is exactly what this spelling must
+not enable. `try` is an explicit, locally visible swallow with the same
+standing as `?? fallback`; when the failure's details matter, the answer is
+still `try`/`catch`.
 
 Assertions remain active in production:
 
@@ -2059,6 +2182,32 @@ model is three sentences, and every one of them matters:
    the edge — `Config.parse(legacyValue)` — and let only checked values inward.
    An `any` that travels further into the program takes the compiler's
    guarantees with it wherever it stops.
+
+### Tests
+
+A `*.test.vel` module declares its tests as named blocks:
+
+```velar
+import {expect} from "velar/test"
+
+def scale(maximum: number) -> number:
+    assert maximum <= 1000000 else "The chart maximum is beyond the supported range"
+    return maximum
+
+test "an oversized chart maximum is rejected":
+    expect(() => scale(1000001)).toThrow()
+```
+
+The name is a string literal, and it is the test's identity: the reporter
+quotes it verbatim, so it reads as a sentence about the code rather than a
+machine-shaped function name. Names are unique within their module. A test body
+is its own async frame and may `await` directly, and a test needs no `export` —
+the runner discovers it.
+
+`test` is a contextual keyword. It declares a test only at the top level of a
+`*.test.vel` module, followed by a string literal and a block; everywhere else
+`test` is an ordinary name. There is one spelling: a top-level `def test_*` in a
+test module is rejected with the block to write instead.
 
 ## 13. Web extension boundary
 

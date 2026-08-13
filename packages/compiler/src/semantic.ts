@@ -599,6 +599,7 @@ export function buildSemanticIndex(
         break;
       case "SpreadExpression": visitExpression(expression.value); break;
       case "UnaryExpression": visitExpression(expression.operand); break;
+      case "TryExpression": visitExpression(expression.value); break;
       case "BinaryExpression": visitExpression(expression.left); visitExpression(expression.right); break;
       case "AssignmentExpression": visitExpression(expression.target); visitExpression(expression.value); break;
       case "ComparisonChainExpression": for (const operand of expression.operands) visitExpression(operand); break;
@@ -782,6 +783,7 @@ export function buildSemanticIndex(
           if (!field.static && field.initializer) visitExpression(field.initializer);
         }
         if (statement.initialization) visitBlock(statement.initialization.body, statement.initialization.span);
+        if (statement.dispose) visitBlock(statement.dispose.body, statement.dispose.span);
         exitScope();
         for (const field of statement.fields) if (field.static && field.initializer) visitExpression(field.initializer);
         for (const getter of statement.getters) visitFunction(getter, true, statement.name, "field", getter.returnType ? formatTypeReference(getter.returnType) : undefined);
@@ -791,6 +793,16 @@ export function buildSemanticIndex(
         visitExpression(statement.initializer);
         typeReferences(statement.type);
         visitPattern(statement.pattern, "variable", statement.pattern.span, statement.binding === "let", statement.exported, statement.span.start);
+        break;
+      case "TestDeclaration":
+        // A test body is an ordinary block for navigation and rename.
+        visitBlock(statement.body, statement.span);
+        break;
+      case "UsingDeclaration":
+        // D43 item 69: an owned resource is an ordinary immutable binding as
+        // far as navigation and rename are concerned.
+        visitExpression(statement.initializer);
+        declare(statement, statement.name, "variable", statement.span, statement.nameSpan, false);
         break;
       case "FunctionDeclaration":
         if (!declarations.has(statement)) declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported);

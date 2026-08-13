@@ -7,7 +7,7 @@ async def reset() -> null:
     await browser.waitForText("[data-results]", "3 of 3 tasks shown")
     expect(await browser.text("[data-board-state]")).toBe("Sample")
 
-async def test_flow_board_crud_and_persistence() -> null:
+test "flow board crud and persistence":
     await reset()
     expect(await browser.count("[data-task]")).toBe(3)
     await browser.fill("[data-title-input]", "Write launch notes")
@@ -25,7 +25,7 @@ async def test_flow_board_crud_and_persistence() -> null:
     expect(await browser.count("[data-task]")).toBe(3)
     expect(await browser.text("[data-board-state]")).toBe("Sample")
 
-async def test_search_and_lazy_analytics_route() -> null:
+test "search and lazy analytics route":
     await reset()
     await browser.fill("[data-search]", "compiler")
     await browser.waitForText("[data-results]", "1 of 3 tasks shown")

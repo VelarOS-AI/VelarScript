@@ -167,6 +167,20 @@ two statements, promote it to a named `def` — the name is documentation.
 Name arguments at call sites where a bare value would read as a mystery:
 `buttonLook(dangerous=true)`, never `buttonLook(true)`.
 
+A type parameter stays unbounded by default. Add a bound only when the body
+actually uses the capability — `<T: Text>` because it interpolates the value,
+`<T: Comparable>` because it orders it, `<T: Data>` because it serializes it.
+A bound the body does not need is a narrower contract for no gain, and it is
+the caller who pays. The chain runs `Comparable ⊂ Text ⊂ Data`, so one word
+always says it; reach for the weakest one that compiles:
+
+```velar
+def summarize<T: Text>(values: List<T>) -> string:
+    return values.map(str).join(", ")
+
+print(summarize([1, 2, 3]))
+```
+
 ## 6. Strings
 
 Text is built with f-strings — numbers, bools, and enums interpolate
@@ -223,13 +237,58 @@ the boundary with `Type.parse`, then trust the types inward. `await` every
 call whose result or completion you depend on — a dropped promise is a bug,
 and the compiler treats it as one.
 
-## 9. Modules
+Every handle a scope opens, that scope owns: write `using` and delete the
+`try`/`finally` you were about to write. It covers the exits that are easy to
+forget — an early `return`, a `break` out of a pull loop, a throw from three
+frames down:
+
+```velar fragment
+async def tail(path: string) -> null:
+    using watcher = await watchFiles(path)
+    async for batch in watcher:
+        if batch.rescan:
+            return null
+```
+
+Give a class an `@dispose:` block only when it truly owns something a scope
+should release; delegate it to the `close()` or `stop()` the class already
+publishes rather than inventing a second verb, and keep it safe to run twice.
+
+Sort failures by whether the caller already expects them. An expected failure
+is an optional — `try` it and supply the fallback at the use site, where a
+reader can see the decision. An unexpected one is a `try`/`catch` block,
+because the details are what you need. Never hand-write the third shape, a
+`def tryParse` that wraps a parse in try/catch and returns null:
+
+```velar fragment
+const settings = try Settings.parse(raw) ?? defaultSettings()
+```
+
+## 9. Tests are the specification
+
+A test name is a sentence the product owner can read: state what the code must
+do, not which function is under test. `test "an empty draft cannot be
+submitted":` earns its place in a report; `test "submit validation":` does not.
+One behaviour per test, and let the assertions read as the evidence for the
+name:
+
+```velar fragment
+test "a resolved ticket leaves the open queue":
+    const board = boardWith(openTicket)
+    resolve(board, openTicket.id)
+    expect(openIds(board)).toEqual([])
+```
+
+Helpers in a test module stay ordinary `def`s with ordinary names; only the
+blocks are tests.
+
+## 10. Modules
 
 Export and import by name. A package's public face is a barrel of explicit
 re-exports (`export {x} from "./x.vel"`). If two modules need each other's
 values at load time, the shared value wants a third module.
 
-## 10. What elegance means here
+## 11. What elegance means here
 
 The `@velarscript/text-buffer` package is the reference specimen: small pure
 functions, structural record returns, one job per function, contracts as

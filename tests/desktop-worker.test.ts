@@ -388,7 +388,7 @@ test("Desktop owns bounded packaged project tasks without executable grants", { 
   await Promise.all([mkdir(project), mkdir(appData), mkdir(host)]);
   await writeFile(join(project, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist", extensions: [] }), "utf8");
   await writeFile(join(project, "main.vel"), "print(\"project-task-run\")\n", "utf8");
-  await writeFile(join(project, "main.test.vel"), "def test_project_task() -> null:\n    if 2 + 2 != 4:\n        throw Error(\"math failed\")\n", "utf8");
+  await writeFile(join(project, "main.test.vel"), "test \"the project task runs\":\n    if 2 + 2 != 4:\n        throw Error(\"math failed\")\n", "utf8");
   await withDeadline(Promise.all([
     buildProjectTaskTool(join(host, "project-task.js")),
     buildBuildEngineTool(join(host, "build-engine")),
