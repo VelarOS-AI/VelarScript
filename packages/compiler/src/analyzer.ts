@@ -1246,6 +1246,14 @@ export class Analyzer implements TypeEnvironment {
     return undefined;
   }
 
+  extensionTextForm(type: ValueType): boolean | undefined {
+    for (const extension of this.analysisExtensions) {
+      const result = extension.textForm?.(type);
+      if (result !== undefined) return result;
+    }
+    return undefined;
+  }
+
   protected readonlyDataViewOf(type: ValueType): ValueType {
     if (type.kind === "optional") return optionalOf(this.readonlyDataViewOf(type.inner));
     if (type.kind === "union") return unionOf(type.members.map((member) => this.readonlyDataViewOf(member)));
@@ -8779,9 +8787,12 @@ export class Analyzer implements TypeEnvironment {
   private requireTextConvertible(type: ValueType, span: Span, site: "f-string" | "str"): void {
     if (isInvalidType(type) || this.isTextConvertible(type)) return;
     const lead = site === "f-string" ? "An f-string renders" : "str() converts";
+    const exit = this.extensionTextForm(this.expandAliases(type)) === false
+      ? "print(value) to inspect it"
+      : 'print(value) to inspect it, or stringify(value) for data text (import {stringify} from "velar/json")';
     this.diagnostics.push(diagnostic(
       "VEL4026",
-      `${lead} strings, numbers, bools, enums, and null; format ${describeType(type)} explicitly — print(value) to inspect it, or stringify(value) for data text (import {stringify} from "velar/json")`,
+      `${lead} strings, numbers, bools, enums, null, and extension values with a declared text form; format ${describeType(type)} explicitly — ${exit}`,
       span,
     ));
   }

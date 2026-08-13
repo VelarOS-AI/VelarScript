@@ -86,6 +86,13 @@ const lookModuleExports = new Map<string, ValueType>([
   ["clamp", namedFunction(["minimum", "preferred", "maximum"], [lengthType, lengthType, lengthType], lengthType)],
 ]);
 
+const webTextFormTypes = new Set(LOOK_UNIT_TYPES.values());
+const webOwnedNamedTypes = new Set([
+  "WebNode", "Element", "InputElement", "TextAreaElement", "CanvasElement", "DialogElement",
+  "Blob", "File", "Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent",
+  ...LOOK_PUBLIC_TYPE_NAMES,
+]);
+
 function functionType(parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
   return { kind: "function", parameters, requiredParameters, result };
 }
@@ -548,6 +555,11 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     ]),
     resolveTypeSyntax: resolveWebTypeSyntax,
     isTypeAssignable: isWebTypeAssignable,
+    textForm(type: ValueType): boolean | undefined {
+      if (type.kind === "extension" && type.extensionId === "@velarscript/web") return false;
+      if (type.kind !== "named" || !webOwnedNamedTypes.has(type.name)) return undefined;
+      return webTextFormTypes.has(type.name as "Length" | "Percentage" | "TrackFraction" | "Duration" | "Angle");
+    },
     inferIntrinsic: inferWebIntrinsic,
   }),
   editor: Object.freeze({

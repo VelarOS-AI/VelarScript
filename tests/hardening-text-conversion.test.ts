@@ -5,8 +5,8 @@ import { compile } from "@velarscript/compiler";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 const CONTRACT = "VEL4026";
-const F_STRING_LEAD = /^An f-string renders strings, numbers, bools, enums, and null; format /u;
-const STR_LEAD = /^str\(\) converts strings, numbers, bools, enums, and null; format /u;
+const F_STRING_LEAD = /^An f-string renders strings, numbers, bools, enums, null, and extension values with a declared text form; format /u;
+const STR_LEAD = /^str\(\) converts strings, numbers, bools, enums, null, and extension values with a declared text form; format /u;
 const TWO_EXITS = /print\(value\) to inspect it, or stringify\(value\) for data text \(import \{stringify\} from "velar\/json"\)$/u;
 
 function executeModule(code: string): ReturnType<typeof spawnSync> {
@@ -142,15 +142,31 @@ component Card(user: User):
   assert.deepEqual(codes, ["VEL4026", "VEL5047"], result.diagnostics.map((item) => item.message).join("\n"));
 });
 
-test("web unit values stay outside the v1 conversion contract", () => {
+test("web unit values declare a total text form for f-strings and str()", () => {
   const result = compile(`
 const width = 12px
-print(f"{width}")
+const ratio = 50%
+const time = 300ms
+const angle = 0.5turn
+print(f"gap: {width}; ratio: {ratio}; time: {time}; angle: {angle}")
+print(str(width))
 `.trimStart(), { extensions: [velarCompilerExtension] });
-  assert.ok(
-    result.diagnostics.some((item) => item.code === CONTRACT),
-    result.diagnostics.map((item) => `${item.code}: ${item.message}`).join("\n"),
-  );
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "gap: 12px; ratio: 50%; time: 300ms; angle: 0.5turn\n12px\n");
+});
+
+test("a Web extension value without a text form keeps VEL4026 and offers only inspection", () => {
+  const result = compile(`
+const card = look:
+    display = "grid"
+print(f"{card}")
+`.trimStart(), { extensions: [velarCompilerExtension] });
+  const rejection = result.diagnostics.find((item) => item.code === CONTRACT);
+  assert.ok(rejection, result.diagnostics.map((item) => `${item.code}: ${item.message}`).join("\n"));
+  assert.match(rejection.message, /format Look explicitly — print\(value\) to inspect it$/u);
+  assert.doesNotMatch(rejection.message, /stringify/u);
 });
 
 test("recovered earlier guidance still reaches the conversion check in the same compile", () => {
