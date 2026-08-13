@@ -16,7 +16,6 @@ export type TokenKind =
   | "import"
   | "js"
   | "unsafe"
-  | "extensionKeyword"
   | "extern"
   | "module"
   | "enum"

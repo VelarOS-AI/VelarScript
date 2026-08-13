@@ -2575,10 +2575,13 @@ export class Parser {
           const extensionExpression = this.parseExtensionExpression(token);
           if (extensionExpression) return extensionExpression;
         }
-        if (token.value === "keyframes" && this.check("colon")) {
+        // A block-valued Web word reaching Core means the extension is not
+        // active: the module was moved, or velar.json is missing the entry. One
+        // message names the cause instead of a statement-boundary cascade.
+        if ((token.value === "keyframes" || token.value === "look") && this.check("colon") && this.peekKind(1) === "newline") {
           this.diagnostics.push(diagnostic(
             "VEL2035",
-            "'keyframes:' belongs to @velarscript/web; add \"@velarscript/web\" to velar.json extensions, or move this module into a Web project",
+            `'${token.value}:' belongs to @velarscript/web; add "@velarscript/web" to velar.json extensions, or move this module into a Web project`,
             token.span,
           ));
           this.skipMistypedDeclaration();
@@ -2735,7 +2738,10 @@ export class Parser {
           this.skipMistypedDeclaration();
           return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
         }
-        this.diagnostics.push(diagnostic("VEL2002", "Expected an expression", token.span));
+        // A hard-reserved word standing where a value belongs is the same
+        // mistake as one standing in a name position, so it gets the same
+        // named message rather than a bare "Expected an expression".
+        this.diagnostics.push(diagnostic("VEL2002", this.reservedWordMessageFor(token, "name") ?? "Expected an expression", token.span));
         return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
   }
@@ -3162,7 +3168,10 @@ export class Parser {
    * was the problem, which is exactly the question a reserved word raises.
    */
   protected reservedWordMessage(noun: string): string | null {
-    const token = this.current();
+    return this.reservedWordMessageFor(this.current(), noun);
+  }
+
+  private reservedWordMessageFor(token: Token, noun: string): string | null {
     if (token.kind === "identifier" || token.kind === "string" || !/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(token.value)) return null;
     return `'${token.value}' is a VelarScript keyword and cannot be a ${noun}; choose another name`;
   }

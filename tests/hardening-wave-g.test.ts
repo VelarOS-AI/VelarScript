@@ -262,6 +262,20 @@ test("[wave G] a hard-reserved word in a name position is named by the diagnosti
     messages(`const holder = {enum}\n`, false),
     ["VEL2020 'enum' is a VelarScript keyword, so no binding spells it; write 'enum: value'"],
   );
+  assert.deepEqual(
+    messages(`print(enum)\n`, false),
+    ["VEL2002 'enum' is a VelarScript keyword and cannot be a name; choose another name"],
+  );
+});
+
+test("[wave G] a Web block word in a Core module names the missing extension", () => {
+  for (const word of ["look", "keyframes"]) {
+    assert.ok(
+      messages(`const value = ${word}:\n    color = "red"\n`, false)
+        .some((item) => item === `VEL2035 '${word}:' belongs to @velarscript/web; add "@velarscript/web" to velar.json extensions, or move this module into a Web project`),
+      word,
+    );
+  }
 });
 
 test("[wave G] 'case' is softened as a word but JavaScript still reserves the binding", () => {
