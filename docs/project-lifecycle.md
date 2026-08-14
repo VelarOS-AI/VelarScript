@@ -114,15 +114,29 @@ stdio to close and reports conventional status 130 or 143 when the child exits
 from the forwarded signal, so terminating the command cannot leave a detached
 VelarScript program holding files, ports, or output streams.
 
-`velar test` holds one trust rule: any unowned error during a test fails that
-test. A detached-task failure report, an uncaught exception or unhandled
-rejection (a module whose initialization touches the DOM in a headless run is
-the canonical case), or anything else that reaches the host error channel
-while a test runs marks that test failed; an unowned error while a test file
-loads fails that file's tests before they can run green. The runner itself
-keeps running — the failure belongs to the test, never to the process — and
-the exit code reports it. A green suite therefore means no test printed an
-error anywhere, not merely that every awaited assertion passed.
+`velar test` holds one trust rule, and `velar test --browser` holds the same
+one: any unowned error during a test fails that test. A detached-task failure
+report, an uncaught exception or unhandled rejection (a module whose
+initialization touches the DOM in a headless run is the canonical case), a page
+error or error/warning console message in a browser run, or anything else that
+reaches the host error channel while a test runs marks that test failed; an
+unowned error while a test file loads fails that file's tests before they can
+run green. A `.browser.test.vel` body runs in the test process rather than in
+the page, so a page API called from it reports through that same host channel
+and fails the test there. The runner itself keeps running — the failure belongs
+to the test, never to the process — and the exit code reports it. A green suite
+therefore means no test printed an error anywhere, not merely that every awaited
+assertion passed.
+
+Work a test starts is work the test owns, so the rule reaches past the test's
+own return. Each runner waits for the process to have nothing left to do before
+it takes a verdict, which is what attributes a late failure to the test that
+started it rather than to whichever test happens to be running when it lands. A
+fixed grace window cannot do that job: a failure one millisecond past it is a
+failure nobody counts. The wait carries an owned upper bound, and its expiry is
+itself a failure — work that never finishes is work whose failure could never be
+reported. A test that does not finish within its own bound is reported the same
+way, so a hung test ends the run instead of holding it open forever.
 
 `velar test` and `velar run` compile into a short-lived sandbox inside the
 project — `.velar/test-*` and `.velar/run-*` — rather than the system

@@ -504,6 +504,15 @@ function moduleInterface(
   return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
 }
 
+/**
+ * The one sentence an author standing in a `.browser.test.vel` needs: the body
+ * runs in the test process, the application runs in the page, and the surface
+ * that reaches across is `velar/web-test`.
+ */
+function browserTestDrivingGuidance(name: string): string {
+  return `A browser test drives the running page, so '${name}' is not available in its body; import {browser} from "velar/web-test" and use browser.open("/"), browser.fill(selector, text), browser.click(selector), browser.waitForText(selector, text), and browser.text(selector) — the same module exports localStorage and sessionStorage for the page's storage`;
+}
+
 export const velarCompilerExtension: CompilerExtension = Object.freeze({
   id: "@velarscript/web",
   contract: Object.freeze({ protocolVersion: 1, apiVersion: VELAR_WEB_API_VERSION, kind: "application", extends: Object.freeze({}) }),
@@ -568,6 +577,18 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       ["location", "Use velar/browser location() or velar/web navigation instead of the location global"],
       ["history", "Use velar/web navigation instead of the history global"],
       ["fetch", "Use velar/http instead of the raw fetch global"],
+    ]),
+    // A `.browser.test.vel` body runs in the test process and drives a page
+    // that already runs the built application, so the DOM globals do not point
+    // at velar/browser there: the door is velar/web-test.
+    globalGuidanceByPathSuffix: new Map([
+      [".browser.test.vel", new Map([
+        ["document", browserTestDrivingGuidance("document")],
+        ["window", browserTestDrivingGuidance("window")],
+        ["navigator", browserTestDrivingGuidance("navigator")],
+        ["localStorage", browserTestDrivingGuidance("localStorage")],
+        ["sessionStorage", browserTestDrivingGuidance("sessionStorage")],
+      ])],
     ]),
     resolveTypeSyntax: resolveWebTypeSyntax,
     isTypeAssignable: isWebTypeAssignable,

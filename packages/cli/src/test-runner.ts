@@ -7,8 +7,48 @@ import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { hostErrorStack } from "./host-error.ts";
+import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources } from "./unowned-errors.ts";
 
-export async function runTests(config: VelarProjectConfig, explicitInput: string | null): Promise<number> {
+export interface TestRunnerOptions {
+  readonly testTimeoutMs?: number;
+  readonly settleTimeoutMs?: number;
+  /**
+   * Ends a run whose leftover work holds the event loop open. A CLI run must
+   * end; an in-process caller owns its own process and disables this.
+   */
+  readonly exitWhenStuck?: boolean;
+}
+
+interface TestLimits {
+  readonly testTimeoutMs: number;
+  readonly settleTimeoutMs: number;
+  readonly exitWhenStuck: boolean;
+}
+
+const defaultTestTimeoutMs = 120_000;
+const defaultTestSettleTimeoutMs = 10_000;
+
+function testLimits(options: TestRunnerOptions): TestLimits {
+  const bounded = (value: number | undefined, fallback: number, name: string): number => {
+    const resolved = value ?? fallback;
+    if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > 600_000) {
+      throw new RangeError(`${name} must be an integer from 1 through 600000`);
+    }
+    return resolved;
+  };
+  return {
+    testTimeoutMs: bounded(options.testTimeoutMs, defaultTestTimeoutMs, "Test timeout"),
+    settleTimeoutMs: bounded(options.settleTimeoutMs, defaultTestSettleTimeoutMs, "Test settle timeout"),
+    exitWhenStuck: options.exitWhenStuck !== false,
+  };
+}
+
+export async function runTests(
+  config: VelarProjectConfig,
+  explicitInput: string | null,
+  options: TestRunnerOptions = {},
+): Promise<number> {
+  const limits = testLimits(options);
   const files = explicitInput?.endsWith(".test.vel")
     ? [config.entryPath]
     : await discoverTestFiles(config.root, new Set([config.outDir, config.publicDir]));
@@ -17,37 +57,28 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
     return 1;
   }
 
+  mapCompiledStacksToSources();
   const temporary = await createCompiledSandbox(config.root, "test");
   let passed = 0;
   let failed = 0;
-  // ASY-D2 + WEB-N5 + BLD-D1, one stance: any unowned error during a test
-  // fails that test. Unowned means anything that reaches the host error
-  // channel instead of the test's own await chain — a detached-task report,
-  // an uncaught exception or unhandled rejection (a module whose
-  // initialization touches the DOM in a headless run lands here), or any
-  // other console.error the program never owned. The runner keeps running:
-  // the failure belongs to the test, never to the process.
-  const unowned: string[] = [];
-  const hostConsole = console;
-  const originalConsoleError = hostConsole.error;
-  const captureConsoleError = (...values: unknown[]): void => {
-    unowned.push(values.map((value) => (typeof value === "string" ? value : hostErrorStack(value))).join(" "));
-    Reflect.apply(originalConsoleError, hostConsole, values);
+  // The runner keeps running: an unowned failure belongs to the test, never to
+  // the process. The channel is shared with the browser runner so that the one
+  // stance has one implementation.
+  const channel = captureUnownedErrors();
+  const drainUnowned = (): Promise<readonly string[]> => channel.drain();
+  // Work a test started is work the test owns. Waiting for the process to run
+  // out of work before reading the verdict is what makes a late failure belong
+  // to the test that started it instead of whichever later test happens to be
+  // running when it lands — and what stops it from being dropped entirely.
+  // A fixed sleep cannot do this job: a failure one millisecond past the sleep
+  // is a failure nobody counts.
+  let stuck = false;
+  const settleWork = async (subject: string): Promise<string | null> => {
+    if (stuck) return null;
+    if (await channel.settle(limits.settleTimeoutMs)) return null;
+    stuck = true;
+    return `work started ${subject} was still running ${limits.settleTimeoutMs} milliseconds later; a test owns the work it starts, and a failure from work that never finishes can never be reported`;
   };
-  const captureHostError = (error: unknown): void => {
-    unowned.push(hostErrorStack(error));
-  };
-  // Two macrotask turns let reports that were already scheduled during the
-  // awaited work (a settled detached rejection observes on a microtask, its
-  // chained observer one turn later) land before the verdict is read.
-  const drainUnowned = async (): Promise<readonly string[]> => {
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
-    return unowned.splice(0);
-  };
-  hostConsole.error = captureConsoleError;
-  process.on("uncaughtException", captureHostError);
-  process.on("unhandledRejection", captureHostError);
   try {
     await prepareStandardModules(temporary, config);
     for (const file of files) {
@@ -105,11 +136,13 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
         try {
           if (typeof test !== "function") throw new Error(`Test ${JSON.stringify(name)} was not emitted`);
           if (test.length !== 0) throw new Error(`Test ${JSON.stringify(name)} cannot declare parameters`);
-          await test();
+          await boundedTest(test as () => unknown, limits.testTimeoutMs);
+          const leftover = await settleWork("by this test");
           const testErrors = await drainUnowned();
           if (testErrors.length > 0) {
             throw new Error(`an unowned error was reported while this test ran\n${testErrors.join("\n")}`);
           }
+          if (leftover !== null) throw new Error(leftover);
           passed += 1;
           process.stdout.write(`✓ ${relative(config.root, file)} :: ${name}\n`);
         } catch (error) {
@@ -122,20 +155,52 @@ export async function runTests(config: VelarProjectConfig, explicitInput: string
     // Work a test left behind (a straggling timer, a task that outlived its
     // test) still fails the run instead of crashing it after the guards come
     // down.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const leftover = await settleWork("during this run");
     const trailing = await drainUnowned();
     if (trailing.length > 0) {
       failed += 1;
       process.stderr.write(`✗ an unowned error was reported after the last test\n${trailing.join("\n")}\n`);
     }
+    if (leftover !== null) {
+      failed += 1;
+      process.stderr.write(`✗ ${leftover}\n`);
+    }
   } finally {
-    hostConsole.error = originalConsoleError;
-    process.off("uncaughtException", captureHostError);
-    process.off("unhandledRejection", captureHostError);
+    channel.release();
     await removeCompiledSandbox(temporary);
   }
   process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
-  return failed === 0 ? 0 : 1;
+  const code = failed === 0 ? 0 : 1;
+  if (stuck && limits.exitWhenStuck) {
+    // The process cannot end on its own — work a test started still holds the
+    // event loop. The verdict is already written; ending the run beats hanging
+    // a gate forever on a failure that has already been reported.
+    await flushOutput(process.stdout);
+    await flushOutput(process.stderr);
+    process.exit(code);
+  }
+  return code;
+}
+
+/**
+ * A test that never settles is a failure that never reaches a human. The bound
+ * makes the hang a reported failure; the work itself keeps whatever handles it
+ * holds, which the run-level settle then reports in its own right.
+ */
+async function boundedTest(test: () => unknown, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`this test did not finish within its ${timeoutMs} millisecond bound`)),
+      timeoutMs,
+    );
+  });
+  void deadline.catch(() => {});
+  try {
+    await Promise.race([Promise.resolve().then(() => test()), deadline]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 async function discoverTestFiles(root: string, excluded: ReadonlySet<string>): Promise<string[]> {

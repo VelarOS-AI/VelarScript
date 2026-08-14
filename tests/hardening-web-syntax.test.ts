@@ -93,7 +93,7 @@ component Probe(messages: Map<string, Message>):
   const result = compile(source);
   const argument = 'messages.get("id")';
   const start = source.indexOf(argument);
-  const diagnostic = result.diagnostics.find((item) => item.message === "Cannot assign readonly Message? to Message?");
+  const diagnostic = result.diagnostics.find((item) => item.message.startsWith("Cannot assign readonly Message? to Message?"));
 
   assert.deepEqual(diagnostic?.span, { start, end: start + argument.length });
   assert.ok(result.semanticIndex.expressions.some((expression) => expression.span.start === start

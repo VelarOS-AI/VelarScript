@@ -21,6 +21,7 @@ import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "./preview-server.ts";
 import { hostErrorStack } from "./host-error.ts";
+import { captureUnownedErrors, mapCompiledStacksToSources, type UnownedErrorChannel } from "./unowned-errors.ts";
 import {
   boundedBrowserOperation,
   exitBrowserWorker,
@@ -28,6 +29,20 @@ import {
   superviseBrowserWorker,
   terminateBrowserServer,
 } from "./browser-process-owner.ts";
+
+/**
+ * The one thing an author who reached this failure did not know. A
+ * `.browser.test.vel` body runs in the test process and drives a page that is
+ * already running the built application, so a page API called from the test
+ * body fails on a host that has no DOM and no storage. The compile-time
+ * guidance for `document` says the same thing at the other end.
+ */
+const browserTestHostGuidance = [
+  "A .browser.test.vel body runs in the test process, not in the page — the page already runs the built application.",
+  'Drive it through `import {browser} from "velar/web-test"`: browser.open("/"), browser.fill(selector, text),',
+  "browser.click(selector), browser.waitForText(selector, text), browser.text(selector).",
+  "mount, JSX, document, and velar/storage are page APIs and are unavailable in the test process.",
+].join("\n");
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 export type BrowserEngineSelection = BrowserEngine | "all";
@@ -266,11 +281,21 @@ export async function runBrowserTests(
   if (workerOptions !== undefined && typeof process.send === "function") {
     const resolvedOptions = browserTestWorkerOptions(workerOptions);
     const stopObservingParent = observeBrowserWorkerParent();
+    // The worker owns its process and ends it with process.exit, so the exit
+    // net is this runner's last guarantee that a report arriving after the
+    // verdict cannot leave the run green.
+    const channel = captureUnownedErrors({ exitNet: true });
+    mapCompiledStacksToSources();
     let code = 1;
     try {
-      code = await runBrowserTestsInWorker(config, explicitInput, selection, resolvedOptions);
+      code = await runBrowserTestsInWorker(config, explicitInput, selection, resolvedOptions, channel);
     } catch (error) {
       process.stderr.write(`${stackOf(error)}\n`);
+    }
+    const trailing = await channel.drain();
+    if (trailing.length > 0) {
+      process.stderr.write(`✗ an unowned error was reported after the last browser test\n${trailing.join("\n")}\n${browserTestHostGuidance}\n`);
+      code = code === 0 ? 1 : code;
     }
     stopObservingParent();
     await exitBrowserWorker(code);
@@ -319,7 +344,8 @@ async function runBrowserTestsInWorker(
   config: VelarProjectConfig,
   explicitInput: string | null,
   selection: BrowserEngineSelection,
-  options: BrowserTestRunnerOptions = {},
+  options: BrowserTestRunnerOptions,
+  channel: UnownedErrorChannel,
 ): Promise<number> {
   const limits = browserTestLimits(options);
   const contract = config.framework?.host.browserTests;
@@ -399,7 +425,26 @@ async function runBrowserTestsInWorker(
           activeBrowser = await browserTypes[engine].connect(activeBrowserServer.wsEndpoint(), { timeout: 30_000 });
           engineEntries:
           for (const entry of entries) {
-            const namespace = await import(`${pathToFileURL(entry.output).href}?engine=${engine}&run=${Date.now()}`) as Record<string, unknown>;
+            let namespace: Record<string, unknown>;
+            try {
+              namespace = await import(`${pathToFileURL(entry.output).href}?engine=${engine}&run=${Date.now()}`) as Record<string, unknown>;
+            } catch (error) {
+              if (lifecycleFailure !== null) throw lifecycleFailure;
+              failed += entry.tests.length;
+              process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} failed to load\n${stackOf(error)}\n${browserTestHostGuidance}\n`);
+              await channel.drain();
+              continue;
+            }
+            // A module initialization error that surfaced on the host channel
+            // instead of the import's own await — the shape a mounted entry
+            // takes when a browser test imports it — fails the file's tests
+            // before any of them can run green.
+            const loadTimeErrors = await channel.drain();
+            if (loadTimeErrors.length > 0) {
+              failed += entry.tests.length;
+              process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} reported an unowned error while loading\n${loadTimeErrors.join("\n")}\n${browserTestHostGuidance}\n`);
+              continue;
+            }
             for (const declared of entry.tests) {
               if (lifecycleFailure !== null) throw lifecycleFailure;
               // D39 item 53: the reporter quotes the author's name for the
@@ -441,6 +486,20 @@ async function runBrowserTestsInWorker(
                   engineUsable = false;
                   testFailure = new Error(`${testFailure === null ? "Browser test completed but its context leaked" : stackOf(testFailure)}\n${stackOf(cleanupError)}`);
                 }
+              }
+              // The host error channel is the third way a failure reaches a
+              // human here, and the one the runner used to ignore: the test
+              // body runs in this process, so a page API it calls, a detached
+              // task it starts, and a module it imports all report through
+              // console.error, uncaughtException, or unhandledRejection rather
+              // than through the page. Draining after the verdict also catches
+              // page reports queued while the context closed.
+              const hostReports = await channel.drain();
+              if (testFailure === null && (hostReports.length > 0 || runtimeFailures.length > 0)) {
+                const reported = [...runtimeFailures, ...hostReports].join("\n");
+                testFailure = new Error(hostReports.length > 0
+                  ? `Browser runtime failures:\n${reported}\n${browserTestHostGuidance}`
+                  : `Browser runtime failures:\n${reported}`);
               }
               if (testFailure instanceof BrowserTestInterrupted || testFailure instanceof BrowserTestRunTimedOut) throw testFailure;
               if (testFailure === null) {
@@ -510,8 +569,39 @@ async function runBrowserTestsInWorker(
     catch (error) { cleanupFailure ??= error; }
     if (cleanupFailure !== null) throw cleanupFailure;
   }
+  // The cleanup above released everything this runner owns, so whatever still
+  // holds the loop is work a test started. Waiting for it before the verdict is
+  // what keeps a late failure from being dropped — and keeps the printed count
+  // honest about it.
+  if (!await settleWorkerWork(channel, limits.cleanupTimeoutMs)) {
+    failed += 1;
+    process.stderr.write("✗ work a browser test started was still running when the run ended; a test owns the work it starts, and a failure from work that never finishes can never be reported\n");
+  }
+  const trailing = await channel.drain();
+  if (trailing.length > 0) {
+    failed += 1;
+    process.stderr.write(`✗ an unowned error was reported after the last browser test\n${trailing.join("\n")}\n${browserTestHostGuidance}\n`);
+  }
   process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
   return failed === 0 ? 0 : 1;
+}
+
+/**
+ * Work a browser test started outlives the last test exactly as it does in the
+ * Node runner, and the worker ends with process.exit, so the run must wait for
+ * the process to run out of work before it takes its verdict. The one handle
+ * that would make quiescence unobservable is the worker's own IPC channel to
+ * its supervisor; unreferencing it for the settle window does not close it —
+ * the disconnect that reports a dead parent still arrives.
+ */
+async function settleWorkerWork(channel: UnownedErrorChannel, timeoutMs: number): Promise<boolean> {
+  const supervisorChannel = process.channel;
+  supervisorChannel?.unref?.();
+  try {
+    return await channel.settle(timeoutMs);
+  } finally {
+    supervisorChannel?.ref?.();
+  }
 }
 
 async function installFrameworkRuntime(page: Page, source: string | undefined): Promise<void> {

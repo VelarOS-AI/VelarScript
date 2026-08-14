@@ -6,6 +6,24 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The test runners can no longer report green around a failure. The
+  browser runner never watched the host error channel — a browser test
+  body runs in the worker, so `mount(...)` failing there printed and
+  passed — and the Node runner's fixed 20ms straggler window dropped any
+  failure that landed late, against its own comment's promise. The
+  unowned-error stance now lives in one shared module both runners
+  consume, verdicts wait for event-loop quiescence (which also attributes
+  a late failure to the test that started it), the Node runner gains a
+  per-test timeout, and compiled stacks map back to `.vel` sources. The
+  enumeration of every path a failure can take to a human — 16 in the
+  Node runner, 23 in the browser runner — is recorded, each verified.
+- The blind-test discoverability gaps close: DOM globals inside a
+  `.browser.test.vel` point at `velar/web-test` instead of the wrong
+  door, the skill brief carries a runnable browser-test recipe, the first
+  storage diagnostic teaches a complete working read (storage already
+  parses internally — the five-guess chain was hand-rolling it), and a
+  refused readonly component prop names the helper signature that would
+  accept it.
 - Narrowing gets six long-standing gaps closed: `flag == true` narrows a
   `bool?` the way an enum comparison already did, a non-null optional chain
   proves every link was present, a `while` that cannot `break` keeps its

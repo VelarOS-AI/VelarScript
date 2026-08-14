@@ -145,6 +145,13 @@ export interface CompilerAnalysisExtension {
   readonly globals?: ReadonlyMap<string, ValueType>;
   readonly reservedBindings?: ReadonlySet<string>;
   readonly globalGuidance?: ReadonlyMap<string, string>;
+  /**
+   * Guidance that replaces `globalGuidance` inside a module whose path ends
+   * with the keyed suffix. The right door for a reserved global depends on
+   * where the author is standing: `document` inside a component means JSX and
+   * refs, and inside a `.browser.test.vel` it means `velar/web-test`.
+   */
+  readonly globalGuidanceByPathSuffix?: ReadonlyMap<string, ReadonlyMap<string, string>>;
   /** Resolve target-owned type syntax without teaching Core the target's types. */
   readonly resolveTypeSyntax?: ExtensionTypeSyntaxResolver;
   /** Decide compatibility inside a target-owned type family. */

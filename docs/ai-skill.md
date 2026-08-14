@@ -115,6 +115,29 @@ Components, functions, and types live in `src/app.vel` and its neighbours;
 `src/app.test.vel` tests those exports headlessly and
 `src/app.browser.test.vel` drives the mounted application.
 
+**A browser test drives the page; it does not build one.** Its body runs in the
+test process against a page already running the production build, so `mount`,
+JSX, and `document` are unavailable there — the driving surface is
+`velar/web-test`, and selectors are ordinary CSS:
+
+```velar fragment
+import {expect} from "velar/test"
+import {browser, localStorage} from "velar/web-test"
+
+test "adding a link shows it in the list":
+    await browser.open("/")
+    await browser.fill("#title", "Vel")
+    await browser.click("#add")
+    await browser.waitForText("[data-item]", "Vel")
+    expect(await browser.text("[data-count]")).toBe("1")
+    expect(await localStorage.get("reading")).toBe(`[{"title":"Vel"}]`)
+```
+
+`browser` also carries `reload`, `press`, `select`, `attribute`, `count`,
+`visible`, `waitFor`, `currentPath`, and `viewport`; `localStorage` and
+`sessionStorage` read and write the page's raw storage. Any unhandled error —
+in the page or in the test process — fails the test.
+
 ## The traps your reflexes will hit
 
 Everything in this table was hit by real models writing Vel blind. All but
@@ -509,6 +532,31 @@ component Panel:
         </ul>
     </section>
 ```
+
+**A component prop is a readonly projection**, and readonly travels: inside
+`component ProjectList(items: List<Item>)` the body sees `readonly List<Item>`,
+so a helper it calls takes `items: readonly List<Item>`, and a `List` that
+helper builds is `List<readonly Item>`. Declare the helper that way once rather
+than copying the data to widen it.
+
+`velar/storage` persists JSON and validates on the way back in, so a read needs
+a **named** runtime type — a primitive or generic spelling is a type, not a
+value:
+
+```velar fragment
+import {storage} from "velar/storage"
+
+type SavedItem:
+    title: string
+
+type SavedItems = List<SavedItem>
+
+const items = storage.get("reading", SavedItems, [])
+storage.set("reading", items)
+```
+
+The third argument is the fallback for missing or invalid data; `session` and
+`database(name)` from the same module carry the same shape.
 
 ### Errors and async
 

@@ -485,6 +485,15 @@ const coreGlobalGuidance = new Map([
   // COL-U8: Set() and Map() are real constructors, so the List/Array
   // asymmetry is a trap worth naming: a List is built with a literal.
   ["List", "Lists are created with a '[]' literal (or [...values] to copy); 'List<T>' is a type name, not a constructor"],
+  // A primitive spelling in a value position is almost always an API asking
+  // for a runtime type; the alias is the step that turns the type into a value.
+  // `number` is absent because `number(text)` is a real prelude conversion, so
+  // the name resolves and never reaches guidance; the runtime-type position
+  // says the same thing there.
+  ...["string", "bool"].map((name) => [
+    name,
+    `'${name}' names a type, not a value; declare an alias — 'type Saved = ${name}' — when an API asks for a runtime type to validate against`,
+  ] as const),
   // TXT-I1: the Python spellings.
   ["len", "Use 'value.size'; strings and collections measure with the size member"],
   ["parseInt", "Use 'number(text)', then '.floor()' or '.round()' for an integer; VelarScript has one text-to-number conversion"],
@@ -820,6 +829,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly extensionGlobals = new Map<string, ValueType>();
   private readonly extensionReservedBindings = new Set<string>();
   private readonly globalGuidance = new Map(coreGlobalGuidance);
+  private readonly scopedGlobalGuidance = new Map<string, Map<string, string>>();
   private readonly analysisExtensions: readonly CompilerAnalysisExtension[];
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
@@ -915,7 +925,28 @@ export class Analyzer implements TypeEnvironment {
       for (const [name, type] of extension.globals ?? []) this.extensionGlobals.set(name, type);
       for (const name of extension.reservedBindings ?? []) this.extensionReservedBindings.add(name);
       for (const [name, guidance] of extension.globalGuidance ?? []) this.globalGuidance.set(name, guidance);
+      for (const [suffix, guidance] of extension.globalGuidanceByPathSuffix ?? []) {
+        const collected = this.scopedGlobalGuidance.get(suffix) ?? new Map<string, string>();
+        for (const [name, message] of guidance) collected.set(name, message);
+        this.scopedGlobalGuidance.set(suffix, collected);
+      }
     }
+  }
+
+  /**
+   * The guidance a reserved global earns where it was written. A module path
+   * suffix selects the door that is actually open there before the module-wide
+   * answer applies.
+   */
+  private guidanceForGlobal(name: string): string | undefined {
+    if (this.modulePath !== null) {
+      for (const [suffix, guidance] of this.scopedGlobalGuidance) {
+        if (!this.modulePath.endsWith(suffix)) continue;
+        const message = guidance.get(name);
+        if (message !== undefined) return message;
+      }
+    }
+    return this.globalGuidance.get(name);
   }
 
   private readonly modulePath: string | null;
@@ -4145,7 +4176,7 @@ export class Analyzer implements TypeEnvironment {
             this.diagnostics.push(diagnostic("VEL3001", selfGuidance, expression.span));
             return invalidType;
           }
-          const guidance = this.globalGuidance.get(expression.name);
+          const guidance = this.guidanceForGlobal(expression.name);
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
         }
@@ -5844,7 +5875,12 @@ export class Analyzer implements TypeEnvironment {
       if (type.kind === "runtimeType") return type.value;
       if (type.kind === "any") return anyType;
       const argument = argumentAt(index);
-      if (argument) this.typeError("Runtime parsing requires a VelarScript runtime type", argument.span);
+      if (argument) {
+        this.typeError(
+          "Runtime parsing requires a VelarScript runtime type: pass a declared type, enum, or alias name — 'type Saved = List<Item>' makes 'Saved' one. A primitive spelling ('string') and a generic spelling ('List<Item>') are types, not values",
+          argument.span,
+        );
+      }
       return unknownType;
     };
 
@@ -8436,6 +8472,15 @@ export class Analyzer implements TypeEnvironment {
     const actualDescription = describeType(actual);
     const expectedDescription = describeType(expected);
     if (actualDescription !== expectedDescription) {
+      // A readonly projection is refused for one reason and has one fix, and
+      // the fix is a signature the author has to write somewhere else. Naming
+      // the mismatch without naming that signature is what made component
+      // props cost two rounds of rework in a blind test.
+      const projection = this.readonlyProjectionGuidance(expandedActual, expected, expandedExpected, expectedCore);
+      if (projection !== null) {
+        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${projection}`, valueSpan);
+        return;
+      }
       // COL-U10: a value of one collection family in another family's
       // position gets the bridge spelling, not a bare mismatch.
       const bridge = this.collectionBridgeGuidance(expandedActual, expectedCore);
@@ -8451,6 +8496,33 @@ export class Analyzer implements TypeEnvironment {
       ? ` (the value is ${actualOrigin ?? "a structural type"} and the target is ${expectedOrigin ?? "a structural type"})`
       : "";
     this.typeError(`Cannot assign ${actualDescription} to a different ${expectedDescription} contract${origins}`, valueSpan);
+  }
+
+  /**
+   * D44 rule 72's readonly view refuses exactly one shape of assignment: the
+   * value is the target type with readonly added. Component props arrive that
+   * way — the body of `component List(items: List<Item>)` sees a readonly
+   * projection — so the helper that would accept the value has a signature the
+   * author never wrote, and the diagnostic is the only place to hand it over.
+   * The return shape matters as much as the parameter: a List built from a
+   * readonly List carries readonly elements.
+   */
+  private readonlyProjectionGuidance(
+    actual: ValueType,
+    expected: ValueType,
+    expandedExpected: ValueType,
+    expectedCore: ValueType,
+  ): string | null {
+    if (describeType(this.readonlyDataViewOf(expandedExpected)) !== describeType(actual)) return null;
+    const parameter = describeType(this.readonlyDataViewOf(expected));
+    const family = expectedCore.kind === "list" ? "List" : expectedCore.kind === "set" ? "Set" : null;
+    let built = "";
+    if (family !== null && (expectedCore.kind === "list" || expectedCore.kind === "set")) {
+      const element = describeType(expectedCore.element);
+      const projected = describeType(this.readonlyDataViewOf(expectedCore.element));
+      if (projected !== element) built = `, and a ${family} built from it is '${family}<${projected}>'`;
+    }
+    return `a readonly projection stays readonly through every hop, so the value never widens — declare the receiving parameter as '${parameter}'${built}`;
   }
 
   // COL-U10: the collection families never assign across each other; each

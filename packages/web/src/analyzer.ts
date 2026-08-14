@@ -152,6 +152,18 @@ const lookPropertyType = (kind: LookPropertyValueKind): ValueType => {
 const LOOK_PROPERTY_TYPES = new Map([...LOOK_PROPERTY_VALUE_KINDS]
   .map(([name, kind]) => [name, lookPropertyType(kind)] as const));
 
+/**
+ * The whole read, from the module name to a working line. A blind model needed
+ * five guesses to get here because each diagnostic answered only the step it
+ * was standing on: the export name, then the argument count, then that the
+ * second argument is a runtime type, then that a primitive spelling is not a
+ * value. Storage already parses and validates the stored JSON, so the one thing
+ * still missing is the named type to validate against.
+ */
+function storageReadGuidance(call: string): string {
+  return `${call} validates what it reads and parses the stored JSON itself, so its second argument is a named runtime type: declare one — 'type SavedItems = List<Item>' — then read with 'storage.get("items", SavedItems, [])', whose third argument is the fallback for missing or invalid data, and write it back with 'storage.set("items", items)'. A primitive spelling ('string') and a generic spelling ('List<Item>') are types, not values; only a declared type, enum, or alias name is one.`;
+}
+
 export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
   const { intrinsic, argumentAt, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
   switch (intrinsic.name) {
@@ -280,6 +292,10 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       arity(1, 1);
       return runtimeTypeAt(0);
     case "storage.get": {
+      if (!argumentAt(1)) {
+        context.typeError(storageReadGuidance("storage.get(key, Type)"), callSpan);
+        return unknownType;
+      }
       arity(2, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
@@ -288,6 +304,10 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       return optionalOf(parsed);
     }
     case "storage.databaseGet": {
+      if (!argumentAt(1)) {
+        context.typeError(storageReadGuidance("database(name).get(key, Type)"), callSpan);
+        return { kind: "promise", value: unknownType };
+      }
       arity(2, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
@@ -296,6 +316,10 @@ export function inferWebIntrinsic(context: CompilerIntrinsicAnalysisContext): Va
       return { kind: "promise", value: optionalOf(parsed) };
     }
     case "storage.watch": {
+      if (!argumentAt(1)) {
+        context.typeError(storageReadGuidance("storage.watch(key, Type, callback)"), callSpan);
+        return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
+      }
       arity(3, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);

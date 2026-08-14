@@ -20394,7 +20394,7 @@ mutable.id = "changed"
   assert.deepEqual([...modelInterface.namedTypeReadonlyFields?.get("Profile") ?? []], ["id"]);
   const diagnostics = project.modules.find((module) => module.inputPath === entry)!.result.diagnostics;
   assert.deepEqual(diagnostics.map((item) => item.message), [
-    "Cannot assign readonly Profile to Profile",
+    "Cannot assign readonly Profile to Profile; a readonly projection stays readonly through every hop, so the value never widens — declare the receiving parameter as 'readonly Profile'",
     "Cannot assign through readonly Meta; it is a read-only view",
     "Cannot assign to read-only field 'id'",
   ]);

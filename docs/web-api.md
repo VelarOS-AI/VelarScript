@@ -1426,7 +1426,11 @@ animation, so a keyframes declaration can be asserted without reading computed
 style. It is not a
 DOM or Playwright escape hatch. The CLI builds a real CSP production site,
 starts an isolated local host, creates a fresh browser context for each test,
-and automatically fails on page errors or error/warning console messages.
+and automatically fails on page errors or error/warning console messages. A
+`.browser.test.vel` body runs in the test process, not in the page, so `mount`,
+JSX, `document`, and `velar/storage` are unavailable there; a call that reaches
+for them reports on the worker's host error channel and fails the test through
+the same trust rule, which also covers a detached task the test leaves running.
 Chromium is the local default; Chromium, Firefox, WebKit, or all three may be
 selected explicitly. `namespace(selector)` requires one matched node and
 returns its platform namespace URI so SVG/HTML lowering can be asserted without
