@@ -247,6 +247,41 @@ provider operation. A present accessor-backed, mutable, extensible, or otherwise
 incompatible registry fails closed without running its hooks. This adaptation
 does not make `import js unsafe` checked; it only prevents a framework proxy from
 being mistaken for the application value the host API was given.
+## Extern arguments are read-only
+
+What crosses the call is the **raw identity** — the same object, without the
+reactive wrapper the VelarScript side reads through. That is what makes host
+APIs work at all: a DOM call receives the value the DOM expects. It is also the
+reason an extern argument is read-only by contract.
+
+If the package writes into the object it was given, the write lands on the real
+data and nothing on the VelarScript side hears it. Reactive reads are
+invalidated by VelarScript-side assignment; a foreign write performs no
+assignment, so no computed value recomputes, no component re-renders, and no
+watcher runs. The change becomes visible at the next VelarScript-triggered
+invalidation that happens for some unrelated reason — data appearing to change
+with no cause at the point where it is finally noticed. Flow facts have the
+same blind spot: a narrowing established before the call is not re-established
+by a foreign write, and the value the compiler proved is not the value in the
+object any more.
+
+So each call carries data one way. A package that produces data **returns** it,
+and the VelarScript side assigns the result:
+
+```velar fragment
+extern module "text-tools":
+    export def formatEntries(entries: readonly List<string>) -> List<string>
+
+import js {formatEntries} from "text-tools"
+
+let entries: List<string> = ["beta", "alpha"]
+entries = formatEntries(entries)
+```
+
+Declaring the parameter `readonly` states the contract in the signature where a
+reader will find it. Everything passed across the bridge is borrowed for the
+duration of the call.
+
 Direct `compile()` results inline this bridge and remain independently
 executable. A project compile instead reports a compiler-internal runtime-module
 requirement and imports that one shared implementation from every module that

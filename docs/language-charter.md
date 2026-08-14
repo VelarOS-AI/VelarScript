@@ -708,6 +708,16 @@ diagnostic teaches the two ways out: model the member as a data record, or drop
 mutate, and `unknown`/`any` members pass because they are already where static
 promises end.
 
+`readonly` is static discipline, and `unknown` is exactly where that discipline
+stops. A value validated out of an `unknown` is a **fresh, independent
+assertion** about the data: validation asserts a shape, it does not copy, and
+the assertion carries no memory of the view the `unknown` was reached through.
+So a mutable value parsed out of an `unknown` field of a `readonly` record
+aliases the same structure the read-only view was protecting, and writing
+through it writes through that view — with no diagnostic, because there is
+nothing left to check. Validate at the boundary where data enters, and do not
+park `unknown` inside data you intend to hand out as `readonly`.
+
 A field declaration such as `readonly details: Details` forbids replacing the
 field and projects nested data through the same transitive read-only view. This
 makes a readonly field and a field read through `readonly Profile` obey one rule.
@@ -831,13 +841,25 @@ Runtime narrowing guards are separate from `readonly`: the former validates a
 fact at a use site; the latter removes mutation capability from a data type at
 compile time.
 
-Two boundaries remain because they are visible in source:
+The recheck runs at **every read that relies on the fact**, not once per check,
+and for a record or collection it is a validating walk over the data. One check
+followed by ten reads is ten rechecks. That is the right default — it is what
+makes a fact survive a call at all — but in a hot loop it is worth avoiding:
+bind the narrowed value to a `const` once, outside the loop or immediately
+after the check, and read the `const`. A `const` holds the checked type
+outright, so it carries no fact and needs no recheck.
+
+Three boundaries remain because they are visible in source:
 
 - Narrowing does not flow into a nested function body. A callback may run at
   any later time, so it re-checks what it needs or receives checked values as
   parameters.
 - A getter is a computed value, not a stable location. Read it into a `const`
   to narrow the result.
+- An index or a `Map.get` is a read, not a location either. `values[0]` and
+  `lookup.get(key)` compute a result each time they are written, so testing one
+  narrows nothing for the next — the collection may hold something else by
+  then. Read the value into a `const` and test that; the two reads become one.
 
 An f-string converts each embedded value at its source position under the
 language's one text-conversion contract: conversion accepts `string`,
@@ -1861,7 +1883,14 @@ class Player extends Entity:
 ```
 
 A derived constructor calls `super(...)` before using `self`. `abstract` and
-`override` are checked for instance and static methods and getters. `static`
+`override` are checked for instance and static methods and getters. An override
+signature is strictly invariant: parameter types, arity, and the result type
+must match the base declaration exactly, while parameter names are the
+override's own. `-> number` does not
+override `-> number?`, even though the narrower result would be harmless,
+because one rule the reader can hold beats a correct variance table nobody
+remembers; result covariance is a deliberate exclusion that a real site can
+reopen. `static`
 declares class-owned fields and methods; inherited static fields cannot be
 redeclared because that would create two independent storage locations.
 `private` lowers to native JavaScript private storage and is accessible only
@@ -1869,11 +1898,23 @@ inside the declaring class. The Velar spelling remains `private let field` and
 `self.field`; direct JavaScript private-identifier syntax such as `#field` or
 `self.#field` is rejected with a safe fix that removes only the `#` marker.
 
-`super.member` follows JavaScript's lexical rule. It is available directly in a
-derived constructor, method, getter, or field initializer and remains available
-inside a nested arrow. A nested `def` creates a new function boundary and does
-not inherit `super`; name the base class explicitly when that is the intended
-call.
+`super.member` reaches base methods and getters — the members whose derived
+definition would otherwise shadow the base one. A base *field* is one storage
+location shared by the whole instance, so it is read and written through
+`self.field`; `super.field` names nothing. Position follows JavaScript's
+lexical rule: `super` is available directly in a derived constructor, method,
+getter, or field initializer and remains available inside a nested arrow. A
+nested `def` creates a new function boundary and does not inherit `super`; name
+the base class explicitly when that is the intended call.
+
+`self` is a keyword only where an instance exists — a constructor, method, or
+getter body. It does not exist in a field initializer, which runs before the
+instance is complete, nor in a static member, which has no instance; both
+positions report the rule rather than an unknown name. `self` is not, however,
+a reserved member name: a class may declare a field or method called `self`,
+and `self.self` reads it. The receiver keyword and the member namespace are
+separate, so no vocabulary is taken away from data that legitimately names a
+self-reference.
 
 A class name is not a value. It is used directly: called to construct
 (`Session("session-1")`), read for static members, extended, named in type
@@ -1899,7 +1940,15 @@ descriptors, or operator overloading.
 
 ## 11. Errors and assertions
 
-Only `Error` values can be thrown from checked VelarScript.
+Only `Error` values can be thrown from checked VelarScript. That is a rule
+about `throw`, and it does not claim that every failure originates in source:
+the compiler injects guards of its own, and they raise. A checked class-field
+read raises a host `TypeError` when the field holds `undefined`, and a stale
+flow fact raises `NarrowingError` at the read that relied on it (section 18 and
+section 5 own the two mechanisms). Both arrive at a `catch` binding as `Error`
+values under the normalization below, so a catch binding still never sees a
+non-`Error` — but a reader tracing a failure back to a `throw` will not find
+one, and should look at the read.
 
 ```velar fragment
 try:
@@ -2098,6 +2147,18 @@ the rewrites a diagnostic registered, and there is no diagnostic here to
 register one. The import still runs the module, so a module imported only for
 its initialization side effects behaves exactly as written.
 
+A module imported *only* for its effects says so by naming nothing:
+
+```velar fragment
+import "./register-formats.vel"
+```
+
+That is the spelling both parents already use — Python's `import x`,
+JavaScript's `import "./x"` — and it is the one to write when there is no name
+to bind. `import {} from "./register-formats.vel"` runs the same module through
+empty braces; it is rejected with that rewrite, because a form that binds
+nothing should not be spelled as a binding list.
+
 An imported name is read-only in the receiving module, but an `export let`
 remains a live ES-module value: the exporting module can reassign it between
 reads. The module contract records that distinction, and modules with live
@@ -2182,7 +2243,12 @@ decoders can accept forward-compatible protocol metadata, but every declared
 singleton field must equal its exact enum member.
 
 Validation proves the shape a value has at that operation; it does not
-constrain what an unchecked Proxy may do on later reads.
+constrain what an unchecked Proxy may do on later reads. Nor does it inherit
+anything from where the value was found: a value validated out of an `unknown`
+is a fresh, independent assertion over the same object, so if that `unknown`
+was reached through a `readonly` view, the validated result is a mutable alias
+of the data that view was protecting (section 5). Validate at the boundary,
+before the data is stored anywhere a read-only promise is made about it.
 
 Native JavaScript is explicit:
 
@@ -3137,6 +3203,16 @@ VelarScript preserves the JavaScript runtime where it matters:
   (section 8).
 - `private` lowers to native private members; private methods are native
   private methods.
+- Reading a class instance field is a compiler-injected guarded read, not a
+  bare property access. A field declared `T` promises a `T`, and JavaScript's
+  `undefined` is not one, so the guard raises a host `TypeError` naming the
+  field when the read finds `undefined` — a field read before its
+  initialization ran, or one an unchecked boundary filled with `undefined` —
+  rather than letting `undefined` travel under the declared type and fail
+  somewhere unrelated. Private and static field reads carry the same guard;
+  `Error.cause` is exempt because a host error legitimately has none. This is
+  the one class-member read that is a call, which is also why a field read in a
+  hot loop is worth binding to a `const` once.
 - Async functions and actions use Promises and the host event loop.
 - Map and Set use JavaScript key/value identity.
 - Garbage collection belongs to the host JavaScript engine.
@@ -3144,6 +3220,13 @@ VelarScript preserves the JavaScript runtime where it matters:
 The compiler adds checked boundaries, bounded collection helpers, runtime data
 validators, optional-chain normalization, readable DOM output, and source maps.
 It does not pretend those additions create a different memory model.
+An argument handed to JavaScript crosses as its raw identity, so an extern
+parameter is read-only by contract: a foreign write into it performs no
+VelarScript assignment, and nothing — reactive invalidation, a flow fact, a
+`readonly` promise — observes it until the next VelarScript-triggered
+invalidation happens for some other reason. A package that produces data
+returns it and the VelarScript side assigns the result
+([javascript-bridge.md](javascript-bridge.md)).
 Compiler-created lexical temporaries use the reserved `__velar...` namespace;
 the analyzer and editor refactors reject source bindings in that namespace, so
 optional lowering, component setup, and JSX callbacks cannot capture a user's
@@ -3206,6 +3289,18 @@ The following are not part of VelarScript:
 - source-level `prototype` or `__proto__` manipulation
 - class-header constructor fields
 - `init:` constructor blocks
+- class setters. A `get` property reads; there is no `set` counterpart, because
+  a setter makes an assignment run code that the assignment does not show.
+  Assign the field, or call a method (`def setSize(value: number)`) that names
+  the work it does
+- extending an `extern` class. Construction would have to chain across the
+  JavaScript bridge, and the base class is a contract the compiler cannot see
+  the body of. Hold the instance in a field and expose the behavior you need —
+  composition. `extends Error` is unaffected; `Error` is a builtin, not an
+  extern declaration
+- optional-field syntax. `let name?: T` marks the *field* optional in
+  TypeScript; VelarScript puts the question in the type, where the readers of
+  every other declaration already look: `let name: T? = null`
 - TypeScript-style interfaces, assertions, overloads, or type programming
 - generators, `yield`, or the JavaScript `Symbol.asyncIterator` protocol;
   incremental sources use checked `async for` pull contracts or producer

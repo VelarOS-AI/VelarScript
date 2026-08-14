@@ -590,6 +590,12 @@ needs a factory `def` (a class name is not a value) plus an exported `type`
 alias so consumers can annotate. Validate anything declared `-> unknown` inside
 the adapter, so only checked types leave it.
 
+**Extern arguments are read-only.** What crosses is the raw identity, so a
+package that writes into what you passed changes the real data while nothing on
+the Vel side observes it — no recompute, no re-render, no refreshed flow fact —
+until some unrelated Vel assignment invalidates. Have the package **return** the
+data and assign the result on the Vel side.
+
 2. **Quick raw access** — `import js unsafe` admits the value as `any`.
    Operations on an `any` are raw JavaScript with no runtime check anywhere: it
    is assignable to every type without validation, and an `any` holding
