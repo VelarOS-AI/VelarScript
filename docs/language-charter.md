@@ -1121,6 +1121,14 @@ such a value. Source literals stay narrower than the value space on purpose:
 `\u{D800}`–`\u{DFFF}` are rejected (section 3), so a lone surrogate can only
 enter a program across a JavaScript boundary, never from Velar text.
 
+Text equality is code-point-sequence identity, so canonically equivalent text
+is not equal: a word typed with one precomposed accented character and the same
+word read back from a macOS filename as a plain letter plus a combining accent
+render identically, yet they compare unequal, report different `size`, and miss
+each other as Map and Set keys. Normalize at the boundary where such text
+enters the program — `Text.normalize(text)` produces NFC, and `"NFD"`,
+`"NFKC"`, and `"NFKD"` are the other three accepted forms.
+
 Case-insensitive comparison is spelled `a.lower() == b.lower()`, and that is an
 approximation rather than Unicode case folding: `"STRASSE".lower()` is
 `"strasse"` while `"straße".lower()` is unchanged, so the two do not compare
@@ -3369,7 +3377,7 @@ needs, and a program reaches every one of them without writing an import:
 | --- | --- |
 | `Json.` | `parse`, `tryParse`, `stringify`, `stableStringify`, `clone`, `isSerializable` |
 | `Promise.` | `all`, `race`, `sleep`, `timeout`, `retry`, `map`, `series` |
-| `Text.` | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
+| `Text.` | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
 | `Look.` | the Web builder roster (`rgb`, `spacing`, `border`, and the rest of section 17) |
 
 The prelude adds `print`, `str`, `number`, `equals`, and `range` as bare names.

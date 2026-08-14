@@ -153,6 +153,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["chunks", apiFunction(["value", "size"], [stringType, numberType], listString)],
     ["words", apiFunction(["value"], [stringType], listString)],
     ["slug", apiFunction(["value"], [stringType], stringType)],
+    ["normalize", apiFunction(["value", "form"], [stringType, stringType], stringType, 1)],
     ["truncate", apiFunction(["value", "length", "suffix"], [stringType, numberType, stringType], stringType, 2)],
     ["indent", apiFunction(["value", "prefix"], [stringType, stringType], stringType, 1)],
     ["dedent", apiFunction(["value"], [stringType], stringType)],
@@ -872,6 +873,18 @@ export function chunks(value, size) {
 }
 export function words(value) { const cleaned = __velarTextCall(__velarNativeStringTrim, valueOf(value), []); return cleaned ? textList(__velarTextRegexSplit(cleaned, __velarTextWords, maxTextItems + 1), "words") : []; }
 export function slug(value) { let output = __velarTextCall(__velarTextStringNormalize, valueOf(value), ["NFKD"]); output = __velarTextRegexReplace(output, __velarTextMarks, ""); output = __velarTextCall(__velarNativeStringLower, output, []); output = __velarTextCall(__velarNativeStringTrim, output, []); output = __velarTextRegexReplace(output, __velarTextSlugSeparators, "-"); output = __velarTextRegexReplace(output, __velarTextSlugEdges, ""); return textOutput(output, "slug"); }
+// TXT-U3: text equality is code-point-sequence identity, so "café" typed on a
+// keyboard (NFC) and the same name read back from a macOS filename (NFD) are
+// different values with different sizes. This is the boundary tool that makes
+// them one value; the four Unicode forms are the only accepted spellings.
+export function normalize(value, form = "NFC") {
+  value = valueOf(value);
+  form = valueOf(form);
+  if (form !== "NFC" && form !== "NFD" && form !== "NFKC" && form !== "NFKD") {
+    throw new __velarTextNativeRangeError("normalize form must be NFC, NFD, NFKC, or NFKD");
+  }
+  return textOutput(__velarTextCall(__velarTextStringNormalize, value, [form]), "normalize");
+}
 export function truncate(value, length, suffix = "…") { value = valueOf(value); suffix = valueOf(suffix); length = textCount(length, "truncate length"); const valueLength = codePointLength(value); if (valueLength <= length) return value; const suffixLength = codePointLength(suffix); if (suffixLength >= length) return codePointPrefix(suffix, length); return codePointPrefix(value, length - suffixLength) + suffix; }
 export function indent(value, prefix = "    ") {
   const rows = lines(valueOf(value)); prefix = valueOf(prefix);

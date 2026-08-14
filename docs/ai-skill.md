@@ -37,8 +37,8 @@ must be imported. Four permanent namespaces carry the pure computation:
 `Json.` (`parse`, `tryParse`, `stringify`, `stableStringify`, `clone`,
 `isSerializable`), `Promise.` (`all`, `race`, `sleep`, `timeout`, `retry`,
 `map`, `series`), `Text.` (`trimStart`, `trimEnd`, `capitalize`, `title`,
-`lines`, `lineStarts`, `chunks`, `words`, `slug`, `truncate`, `indent`,
-`dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`,
+`lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`,
+`indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`,
 `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`,
 `splitPattern`), and Web visual builders under `Look.*`. A string method is a
 core operation; `Text.*` is the extension toolbox, and nothing moves between

@@ -543,6 +543,10 @@ const textNamespaceMembers: ReadonlyMap<string, ValueType> = new Map([
   ["chunks", textFunction(["value", "size"], [stringType, numberType], listOfString)],
   ["words", textFunction(["value"], [stringType], listOfString)],
   ["slug", textFunction(["value"], [stringType], stringType)],
+  // TXT-U3: equality is code-point-sequence identity, so canonically
+  // equivalent text is not equal. `normalize` is the boundary tool that makes
+  // it equal — macOS filenames arrive NFD while typed text is usually NFC.
+  ["normalize", textFunction(["value", "form"], [stringType, stringType], stringType, 1)],
   ["truncate", textFunction(["value", "length", "suffix"], [stringType, numberType, stringType], stringType, 2)],
   ["indent", textFunction(["value", "prefix"], [stringType, stringType], stringType, 1)],
   ["dedent", textFunction(["value"], [stringType], stringType)],

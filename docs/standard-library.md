@@ -227,7 +227,7 @@ needs no import, and nothing moves between the two, so the member list a reader
 must hold in mind never grows. It carries the transformations that are not
 simple receiver operations: `Text.trimStart`, `Text.trimEnd`, `Text.capitalize`,
 `Text.title`, `Text.lines`, `Text.lineStarts`, `Text.chunks`, `Text.words`,
-`Text.slug`, `Text.truncate`, `Text.indent`, `Text.dedent`,
+`Text.slug`, `Text.normalize`, `Text.truncate`, `Text.indent`, `Text.dedent`,
 `Text.normalizeWhitespace`, `Text.utf8Size`, `Text.escapeHtml`,
 `Text.codePoint`, and `Text.fromCodePoint`. Blank text is tested with the
 `text.isBlank()` member — `true` for empty or whitespace-only text.
@@ -246,6 +246,14 @@ an empty List. Stateless pattern operations are `Text.matches`, `Text.findMatch`
 `Text.title` treats separators as word boundaries. `Text.truncate` reserves room
 for its suffix. `Text.slug` lowercases Unicode text, removes punctuation, and
 joins word runs with `-`; it does not transliterate non-Latin text.
+`Text.normalize(text, form = "NFC")` applies one of the four Unicode
+normalization forms — `"NFC"`, `"NFD"`, `"NFKC"`, or `"NFKD"`; any other form
+throws `RangeError`. Text equality is code-point-sequence identity, so
+canonically equivalent text is not equal: a precomposed accented character and
+the letter plus its combining accent render identically but compare unequal,
+report different `size`, and miss each other as Map and Set keys. Normalize
+where such text enters the program — macOS filenames arrive decomposed while
+typed text is usually composed.
 `Text.escapeHtml` escapes text for HTML content and attribute contexts but does
 not mark it as trusted HTML. `Text.codePoint(character)` answers the code point
 of exactly one character and `null` for anything else — empty text, several
