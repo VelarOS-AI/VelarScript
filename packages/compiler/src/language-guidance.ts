@@ -150,6 +150,20 @@ const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<strin
   ])],
 ]);
 
+/**
+ * LOK-I5: the visual unit vocabulary belongs to `@velarscript/web`, which adds
+ * these suffixes to the lexer. Core keeps the list only to recognize the
+ * spelling and name the extension that owns it — the same cross-extension
+ * guidance D37 rule 45 established for Web statement shapes — instead of
+ * reporting a unit the author spelled perfectly well as unknown. Core's own
+ * duration suffixes (`ms`, `s`) are not in this list; they are Core's.
+ */
+const webNumericUnits = new Set(["px", "rem", "em", "vw", "vh", "vmin", "vmax", "%", "fr", "deg", "turn"]);
+
+export function webNumericUnitOwner(suffix: string): string | null {
+  return webNumericUnits.has(suffix) ? "@velarscript/web" : null;
+}
+
 export function declarationKeywordGuidance(name: string): DeclarationKeywordGuidance | null {
   return declarationKeywordGuidanceEntries.get(name) ?? null;
 }

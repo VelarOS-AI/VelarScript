@@ -18608,9 +18608,11 @@ extern module "host-sdk":
         readonly def inspect() -> string
         def refresh() -> null
 `.trimStart());
+  // CLS-I5: a getter and a method are executable, so `const` is advice they
+  // cannot take; the modifier belongs on the data they carry.
   assert.deepEqual(result.diagnostics.map((item) => item.message), [
-    "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field",
-    "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field",
+    "'readonly' is a data-type modifier, not a class member modifier; a method, getter, or constructor is executable and has no readonly contract — mark the data it works with, as in 'readonly List<number>'",
+    "'readonly' is a data-type modifier, not a class member modifier; a method, getter, or constructor is executable and has no readonly contract — mark the data it works with, as in 'readonly List<number>'",
   ]);
 });
 

@@ -36,7 +36,9 @@ def inspect(pending: readonly Promise<List<number>>) -> null:
     ...invalidClass.diagnostics,
     ...invalidPromise.diagnostics,
   ].map((item) => item.message), [
-    "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field",
+    // CLS-I5: the advice differs by member kind — `const` is a field's
+    // read-only spelling and means nothing on a method.
+    "'readonly' is a data-type modifier, not a class member modifier; a method, getter, or constructor is executable and has no readonly contract — mark the data it works with, as in 'readonly List<number>'",
     "'readonly' applies only to data records, structural objects, List, Set, Map, and Record values; T is outside that boundary",
     "'readonly' applies only to data records, structural objects, List, Set, Map, and Record values; Box is outside that boundary",
     "'readonly' applies only to data records, structural objects, List, Set, Map, and Record values; Promise<List<number>> is outside that boundary",

@@ -1,6 +1,7 @@
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringLiteralScan, type StringTokenPayload } from "./interpolated-string.ts";
+import { webNumericUnitOwner } from "./language-guidance.ts";
 import { forbiddenSourceIdentifiers, isForbiddenPrototypeMember, isSourceIdentifierPart, isSourceIdentifierStart } from "./source-names.ts";
 import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
@@ -545,7 +546,13 @@ export class Lexer {
       value += this.readDigitsWithSeparators();
     }
     const numberEnd = this.index;
-    if (this.peek() === "%" && this.numericSuffixes.has("%")) this.advance();
+    // LOK-I5: where the percentage unit does not exist, Core still reads `50%`
+    // as the percentage shape in the positions where no remainder operand can
+    // follow — end of line, `)`, `]`, `,` — so the author gets the unit's own
+    // guidance instead of a statement-continuation error about a spelling they
+    // never meant as arithmetic. `10 % 3` and `10%3` both keep a right operand
+    // and stay remainder in Core.
+    if (this.peek() === "%" && (this.numericSuffixes.has("%") || this.isPercentUnitPosition())) this.advance();
     else while (this.isIdentifierPart(this.peek())) this.advance();
     const suffix = this.text.slice(numberEnd, this.index);
     if (suffix && this.numericSuffixes.has(suffix)) {
@@ -555,17 +562,35 @@ export class Lexer {
     if (suffix) {
       const radix = integer === "0" && suffix.length > 1 ? suffix[0]?.toLowerCase() : null;
       const radixName = radix === "x" ? "Hexadecimal" : radix === "b" ? "Binary" : radix === "o" ? "Octal" : null;
+      // The unit vocabulary is the Web extension's. A Core file that spells a
+      // Look unit names the extension that owns it and how to enable it —
+      // D37 rule 45's cross-extension voice — instead of calling a perfectly
+      // good spelling unknown.
+      const owner = webNumericUnitOwner(suffix);
       this.diagnostics.push(diagnostic(
         "VEL1007",
         radixName
           ? `${radixName} literals are not part of VelarScript; write the decimal value`
-          : this.numericSuffixes.size > 0
-            ? `Unknown numeric unit '${suffix}'`
-            : `Unexpected characters '${suffix}' after a number`,
+          : owner
+            ? `The numeric unit '${suffix}' belongs to ${owner}; add "${owner}" to velar.json extensions, or move this module into a Web project`
+            : this.numericSuffixes.size > 0
+              ? `Unknown numeric unit '${suffix}'`
+              : `Unexpected characters '${suffix}' after a number`,
         span(numberEnd, this.index),
       ));
     }
     this.tokens.push({ kind: "number", value, span: span(start, numberEnd) });
+  }
+
+  /**
+   * LOK-I5: `%` right after a number is the percentage unit only where a
+   * remainder operator could not stand — the operator always takes a right
+   * operand, so a `%` followed by a line end, a closing bracket, or a
+   * separator is a unit spelling and nothing else.
+   */
+  private isPercentUnitPosition(): boolean {
+    const next = this.peek(1);
+    return next === "\0" || next === "\n" || next === "\r" || next === ")" || next === "]" || next === "}" || next === "," || next === ";" || next === ":";
   }
 
   private readLeadingDotNumber(): void {
