@@ -3,6 +3,28 @@ import { dirname, join, relative } from "node:path";
 import type { ProjectModule, ProjectResult, VelarSourcePackage } from "./project.ts";
 
 /**
+ * D51 rule 105: the verdict line is the last link in the trust chain, so what
+ * it says has to be true. Author text — a test name, a module path — reaches it
+ * verbatim today, and a `test "\u{202E}…"` reorders a failing line into a
+ * passing one on any bidi-aware terminal. The source-level ban (rule 104) does
+ * not cover this: an escape sequence puts the very same code point in the
+ * string at runtime.
+ *
+ * The output is a JSON string literal — the escaping the compiler's own
+ * duplicate-name diagnostic already applies — plus the twelve `Bidi_Control`
+ * code points, which `JSON.stringify` passes through untouched and which are
+ * the whole hazard.
+ */
+const bidirectionalControls = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+
+export function quoteReportedText(value: string): string {
+  return JSON.stringify(value).replaceAll(
+    bidirectionalControls,
+    (character) => `\\u${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`,
+  );
+}
+
+/**
  * Creates the sandbox directory that receives a compiled test or run tree.
  *
  * The sandbox lives inside the project (`<project>/.velar/<prefix>-*`), not in

@@ -46,8 +46,8 @@ test "a list totals its members, in any order":
 `.trimStart()],
   ]));
   assert.equal(execution.status, 0, execution.stderr);
-  assert.match(execution.stdout, /✓ src\/main\.test\.vel :: an empty list totals zero/u);
-  assert.match(execution.stdout, /✓ src\/main\.test\.vel :: a list totals its members, in any order/u);
+  assert.match(execution.stdout, /✓ "src\/main\.test\.vel" :: "an empty list totals zero"/u);
+  assert.match(execution.stdout, /✓ "src\/main\.test\.vel" :: "a list totals its members, in any order"/u);
   assert.match(execution.stdout, /2 passed, 0 failed/u);
 });
 
@@ -66,8 +66,8 @@ test "the answer is a number":
 `.trimStart()],
   ]));
   assert.equal(execution.status, 1);
-  assert.match(execution.stderr, /✗ src\/main\.test\.vel :: the answer is right/u);
-  assert.match(execution.stdout, /✓ src\/main\.test\.vel :: the answer is a number/u);
+  assert.match(execution.stderr, /✗ "src\/main\.test\.vel" :: "the answer is right"/u);
+  assert.match(execution.stdout, /✓ "src\/main\.test\.vel" :: "the answer is a number"/u);
   assert.match(execution.stdout, /1 passed, 1 failed/u);
 });
 
@@ -83,7 +83,7 @@ test "loading resolves to its value":
 `.trimStart()],
   ]));
   assert.equal(execution.status, 0, execution.stderr);
-  assert.match(execution.stdout, /✓ src\/main\.test\.vel :: loading resolves to its value/u);
+  assert.match(execution.stdout, /✓ "src\/main\.test\.vel" :: "loading resolves to its value"/u);
 });
 
 test("[D39 53] the unowned-error stance applies to a block: a detached failure fails its test", async () => {
@@ -104,7 +104,7 @@ test "a detached failure belongs to the test that started it":
 `.trimStart()],
   ]));
   assert.equal(execution.status, 1);
-  assert.match(execution.stderr, /✗ src\/main\.test\.vel :: a detached failure belongs to the test that started it/u);
+  assert.match(execution.stderr, /✗ "src\/main\.test\.vel" :: "a detached failure belongs to the test that started it"/u);
   assert.match(execution.stderr, /an unowned error was reported while this test ran/u);
 });
 

@@ -82,6 +82,7 @@ export class JavaScriptEmitter {
   private readonly requiredHostErrorClasses = new Set<string>();
   private needsDetachedTaskHelper = false;
   private needsDisposalHelper = false;
+  private needsIntegrityFailureHelper = false;
   private needsNarrowingErrorClass = false;
   private suppressPromiseNormalization = 0;
   private nextJavaScriptNodeId = 0;
@@ -297,6 +298,9 @@ export class JavaScriptEmitter {
     }
     if (this.needsDisposalHelper) {
       helpers.push(...this.disposalHelpers());
+    }
+    if (this.needsIntegrityFailureHelper) {
+      helpers.push(...this.integrityFailureHelpers());
     }
     const needsErrorNormalizationRuntime = this.needsThrownValueHelper || this.needsErrorCodeHelper;
     if (needsErrorNormalizationRuntime && !this.includesErrorNormalizationRuntime()) {
@@ -697,6 +701,25 @@ export class JavaScriptEmitter {
       "    __velarDisposalApply(__velarDisposalConsoleError, __velarDisposalConsole, [\"Resource release failed while another error was in flight: \" + trace]);",
       "  } catch {}",
       "  return null;",
+      "}",
+    ].join("\n")];
+  }
+
+  /**
+   * D51 rule 103: the three failures that mean "this program has a bug", by the
+   * one name each of them stamps on itself. A forged name can only make a
+   * failure propagate instead of becoming `null`, which is the safe direction:
+   * `try` never hides a guard, and `catch` still receives everything.
+   */
+  protected integrityFailureHelpers(): readonly string[] {
+    return [[
+      "const __velarIntegrityDescriptor = Object.getOwnPropertyDescriptor;",
+      "function __velarIsIntegrityFailure(value) {",
+      "  if (value === null || (typeof value !== \"object\" && typeof value !== \"function\")) return false;",
+      "  const descriptor = __velarIntegrityDescriptor(value, \"name\");",
+      "  if (!descriptor || !(\"value\" in descriptor)) return false;",
+      "  const name = descriptor.value;",
+      "  return name === \"AssertionError\" || name === \"NarrowingError\" || name === \"IndexError\";",
       "}",
     ].join("\n")];
   }
@@ -1659,17 +1682,58 @@ export class JavaScriptEmitter {
     // from source and cannot collide with a member the author declares.
     const dispose: string[] = [];
     if (statement.dispose) {
-      const disposeDepth = depth + 2;
-      const lines = [
-        `${"  ".repeat(disposeDepth)}const self = this;`,
+      // D51 rule 102: a derived `@dispose:` adds to the base's, it does not
+      // replace it. The compiler composes the contract because `@dispose` is
+      // not callable from source (D43 item 69), so an author could not forward
+      // it by hand even if every author remembered to.
+      const chained = this.hints.classDisposeChains.get(spanIdentity(statement.span)) ?? null;
+      const disposeDepth = depth + (chained ? 3 : 2);
+      const indent = "  ".repeat(disposeDepth);
+      const asynchronous = chained === "async"
+        || blockContainsDirectAwait(statement.dispose.body, (value) => this.extensionExpressionContainsDirectAwait(value));
+      const body = [
+        `${indent}const self = this;`,
         ...this.emitStatementLines(statement.dispose.body, disposeDepth),
-        `${"  ".repeat(disposeDepth)}return null;`,
+        `${indent}return null;`,
       ];
-      const asynchronous = blockContainsDirectAwait(statement.dispose.body, (value) => this.extensionExpressionContainsDirectAwait(value));
+      const lines = chained ? this.chainedDisposeLines(body, chained, statement.span.start, depth + 2) : body;
       dispose.push(`${indentation}  ${asynchronous ? "async " : ""}[${JSON.stringify(disposeMemberKey)}]() {\n${lines.join("\n")}\n${indentation}  }`);
     }
     const extension = statement.base ? ` extends ${statement.base.name}` : "";
     return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods, ...dispose].join("\n\n")}\n${indentation}}`;
+  }
+
+  /**
+   * D51 rule 102: derived first, base after — construction order reversed, the
+   * same intuition LIFO release already has. The base runs on every exit from
+   * the derived body, including a `return`, and when the derived part already
+   * failed the base failure is reported to the host instead of replacing the
+   * error in flight, exactly as rule 8 of D43 item 69 decides for `using`.
+   */
+  private chainedDisposeLines(
+    body: readonly string[],
+    inherited: "sync" | "async",
+    suffix: number,
+    depth: number,
+  ): readonly string[] {
+    const indentation = "  ".repeat(depth);
+    this.needsDisposalHelper = true;
+    this.needsThrownValueHelper = true;
+    const call = `${inherited === "async" ? "await " : ""}super[${JSON.stringify(disposeMemberKey)}]()`;
+    const released = `__velarBaseReleased${suffix}`;
+    const failure = `__velarDisposeChainFailure${suffix}`;
+    return [
+      `${indentation}let ${released} = false;`,
+      `${indentation}try {`,
+      ...body,
+      `${indentation}} catch (${failure}) {`,
+      `${indentation}  ${released} = true;`,
+      `${indentation}  try { ${call}; } catch (__velarBaseDisposeFailure${suffix}) { __velarDisposalReport(__velarBaseDisposeFailure${suffix}); }`,
+      `${indentation}  throw ${failure};`,
+      `${indentation}} finally {`,
+      `${indentation}  if (!${released}) ${call};`,
+      `${indentation}}`,
+    ];
   }
 
   protected emitParameter(name: string, defaultValue: Expression | null, rest = false): string {
@@ -1790,8 +1854,16 @@ export class JavaScriptEmitter {
       // the whole chain becomes null, and nothing else in the surrounding
       // expression is skipped.
       case "TryExpression": {
+        // D51 rule 103: `try` turns an *expected* failure into an optional.
+        // AssertionError, NarrowingError, and IndexError are the language
+        // saying "your program has a bug", so they pass straight through
+        // instead of arriving as a `null` that reads like "not found". A
+        // `catch` block still catches all three — that one is explicit.
+        this.needsIntegrityFailureHelper = true;
         const asynchronous = this.expressionContainsDirectAwait(expression.value);
-        const attempt = `{ try { return ${this.emitMappedExpression(expression.value)}; } catch { return null; } }`;
+        const failure = `__velarTryFailure${expression.span.start}`;
+        const attempt = `{ try { return ${this.emitMappedExpression(expression.value)}; } `
+          + `catch (${failure}) { if (__velarIsIntegrityFailure(${failure})) throw ${failure}; return null; } }`;
         return `${asynchronous ? "await " : ""}(${asynchronous ? "async " : ""}() => ${attempt})()`;
       }
       case "UnaryExpression":

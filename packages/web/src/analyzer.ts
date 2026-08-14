@@ -721,6 +721,9 @@ function hasAccessibleSvgName(expression: JSXElementExpression): boolean {
 export class VelarWebAnalyzer extends Analyzer {
   private componentStates: Set<string> | null = null;
   private mountedDepth = 0;
+  private cleanupDepth = 0;
+  /** D51 (audit 12): a component `watch` body runs on a change and ends, exactly as a module `watch` body does. */
+  private watchBodyDepth = 0;
   private synchronousReactiveDepth = 0;
   private jsxDepth = 0;
   private readonly resources: ReadonlyMap<string, string>;
@@ -1086,7 +1089,8 @@ export class VelarWebAnalyzer extends Analyzer {
    * says so instead of releasing at the wrong moment.
    */
   protected override ownershipScopeRejection(): string | null {
-    if (this.componentStates !== null && this.mountedDepth === 0 && this.inComponentSetupPosition()) {
+    if (this.componentStates !== null && this.mountedDepth === 0 && this.cleanupDepth === 0 && this.watchBodyDepth === 0
+      && this.inComponentSetupPosition()) {
       return "A component body builds the component and does not end, so a 'using' here has no scope to release at; own the resource inside an action, a method, or the cleanup hook";
     }
     return super.ownershipScopeRejection();
@@ -1223,7 +1227,9 @@ export class VelarWebAnalyzer extends Analyzer {
         this.enterScope();
         if (item.currentName) this.declareBinding(item.currentName, false, watched, item.span);
         if (item.previousName) this.declareBinding(item.previousName, false, watched, item.span);
+        this.watchBodyDepth += 1;
         this.analyzeStatements(item.body);
+        this.watchBodyDepth -= 1;
         this.exitScope();
         this.synchronousReactiveDepth -= 1;
         this.flowFrameDepth -= 1;
@@ -1243,9 +1249,14 @@ export class VelarWebAnalyzer extends Analyzer {
         this.mountedDepth -= 1;
       } else if (item.kind === "ExtensionStatement:web:cleanup") {
         cleanup += 1;
+        // D51 (audit 12): a cleanup hook runs once and ends, so it is an
+        // ordinary scope with an exit. It used to be counted as component
+        // setup, and the rejection then named `@cleanup` as its own fix.
+        this.cleanupDepth += 1;
         this.flowFrameDepth += 1;
         this.analyzeBlock(item.body);
         this.flowFrameDepth -= 1;
+        this.cleanupDepth -= 1;
       } else if (item.kind === "ReturnStatement") {
         renders += 1;
         renderValue = item.value;
@@ -1954,7 +1965,11 @@ export class VelarWebAnalyzer extends Analyzer {
         continue;
       }
       this.semanticJsxAttributeOwners.set(`${attribute.span.start}:${attribute.name}`, component);
-      const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value) : boolType;
+      // D51 rule 108: a JSX attribute is a typed position, exactly like an
+      // argument position, so the declared prop type is the literal's context.
+      // Without it `items={[]}` inferred List<unknown> and forced the author to
+      // annotate an empty list on a separate line.
+      const actual = typeof attribute.value === "string" ? stringType : attribute.value ? this.inferExpression(attribute.value, expected) : boolType;
       if (isWebComponentConstructor(component) && webComponentIntrinsic(component) === "web.router" && attribute.name === "fallback" && actual.kind !== "null" && actual.kind !== "any") {
         this.checkWebRouteComponent(actual, attribute.span, "A Router fallback");
       }

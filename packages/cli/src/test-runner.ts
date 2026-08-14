@@ -5,7 +5,7 @@ import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
-import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
+import { compiledTestModulePath, createCompiledSandbox, quoteReportedText, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { hostErrorStack } from "./host-error.ts";
 import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources } from "./unowned-errors.ts";
 
@@ -130,12 +130,14 @@ export async function runTests(
         continue;
       }
       for (const declared of tests) {
-        // D39 item 53: the reporter quotes the author's name for the test.
-        const name = declared.title;
+        // D39 item 53 + D51 rule 105: the reporter quotes the author's name for
+        // the test, escaped, because a verdict line must say what it means on
+        // every terminal.
+        const name = quoteReportedText(declared.title);
         const test = namespace[declared.name];
         try {
-          if (typeof test !== "function") throw new Error(`Test ${JSON.stringify(name)} was not emitted`);
-          if (test.length !== 0) throw new Error(`Test ${JSON.stringify(name)} cannot declare parameters`);
+          if (typeof test !== "function") throw new Error(`Test ${name} was not emitted`);
+          if (test.length !== 0) throw new Error(`Test ${name} cannot declare parameters`);
           await boundedTest(test as () => unknown, limits.testTimeoutMs);
           const leftover = await settleWork("by this test");
           const testErrors = await drainUnowned();
@@ -144,11 +146,11 @@ export async function runTests(
           }
           if (leftover !== null) throw new Error(leftover);
           passed += 1;
-          process.stdout.write(`✓ ${relative(config.root, file)} :: ${name}\n`);
+          process.stdout.write(`✓ ${quoteReportedText(relative(config.root, file))} :: ${name}\n`);
         } catch (error) {
           failed += 1;
           await drainUnowned();
-          process.stderr.write(`✗ ${relative(config.root, file)} :: ${name}\n${stackOf(error)}\n`);
+          process.stderr.write(`✗ ${quoteReportedText(relative(config.root, file))} :: ${name}\n${stackOf(error)}\n`);
         }
       }
     }

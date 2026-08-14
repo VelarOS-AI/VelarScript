@@ -49,6 +49,11 @@ function namedIntrinsic(
   return { kind: "intrinsic", name, parameterNames, parameters, requiredParameters, result };
 }
 
+/** A structurally declared standard capability handle; see ValueType.capabilityHandle. */
+function capabilityHandle(fields: Readonly<Record<string, ValueType>>): ValueType {
+  return { kind: "object", fields: new Map(Object.entries(fields)), capabilityHandle: true };
+}
+
 function object(fields: Readonly<Record<string, ValueType>>, optionalFields: readonly string[] = []): ValueType {
   return {
     kind: "object",
@@ -189,7 +194,10 @@ const nodeHttpOptionsType = object({
   timeout: optional(numberType),
   maxBytes: optional(numberType),
 }, ["headers", "secretHeaders", "body", "timeout", "maxBytes"]);
-const terminalType = object({
+// D51 (audit 12): the terminal is a standard capability handle that publishes
+// `close()`, so `using` supplies its release contract (charter section 16). The
+// marker is set by this target, never inferred from the shape.
+const terminalType = capabilityHandle({
   args: functionType([], [], listStringType),
   isInteractive: functionType([], [], boolType),
   readLine: functionType(["prompt"], [stringType], promise(optional(stringType)), 0),

@@ -407,7 +407,7 @@ test("Desktop owns bounded packaged project tasks without executable grants", { 
     await assert.rejects(client.call("project-task", "start", ["check", ["--out", "escape"], { timeout: 1000, maxOutputBytes: 65536 }]), /Only a run project task accepts/u);
     await assert.rejects(client.call("project-task", "start", ["check", [], { cwd: "/tmp", timeout: 1000, maxOutputBytes: 65536 }]), /options are invalid/u);
 
-    for (const [command, expected] of [["check", /Checked 1 module/u], ["test", /1 passed, 0 failed/u], ["build", /Built 1 module/u], ["run", /project-task-run/u]] as const) {
+    for (const [command, expected] of [["check", /Checked 2 modules/u], ["test", /1 passed, 0 failed/u], ["build", /Built 1 module/u], ["run", /project-task-run/u]] as const) {
       const started = await client.call("project-task", "start", [command, [], { timeout: 120000, maxOutputBytes: 1024 * 1024 }]) as { handle: number; pid: number };
       assert.ok(started.handle > 0 && started.pid > 0);
       await assert.rejects(client.call("process", "read", [started.handle]), /process handle is unknown/u);

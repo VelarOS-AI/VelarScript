@@ -517,16 +517,16 @@ print(low.label + "|" + high.label)
 test("[TXT-I1] the spelling guidance table covers the Python column", () => {
   rejects("print(str(len(\"abc\")))\n", "VEL3008", /Use 'value\.size'; strings and collections measure with the size member/u);
   rejects("print(\"  a \".strip())\n", "VEL4001", /Use '\.trim\(\)'/u);
-  rejects("print(\"a\".lstrip())\n", "VEL4001", /Use trimStart\(value\) from 'velar\/text'/u);
-  rejects("print(\"a\".rstrip())\n", "VEL4001", /Use trimEnd\(value\) from 'velar\/text'/u);
+  rejects("print(\"a\".lstrip())\n", "VEL4001", /Use Text\.trimStart\(value\); string operations beyond the core members live in the Text namespace, which needs no import/u);
+  rejects("print(\"a\".rstrip())\n", "VEL4001", /Use Text\.trimEnd\(value\); string operations beyond the core members live in the Text namespace, which needs no import/u);
   rejects("print(str(\"ab\".startswith(\"a\")))\n", "VEL4001", /Use '\.startsWith\(text\)'/u);
   rejects("print(str(\"ab\".endswith(\"b\")))\n", "VEL4001", /Use '\.endsWith\(text\)'/u);
   rejects("print(str(\"ab\".find(\"b\")))\n", "VEL4001", /Use '\.index\(text, start\)'; missing text returns null instead of -1/u);
-  rejects("print(str(\"a\\nb\".splitlines().size))\n", "VEL4001", /Use lines\(value\) from 'velar\/text'/u);
+  rejects("print(str(\"a\\nb\".splitlines().size))\n", "VEL4001", /Use Text\.lines\(value\); it splits on line boundaries, and the Text namespace needs no import/u);
   rejects("print(\"AB\".casefold())\n", "VEL4001", /Use '\.lower\(\)'/u);
   rejects("print(\"hi {}\".format(1))\n", "VEL4001", /Use an f-string/u);
-  rejects("print(\"ab\".title())\n", "VEL4001", /Use title\(value\) from 'velar\/text'/u);
-  rejects("print(\"ab\".capitalize())\n", "VEL4001", /Use capitalize\(value\) from 'velar\/text'/u);
+  rejects("print(\"ab\".title())\n", "VEL4001", /Use Text\.title\(value\); string operations beyond the core members live in the Text namespace, which needs no import/u);
+  rejects("print(\"ab\".capitalize())\n", "VEL4001", /Use Text\.capitalize\(value\); string operations beyond the core members live in the Text namespace, which needs no import/u);
   rejects("print(str(\"ab\".lastIndexOf(\"b\")))\n", "VEL4001", /VelarScript has no reverse string search member/u);
   rejects("print(str(number(\"5\")))\nprint(str(parseInt(\"5\")))\n", "VEL3008", /Use 'number\(text\)', then '\.floor\(\)' or '\.round\(\)'/u);
   rejects("print(str(parseFloat(\"5.5\")))\n", "VEL3008", /Use 'number\(text\)'; VelarScript has one text-to-number conversion/u);

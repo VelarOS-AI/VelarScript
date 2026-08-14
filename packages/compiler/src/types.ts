@@ -59,6 +59,14 @@ export type ValueType =
       readonly readonlyFields?: ReadonlySet<string>;
       readonly optionalFields?: ReadonlySet<string>;
       readonly readonlyView?: true;
+      /**
+       * D51 (audit 12): a standard capability handle a target declares
+       * structurally rather than as a named type — a socket, an event stream, a
+       * terminal. `using` supplies the contract for capability handles (charter
+       * section 16), and only a compiler extension can set this flag, so a user
+       * record with a `close()` is still never auto-detected as ownable.
+       */
+      readonly capabilityHandle?: true;
     }
   | { readonly kind: "parameter"; readonly name: string; readonly index: number }
   | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly readonlyView?: true }
@@ -88,8 +96,10 @@ export const boolType: ValueType = { kind: "bool" };
 /**
  * D41 item 61: the complete, closed bound vocabulary. A bound is a name the
  * compiler owns; users cannot define one, and there is no syntax for combining
- * two. The three form one containment chain — `Comparable ⊂ Text ⊂ Data` — so
- * a single word always suffices.
+ * two — D51 rule 110: not because the three form a containment chain (they do
+ * not: a Web text-shaped value satisfies Text and is refused by Data), but
+ * because no real function demands two at once. The grant table below is the
+ * whole definition; nothing computes a relation between two bounds.
  */
 export const typeParameterBoundNames = Object.freeze(["Comparable", "Text", "Data"] as const);
 
@@ -101,8 +111,8 @@ export type BoundCapability = "text" | "order" | "data";
 /**
  * The 4x3 capability-grant table (D41 item 61). Every check reads this
  * constant; nothing computes a relation between two bounds, so the rule
- * "bounds have no subtyping" holds literally even though the grants encode
- * the chain.
+ * "bounds have no subtyping" holds literally. The overlaps below are grants,
+ * not type containment (D51 rule 110).
  */
 const boundCapabilityGrants: Readonly<Record<TypeParameterBound, Readonly<Record<BoundCapability, boolean>>>> = Object.freeze({
   Data: Object.freeze({ text: false, order: false, data: true }),
@@ -907,28 +917,52 @@ export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap
   }
 }
 
+/**
+ * D51 item NEW-D3: `unknown` never *binds* a parameter — merging it would erase
+ * every concrete actual at the other positions — but the site must still be
+ * remembered. A bounded parameter that only `unknown` ever reached is solved to
+ * `unknown`, which satisfies no bound; dropping the site silently let `unknown`
+ * through every bound and on into the implicit-conversion the bound forbids.
+ * Callers that check bounds pass this sink; the rest may ignore it.
+ */
 export function unifyTypeParameters(
   pattern: ValueType,
   actual: ValueType,
   bindings: (ValueType | null)[],
   fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null = () => null,
+  unknownParameters?: Set<number>,
 ): void {
+  unifyInto(pattern, actual, bindings, fieldsOf, unknownParameters);
+}
+
+function unifyInto(
+  pattern: ValueType,
+  actual: ValueType,
+  bindings: (ValueType | null)[],
+  fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
+  unknownParameters: Set<number> | undefined,
+): void {
+  const unifyTypeParameters = (nextPattern: ValueType, nextActual: ValueType): void =>
+    unifyInto(nextPattern, nextActual, bindings, fieldsOf, unknownParameters);
   if (isInvalidType(actual)) return;
   if (pattern.kind === "parameter") {
-    if (actual.kind === "unknown") return;
+    if (actual.kind === "unknown") {
+      unknownParameters?.add(pattern.index);
+      return;
+    }
     const existing = bindings[pattern.index];
     bindings[pattern.index] = existing ? mergeTypes(existing, actual) : actual;
     return;
   }
   if (pattern.kind === "optional") {
     if (actual.kind === "null") return;
-    if (actual.kind === "optional") return unifyTypeParameters(pattern.inner, actual.inner, bindings, fieldsOf);
+    if (actual.kind === "optional") return unifyTypeParameters(pattern.inner, actual.inner);
     if (actual.kind === "union") {
       const remaining = actual.members.filter((member) => member.kind !== "null");
       if (remaining.length === 0) return;
-      return unifyTypeParameters(pattern.inner, unionOf(remaining), bindings, fieldsOf);
+      return unifyTypeParameters(pattern.inner, unionOf(remaining));
     }
-    return unifyTypeParameters(pattern.inner, actual, bindings, fieldsOf);
+    return unifyTypeParameters(pattern.inner, actual);
   }
   if (pattern.kind === "union") {
     const concrete = pattern.members.filter((member) => !typeContainsParameter(member));
@@ -936,27 +970,27 @@ export function unifyTypeParameters(
     const remaining = actualMembers.filter((member) => !concrete.some((covered) => sameType(covered, member)));
     if (remaining.length === 0) return;
     for (const member of pattern.members) {
-      if (typeContainsParameter(member)) unifyTypeParameters(member, unionOf(remaining), bindings, fieldsOf);
+      if (typeContainsParameter(member)) unifyTypeParameters(member, unionOf(remaining));
     }
     return;
   }
   if ((pattern.kind === "list" && actual.kind === "list") || (pattern.kind === "set" && actual.kind === "set")) {
-    return unifyTypeParameters(pattern.element, actual.element, bindings, fieldsOf);
+    return unifyTypeParameters(pattern.element, actual.element);
   }
   if (pattern.kind === "map" && actual.kind === "map") {
-    unifyTypeParameters(pattern.key, actual.key, bindings, fieldsOf);
-    unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
+    unifyTypeParameters(pattern.key, actual.key);
+    unifyTypeParameters(pattern.value, actual.value);
     return;
   }
   if (pattern.kind === "record" && actual.kind === "record") {
-    return unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
+    return unifyTypeParameters(pattern.value, actual.value);
   }
   if (pattern.kind === "promise" && actual.kind === "promise") {
-    return unifyTypeParameters(pattern.value, actual.value, bindings, fieldsOf);
+    return unifyTypeParameters(pattern.value, actual.value);
   }
   if (pattern.kind === "runtimeType") {
     const value = runtimeTypeValue(actual);
-    if (value) return unifyTypeParameters(pattern.value, value, bindings, fieldsOf);
+    if (value) return unifyTypeParameters(pattern.value, value);
   }
   if (pattern.kind === "object") {
     const fields = actual.kind === "object" ? actual.fields
@@ -965,7 +999,7 @@ export function unifyTypeParameters(
     if (!fields) return;
     for (const [name, field] of pattern.fields) {
       const provided = fields.get(name);
-      if (provided) unifyTypeParameters(field, provided, bindings, fieldsOf);
+      if (provided) unifyTypeParameters(field, provided);
     }
     return;
   }
@@ -973,11 +1007,11 @@ export function unifyTypeParameters(
     && pattern.extensionId === actual.extensionId && pattern.family === actual.family) {
     for (const [name, property] of pattern.properties) {
       const provided = actual.properties.get(name);
-      if (provided) unifyTypeParameters(property, provided, bindings, fieldsOf);
+      if (provided) unifyTypeParameters(property, provided);
     }
     for (let index = 0; index < pattern.arguments.length; index += 1) {
       const provided = actual.arguments[index];
-      if (provided) unifyTypeParameters(pattern.arguments[index]!, provided, bindings, fieldsOf);
+      if (provided) unifyTypeParameters(pattern.arguments[index]!, provided);
     }
     return;
   }
@@ -987,10 +1021,10 @@ export function unifyTypeParameters(
     if (actual.typeParameterNames?.length) return;
     for (let index = 0; index < pattern.parameters.length; index += 1) {
       const provided = actual.parameters[index] ?? actual.rest;
-      if (provided) unifyTypeParameters(pattern.parameters[index]!, provided, bindings, fieldsOf);
+      if (provided) unifyTypeParameters(pattern.parameters[index]!, provided);
     }
-    if (pattern.rest && actual.rest) unifyTypeParameters(pattern.rest, actual.rest, bindings, fieldsOf);
-    unifyTypeParameters(pattern.result, actual.result, bindings, fieldsOf);
+    if (pattern.rest && actual.rest) unifyTypeParameters(pattern.rest, actual.rest);
+    unifyTypeParameters(pattern.result, actual.result);
   }
 }
 
@@ -1020,16 +1054,20 @@ export function collectGenericBoundViolations(
   callable: CallableType,
   bindings: readonly (ValueType | null)[],
   satisfiesBound: (type: ValueType, bound: TypeParameterBound) => boolean,
+  unknownParameters?: ReadonlySet<number>,
 ): readonly GenericBoundViolation[] {
   const bounds = callable.typeParameterBounds;
   if (!bounds?.some((bound) => bound !== null)) return [];
   const violations: GenericBoundViolation[] = [];
   for (let index = 0; index < bounds.length; index += 1) {
     const bound = bounds[index];
-    const solved = bindings[index];
-    // An unsolved parameter substitutes `unknown`, which satisfies nothing;
-    // checking it would report every call that leaves a parameter open.
-    if (!bound || solved == null) continue;
+    if (!bound) continue;
+    // A parameter no argument mentioned substitutes `unknown`, which satisfies
+    // nothing; checking it would report every call that leaves a parameter
+    // open. A parameter an `unknown` argument *did* reach is a different fact:
+    // it is solved, and solved to the one type no bound admits (NEW-D3).
+    const solved = bindings[index] ?? (unknownParameters?.has(index) ? unknownType : null);
+    if (solved == null) continue;
     if (!satisfiesBound(solved, bound)) {
       violations.push({ index, name: callable.typeParameterNames?.[index] ?? `#${index + 1}`, bound, solved });
     }
@@ -1044,21 +1082,26 @@ export function instantiateGenericCallable(
   violations?: GenericBoundViolation[],
 ): CallableType {
   const bindings: (ValueType | null)[] = Array.from({ length: actual.typeParameterNames?.length ?? 0 }, () => null);
+  const unknownParameters = new Set<number>();
   const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => environment.fieldsOf(identity);
   for (let index = 0; index < actual.parameters.length; index += 1) {
     const provided = expected.parameters[index] ?? expected.rest;
-    if (provided) unifyTypeParameters(actual.parameters[index]!, provided, bindings, fieldsOf);
+    if (provided) unifyTypeParameters(actual.parameters[index]!, provided, bindings, fieldsOf, unknownParameters);
   }
   if (actual.rest) {
     for (let index = actual.parameters.length; index < expected.parameters.length; index += 1) {
-      unifyTypeParameters(actual.rest, expected.parameters[index]!, bindings, fieldsOf);
+      unifyTypeParameters(actual.rest, expected.parameters[index]!, bindings, fieldsOf, unknownParameters);
     }
-    if (expected.rest) unifyTypeParameters(actual.rest, expected.rest, bindings, fieldsOf);
+    if (expected.rest) unifyTypeParameters(actual.rest, expected.rest, bindings, fieldsOf, unknownParameters);
   }
+  // The result position is deliberately outside the `unknown` sink: an expected
+  // result of `unknown` says "the consumer accepts anything", not "the callee
+  // is handed an unvalidated value". Only the input positions can force a
+  // bounded parameter to be `unknown` inside the body.
   unifyTypeParameters(actual.result, expected.result, bindings, fieldsOf);
   if (violations && environment.satisfiesBound) {
     const decide = environment.satisfiesBound.bind(environment);
-    violations.push(...collectGenericBoundViolations(actual, bindings, decide));
+    violations.push(...collectGenericBoundViolations(actual, bindings, decide, unknownParameters));
   }
   const { typeParameterNames: _erased, typeParameterBounds: _erasedBounds, ...base } = actual;
   return {

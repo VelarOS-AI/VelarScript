@@ -17,7 +17,7 @@ import {
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
-import { compiledTestModulePath, writeCompiledTestProject } from "./test-output.ts";
+import { compiledTestModulePath, quoteReportedText, writeCompiledTestProject } from "./test-output.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "./preview-server.ts";
 import { hostErrorStack } from "./host-error.ts";
@@ -449,7 +449,8 @@ async function runBrowserTestsInWorker(
               if (lifecycleFailure !== null) throw lifecycleFailure;
               // D39 item 53: the reporter quotes the author's name for the
               // test, which is the specification a person reads.
-              const name = declared.title;
+              // D51 rule 105: the browser verdict line escapes author text too.
+              const name = quoteReportedText(declared.title);
               const test = namespace[declared.name];
               const context = await activeBrowser.newContext();
               const page = await context.newPage();
@@ -467,12 +468,12 @@ async function runBrowserTestsInWorker(
                 await installBrowserPerformanceRuntime(page);
                 await installFrameworkRuntime(page, contract.initScript?.(config.framework.config));
                 installBrowserRuntime(page, origin, verified.deployment.base, runtimeKey);
-                if (typeof test !== "function") throw new Error(`Test ${JSON.stringify(name)} was not emitted`);
-                if (test.length !== 0) throw new Error(`Browser test ${JSON.stringify(name)} cannot declare parameters`);
+                if (typeof test !== "function") throw new Error(`Test ${name} was not emitted`);
+                if (test.length !== 0) throw new Error(`Browser test ${name} cannot declare parameters`);
                 await boundedBrowserOperation(
                   Promise.resolve().then(() => test()),
                   limits.testTimeoutMs,
-                  `Browser test ${relative(config.root, entry.file)} :: ${name}`,
+                  `Browser test ${quoteReportedText(relative(config.root, entry.file))} :: ${name}`,
                   lifecycle,
                 );
                 if (runtimeFailures.length > 0) throw new Error(`Browser runtime failures:\n${runtimeFailures.join("\n")}`);
@@ -504,10 +505,10 @@ async function runBrowserTestsInWorker(
               if (testFailure instanceof BrowserTestInterrupted || testFailure instanceof BrowserTestRunTimedOut) throw testFailure;
               if (testFailure === null) {
                 passed += 1;
-                process.stdout.write(`✓ ${engine} :: ${relative(config.root, entry.file)} :: ${name}\n`);
+                process.stdout.write(`✓ ${engine} :: ${quoteReportedText(relative(config.root, entry.file))} :: ${name}\n`);
               } else {
                 failed += 1;
-                process.stderr.write(`✗ ${engine} :: ${relative(config.root, entry.file)} :: ${name}\n${stackOf(testFailure)}\n`);
+                process.stderr.write(`✗ ${engine} :: ${quoteReportedText(relative(config.root, entry.file))} :: ${name}\n${stackOf(testFailure)}\n`);
               }
               if (!engineUsable) {
                 process.stderr.write(`✗ ${engine} was retired after context cleanup failed\n`);

@@ -125,6 +125,11 @@ function object(fields: Readonly<Record<string, ValueType>>): ValueType {
   return { kind: "object", fields: new Map(Object.entries(fields)) };
 }
 
+/** A structurally declared standard capability handle; see ValueType.capabilityHandle. */
+function capabilityHandle(fields: Readonly<Record<string, ValueType>>): ValueType {
+  return { kind: "object", fields: new Map(Object.entries(fields)), capabilityHandle: true };
+}
+
 const errorType: ValueType = { kind: "class", name: "Error" };
 const cleanupType = namedFunction([], [], nullType);
 const arrayString: ValueType = { kind: "list", element: stringType };
@@ -260,7 +265,11 @@ const socketHandlersType = object({
   error: optional(functionType([stringType], unknownType)),
   close: optional(functionType([numberType, stringType], unknownType)),
 });
-const socketType = object({
+// D51 (audit 12): both realtime handles are standard capability handles that
+// publish `close()`, so `using` supplies their release contract (charter
+// section 16). They are declared structurally rather than as named types, and
+// the marker is what lets Core see them without ever detecting a shape.
+const socketType = capabilityHandle({
   url: stringType,
   state: namedFunction([], [], stringType),
   send: namedFunction(["data"], [stringType], nullType),
@@ -272,7 +281,7 @@ const eventStreamHandlersType = object({
   message: optional(functionType([stringType, stringType], unknownType)),
   error: optional(functionType([stringType], unknownType)),
 });
-const eventStreamType = object({ url: stringType, state: namedFunction([], [], stringType), close: namedFunction([], [], nullType) });
+const eventStreamType = capabilityHandle({ url: stringType, state: namedFunction([], [], stringType), close: namedFunction([], [], nullType) });
 const appErrorType = object({
   error: errorType,
   phase: stringType,

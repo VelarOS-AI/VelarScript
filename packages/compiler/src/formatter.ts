@@ -747,6 +747,12 @@ function needsSpace(
     if (!memberAccess && expressionStatementWords.has(previous.text)) return true;
     if (!memberAccess && current.text === "(" && parenthesizedKeywordWords.has(previous.text)) return true;
     if (!memberAccess && current.text === "(" && index === 1 && statementHeadKeywordWords.has(previous.text)) return true;
+    // D51 item NEW-D9: `[` after a word is an index — `values[0]` — unless the
+    // word is a keyword operator or a statement head, where the bracket opens a
+    // fresh literal. `for i in [1, 2]:` used to lose the space and stay
+    // idempotent and check-clean, so `--check` enforced the bad shape.
+    if (!memberAccess && current.text === "[" && previous.kind === "word"
+      && (parenthesizedKeywordWords.has(previous.text) || statementHeadKeywordWords.has(previous.text))) return true;
     if (current.generic || current.text === "[" && (previous.kind === "word" || previous.kind === "close")) return false;
     return previous.kind !== "word" && previous.kind !== "close" && previous.kind !== "literal";
   }

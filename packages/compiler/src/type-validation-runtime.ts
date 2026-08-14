@@ -98,6 +98,7 @@ function __velarRecordTypeIs(value, check) {
 `.trimStart();
 
 export const VELAR_VALIDATION_ERROR_RUNTIME = String.raw`
+const __velarValidationErrorDefineProperty = globalThis.Object.defineProperty;
 class __VelarValidationError extends __velarCollectionNativeTypeError {
   constructor(message, detail) {
     super(message);
@@ -107,6 +108,9 @@ class __VelarValidationError extends __velarCollectionNativeTypeError {
     this.reason = detail?.reason ?? null;
   }
 }
+// D51 rule 107: 'code' answers with the class a value was constructed from, so
+// the compiler-owned class carries the source-level name it reports.
+__velarValidationErrorDefineProperty(__VelarValidationError, "name", { value: "ValidationError", writable: false, enumerable: false, configurable: true });
 `.trimStart();
 
 export const VELAR_TYPE_VALIDATION_MODULE = "velar/compiler-runtime-types-v1";

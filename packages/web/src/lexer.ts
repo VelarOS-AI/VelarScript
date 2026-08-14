@@ -303,9 +303,15 @@ class WebJsxScanner {
       if (this.peek() === "=") {
         this.index += 1;
         this.skipWhitespace();
-        if (this.peek() === '"' || this.peek() === "'") value = this.readQuoted();
+        // D51 (audit 12): a backtick is a VelarScript string delimiter, and
+        // charter section 3 promises the two delimiters hold in the same
+        // positions. A JSX attribute is exactly the position the backtick
+        // exists for — a quoted attribute selector, an HTML fragment — and it
+        // was the one position that refused it while accepting the HTML habit
+        // of a single quote.
+        if (this.peek() === '"' || this.peek() === "'" || this.peek() === "`") value = this.readQuoted();
         else if (this.peek() === "{") value = this.readEmbedded();
-        else this.report("VEL5003", "JSX attribute values use quotes or '{...}'", this.index, this.index + 1);
+        else this.report("VEL5003", "JSX attribute values use quotes, backticks, or '{...}'", this.index, this.index + 1);
       }
       attributes.push({ name, value, span: { start: attributeStart, end: this.index } });
     }

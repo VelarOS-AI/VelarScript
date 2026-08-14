@@ -7,7 +7,18 @@ import { span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
 const MAX_TOKENS = 250000;
 const MAX_NESTING = 512;
-const bidirectionalControls = new Set([0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]);
+/**
+ * D51 rule 104: all twelve `Bidi_Control` code points. LRM/RLM/ALM were the
+ * three missing, and CVE-2021-42574 names them in the same breath as the nine
+ * that were already banned — three open doors is the same as no door. ZWJ and
+ * the variation selectors stay legal: they compose emoji, they do not reorder
+ * a reviewer's line.
+ */
+const bidirectionalControls = new Set([
+  0x061c, 0x200e, 0x200f,
+  0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
+  0x2066, 0x2067, 0x2068, 0x2069,
+]);
 
 // A logical line may continue onto the next physical line when that line's
 // first token is '.' or '?.' member access (a leading-dot method chain). The
@@ -917,9 +928,10 @@ export class Lexer {
         continue;
       }
       this.diagnosedBidirectionalOffsets.add(index);
+      const point = codePoint.toString(16).toUpperCase().padStart(4, "0");
       this.diagnostics.push(diagnostic(
         "VEL1009",
-        `Bidirectional control U+${codePoint.toString(16).toUpperCase()} cannot appear directly in VelarScript source; write it inside a string as '\\u{${codePoint.toString(16).toUpperCase()}}' so the source remains reviewable`,
+        `Bidirectional control U+${point} cannot appear directly in VelarScript source; write it inside a string as '\\u{${point}}' so the source remains reviewable`,
         span(index, index + 1),
       ));
     }

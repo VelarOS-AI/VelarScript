@@ -400,9 +400,14 @@ export class Parser {
       }
       const following = this.peekKind(2);
       if (following === "leftParen" || following === "colon") {
+        // D51 (audit 12): `test` is a real declaration head, so calling it
+        // unknown was false. What is wrong is the name's shape: a test name is
+        // the sentence a report prints, so it is a string, not an identifier.
         this.diagnostics.push(diagnostic(
           "VEL2026",
-          `Unknown declaration keyword '${first.value}'; VelarScript declarations start with 'def', 'type', 'enum', 'class', 'const', or 'let'`,
+          first.value === "test" && following === "colon"
+            ? `A test name is the sentence a report prints, so it is written as a string — 'test "${this.peekValue(1)}":'`
+            : `Unknown declaration keyword '${first.value}'; VelarScript declarations start with 'def', 'type', 'enum', 'class', 'const', or 'let'`,
           first.span,
         ));
         this.skipMistypedDeclaration();

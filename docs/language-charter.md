@@ -337,12 +337,14 @@ The rule is deterministic, so any given text has exactly one formatted
 spelling, and formatting is idempotent. It applies to inline strings of every
 prefix; a layout string keeps its double quotes because its content is text.
 
-Source hygiene is part of the lexer, not a linter. Bidirectional formatting
-controls (`U+202A`–`U+202E`, `U+2066`–`U+2069`) cannot appear literally
-anywhere in a source file — not in a string, not in a comment — because that is
-exactly how source is made to read differently than it runs. The only way one
-enters a program is `\u{202E}` inside a string, which stays visible to a
-reviewer. Other control characters — `U+0000`–`U+001F` other than the line
+Source hygiene is part of the lexer, not a linter. All twelve `Bidi_Control`
+code points (`U+061C`, `U+200E`, `U+200F`, `U+202A`–`U+202E`, `U+2066`–`U+2069`)
+cannot appear literally anywhere in a source file — not in a string, not in a
+comment — because that is exactly how source is made to read differently than
+it runs. The only way one enters a program is `\u{202E}` inside a string, which
+stays visible to a reviewer; and because that escape is legal, a test report
+that quotes author text escapes it again before printing, so a verdict line
+cannot be reordered on the reader's terminal. Other control characters — `U+0000`–`U+001F` other than the line
 endings a layout string owns, `U+007F`, and `U+0080`–`U+009F` — are rejected
 inside a literal with the same guidance to `\u{...}`, so a tab inside text is
 written `\t` and only structural indentation may be a real tab. Characters that
@@ -1300,15 +1302,22 @@ conditional types, mapped types, operations between bounds, inferred bounds,
 or default bounds — the type-level programming rule 4 excludes stays excluded.
 
 The bound vocabulary is closed and the compiler owns it. There are exactly
-three, and they form one containment chain — every `Comparable` type is also a
-`Text` type, and every `Text` type is also a `Data` type — so one word is
-always enough and there is no syntax for combining two:
+three, and each one stands on its own: the table below is the whole definition
+of what a bound grants, and nothing computes a relation between two bounds.
+There is no syntax for combining two, because no real function needs to demand
+both — a value that must be both ordered and JSON-shaped is asking two
+questions one signature has no reason to ask together.
 
 | Bound | Promise | What the body may do |
 | --- | --- | --- |
-| `Comparable` | the type has a runtime order | `<` `<=` `>` `>=`, `sorted()`, `min()`, `max()`, `sorted(by=)`, and `sortBy`/`minBy`/`maxBy` keys, plus everything `Text` allows |
-| `Text` | the type has a hook-free text form | f-string interpolation, `str(value)`, passing `str` itself, plus everything `Data` allows |
+| `Comparable` | the type has a runtime order | `<` `<=` `>` `>=`, `sorted()`, `min()`, `max()`, `sorted(by=)`, and `sortBy`/`minBy`/`maxBy` keys, plus text form and JSON shape |
+| `Text` | the type has a hook-free text form | f-string interpolation, `str(value)`, passing `str` itself, plus JSON shape |
 | `Data` | the type is JSON-shaped | `Json.stringify`, `Json.stableStringify`, `Json.clone`, request bodies, stored values |
+
+The grants overlap, but they are not a containment chain over *types*: a Web
+extension's text-shaped values (`Length`, `Duration`) satisfy `Text` and are
+refused by `Data`, because they are not JSON-serializable. Read the table as
+what the body may do, never as "every `Text` type is also a `Data` type".
 
 ```velar fragment
 def label<T: Text>(value: T) -> string:
@@ -1321,8 +1330,11 @@ print(label(5))
 print(ranked(["b", "a"]).size)
 ```
 
-A user type is never a bound: `<T: User>` is rejected, and so is any name
-outside the three. The vocabulary is closed for the same reason user-defined
+`Comparable`, `Text`, and `Data` are reserved type names: a user `type`,
+`class`, `enum`, type parameter, or imported name may not be spelled with one
+of them, because a same-named user type would silently lose to the bound at
+every `<T: Data>`. A user type is never a bound: `<T: User>` is rejected, and
+so is any name outside the three. The vocabulary is closed for the same reason user-defined
 decorators are absent — a library must not be able to change what a
 declaration means. An unbounded type parameter behaves exactly as before, a
 bound survives export so an imported generic keeps its contract, and the
@@ -1842,7 +1854,11 @@ one already has, so `using` works on them with no declaration at all.
 The `@dispose:` body may `await`. When it does, releasing awaits too, and the
 `using` must sit in an async scope; acquiring is ordinary async work written as
 `using name = await open(...)`. A record cannot be owned: a record is data, and
-releasing is behavior.
+releasing is behavior. Neither can an `any` or an `unknown`: a JavaScript value
+carries no release contract, and an extern class declares the foreign shape
+rather than a VelarScript contract. The spelling that works for a foreign
+handle is composition — hold it in a field of a class whose `@dispose:` block
+releases it, and own that class.
 
 A release failure never hides a real error. When an error is already in flight
 the original error is what propagates and the release failure is reported
@@ -1851,8 +1867,37 @@ throws normally, exactly as a `finally` would.
 
 Ownership needs a scope that ends, so `using` is rejected where none does: the
 module top level lives until the process ends, and a component body builds the
-component rather than finishing. Function bodies, methods, actions, and loop
-bodies — which release on every iteration — are all ordinary owning scopes.
+component rather than finishing. Function bodies, methods, actions, lifecycle
+cleanup hooks, `watch` bodies, and loop bodies — which release on every
+iteration — are all ordinary owning scopes.
+
+An owned value may not leave the scope that releases it. `return handle`,
+storing it in a binding or member that outlives the scope, and capture by a
+closure that itself escapes are all rejected: the reference that left is
+already known to be dead, so letting it out would be handing on a released
+handle. This is what `using` means, not a restriction added on top of it. Two
+exits are always available — move the `using` up to the scope that really owns
+the resource, or return the data you read from it. Passing the handle to a
+function stays legal: a callee borrows, and a borrow is not ownership.
+
+```velar fragment
+async def lineCount(path: string) -> number:
+    using source = await openLog(path)
+    let lines = 0
+    async for line in source:
+        lines += 1
+    return lines
+```
+
+A derived class's `@dispose:` adds to its base's rather than replacing it. The
+compiler chains them, derived first and base after — the reverse of
+construction order, the same intuition reverse-order release already has — so
+an author's block is only responsible for what that class declared. A base
+release that fails does not undo the derived part that already ran, and when
+both fail the release-failure priority above decides which error propagates.
+Because a `using` reads the release contract from the value's *static* type, a
+subclass may not begin awaiting where its ancestors release without awaiting:
+that would leave a base-typed owner releasing without an await.
 
 ## 10. Classes
 
@@ -2040,10 +2085,19 @@ catch error:
 
 Class identity cannot cross a JSON or log boundary, so every checked `Error`
 also carries a readonly `code: string` beside `message` and `cause`. Its value
-is the instance's declared class name — `"FileNotFoundError"` above — and it
-comes from the same place `.name` does, so the two can never disagree. A value
-no VelarScript class declared, such as a host `TypeError` that reached a catch
-binding, reports the contract it does satisfy: `"Error"`.
+is the instance's declared class name — `"FileNotFoundError"` above. `is` is
+the only discrimination authority, and `code` is that same identity in string
+form: a value reports a `code` only when the class it was constructed from
+declares that name, so `code` and `is` always agree. A value no VelarScript
+class declared — a host `TypeError` that reached a catch binding, or a
+JavaScript error a caller relabelled by writing `e.name = "..."` — reports the
+contract it does satisfy: `"Error"`. `.name` still shows whatever the value
+carries, which is why the discriminating question is `is`, never `name`.
+
+`name`, `code`, `message`, `stack`, and `cause` are the Error contract's own
+members. An `Error` subclass cannot redeclare any of them in any form: a
+redeclared `name` would forge `code`, and a redeclared `message` would
+silently discard the one passed to `super(...)`.
 
 The capabilities raise these classes, each for a failure a caller recovers from
 differently:
@@ -2102,6 +2156,15 @@ swallowed failure with no visible consumer is exactly what this spelling must
 not enable. `try` is an explicit, locally visible swallow with the same
 standing as `?? fallback`; when the failure's details matter, the answer is
 still `try`/`catch`.
+
+Three failures are never converted to `null`: `AssertionError`,
+`NarrowingError`, and `IndexError`. Those are the language saying the program
+has a bug — a broken assertion, a stale flow fact, an out-of-range position —
+and turning one into `null` would let a bug wear the costume of "not found".
+They pass straight through `try`, and through any combinator that turns a
+failure into a value or retries past it, such as `Promise.retry`. A `catch`
+block still receives all three, because a `catch` is explicit: the author wrote
+code to handle it, and `is` names which one it was.
 
 Assertions remain active in production:
 
@@ -2441,10 +2504,15 @@ export component Greeting(name: string, emphasized: bool = false):
 
 Component names are PascalCase. Native elements use lowercase HTML/SVG names.
 Props are checked from the component declaration. Boolean attributes may be
-valueless. JSX expressions use ordinary VelarScript expressions, and the
-interpolation braces are a bracket context: the expression inside `{...}`
-continues across physical lines without parentheses, exactly as it would
-inside a call's parentheses.
+valueless. A literal attribute value is delimited by double quotes, backticks,
+or the HTML single quote — the language's two string delimiters hold here as
+everywhere else, so an attribute that contains a quotation mark is written with
+backticks instead of escaped. JSX expressions use ordinary VelarScript
+expressions, and the interpolation braces are a bracket context: the expression
+inside `{...}` continues across physical lines without parentheses, exactly as
+it would inside a call's parentheses. An attribute is a typed position: a
+literal there is inferred against the declared prop type, so `items={[]}` needs
+no annotation.
 
 `velar format` owns the layout of an element that opens and closes on one
 line. Such an element is written on that line while it fits within 120
@@ -3526,6 +3594,14 @@ needs, and a program reaches every one of them without writing an import:
 | `Look.` | the Web builder roster (`rgb`, `spacing`, `border`, and the rest of section 17) |
 
 The prelude adds `print`, `str`, `number`, `equals`, and `range` as bare names.
+
+A permanent namespace is vocabulary, not a value. `Json`, `Promise`, `Text`,
+and `Look` are legal in exactly one position — the head of a member access,
+`Json.parse(text)` — and rejected everywhere else: passed as an argument,
+stored in a binding, spread, destructured, or exported. Allowing any of those
+would invent a second and third spelling for the same functions, which rule 3
+exists to prevent, and there is no program that needs one. The members
+themselves are ordinary values: `const encode = Json.stringify` is fine.
 
 `velar/collections`, `velar/math`, `velar/url`, and `velar/test` are pure too,
 and they stay behind an import on purpose: they are toolboxes a program

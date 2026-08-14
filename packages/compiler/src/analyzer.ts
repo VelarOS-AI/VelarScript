@@ -91,6 +91,13 @@ interface Binding {
   // its spelling. Lowering records each resolved read/write span so local
   // state can shadow (and be shadowed by) ordinary bindings safely.
   reactiveKind?: "state" | "prop";
+  /**
+   * D51 rule 101: the binding holds — or carries — a resource this scope owns
+   * and releases at its exit. `handle` is the `using` name to blame, and
+   * `depth` is the scope nesting level that releases it, so a store into any
+   * shallower binding is a store into something that outlives the release.
+   */
+  ownedResource?: { readonly handle: string; readonly depth: number };
 }
 
 interface CollectionInferenceGroup {
@@ -359,6 +366,12 @@ export interface LoweringHints {
    * is the only stage that knows the value's type.
    */
   readonly usingDisposals: ReadonlyMap<string, DisposalContract>;
+  /**
+   * Class declarations whose `@dispose:` must forward to an inherited one
+   * (D51 rule 102), keyed by the declaration's span identity. The value is the
+   * inherited release's async-ness, which decides whether the forward awaits.
+   */
+  readonly classDisposeChains: ReadonlyMap<string, "sync" | "async">;
   /**
    * Span identities of JavaScript-boundary calls in synchronous
    * module-initialization position. A non-Error value thrown there would
@@ -697,6 +710,10 @@ export class Analyzer implements TypeEnvironment {
   private readonly dynamicOrderings = new Set<string>();
   private readonly reportedBoundViolations = new Set<string>();
   private readonly usingDisposals = new Map<string, DisposalContract>();
+  private readonly classDisposeChains = new Map<string, "sync" | "async">();
+  /** D51 rule 101: arrows that read a `using`-owned binding, by arrow span. */
+  private readonly arrowOwnedCaptures = new Map<string, { readonly handle: string; readonly depth: number }>();
+  private readonly arrowCaptureFrames: { captured: { readonly handle: string; readonly depth: number } | null }[] = [];
   private readonly declaredTestTitles = new Set<string>();
   private readonly moduleTopLevelHostCalls = new Set<string>();
   private readonly stringSizes = new Set<number>();
@@ -954,6 +971,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly dynamicImports: ReadonlyMap<string, ValueType>;
 
   analyze(program: Program): readonly Diagnostic[] {
+    this.rejectReservedTypeNames(program);
     this.registerEnumShapes(program);
     this.registerAliasShapes(program);
     // Class identities must exist before record fields are resolved. Otherwise a
@@ -1404,6 +1422,7 @@ export class Analyzer implements TypeEnvironment {
       stringOrderings: this.stringOrderings,
       dynamicOrderings: this.dynamicOrderings,
       usingDisposals: this.usingDisposals,
+      classDisposeChains: this.classDisposeChains,
       moduleTopLevelHostCalls: this.moduleTopLevelHostCalls,
     };
   }
@@ -1660,6 +1679,50 @@ export class Analyzer implements TypeEnvironment {
       for (const parent of this.primitiveParents.get(current) ?? []) pending.push(parent);
     }
     return false;
+  }
+
+  /**
+   * D51 rule 109: `Comparable`, `Text`, and `Data` are the compiler's own
+   * closed bound vocabulary (D41 item 61). A user type of the same name used to
+   * be accepted and then silently ignored at every `<T: Data>` — the bound won,
+   * so `save(42)` passed a function whose author had declared a record. The
+   * name is rejected where it is introduced, which is the only place a rename
+   * is cheap; the use site could only report an ambiguity nobody can fix.
+   */
+  private rejectReservedTypeNames(program: Program): void {
+    const vocabulary = typeParameterBoundNames.join(", ");
+    const reject = (name: string, errorSpan: Span, noun: string): void => {
+      if (!isTypeParameterBound(name)) return;
+      this.diagnostics.push(diagnostic(
+        "VEL4021",
+        `'${name}' is a reserved type-parameter bound — the bounds are ${vocabulary} — so it cannot also name a ${noun}; rename this declaration`,
+        errorSpan,
+      ));
+    };
+    for (const statement of program.body) {
+      switch (statement.kind) {
+        case "TypeDeclaration":
+        case "TypeAliasDeclaration":
+          reject(statement.name, statement.span, "type");
+          break;
+        case "ClassDeclaration":
+          reject(statement.name, statement.span, "class");
+          break;
+        case "EnumDeclaration":
+          reject(statement.name, statement.span, "enum");
+          break;
+        case "ExternModuleDeclaration":
+          for (const declaration of statement.classes) reject(declaration.name, declaration.span, "extern class");
+          break;
+        case "ImportDeclaration":
+          for (const specifier of statement.specifiers) {
+            reject(specifier.local, statement.span, specifier.local === specifier.imported ? "imported name" : "import alias");
+          }
+          break;
+        default:
+          break;
+      }
+    }
   }
 
   private registerAliasShapes(program: Program): void {
@@ -2181,6 +2244,14 @@ export class Analyzer implements TypeEnvironment {
         const contract = annotationValid ? annotated ?? inferredStorage : invalidType;
         if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
         this.declarePattern(statement.pattern, statement.binding === "let", declared, contract);
+        // D51 rule 101: an alias of an owned handle — or a closure over one —
+        // is the same resource under a second name, so it inherits the
+        // ownership and the escape check follows it.
+        if (statement.pattern.kind === "NameBindingPattern") {
+          const carried = this.carriedOwnedResource(statement.initializer);
+          const declaredBinding = carried ? this.scopes.at(-1)?.get(statement.pattern.name) : null;
+          if (carried && declaredBinding) declaredBinding.ownedResource = carried;
+        }
         this.validateKnownBindingShape(statement.pattern, statement.initializer);
         // D44 rule 71: the initializer's type is a fact for each declared
         // binding — `const x: string? = "a"` reads as string until a write
@@ -2238,6 +2309,8 @@ export class Analyzer implements TypeEnvironment {
         const expected = returnContext?.expected ?? unknownType;
         const inferredReturns = returnContext?.inferredReturns ?? null;
         const actual = statement.value ? this.inferExpression(statement.value, inferredReturns ? unknownType : expected) : nullType;
+        // D51 rule 101: a return always leaves the scope that releases.
+        if (statement.value) this.rejectOwnedResourceEscape(statement.value, "returning it", statement.value.span);
         const asynchronous = this.asynchronousFunctions.at(-1) === true;
         const returned = asynchronous ? this.resolvedAsyncResult(actual) : actual;
         if (asynchronous && statement.value) {
@@ -3034,7 +3107,10 @@ export class Analyzer implements TypeEnvironment {
     }
     this.validateConstructorShape(statement);
     if (statement.initialization) this.analyzeClassInitialization(statement);
-    if (statement.dispose) this.analyzeClassDispose(statement, statement.dispose);
+    if (statement.dispose) {
+      this.analyzeClassDispose(statement, statement.dispose);
+      this.checkDisposalChain(statement, baseName);
+    }
     this.superMemberContext = null;
     this.flowFrameDepth -= 1;
     this.exitScope();
@@ -3079,6 +3155,11 @@ export class Analyzer implements TypeEnvironment {
     for (const field of instanceFields) {
       if (ownFields.has(field.name)) this.typeError(`Class '${statement.name}' declares field '${field.name}' more than once`, field.span);
       ownFields.add(field.name);
+      const reserved = this.errorContractMemberRejection(baseName, field.name);
+      if (reserved) {
+        this.typeError(reserved, field.span);
+        continue;
+      }
       const inheritedField = baseName ? this.findField(baseName, field.name) : null;
       const inheritedGetter = baseName ? this.findGetter(baseName, field.name) : null;
       const inheritedMethod = baseName ? this.findMethod(baseName, field.name) : null;
@@ -3237,6 +3318,29 @@ export class Analyzer implements TypeEnvironment {
     this.superMemberContext = outerSuperMemberContext;
   }
 
+  /**
+   * D51 item NEW-D7: `name`, `code`, `message`, `stack`, and `cause` are the
+   * Error contract's own members, not names a subclass may reuse. The generic
+   * inherited-field check let a `const` through whenever it restated the same
+   * type — and that spelling forged `code` (charter 2070 promises `code` and
+   * `name` never disagree) or silently discarded the constructed message.
+   */
+  private errorContractMemberRejection(baseName: string | null, member: string): string | null {
+    if (!baseName || !this.isSubclassOf(baseName, "Error")) return null;
+    switch (member) {
+      case "name":
+      case "code":
+        return `'${member}' is the Error contract's own member: both report the declared class name, so a subclass cannot redeclare either — rename this field, or rename the class`;
+      case "message":
+        return "'message' is the Error contract's own member; pass the text to 'super(...)' instead of redeclaring the field";
+      case "stack":
+      case "cause":
+        return `'${member}' is the Error contract's own member, filled in where the failure happens; a subclass cannot redeclare it`;
+      default:
+        return null;
+    }
+  }
+
   private validateClassMemberName(name: string, memberSpan: Span, external = false): void {
     const label = external ? "Extern class member" : "Class member";
     if (name === "constructor") {
@@ -3346,7 +3450,11 @@ export class Analyzer implements TypeEnvironment {
     if (rejection !== null) this.diagnostics.push(diagnostic("VEL3018", rejection, statement.span));
     const contract = this.disposalContract(value);
     if (contract === null) {
-      if (!isInvalidType(this.expandAliases(value)) && this.expandAliases(value).kind !== "any") {
+      // D51 item NEW-D5: `any` used to be exempt here, so `using` over an
+      // unsafe JavaScript value compiled to a plain `const` — no release, no
+      // diagnostic. `any` is an escape hatch for *values*; it can never answer
+      // "how does this release", which is the whole content of `using`.
+      if (!isInvalidType(this.expandAliases(value))) {
         this.diagnostics.push(diagnostic(
           "VEL4032",
           `'using' releases a value whose type declares '@dispose'; ${describeType(value)} does not${this.disposalGuidance(value)}`,
@@ -3364,6 +3472,67 @@ export class Analyzer implements TypeEnvironment {
       this.usingDisposals.set(spanIdentity(statement.span), contract);
     }
     this.declareBinding(statement.name, false, value, statement.nameSpan);
+    const binding = this.scopes.at(-1)?.get(statement.name);
+    if (binding) binding.ownedResource = { handle: statement.name, depth: this.scopes.length };
+  }
+
+  /**
+   * D51 rule 101: an owned resource may not leave the scope that releases it.
+   * `using` means "this scope owns it and guarantees the release", so letting
+   * the value out hands back a reference that is already known to be dead —
+   * which is the construct's definition, not a restriction on top of it. The
+   * judgement is *storage and return*, never use: passing the handle to a
+   * function stays legal, because a callee borrows and must not assume
+   * ownership. Returns the owned binding an expression carries, or null.
+   */
+  private carriedOwnedResource(expression: Expression | null): { readonly handle: string; readonly depth: number } | null {
+    if (!expression) return null;
+    switch (expression.kind) {
+      case "IdentifierExpression":
+        return this.lookup(expression.name)?.ownedResource ?? null;
+      case "ListExpression":
+        for (const element of expression.elements) {
+          const carried = this.carriedOwnedResource(element.kind === "SpreadExpression" ? element.value : element);
+          if (carried) return carried;
+        }
+        return null;
+      case "ObjectExpression":
+        for (const property of expression.properties) {
+          const carried = this.carriedOwnedResource(property.value);
+          if (carried) return carried;
+        }
+        return null;
+      case "ConditionalExpression":
+        return this.carriedOwnedResource(expression.thenValue) ?? this.carriedOwnedResource(expression.elseValue);
+      case "ArrowFunctionExpression":
+        // A closure that captured the handle carries it wherever the closure
+        // goes. The captures were recorded by the arrow's own analysis, so the
+        // answer respects shadowing exactly as name resolution does.
+        return this.arrowOwnedCaptures.get(spanIdentity(expression.span)) ?? null;
+      default:
+        // Member reads, index reads, and call results are data read *out of*
+        // the handle — the diagnostic's own second exit — so they never carry.
+        return null;
+    }
+  }
+
+  /** The scope nesting level a name is declared at, or 0 when it is not a local. */
+  private bindingScopeDepth(name: string): number {
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      if (this.scopes[index]!.has(name)) return index + 1;
+    }
+    return 0;
+  }
+
+  private rejectOwnedResourceEscape(expression: Expression | null, action: string, errorSpan: Span): boolean {
+    const carried = this.carriedOwnedResource(expression);
+    if (!carried) return false;
+    this.diagnostics.push(diagnostic(
+      "VEL4036",
+      `'${carried.handle}' is owned by this scope, which releases it on the way out, so ${action} would hand on an already-released handle; move the 'using' up to the scope that really owns it, or ${action.startsWith("returning") ? "return" : "store"} the data you read from it instead`,
+      errorSpan,
+    ));
+    return true;
   }
 
   /**
@@ -3374,23 +3543,30 @@ export class Analyzer implements TypeEnvironment {
   private disposalContract(source: ValueType): DisposalContract | null {
     const type = this.resolveNamedClasses(this.expandAliases(source));
     if (type.kind === "class") {
-      let current: string | null = type.identity ?? type.name;
-      const visited = new Set<string>();
-      while (current && !visited.has(current)) {
-        visited.add(current);
-        const info: ClassInfo | undefined = this.classes.get(current);
-        if (info?.dispose) return { member: disposeMemberKey, asynchronous: info.dispose === "async", owner: "class" };
-        current = info?.base ?? null;
-      }
-      return null;
+      // D51 rule 102: every `@dispose:` in the chain runs, so the contract's
+      // async-ness is the chain's, not the most-derived block's. Rule NEW-D4
+      // keeps that answer sound through a supertype: a subclass may not add
+      // awaiting where an ancestor's release does not await, so no subclass
+      // below the static type can raise the answer computed here.
+      const chain = this.disposalChain(type.identity ?? type.name);
+      if (chain.length === 0) return null;
+      return { member: disposeMemberKey, asynchronous: chain.includes("async"), owner: "class" };
     }
-    if (type.kind !== "named") return null;
-    // A standard capability module owns its handle types (`velar/fs#type:...`);
-    // a module's own `type` declaration is identified as `velar:<path>#...`, so
-    // a plain record can never reach the built-in contract.
-    const identity = type.identity ?? type.name;
-    if (!identity.startsWith("velar/")) return null;
-    const fields = this.fieldsOf(identity);
+    // D51 (audit 12): charter section 16 promises the compiler supplies the
+    // contract for *every* standard capability handle. Some targets declare a
+    // handle structurally rather than as a named type — a socket, an event
+    // stream, a terminal — and the named rule could never match those, so a
+    // live WebSocket was reported as "a record, which is data". The extension
+    // marks its own handles; nothing here detects a shape.
+    const fields = type.kind === "object" && type.capabilityHandle === true
+      ? type.fields
+      : type.kind === "named" && (type.identity ?? type.name).startsWith("velar/")
+        // A standard capability module owns its handle types
+        // (`velar/fs#type:...`); a module's own `type` declaration is
+        // identified as `velar:<path>#...`, so a plain record can never reach
+        // the built-in contract.
+        ? this.fieldsOf(type.identity ?? type.name)
+        : null;
     if (!fields) return null;
     for (const verb of ["close", "stop"]) {
       const member = fields.get(verb);
@@ -3403,6 +3579,44 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return null;
+  }
+
+  /**
+   * D51 rule 102 + item NEW-D4. Rule 102 makes the compiler chain a derived
+   * `@dispose:` into its base's, so the emitter is told which classes forward
+   * and whether the forwarded release awaits. NEW-D4 is the soundness half:
+   * `using` reads the release contract off the *static* type, so a subclass
+   * that starts awaiting where its ancestors do not would be released without
+   * an await through a base-typed binding — an unhandled rejection that kills
+   * the process. Adding `await` downward is therefore rejected at the subclass;
+   * an ancestor that already awaits carries every descendant with it.
+   */
+  private checkDisposalChain(statement: ClassDeclaration, baseName: string | null): void {
+    const inherited = baseName ? this.disposalChain(baseName) : [];
+    if (inherited.length === 0) return;
+    this.classDisposeChains.set(spanIdentity(statement.span), inherited.includes("async") ? "async" : "sync");
+    const own = this.classes.get(statement.name)?.dispose ?? "sync";
+    if (own === "async" && !inherited.includes("async")) {
+      this.diagnostics.push(diagnostic(
+        "VEL4035",
+        `Class '${statement.name}' awaits in '@dispose', but '${baseName}' releases without awaiting; a 'using' that owns this value through '${baseName}' would not await the release — move the awaiting work into the base's '@dispose', or release it there`,
+        statement.dispose!.span,
+      ));
+    }
+  }
+
+  /** Every `@dispose:` a class releases through, most derived first (D51 rule 102). */
+  private disposalChain(className: string): readonly ("sync" | "async")[] {
+    const chain: ("sync" | "async")[] = [];
+    let current: string | null = className;
+    const visited = new Set<string>();
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      const info: ClassInfo | undefined = this.classes.get(current);
+      if (info?.dispose) chain.push(info.dispose);
+      current = info?.base ?? null;
+    }
+    return chain;
   }
 
   /**
@@ -3422,6 +3636,18 @@ export class Analyzer implements TypeEnvironment {
       return this.disposalContract(type.value) === null
         ? ""
         : "; acquisition is ordinary async work — write 'using name = await ...' so the scope owns the handle, not the Promise";
+    }
+    // D51 item NEW-D5: the three JavaScript-boundary shapes get the spelling
+    // that actually works. An extern class cannot grow an '@dispose:' block —
+    // an extern body declares, it has no statements — so the old guidance named
+    // a fix that is a parse error. Composition is the answer the bridge already
+    // gives for every other extern-class need (D45 rule 78).
+    const wrapperGuidance = "; hold it in a field of a VelarScript class whose '@dispose:' block releases it, then own that wrapper";
+    if (type.kind === "any" || type.kind === "unknown") {
+      return `; a JavaScript value carries no release contract${wrapperGuidance}`;
+    }
+    if ((type.kind === "class" || type.kind === "classConstructor") && isExternClassIdentity(type.identity ?? null)) {
+      return `; an extern class declares the foreign shape and cannot declare '@dispose:'${wrapperGuidance}`;
     }
     if (type.kind === "class") return "; declare an '@dispose:' block on the class to say how it releases itself";
     if (type.kind === "named" || type.kind === "object" || type.kind === "record") {
@@ -4009,6 +4235,18 @@ export class Analyzer implements TypeEnvironment {
     }
 
     const valueType = this.inferExpression(statement.value, operator === "=" ? targetType : unknownType);
+    // D51 rule 101: a store into a member, an index, or any binding declared
+    // outside the owning scope outlives the release. A store into a binding at
+    // or inside the owning scope dies with it, so it stays legal.
+    const carriedValue = this.carriedOwnedResource(statement.value);
+    if (carriedValue) {
+      const targetDepth = statement.target.kind === "IdentifierExpression"
+        ? this.bindingScopeDepth(statement.target.name)
+        : 0;
+      if (targetDepth < carriedValue.depth) {
+        this.rejectOwnedResourceEscape(statement.value, "storing it here", statement.value.span);
+      }
+    }
 
     if (operator !== "=" && targetType.kind !== "number" && !(operator === "+=" && targetType.kind === "string")) {
       this.typeError(`Operator '${operator}' is not valid for ${describeType(targetType)}`, statement.span);
@@ -4069,6 +4307,21 @@ export class Analyzer implements TypeEnvironment {
       if (!this.callExpressionCallees.has(key) && !this.memberAccessReceivers.has(key)) {
         this.typeError(
           `A class name is not a value; call '${type.name}()' directly, or wrap a factory as an arrow '() => ${type.name}()'`,
+          expression.span,
+        );
+        type = invalidType;
+      }
+    }
+    // D51 rule 106: a permanent namespace is vocabulary, not a value. It exists
+    // so pure computation needs no import; letting it be passed, stored,
+    // spread, or destructured invents a second and third spelling of the same
+    // functions (rule 3) and buys nothing. The one legal position is the head
+    // of a member access — the same shape D45 rule 75 leaves a class name.
+    if (expression.kind === "IdentifierExpression") {
+      const namespace = this.builtinValueReferences.get(spanIdentity(expression.span));
+      if (namespace && namespace !== "range" && !this.memberAccessReceivers.has(spanIdentity(expression.span))) {
+        this.typeError(
+          `'${namespace}' is a namespace, not a value; name the member you need — '${namespace}.${this.firstNamespaceMember(namespace)}(...)' — a namespace cannot be called, passed, stored, spread, or destructured`,
           expression.span,
         );
         type = invalidType;
@@ -4182,6 +4435,11 @@ export class Analyzer implements TypeEnvironment {
         }
         if (!lexical && (expression.name === "Json" || expression.name === "Promise" || expression.name === "Text" || expression.name === "Look" || expression.name === "range")) {
           this.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
+        }
+        // D51 rule 101: every arrow frame this read sits inside captures the
+        // owned handle, so a nested arrow taints its enclosing arrows too.
+        if (binding.ownedResource && this.arrowCaptureFrames.length > 0) {
+          for (const frame of this.arrowCaptureFrames) frame.captured ??= binding.ownedResource;
         }
         this.checkShadowedRead(expression.name, expression.span);
         this.recordInitializationImportRead(binding, expression.name, expression.span);
@@ -4320,7 +4578,7 @@ export class Analyzer implements TypeEnvironment {
               }
             } else if (spread.kind === "record" && expectedRecordValue) {
               this.requireAssignable(spread.value, expectedRecordValue, property.span);
-            } else if (spread.kind !== "any") {
+            } else if (spread.kind !== "any" && !isInvalidType(spread)) {
               this.typeError(`Cannot spread ${describeType(spread)} into an object`, property.span);
             }
           }
@@ -5260,7 +5518,10 @@ export class Analyzer implements TypeEnvironment {
     const outerConstructorDepth = this.constructorDepth;
     this.parameterDefaultDepth = 0;
     this.constructorDepth = 0;
+    this.arrowCaptureFrames.push({ captured: null });
     const bodyResult = this.inferExpression(expression.body, contextualResult);
+    const captured = this.arrowCaptureFrames.pop()?.captured ?? null;
+    if (captured) this.arrowOwnedCaptures.set(spanIdentity(expression.span), captured);
     this.parameterDefaultDepth = outerParameterDefaultDepth;
     this.constructorDepth = outerConstructorDepth;
     const checkedBodyResult = expected
@@ -5618,6 +5879,10 @@ export class Analyzer implements TypeEnvironment {
     callSpan: Span,
   ): ValueType {
     const bindings: (ValueType | null)[] = Array.from({ length: callee.typeParameterNames?.length ?? 0 }, () => null);
+    // NEW-D3: parameters an `unknown` argument reached are solved-to-unknown,
+    // which no bound admits; they are tracked apart from `bindings` so that
+    // `unknown` still never poisons a merge with a concrete argument.
+    const unknownParameters = new Set<number>();
     const fieldsOf = (identity: string): ReadonlyMap<string, ValueType> | null => this.fieldsOf(identity);
     const substitute = (declared: ValueType): ValueType => substituteTypeParameters(declared, bindings);
     const solvedContext = (declared: ValueType): ValueType =>
@@ -5683,18 +5948,18 @@ export class Analyzer implements TypeEnvironment {
       if (!item.declared) continue;
       if (item.spreadList) {
         const expanded = this.expandAliases(actual);
-        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf);
+        if (expanded.kind === "list") unifyTypeParameters(item.declared, expanded.element, bindings, fieldsOf, unknownParameters);
       } else {
-        unifyTypeParameters(item.declared, actual, bindings, fieldsOf);
+        unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters);
       }
     }
     for (const item of deferredArrows) {
       const context = item.declared ? substitute(item.declared) : unknownType;
       const actual = this.inferExpression(item.value, context);
       actuals.set(item, actual);
-      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf);
+      if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters);
     }
-    this.reportGenericBoundViolations(callee, bindings, planned, callSpan);
+    this.reportGenericBoundViolations(callee, bindings, planned, callSpan, unknownParameters);
     for (const item of planned) {
       const actual = actuals.get(item) ?? unknownType;
       if (!item.declared) continue;
@@ -5719,8 +5984,9 @@ export class Analyzer implements TypeEnvironment {
     bindings: readonly (ValueType | null)[],
     planned: readonly { readonly declared: ValueType | null; readonly errorSpan: Span }[],
     callSpan: Span,
+    unknownParameters?: ReadonlySet<number>,
   ): void {
-    const violations = collectGenericBoundViolations(callee, bindings, (type, bound) => this.satisfiesBound(type, bound));
+    const violations = collectGenericBoundViolations(callee, bindings, (type, bound) => this.satisfiesBound(type, bound), unknownParameters);
     for (const violation of violations) {
       // "Report at the cause" (D31 item 27). The one shape it cannot serve is
       // a parameter several arguments merged into: there is no single cause,
@@ -8846,7 +9112,16 @@ export class Analyzer implements TypeEnvironment {
         continue;
       }
       seen.add(declaration.name);
-      if (this.isDeclaredTypeName(declaration.name)) {
+      // D51 rule 109: the same closed vocabulary, at the other place a name is
+      // introduced. `def f<Data, T: Data>` would otherwise read one word two
+      // ways in one signature.
+      if (isTypeParameterBound(declaration.name)) {
+        this.diagnostics.push(diagnostic(
+          "VEL4021",
+          `'${declaration.name}' is a reserved type-parameter bound — the bounds are ${typeParameterBoundNames.join(", ")} — so it cannot also name a type parameter; rename it`,
+          declaration.span,
+        ));
+      } else if (this.isDeclaredTypeName(declaration.name)) {
         this.diagnostics.push(diagnostic("VEL4021", `Type parameter '${declaration.name}' shadows an existing type name; choose another name`, declaration.span));
       }
       if (declaration.bound !== undefined && !isTypeParameterBound(declaration.bound)) {
@@ -9157,6 +9432,16 @@ export class Analyzer implements TypeEnvironment {
     const valid = validate(reference.syntax);
     if (!resolve) this.typeReferenceValidity.set(reference, valid);
     return valid;
+  }
+
+  /** A member name to show in the rule 106 guidance, so the fix is concrete. */
+  private firstNamespaceMember(namespace: "Json" | "Promise" | "Text" | "Look"): string {
+    const binding = this.builtin(namespace);
+    const type = binding ? this.expandAliases(binding.type) : null;
+    if (type?.kind === "object") {
+      for (const name of type.fields.keys()) return name;
+    }
+    return "member";
   }
 
   protected typeError(message: string, errorSpan: Span, fix?: DiagnosticFix): void {
@@ -10195,7 +10480,7 @@ export class Analyzer implements TypeEnvironment {
     const fields = type.kind === "object" ? type.fields : type.kind === "named" ? this.fieldsOf(type.identity ?? type.name) : null;
     const declaredFields = declaredType.kind === "object" ? declaredType.fields
       : declaredType.kind === "named" ? this.fieldsOf(declaredType.identity ?? declaredType.name) : null;
-    if (!fields && type.kind !== "any") {
+    if (!fields && type.kind !== "any" && !isInvalidType(type)) {
       this.typeError(`Cannot object-destructure ${describeType(type)}`, pattern.span);
     }
     const selected = new Set<string>();

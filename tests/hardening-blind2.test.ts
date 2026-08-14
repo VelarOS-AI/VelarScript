@@ -153,7 +153,7 @@ test "mounting from the test body":
   });
   const result = await runCommand(process.execPath, [cli, "test", directory, "--browser", "chromium"]);
   assert.notEqual(result.code, 0, result.output);
-  assert.match(result.output, /✗ chromium :: src\/body\.browser\.test\.vel :: mounting from the test body/u);
+  assert.match(result.output, /✗ chromium :: "src\/body\.browser\.test\.vel" :: "mounting from the test body"/u);
   assert.match(result.output, /document\.createElement API is unavailable/u);
   assert.match(result.output, /browser\.waitForText\(selector, text\)/u);
   assert.match(result.stdout, /\n0 passed, 1 failed\n/u);
@@ -183,7 +183,7 @@ test "the page throws during mount":
   });
   const result = await runCommand(process.execPath, [cli, "test", directory, "--browser", "chromium"]);
   assert.notEqual(result.code, 0, result.output);
-  assert.match(result.output, /✗ chromium :: src\/page\.browser\.test\.vel :: the page throws during mount/u);
+  assert.match(result.output, /✗ chromium :: "src\/page\.browser\.test\.vel" :: "the page throws during mount"/u);
   assert.match(result.output, /the page throws while mounting/u);
   assert.match(result.stdout, /\n0 passed, 1 failed\n/u);
 });
@@ -246,9 +246,9 @@ test "the second test is innocent":
   });
   const result = await runCommand(process.execPath, [cli, "test", directory]);
   assert.equal(result.code, 1, result.output);
-  assert.match(result.output, /✗ src\/late\.test\.vel :: the first test starts detached work/u);
+  assert.match(result.output, /✗ "src\/late\.test\.vel" :: "the first test starts detached work"/u);
   assert.match(result.output, /started by the first test/u);
-  assert.match(result.output, /✓ src\/late\.test\.vel :: the second test is innocent/u);
+  assert.match(result.output, /✓ "src\/late\.test\.vel" :: "the second test is innocent"/u);
   assert.match(result.stdout, /\n1 passed, 1 failed\n/u);
 });
 
@@ -294,7 +294,7 @@ test "this test never finishes":
   const result = await runTestsWithLimits(directory, 500, 1_000);
   assert.equal(result.code, 1, result.output);
   assert.ok(Date.now() - started < 60_000, "a bounded run must not wait out the test's own sleep");
-  assert.match(result.output, /✗ src\/hang\.test\.vel :: this test never finishes/u);
+  assert.match(result.output, /✗ "src\/hang\.test\.vel" :: "this test never finishes"/u);
   assert.match(result.output, /did not finish within its 500 millisecond bound/u);
   assert.match(result.output, /work started during this run was still running 1000 milliseconds later/u);
 });

@@ -100,25 +100,28 @@ const stringMemberGuidanceEntries = new Map<string, string>([
   ["at", "Use '.char(index)'; string positions count Unicode code points"],
   ["indexOf", "Use '.index(text, start)'; missing text returns null and string positions count Unicode code points"],
   ["lastIndexOf", "Use '.index(text, start)' to search forward; VelarScript has no reverse string search member"],
-  ["trimStart", "Use trimStart(value) from 'velar/text'; string operations are functions"],
-  ["trimEnd", "Use trimEnd(value) from 'velar/text'; string operations are functions"],
+  // D51 item "two-round retirement": the destination is the spelling that
+  // survives. Naming 'velar/text' here sent the author to an import the
+  // project driver retires on the next run, so the guidance taught a loop.
+  ["trimStart", "Use Text.trimStart(value); string operations beyond the core members live in the Text namespace, which needs no import"],
+  ["trimEnd", "Use Text.trimEnd(value); string operations beyond the core members live in the Text namespace, which needs no import"],
   ["toUpperCase", "Use '.upper()'; VelarScript exposes one string uppercase spelling"],
   ["toLowerCase", "Use '.lower()'; VelarScript exposes one string lowercase spelling"],
   ["includes", "Use '.has(text)'; strings and collections share one membership method"],
   ["toString", "Use 'str(value)' or an f-string; VelarScript has one explicit text conversion spelling"],
-  // TXT-I1: the Python spellings, each pointed at the member or velar/text
-  // function that exists.
+  // TXT-I1: the Python spellings, each pointed at the member or the `Text.`
+  // namespace function that exists.
   ["strip", "Use '.trim()'; VelarScript trims whitespace with the trim member"],
-  ["lstrip", "Use trimStart(value) from 'velar/text'; string operations are functions"],
-  ["rstrip", "Use trimEnd(value) from 'velar/text'; string operations are functions"],
+  ["lstrip", "Use Text.trimStart(value); string operations beyond the core members live in the Text namespace, which needs no import"],
+  ["rstrip", "Use Text.trimEnd(value); string operations beyond the core members live in the Text namespace, which needs no import"],
   ["startswith", "Use '.startsWith(text)'; VelarScript member names are camelCase"],
   ["endswith", "Use '.endsWith(text)'; VelarScript member names are camelCase"],
   ["find", "Use '.index(text, start)'; missing text returns null instead of -1"],
-  ["splitlines", "Use lines(value) from 'velar/text'; it splits on line boundaries"],
+  ["splitlines", "Use Text.lines(value); it splits on line boundaries, and the Text namespace needs no import"],
   ["casefold", "Use '.lower()'; VelarScript exposes simple case mapping, not locale case folding"],
   ["format", "Use an f-string — f\"Hello {name}\" — VelarScript interpolates values instead of format()"],
-  ["title", "Use title(value) from 'velar/text'; string operations beyond the core members are functions"],
-  ["capitalize", "Use capitalize(value) from 'velar/text'; string operations beyond the core members are functions"],
+  ["title", "Use Text.title(value); string operations beyond the core members live in the Text namespace, which needs no import"],
+  ["capitalize", "Use Text.capitalize(value); string operations beyond the core members live in the Text namespace, which needs no import"],
 ]);
 
 const removedStandardFunctionGuidanceEntries = new Map<string, ReadonlyMap<string, string>>([

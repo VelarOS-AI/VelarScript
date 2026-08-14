@@ -266,20 +266,25 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     let report;
     try {
-      report = await applyProjectMechanicalFixes(fixConfig, displayPath);
+      report = await applyProjectMechanicalFixes(fixConfig, displayPath, 8, await projectTestModules(fixConfig));
     } catch (error) {
       process.stderr.write(`velar fix: ${hostErrorMessage(error)}\n`);
       return 1;
     }
     for (const change of report.changes) process.stdout.write(`${change}\n`);
     if (report.remainingDiagnostics.length > 0) process.stderr.write(`${report.remainingDiagnostics.join("\n\n")}\n`);
+    // D51 item NEW-D8: a write that failed is named, and the summary that says
+    // what did change is printed either way — a rewritten tree is never left
+    // unreported.
+    for (const failure of report.writeFailures) process.stderr.write(`velar fix: could not write ${failure}\n`);
     const files = report.changedFiles.length;
     process.stdout.write(
       `applied ${report.changes.length} mechanical fix${report.changes.length === 1 ? "" : "es"}`
       + `${files > 0 ? ` in ${files} file${files === 1 ? "" : "s"}` : ""}`
+      + `${report.writeFailures.length > 0 ? `; ${report.writeFailures.length} file${report.writeFailures.length === 1 ? "" : "s"} could not be written` : ""}`
       + `; ${report.remainingDiagnostics.length} diagnostic${report.remainingDiagnostics.length === 1 ? " remains" : "s remain"}\n`,
     );
-    return report.remainingDiagnostics.length > 0 ? 1 : 0;
+    return report.remainingDiagnostics.length > 0 || report.writeFailures.length > 0 ? 1 : 0;
   }
 
   if (command !== "check" && command !== "build" && command !== "package" && command !== "format" && command !== "dev" && command !== "test") {
@@ -408,6 +413,25 @@ async function main(arguments_: readonly string[]): Promise<number> {
 
   const project = await compileConfiguredProject(projectConfig);
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
+  // A `*.test.vel` module is not reachable from the entry, so the module-graph
+  // walk never saw one: `const n: number = "not a number"` inside a test passed
+  // `check` and `build` (audit 12). Test source is source the author owns and
+  // answers to the same compiler; it stays out of the build *output*, because
+  // checking is not emitting.
+  const testModules = parsed.input?.endsWith(".vel") ? [] : await projectTestModules(projectConfig);
+  const compiled = new Set(project.modules.map((module) => module.inputPath));
+  const testProjects: ProjectResult[] = [];
+  for (const file of testModules) {
+    testProjects.push(await compileProject(file, new Map(), {
+      sourceRoot: projectConfig.root,
+      projectRoot: projectConfig.root,
+      publicRoot: projectConfig.publicDir,
+      extensions: projectConfig.compilerExtensions,
+      extensionConfig: projectConfig.extensionConfig,
+      framework: projectConfig.framework,
+      exportTestFunctions: true,
+    }));
+  }
   // MOD-I1: resolution failures and module diagnostics print together —
   // exactly as `velar run` reports them — so one unresolved import can never
   // bury the compiler's own diagnostics for everything else.
@@ -415,13 +439,22 @@ async function main(arguments_: readonly string[]): Promise<number> {
     ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
   ];
+  for (const testProject of testProjects) {
+    for (const failure of testProject.failures) errors.push(`${failure.path}: ${failure.message}`);
+    for (const module of testProject.modules) {
+      if (compiled.has(module.inputPath)) continue;
+      compiled.add(module.inputPath);
+      errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
+    }
+  }
   if (errors.length > 0) {
     process.stderr.write(`${errors.join("\n\n")}\n`);
     return 1;
   }
 
   if (command === "check") {
-    process.stdout.write(`Checked ${project.modules.length} module${project.modules.length === 1 ? "" : "s"} from ${displayInput(parsed.input, projectConfig)}\n`);
+    const count = compiled.size;
+    process.stdout.write(`Checked ${count} module${count === 1 ? "" : "s"} from ${displayInput(parsed.input, projectConfig)}\n`);
     return 0;
   }
 
@@ -907,6 +940,11 @@ function compileConfiguredProject(config: VelarProjectConfig) {
 
 function displayInput(input: string | null, config: VelarProjectConfig): string {
   return input ?? config.manifestPath ?? config.entryPath;
+}
+
+/** Every `*.test.vel` root in the project — the modules no import reaches. */
+async function projectTestModules(config: VelarProjectConfig): Promise<string[]> {
+  return (await discoverVelarSources(config)).filter((path) => path.endsWith(".test.vel"));
 }
 
 async function discoverVelarSources(config: VelarProjectConfig): Promise<string[]> {

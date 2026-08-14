@@ -6,6 +6,32 @@ truth for acceptance status.
 
 ## Unreleased
 
+- `IndexError` was unreachable from every CLI path — the class existed but
+  was missing from the shared-runtime export list, so `error.code` read
+  `Error` while the program's own `catch` swallowed a `ReferenceError` and
+  ran recovery against the wrong error. Every existing test sat on the
+  standalone compile path, so the gate was blind by construction; the new
+  regression is project-level, and a sweep confirmed this was the only
+  unexported runtime name.
+- `unknown` no longer satisfies every type bound, which had let a record
+  reach a `toString` hook through a `<T: Text>` parameter. An owned
+  resource may not escape its scope; a derived `@dispose` now runs the
+  base's release after its own instead of silently replacing it; `using`
+  over an unsafe JavaScript value is rejected with the composition
+  spelling that works instead of degrading to a plain `const`; and `try`
+  stops swallowing the compiler's own integrity guards, so an assertion,
+  narrowing, or index failure can no longer disguise itself as an expected
+  absence.
+- Permanent namespaces are vocabulary, not values: `Json` and its siblings
+  are legal only as the head of a member access, which closes a spread
+  that crashed at runtime, a destructuring spelling that revived retired
+  names, and an export alias. An `Error` subclass can no longer redeclare
+  `name`, `code`, `message`, `stack`, or `cause` — redeclaring `name` had
+  been enough to forge `code` — and a host error reports `code = "Error"`
+  rather than a name JavaScript can set. The bidirectional-control ban
+  covers all twelve control points, and the test reporter escapes author
+  text before printing it, so a test name can no longer render its own
+  verdict backwards.
 - The test runners can no longer report green around a failure. The
   browser runner never watched the host error channel — a browser test
   body runs in the worker, so `mount(...)` failing there printed and

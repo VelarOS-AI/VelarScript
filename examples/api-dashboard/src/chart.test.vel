@@ -7,6 +7,11 @@ test "chart coordinates are bounded":
     expect(barHeight(160, 100)).toBe(120)
     expect(barY(50, 100)).toBe(90)
 
+test "chart heights are bounded for every sampled value":
+    for value in [0, 25, 50, 100, 160]:
+        const height = barHeight(value, 100)
+        expect(0 <= height and height <= 120).toBe(true)
+
 test "chart scale owns derived internal state":
     const scale = ChartScale(200, 100, 130)
     expect(ChartScale.defaultHeight).toBe(120)

@@ -5,6 +5,7 @@ const __velarErrorNativeObject = globalThis.Object;
 const __velarErrorNativeReflect = globalThis.Reflect;
 const __velarErrorNativeTypeError = globalThis.TypeError;
 const __velarErrorGetOwnPropertyDescriptor = __velarErrorNativeObject.getOwnPropertyDescriptor;
+const __velarErrorGetPrototypeOf = __velarErrorNativeObject.getPrototypeOf;
 const __velarErrorReflectApply = __velarErrorGetOwnPropertyDescriptor(__velarErrorNativeReflect, "apply")?.value;
 const __velarErrorIsErrorOperation = __velarErrorGetOwnPropertyDescriptor(__velarErrorNativeError, "isError")?.value;
 function __velarErrorApply(operation, receiver, arguments_, label) {
@@ -20,14 +21,23 @@ function __velarIsError(value) {
 // never a second taxonomy. The class lowering writes the declared name into
 // the instance's own 'name' property (rule 74), and this reads exactly that
 // property back — one source of truth, so the two can never diverge. A value
-// no Velar class declared (a host TypeError, a foreign Error) has no own name
-// and reports the base contract it actually satisfies: "Error".
+// no Velar class declared (a host TypeError, a foreign Error) reports the base
+// contract it actually satisfies: "Error".
+//
+// D51 rule 107: 'is' is the only discrimination authority, so the own 'name'
+// counts only when the class the value was constructed from declares that same
+// name. A JavaScript caller writing e.name = "FileNotFoundError" on a host
+// TypeError produced an error whose 'code' said FileNotFoundError while 'is'
+// said false; the class behind the value is what answers now.
 function __velarErrorCode(value) {
   if (value === null || typeof value !== "object" && typeof value !== "function") return "Error";
   const descriptor = __velarErrorGetOwnPropertyDescriptor(value, "name");
-  return descriptor && "value" in descriptor && typeof descriptor.value === "string" && descriptor.value.length > 0
-    ? descriptor.value
-    : "Error";
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string" || descriptor.value.length === 0) return "Error";
+  const prototype = __velarErrorGetPrototypeOf(value);
+  const constructor = prototype === null ? null : __velarErrorGetOwnPropertyDescriptor(prototype, "constructor");
+  if (!constructor || !("value" in constructor) || typeof constructor.value !== "function") return "Error";
+  const declared = __velarErrorGetOwnPropertyDescriptor(constructor.value, "name");
+  return declared && "value" in declared && declared.value === descriptor.value ? descriptor.value : "Error";
 }
 function __velarNormalizeError(value) {
   if (__velarIsError(value)) return value;
@@ -66,6 +76,7 @@ export const VELAR_HOST_ERROR_PATH_NAMES: readonly string[] = VELAR_HOST_ERROR_N
 
 export const VELAR_HOST_ERROR_RUNTIME = String.raw`
 const __velarHostErrorNativeError = globalThis.Error;
+const __velarHostErrorDefineProperty = globalThis.Object.defineProperty;
 ${VELAR_HOST_ERROR_NAMES.map((name) => VELAR_HOST_ERROR_PATH_NAMES.includes(name)
   ? `class __Velar${name} extends __velarHostErrorNativeError {
   constructor(message, path = null) {
@@ -73,13 +84,17 @@ ${VELAR_HOST_ERROR_NAMES.map((name) => VELAR_HOST_ERROR_PATH_NAMES.includes(name
     this.name = ${JSON.stringify(name)};
     this.path = path;
   }
-}`
+}
+// D51 rule 107: the class the value was constructed from is what 'code' reads,
+// so a compiler-owned class carries the source-level name it reports.
+__velarHostErrorDefineProperty(__Velar${name}, "name", { value: ${JSON.stringify(name)}, writable: false, enumerable: false, configurable: true });`
   : `class __Velar${name} extends __velarHostErrorNativeError {
   constructor(message) {
     super(message);
     this.name = ${JSON.stringify(name)};
   }
-}`).join("\n")}
+}
+__velarHostErrorDefineProperty(__Velar${name}, "name", { value: ${JSON.stringify(name)}, writable: false, enumerable: false, configurable: true });`).join("\n")}
 `.trimStart();
 
 export const VELAR_ERROR_NORMALIZATION_MODULE = "velar/compiler-runtime-errors-v1";

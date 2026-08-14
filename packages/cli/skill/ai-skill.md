@@ -258,9 +258,14 @@ const session = Session("session-1")
 `@name` members belong to the language and can never collide with yours.
 `@dispose:` is the release contract — never called directly — that
 `using name = expression` runs on every exit from the owning scope (block end,
-`return`, `break`, `continue`, throw), in reverse declaration order. Standard
-handles already have it, so `using watcher = await watchFiles(path)` above an
-`async for` needs no `try`/`finally`.
+`return`, `break`, `continue`, throw), in reverse declaration order. A derived
+`@dispose:` adds to its base's; the compiler runs derived first, then base.
+Standard handles already have it, so `using watcher = await watchFiles(path)`
+above an `async for` needs no `try`/`finally`. An owned value may not leave its
+scope: `return handle`, storing it outside, or capturing it in a closure that
+escapes are rejected — return the data you read from it, or move the `using` up
+to the scope that really owns it. A JavaScript handle is owned by composition:
+hold it in a field of a class whose `@dispose:` releases it.
 
 Components (Web extension) return JSX directly — there is no `render` block.
 `state` holds a fact, `computed(() => ...)` derives, `action` performs a

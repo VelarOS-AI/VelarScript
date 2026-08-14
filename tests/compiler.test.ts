@@ -732,7 +732,9 @@ print(wrapped("Velar"))
   const runtimeFunction = compileCore("Function()\n");
   assert.ok(runtimeFunction.diagnostics.some((item) => item.message === "Unknown name 'Function'"));
   const runtimePromise = compileCore("Promise()\n");
-  assert.ok(runtimePromise.diagnostics.some((item) => /not callable/u.test(item.message)));
+  // D51 rule 106: a permanent namespace is not a value, so calling one is
+  // rejected as the position it is, before "not callable" can be asked.
+  assert.ok(runtimePromise.diagnostics.some((item) => /'Promise' is a namespace, not a value/u.test(item.message)));
 
   const formatted = formatSource("const callback: Function < string, number, bool > = (text, size) => true\n");
   assert.equal(formatted, "const callback: Function<string, number, bool> = (text, size) => true\n");
@@ -4485,11 +4487,11 @@ test("throws only Error values, normalizes JavaScript failures, and preserves re
 import js unsafe {explode} from "data:text/javascript,export function explode(){throw 'raw failure'}"
 
 class BucketError extends Error:
-    const code: string
+    const bucket: string
 
-    constructor(code: string, message: string):
+    constructor(bucket: string, message: string):
         super(message)
-        self.code = code
+        self.bucket = bucket
 
 def bucket(value: number) -> number:
     if value < 0:
@@ -15695,7 +15697,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(checked.status, 0, checked.stderr);
   const coreTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(coreTest.status, 0, coreTest.stderr);
-  assert.match(coreTest.stdout, /app\.test\.vel :: application contract/u);
+  assert.match(coreTest.stdout, /app\.test\.vel" :: "application contract"/u);
 
   const formatCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "format", "--check"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(formatCheck.status, 0, formatCheck.stderr);
@@ -15770,7 +15772,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(libraryFormat.status, 0, libraryFormat.stderr);
   const libraryTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryTest.status, 0, libraryTest.stderr);
-  assert.match(libraryTest.stdout, /index\.test\.vel :: greeting/u);
+  assert.match(libraryTest.stdout, /index\.test\.vel" :: "greeting"/u);
   const libraryBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryBuild.status, 0, libraryBuild.stderr);
   assert.match(await readFile(join(libraryRoot, "dist", "index.js"), "utf8"), /function greet/u);
@@ -15796,7 +15798,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(componentCheck.status, 0, componentCheck.stderr);
   const componentTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", componentRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(componentTest.status, 0, componentTest.stderr);
-  assert.match(componentTest.stdout, /index\.test\.vel :: component content contract/u);
+  assert.match(componentTest.stdout, /index\.test\.vel" :: "component content contract"/u);
   const componentBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", componentRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(componentBuild.status, 0, componentBuild.stderr);
   await verifyProductionBuild(join(componentRoot, "dist"));
@@ -15817,7 +15819,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(nodeCheck.status, 0, nodeCheck.stderr);
   const nodeTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", nodeRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(nodeTest.status, 0, nodeTest.stderr);
-  assert.match(nodeTest.stdout, /app\.test\.vel :: node application contract/u);
+  assert.match(nodeTest.stdout, /app\.test\.vel" :: "node application contract"/u);
 
   const desktopRoot = join(directory, "hello-desktop");
   const desktopCreate = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", desktopRoot, "--template=desktop"], { cwd: directory, encoding: "utf8" });
@@ -15837,7 +15839,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(desktopCheck.status, 0, desktopCheck.stderr);
   const desktopTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", desktopRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(desktopTest.status, 0, desktopTest.stderr);
-  assert.match(desktopTest.stdout, /app\.test\.vel :: desktop application contract/u);
+  assert.match(desktopTest.stdout, /app\.test\.vel" :: "desktop application contract"/u);
 
   const unavailableGame = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", join(directory, "game"), "--template", "game"], { cwd: directory, encoding: "utf8" });
   assert.equal(unavailableGame.status, 2);
@@ -16210,7 +16212,7 @@ test "it awaits async code":
 
   const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: directory, encoding: "utf8" });
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.match(execution.stdout, /math\.test\.vel :: it adds numbers/);
+  assert.match(execution.stdout, /math\.test\.vel" :: "it adds numbers"/);
   assert.match(execution.stdout, /2 passed, 0 failed/);
 });
 
@@ -16242,7 +16244,7 @@ test "the package graph resolves":
 
   const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: directory, encoding: "utf8" });
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.match(execution.stdout, /package\.test\.vel :: the package graph resolves/u);
+  assert.match(execution.stdout, /package\.test\.vel" :: "the package graph resolves"/u);
 });
 
 test("JSX fragments, declared children, form bindings, and event modifiers compose", () => {
@@ -28632,7 +28634,7 @@ test "a bridged dependency resolves":
   // through the project's own node_modules.
   const tested = spawnSync(process.execPath, [cli, "test"], { cwd: directory, encoding: "utf8" });
   assert.equal(tested.status, 0, String(tested.stderr));
-  assert.match(tested.stdout, /words\.test\.vel :: a bridged dependency resolves/u);
+  assert.match(tested.stdout, /words\.test\.vel" :: "a bridged dependency resolves"/u);
   assert.match(tested.stdout, /1 passed, 0 failed/u);
 
   const ran = spawnSync(process.execPath, [cli, "run"], { cwd: directory, encoding: "utf8" });

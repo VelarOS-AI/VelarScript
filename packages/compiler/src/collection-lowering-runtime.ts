@@ -25,6 +25,12 @@ export const VELAR_COLLECTION_LOWERING_EXPORTS = [
   "__velarCollectionSize",
   "__velarCollectionGet",
   "__velarCollectionSlice",
+  // COL-U5: `IndexError` is a nameable source type, so a project build must be
+  // able to import the one runtime class every List position raises. The
+  // standalone path inlines this runtime whole, so an unexported class stayed
+  // reachable there while every CLI entry (sharedRuntimeModules) emitted an
+  // unbound reference.
+  "__VelarIndexError",
   "__velarIndex",
   "__velarOptionalIndex",
   "__velarSetIndex",
@@ -376,6 +382,9 @@ class __VelarIndexError extends __velarCollectionListNativeRangeError {
     this.name = "IndexError";
   }
 }
+// D51 rule 107: 'code' answers with the class a value was constructed from, so
+// the compiler-owned class carries the source-level name it reports.
+__velarCollectionListDefineProperty(__VelarIndexError, "name", { value: "IndexError", writable: false, enumerable: false, configurable: true });
 function __velarStrictListIndex(value, requested) {
   if (!__velarCollectionListIsInteger(requested)) throw new __VelarIndexError("List index must be an in-range integer");
   const index = requested < 0 ? value.length + requested : requested;
