@@ -20,6 +20,7 @@ import type {
   TypeSyntax,
 } from "./ast.ts";
 import { diagnostic, type Diagnostic } from "./diagnostic.ts";
+import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
 import type { CompilerAnalysisExtension } from "./extension.ts";
 import { collectionMemberGuidance, removedGlobalFunctionGuidance, stringMemberGuidance, type CollectionKind } from "./language-guidance.ts";
 import { bindingNameRestriction } from "./source-names.ts";
@@ -280,6 +281,7 @@ export interface LoweringHints {
   readonly asyncForStatements: ReadonlySet<number>;
   readonly normalizedUndefinedExpressions: ReadonlySet<string>;
   readonly instanceFieldReads: ReadonlySet<string>;
+  readonly errorCodeReads: ReadonlySet<string>;
   readonly privateInstanceFieldReads: ReadonlySet<string>;
   readonly staticFieldReads: ReadonlyMap<string, number>;
   /**
@@ -297,7 +299,7 @@ export interface LoweringHints {
   readonly extensionLiterals: ReadonlyMap<string, string>;
   readonly extensionCalls: ReadonlyMap<string, string>;
   /** Prelude and permanent-namespace reads, keyed by span so lexical shadows win. */
-  readonly builtinValueReferences: ReadonlyMap<string, "Json" | "Promise" | "Look" | "range">;
+  readonly builtinValueReferences: ReadonlyMap<string, "Json" | "Promise" | "Text" | "Look" | "range">;
   readonly runtimeNarrowings: ReadonlyMap<string, RuntimeNarrowingGuard>;
   /**
    * Span identities of `==`/`!=` operations (and comparison-chain links)
@@ -448,11 +450,74 @@ const jsonNamespaceType: ValueType = {
   kind: "object",
   fields: new Map([
     ["parse", namespaceFunction("json.parse", ["text", "target"], [stringType, anyType], unknownType, 1)],
+    ["tryParse", namespaceFunction("json.tryParse", ["text", "target", "fallback"], [stringType, anyType, anyType], unknownType, 1)],
     ["stringify", namespaceFunction("json.stringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
     ["stableStringify", namespaceFunction("json.stableStringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
     ["clone", namespaceFunction("json.clone", ["value", "target"], [anyType, anyType], anyType, 1)],
+    ["isSerializable", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: boolType }],
   ]),
-  readonlyFields: new Set(["parse", "stringify", "stableStringify", "clone"]),
+  readonlyFields: new Set(["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"]),
+};
+// D50 rule 90: every pure computation lives in a permanent namespace. `Text.`
+// is the extension toolbox beside the core string methods — the method table
+// stays exactly as it is, and these are the operations most programs never
+// touch but must still be able to find without an import.
+const textFunction = (
+  parameterNames: readonly string[],
+  parameters: readonly ValueType[],
+  result: ValueType,
+  requiredParameters = parameters.length,
+): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
+const listOfString: ValueType = { kind: "list", element: stringType };
+const listOfNumber: ValueType = { kind: "list", element: numberType };
+const textPatternOptionsType: ValueType = {
+  kind: "object",
+  fields: new Map([
+    ["ignoreCase", optionalOf(boolType)],
+    ["multiline", optionalOf(boolType)],
+    ["dotAll", optionalOf(boolType)],
+  ]),
+};
+const textMatchType: ValueType = {
+  kind: "object",
+  fields: new Map([
+    ["value", stringType],
+    ["index", numberType],
+    ["groups", { kind: "list", element: optionalOf(stringType) }],
+  ]),
+};
+const textNamespaceMembers: ReadonlyMap<string, ValueType> = new Map([
+  ["trimStart", textFunction(["value"], [stringType], stringType)],
+  ["trimEnd", textFunction(["value"], [stringType], stringType)],
+  ["capitalize", textFunction(["value"], [stringType], stringType)],
+  ["title", textFunction(["value"], [stringType], stringType)],
+  ["lines", textFunction(["value"], [stringType], listOfString)],
+  ["lineStarts", textFunction(["value"], [stringType], listOfNumber)],
+  ["chunks", textFunction(["value", "size"], [stringType, numberType], listOfString)],
+  ["words", textFunction(["value"], [stringType], listOfString)],
+  ["slug", textFunction(["value"], [stringType], stringType)],
+  ["truncate", textFunction(["value", "length", "suffix"], [stringType, numberType, stringType], stringType, 2)],
+  ["indent", textFunction(["value", "prefix"], [stringType, stringType], stringType, 1)],
+  ["dedent", textFunction(["value"], [stringType], stringType)],
+  ["normalizeWhitespace", textFunction(["value"], [stringType], stringType)],
+  ["utf8Size", textFunction(["value"], [stringType], numberType)],
+  ["escapeHtml", textFunction(["value"], [stringType], stringType)],
+  // TXT-U4: one code point in, one code point out. `codePoint` answers null
+  // when the argument is not exactly one character, and `fromCodePoint`
+  // rejects surrogate halves so no call can build unpaired text.
+  ["codePoint", textFunction(["value"], [stringType], optionalOf(numberType))],
+  ["fromCodePoint", textFunction(["value"], [numberType], stringType)],
+  ["matches", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], boolType, 2)],
+  ["findMatch", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], optionalOf(textMatchType), 2)],
+  ["findMatches", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], { kind: "list", element: textMatchType }, 2)],
+  ["replaceMatches", textFunction(["value", "expression", "replacement", "options"], [stringType, stringType, stringType, textPatternOptionsType], stringType, 3)],
+  ["splitPattern", textFunction(["value", "expression", "options"], [stringType, stringType, textPatternOptionsType], listOfString, 2)],
+]);
+export const TEXT_NAMESPACE_MEMBERS: readonly string[] = [...textNamespaceMembers.keys()];
+const textNamespaceType: ValueType = {
+  kind: "object",
+  fields: new Map(textNamespaceMembers),
+  readonlyFields: new Set(textNamespaceMembers.keys()),
 };
 const promiseNamespaceType: ValueType = {
   kind: "object",
@@ -570,6 +635,10 @@ export class Analyzer implements TypeEnvironment {
   private readonly reportedPromiseResolutionHazards = new Set<string>();
   private readonly normalizedUndefinedExpressions = new Set<string>();
   private readonly instanceFieldReads = new Set<string>();
+  // D50 rule 89: member spans that read `code` on an Error contract. The
+  // emitter projects the declared class name rather than reading a property,
+  // so a host object carrying its own unrelated `code` cannot impersonate one.
+  private readonly errorCodeReads = new Set<string>();
   private readonly privateInstanceFieldReads = new Set<string>();
   private readonly staticFieldReads = new Map<string, number>();
   // D44 rule 74: member spans that read a class method as a value (not as a
@@ -596,7 +665,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly namedArgumentOrders = new Map<string, readonly number[]>();
   protected readonly extensionLiterals = new Map<string, string>();
   protected readonly extensionCalls = new Map<string, string>();
-  private readonly builtinValueReferences = new Map<string, "Json" | "Promise" | "Look" | "range">();
+  private readonly builtinValueReferences = new Map<string, "Json" | "Promise" | "Text" | "Look" | "range">();
   private readonly semanticBindingTypes = new Map<string, ValueType>();
   private readonly semanticBindingMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly semanticMemberCache = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -698,6 +767,10 @@ export class Analyzer implements TypeEnvironment {
         // ASY-U3: charter section 11 promises a non-Error rejection remains
         // available as the JavaScript cause; the member makes that reachable.
         ["cause", { mutable: false, type: unknownType }],
+        // D50 rule 89: the string form of the same identity `is` discriminates
+        // on — the declared class name — so a log line or a JSON payload can
+        // carry an error's class across a boundary that classes cannot cross.
+        ["code", { mutable: false, type: stringType }],
       ]),
       getters: new Set(),
       abstractGetters: new Set(),
@@ -711,7 +784,7 @@ export class Analyzer implements TypeEnvironment {
     // catchable, `is`-narrowable, and constructible — wired exactly like
     // Error. ValidationError additionally carries the failure detail its
     // parse sites report (path, field, reason).
-    for (const [name, detailFields] of [
+    const builtinErrorDetails: readonly (readonly [string, readonly (readonly [string, ClassField])[]])[] = [
       ["ValidationError", [
         ["path", { mutable: false, type: optionalOf(stringType) }],
         ["field", { mutable: false, type: optionalOf(stringType) }],
@@ -719,14 +792,23 @@ export class Analyzer implements TypeEnvironment {
       ]],
       ["NarrowingError", []],
       ["IndexError", []],
-    ] as const) {
+      // D50 rule 89: the capability failures a caller recovers from
+      // differently. Each carries the resource that failed, because every
+      // recovery — create it, request access, choose another name — starts by
+      // asking which one it was.
+      ...VELAR_HOST_ERROR_NAMES.map((name) => [
+        name,
+        VELAR_HOST_ERROR_PATH_NAMES.includes(name) ? [["path", { mutable: false, type: optionalOf(stringType) }] as const] : [],
+      ] as const),
+    ];
+    for (const [name, detailFields] of builtinErrorDetails) {
       this.classes.set(name, {
         parameters: [stringType],
         parameterNames: ["message"],
         requiredParameters: 0,
         base: "Error",
         abstract: false,
-        fields: new Map(detailFields as readonly (readonly [string, ClassField])[]),
+        fields: new Map(detailFields),
         getters: new Set(),
         abstractGetters: new Set(),
         methods: new Map(),
@@ -1197,6 +1279,7 @@ export class Analyzer implements TypeEnvironment {
       asyncForStatements: this.asyncForStatements,
       normalizedUndefinedExpressions: this.normalizedUndefinedExpressions,
       instanceFieldReads: this.instanceFieldReads,
+      errorCodeReads: this.errorCodeReads,
       privateInstanceFieldReads: this.privateInstanceFieldReads,
       staticFieldReads: this.staticFieldReads,
       classMethodReferences: this.classMethodReferences,
@@ -2721,7 +2804,8 @@ export class Analyzer implements TypeEnvironment {
     const baseName = statement.base?.name ?? null;
     if (baseName) {
       const baseBinding = this.lookup(baseName) ?? this.builtin(baseName);
-      if (baseName === "ValidationError" || baseName === "NarrowingError" || baseName === "IndexError") {
+      if (baseName === "ValidationError" || baseName === "NarrowingError" || baseName === "IndexError"
+        || (VELAR_HOST_ERROR_NAMES as readonly string[]).includes(baseName)) {
         // The compiler-raised error types are leaf contracts: user subclasses
         // would dilute what a caught ValidationError/NarrowingError/IndexError
         // proves. Extend Error for custom hierarchies.
@@ -3717,7 +3801,7 @@ export class Analyzer implements TypeEnvironment {
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
         }
-        if (!lexical && (expression.name === "Json" || expression.name === "Promise" || expression.name === "Look" || expression.name === "range")) {
+        if (!lexical && (expression.name === "Json" || expression.name === "Promise" || expression.name === "Text" || expression.name === "Look" || expression.name === "range")) {
           this.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
         }
         this.checkShadowedRead(expression.name, expression.span);
@@ -6658,7 +6742,13 @@ export class Analyzer implements TypeEnvironment {
       } else if (!field && !getter && !method) {
         this.typeError(`Class '${object.name}' has no member '${property}'`, memberSpan);
       }
-      if (readValue && field && !classKey.startsWith("js:")
+      // D50 rule 89: `code` is not stored anywhere. The read recovers the
+      // declared class name the lowering wrote into `.name`, so the string and
+      // the class identity cannot drift apart, and a host error no Velar class
+      // declared answers the contract it does satisfy: "Error".
+      const errorCodeRead = property === "code" && classKey !== "js:code" && this.isSubclassOf(classKey, "Error");
+      if (readValue && errorCodeRead) this.errorCodeReads.add(spanIdentity(memberSpan));
+      if (readValue && field && !classKey.startsWith("js:") && !errorCodeRead
         && !(property === "cause" && this.isSubclassOf(classKey, "Error"))) {
         // Error's `cause` is host-managed and legitimately absent (ASY-U3);
         // the read normalizes undefined to null instead of tripping the
@@ -8776,9 +8866,11 @@ export class Analyzer implements TypeEnvironment {
       ["range", { kind: "intrinsic", name: "collections.range", parameterNames: ["start", "end", "step"], parameters: [numberType, numberType, numberType], requiredParameters: 1, result: { kind: "list", element: numberType } }],
       ["Json", jsonNamespaceType],
       ["Promise", promiseNamespaceType],
+      ["Text", textNamespaceType],
     ]);
     const type = this.extensionGlobals.get(name) ?? functions.get(name)
       ?? (name === "Error" || name === "ValidationError" || name === "NarrowingError" || name === "IndexError"
+        || (VELAR_HOST_ERROR_NAMES as readonly string[]).includes(name)
         ? { kind: "classConstructor", name } satisfies ValueType
         : null)
       ?? (name === "Map" || name === "Set" ? anyType : null);
@@ -9409,7 +9501,7 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  protected isBuiltinValueReference(expression: Expression, name: "Json" | "Promise" | "Look" | "range"): boolean {
+  protected isBuiltinValueReference(expression: Expression, name: "Json" | "Promise" | "Text" | "Look" | "range"): boolean {
     return this.builtinValueReferences.get(spanIdentity(expression.span)) === name;
   }
 

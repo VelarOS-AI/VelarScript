@@ -1,4 +1,3 @@
-import {chunks, matches} from "velar/text"
 import {TextBuffer, TextEdit} from "@velarscript/text-buffer"
 
 /// The source grammar selected for one ECMAScript document.
@@ -170,28 +169,28 @@ def isIdentifierStart(value: string) -> bool:
         return true
     if isAscii(value):
         return false
-    return value.size == 1 and matches(value, "^\\p{ID_Start}$")
+    return value.size == 1 and Text.matches(value, "^\\p{ID_Start}$")
 
 def isIdentifierPart(value: string) -> bool:
     if isIdentifierStart(value) or isDigit(value):
         return true
     if isAscii(value):
         return false
-    return value.size == 1 and matches(value, r"^[\p{ID_Continue}\u200c\u200d]$")
+    return value.size == 1 and Text.matches(value, r"^[\p{ID_Continue}\u200c\u200d]$")
 
 def isLineBreak(value: string) -> bool:
     if value == "\r" or value == "\n":
         return true
     if isAscii(value):
         return false
-    return value.size == 1 and matches(value, r"^[\u2028\u2029]$")
+    return value.size == 1 and Text.matches(value, r"^[\u2028\u2029]$")
 
 def isSpace(value: string) -> bool:
     if value == " " or value == "\t" or value == "\r" or value == "\n":
         return true
     if isAscii(value):
         return false
-    return value.size == 1 and matches(value, r"^\s$")
+    return value.size == 1 and Text.matches(value, r"^\s$")
 
 def requiredChar(value: string, index: number) -> string:
     const result = value.char(index)
@@ -206,7 +205,7 @@ def requiredChar(value: string, index: number) -> string:
 // stay O(1).
 def sourceCharacters(source: string) -> ScriptCharacters:
     let output: List<List<string>> = []
-    for part in chunks(source, 4096):
+    for part in Text.chunks(source, 4096):
         let values: List<string> = []
         values.extend(part.split(""))
         output.append(values)

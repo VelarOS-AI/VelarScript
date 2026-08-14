@@ -17,7 +17,7 @@ import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLL
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 import { describeType, formatTypeReference, resolveTypeReference, type ValueType } from "./types.ts";
 import type { LoweringHints } from "./analyzer.ts";
-import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
+import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 import type { CompilerEmitterOptions } from "./extension.ts";
 import { VELAR_NARROWING_MODULE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
 import { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
@@ -76,6 +76,8 @@ export class JavaScriptEmitter {
   private needsRuntimeTypeHelpers = false;
   private needsNumberHelper = false;
   private needsThrownValueHelper = false;
+  private needsErrorCodeHelper = false;
+  private readonly requiredHostErrorClasses = new Set<string>();
   private needsDetachedTaskHelper = false;
   private needsNarrowingErrorClass = false;
   private suppressPromiseNormalization = 0;
@@ -94,6 +96,7 @@ export class JavaScriptEmitter {
     this.nextJavaScriptNodeId = 0;
     this.javaScriptNodeSpans.clear();
     this.requiredRuntimeModules.clear();
+    this.requiredHostErrorClasses.clear();
     this.collectDeclarations(program);
     this.collectRuntimeUses(program);
     const statements = program.body
@@ -113,6 +116,10 @@ export class JavaScriptEmitter {
     if (builtinValues.has("Promise")) {
       helpers.push('import * as __velarPromiseNamespace from "velar/async";');
       this.requiredRuntimeModules.add("velar/async");
+    }
+    if (builtinValues.has("Text")) {
+      helpers.push('import * as __velarTextNamespace from "velar/text";');
+      this.requiredRuntimeModules.add("velar/text");
     }
     if (builtinValues.has("Look")) {
       helpers.push('import * as __velarLookNamespace from "velar/look";');
@@ -285,12 +292,29 @@ export class JavaScriptEmitter {
     if (this.needsDetachedTaskHelper) {
       helpers.push(...this.detachedTaskHelpers());
     }
-    if (this.needsThrownValueHelper && !this.includesErrorNormalizationRuntime()) {
+    const needsErrorNormalizationRuntime = this.needsThrownValueHelper || this.needsErrorCodeHelper;
+    if (needsErrorNormalizationRuntime && !this.includesErrorNormalizationRuntime()) {
       if (this.sharedRuntimeModules) {
         this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
-        helpers.push(`import { normalizeError as __velarNormalizeError } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`);
+        const imports = [
+          ...(this.needsErrorCodeHelper ? ["errorCode as __velarErrorCode"] : []),
+          ...(this.needsThrownValueHelper ? ["normalizeError as __velarNormalizeError"] : []),
+        ];
+        helpers.push(`import { ${imports.join(", ")} } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`);
       } else {
         helpers.push(VELAR_ERROR_NORMALIZATION_RUNTIME);
+      }
+    }
+    // D50 rule 89: a named capability error is a leaf class the compiler owns,
+    // so a source reference resolves to the one runtime class every capability
+    // constructs — the same wiring the three compiler-raised errors use.
+    if (this.requiredHostErrorClasses.size > 0) {
+      const imports = [...this.requiredHostErrorClasses].sort().map((name) => `${name} as __Velar${name}`);
+      if (this.sharedRuntimeModules) {
+        this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
+        helpers.push(`import { ${imports.join(", ")} } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`);
+      } else {
+        helpers.push(VELAR_HOST_ERROR_RUNTIME);
       }
     }
     const needsRuntimeTypeRuntime = this.needsRuntimeTypeHelpers || this.runtimeTypes.size > 0
@@ -1431,6 +1455,10 @@ export class JavaScriptEmitter {
 
   /** The runtime class behind a nameable builtin error type, marking the runtime it needs. */
   private builtinErrorRuntimeName(name: string): string | null {
+    if ((VELAR_HOST_ERROR_NAMES as readonly string[]).includes(name)) {
+      this.requiredHostErrorClasses.add(name);
+      return `__Velar${name}`;
+    }
     const runtime = builtinErrorRuntimeNames.get(name);
     if (!runtime) return null;
     if (name === "ValidationError") this.needsRuntimeTypeHelpers = true;
@@ -1581,6 +1609,7 @@ export class JavaScriptEmitter {
           const builtin = this.hints.builtinValueReferences.get(spanIdentity(expression.span));
           if (builtin === "Json") return "__velarJsonNamespace";
           if (builtin === "Promise") return "__velarPromiseNamespace";
+          if (builtin === "Text") return "__velarTextNamespace";
           if (builtin === "Look") return "__velarLookNamespace";
           if (builtin === "range") return "__velarRange";
         }
@@ -1854,6 +1883,13 @@ export class JavaScriptEmitter {
           return expression.optional
             ? `($velarValue => $velarValue == null ? null : ${read})(${object})`
             : `__velarReadStaticField(${object}, ${JSON.stringify(expression.property)}, ${staticFieldOwnerDepth})`;
+        }
+        if (this.hints.errorCodeReads.has(spanIdentity(expression.span))) {
+          this.needsErrorCodeHelper = true;
+          const object = this.emitMappedExpression(expression.object);
+          return expression.optional
+            ? `($velarValue => $velarValue == null ? null : __velarErrorCode($velarValue))(${object})`
+            : `__velarErrorCode(${object})`;
         }
         if (this.hints.instanceFieldReads.has(spanIdentity(expression.span))) {
           const object = this.emitMappedExpression(expression.object);

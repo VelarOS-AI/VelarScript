@@ -1,7 +1,6 @@
 import {clearError, focusFirstError, setError} from "velar/forms"
 import {frame} from "velar/browser"
 
-import {findMatch} from "velar/text"
 import {announce} from "velar/web"
 
 const formLook = look:
@@ -31,7 +30,7 @@ export component Newsletter:
     action submit() -> null:
         if form != null:
             const currentForm = form
-            const domain = findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups?.[0]
+            const domain = Text.findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups?.[0]
             if email == "":
                 setError(currentForm, "email", "Email is required")
                 focusFirstError(currentForm)

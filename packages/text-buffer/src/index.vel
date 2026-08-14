@@ -1,5 +1,3 @@
-import {chunks, lineStarts as textLineStarts, utf8Size} from "velar/text"
-
 /// A stable zero-based line and Unicode code-point column.
 export type TextPosition:
     line: number
@@ -84,10 +82,10 @@ class RopeNode:
 def leafNode(text: string) -> RopeNode?:
     if text == "":
         return null
-    const starts = textLineStarts(text)
+    const starts = Text.lineStarts(text)
     const newlines = starts.size - 1
     const tail = text.size - starts[-1]
-    return RopeNode(text, null, null, text.size, utf8Size(text), newlines, 1, 1, tail, starts)
+    return RopeNode(text, null, null, text.size, Text.utf8Size(text), newlines, 1, 1, tail, starts)
 
 def requiredLeft(node: RopeNode) -> RopeNode:
     const value = node.left
@@ -164,7 +162,7 @@ def buildNodes(parts: List<string>, start: number, end: number) -> RopeNode?:
     return joinNodes(buildNodes(parts, start, middle), buildNodes(parts, middle, end))
 
 def ropeFromText(text: string) -> RopeNode?:
-    const parts = chunks(text, 4096)
+    const parts = Text.chunks(text, 4096)
     return buildNodes(parts, 0, parts.size)
 
 def splitNode(node: RopeNode?, offset: number) -> RopeSplit:
@@ -213,7 +211,7 @@ def prefixMetrics(node: RopeNode, offset: number) -> PrefixMetrics:
         return {newlines: node.newlines, tail: node.tail}
     const text = node.text
     if text != null:
-        const starts = textLineStarts(text.slice(0, offset))
+        const starts = Text.lineStarts(text.slice(0, offset))
         return {newlines: starts.size - 1, tail: offset - starts[-1]}
     const left = requiredLeft(node)
     const right = requiredRight(node)
@@ -252,7 +250,7 @@ def copyEdits(changes: List<TextChange>) -> HistoryStep:
         const postStart = change.start + delta
         inverse.append({start: postStart, end: postStart + change.inserted.size, inserted: change.removed})
         delta += change.inserted.size - change.removed.size
-        bytes += utf8Size(change.inserted) + utf8Size(change.removed)
+        bytes += Text.utf8Size(change.inserted) + Text.utf8Size(change.removed)
     return {forward, inverse, bytes}
 
 /// A balanced immutable-node text rope with Unicode code-point offsets.
@@ -264,7 +262,7 @@ export class TextBuffer:
     private let version: number = 0
 
     constructor(text: string = ""):
-        assert utf8Size(text) <= TextBuffer.maxBytes else "TextBuffer content cannot exceed 16 MiB of UTF-8 text"
+        assert Text.utf8Size(text) <= TextBuffer.maxBytes else "TextBuffer content cannot exceed 16 MiB of UTF-8 text"
         self.root = ropeFromText(text)
 
     /// Current Unicode code-point length.
@@ -316,8 +314,8 @@ export class TextBuffer:
             self.requireRange(edit.start, edit.end)
             assert first or edit.start >= previousEnd else "TextBuffer transaction edits must be ordered and non-overlapping"
             const removed = self.slice(edit.start, edit.end)
-            removedBytes += utf8Size(removed)
-            insertedBytes += utf8Size(edit.inserted)
+            removedBytes += Text.utf8Size(removed)
+            insertedBytes += Text.utf8Size(edit.inserted)
             changes.append({start: edit.start, removed, inserted: edit.inserted, beforeRevision, afterRevision: beforeRevision + 1})
             previousEnd = edit.end
             first = false

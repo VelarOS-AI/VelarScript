@@ -1,5 +1,4 @@
 import {expect} from "velar/test"
-import {deepEqual} from "velar/json"
 import {TaskDraft, TaskFilter, TaskPriority, TaskStatus, advanceStatus, countStatus, filterTasks, moveTask, newTask, seedTasks} from "./domain.vel"
 
 def test_task_workflow_uses_finite_states() -> null:
@@ -15,7 +14,7 @@ def test_board_mutations_are_direct_and_typed() -> null:
     expect(filterTasks(tasks, "compiler", TaskFilter.all)).toHaveLength(1)
     expect(filterTasks(tasks, "", TaskFilter.done)).toHaveLength(1)
     expect(TaskPriority.is(TaskPriority.high)).toBe(true)
-    expect(deepEqual(tasks, seedTasks())).toBe(false)
+    expect(equals(tasks, seedTasks())).toBe(false)
 
 def test_task_draft_uses_named_record_fields() -> null:
     const title = "  Record-first task  "

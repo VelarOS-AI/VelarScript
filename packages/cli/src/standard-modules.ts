@@ -20,6 +20,7 @@ import {
   VELAR_REACTIVE_BRIDGE_MODULE_SOURCE,
   VELAR_RUNTIME_REGISTRY_KEY,
   VELAR_RUNTIME_SCHEMA_VERSION,
+  TEXT_NAMESPACE_MEMBERS,
   VELAR_STRICT_JSON_RUNTIME,
   VELAR_TEXT_METHOD_RUNTIME,
   VELAR_TYPE_REGISTRY_RUNTIME,
@@ -142,7 +143,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["join", apiIntrinsic("collections.join", ["values", "separator"], [listString, stringType], stringType, 1)],
     ["repeat", apiIntrinsic("collections.repeat", ["value", "count"], [anyType, numberType], listAny)],
   ]))],
-  ["velar/text", moduleInterface(new Map([
+  ["velar/text", permanentNamespace(moduleInterface(new Map([
     ["trimStart", apiFunction(["value"], [stringType], stringType)],
     ["trimEnd", apiFunction(["value"], [stringType], stringType)],
     ["capitalize", apiFunction(["value"], [stringType], stringType)],
@@ -158,12 +159,14 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["normalizeWhitespace", apiFunction(["value"], [stringType], stringType)],
     ["utf8Size", apiFunction(["value"], [stringType], numberType)],
     ["escapeHtml", apiFunction(["value"], [stringType], stringType)],
+    ["codePoint", apiFunction(["value"], [stringType], optional(numberType))],
+    ["fromCodePoint", apiFunction(["value"], [numberType], stringType)],
     ["matches", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], boolType, 2)],
     ["findMatch", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], optional(textMatchType), 2)],
     ["findMatches", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], textMatchArrayType, 2)],
     ["replaceMatches", apiFunction(["value", "expression", "replacement", "options"], [stringType, stringType, stringType, patternOptionsType], stringType, 3)],
     ["splitPattern", apiFunction(["value", "expression", "options"], [stringType, stringType, patternOptionsType], listString, 2)],
-  ]))],
+  ])), "Text", TEXT_NAMESPACE_MEMBERS)],
   ["velar/math", moduleInterface(new Map([
     ["pi", numberType], ["e", numberType], ["tau", numberType], ["infinity", numberType],
     // min and max are pure rest calls and therefore have no named rest value.
@@ -202,8 +205,7 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
     ["stableStringify", apiIntrinsic("json.stableStringify", ["value", "pretty"], [anyType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
     ["clone", apiIntrinsic("json.clone", ["value", "target"], [anyType, anyType], anyType, 1)],
     ["isSerializable", apiFunction(["value"], [anyType], boolType)],
-    ["deepEqual", apiFunction(["left", "right"], [anyType, anyType], boolType)],
-  ])), "Json", ["parse", "stringify", "stableStringify", "clone"])],
+  ])), "Json", ["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"])],
   ["velar/async", permanentNamespace(moduleInterface(new Map([
     ["sleep", apiFunction(["duration"], [durationType], promise(nullType))],
     ["all", apiIntrinsic("async.all", ["values"], [anyType], promise(anyType))],
@@ -746,6 +748,8 @@ const nativeRegExpPrototype = __velarTextGetPrototypeOf(/(?:)/u);
 const NativeRegExp = __velarTextGetOwnPropertyDescriptor(nativeRegExpPrototype, "constructor")?.value;
 const nativeRegExpExec = __velarTextGetOwnPropertyDescriptor(nativeRegExpPrototype, "exec")?.value;
 const nativeStringReplaceAll = __velarNativeStringReplaceAll;
+const __velarTextStringCodePointAt = __velarTextGetOwnPropertyDescriptor(__velarTextStringPrototype, "codePointAt")?.value;
+const __velarTextStringFromCodePoint = __velarTextGetOwnPropertyDescriptor(__velarTextNativeString, "fromCodePoint")?.value;
 const __velarTextTitleSeparators = /[_\-/]+/gu;
 const __velarTextTitleWords = /(^|\s)([\p{L}\p{N}])/gu;
 const __velarTextLines = /\r?\n/gu;
@@ -949,6 +953,24 @@ export function escapeHtml(value) {
   }
   return value;
 }
+// TXT-U4 (D50 rule 90 item 4): one character in, one code point out. Anything
+// that is not exactly one code point — empty text, several characters, or a
+// lone surrogate half — answers null rather than a partial reading, and the
+// inverse refuses to build a surrogate half that could never stand alone.
+export function codePoint(value) {
+  value = valueOf(value);
+  if (value.length === 0 || __velarTextNextCodePointOffset(value, 0) !== value.length) return null;
+  const point = __velarTextCall(__velarTextStringCodePointAt, value, [0]);
+  if (typeof point !== "number" || point >= 0xD800 && point <= 0xDFFF) return null;
+  return point;
+}
+export function fromCodePoint(value) {
+  if (!__velarTextCall(__velarTextNumberIsSafeInteger, __velarTextNativeNumber, [value]) || value < 0 || value > 0x10FFFF) {
+    throw new __velarTextNativeRangeError("fromCodePoint requires a code point from 0 through 1114111");
+  }
+  if (value >= 0xD800 && value <= 0xDFFF) throw new __velarTextNativeRangeError("fromCodePoint refuses surrogate halves; they are not characters on their own");
+  return __velarTextCall(__velarTextStringFromCodePoint, __velarTextNativeString, [value]);
+}
 export function matches(value, expression, options = {}) { value = valueOf(value); return __velarTextCall(nativeRegExpExec, patternOf(expression, options), [value]) !== null; }
 export function findMatch(value, expression, options = {}) { value = valueOf(value); const match = __velarTextCall(nativeRegExpExec, patternOf(expression, options), [value]); return match === null ? null : publicMatchValue(checkedMatchValue(match, value), value); }
 export function findMatches(value, expression, options = {}) { value = valueOf(value); const output = []; eachMatch(value, patternOf(expression, options, true), match => __velarTextAppend(output, match)); return output; }
@@ -1049,7 +1071,6 @@ export function lcm(left, right) { if (!__velarMathCall(__velarMathNumberIsSafeI
 `.trimStart()],
   ["velar/json", String.raw`
 ${VELAR_STRICT_JSON_RUNTIME}
-${deepEqualRuntime}
 ${runtimeTypeRuntime}
 function runtimeType(Type) { return __velarRequireRuntimeType(Type, "JSON validation", true); }
 export function parse(text, Type = null) { if (typeof text !== "string") throw new __velarJsonNativeTypeError("json.parse requires a string"); Type = runtimeType(Type); const value = __velarJsonParse(text); return Type ? Type.parse(value) : value; }
@@ -1071,7 +1092,6 @@ function sorted(value) {
 export function stableStringify(value, pretty = false) { return __velarJsonStringify(sorted(__velarJsonSnapshot(value).value), pretty); }
 export function clone(value, Type = null) { Type = runtimeType(Type); const cloned = __velarJsonClone(value); return Type ? Type.parse(cloned) : cloned; }
 export function isSerializable(value) { try { __velarAssertJson(value); return true; } catch { return false; } }
-export function deepEqual(left, right) { return __velarDeepEqual(left, right); }
 `.trimStart()],
   ["velar/async", String.raw`
 ${listRuntime}
