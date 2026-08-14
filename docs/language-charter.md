@@ -1884,6 +1884,13 @@ class Session:
   require an explicit type and cannot be rest parameters.
 - An ordinary constructor parameter remains local to the constructor. Required
   body fields are initialized through one direct `self.field = value` assignment.
+  *Direct* means one plain `=` at the top level of the constructor body with
+  `self` written literally: an assignment inside an `if`, a loop, or a `try`, a
+  compound assignment, an assignment through an alias of `self`, and an
+  assignment made by a method the constructor calls all leave the field
+  uninitialized as far as the checker is concerned. Definite assignment is what
+  the rule buys; a field whose value depends on a branch takes an initializer
+  and is overwritten, or the branch chooses a value that one assignment stores.
 - In a derived class, parameter properties initialize after the leading
   `super(...)` call and before body field initializers and the remaining
   constructor statements.

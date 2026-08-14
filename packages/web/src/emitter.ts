@@ -1354,7 +1354,7 @@ function __velarObserver(read, mode, scope) {
         observer.selfInvalidations += 1;
         if (observer.selfInvalidations > 100) {
           observer.stop();
-          __velarReport(new RangeError("A reactive render cannot invalidate itself more than 100 times"), mode === "watch" ? "watch" : "render", scope);
+          __velarReport(new RangeError("A reactive " + (mode === "watch" ? "watch" : "render") + " cannot invalidate itself more than 100 times"), mode === "watch" ? "watch" : "render", scope);
           return;
         }
       } else {

@@ -134,6 +134,7 @@ Manual adapters describe only runtime exports and never execute declarations:
 extern module "text-tools":
     export const version: string
     export def format(value: string) -> string
+    export async def load(id: string) -> string
 
     export class Formatter:
         const prefix: string
@@ -247,6 +248,12 @@ provider operation. A present accessor-backed, mutable, extensible, or otherwise
 incompatible registry fails closed without running its hooks. This adaptation
 does not make `import js unsafe` checked; it only prevents a framework proxy from
 being mistaken for the application value the host API was given.
+An `async def` in an extern block declares a member whose JavaScript returns a
+Promise; `def load(id: string) -> Promise<string>` declares the same contract,
+and the two spellings are equivalent. Either way the value crossing the boundary
+is normalized at the call site, so a foreign thenable fails there with an owned
+error rather than being adopted.
+
 ## Extern arguments are read-only
 
 What crosses the call is the **raw identity** — the same object, without the
@@ -412,6 +419,7 @@ re-exports a checked surface:
 extern module "text-tools":
     export const version: string
     export def format(value: string) -> string
+    export async def load(id: string) -> string
 
     export class Formatter:
         let precision: number
