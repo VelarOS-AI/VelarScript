@@ -137,6 +137,12 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
   结构必须升版本号。
 - 三份类型遍历器（compiler/index/cli project）曾经三处漏改其一 —— 改 ValueType
   必查全部。
+- **同一 checkout 内两个门禁并发 = 凭空捏造的故障** —— 后启动那次的
+  `npm run clean` 会在前一次跑测试时删掉 `packages/*/dist`，前一次以
+  `ERR_MODULE_NOT_FOUND` 失败（曾伪装成 0.5 标准库用例回归），树本身完好；端口
+  42880/42881/42885 与 `examples/*/.velar` 沙箱同样会撞。现由
+  `scripts/gate-lock.mjs` 按 checkout 路径加锁：后到的门禁等待，不再清理。看到
+  门禁报 dist 缺失，先确认没有第二个 agent 在跑。
 
 ## 六、下一阶段：0.10.0 稳定版发布与面世（2026-08-09 决策，按序执行）
 

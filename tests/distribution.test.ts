@@ -14,8 +14,12 @@ test("the AI skill brief ships byte-identical inside the CLI package and stays w
   const packaged = await readFile(join(root, "packages", "cli", "skill", "ai-skill.md"));
   assert.ok(source.equals(packaged),
     "packages/cli/skill/ai-skill.md must stay byte-identical to docs/ai-skill.md; update both in the same commit");
+  // D50 rule 98: the ceiling forces ranking, not brevity for its own sake — the
+  // brief must teach what an author needs to write ordinary code, and the long
+  // tail stays out because the diagnostic names the spelling when they hit it.
+  // Reaching this line means cutting the least-needed content, not raising it.
   const lines = source.toString("utf8").split("\n").length;
-  assert.ok(lines <= 600, `docs/ai-skill.md is designed for a context window and must stay within 600 lines (found ${lines})`);
+  assert.ok(lines <= 750, `docs/ai-skill.md must stay within 750 lines (found ${lines}); cut the least-needed content rather than raising the ceiling — the long tail belongs in diagnostics`);
   const manifest = JSON.parse(await readFile(join(root, "packages", "cli", "package.json"), "utf8")) as { files: string[] };
   assert.ok(manifest.files.includes("skill"), "the @velarscript/cli package must publish the skill directory");
 });

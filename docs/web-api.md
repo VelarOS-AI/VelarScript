@@ -1045,7 +1045,7 @@ component PreferencesPanel:
   `watch(key, Type, callback, maxBytes=16777216)` accept a positive integer
   encoded-value budget up to the 16 MiB hard ceiling. Named arguments may set
   `maxBytes` without supplying a fallback. The budget uses the same
-  compiler-owned UTF-8 counter as HTTP and `velar/text.utf8Size`, including its
+  compiler-owned UTF-8 counter as HTTP and `Text.utf8Size`, including its
   treatment of surrogate pairs and unpaired surrogates.
 - A local/session read whose stored JSON text exceeds `maxBytes` returns the
   declared fallback without parsing it. A write serializes through strict JSON
@@ -1386,9 +1386,10 @@ component LiveStatus:
 
 `expect(value)` provides typed `toBe`, `toEqual`, `toBeTruthy`, `toBeFalsy`,
 `toContain`, `toMatch`, `toHaveLength`, `toThrow`, and `toReject` matchers.
-`toEqual` uses exactly the public `velar/json.deepEqual` contract: it does not
+`toEqual` uses a bounded JSON-shaped data comparison: it does not
 invent a test-only structural model, invoke record getters, accept sparse Lists,
-or treat distinct class instances/cycles as equal.
+or treat distinct class instances/cycles as equal. It is not the prelude
+`equals`, which is stricter about Set members, Map keys, `NaN`, and cycles.
 `toBe` follows VelarScript `==` value/reference semantics. The truthy/falsy spellings
 accept only actual booleans; they do not reintroduce JS truthiness. Specialized
 matchers are exposed only for compatible checked subjects, then validate the

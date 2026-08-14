@@ -14,7 +14,7 @@ export { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLL
 export { VELAR_COLLECTION_LOWERING_DEPENDENCIES, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_MODULE_SOURCE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 export { JavaScriptEmitter } from "./emitter.ts";
 export { findInterpolatedExpressionEnd, scanStringLiteral } from "./interpolated-string.ts";
-export { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE, VELAR_ERROR_NORMALIZATION_RUNTIME } from "./error-runtime.ts";
+export { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 export { VELAR_STRICT_JSON_RUNTIME } from "./json-runtime.ts";
 export { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
 export { VELAR_NARROWING_MODULE, VELAR_NARROWING_MODULE_SOURCE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
@@ -32,7 +32,7 @@ export {
 } from "./type-validation-runtime.ts";
 export { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
 export { VELAR_UTF8_RUNTIME } from "./utf8-runtime.ts";
-export { Analyzer } from "./analyzer.ts";
+export { Analyzer, TEXT_NAMESPACE_MEMBERS } from "./analyzer.ts";
 export type {
   CoreExpression,
   CoreStatement,

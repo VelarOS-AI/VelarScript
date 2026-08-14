@@ -185,7 +185,7 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
     if (!this.usesSharedRuntimeModules()) return [webRuntime(WEB_RUNTIME_FOUNDATION)];
     this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
     return [
-      `import { errorApply as __velarErrorApply, isError as __velarIsError, normalizeError as __velarNormalizeError } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`,
+      `import { errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`,
       webRuntime(WEB_RUNTIME_FOUNDATION_SHARED_ERROR),
     ];
   }

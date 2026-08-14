@@ -1,3 +1,4 @@
+import { VELAR_HOST_ERROR_NAMES } from "./error-runtime.ts";
 import { keywordKinds, type TokenKind } from "./token.ts";
 
 export interface ForbiddenSourceIdentifierRule {
@@ -44,6 +45,9 @@ export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIden
 const coreReservedBindings = new Set([
   "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "RangeError", "Reflect", "Set", "String",
   "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
+  // D50 rule 89: the capability error classes are nameable everywhere a
+  // `catch` can see them, so a bare reference is always the builtin.
+  ...VELAR_HOST_ERROR_NAMES,
 ]);
 
 // Spellings JavaScript reserves that VelarScript does not turn into a keyword

@@ -162,10 +162,21 @@ async function regularFile(path, operation, maxBytes) {
   return data;
 }
 
+// D50 rule 89: a target that already exists is the same recovery whether the
+// operating system reported EEXIST or this pre-check found it first, so both
+// spellings carry the same evidence into the classification below.
+class AlreadyExists extends Error {
+  constructor(operation, path) {
+    super(operation + " target already exists");
+    this.code = "EEXIST";
+    this.path = path;
+  }
+}
+
 async function absent(path, operation) {
   try { await lstat(path); }
   catch (error) { if (missing(error)) return; throw error; }
-  throw new Error(operation + " target already exists");
+  throw new AlreadyExists(operation, path);
 }
 
 function equalBytes(left, right) {
@@ -841,7 +852,7 @@ async function dispatch(operation, args) {
     return withFileMutations([path], async () => {
       try { await writeFile(path, data, {flag: "wx"}); }
       catch (error) {
-        if (error && typeof error === "object" && error.code === "EEXIST") throw new Error("createText target already exists");
+        if (error && typeof error === "object" && error.code === "EEXIST") throw new AlreadyExists("createText", path);
         throw error;
       }
       return null;
@@ -1081,12 +1092,29 @@ async function dispatch(operation, args) {
   throw new TypeError("Unknown Node host operation");
 }
 
+// D50 rule 89: the operating system's errno vocabulary is not an API — it is
+// evidence. These are the failures whose recovery differs (create the file,
+// request access, take the other branch on kind, choose another name, choose
+// another port); everything else stays an ordinary Error, because a caller
+// writes the same recovery for all of it: none.
+const namedFailures = new Map([
+  ["ENOENT", "FileNotFoundError"],
+  ["EACCES", "PermissionError"],
+  ["EPERM", "PermissionError"],
+  ["ENOTDIR", "NotADirectoryError"],
+  ["EEXIST", "FileExistsError"],
+  ["EADDRINUSE", "AddressInUseError"],
+]);
+
 function errorRecord(error) {
   if (error instanceof HttpTransportFailure) return {name: "HttpTransportError", message: error.message, phase: error.phase};
-  const name = error instanceof RangeError ? "RangeError" : error instanceof TypeError ? "TypeError" : "Error";
   const message = error instanceof Error && typeof error.message === "string" && error.message.length > 0
     ? error.message.slice(0, 65536)
     : "Node host operation failed";
+  const failure = error && typeof error === "object" && typeof error.code === "string" ? namedFailures.get(error.code) : undefined;
+  if (failure === "AddressInUseError") return {name: failure, message};
+  if (failure) return {name: failure, message, path: typeof error.path === "string" ? error.path.slice(0, 65536) : ""};
+  const name = error instanceof RangeError ? "RangeError" : error instanceof TypeError ? "TypeError" : "Error";
   return {name, message};
 }
 

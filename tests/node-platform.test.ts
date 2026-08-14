@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
-import { standardModuleApi, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
+import { standardModuleApi, standardModuleDependencies, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
 import { nodeModuleDependencies, nodeModuleSources, VELAR_NODE_HOST_MODULE } from "../packages/node/src/compiler.ts";
 import { VELAR_NODE_HOST_WORKER_SOURCE } from "../packages/node/src/node-host-worker-runtime.ts";
 import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
@@ -43,7 +43,7 @@ async function materializeNodeRuntimeDependencies(
 ): Promise<void> {
   const dependencies = new Set<string>();
   const visit = (name: string): void => {
-    for (const dependency of nodeModuleDependencies.get(name) ?? []) {
+    for (const dependency of nodeModuleDependencies.get(name) ?? standardModuleDependencies(name) ?? []) {
       if (dependencies.has(dependency)) continue;
       dependencies.add(dependency);
       visit(dependency);
@@ -55,7 +55,10 @@ async function materializeNodeRuntimeDependencies(
   await mkdir(root, {recursive: true});
   const exports_: Record<string, string> = {};
   for (const dependency of dependencies) {
-    const moduleSource = nodeModuleSources.get(dependency);
+    // A Node runtime module may depend on a compiler-owned Core runtime module
+    // (D50 rule 89 put the nameable capability error classes there), so the
+    // materializer resolves both registries.
+    const moduleSource = nodeModuleSources.get(dependency) ?? standardModuleSource(dependency);
     assert.ok(moduleSource, `missing Node runtime dependency ${dependency}`);
     const name = dependency.slice("velar/".length);
     exports_[`./${name}`] = `./${name}.js`;

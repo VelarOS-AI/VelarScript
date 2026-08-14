@@ -6,6 +6,20 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Errors are discriminable by class, and `error.code` is that class's name —
+  one taxonomy with a string projection rather than a parallel code table.
+  Five environment failures that a caller recovers from differently get
+  their own classes (`FileNotFoundError`, `PermissionError`,
+  `NotADirectoryError`, `FileExistsError`, `AddressInUseError`, the
+  filesystem ones carrying `path`); the hundreds of argument and protocol
+  violations whose only recovery is fixing the code get none. Reading
+  `code` cannot pick up a host's `ENOENT`-style value by accident.
+- `Text.` joins `Json.`, `Promise.`, and `Look.` as a permanent namespace,
+  carrying the pure text toolkit with no import — the core string method
+  table is unchanged — and `Json` completes with `tryParse` and
+  `isSerializable`. `Json.deepEqual` is gone: measured against `equals` it
+  was weaker or wrong in four ways, including answering `false` for two
+  identical deep structures.
 - Four language features land together. A generic function can now say what
   its type parameter must support — `def label<T: Text>(value: T)` — from a
   closed vocabulary of three compiler-owned bounds, so a body that orders,

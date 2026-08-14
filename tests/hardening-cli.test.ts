@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { compileProject } from "../packages/cli/src/project.ts";
+import { standardModuleDependencies, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
 import { nodeModuleDependencies, nodeModuleSources } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
@@ -219,7 +220,7 @@ async function loadServeRuntime(directory: string): Promise<ServeRuntime> {
   const exports_: Record<string, string> = {};
   const dependencies = new Set<string>();
   const visit = (name: string): void => {
-    for (const dependency of nodeModuleDependencies.get(name) ?? []) {
+    for (const dependency of nodeModuleDependencies.get(name) ?? standardModuleDependencies(name) ?? []) {
       if (dependencies.has(dependency)) continue;
       dependencies.add(dependency);
       visit(dependency);
@@ -227,7 +228,9 @@ async function loadServeRuntime(directory: string): Promise<ServeRuntime> {
   };
   visit("velar/serve");
   for (const dependency of dependencies) {
-    const dependencySource = nodeModuleSources.get(dependency);
+    // A Node runtime module may depend on a compiler-owned Core runtime module
+    // (D50 rule 89 put the nameable capability error classes there).
+    const dependencySource = nodeModuleSources.get(dependency) ?? standardModuleSource(dependency);
     assert.ok(dependencySource, `missing Node runtime dependency ${dependency}`);
     const name = dependency.slice("velar/".length);
     exports_[`./${name}`] = `./${name}.js`;

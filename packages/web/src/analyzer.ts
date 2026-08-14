@@ -98,7 +98,7 @@ const nativeDomEventNames = new Set([
   "compositionstart", "compositionupdate", "compositionend",
   "copy", "cut", "paste", "load", "error", "transitionend", "animationend", "play", "pause", "ended",
 ]);
-const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle", "Opacity"]);
+const textualWebPrimitiveNames = new Set(["Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle"]);
 const webEventTypeNames = new Set(["Event", "KeyboardEvent", "PointerEvent", "InputEvent", "CompositionEvent", "ClipboardEvent"]);
 const webEventDeadFields = new Set(["target", "currentTarget", "value", "checked"]);
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });

@@ -1,5 +1,5 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
-import { VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME } from "@velarscript/compiler/extension";
+import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME } from "@velarscript/compiler/extension";
 import { VELAR_NODE_ENV_RUNTIME } from "./environment-runtime.ts";
 import { VELAR_NODE_FILESYSTEM_RUNTIME } from "./filesystem-runtime.ts";
 import { VELAR_NODE_HTTP_RUNTIME } from "./http-runtime.ts";
@@ -907,6 +907,9 @@ export const nodeModuleDependencies: ReadonlyMap<string, readonly string[]> = ne
   ["velar/http", [VELAR_NODE_HOST_MODULE]],
   ["velar/fs", [VELAR_NODE_HOST_MODULE]],
   ["velar/serve", [VELAR_NODE_HOST_MODULE]],
+  // D50 rule 89: the host proxy rebuilds the compiler-owned capability error
+  // classes, so its module carries that dependency edge.
+  [VELAR_NODE_HOST_MODULE, [VELAR_ERROR_NORMALIZATION_MODULE]],
 ]);
 
 const nodeModules = new Set(nodeModuleInterfaces.keys());

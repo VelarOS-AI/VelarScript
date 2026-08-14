@@ -363,7 +363,7 @@ values. String and number members are analyzer-owned signatures whose spans
 carry primitive-lowering hints; generated code calls bounded compiler helpers
 and never trusts a JavaScript prototype method. The same hint path makes a
 stored method a receiver-once bound wrapper. The text helper source is shared
-with the surviving advanced `velar/text` functions, so Unicode and 16 MiB
+with the `Text.` namespace functions, so Unicode and 16 MiB
 limits have one implementation.
 
 Inline and layout strings travel through the same literal and f-string AST
@@ -930,14 +930,14 @@ and accepted values are serialized from the validated data snapshot.
 
 Checked String methods follow an equivalent compiler-owned text runtime. It
 captures string, array, numeric, reflection, Unicode-progress, and Error
-operations at module initialization; `velar/text` extends that source with its
+operations at module initialization; the `Text.` runtime extends that source with its
 captured RegExp constructor/exec and bounded transformation helpers. Pattern
 replacement and splitting do not delegate back to mutable RegExp symbol hooks.
 The code-point length helper first uses one captured RegExp operation to prove
 that text contains no astral or unpaired-surrogate value; ordinary source text
 then returns its native unit length directly, while text containing either
-shape retains the explicit code-point scan. `velar/text.lineStarts` and
-`velar/text.chunks` perform one captured scan and return code-point line starts
+shape retains the explicit code-point scan. `Text.lineStarts` and
+`Text.chunks` perform one captured scan and return code-point line starts
 or bounded pieces without repeated source-level `.char(index)` calls or
 surrogate splitting.
 
@@ -962,7 +962,7 @@ called. Standalone results inline the text and Number fragments together as
 before. Project results import their compiler-lowered entry points from one
 internal primitive-method module, so many Core-shaped source modules share one
 captured host ABI and one production copy. The internal module still has no
-`ModuleInterface`; `velar/text` remains the separate public Standard API rather
+`ModuleInterface`; the `Text.` namespace remains the separate public Standard API rather
 than becoming an alias for compiler lowering internals.
 
 The Node tooling boundary follows the same non-coercion rule without sharing a
@@ -1052,10 +1052,11 @@ and browser runtimes and do not define a separate VelarScript memory model.
   constructors. `str` lowers intentionally to string display conversion;
   `number(text)` lowers to a compiler helper that validates the complete decimal
   grammar and finite result before returning a value or `null`.
-- Explicit structural equality lives in `velar/json`, not the `==` operator or
-  a reflection feature. Its bounded runtime understands owned records, Lists,
-  Maps, and Sets, preserves class/non-data reference identity, and terminates
-  safely when separate cyclic graphs are encountered.
+- Explicit structural equality is the prelude `equals(a, b)`, not the `==`
+  operator or a reflection feature. Its bounded runtime understands owned
+  records, Lists, Maps, and Sets, compares Set members and Map keys
+  structurally, preserves class/non-data reference identity, and throws rather
+  than answering a quiet `false` on a cyclic graph.
 - Source-level React effects, React lifecycle names, deep Proxy state, and a
   parallel schema declaration are not part of VelarScript.
 - Arrow expressions carry their async boundary in the AST. The analyzer owns

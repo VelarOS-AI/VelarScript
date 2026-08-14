@@ -1347,7 +1347,7 @@ if (compilerEmitterSource.includes('"class __VelarNarrowingError extends TypeErr
 for (const phrase of [
   "WEB_RUNTIME_FOUNDATION_SHARED_ERROR",
   "this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE)",
-  "errorApply as __velarErrorApply, isError as __velarIsError, normalizeError as __velarNormalizeError",
+  "errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError",
   "webRuntime(WEB_RUNTIME_FOUNDATION_SHARED_ERROR)",
 ]) {
   if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: project Web runtime does not share error normalization '${phrase}'`);

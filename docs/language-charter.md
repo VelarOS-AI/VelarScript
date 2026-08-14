@@ -1929,6 +1929,51 @@ extend `Error` for custom hierarchies. An `Error` subclass reports under its
 declared name: the class lowering sets `.name` to the class name, so reports
 and `print(error.name)` say `TimeoutError`, not `Error`.
 
+### Discrimination is the class; `code` is its string form
+
+An error has exactly one classification: **its class.** VelarScript publishes
+no parallel table of error-code constants, because a second classification only
+makes a reader — and a writer — hesitate between two spellings of the same
+question. Inside the language you ask the class:
+
+```velar fragment
+try:
+    await readText(path)
+catch error:
+    if error is FileNotFoundError:
+        await createText(path, "")
+    else if error is PermissionError:
+        print(f"Cannot read {path}: {error.message}")
+    else:
+        throw error
+```
+
+Class identity cannot cross a JSON or log boundary, so every checked `Error`
+also carries a readonly `code: string` beside `message` and `cause`. Its value
+is the instance's declared class name — `"FileNotFoundError"` above — and it
+comes from the same place `.name` does, so the two can never disagree. A value
+no VelarScript class declared, such as a host `TypeError` that reached a catch
+binding, reports the contract it does satisfy: `"Error"`.
+
+The capabilities raise these classes, each for a failure a caller recovers from
+differently:
+
+| Class | Raised by | The recovery it enables |
+| --- | --- | --- |
+| `FileNotFoundError` | `velar/fs` | Create the entry, or fall back to a default. |
+| `PermissionError` | `velar/fs`, `velar/serve` | Stop and tell the operator; retrying cannot help. |
+| `NotADirectoryError` | `velar/fs` | The path names a file — take the file branch instead. |
+| `FileExistsError` | `velar/fs` | Choose another name, or replace deliberately. |
+| `AddressInUseError` | `velar/serve` | Bind another port, or port `0` for any free one. |
+
+Each carries the resource that failed where one exists: the four filesystem
+classes expose `path: string?`. Like the three compiler-raised types they are
+reserved Core bindings, need no import, and cannot be extended. Every other
+capability failure stays an ordinary `Error`, because a caller writes the same
+recovery for all of them: none. `velar/http` keeps its own imported
+`HttpError`, `HttpAbortError`, and `HttpTransportError`, whose fields (`status`,
+`reason`, `phase`) a caller branches on directly.
+
 The `try` body and `catch` body are separate execution paths. A mutation in a
 catch that returns cannot erase a fact used only by the normal try continuation,
 while mutations that can precede a caught failure are visible inside the catch.
@@ -3282,15 +3327,38 @@ text uses `Json.stringify`.
 
 ## Core permanent namespaces and durations
 
-Pure standard helpers with a language-wide identity live at permanent names,
-without source imports. Core provides `Json.parse`, `Json.stringify`,
-`Json.stableStringify`, and `Json.clone`; `Promise.all`, `Promise.race`,
-`Promise.sleep`, `Promise.timeout`, `Promise.retry`, `Promise.map`, and
-`Promise.series`; and the prelude function `range`. Web adds the existing Look
-builder roster under `Look.*`. A lexical declaration may shadow any permanent
-namespace, and imports remain the contract for capability-bearing modules.
-Named imports of these permanent members are retired and receive a diagnostic
-that teaches the namespace spelling.
+One rule decides this whole surface: **what a program can compute needs no
+import; what reaches outside the program must be imported.** An `import` line
+is therefore an audit of what a module touches, and pure computation never
+appears on one.
+
+Four permanent namespaces carry that pure computation, and a program reaches
+every one of them without writing an import:
+
+| Namespace | Members |
+| --- | --- |
+| `Json.` | `parse`, `tryParse`, `stringify`, `stableStringify`, `clone`, `isSerializable` |
+| `Promise.` | `all`, `race`, `sleep`, `timeout`, `retry`, `map`, `series` |
+| `Text.` | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
+| `Look.` | the Web builder roster (`rgb`, `spacing`, `border`, and the rest of section 17) |
+
+The prelude adds `print`, `str`, `equals`, and `range` as bare names.
+
+String methods and `Text.*` divide the way a hand divides from a toolbox:
+**a string method is a core operation** — the everyday members of section 5 —
+**and `Text.*` is the extension toolbox** every program can open and most never
+need. Nothing moves between them, so the member list a reader must hold in mind
+never grows.
+
+`Text.codePoint(character)` answers the code point of exactly one character and
+`null` for anything else — empty text, several characters, or a lone surrogate
+half. `Text.fromCodePoint(value)` is its inverse and refuses a surrogate half,
+so no call can build text that is not a sequence of characters.
+
+A lexical declaration may shadow any permanent namespace, and imports remain
+the contract for capability-bearing modules. Named imports of these permanent
+members are retired and receive a diagnostic that teaches the namespace
+spelling.
 
 `Duration` is a Core value type written with `ms` or `s`. Core async timing and
 Web `after`/`every` accept `Duration`, never a bare number. Duration addition,

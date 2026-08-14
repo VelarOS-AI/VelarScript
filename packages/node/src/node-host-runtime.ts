@@ -1,6 +1,9 @@
+import { VELAR_ERROR_NORMALIZATION_MODULE, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "@velarscript/compiler/extension";
+
 // Application-facing proxy for the shared privileged Node worker. This module
 // is a private compiler-extension dependency and has no VelarScript interface.
 export const VELAR_NODE_HOST_RUNTIME = String.raw`
+import { ${VELAR_HOST_ERROR_NAMES.map((name) => `${name} as __Velar${name}`).join(", ")} } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};
 import { EventEmitter as __VelarNodeHostEventEmitter } from "node:events";
 import { MessageChannel as __VelarNodeHostMessageChannel, MessagePort as __VelarNodeHostMessagePort, Worker as __VelarNodeHostWorker } from "node:worker_threads";
 
@@ -85,6 +88,9 @@ export class __velarNodeHostHttpTransportError extends __velarNodeHostError {
   }
 }
 
+const __velarNodeHostPathErrorClasses = __velarNodeHostObjectCreate(null);
+${VELAR_HOST_ERROR_PATH_NAMES.map((name) => `__velarNodeHostPathErrorClasses[${JSON.stringify(name)}] = __Velar${name};`).join("\n")}
+
 function __velarNodeHostErrorOf(value, operation) {
   value = __velarNodeHostRecord(value, "Node host error");
   if (typeof value.message !== "string" || value.message.length === 0 || value.message.length > 65536) {
@@ -98,6 +104,17 @@ function __velarNodeHostErrorOf(value, operation) {
     }
     return new __velarNodeHostHttpTransportError(value.message, value.phase);
   }
+  // D50 rule 89: the worker names the failures a caller recovers from
+  // differently. Only the class name and its path cross the boundary; the
+  // proxy rebuilds the Realm-owned class so no privileged object escapes.
+  const pathed = __velarNodeHostPathErrorClasses[value.name];
+  if (pathed) {
+    if (typeof value.path !== "string" || value.path.length > 65536) {
+      throw new __velarNodeHostTypeError("Node host returned an invalid error path");
+    }
+    return new pathed(value.message, value.path.length > 0 ? value.path : null);
+  }
+  if (value.name === "AddressInUseError") return new __VelarAddressInUseError(value.message);
   if (value.name === "RangeError") return new __velarNodeHostRangeError(value.message);
   if (value.name === "TypeError") return new __velarNodeHostTypeError(value.message);
   if (value.name === "Error") return new __velarNodeHostError(value.message);

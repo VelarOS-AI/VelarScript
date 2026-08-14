@@ -1,5 +1,4 @@
 import {groupBy} from "velar/collections"
-import {title} from "velar/text"
 import {pi} from "velar/math"
 
 import {withQuery} from "velar/url"
@@ -24,7 +23,7 @@ const banner = "
 "
 
 await Promise.sleep(1ms)
-print(title("velar standard library"))
+print(Text.title("velar standard library"))
 print(grouped.get("admin")?.size ?? 0)
 print(range(1, 5).sum())
 for name, score in scores:

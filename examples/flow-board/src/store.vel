@@ -1,5 +1,4 @@
 import {storage} from "velar/storage"
-import {deepEqual} from "velar/json"
 import {BoardData, Task, TaskDraft, TaskFilter, TaskStatus, countStatus, filterTasks, moveTask as moveInList, newTask, removeTask as removeFromList, seedTasks} from "./domain.vel"
 
 const boardStorage = storage.scope("flow-board")
@@ -14,7 +13,7 @@ export const visibleTasks: () -> List<Task> = computed(() => filterTasks(tasks, 
 export const todoCount: () -> number = computed(() => countStatus(tasks, TaskStatus.todo))
 export const doingCount: () -> number = computed(() => countStatus(tasks, TaskStatus.doing))
 export const doneCount: () -> number = computed(() => countStatus(tasks, TaskStatus.done))
-export const changed: () -> bool = computed(() => not deepEqual(tasks, baseline))
+export const changed: () -> bool = computed(() => not equals(tasks, baseline))
 
 def persist() -> null:
     boardStorage.set("board", {tasks})

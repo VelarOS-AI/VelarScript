@@ -47,5 +47,18 @@ rehearsal documented in `docs/release-process.md`. Editor-facing changes must
 be checked through a packed toolchain in the independent Workbench gate; do not
 link compiler source into the editor.
 
+Gates in one checkout run one at a time. Every gate rebuilds `packages/*/dist`
+through a clean step, binds fixed test ports, and writes sandboxes under
+`examples/*/.velar`; a second gate started in the same working tree would delete
+a package `dist` while the first one is importing it and fail that run with an
+`ERR_MODULE_NOT_FOUND` the code did not cause. `build:packages`, `check`,
+`test`, `test:browser`, `test:packages`, and `velar` therefore run under
+`scripts/gate-lock.mjs`, which is keyed by the checkout path: a later gate
+prints what it is waiting for and starts when the running one finishes.
+Separate checkouts, git worktrees, and CI jobs never wait on each other, and the
+release and preview scripts build in a temporary workspace so they are not
+serialized at all. The `gate:*` scripts are the unlocked bodies of those gates
+and exist only to be wrapped; running one directly skips the lock.
+
 Do not publish npm packages, create a stable tag, deploy a preview, or weaken a
 release blocker as part of an ordinary contribution.

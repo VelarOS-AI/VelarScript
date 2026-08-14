@@ -64,11 +64,14 @@ export const LOOK_BORDER_STYLE_NAMES = new Set(["none", "hidden", "dotted", "das
 export const LOOK_ARITHMETIC_HINT = "@velarscript/web:look-arithmetic";
 
 export const LOOK_NUMERIC_TYPE_NAMES = new Set([
-  "Length", "Percentage", "LengthPercentage", "TrackFraction", "Duration", "Angle", "Opacity",
+  "Length", "Percentage", "LengthPercentage", "TrackFraction", "Duration", "Angle",
 ]);
 
+// D50 rule 92: 'Opacity' never appeared here. No builder produces it and the
+// 'opacity' property's declared type is number, so the name was unreachable —
+// publishing an unreachable name is worse than publishing nothing.
 export const LOOK_PUBLIC_TYPE_NAMES = Object.freeze([
-  "Look", "Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle", "Opacity",
+  "Look", "Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle",
   "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing", "Keyframes", "Animation",
 ] as const);
 
