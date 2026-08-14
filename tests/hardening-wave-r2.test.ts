@@ -98,6 +98,43 @@ catch error:
   assert.doesNotMatch(emitted.code ?? "", /__velarReadInstanceField\([^)]*"code"\)/u);
 });
 
+test("[D50-89] code crosses a module boundary because only the declaring module writes it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-r2-code-"));
+  try {
+    await writeFile(join(directory, "errors.vel"), `
+export class PaymentError extends Error:
+    constructor(message: string):
+        super(message)
+`.trimStart(), "utf8");
+    await writeFile(join(directory, "domain.vel"), `
+export type Amount:
+    cents: number
+
+export def parseAmount(raw: unknown) -> Amount:
+    return Amount.parse(raw)
+`.trimStart(), "utf8");
+    const entry = join(directory, "main.vel");
+    await writeFile(entry, `
+import {PaymentError} from "./errors.vel"
+import {parseAmount} from "./domain.vel"
+
+try:
+    throw PaymentError("declined")
+catch error:
+    print(f"{error.code}|{error.name}|{error is PaymentError}")
+try:
+    print(parseAmount("not a record").cents)
+catch error:
+    print(f"{error.code}|{error is ValidationError}")
+`.trimStart(), "utf8");
+    const result = spawnSync(process.execPath, [cliPath, "run", entry], { encoding: "utf8", timeout: 120_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "PaymentError|PaymentError|true\nValidationError|true\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("[D50-89] a failure no Velar class declared reports the contract it does satisfy", () => {
   const output = run(`
 type Port:

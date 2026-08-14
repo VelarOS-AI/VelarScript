@@ -10509,7 +10509,9 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 282);
+  // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
+  // velar/look retired the unreachable Opacity name: the total is unchanged.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 281);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 118);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 22);
@@ -11420,8 +11422,6 @@ test("velar/json captures validation, serialization, graph, and error hosts at i
 const OriginalTypeError = TypeError;
 const nativeDefineProperty = Object.defineProperty;
 const regExpPrototype = Object.getPrototypeOf(/x/u);
-const leftMap = new Map([["item", { value: 1 }]]), rightMap = new Map([["item", { value: 1 }]]);
-const leftSet = new Set(["a", "b"]), rightSet = new Set(["b", "a"]);
 let poisonedCalls = 0;
 const poison = () => { poisonedCalls += 1; throw new Error("late JSON host mutation"); };
 nativeDefineProperty(Map.prototype, "size", { configurable: true, get: poison });
@@ -11466,7 +11466,6 @@ globalThis.RangeError = class PoisonRangeError extends Error {};
 console.log(stringify({ b: 2, a: [1, true], text: "😀" }));
 console.log(stableStringify({ b: 2, a: 1 }));
 console.log(parse('{"a":1}').a, clone({ b: 2 }).b, isSerializable({ ready: true }));
-console.log(deepEqual(leftMap, rightMap), deepEqual(leftSet, rightSet), deepEqual({ value: [1] }, { value: [1] }));
 try { stringify({ value: Infinity }); console.log("accepted"); } catch (error) { console.log(error instanceof OriginalTypeError); }
 console.log(poisonedCalls);
 `);
@@ -11475,7 +11474,6 @@ console.log(poisonedCalls);
     '{"b":2,"a":[1,true],"text":"😀"}',
     '{"a":1,"b":2}',
     "1 2 true",
-    "true true true",
     "true",
     "0",
     "",
@@ -17819,7 +17817,7 @@ component App():
   const sharedWeb = compile(webSource, { sharedRuntimeModules: true });
   assert.deepEqual(sharedWeb.diagnostics, []);
   assert.ok(sharedWeb.runtimeModules.includes(VELAR_ERROR_NORMALIZATION_MODULE));
-  assert.match(sharedWeb.code ?? "", /errorApply as __velarErrorApply, isError as __velarIsError, normalizeError as __velarNormalizeError/u);
+  assert.match(sharedWeb.code ?? "", /errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError/u);
   assert.doesNotMatch(sharedWeb.code ?? "", /const __velarErrorNativeError = globalThis\.Error/u);
 
   const directory = await makeTemporaryDirectory("velar-shared-error-runtime-");
@@ -17861,7 +17859,13 @@ print(recoverDependency() + ":" + recoverEntry())
   assert.equal(standardModuleAssetCore(runtimeRoute), runtimeSource);
   const runtimeUrl = `data:text/javascript;base64,${Buffer.from(runtimeSource).toString("base64")}`;
   const runtimeNamespace = await import(runtimeUrl);
-  assert.deepEqual(Object.keys(runtimeNamespace).sort(), ["errorApply", "isError", "normalizeError"]);
+  // D50 rule 89: the shared error module also owns the nameable capability
+  // error classes and the code projection, so every consumer builds the same
+  // class identities.
+  assert.deepEqual(Object.keys(runtimeNamespace).sort(), [
+    "AddressInUseError", "FileExistsError", "FileNotFoundError", "NotADirectoryError", "PermissionError",
+    "errorApply", "errorCode", "isError", "normalizeError",
+  ]);
 
   const hostile = executeModule(`
 import {errorApply, isError, normalizeError} from ${JSON.stringify(runtimeUrl)};

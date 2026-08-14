@@ -6746,7 +6746,9 @@ export class Analyzer implements TypeEnvironment {
       // declared class name the lowering wrote into `.name`, so the string and
       // the class identity cannot drift apart, and a host error no Velar class
       // declared answers the contract it does satisfy: "Error".
-      const errorCodeRead = property === "code" && classKey !== "js:code" && this.isSubclassOf(classKey, "Error");
+      // An extern class declares its own JavaScript members, so a 'code' it
+      // publishes is that host property and stays an ordinary read.
+      const errorCodeRead = property === "code" && !classKey.startsWith("js:") && this.isSubclassOf(classKey, "Error");
       if (readValue && errorCodeRead) this.errorCodeReads.add(spanIdentity(memberSpan));
       if (readValue && field && !classKey.startsWith("js:") && !errorCodeRead
         && !(property === "cause" && this.isSubclassOf(classKey, "Error"))) {
