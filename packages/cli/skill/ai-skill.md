@@ -29,14 +29,22 @@ The working loop:
 Do not invent workarounds for a diagnostic; it is the language telling you
 the canonical spelling.
 
-Pure standard helpers use permanent namespaces: `Json.parse`,
-`Json.stringify`, `Json.stableStringify`, and `Json.clone`; `Promise.all`,
-`Promise.race`, `Promise.sleep`, `Promise.timeout`, `Promise.retry`,
-`Promise.map`, and `Promise.series`; and Web visual builders under `Look.*`.
-These names need no import and may be shadowed by a lexical binding. `range`
-is likewise in the Core prelude. Capability modules such as `velar/http`,
-`velar/storage`, and `velar/browser` remain explicit imports. Core durations
-use `ms` or `s`, so write `await Promise.sleep(250ms)`, not a bare number.
+What a program can compute needs no import; what reaches outside the program
+must be imported. Four permanent namespaces carry the pure computation:
+`Json.` (`parse`, `tryParse`, `stringify`, `stableStringify`, `clone`,
+`isSerializable`), `Promise.` (`all`, `race`, `sleep`, `timeout`, `retry`,
+`map`, `series`), `Text.` (`trimStart`, `trimEnd`, `capitalize`, `title`,
+`lines`, `lineStarts`, `chunks`, `words`, `slug`, `truncate`, `indent`,
+`dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`,
+`fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`,
+`splitPattern`), and Web visual builders under `Look.*`. A string method is a
+core operation; `Text.*` is the extension toolbox, and nothing moves between
+them. These names need no import and may be shadowed by a lexical binding.
+`print`, `str`, `equals`, and `range` are likewise in the Core prelude —
+`equals(a, b)` is the one spelling of content comparison. Capability modules
+such as `velar/http`, `velar/storage`, and `velar/browser` remain explicit
+imports. Core durations use `ms` or `s`, so write `await Promise.sleep(250ms)`,
+not a bare number.
 
 ## Project setup
 
@@ -481,6 +489,12 @@ component Panel:
 ### Errors and async
 
 Throw `Error` (or a subclass) with a message that names the broken rule.
+An error's class is its only classification — discriminate with
+`if error is FileNotFoundError:` and read `error.code` (the declared class
+name) only when the identity must survive a log or JSON boundary. The nameable
+capability classes need no import: `FileNotFoundError`, `PermissionError`,
+`NotADirectoryError`, `FileExistsError`, `AddressInUseError`, plus
+`ValidationError`, `NarrowingError`, and `IndexError`.
 Validate untrusted data at the boundary with `Type.parse`, then trust the
 types inward. `await` every call whose result or completion you depend on:
 

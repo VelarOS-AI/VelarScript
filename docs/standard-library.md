@@ -16,8 +16,10 @@ minimal orthogonal capability primitive for interacting with the outside world.
 Domain functionality such as editor, game, or chart tooling is always an
 installable library, even when it is implemented entirely in VelarScript.
 
-- Module-level capabilities are imported from official `velar/*` modules.
-  Everyday value operations live on checked string, number, and collection
+- **What a program can compute needs no import; what reaches outside the
+  program must be imported.** An `import` line is an audit of what a module
+  touches, so pure computation never appears on one.
+- Everyday value operations live on checked string, number, and collection
   members. Nothing patches JavaScript prototypes or creates new global names.
 - Implementation language does not determine membership. Reusable domain
   modules written in VelarScript publish an ordinary npm package with one
@@ -100,6 +102,22 @@ installable library, even when it is implemented entirely in VelarScript.
   Map key remains valid at the ceiling, while growth fails with `RangeError`.
   Dynamic misuse fails before a native capability is invoked.
 
+## Two halves of the library
+
+**Permanent pure computation — no import.** `Json.`, `Promise.`, `Text.`, and
+(on Web) `Look.` are always in scope, alongside the prelude names `print`,
+`str`, `equals`, and `range`. Named imports of their members are retired and
+receive a diagnostic that teaches the namespace spelling.
+
+**Everything else is imported.** That includes the remaining pure modules —
+`velar/collections`, `velar/math`, `velar/url`, `velar/time`, `velar/id`,
+`velar/log`, `velar/test` — whose functions stay behind an import because their
+names are ordinary vocabulary a program is free to own, and every capability
+module: `velar/fs`, `velar/path`, `velar/process`, `velar/env`, `velar/host`,
+`velar/serve`, `velar/terminal`, `velar/http`, and the Web modules documented in
+`web-api.md`. For a capability the import line is the audit signal, so it never
+becomes permanent for convenience.
+
 ## `velar/collections`
 
 Python-style iteration helpers and explicit functional collection operations.
@@ -171,7 +189,7 @@ allocation. Imported helpers use explicit index loops over the one checked List
 copy; stable sort remains the host's standards-defined stable Array sort through
 the captured operation.
 
-## `velar/text`
+## `Text.` (permanent, no import)
 
 Common string operations are checked members: `size`, `trim`, `upper`, `lower`,
 `slice`, `char`, `has`, `index`, `count`, `startsWith`, `endsWith`, `split`, `replace`,
@@ -188,28 +206,36 @@ positions clamp. `index` also clamps its start and returns `null` when no match
 exists. `text.has(part)` and `part in text` are the method and operator forms of
 the same substring test. Direct string indexing stays absent.
 
-The `velar/text` module keeps transformations that are not simple receiver
-operations: `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`,
-`slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, and
-`escapeHtml`. Blank text is tested with the `text.isBlank()` member — `true`
-for empty or whitespace-only text.
-`utf8Size(text)` returns the exact byte count used
+The `Text.` namespace is the extension toolbox beside those core methods: it
+needs no import, and nothing moves between the two, so the member list a reader
+must hold in mind never grows. It carries the transformations that are not
+simple receiver operations: `Text.trimStart`, `Text.trimEnd`, `Text.capitalize`,
+`Text.title`, `Text.lines`, `Text.lineStarts`, `Text.chunks`, `Text.words`,
+`Text.slug`, `Text.truncate`, `Text.indent`, `Text.dedent`,
+`Text.normalizeWhitespace`, `Text.utf8Size`, `Text.escapeHtml`,
+`Text.codePoint`, and `Text.fromCodePoint`. Blank text is tested with the
+`text.isBlank()` member — `true` for empty or whitespace-only text.
+`Text.utf8Size(text)` returns the exact byte count used
 by official UTF-8 transport, JSON, and filesystem budgets, including stable
-three-byte treatment of an unpaired surrogate. `lineStarts(text)` performs one
+three-byte treatment of an unpaired surrogate. `Text.lineStarts(text)` performs one
 bounded scan and returns `[0, ...]` Unicode code-point offsets immediately after
 each line-feed character, including the final text size when the text ends in a
 line feed. This keeps large-file line indexes out of repeated `.char(index)`
-lookups without exposing JavaScript UTF-16 units. `chunks(text,size)` performs
+lookups without exposing JavaScript UTF-16 units. `Text.chunks(text, size)` performs
 the same single bounded code-point scan and returns non-empty pieces of at most
 `size` code points; it never splits a surrogate pair, and an empty input returns
-an empty List. Stateless pattern operations are `matches`, `findMatch`,
-`findMatches`, `replaceMatches`, and `splitPattern`.
+an empty List. Stateless pattern operations are `Text.matches`, `Text.findMatch`,
+`Text.findMatches`, `Text.replaceMatches`, and `Text.splitPattern`.
 
-`title` treats separators as word boundaries. `truncate` reserves room for its
-suffix. `slug` lowercases Unicode text, removes punctuation, and joins word
-runs with `-`; it does not transliterate non-Latin text. `escapeHtml` escapes
-text for HTML content and attribute contexts but does not mark it as trusted
-HTML.
+`Text.title` treats separators as word boundaries. `Text.truncate` reserves room
+for its suffix. `Text.slug` lowercases Unicode text, removes punctuation, and
+joins word runs with `-`; it does not transliterate non-Latin text.
+`Text.escapeHtml` escapes text for HTML content and attribute contexts but does
+not mark it as trusted HTML. `Text.codePoint(character)` answers the code point
+of exactly one character and `null` for anything else — empty text, several
+characters, or a lone surrogate half; `Text.fromCodePoint(value)` is its inverse
+and throws `RangeError` for a value outside `0`–`1114111` or inside the
+surrogate range, so no call can build text that is not a sequence of characters.
 
 Pattern expressions use JavaScript pattern syntax in Unicode mode through a
 captured intrinsic implementation, not a replaceable ambient `RegExp` global.
@@ -218,10 +244,10 @@ its mutable `lastIndex`. Options are copied from one typed data record containin
 `ignoreCase`, `multiline`, and `dotAll` booleans. `findMatch` returns
 `{value, index, groups}` or `null`; `index` is a Unicode code-point position, so
 it can be passed directly to `char` or `slice` without leaking JavaScript UTF-16
-offsets. `findMatches` returns all such records and
-normalizes an unmatched capture to `null`. `replaceMatches` replaces every
-match with one literal string, and `splitPattern` omits capture groups from the
-result. Invalid patterns throw `TypeError` at the VelarScript boundary.
+offsets. `Text.findMatches` returns all such records and
+normalizes an unmatched capture to `null`. `Text.replaceMatches` replaces every
+match with one literal string, and `Text.splitPattern` omits capture groups from
+the result. Invalid patterns throw `TypeError` at the VelarScript boundary.
 
 Pattern source is limited to 4,096 code units, pattern input/output and returned
 match text to 16 MiB, and list-producing pattern operations to 1,000,000 results.
@@ -233,14 +259,15 @@ regular expressions; applications that accept search text should use the
 literal `.has()`/`.startsWith()`/`.endsWith()` operations unless they deliberately
 own a pattern grammar.
 
-Text counts used by `.repeat`, `.padStart`, `.padEnd`, and `truncate` are
+Text counts used by `.repeat`, `.padStart`, `.padEnd`, and `Text.truncate` are
 non-negative safe integers; native string-to-number coercion is not exposed.
 Dynamic pattern options must be plain enumerable data fields, so getters,
 symbols, and class instances are rejected without hidden evaluation. Text
-composition such as `.replace`, `.replaceAll`, `escapeHtml`, and `indent` checks
+composition such as `.replace`, `.replaceAll`, `Text.escapeHtml`, and
+`Text.indent` check
 its complete output budget before allocating the final string.
 
-The compiler-owned String runtime and `velar/text` capture their string, array,
+The compiler-owned String runtime and the `Text.` runtime capture their string, array,
 numeric, reflection, RegExp, iterator-independent Unicode, and Error operations
 when the module initializes. Pattern replacement and splitting are driven by the
 captured native `exec` operation instead of mutable RegExp symbol hooks. Later
@@ -248,11 +275,9 @@ changes to JavaScript globals, prototypes, or string/array iterators therefore
 cannot redirect a checked text operation.
 
 ```velar
-import {findMatch, matches, splitPattern} from "velar/text"
-
-const valid = matches("VelarScript 42", "^velar [0-9]+$", {ignoreCase: true})
-const ticket = findMatch("ticket-42", "[0-9]+")
-const fields = splitPattern("one, two; three", " *[,;] *")
+const valid = Text.matches("VelarScript 42", "^velar [0-9]+$", {ignoreCase: true})
+const ticket = Text.findMatch("ticket-42", "[0-9]+")
+const fields = Text.splitPattern("one, two; three", " *[,;] *")
 const initial = "Ada".char(0)
 const short = "VelarScript".slice(0, 5)
 print(f"{initial ?? "?"}:{short.size}")
@@ -294,7 +319,7 @@ methods, or the ambient error constructors afterward cannot redirect an
 already initialized module; a host that supplies a missing/accessor-backed
 operation or an invalid random result fails explicitly.
 
-## `velar/json`
+## `Json.` (permanent, no import)
 
 | Export | Behavior |
 | --- | --- |
@@ -304,41 +329,34 @@ operation or an invalid random result fails explicitly.
 | `stableStringify` | Strictly serializes while recursively ordering record keys. |
 | `clone` | Strictly JSON-clones a value and optionally validates the result with a VelarScript `type`. |
 | `isSerializable` | Reports whether a value is losslessly representable as JSON data. |
-| `deepEqual` | Recursively compares VelarScript records and Lists, Map values with native key identity, and Sets with native membership; non-data objects keep reference identity and distinct cycles safely compare false. |
 
-`deepEqual` is the JSON-shaped comparison and shares this module's boundary: it
-accepts any value, compares a non-data object such as a class instance by
-reference, and answers `false` for distinct cycles. The prelude `equals(a, b)`
-(charter section 4) is the general companion to `==` and is stricter by design:
-it needs no import, requires its operands to intersect statically, rejects class
-instances, functions, Promises, and unvalidated `unknown`/`any` at compile time,
-and throws on a cycle. Reach for `equals` when comparing application data and
-for `deepEqual` when comparing values that came through a JSON boundary.
+Content comparison is one concept with one spelling: the prelude `equals(a, b)`
+(charter section 4). It needs no import, requires its operands to intersect
+statically, rejects class instances, functions, Promises, and unvalidated
+`unknown`/`any` at compile time, compares Set members and Map keys structurally
+rather than by reference, agrees with `==` on `NaN`, and throws on a cycle
+rather than answering a quiet `false`.
 
 Strict JSON is a compiler-owned runtime shared by Core and platform consumers.
 It captures parsing/serialization, Array/Set traversal, reflection and data
 descriptors, numeric/text/path operations, allocation, Reflect invocation, and
 error constructors when the generated module initializes. `stableStringify`
-uses that same captured sort operation, while `deepEqual` captures its Map/Set/
-WeakSet graph operations. Replacing ambient globals or prototypes afterward
+uses that same captured sort operation. Replacing ambient globals or prototypes afterward
 cannot redirect validation, snapshots, cloning, ordering, or equality. The
 versioned reactive registry remains the one explicit dynamic seam used to
 unwrap tracked values before JSON inspection.
 
-`Json.parse`, `Json.stringify`, `Json.stableStringify`, and `Json.clone` are
-permanent Core namespace members and need no import. The remaining
-`velar/json` capabilities stay explicit imports because they are outside that
-namespace roster.
+Every member above is a permanent Core namespace member: JSON handling is pure
+computation, so no `Json.*` call needs an import and named imports from
+`velar/json` are retired with a diagnostic that teaches the namespace spelling.
 
 ```velar fragment
-import {deepEqual} from "velar/json"
-
 type User:
     id: string
     name: string
 
 const user = Json.parse(source, User)
-const unchanged = deepEqual(user, previousUser)
+const unchanged = equals(user, previousUser)
 ```
 
 The second argument is the existing runtime form of a record `type`, a runtime
@@ -600,7 +618,10 @@ with a compiler-known VelarScript runtime Type, returning `Promise<T>` with the
 same inference and callable-`then` rejection as `velar/http`. The Type identity
 is checked before any body read, so an invalid or forged Type cannot consume the
 request stream.
-Budgets are positive integers up to the 16 MiB hard ceiling. Exceeding the
+**Errors it raises.** `serve` reports a port already bound as
+`AddressInUseError` (bind another port, or `0` for any free one) and a port the
+host refuses as `PermissionError`; both are nameable Core classes that need no
+import. Budgets are positive integers up to the 16 MiB hard ceiling. Exceeding the
 application budget throws `RequestBodyTooLargeError`, whose read-only
 `maxBytes` field lets a handler return 413 without matching error text. Request
 text must be valid UTF-8. `json()` then applies the same finite, bounded,
@@ -688,6 +709,14 @@ fallback goes through the identical containment and size checks.
 | `watchFiles(path, recursive=false)` | Creates a bounded, resource-owned invalidation watcher for one existing file or directory. |
 | `FileWatcher.next()` | Pulls one sorted/deduplicated `FileWatchBatch`, permits only one active pull, and returns `null` after release. |
 | `FileWatcher.close()` | Idempotently releases the watcher and settles a pending pull with `null`. |
+
+**Errors it raises.** A failure a caller recovers from differently arrives as
+its own class (charter section 11): `FileNotFoundError` when the path is
+absent, `PermissionError` when the host denies access, `NotADirectoryError`
+when a path component or a `list` target is a file, and `FileExistsError` when
+`createText`, `copyFile`, or `move` would overwrite without `replace`. Each
+carries the failing `path: string?`. Every other failure — a wrong argument
+type, an exceeded budget, an unusable host — stays an ordinary `Error`.
 
 Paths are non-empty, NUL-free strings of at most 4,096 code units. The module
 has no synchronous forms, recursive deletion, byte inspection, callback event
@@ -1136,8 +1165,11 @@ def test_profile_name() -> null:
     expect(profile).toEqual({name: "Ada", tags: ["compiler", "web"]})
 ```
 
-- `toBe` uses exact identity/value equality; `toEqual` uses the same bounded
-  VelarScript data comparison as `velar/json.deepEqual`.
+- `toBe` uses exact identity/value equality; `toEqual` uses a bounded
+  JSON-shaped data comparison: it compares records and Lists recursively, Map
+  values by native key identity and Sets by native membership, and answers
+  `false` for a distinct cycle. It is not the prelude `equals`, which is
+  stricter (see `Json.`).
 - `toBeTruthy` and `toBeFalsy` require actual `true` and `false`, rather than
   JavaScript truthiness. `toContain` accepts text or a dense List, and
   `toHaveLength` accepts text or a dense List.
