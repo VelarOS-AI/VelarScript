@@ -552,7 +552,6 @@ export const LengthPercentage = lookType("LengthPercentage", (value) => typeof v
 export const TrackFraction = lookType("TrackFraction", (value) => typeof value === "string" && lookMatches(trackFractionPattern, value));
 export const Duration = lookType("Duration", (value) => typeof value === "string" && lookMatches(durationPattern, value));
 export const Angle = lookType("Angle", (value) => typeof value === "string" && lookMatches(anglePattern, value));
-export const Opacity = lookType("Opacity", (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1);
 export const Color = lookType("Color", textVisual);
 export const Border = lookType("Border", textVisual);
 export const Shadow = lookType("Shadow", textVisual);
