@@ -259,3 +259,13 @@ Checked 76 runtime boundary operations and the shared registry, strict JSON, Web
 ### `npm run test:browser`
 
 （见文末追加）
+
+---
+
+## 附：本波额外触及的两处
+
+- **`velar/look` 的公开导出少了一个**（`Opacity`），因此 `standardModuleApi()` 的
+  总导出数保持 281 不变：Text +2、Json −1、Look −1。相关断言已同步并写明原因。
+- **语言服务补全**：`Text.` 与 `equals` 加入核心补全项，`velar/text`/`velar/json`
+  从「可导入模块」补全里移除（它们的具名导入已退役，补全不该再教一个会被诊断
+  拒绝的拼写）。
