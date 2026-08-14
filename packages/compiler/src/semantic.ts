@@ -104,6 +104,8 @@ export interface SemanticModuleReference {
   readonly source: string;
   readonly span: Span;
   readonly dynamic: boolean;
+  /** D38 rule 49: a type-only edge carries no runtime evaluation order. */
+  readonly typeOnly: boolean;
 }
 
 export interface SemanticScope {
@@ -371,7 +373,7 @@ export function buildSemanticIndex(
     : valueSpan;
 
   const declareImport = (statement: ImportDeclaration): void => {
-    moduleReferences.push({ source: statement.source, span: moduleSourceSpan(statement.sourceSpan), dynamic: false });
+    moduleReferences.push({ source: statement.source, span: moduleSourceSpan(statement.sourceSpan), dynamic: false, typeOnly: statement.typeOnly });
     for (const specifier of statement.specifiers) {
       const words = wordSpans(source.text, specifier.span);
       const importedSpan = specifier.namespace
@@ -392,7 +394,7 @@ export function buildSemanticIndex(
   };
 
   const declareReExport = (statement: ReExportDeclaration): void => {
-    moduleReferences.push({ source: statement.source, span: moduleSourceSpan(statement.sourceSpan), dynamic: false });
+    moduleReferences.push({ source: statement.source, span: moduleSourceSpan(statement.sourceSpan), dynamic: false, typeOnly: statement.typeOnly });
     for (const specifier of statement.specifiers) {
       const words = wordSpans(source.text, specifier.span);
       const importedSpan = words.find((word) => source.text.slice(word.start, word.end) === specifier.imported) ?? words[0] ?? specifier.span;
@@ -579,7 +581,7 @@ export function buildSemanticIndex(
       case "IdentifierExpression": reference(expression.name, expression.span, write); break;
       case "SuperExpression": break;
       case "DynamicImportExpression":
-        moduleReferences.push({ source: expression.source, span: moduleSourceSpan(expression.sourceSpan), dynamic: true });
+        moduleReferences.push({ source: expression.source, span: moduleSourceSpan(expression.sourceSpan), dynamic: true, typeOnly: false });
         break;
       case "FStringExpression": for (const part of expression.parts) if (part.kind === "expression") visitExpression(part.value); break;
       case "ListExpression": for (const element of expression.elements) visitExpression(element); break;

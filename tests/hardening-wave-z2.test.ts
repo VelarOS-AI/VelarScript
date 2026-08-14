@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 import test from "node:test";
-import { compile } from "@velarscript/compiler";
+import { applyMechanicalFixes, compile } from "@velarscript/compiler";
 import { TEXT_NAMESPACE_MEMBERS } from "@velarscript/compiler/extension";
+import { compileProject, type ProjectResult } from "../packages/cli/src/project.ts";
 import { standardModuleInterfaces, standardModuleSources } from "../packages/cli/src/standard-modules.ts";
+
+const projectRoot = "/velar-wave-z2-modules";
+
+async function checkProject(modules: Readonly<Record<string, string>>, entry: string): Promise<ProjectResult> {
+  const overrides = new Map(Object.entries(modules).map(([name, text]) => [join(projectRoot, name), text]));
+  return await compileProject(join(projectRoot, entry), overrides, {});
+}
+
+function moduleOf(project: ProjectResult, name: string): ProjectResult["modules"][number] {
+  const module = project.modules.find((candidate) => candidate.inputPath === join(projectRoot, name));
+  assert.ok(module, `module ${name} was compiled`);
+  return module;
+}
+
+function projectMessages(project: ProjectResult, name: string): readonly string[] {
+  return moduleOf(project, name).result.diagnostics.map((item) => item.message);
+}
 
 // The generated standard modules name each other by specifier, so the whole
 // graph is linked as data URLs before a program runs. Three passes settle the
@@ -655,4 +674,144 @@ print(read("nobody", ["ada", "grace"]))
 print(read(null, ["ada", "grace"]))
 `.trimStart());
   assert.equal(output, ["ADA", "absent", "absent"].join("\n") + "\n");
+});
+
+// ---------------------------------------------------------------------------
+// MOD-U3 / D38 rule 49 — import type
+// ---------------------------------------------------------------------------
+
+const usersModule = `export type User:
+    name: string
+
+export def load() -> User:
+    return {name: "Ada"}
+
+export const first: string = "Ada"
+`;
+
+test("[MOD-U3] import type names a module's types and its values stay out of reach", async () => {
+  const legal = await checkProject({
+    "users.vel": usersModule,
+    "main.vel": [
+      'import type {User} from "./users.vel"',
+      "",
+      "def label(user: User) -> string:",
+      "    return user.name",
+      "",
+      "def count(users: List<User>) -> number:",
+      "    return users.size",
+      "",
+      'print(label({name: "Grace"}))',
+      "print(str(count([])))",
+      "",
+    ].join("\n"),
+  }, "main.vel");
+  assert.deepEqual(legal.failures, []);
+  assert.deepEqual(projectMessages(legal, "main.vel"), []);
+  // Item 4: nothing is emitted for the declaration, so the module never loads.
+  assert.doesNotMatch(moduleOf(legal, "main.vel").result.code ?? "", /users\.js/u);
+
+  const aliased = await checkProject({
+    "users.vel": usersModule,
+    "main.vel": 'import type {User as Account} from "./users.vel"\n\ndef label(account: Account) -> string:\n    return account.name\n\nprint(label({name: "Ada"}))\n',
+  }, "main.vel");
+  assert.deepEqual(projectMessages(aliased, "main.vel"), []);
+});
+
+test("[MOD-U3] every position needing the validator is answered with the same fix", async () => {
+  const expected = (name: string): string =>
+    `'${name}' comes from a type-only import, so it names a type and has no value here`
+    + `; runtime validation needs the value import — drop 'type' from the import of "./users.vel"`;
+  const cases: readonly (readonly [string, string, readonly string[]])[] = [
+    ["parse", 'print(User.parse({name: "Ada"}).name)\n', [expected("User")]],
+    ["call", "print(load().name)\n", [expected("load")]],
+    ["is", "def read(raw: unknown) -> string:\n    if raw is User:\n        return raw.name\n    return \"\"\n\nprint(read(1))\n", [expected("User")]],
+    ["argument", "def read(value: Type<User>) -> string:\n    return \"x\"\n\nprint(read(User))\n", [expected("User")]],
+    // A narrowed read rechecks against the record's own validator, which the
+    // type-only import never loaded.
+    ["narrowed read", "def read(user: User?) -> string:\n    if user != null:\n        return user.name\n    return \"\"\n\nprint(read(null))\n", [expected("User")]],
+  ];
+  for (const [label, body, messages_] of cases) {
+    const project = await checkProject({
+      "users.vel": usersModule,
+      "main.vel": `import type {User, load} from "./users.vel"\n\n${body}`,
+    }, "main.vel");
+    assert.deepEqual(projectMessages(project, "main.vel").filter((item) => item.includes("type-only import")), messages_, label);
+    assert.equal(moduleOf(project, "main.vel").result.code, null, label);
+  }
+});
+
+test("[MOD-U3] the value-use diagnostic carries the mechanical rewrite that drops 'type'", () => {
+  const source = 'import type {User} from "./users.vel"\n\nprint(User.parse(1))\n';
+  const diagnostics = compile(source).diagnostics;
+  const named = diagnostics.find((item) => item.message.includes("type-only import"));
+  assert.ok(named, diagnostics.map((item) => item.message).join("\n"));
+  assert.equal(named.fix?.title, "Drop 'type' from the import");
+  const fixed = applyMechanicalFixes(source, diagnostics);
+  assert.match(fixed.text, /^import \{User\} from "\.\/users\.vel"/u);
+  // Idempotent: the rewritten source no longer registers the fix.
+  assert.equal(applyMechanicalFixes(fixed.text, compile(fixed.text).diagnostics).applied.length, 0);
+});
+
+test("[MOD-U3] one import line is entirely values or entirely types", () => {
+  assert.deepEqual(messages('import {load, type User} from "./users.vel"\n'), [
+    "An import is entirely values or entirely types; move 'User' to its own 'import type {...} from' line",
+  ]);
+  assert.deepEqual(messages('import type {User, type Status} from "./users.vel"\n'), [
+    "'type' is already declared for this import; drop the inner marker on 'Status'",
+  ]);
+  assert.deepEqual(messages('export {measure, type Shape} from "./text.vel"\n'), [
+    "A re-export is entirely values or entirely types; move 'Shape' to its own 'export type {...} from' line",
+  ]);
+  assert.deepEqual(messages('import type * as Users from "./users.vel"\n'), [
+    'A type-only import names its types explicitly; write import type {Name} from "..." instead of a namespace import',
+  ]);
+  assert.ok(messages('import type Users from "./users.vel"\n')
+    .includes('A type-only import names its types in braces; write import type {Name} from "..."'));
+  assert.deepEqual(messages('import js type {Client} from "sdk"\n'), [
+    "'import js type' is not a spelling: a JavaScript module's types come from an 'extern module' declaration, which is already types-only",
+  ]);
+  // `type` is still a contextual keyword everywhere else.
+  clean('const type = "record"\nprint(type)\n');
+  clean('type Row:\n    name: string\n\nprint(Row.parse({name: "a"}).name)\n');
+});
+
+test("[MOD-U3] a type-only edge does not participate in initialization order", async () => {
+  const modules = (keyword: string): Readonly<Record<string, string>> => ({
+    "alpha.vel": 'import {beta} from "./beta.vel"\n\nexport type Alpha:\n    field: string\n\nexport const alpha: string = "A" + beta\n',
+    "beta.vel": `${keyword} {Alpha} from "./alpha.vel"\n\nexport def describe(value: Alpha) -> string:\n    return value.field\n\nexport const beta: string = "B"\n`,
+  });
+  const valueEdge = await checkProject(modules("import"), "beta.vel");
+  assert.deepEqual(projectMessages(valueEdge, "alpha.vel"), [
+    "Move this read into a function, or extract the shared value into a third module; './beta.vel' has not initialized when this line runs",
+  ]);
+
+  const typeEdge = await checkProject(modules("import type"), "beta.vel");
+  assert.deepEqual(projectMessages(typeEdge, "alpha.vel"), []);
+  assert.deepEqual(projectMessages(typeEdge, "beta.vel"), []);
+  // The type-only importer emits no import of the module it names.
+  assert.doesNotMatch(moduleOf(typeEdge, "beta.vel").result.code ?? "", /alpha\.js/u);
+});
+
+test("[MOD-U3] export type re-exports types and emits nothing for them", async () => {
+  const project = await checkProject({
+    "users.vel": usersModule,
+    "barrel.vel": 'export type {User} from "./users.vel"\n\nexport const tag: string = "barrel"\n',
+    "main.vel": [
+      'import type {User} from "./barrel.vel"',
+      'import {tag} from "./barrel.vel"',
+      "",
+      "def label(user: User) -> string:",
+      "    return user.name + \" \" + tag",
+      "",
+      'print(label({name: "Grace"}))',
+      "",
+    ].join("\n"),
+  }, "main.vel");
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(projectMessages(project, "barrel.vel"), []);
+  assert.deepEqual(projectMessages(project, "main.vel"), []);
+  const barrel = moduleOf(project, "barrel.vel").result.code ?? "";
+  assert.doesNotMatch(barrel, /export \{ ?User/u);
+  assert.doesNotMatch(barrel, /users\.js/u);
 });

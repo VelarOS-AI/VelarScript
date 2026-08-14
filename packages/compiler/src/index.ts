@@ -79,6 +79,8 @@ export interface ModuleDependency {
   readonly javascript: boolean;
   readonly unsafe: boolean;
   readonly dynamic: boolean;
+  /** D38 rule 49: true for `import type`/`export type`, which carry no runtime edge. */
+  readonly typeOnly?: boolean;
   /** True for `export {name} from "source"` re-export dependencies. */
   readonly reExport?: boolean;
   /** True when the importing module declares `extern module "source"` itself. */
@@ -391,6 +393,7 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       javascript: statement.javascript,
       unsafe: statement.unsafe,
       dynamic: false,
+      ...(statement.typeOnly ? { typeOnly: true } : {}),
       ...(statement.javascript && !statement.unsafe && externSources.has(statement.source) ? { externOwned: true } : {}),
       specifiers: statement.specifiers.map((specifier) => ({
         imported: specifier.imported,
@@ -405,6 +408,7 @@ function dependenciesOf(program: Program, extensions: readonly CompilerExtension
       javascript: false,
       unsafe: false,
       dynamic: false,
+      ...(statement.typeOnly ? { typeOnly: true } : {}),
       reExport: true,
       specifiers: statement.specifiers.map((specifier) => ({
         imported: specifier.imported,

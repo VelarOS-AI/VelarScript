@@ -2117,6 +2117,32 @@ import {User as Account, loadUser} from "./users.vel"
 const user: Account = loadUser()
 ```
 
+`import type {User, Status as S} from "./x.vel"` names types without importing
+values, and `export type {User} from "./x.vel"` re-exports them the same way.
+In VelarScript a type is a value carrying a validator, so this is a real
+distinction rather than an erasure marker: the named module is not imported at
+runtime at all. Three consequences follow, and they are the reason to reach for
+the spelling.
+
+- The names may be written only where no value is needed — annotations, type
+  arguments, and results. `User.parse(raw)`, `raw is User`, `case User:`, and
+  passing the name as an argument all need the validator the module holds, and
+  so does a narrowed read of a record typed by that name, because the recheck
+  validates against the type itself. Every one of those is answered with the
+  same fix: drop `type` from that import line, which `velar fix` applies.
+- A type-only edge does not participate in initialization order, so two modules
+  whose types refer to each other are a legal shape once one direction says so
+  in source. The exemption is now spelled rather than inferred.
+- Nothing is emitted for the declaration, so a module reached only by type-only
+  edges never loads and its validators stay out of the build.
+
+One import declaration is entirely values or entirely types: `import {loadUser,
+type User}` is refused with the two-line spelling, because a mixed line hides
+which names load a module and which do not. An ordinary import of a name used
+only in annotations stays legal and keeps its runtime edge — the import still
+runs the module, and demanding the type-only spelling there would silently stop
+it from running.
+
 VelarScript modules have no default export in either direction: every export
 carries a name, `export default` is rejected with that answer, and a default
 import from a `.vel` module is answered the same way (`import js Name from

@@ -879,6 +879,10 @@ function appendInitializationCycleDiagnostics(
           dynamicRoots.push(target);
           continue;
         }
+        // D38 rule 49: a type-only edge names types, never a value, and emits
+        // no runtime import, so it orders nothing. Two modules whose types are
+        // mutually recursive become a legal shape by saying so in source.
+        if (reference.typeOnly) continue;
         if (seen.has(target)) continue;
         seen.add(target);
         output.push(target);

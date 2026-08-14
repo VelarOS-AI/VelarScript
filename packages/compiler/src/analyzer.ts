@@ -787,6 +787,12 @@ export class Analyzer implements TypeEnvironment {
   private readonly importedBindingOrigins = new Map<Binding, string>();
   /** Namespace import locals by name, known before signature validation runs (ENM-I9 teaching). */
   private readonly namespaceImportLocals = new Map<string, string>();
+  /**
+   * D38 rule 49: the locals a type-only import declared. They resolve in type
+   * positions and nowhere else — the module they name is never imported at
+   * runtime, so there is no value behind them to reach.
+   */
+  private readonly typeOnlyImportLocals = new Map<string, { readonly source: string; readonly marker: Span | null }>();
   private readonly initializationImportReadSites = new Map<string, InitializationImportRead>();
   /** Local class bindings mapped to the source offset where their `class` statement evaluates (CLS-D8). */
   private readonly hoistedClassDeclarations = new Map<Binding, number>();
@@ -925,6 +931,12 @@ export class Analyzer implements TypeEnvironment {
       if (statement.kind !== "ImportDeclaration") continue;
       for (const specifier of statement.specifiers) {
         if (specifier.namespace) this.namespaceImportLocals.set(specifier.local, statement.source);
+        if (statement.typeOnly && !specifier.namespace) {
+          this.typeOnlyImportLocals.set(specifier.local, {
+            source: statement.source,
+            marker: statement.typeMarkerSpan ?? null,
+          });
+        }
       }
     }
     this.validateCoreDeclarationSignatures(program);
@@ -4103,6 +4115,7 @@ export class Analyzer implements TypeEnvironment {
           this.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
         }
         this.checkShadowedRead(expression.name, expression.span);
+        if (lexical) this.rejectTypeOnlyValueUse(expression.name, expression.span);
         this.recordInitializationImportRead(binding, expression.name, expression.span);
         {
           // The class name is hoisted for analysis, but the emitted `class`
@@ -4121,6 +4134,7 @@ export class Analyzer implements TypeEnvironment {
         }
         if (binding.reactiveKind) this.reactiveReferences.set(spanIdentity(expression.span), binding.reactiveKind);
         if (binding.narrowingFrame !== null) {
+          this.rejectTypeOnlyRuntimeValidation(binding.type, expression.span);
           this.runtimeNarrowings.set(spanIdentity(expression.span), {
             expected: binding.type,
             description: expression.name,
@@ -4415,6 +4429,7 @@ export class Analyzer implements TypeEnvironment {
         const subject = this.inferExpression(expression.value);
         const checked = this.resolveAnnotation(expression.type);
         const valid = this.validateTypeReference(expression.type);
+        if (valid && this.rejectTypeOnlyRuntimeCheck(expression.type, expression.type.span)) return invalidType;
         if (valid && this.rejectErasedRuntimeCheck(checked, expression.type.span)) return invalidType;
         if (valid && checked.kind === "class") {
           this.classChecks.add(spanIdentity(expression.span));
@@ -7295,6 +7310,7 @@ export class Analyzer implements TypeEnvironment {
     result = this.displayExternalClasses(result);
     if (useNarrowing && narrowedMember) {
       result = narrowedMember;
+      this.rejectTypeOnlyRuntimeValidation(narrowedMember, memberSpan);
       this.runtimeNarrowings.set(spanIdentity(memberSpan), {
         expected: narrowedMember,
         description: `.${property}`,
@@ -8019,6 +8035,10 @@ export class Analyzer implements TypeEnvironment {
         if (fact) narrowed.set(`${memberNarrowingPrefix}${path}`, fact);
       }
     } else if (expression.kind === "IsExpression") {
+      // A check the compiler already refused establishes nothing. Without this
+      // the refusal cascades: the refused `is` would still narrow, and every
+      // guarded read would report the same one mistake again.
+      if (isInvalidType(this.inferredExpressionTypes.get(spanIdentity(expression.span)) ?? unknownType)) return narrowed;
       const checked = this.resolveAnnotation(expression.type);
       const matches = expression.operator === "is" ? truthy : !truthy;
       if (matches) {
@@ -8749,6 +8769,87 @@ export class Analyzer implements TypeEnvironment {
       || this.externTypeImports.has(name);
   }
 
+  /**
+   * D38 rule 49: a type-only import brings in no module, so nothing behind the
+   * name exists at runtime. Every value use is one obvious spelling away from
+   * working, so the diagnostic names the rewrite and `velar fix` applies it.
+   */
+  private rejectTypeOnlyValueUse(name: string, errorSpan: Span): boolean {
+    const declaration = this.typeOnlyImportLocals.get(name);
+    if (!declaration) return false;
+    this.diagnostics.push(diagnostic(
+      "VEL3001",
+      `'${name}' comes from a type-only import, so it names a type and has no value here`
+      + `; runtime validation needs the value import — drop 'type' from the import of ${JSON.stringify(declaration.source)}`,
+      errorSpan,
+      declaration.marker
+        ? mechanicalFix({ start: declaration.marker.start, end: declaration.marker.end + 1 }, "", "Drop 'type' from the import")
+        : undefined,
+    ));
+    return true;
+  }
+
+  /**
+   * D38 rule 49: a narrowed read rechecks the available runtime evidence, and
+   * for a record that means the type's own validator. A type-only import never
+   * loaded the module the validator lives in, so the recheck is a value use of
+   * the name however it was spelled.
+   */
+  private rejectTypeOnlyRuntimeValidation(expected: ValueType, errorSpan: Span): void {
+    if (this.typeOnlyImportLocals.size === 0) return;
+    const seen = new Set<ValueType>();
+    const visit = (value: ValueType): void => {
+      if (seen.has(value)) return;
+      seen.add(value);
+      if ("name" in value && typeof value.name === "string" && this.typeOnlyImportLocals.has(value.name)) {
+        this.rejectTypeOnlyValueUse(value.name, errorSpan);
+        return;
+      }
+      if (value.kind === "optional") visit(value.inner);
+      else if (value.kind === "union") value.members.forEach(visit);
+      else if (value.kind === "list" || value.kind === "set") visit(value.element);
+      else if (value.kind === "map") {
+        visit(value.key);
+        visit(value.value);
+      } else if (value.kind === "record") visit(value.value);
+      else if (value.kind === "object") value.fields.forEach(visit);
+    };
+    visit(expected);
+  }
+
+  /** The type-only names a runtime type check would have to validate against. */
+  private rejectTypeOnlyRuntimeCheck(reference: TypeReference, errorSpan: Span): boolean {
+    if (this.typeOnlyImportLocals.size === 0) return false;
+    let rejected = false;
+    const visit = (syntax: TypeSyntax): void => {
+      switch (syntax.kind) {
+        case "NamedTypeSyntax":
+          if (this.rejectTypeOnlyValueUse(syntax.name, errorSpan)) rejected = true;
+          break;
+        case "EnumMemberTypeSyntax":
+          if (this.rejectTypeOnlyValueUse(syntax.enumName, errorSpan)) rejected = true;
+          break;
+        case "GenericTypeSyntax":
+          if (this.rejectTypeOnlyValueUse(syntax.name, errorSpan)) rejected = true;
+          for (const argument of syntax.arguments) visit(argument);
+          break;
+        case "ReadonlyTypeSyntax":
+        case "OptionalTypeSyntax":
+          visit(syntax.inner);
+          break;
+        case "UnionTypeSyntax":
+          for (const member of syntax.members) visit(member);
+          break;
+        case "FunctionTypeSyntax":
+          for (const parameter of syntax.parameters) visit(parameter.type);
+          visit(syntax.result);
+          break;
+      }
+    };
+    visit(reference.syntax);
+    return rejected;
+  }
+
   private rejectErasedRuntimeCheck(checked: ValueType, errorSpan: Span): boolean {
     if (typeContainsRuntimeTypeCheck(checked)) {
       this.diagnostics.push(diagnostic(
@@ -9086,6 +9187,7 @@ export class Analyzer implements TypeEnvironment {
         }
         const checked = this.resolveAnnotation(pattern.type);
         const valid = this.validateTypeReference(pattern.type);
+        if (valid && this.rejectTypeOnlyRuntimeCheck(pattern.type, pattern.type.span)) return invalidType;
         if (valid && this.rejectErasedRuntimeCheck(checked, pattern.type.span)) return invalidType;
         if (valid && input.kind !== "unknown" && !this.matchTypesOverlap(this.expandAliases(input), checked)) {
           this.typeError(`Type pattern ${describeType(checked)} can never match ${describeType(input)}`, pattern.span);

@@ -52,6 +52,14 @@ export interface ImportDeclaration {
   readonly sourceSpan: Span;
   readonly javascript: boolean;
   readonly unsafe: boolean;
+  /**
+   * D38 rule 49: `import type` names the module's types without importing its
+   * values. The names bind in type positions only, the edge does not
+   * participate in initialization order, and nothing is emitted for it.
+   */
+  readonly typeOnly: boolean;
+  /** The `type` marker's own span, so the fix that drops it knows what to delete. */
+  readonly typeMarkerSpan?: Span;
   readonly specifiers: readonly ImportSpecifier[];
   readonly span: Span;
 }
@@ -67,6 +75,8 @@ export interface ReExportDeclaration {
   readonly kind: "ReExportDeclaration";
   readonly source: string;
   readonly sourceSpan: Span;
+  /** D38 rule 49: `export type {Name} from "..."` re-exports types only. */
+  readonly typeOnly: boolean;
   readonly specifiers: readonly ReExportSpecifier[];
   readonly span: Span;
 }
