@@ -10,7 +10,8 @@ this document names the one to use. The compiler enforces most of the canon;
 and this page is that judgment, written down.
 
 The meta-rule above all others: **run `velar check` and do what the
-diagnostic says.** Diagnostics name the one current spelling; they are the
+diagnostic says**, then `velar fix` for the rewrites that are provably
+behavior-preserving. Diagnostics name the one current spelling; they are the
 canon's enforcement arm, and they outrank any memory of this page.
 
 ## 1. Model the data first

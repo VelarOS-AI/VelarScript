@@ -60,6 +60,7 @@ VelarScript-only protocol branch for language facts.
 - same-document occurrences;
 - document symbols;
 - safe rename;
+- quick fixes, from the same registered mechanical rewrites `velar fix` applies;
 - inferred-type inlay hints;
 - module-path navigation;
 - Core and Web extension semantics.

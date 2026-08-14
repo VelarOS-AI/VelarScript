@@ -187,34 +187,37 @@ attempts += 1
   loop binding's scope begins at the loop head, reading the iterable into a
   differently named binding earlier in the same scope stays legal.
 - Core bindings and the JavaScript host capabilities used directly by generated
-  runtime code cannot be shadowed. Extension conveniences follow ordinary
-  lexical lookup, so a local or imported `color` or `clamp` naturally wins.
+  runtime code cannot be shadowed. An extension's contextual keywords follow
+  ordinary lexical lookup, so a local `state` or `look` naturally wins.
   An extension may reserve an actual runtime entry point such as Web `mount` or
   `tick` when shadowing would make emitted behavior ambiguous.
 - Binding names beginning with `__velar`, case-insensitively, are
   reserved for hygienic generated helpers. Object fields and JavaScript
   property names are unaffected because they cannot capture a lexical helper.
 - Most declaration words are **contextual**, not reserved. `type`, `match`,
-  `case`, `from`, `as`, and every word the Web extension adds — `component`,
-  `state`, `resource`, `action`, `watch`, `look`, `keyframes`, `css`, `expose`,
-  `exposes` — are ordinary names anywhere a name can stand: a binding, a
-  parameter, a loop binding, a named argument, a record field, a member name,
-  and a record shorthand. Each becomes a declaration only in the shape that
-  declaration has, and nothing else can take that shape. Where the two readings
-  could compete, the name wins: `match(value)` calls a function, `state = 1`
-  assigns a binding, and `look.brand` reads a field. A Web module and a Core
-  module therefore accept exactly the same bindings.
+  `from`, `as`, `using`, `test`, and every word the Web extension adds —
+  `component`, `state`, `resource`, `action`, `watch`, `look`, `keyframes`,
+  `css`, `expose`, `exposes` — are ordinary names anywhere a name can stand: a
+  binding, a parameter, a loop binding, a named argument, a record field, a
+  member name, and a record shorthand. Each becomes a declaration only in the
+  shape that declaration has, and nothing else can take that shape. Where the
+  two readings could compete, the name wins: `match(value)` calls a function,
+  `state = 1` assigns a binding, and `look.brand` reads a field. `case` is
+  softened the same way everywhere a name is not being *bound* — a record
+  field, a member name, a `match` branch — but it cannot be a binding, because
+  JavaScript reserves it and the emitted module would not parse.
 - The words that stay reserved are the ones JavaScript reserves — including
-  `enum` — the operator words `in`, `is`, `and`, `or`, `not`, and the
+  `enum` and `case` — the operator words `in`, `is`, `and`, `or`, `not`, and the
   structural words `def`, `class`, `if`, `else`, `while`, `for`, `return`,
   `import`, `export`, `const`, `let`, `try`, `catch`, `finally`, `throw`,
   `async`, `await`, `assert`, `abstract`, `override`, `static`, `private`,
   `extern`, `unsafe`, `pass`, `break`, `continue`, `extends`, `super`, `self`,
   `constructor`, and `get`. Using one as a name is reported by name.
 - `@name` is the language's own namespace for members that stand where your
-  names stand: a component's `@mounted:` and `@cleanup:` blocks and a Look
-  block's `@hover`. `@` is not an identifier character, so a component can
-  declare `def mounted()` and an `@mounted:` hook without any collision.
+  names stand: a component's `@mounted:` and `@cleanup:` blocks, a class's
+  `@dispose:` block, and a Look block's `@hover`. `@` is not an identifier
+  character, so a component can declare `def mounted()` and an `@mounted:` hook
+  without any collision.
 
 ```velar
 const event = {type: "ping", from: "worker"}
@@ -586,7 +589,7 @@ or comma operators to place.
 | 8 | `* / %` | Left to right. `%` keeps JavaScript's sign, so `-3 % 2` is `-1`. |
 | 9 | `not`, unary `+ -` | Binds *looser* than `**`. |
 | 10 | `**` | Right to left, so `2 ** 3 ** 2` is `512`. |
-| 11 | `await` | Prefix, tighter than every operator above. |
+| 11 | `await`, `try` | Prefix, tighter than every operator above. `try` reaches exactly as far as `await` does — over the whole postfix chain that follows it, and no further. |
 | 12 | `()`, `.`, `?.`, `[]` | Postfix, left to right; the tightest level. |
 
 Two rows have consequences worth stating outright.
@@ -844,8 +847,8 @@ enums render their runtime string value, and non-finite numbers print
 honestly. Records, collections, functions, class instances, `unknown`, and
 `any` never convert implicitly: JavaScript string coercion would execute
 conversion hooks such as a `toString` field, so those values are rejected at
-compile time — `print(value)` inspects a value, and `Json.stringify(value)` from
-`velar/json` builds data text. `str(value)` and JSX text positions apply this
+compile time — `print(value)` inspects a value, and `Json.stringify(value)`
+builds data text. `str(value)` and JSX text positions apply this
 same contract.
 
 Optional access is explicit at each optional continuation:
@@ -1703,9 +1706,9 @@ JavaScript `Symbol.asyncIterator` protocol and not an implicit generator model.
 The JavaScript spelling `for await` is rejected with guidance to put the async
 marker before the Velar loop.
 
-`range(end)`, `range(start, end)`, and `range(start, end, step)` from
-`velar/collections` produce a stop-exclusive bounded `List<number>` for loops
-and ordinary List use. Negative steps count down and zero steps fail. Named
+`range(end)`, `range(start, end)`, and `range(start, end, step)` are prelude
+names that need no import; they produce a stop-exclusive bounded `List<number>`
+for loops and ordinary List use. Negative steps count down and zero steps fail. Named
 forms are `range(end=...)`, `range(start=..., end=...)`, and the same with
 `step=...`.
 
@@ -2002,7 +2005,10 @@ const body = try await load(url)
 failure anywhere in `try a().b().c()` produces one `null`. The result type is
 `T?`; an already-optional result stays itself, because failure and an absent
 value merge. `try try` is rejected, and so is a `try` whose expression produces
-`null` on success, since that result could not tell the two apart.
+`null` on success, since that result could not tell the two apart. A `try` over
+an un-awaited Promise is rejected for the same reason: it would catch only the
+failure of *producing* the Promise, never the rejection the caller means, so
+the guidance is to write `try await ...` and catch the real one.
 
 The result must be consumed: a bare `try` statement is rejected, because a
 swallowed failure with no visible consumer is exactly what this spelling must
@@ -2087,9 +2093,10 @@ export).
 
 An unused import is not an error and produces no warning. The language has no
 warning level, so an error on a name the author is about to use would shout in
-the middle of an edit; a future `velar fix` removes them mechanically instead.
-The import still runs the module, so a module imported only for its
-initialization side effects behaves exactly as written.
+the middle of an edit. `velar fix` does not remove one either: it applies only
+the rewrites a diagnostic registered, and there is no diagnostic here to
+register one. The import still runs the module, so a module imported only for
+its initialization side effects behaves exactly as written.
 
 An imported name is read-only in the receiving module, but an `export let`
 remains a live ES-module value: the exporting module can reassign it between
@@ -2265,9 +2272,12 @@ owned DOM construction rather than a hidden Core-language operation.
 The source package then exposes the following language extension. This list is
 the complete addition — ten contextual keywords, two lifecycle hooks, three
 reserved global functions, and the unit literals; nothing else in a Web module
-is new syntax. Every word here is contextual (section 3): it declares only in
-its own shape and remains available as an ordinary name, so the same source
-binds the same names in a Core module and a Web module:
+is new syntax. Every *contextual keyword* here declares only in its own shape
+and remains available as an ordinary name (section 3). The three reserved
+globals are the exception: `computed`, `mount`, and `tick` are real runtime
+entry points, so a Web module refuses them as binding names, as it does the
+media subjects `viewport`, `scheme`, and `motion` (section 17). Those six words
+are the whole difference between what a Core module and a Web module accept:
 
 - `component`, with `exposes` on its declaration and `expose` in its body
 - JSX expressions, including fragments and the `host` marker
@@ -2830,12 +2840,14 @@ undefined color or spacing token instead of guessing that it was a CSS word.
 
 ### Builders
 
-Look builders are ordinary named exports from `velar/look`, not magic names
-that appear only inside a `look:` block. Import only the functions a module
-uses; the functions may be aliased, passed to another function, returned, and
-called outside Look like any other VelarScript value.
+Look builders live on the permanent `Look.` namespace and need no import, and
+they are not magic names that appear only inside a `look:` block. A builder may
+be aliased (`const make = Look.rgb`), passed to another function, returned, and
+called outside Look like any other VelarScript value. `velar/look` remains an
+importable module only for its visual Type objects, such as `Length` and
+`Color`.
 
-The module provides a small checked builder set:
+The namespace provides a small checked builder set:
 
 - colors: `color`, `rgb`, `rgba`, `hsl`, `alpha`, `lighten`, `darken`
 - visuals: `border`, `shadow`, `linearGradient`, `asset`
@@ -3165,6 +3177,14 @@ an ordinary installable package with a `velar.entry` source entry and is
 imported by package name after npm installation. A library's implementation in
 portable VelarScript does not grant it a `velar/*` identity.
 
+A capability module states the host's real semantics rather than a comfortable
+approximation of them. **A watcher reports only the changes that happen after
+it is armed.** If you need to observe a change you are about to make, write
+first and then start watching, or query the state on both sides of the write.
+Arming is asynchronous on every host the language targets, so a watcher that
+promised to catch a change racing its own creation would be promising
+something no filesystem delivers.
+
 ## 19. Deliberately absent source features
 
 The following are not part of VelarScript:
@@ -3192,6 +3212,13 @@ The following are not part of VelarScript:
   callbacks, and JavaScript `for await` is guided to `async for`
 - JavaScript `splice`, `push`, `shift`, `unshift`, mutating `sort`, or mutating
   `reverse`
+- user-defined decorators or declaration annotations. VelarScript's decorators
+  are its modifier keywords — `export`, `abstract`, `override`, `static`,
+  `private`, `readonly`, `async` — and they come from a closed vocabulary the
+  compiler owns. A library that could change what a declaration means would put
+  the reader back to reading the library before reading the code; the same
+  reason forbids user-defined type-parameter bounds. New declaration markings
+  arrive as new modifier keywords, not as an extension point
 - magical JSX control-flow attributes
 - a public `effect` primitive
 - implicit global CSS
@@ -3327,13 +3354,16 @@ text uses `Json.stringify`.
 
 ## Core permanent namespaces and durations
 
-One rule decides this whole surface: **what a program can compute needs no
-import; what reaches outside the program must be imported.** An `import` line
-is therefore an audit of what a module touches, and pure computation never
-appears on one.
+Two rules decide this whole surface. **Purity decides whether a module *may*
+be permanent; universality decides whether it *should* be.** Anything that
+reaches outside the program must be imported, and a module that computes but
+that only some programs reach for keeps its import line, because every
+permanent name is a name every reader is assumed to know without being told.
+An `import` line is therefore both an audit of what a module touches and a
+statement that this program chose a particular toolbox.
 
-Four permanent namespaces carry that pure computation, and a program reaches
-every one of them without writing an import:
+Four permanent namespaces carry the pure computation nearly every program
+needs, and a program reaches every one of them without writing an import:
 
 | Namespace | Members |
 | --- | --- |
@@ -3342,7 +3372,13 @@ every one of them without writing an import:
 | `Text.` | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
 | `Look.` | the Web builder roster (`rgb`, `spacing`, `border`, and the rest of section 17) |
 
-The prelude adds `print`, `str`, `equals`, and `range` as bare names.
+The prelude adds `print`, `str`, `number`, `equals`, and `range` as bare names.
+
+`velar/collections`, `velar/math`, `velar/url`, and `velar/test` are pure too,
+and they stay behind an import on purpose: they are toolboxes a program
+deliberately reaches for rather than vocabulary every program already speaks.
+`velar/time`, `velar/id`, and `velar/log` reach the clock, entropy, and the
+outside world, so they are not even eligible.
 
 String methods and `Text.*` divide the way a hand divides from a toolbox:
 **a string method is a core operation** — the everyday members of section 5 —
@@ -3356,9 +3392,9 @@ half. `Text.fromCodePoint(value)` is its inverse and refuses a surrogate half,
 so no call can build text that is not a sequence of characters.
 
 A lexical declaration may shadow any permanent namespace, and imports remain
-the contract for capability-bearing modules. Named imports of these permanent
-members are retired and receive a diagnostic that teaches the namespace
-spelling.
+the contract for capability-bearing modules. Both spellings that reach these
+permanent members are retired — the named import and the namespace import —
+and each receives a diagnostic that teaches the namespace spelling.
 
 `Duration` is a Core value type written with `ms` or `s`. Core async timing and
 Web `after`/`every` accept `Duration`, never a bare number. Duration addition,

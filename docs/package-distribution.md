@@ -19,8 +19,8 @@ VelarScript domain-library packages through npm:
   system-WebView host, deterministic headless tests, and auditable small-bundle
   packaging without exposing renderer/main or IPC concepts to source code.
 - `create-velar`: the lightweight, transactional `npm create velar` entry and
-  the single authority for `web`, `docs`, `library`, and reusable Web
-  `component` templates.
+  the single authority for the `web`, `node`, `desktop`, `docs`, `library`, and
+  reusable Web `component` templates.
 - `@velarscript/cli`: `velar` CLI, project tooling, development server, test
   runners, npm-backed dependency workflow, production builder/local and remote
   verifiers/preview server, and LSP server.

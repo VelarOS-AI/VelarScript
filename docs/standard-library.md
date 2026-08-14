@@ -16,9 +16,13 @@ minimal orthogonal capability primitive for interacting with the outside world.
 Domain functionality such as editor, game, or chart tooling is always an
 installable library, even when it is implemented entirely in VelarScript.
 
-- **What a program can compute needs no import; what reaches outside the
-  program must be imported.** An `import` line is an audit of what a module
-  touches, so pure computation never appears on one.
+- **Purity decides whether a module *may* be permanent; universality decides
+  whether it *should* be.** Anything that reaches outside the program must be
+  imported. A module that only computes but that only some programs reach for
+  keeps its import line too, because every permanent name is a name every
+  reader is assumed to know unprompted. An `import` line is therefore both an
+  audit of what a module touches and a statement of which toolbox this program
+  chose.
 - Everyday value operations live on checked string, number, and collection
   members. Nothing patches JavaScript prototypes or creates new global names.
 - Implementation language does not determine membership. Reusable domain
@@ -39,7 +43,7 @@ installable library, even when it is implemented entirely in VelarScript.
   functions. Their documented parameter names are part of the checked API and
   editor signature help; source expressions still evaluate left to right.
 - A positional overload or pure rest call has no invented keyword surface.
-  `range`, `randomInt`, numeric `min`/`max`, and URL `join` therefore stay
+  `randomInt`, numeric `min`/`max`, and URL `join` therefore stay
   positional, matching the familiar operation they represent.
 - Every API that requires `List<T>` enforces the same dense, field-free,
   mutable data-element List boundary used by the language runtime. Sparse or
@@ -92,7 +96,7 @@ installable library, even when it is implemented entirely in VelarScript.
 - Core Node builds copy only imported official modules beside the generated
   output. Portable modules also bundle and tree-shake in Web builds. Local
   platform modules (`velar/serve`, `velar/fs`, `velar/env`, `velar/host`,
-  `velar/terminal`) are
+  `velar/terminal`, `velar/path`, `velar/process`) are
   compile-time rejected for Web targets with platform-specific guidance.
 - Resource-producing APIs are bounded contracts, not best-effort host calls.
   A List contains at most 1,000,000 items; text and encoded JSON are limited to
@@ -106,17 +110,25 @@ installable library, even when it is implemented entirely in VelarScript.
 
 **Permanent pure computation — no import.** `Json.`, `Promise.`, `Text.`, and
 (on Web) `Look.` are always in scope, alongside the prelude names `print`,
-`str`, `equals`, and `range`. Named imports of their members are retired and
-receive a diagnostic that teaches the namespace spelling.
+`str`, `number`, `equals`, and `range`. Both spellings that reach a permanent
+member are retired — the named import and the namespace import — and each
+receives a diagnostic that teaches the namespace spelling.
 
-**Everything else is imported.** That includes the remaining pure modules —
-`velar/collections`, `velar/math`, `velar/url`, `velar/time`, `velar/id`,
-`velar/log`, `velar/test` — whose functions stay behind an import because their
-names are ordinary vocabulary a program is free to own, and every capability
-module: `velar/fs`, `velar/path`, `velar/process`, `velar/env`, `velar/host`,
-`velar/serve`, `velar/terminal`, `velar/http`, and the Web modules documented in
-`web-api.md`. For a capability the import line is the audit signal, so it never
-becomes permanent for convenience.
+**Everything else is imported**, for one of two reasons.
+
+*Pure, but not universal:* `velar/collections`, `velar/math`, `velar/url`, and
+`velar/test` compute and touch nothing, so they would be eligible; they keep
+their import line because they are toolboxes a program deliberately reaches
+for, not vocabulary every program already speaks. One import line says "I chose
+this toolbox", which is information worth keeping.
+
+*Not pure:* `velar/time` reads the clock, `velar/id` reads entropy, and
+`velar/log` writes to the outside world, so none is even eligible.
+
+*Capabilities:* `velar/fs`, `velar/path`, `velar/process`, `velar/env`,
+`velar/host`, `velar/serve`, `velar/terminal`, `velar/http`, and the Web
+modules documented in `web-api.md`. For a capability the import line is the
+audit signal, so it never becomes permanent for convenience.
 
 ## `velar/collections`
 
@@ -137,7 +149,7 @@ VelarScript `null` before becoming observable.
 
 | Export | Behavior |
 | --- | --- |
-| `range` | Stop-exclusive bounded `List<number>` via `range(end)`, `range(start, end)`, or `range(start, end, step)`; negative steps count down and zero/tiny non-advancing steps fail. |
+| `range` (prelude, no import) | Stop-exclusive bounded `List<number>` via `range(end)`, `range(start, end)`, or `range(start, end, step)`; negative steps count down and zero/tiny non-advancing steps fail. Importing it is an error that teaches the bare name. |
 | `enumerate` | Returns `{index, value}` entries, with an optional integer start. |
 | `zip` | Pairs two lists as `{first, second}` up to the shorter length. |
 | `unique` | Keeps the first value for each JavaScript `Set` identity. |
@@ -176,7 +188,10 @@ one named-call contract, and ordinary List reuse; it does not hide a second
 lazy object behind a call-shape optimization.
 
 Ordering never uses JavaScript's mixed-type relational coercion. The compiler
-rejects known boolean/record/optional/mixed key results, dynamic keys are
+rejects known boolean/record/optional/mixed key results and enum keys — an enum
+carries no runtime order, so the diagnostic teaches `sorted(by=rank)` or a
+string-backed enum whose values encode the order. A type parameter bounded by
+`Comparable` is accepted. Dynamic keys are
 checked before comparison, and equal-key input order is retained even for
 descending sorts. `find`, `partition`, `some`, and `every` require an
 actual `bool` result at dynamic boundaries.
@@ -192,7 +207,8 @@ the captured operation.
 ## `Text.` (permanent, no import)
 
 Common string operations are checked members: `size`, `trim`, `upper`, `lower`,
-`slice`, `char`, `has`, `index`, `count`, `startsWith`, `endsWith`, `split`, `replace`,
+`slice`, `char`, `has`, `index`, `count`, `startsWith`, `endsWith`, `isBlank`,
+`split`, `replace`,
 `replaceAll`, `repeat`, `padStart`, and `padEnd`. The compiler lowers them to
 bounded helpers rather than trusting JavaScript prototype methods. They support
 named arguments and first-class binding exactly like collection methods.
@@ -386,16 +402,21 @@ cannot present one value for validation and a different value to the serializer.
 Parsed host results are copied through the same boundary, and the serializer's
 return value must be actual text.
 
-## `velar/async`
+## `Promise.` (permanent, no import)
 
-| Export | Behavior |
+| Member | Behavior |
 | --- | --- |
-| `sleep` | Resolves after a non-negative millisecond duration. |
-| `all`, `race` | Typed Promise-list equivalents of JavaScript `Promise.all` and `Promise.race`. A runtime-empty `race` List throws `RangeError("race requires at least one Promise")` — an empty race would never settle. |
-| `timeout` | Rejects if a Promise does not settle before a duration; accepts an optional message. |
-| `retry` | Runs a zero-argument sync/async task again after failure, up to the retry count. |
+| `sleep` | Resolves after a non-negative `Duration` (`250ms`, `1s`). |
+| `all` | Awaits a `List` of Promises to a `List` of results, or a **record** of Promises to a record of the same shape. A List whose elements resolve to different types is rejected in favour of the record form, so every result keeps a name. |
+| `race` | Settles with the first Promise in a List to settle. A runtime-empty `race` List throws `RangeError("race requires at least one Promise")` — an empty race would never settle. |
+| `timeout` | Rejects if a Promise does not settle before a `Duration`; accepts an optional message. |
+| `retry` | Runs a zero-argument sync/async task again after failure, up to the retry count, waiting an optional `Duration` between attempts. |
 | `map` | Maps a list with a sync/async worker and optional positive concurrency limit while preserving result order. |
 | `series` | Runs a list of zero-argument sync/async tasks sequentially. |
+
+`Promise.` is always in scope. Both spellings that reach these members through
+`velar/async` — the named import and the namespace import — are retired and
+receive a diagnostic that teaches the namespace spelling.
 
 These helpers use the host Promise queue. They do not create threads, cancel a
 Promise, or replace the JavaScript event loop. Their List arguments use the
@@ -412,7 +433,7 @@ at most 10,000 attempts, and timer durations stay within the signed 32-bit host
 timer range.
 
 Short asynchronous workers use the language's expression arrow directly, for
-example `await map(urls, async url => await load(url))`. Its inferred result is
+example `await Promise.map(urls, async url => await load(url))`. Its inferred result is
 `Promise<T>`; ordinary synchronous callbacks and named `async def` workflows
 remain available for expression and block bodies respectively. All async forms
 share native Promise adoption: a named async worker declared `-> T` may return
@@ -604,6 +625,14 @@ points Web code to the application dev server and the browser target of
 independently reusable `@velarscript/node` package; the CLI only composes that
 extension for local programs.
 
+**Errors these modules raise.** Only `velar/fs`, `velar/serve`, and
+`velar/http` name their own error classes, because only their failures have
+more than one recovery. Every failure of `velar/path`, `velar/process`,
+`velar/env`, `velar/host`, and `velar/terminal` — a wrong argument, an exceeded
+budget, an unusable host — has exactly one recovery, which is to change the
+code, so each arrives as an ordinary `Error`. A class exists only where a
+caller would write different recovery for it.
+
 ### `velar/serve`
 
 `serve(handler, port, host="127.0.0.1")` binds an HTTP server and resolves to a
@@ -727,6 +756,17 @@ absolute, sorted, and deduplicated; an unknown native filename or exhaustion of
 the 4,096-path/2 MiB queue becomes `{paths: [], rescan: true}`. Each host owns
 at most 128 watchers. Native failure is terminal, and callers explicitly close
 the watcher when its consumer stops.
+
+**A watcher reports only the changes that happen after it is armed.**
+`watchFiles` resolves when the request is accepted, not when the host has
+finished arming its native stream, and the stream begins at the moment arming
+completes. A change written between those two points can therefore never
+arrive — measured on macOS FSEvents under load, 4 of 40 notifications were
+lost, one with a 25-second window. This is the real semantics of every
+filesystem watcher, so the module states it rather than pretending to erase it.
+If you need to observe a change you are about to make, **write first and then
+start watching**, or query the state on both sides of the write. A watcher is
+for changes another actor makes; it is not a delivery receipt for your own.
 `createText` is the no-clobber primitive for generated files, approvals, and
 other check-then-create workflows. Its exclusive-create decision and file
 creation are one host operation; callers must not emulate it with
@@ -1165,11 +1205,13 @@ test "a profile keeps its declared name and tags":
     expect(profile).toEqual({name: "Ada", tags: ["compiler", "web"]})
 ```
 
-- `toBe` uses exact identity/value equality; `toEqual` uses a bounded
-  JSON-shaped data comparison: it compares records and Lists recursively, Map
-  values by native key identity and Sets by native membership, and answers
-  `false` for a distinct cycle. It is not the prelude `equals`, which is
-  stricter (see `Json.`).
+- `toBe` uses exact identity/value equality; `toEqual` **is** the prelude
+  `equals(a, b)` — the same implementation, not a matching one. An assertion
+  that disagreed with the language's own equality would be the worst kind of
+  trap, so there is only one comparison and `toEqual` calls it. It therefore
+  inherits everything `equals` does, including structural Set members and Map
+  keys, `NaN` equal to itself, and a refusal — rather than a quiet `false` —
+  for cyclic or over-deep data.
 - `toBeTruthy` and `toBeFalsy` require actual `true` and `false`, rather than
   JavaScript truthiness. `toContain` accepts text or a dense List, and
   `toHaveLength` accepts text or a dense List.
@@ -1191,7 +1233,7 @@ test "a profile keeps its declared name and tags":
 ## Deliberate omissions
 
 Standard API 0.5 deliberately keeps shells, sockets below the checked server
-abstraction, filesystem streams/watchers, recursive deletion, byte inspection,
+abstraction, filesystem streams, recursive deletion, byte inspection,
 reflection, pickle, dynamic import machinery, and JavaScript's legacy prototype
 surface out of Core. Process execution and filesystem mutation live in
 explicit Node or Desktop target extensions rather than ambient Core globals.

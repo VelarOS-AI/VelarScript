@@ -6,6 +6,14 @@ truth for acceptance status.
 
 ## Unreleased
 
+- `toEqual` in `velar/test` is now the language's own `equals`, not a second
+  implementation that disagreed with it on NaN and on Sets of records — an
+  assertion that answers differently from the language it tests is the worst
+  trap a test framework can carry. A boundary invariant keeps a second
+  comparison from reappearing. Namespace imports of retired modules get the
+  same migration diagnostic their named imports already had, and the file
+  watcher's arming semantics are documented: it reports only changes that
+  happen after it starts.
 - Errors are discriminable by class, and `error.code` is that class's name —
   one taxonomy with a string projection rather than a parallel code table.
   Five environment failures that a caller recovers from differently get

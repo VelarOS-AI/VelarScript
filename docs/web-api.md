@@ -215,11 +215,11 @@ Visual unit suffixes are language syntax and require no import. `px`, `rem`,
 `fr` is TrackFraction; `ms` and `s` are Duration; `deg` and `turn` are Angle.
 They can be bound, exported, imported, and calculated outside a `look:` block.
 
-The constructors are ordinary named module functions:
+The builders live on the permanent `Look.` namespace and need no import.
+`velar/look` remains importable only for its visual Type objects — `Length`,
+`LengthPercentage`, `Color`, and the rest of the published vocabulary:
 
 ```velar
-
-
 export const compact = 40rem
 const accent = Look.rgb(45, 79, 190)
 const fluidWidth: LengthPercentage = 100% - 32px
@@ -234,12 +234,12 @@ export const panelLook = look:
         padding = 12px
 ```
 
-Available named functions are `color`, `rgb`, `rgba`, `hsl`, `alpha`,
+The available `Look.` builders are `color`, `rgb`, `rgba`, `hsl`, `alpha`,
 `lighten`, `darken`, `border`, `shadow`, `linearGradient`, `asset`, `minmax`,
 `repeat`, `tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and
-`clamp`. Because
-they are module values, aliases and higher-order use retain the same checked
-signature. There are no implicit Look builder globals.
+`clamp`. Each is an ordinary value, so `const make = Look.rgb` aliases it and
+higher-order use retains the same checked signature. Importing one by name from
+`velar/look` is retired and teaches the namespace spelling.
 
 Visual addition and subtraction require compatible dimensions. Length mixed
 with Percentage produces LengthPercentage; mixed units lower to `calc(...)`.
@@ -1386,10 +1386,12 @@ component LiveStatus:
 
 `expect(value)` provides typed `toBe`, `toEqual`, `toBeTruthy`, `toBeFalsy`,
 `toContain`, `toMatch`, `toHaveLength`, `toThrow`, and `toReject` matchers.
-`toEqual` uses a bounded JSON-shaped data comparison: it does not
-invent a test-only structural model, invoke record getters, accept sparse Lists,
-or treat distinct class instances/cycles as equal. It is not the prelude
-`equals`, which is stricter about Set members, Map keys, `NaN`, and cycles.
+`toEqual` **is** the prelude `equals(a, b)` — one implementation, not a
+matching one, so an assertion can never answer differently from the language it
+is testing. It therefore invents no test-only structural model, invokes no
+record getter, accepts no sparse List, treats no distinct class instance as
+equal, and refuses cyclic or over-deep data outright instead of quietly
+answering `false`.
 `toBe` follows VelarScript `==` value/reference semantics. The truthy/falsy spellings
 accept only actual booleans; they do not reintroduce JS truthiness. Specialized
 matchers are exposed only for compatible checked subjects, then validate the
@@ -1418,7 +1420,10 @@ test "the home page renders at the root route":
 The `browser` controller intentionally exposes a compact automation surface:
 `open`, `reload`, `click`, `fill`, `select`, `press`, `scroll`, `text`, `attribute`, `namespace`, `count`,
 `visible`, `waitFor`, `waitForText`, `currentPath`, `viewport`, `timings`,
-`measureClick`, `measureFill`, and `measurePress`. It is not a
+`animation`, `measureClick`, `measureFill`, and `measurePress`.
+`animation(selector)` answers `{name, rotating}` for the element's running
+animation, so a keyframes declaration can be asserted without reading computed
+style. It is not a
 DOM or Playwright escape hatch. The CLI builds a real CSP production site,
 starts an isolated local host, creates a fresh browser context for each test,
 and automatically fails on page errors or error/warning console messages.

@@ -1542,6 +1542,11 @@ function importInterface(
 
     for (const specifier of dependency.specifiers) {
       if (specifier.namespace) {
+        // D50 rule 97.3: a namespace import reaches every retired member at
+        // once, so it retires with them. Leaving this spelling alive would
+        // mean the retirement never happened.
+        const retirement = permanentNamespaceImportMessage(dependency.source, interface_, null);
+        if (retirement) failures.push({ path: module.inputPath, message: retirement });
         if (interface_.reactiveExports.size > 0 || interface_.mutableExports.size > 0) {
           failures.push({
             path: module.inputPath,
@@ -1570,12 +1575,19 @@ function importInterface(
     }
 }
 
-function permanentNamespaceImportMessage(source: string, interface_: ModuleInspection["moduleInterface"], imported: string): string | null {
+/**
+ * The migration a retired import spelling earns. `imported` is the specifier's
+ * name, or null for the namespace form — which reaches every member the named
+ * form reaches and therefore retires on the same terms (D50 rule 97.3).
+ */
+function permanentNamespaceImportMessage(source: string, interface_: ModuleInspection["moduleInterface"], imported: string | null): string | null {
   if (source === "velar/collections" && imported === "range") {
     return "Use range(...) directly; the Core prelude needs no import";
   }
   const namespace = interface_.permanentNamespace;
-  if (!namespace?.members.has(imported)) return null;
+  if (!namespace) return null;
+  if (imported === null) return `Use ${namespace.name} directly; VelarScript's pure namespaces need no import`;
+  if (!namespace.members.has(imported)) return null;
   return `Use ${namespace.name}.${imported} directly; VelarScript's pure namespaces need no import`;
 }
 

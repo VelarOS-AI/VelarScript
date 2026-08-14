@@ -95,12 +95,14 @@ dependency and consumer peer contract. Assertions come from `velar/test`.
 Browser automation is a Web extension surface imported from `velar/web-test`
 and runs only through `velar test --browser`.
 
-`velar run [entry.vel | project-directory] [-- <program-arguments>...]`
+`velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]`
 compiles the resolved Core module graph and executes its entry module once on
 Node.js with inherited stdio; the program's exit code becomes the command's
 exit code, arguments after `--` reach the program through `process.argv`, and
 stack traces map back to `.vel` sources. Entry resolution mirrors
-`velar check`. Projects that enable a web application framework are rejected
+`velar check`. An uncaught program error is presented as a VelarScript failure
+with the `.vel` frame that raised it; `--stack` prints the full Node.js trace
+instead. Projects that enable a web application framework are rejected
 and belong to `velar dev` and `velar build`.
 
 The command remains the lifecycle owner of that compiled child. Its first

@@ -4,18 +4,21 @@ Status: VelarScript 0.10 internal gate; publishing remains absent
 
 The repository defines three GitHub Actions workflows:
 
-- `VelarScript CI` runs Node 24 check, tests, and packed-package consumer validation
+- `Velar CI` runs Node 24 check, tests, and packed-package consumer validation
   on Linux, macOS, and Windows. A separate Linux job installs Playwright's
   Chromium, Firefox, and WebKit dependencies and runs both development-server
   and CSP-enabled production browser matrices, the project-owned
   `.browser.test.vel` suite in all engines, and the same generated browser test
-  through packed installed compiler/Node/Web/Desktop/creator/CLI tarballs. Browser-project execution
+  through the eight packed installed tarballs (compiler, Node, Web, Desktop,
+  creator, CLI, text-buffer, and script-analysis). Browser-project execution
   first verifies the exact production asset inventory and uses the public
   preview server.
 - The check gate extracts every `velar` fence from README, package guides, and
-  language/API documentation. Complete examples must compile with the real Web
-  extension and standard modules; explicitly marked `fragment` blocks must
-  still pass the real lexer and parser. Project scaffolds are compiled again by
+  language/API documentation. Every block — complete or `fragment` — is compiled as a whole module under
+  full project analysis with the real Web extension and standard modules. A
+  `fragment` is excused only from the surrounding context it deliberately
+  omits; a type error or a Web-semantic rejection fails the gate in a fragment
+  exactly as in a complete example. Project scaffolds are compiled again by
   packed-package consumer acceptance.
 - The checked-in Release Studio imports all ten public Web modules from real
   `.vel` source. Its realtime acceptance path creates WebSocket and server-sent

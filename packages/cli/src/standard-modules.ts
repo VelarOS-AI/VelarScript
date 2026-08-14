@@ -286,7 +286,14 @@ export function standardModuleInterface(source: string, extensions: readonly Com
   return coreModuleInterfaces.get(source) ?? null;
 }
 
-const deepEqualRuntime = String.raw`
+/** The Core comparison, reached for rather than restated (D50 rule 97.2). */
+const collectionLoweringImport = `import { __velarEquals } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;
+
+// Structure walkers shared by the assertion reporter. Content comparison is
+// deliberately absent: D50 rule 97.2 makes `toEqual` call the language's own
+// `equals`, so a second comparison implementation cannot exist here to
+// disagree with it.
+const testDisplayRuntime = String.raw`
 const __velarDeepNativeArray = globalThis.Array;
 const __velarDeepNativeMap = globalThis.Map;
 const __velarDeepNativeSet = globalThis.Set;
@@ -298,7 +305,6 @@ const __velarDeepGetOwnPropertySymbols = __velarDeepNativeObject.getOwnPropertyS
 const __velarDeepGetPrototypeOf = __velarDeepNativeObject.getPrototypeOf;
 const __velarDeepObjectPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeObject, "prototype")?.value;
 const __velarDeepArrayIsArray = __velarDeepNativeArray.isArray;
-const __velarDeepSymbolFor = globalThis.Symbol.for;
 const __velarDeepApply = __velarDeepGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
 const __velarDeepArrayPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeArray, "prototype")?.value;
 const __velarDeepMapPrototype = __velarDeepGetOwnPropertyDescriptor(__velarDeepNativeMap, "prototype")?.value;
@@ -307,11 +313,8 @@ const __velarDeepWeakSetPrototype = __velarDeepGetOwnPropertyDescriptor(__velarD
 const __velarDeepArraySort = __velarDeepGetOwnPropertyDescriptor(__velarDeepArrayPrototype, "sort")?.value;
 const __velarDeepMapSize = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "size")?.get;
 const __velarDeepMapEntries = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "entries")?.value;
-const __velarDeepMapHas = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "has")?.value;
-const __velarDeepMapGet = __velarDeepGetOwnPropertyDescriptor(__velarDeepMapPrototype, "get")?.value;
 const __velarDeepSetSize = __velarDeepGetOwnPropertyDescriptor(__velarDeepSetPrototype, "size")?.get;
 const __velarDeepSetValues = __velarDeepGetOwnPropertyDescriptor(__velarDeepSetPrototype, "values")?.value;
-const __velarDeepSetHas = __velarDeepGetOwnPropertyDescriptor(__velarDeepSetPrototype, "has")?.value;
 const __velarDeepWeakSetHas = __velarDeepGetOwnPropertyDescriptor(__velarDeepWeakSetPrototype, "has")?.value;
 const __velarDeepWeakSetAdd = __velarDeepGetOwnPropertyDescriptor(__velarDeepWeakSetPrototype, "add")?.value;
 const __velarDeepWeakSetDelete = __velarDeepGetOwnPropertyDescriptor(__velarDeepWeakSetPrototype, "delete")?.value;
@@ -320,11 +323,6 @@ const __velarDeepMapIteratorNext = __velarDeepGetOwnPropertyDescriptor(__velarDe
 const __velarDeepSetIterator = __velarDeepApply(__velarDeepSetValues, new __velarDeepNativeSet(), []);
 const __velarDeepSetIteratorNext = __velarDeepGetOwnPropertyDescriptor(__velarDeepGetPrototypeOf(__velarDeepSetIterator), "next")?.value;
 function __velarDeepCall(operation, receiver, arguments_) { return __velarDeepApply(operation, receiver, arguments_); }
-function __velarDeepEqualRaw(value) {
-  const descriptor = __velarDeepGetOwnPropertyDescriptor(globalThis, __velarDeepCall(__velarDeepSymbolFor, undefined, [${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}]));
-  const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
-  return runtime && runtime.version === ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} && typeof runtime.toRaw === "function" ? runtime.toRaw(value) : value;
-}
 function __velarPlainRecord(value) { const prototype = __velarDeepGetPrototypeOf(value); return prototype === __velarDeepObjectPrototype || prototype === null; }
 function __velarDenseList(value) {
   if (!__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [value]) || value.length > 1000000
@@ -352,60 +350,6 @@ function __velarDataRecordKeys(value) {
   return keys;
 }
 function __velarDeepIteratorValue(iterator, next) { const step = __velarDeepCall(next, iterator, []); const done = __velarDeepGetOwnPropertyDescriptor(step, "done"); if (!done || !("value" in done) || typeof done.value !== "boolean") return { invalid: true }; if (done.value) return null; const value = __velarDeepGetOwnPropertyDescriptor(step, "value"); return !value || !("value" in value) ? { invalid: true } : { invalid: false, value: value.value }; }
-function __velarEqualValue(left, right, leftActive, rightActive, depth = 0) {
-  const reactive = (() => { const descriptor = __velarDeepGetOwnPropertyDescriptor(globalThis, __velarDeepCall(__velarDeepSymbolFor, undefined, [${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}])); return descriptor && "value" in descriptor ? descriptor.value : null; })();
-  if (reactive && reactive.version === ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)} && typeof reactive.trackDeep === "function") { reactive.trackDeep(left); reactive.trackDeep(right); }
-  left = __velarDeepEqualRaw(left); right = __velarDeepEqualRaw(right);
-  if (left === right) return true;
-  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
-  if (depth >= 512) return false;
-  if (__velarDeepCall(__velarDeepWeakSetHas, leftActive, [left]) || __velarDeepCall(__velarDeepWeakSetHas, rightActive, [right])) return false;
-  __velarDeepCall(__velarDeepWeakSetAdd, leftActive, [left]); __velarDeepCall(__velarDeepWeakSetAdd, rightActive, [right]);
-  try {
-    if (__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [left]) || __velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [right])) {
-      if (!__velarDenseList(left) || !__velarDenseList(right) || left.length !== right.length) return false;
-      for (let index = 0; index < left.length; index += 1) {
-        const leftValue = __velarDeepGetOwnPropertyDescriptor(left, index).value;
-        const rightValue = __velarDeepGetOwnPropertyDescriptor(right, index).value;
-        if (!__velarEqualValue(leftValue, rightValue, leftActive, rightActive, depth + 1)) return false;
-      }
-      return true;
-    }
-    const leftMapSize = __velarMapSize(left);
-    const rightMapSize = __velarMapSize(right);
-    if (leftMapSize !== null || rightMapSize !== null) {
-      if (leftMapSize === null || rightMapSize === null || leftMapSize !== rightMapSize) return false;
-      const iterator = __velarDeepCall(__velarDeepMapEntries, left, []);
-      while (true) {
-        const item = __velarDeepIteratorValue(iterator, __velarDeepMapIteratorNext);
-        if (item === null) break;
-        if (item.invalid || !__velarDeepCall(__velarDeepArrayIsArray, __velarDeepNativeArray, [item.value]) || item.value.length !== 2) return false;
-        const key = __velarDeepGetOwnPropertyDescriptor(item.value, 0)?.value;
-        const value = __velarDeepGetOwnPropertyDescriptor(item.value, 1)?.value;
-        if (!__velarDeepCall(__velarDeepMapHas, right, [key])
-          || !__velarEqualValue(value, __velarDeepCall(__velarDeepMapGet, right, [key]), leftActive, rightActive, depth + 1)) return false;
-      }
-      return true;
-    }
-    const leftSetSize = __velarSetSize(left);
-    const rightSetSize = __velarSetSize(right);
-    if (leftSetSize !== null || rightSetSize !== null) {
-      if (leftSetSize === null || rightSetSize === null || leftSetSize !== rightSetSize) return false;
-      const iterator = __velarDeepCall(__velarDeepSetValues, left, []);
-      while (true) { const item = __velarDeepIteratorValue(iterator, __velarDeepSetIteratorNext); if (item === null) break; if (item.invalid || !__velarDeepCall(__velarDeepSetHas, right, [item.value])) return false; }
-      return true;
-    }
-    const leftKeys = __velarDataRecordKeys(left);
-    const rightKeys = __velarDataRecordKeys(right);
-    if (!leftKeys || !rightKeys) return false;
-    if (leftKeys.length !== rightKeys.length) return false;
-    for (let index = 0; index < leftKeys.length; index += 1) { const key = leftKeys[index]; if (key !== rightKeys[index] || !__velarEqualValue(__velarDeepGetOwnPropertyDescriptor(left, key).value, __velarDeepGetOwnPropertyDescriptor(right, key).value, leftActive, rightActive, depth + 1)) return false; }
-    return true;
-  } finally {
-    __velarDeepCall(__velarDeepWeakSetDelete, leftActive, [left]); __velarDeepCall(__velarDeepWeakSetDelete, rightActive, [right]);
-  }
-}
-function __velarDeepEqual(left, right) { return __velarEqualValue(left, right, new __velarDeepNativeWeakSet(), new __velarDeepNativeWeakSet()); }
 `.trimStart();
 
 const listRuntime = String.raw`
@@ -1912,7 +1856,8 @@ export function useSink(sink) {
 }
 `.trimStart()],
   ["velar/test", String.raw`
-${deepEqualRuntime}
+${collectionLoweringImport}
+${testDisplayRuntime}
 const __velarTestNativeString = globalThis.String;
 const __velarTestNativeNumber = globalThis.Number;
 const __velarTestNativePromise = globalThis.Promise;
@@ -2007,7 +1952,9 @@ function display(value, state = null) {
 export function expect(actual) {
   return __velarDeepCall(__velarTestFreeze, __velarDeepNativeObject, [{
     toBe(expected) { if (actual !== expected) throw new __velarTestNativeError("Expected " + display(actual) + " to be " + display(expected)); },
-    toEqual(expected) { if (!__velarDeepEqual(actual, expected)) throw new __velarTestNativeError("Expected " + display(actual) + " to deeply equal " + display(expected)); },
+    // D50 rule 97.2: the assertion asks the language, so 'toEqual' and
+    // 'equals(a, b)' can never give different answers.
+    toEqual(expected) { if (!__velarEquals(actual, expected)) throw new __velarTestNativeError("Expected " + display(actual) + " to deeply equal " + display(expected)); },
     toBeTruthy() { if (actual !== true) throw new __velarTestNativeError("Expected bool true but received " + display(actual)); },
     toBeFalsy() { if (actual !== false) throw new __velarTestNativeError("Expected bool false but received " + display(actual)); },
     toContain(expected) {
@@ -2056,13 +2003,17 @@ export function expect(actual) {
 ]);
 
 /**
- * Implementation-only edges between compiler-owned JavaScript modules.
- * Public ModuleInterface dependencies remain source-level VelarScript imports;
- * this graph only guarantees that unbundled targets materialize every hidden
- * runtime module needed by a generated module.
+ * Implementation-only edges onto compiler-owned JavaScript modules. Public
+ * ModuleInterface dependencies remain source-level VelarScript imports; this
+ * graph only guarantees that unbundled targets materialize every hidden
+ * runtime module a generated or standard module reaches for. A standard
+ * module may appear on the left when it reuses a Core runtime algorithm
+ * rather than restating it.
  */
 const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
+  // D50 rule 97.2: 'toEqual' is the language's own equals(a, b).
+  ["velar/test", [VELAR_COLLECTION_LOWERING_MODULE] as readonly string[]],
 ]);
 
 export function standardModuleSources(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, string> {

@@ -438,7 +438,7 @@ for (const phrase of [
 if (/\b(?:chromium|firefox|webkit|browserType)\.launch\s*\(/u.test(browserTestRunnerSource + "\n" + browserAcceptanceSource)) {
   failures.push("Browser gates use an opaque Playwright launch instead of an explicit BrowserServer owner");
 }
-const coreDeepEqualRuntimeSource = constantSource(standardModulesSource, "deepEqualRuntime", "\n\nconst listRuntime");
+const coreTestDisplayRuntimeSource = constantSource(standardModulesSource, "testDisplayRuntime", "\n\nconst listRuntime");
 const webFoundationSource = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");
 const desktopNativeHostSource = await readFile(join(root, "packages", "desktop", "native", "macos", "VelarDesktopHost.swift"), "utf8");
 const desktopWorkerSource = await readFile(join(root, "packages", "desktop", "native", "node", "worker.js"), "utf8");
@@ -1695,11 +1695,11 @@ for (const phrase of [
   "const __velarDeepWeakSetDelete =",
   "function __velarDeepCall(operation, receiver, arguments_)",
 ]) {
-  if (!coreDeepEqualRuntimeSource.includes(phrase)) failures.push(`packages/cli: deepEqual runtime is missing captured graph operation '${phrase}'`);
+  if (!coreTestDisplayRuntimeSource.includes(phrase)) failures.push(`packages/cli: test display runtime is missing captured graph operation '${phrase}'`);
 }
 if (!coreJsonModuleSource.includes("__velarJsonApply(__velarJsonArraySort, keys")) failures.push("packages/cli: velar/json stableStringify must consume the compiler-owned captured JSON sort ABI");
-if (/\b(?:Array|Map|Set|WeakSet|Object|Reflect|Symbol)\.(?:isArray|entries|values|has|get|sort|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|for)\s*\(|\bnew (?:WeakSet|TypeError|RangeError)\b|\.(?:has|add|delete|entries|values|sort|every|call)\s*\(/u.test(coreDeepEqualRuntimeSource + "\n" + coreJsonModuleSource)) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/json or deepEqual bypasses its captured graph, order, reflection, Type, or Error ABI");
+if (/\b(?:Array|Map|Set|WeakSet|Object|Reflect|Symbol)\.(?:isArray|entries|values|has|get|sort|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|for)\s*\(|\bnew (?:WeakSet|TypeError|RangeError)\b|\.(?:has|add|delete|entries|values|sort|every|call)\s*\(/u.test(coreTestDisplayRuntimeSource + "\n" + coreJsonModuleSource)) {
+  failures.push("packages/cli/src/standard-modules.ts: velar/json or the test display runtime bypasses its captured graph, order, reflection, Type, or Error ABI");
 }
 for (const phrase of [
   "const __velarCollectionsNativeArray = globalThis.Array",
@@ -1793,7 +1793,14 @@ for (const phrase of [
 if (/\b(?:Date\.now|Number\.isFinite|Math\.abs|Object\.fromEntries)\s*\(|\bPromise\.prototype\.then\b|\bError\.isError\s*\(|\b(?:uuidPattern|String\.prototype)\.(?:test|trim|toLowerCase)\s*\(|\b(?:ranks|sinks)\.(?:get|has|set|add|delete|size|values)\b/u.test(coreLogModuleSource)) {
   failures.push("packages/cli/src/standard-modules.ts: velar/log bypasses its captured clock, collection, Promise, text, console, or Error ABI");
 }
+// D50 rule 97.2: the assertion asks the language for content equality instead
+// of carrying a second implementation that could disagree with it.
+if (!standardModulesSource.includes('const collectionLoweringImport = `import { __velarEquals } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;')) {
+  failures.push("packages/cli/src/standard-modules.ts: velar/test must import the Core __velarEquals rather than restate a comparison");
+}
 for (const phrase of [
+  "${collectionLoweringImport}",
+  "if (!__velarEquals(actual, expected))",
   "const __velarTestStringIncludes = __velarDeepGetOwnPropertyDescriptor",
   "const __velarTestArrayJoin = __velarDeepGetOwnPropertyDescriptor",
   "const __velarTestNumberIsSafeInteger = __velarDeepGetOwnPropertyDescriptor",

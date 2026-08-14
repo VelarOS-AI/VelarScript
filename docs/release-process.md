@@ -2,10 +2,11 @@
 
 Status: VelarScript 0.10.0 release candidate; registry publication deferred
 
-VelarScript ships the compiler, official Node runtime, official Web and Desktop frameworks, project creator, and CLI as six
+VelarScript ships the compiler, official Node runtime, official Web and Desktop frameworks, project creator, CLI, and the
+two domain libraries as eight
 independently installable npm packages, but treats them as one version-locked
-release set. Node, Web, and Desktop pin their exact toolchain dependencies; CLI pins compiler, Node, and creator
-while loading Web only when a project explicitly declares `@velarscript/web`.
+release set. Node, Web, and Desktop pin their exact toolchain dependencies; CLI pins compiler, Node, Web, Desktop, creator,
+and script-analysis as one complete release generation, while a project's `@velarscript/web` declaration is what activates the Web extension at compile time.
 
 ## Rehearsal
 
@@ -14,9 +15,9 @@ npm run release:rehearse
 npm run release:verify -- release/rehearsal
 ```
 
-A rehearsal runs `npm pack` for all six release workspaces and writes:
+A rehearsal runs `npm pack` for all eight release workspaces and writes:
 
-- the six package tarballs;
+- the eight package tarballs;
 - `SHA256SUMS`;
 - `velar-toolchain-release.json` containing package name, version, filename,
   byte size, SHA-256, npm integrity, source-tree identity, and publication
@@ -39,8 +40,9 @@ Candidate mode fails unless all of these are true:
 - Git has a committed, clean `HEAD`;
 - `HEAD` has exactly the `v<version>` tag;
 - `origin` matches package repository metadata;
-- all six packages have an explicit publishable license;
-- compiler, Node, Web, Desktop, creator, and CLI versions/dependencies match exactly.
+- all eight packages have an explicit publishable license;
+- compiler, Node, Web, Desktop, creator, CLI, text-buffer, and script-analysis
+  versions/dependencies match exactly.
 
 The GitHub rehearsal workflow adds an OIDC artifact attestation to the packed
 tarballs and uploads them as workflow artifacts. It deliberately contains no

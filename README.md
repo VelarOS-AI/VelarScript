@@ -166,12 +166,21 @@ the explicit `@velarscript/web` package.
   member identity.
 - Functions use `def`, and named arguments use `name=value`.
 - `def` functions can declare type parameters, such as `def first<T>(items: List<T>) -> T?`,
-  inferred at each call site and erased at runtime.
+  inferred at each call site and erased at runtime. A parameter may be bounded
+  by one of three closed words — `Comparable`, `Text`, `Data` — and a library
+  cannot invent a fourth.
 - Declaration and `for` binding patterns use checked record fields and exact
   List shapes; expected shape alternatives belong in `match`.
 - `match` supports literals, enum members, type patterns, nested record/List
   destructuring, `_`, `...rest`, `as` bindings, and guards.
-- Classes use body fields and an explicit `constructor(...)`.
+- Classes use body fields and an explicit `constructor(...)`. A class that
+  declares `@dispose:` is released by `using`, at the end of the block that
+  owns it.
+- `try expression` turns an expected failure into an optional, so
+  `try readPort() ?? 8080` needs no `try`/`catch` block.
+- `Json.`, `Promise.`, `Text.`, and (on Web) `Look.` are permanent namespaces
+  that need no import.
+- Tests are `test "a sentence the owner reads":` blocks in a `.test.vel` file.
 - Public collections are `List`, `Set`, and `Map` with direct APIs such as
   `append`, `add`, `set`, `remove`, `some`, and `every`.
 - `Record<T>` models JSON objects whose string keys are dynamic, without
@@ -244,6 +253,7 @@ velar fix [entry.vel | project-directory]
 velar skill
 velar verify [project-directory | build-directory]
 velar preview [project-directory | build-directory] [--port <port>]
+velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]
 velar lsp
 ```
 
@@ -267,7 +277,7 @@ velar lsp
 
 ```sh
 npm run build:packages
-npm run check:docs
+npm run check
 npm test
 npm run test:browser
 npm run test:packages

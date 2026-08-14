@@ -109,6 +109,28 @@ function executeModule(code: string): ReturnType<typeof spawnSync> {
   });
 }
 
+/**
+ * A standard module with its hidden runtime dependencies linked as data URLs,
+ * so the source can be executed inline. velar/test reaches for the Core
+ * comparison rather than restating it (D50 rule 97.2), so inlining it now
+ * means linking that edge.
+ */
+function linkedStandardModuleSource(name: string): string {
+  const urls = new Map<string, string>();
+  const closure = [...standardModuleClosure([name])].reverse();
+  for (const member of closure) {
+    let source = standardModuleSource(member)!;
+    for (const [linked, url] of urls) source = source.replaceAll(JSON.stringify(linked), JSON.stringify(url));
+    urls.set(member, `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  }
+  let source = standardModuleSource(name)!;
+  for (const [linked, url] of urls) {
+    if (linked === name) continue;
+    source = source.replaceAll(JSON.stringify(linked), JSON.stringify(url));
+  }
+  return source;
+}
+
 function executeWithLookModule(code: string): ReturnType<typeof spawnSync> {
   const source = webModuleSources.get("velar/look");
   assert.ok(source);
@@ -11375,12 +11397,15 @@ test("every declared standard-module export exists in the shipped runtime", asyn
   }
 });
 
-test("the test matcher's data comparison compares owned structures without recursive graph failure", () => {
-  // D50 rule 90 retired Json.deepEqual; the same bounded comparison still backs
-  // velar/test's toEqual, so its hardening is guarded through that owner.
-  const source = standardModuleSource("velar/test") ?? "";
+test("the language's data comparison compares owned structures without recursive graph failure", () => {
+  // D50 rule 90 retired Json.deepEqual and rule 97.2 retired velar/test's own
+  // copy, so equals(a, b) is the single owner and carries the hardening for
+  // every spelling that reaches it — including toEqual.
+  const source = linkedStandardModuleSource("velar/test");
   const execution = executeModule(`${source}
-const deepEqual = __velarDeepEqual;
+// The inlined module already imports the one comparison there is; a refusal is
+// reported verbatim, because refusing is an answer equals is entitled to give.
+const deepEqual = (left, right) => { try { return __velarEquals(left, right); } catch (error) { return error.message; } };
 import { runInNewContext } from "node:vm";
 const left = { name: "Velar", nested: [1, { ready: true }] };
 const right = { nested: [1, { ready: true }], name: "Velar" };
@@ -11415,7 +11440,17 @@ console.log(deepEqual(getterA, getterB));
 console.log(getterReads);
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "true\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\nfalse\n0\n");
+  // The last three used to answer a quiet 'false'. The single owner names the
+  // reason instead, which is the whole point of having one owner.
+  assert.equal(execution.stdout, [
+    "true", "false", "true", "true", "true", "true", "true", "true", "false", "true",
+    "equals cannot compare cyclic data",
+    "true",
+    "equals requires a dense VelarScript List",
+    "equals requires ordinary mutable enumerable data fields",
+    "0",
+    "",
+  ].join("\n"));
 });
 
 test("velar/json captures validation, serialization, graph, and error hosts at initialization", () => {
@@ -11483,7 +11518,7 @@ console.log(poisonedCalls);
 });
 
 test("velar/test toEqual uses the language deepEqual contract", () => {
-  const source = standardModuleSource("velar/test") ?? "";
+  const source = linkedStandardModuleSource("velar/test");
   const execution = executeModule(`${source}
 import { runInNewContext } from "node:vm";
 function passes(callback) { try { callback(); return true; } catch { return false; } }
@@ -11517,7 +11552,7 @@ console.log(getterReads);
 });
 
 test("velar/test matchers cannot turn invalid subjects into false positives", async () => {
-  const source = standardModuleSource("velar/test") ?? "";
+  const source = linkedStandardModuleSource("velar/test");
   const execution = executeModule(`${source}
 function passes(callback) { try { callback(); return true; } catch { return false; } }
 async function passesAsync(callback) { try { await callback(); return true; } catch { return false; } }
@@ -11566,7 +11601,7 @@ expect(value).toReject()
 });
 
 test("velar/test captures matcher, display, Promise, and error hosts at initialization", () => {
-  const source = standardModuleSource("velar/test") ?? "";
+  const source = linkedStandardModuleSource("velar/test");
   const execution = executeModule(`${source}
 const OriginalError = Error;
 const OriginalTypeError = TypeError;
@@ -12052,7 +12087,7 @@ console.log(encode("a b"), decode("a%20b"), poisonedCalls);
     "",
   ].join("\n"));
 
-  const testSource = standardModuleSource("velar/test") ?? "";
+  const testSource = linkedStandardModuleSource("velar/test");
   const testExecution = executeModule(`${testSource}
 let coercions = 0;
 let getterReads = 0;

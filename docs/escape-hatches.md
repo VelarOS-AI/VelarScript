@@ -10,7 +10,8 @@ project.
 The exits, in order:
 
 1. **The diagnostic teaches the fix.** Most walls end here, in one round —
-   run `velar check` and do what it says. The rest of this page is for the
+   run `velar check` and do what it says, and `velar fix` where the rewrite is
+   provably behavior-preserving. The rest of this page is for the
    walls that remain.
 2. **A missing capability or npm package** → [`extern module`](#1-missing-capability-or-npm-package--extern-module),
    the checked boundary and the first choice.
