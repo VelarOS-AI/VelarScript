@@ -1,16 +1,18 @@
 # 波 Z2 — 报告（2026-08-14）
 
-分支 `wave/z2`（基于 `450a13c`），三个提交：
+分支 `wave/z2`（基于 `450a13c`）：
 
 | 提交 | 内容 |
 |---|---|
 | `4951db3` | `Text.normalize` + 码点身份那一句（TXT-U3） |
 | `bdabfeb` | 六条流分析裁定（FLW-N7/N2/S1/N6/S2/N4） |
-| `6117385` | `import type`（MOD-U3 / D38 第 49 条） |
+| `6117385` | `import type` 按 D38 第 49 条实现 —— **已被下面那条撤销** |
+| `c39ca4a` | 本报告初版 |
+| `ZZZPENDING` | 按 D50 第 100 条撤销 `import type`：只留识别 + 定向拒绝 |
 
-回归测试全部在 `tests/hardening-wave-z2.test.ts`（30 例）。账本证据是执行级的地方，
+回归测试全部在 `tests/hardening-wave-z2.test.ts`（27 例）。账本证据是执行级的地方，
 测试也是执行级的：六个流条目里有四个带 `run(...)` 的运行断言，`Text.normalize`
-带三个，`import type` 的发射断言直接读 `result.code`。
+带三个，MOD-U3 的「类型导入是真导入」断言直接读 `result.code`。
 
 ---
 
@@ -143,61 +145,54 @@ charter §5 新增一段，把布尔字面量相等、成员探测、可选链�
 
 ---
 
-## 3. MOD-U3 / D38 第 49 条 —— `import type`
+## 3. MOD-U3 / D50 第 100 条 —— `import type` 撤销
 
 **探针复现**：`import type {User} from "./x.vel"` → `Expected 'from' after imports`。
 
-落地按 D38 第 49 条逐项：
+本波先按 D38 第 49 条实现了整条（语法、类型位检查、环边豁免、发射省略），
+实现过程中上报第 5 项不可实现（见下），随后 **D50 第 100 条整条撤销 D38 第 49 条**，
+本波按新裁决重做。**当前落地的是撤销版**：
 
-1. **语法**：`import type {User, Status as S} from "./x.vel"` 与
-   `export type {User} from "./x.vel"` 合法。`type` 仍是软关键字：
-   `import type from "./x.vel"` 依旧读作名为 `type` 的默认导入，
-   `const type = ...`、`type Row:` 都不受影响。行内混写
-   （`import {loadUser, type User}`）按裁定拒绝并指引拆两行；命名空间形式、
-   默认形式、`import js type` 各有定向消息。
-2. **检查**：type-import 的名字只在类型位解析。值位一律拒绝并带
-   `velar fix` 可应用的机械改写（删掉 `type`）。
-3. **模块环放行**：type-only 边不进初始化顺序图。测试用同一对模块做对照：
-   普通导入的回边给 `VEL3019`，`import type` 干净。
-4. **发射**：type-only 声明不发射任何东西 —— 只被 type-only 边到达的模块
-   根本不加载，验证器不进产物（断言 `result.code` 不含目标模块）。
-5. **双向规则**：**只落地了一个方向**，另一个方向作为规格落差上报，见下。
-6. **迁移**：全仓无一处需要改写（见 §5）；charter §12 与两份 ai-skill 补齐。
-7. **回归**：六个 `[MOD-U3]` 用例。
+- **保留识别**。`type` 仍是软关键字，识别靠它后面跟什么（`{`、`*`、或一个不是
+  `from` 的名字），所以 `import type from "./x.vel"` 依旧读作名为 `type` 的默认
+  导入，`const type = ...`、`type Row:`、`export type Row:` 全不受影响。
+- **一条定向拒绝**，覆盖全部拼写（`import type {...}`、行内 `{load, type User}`、
+  `import type * as`、`import type Name`、`import js type`、`export type {...} from`、
+  `export {type X} from`）：
 
-### 规格落差（必须裁决）—— 第 49 条第 5 项的正向
+  > VelarScript does not erase types: a type carries its runtime validator, so a
+  > type import is an ordinary import — drop 'type' and write `import {Name} from "..."`
 
-D38 第 49 条第 5 项要求双向：type-import 名字用于值位 → 反向教（已落地，就是
-第 2 项）；**普通导入的名字若全部用途都在类型位 → 诊断教 `import type`**，
-并把两个方向都归入第 48 条自动修复类。
+- **`recovered` 诊断 + 机械修复**。按被教的拼写恢复，所以同一次编译里后续阶段
+  照常报自己的发现；删掉那个 `type` 就是全部改写，故 `velar fix` 一键应用且幂等
+  （测试逐一断言七种拼写各自的改写结果）。
+- **第 49 条的实现全部拆掉**：AST 的 `typeOnly`/`typeMarkerSpan`、
+  `SemanticModuleReference.typeOnly`、`ModuleDependency.typeOnly`、
+  发射跳过、初始化环图的 type-only 跳过、以及 analyzer 里
+  `typeOnlyImportLocals` / `rejectTypeOnlyValueUse` / `rejectTypeOnlyRuntimeCheck`
+  / `rejectTypeOnlyRuntimeValidation` 三个拒绝器，全部回退。
+- 顺带那条「被拒绝的 `is` 检查仍在收窄」的级联修复**也一并回退**：它唯一的触发点
+  是 type-only 的值位拒绝。复验 `rejectErasedRuntimeCheck` 的两条既有路径
+  （擦除的类型参数、`Type<T>`）都不级联 —— 各只报一条，所以那段守卫现在是死代码。
 
-**正向没有落地，因为它在 Vel 里不是一次保语义的机械改写。两条独立理由：**
+### 为什么撤销（上报理由 + 裁决理由）
 
-1. **它会静默拿掉一条运行时边。** charter §12 现有一句：「An unused import is not
-   an error… **The import still runs the module**, so a module imported only for
-   its initialization side effects behaves exactly as written.」把一个普通导入
-   改成 `import type`，按第 4 项该模块就不再加载 —— 求值顺序变了，只为初始化副作用
-   而存在的导入被删掉了。这不是拼写改动。
-2. **「全部用途都在类型位」在 Vel 里不能由语法判定。** Vel 的类型是带验证器的值，
-   所以**类型位的用途也可能需要运行时验证器**：被该类型标注的值一旦被收窄读取，
-   重查就要拿这个类型的验证器。本波实测过这条 —— 早期实现里
+本波上报的理由：第 49 条第 5 项正向（普通导入全类型位 → 强制 `import type`）
+不是保语义的机械改写。两条独立证据：
+
+1. 它会静默拿掉一条运行时边，与 charter §12「导入仍然运行模块」冲突。
+2. **「全部用途都在类型位」在 Vel 里不能由语法判定** —— 被该类型标注的值一旦被
+   收窄读取，重查就要拿这个类型的验证器。早期实现里
    `import type {User}` + `if user != null: return user.name` 编译干净、运行时
-   `ReferenceError: User is not defined`（已修：这类读取现在按值位拒绝）。也就是说
-   一个「全部用途都在类型位」的名字改写成 `import type` 之后可能**编译不过**。
-   判定它需要分析结果而不只是语法，改写也就不再是确定性的。
+   `ReferenceError: User is not defined`（当时按值位拒绝修掉了）。
 
-**建议**：正向作废，或降格为不改变加载行为的编辑器提示（且必须排除任何会触发
-运行时验证的用途）。charter §12 已按现状成文：「An ordinary import of a name used
-only in annotations stays legal and keeps its runtime edge — the import still runs
-the module, and demanding the type-only spelling there would silently stop it from
-running.」若用户裁决要正向，需先裁决它与上面那句 charter 承诺的取舍。
+D50 第 100 条给的是更根本的一层：**第 49 条把 TypeScript 的问题搬进了没有那个
+问题的语言**。TS 需要这个形式是因为 TS 擦除类型；Vel 不擦除 —— 每个命名类型带着
+`User.is`/`User.parse`，枚举同理，类本身就是运行时值。所以 Vel 里**任何类型导入
+都是真导入**，「type-only 边」这个概念不存在，而第 49 条的立项理由正是那条边的
+环豁免。理由消失，形式只剩装饰，而装饰会变错（之后需要 `User.parse` 就得改导入）。
 
-**同时记录一处裁定文本的扩张**：第 49 条第 2 项举的值位是 `User.parse`、
-`value is User`、传参。实测这三项之外还有两个：`case User:` 类型模式，以及
-上面说的**被收窄读取**。两者都用同一条消息和同一个修复，属于第 2 项那句
-「runtime validation needs the value import」的字面覆盖，不算改设计。
-
----
+**账本处置**：MOD-U3 记为**已裁决为不实现**（不是「未实现」），D38 第 49 条记为作废。
 
 ## 4. 顺带发现并修掉的缺陷（不在任务书里）
 
@@ -205,7 +200,7 @@ running.」若用户裁决要正向，需先裁决它与上面那句 charter 承
 
 **探针**（在 `4951db3` 与 `450a13c` 上行为相同）：
 
-```velar
+```text
 def read(initial: number | string | bool) -> string:
     let value = initial
     if value is not bool:
@@ -240,13 +235,13 @@ def read(initial: number | string | bool) -> string:
 - `tests/compiler.test.ts` "getter results are not stable narrowing locations"：
   断言 `/optional access/` 出现 1 次的那行改为 0 次，并逐字断言 FLW-S2 的两条新消息。
 - `tests/hardening-audit-runtime.test.ts` `[MOD-I1 + BRG-D1]`：该用例把
-  `import type` 当作「尚不是拼写」的恢复形状。拆成两半：`import unsafe` 仍断言
-  `VEL2001`；`import type` 现在断言诚实的 `has no export named 'User'`，并断言
-  type-only 依赖记为 `typeOnly: true`（不再是空依赖表 —— 类型确实来自那个模块，
-  只是不带运行时边）。
+  `import type` 与 `import unsafe` 一起断言为「不伪造空源依赖」的恢复形状。
+  两条仍并列，断言放宽为 `VEL20(01|29)`（`import type` 现在有自己的 VEL2029 教学），
+  并断言它恢复为被教的普通导入 —— 依赖是 `./lib.vel` 而非空源。
 - **源码零改写**：全仓无 optional 类型的 getter（FLW-S2 因此零站点），
-  也无一处普通导入需要变 `import type`（正向未落地，且即便落地也无站点）。
-  `examples/`、`packages/*/src/*.vel`、charter/文档围栏均未改。
+  也无一处采用过 `import type`（该形式从未离开本分支的测试）。
+  `examples/`、`packages/*/src/*.vel` 均未改。charter §12 与两份 ai-skill 写的是
+  撤销后的语义。
 
 ---
 
@@ -274,14 +269,14 @@ Checked 77 runtime boundary operations and the shared registry, strict JSON, Web
 ### `npm test`
 
 ```
-ℹ tests 1083
+ℹ tests 1080
 ℹ suites 0
-ℹ pass 1083
+ℹ pass 1080
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 165215.832542
+ℹ duration_ms 163485.0585
 Checked 15 modules from examples/production-web
 Checked 9 modules from examples/flow-board
 Checked 8 modules from examples/support-desk
@@ -306,7 +301,7 @@ Checked 3 modules from examples/api-dashboard
 3 passed, 0 failed
 ```
 
-（1053 → 1083：本波 `tests/hardening-wave-z2.test.ts` 30 例。）
+（1053 → 1080：本波 `tests/hardening-wave-z2.test.ts` 27 例。）
 
 ### `npm run test:browser`
 
@@ -354,9 +349,8 @@ Installed VelarScript browser-project acceptance passed
 
 ## 7. 待用户裁决
 
-1. **D38 第 49 条第 5 项的正向**（普通导入全类型位 → 强制 `import type`）：
-   见 §3。建议作废或降格；若保留，需先裁决它与 charter §12「导入仍然运行模块」
-   那句承诺的取舍。
-2. **FLW-N6 的边界成文**：本波把它实现为「`while true:` 的 breaks 是它唯一的
-   出口」。条件可失败的循环恒为空结论（§2 有论证），所以没有别的可实现的内容 ——
-   若用户认为账本条目的意图更宽，需要重新裁决它到底要什么。
+无。本波唯一上报的设计问题（D38 第 49 条第 5 项）已由 D50 第 100 条整条裁决，
+并已按新裁决重做。
+
+FLW-N6 的范围（「`while true:` 的 breaks 是它唯一的出口」）已被接受为裁定读法：
+条件可失败的循环其合并恒为空，§2 有论证。

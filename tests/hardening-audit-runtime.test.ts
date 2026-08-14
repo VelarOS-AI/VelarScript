@@ -142,35 +142,27 @@ test("[MOD-I1] velar check prints module diagnostics alongside resolution failur
 });
 
 test("[MOD-I1 + BRG-D1] a recovered import never fabricates an empty-source dependency", async () => {
-  // `import unsafe` (forgot js) died behind "invalid package name ''" while the
-  // parser's own diagnostics were generated and hidden. `import type` was the
-  // other case; MOD-U3 has since made it a real spelling, so it is asserted
-  // below as the honest missing-export failure instead.
-  const recovered = await runCli({
-    "lib.vel": "export const x = 1\n",
-    "main.vel": "import unsafe {x} from \"./lib.vel\"\nprint(\"k\")\n",
-  }, ["check", "<dir>/main.vel"]);
-  assert.equal(recovered.status, 1, recovered.stdout + recovered.stderr);
-  assert.doesNotMatch(recovered.stderr, /invalid package name/u);
-  assert.match(recovered.stderr, /VEL2001/u);
-
-  const typeOnly = await runCli({
-    "lib.vel": "export const x = 1\n",
-    "main.vel": "import type {User} from \"./lib.vel\"\nprint(\"k\")\n",
-  }, ["check", "<dir>/main.vel"]);
-  assert.equal(typeOnly.status, 1, typeOnly.stdout + typeOnly.stderr);
-  assert.doesNotMatch(typeOnly.stderr, /invalid package name/u);
-  assert.match(typeOnly.stderr, /has no export named 'User'/u);
-
-  // MOD-U3: the type-only edge is still a compile-time dependency — the type
-  // comes from that module — and records itself as carrying no runtime edge.
+  // `import type` and `import unsafe` (forgot js) both died behind "invalid
+  // package name ''" while the parser's own diagnostics were generated and
+  // hidden. D50 rule 100 later gave `import type` its own teaching, so the two
+  // spellings now differ in message but agree on naming a real module.
+  for (const line of ["import type {User} from \"./lib.vel\"", "import unsafe {x} from \"./lib.vel\""]) {
+    const result = await runCli({
+      "lib.vel": "export const x = 1\n",
+      "main.vel": `${line}\nprint("k")\n`,
+    }, ["check", "<dir>/main.vel"]);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.doesNotMatch(result.stderr, /invalid package name/u);
+    assert.match(result.stderr, /VEL20(01|29)/u);
+  }
+  // `import type` recovers as the ordinary import the teaching names, so its
+  // dependency is that module — never the empty source.
   const compiled = compile("import type {User} from \"./lib.vel\"\nprint(\"k\")\n");
   assert.deepEqual(compiled.dependencies, [{
     source: "./lib.vel",
     javascript: false,
     unsafe: false,
     dynamic: false,
-    typeOnly: true,
     specifiers: [{ imported: "User", local: "User", namespace: false }],
   }]);
 });

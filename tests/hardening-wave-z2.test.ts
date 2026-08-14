@@ -677,141 +677,75 @@ print(read(null, ["ada", "grace"]))
 });
 
 // ---------------------------------------------------------------------------
-// MOD-U3 / D38 rule 49 — import type
+// MOD-U3 / D50 rule 100 — import type is recognized and refused
 // ---------------------------------------------------------------------------
 
-const usersModule = `export type User:
-    name: string
+const eraseRejection = (form: "import" | "export"): string =>
+  "VelarScript does not erase types: a type carries its runtime validator, so a type import is an ordinary import"
+  + ` — drop 'type' and write ${form} {Name} from "..."`;
 
-export def load() -> User:
-    return {name: "Ada"}
+test("[MOD-U3] every import-type spelling lands on one teaching, not a parse error", () => {
+  const spellings: readonly (readonly [string, "import" | "export"])[] = [
+    ['import type {User} from "./users.vel"\n', "import"],
+    ['import type {User, Status as S} from "./users.vel"\n', "import"],
+    ['import {load, type User} from "./users.vel"\n', "import"],
+    ['import type * as Users from "./users.vel"\n', "import"],
+    ['import js type {Client} from "sdk"\n', "import"],
+    ['export type {User} from "./users.vel"\n', "export"],
+    ['export {measure, type Shape} from "./text.vel"\n', "export"],
+  ];
+  for (const [source, form] of spellings) {
+    assert.deepEqual(messages(source), [eraseRejection(form)], source);
+    // No generic parse wreckage rides along.
+    assert.deepEqual(compile(source).diagnostics.map((item) => item.code), ["VEL2029"], source);
+  }
+  // The default-import spelling is taught too, and keeps its own answer as well.
+  const defaultForm = messages('import type Users from "./users.vel"\n');
+  assert.ok(defaultForm.includes(eraseRejection("import")), defaultForm.join("\n"));
+});
 
-export const first: string = "Ada"
-`;
+test("[MOD-U3] the teaching recovers as the ordinary import and velar fix writes it", () => {
+  const source = 'import type {User, Status as S} from "./users.vel"\n';
+  const diagnostics = compile(source).diagnostics;
+  // Recovered: the compile continues as the guided spelling, so later stages
+  // still report their own findings in the same run.
+  assert.equal(diagnostics[0]?.recovered, true);
+  assert.equal(diagnostics[0]?.fix?.title, "Drop 'type' from the import");
+  const fixed = applyMechanicalFixes(source, diagnostics);
+  assert.equal(fixed.text, 'import {User, Status as S} from "./users.vel"\n');
+  // Idempotent: the rewritten source registers no further fix.
+  assert.equal(applyMechanicalFixes(fixed.text, compile(fixed.text).diagnostics).applied.length, 0);
+  // The inline marker is the same habit written per name, and rewrites the same way.
+  const inline = 'import {load, type User} from "./users.vel"\n';
+  assert.equal(applyMechanicalFixes(inline, compile(inline).diagnostics).text,
+    'import {load, User} from "./users.vel"\n');
+});
 
-test("[MOD-U3] import type names a module's types and its values stay out of reach", async () => {
-  const legal = await checkProject({
-    "users.vel": usersModule,
+test("[MOD-U3] an ordinary import of a type keeps working, and 'type' stays contextual", async () => {
+  const project = await checkProject({
+    "users.vel": 'export type User:\n    name: string\n\nexport def load() -> User:\n    return {name: "Ada"}\n',
     "main.vel": [
-      'import type {User} from "./users.vel"',
+      'import {User, load} from "./users.vel"',
       "",
       "def label(user: User) -> string:",
       "    return user.name",
       "",
-      "def count(users: List<User>) -> number:",
-      "    return users.size",
+      "def read(raw: unknown) -> string:",
+      "    if raw is User:",
+      "        return raw.name",
+      '    return ""',
       "",
-      'print(label({name: "Grace"}))',
-      "print(str(count([])))",
-      "",
-    ].join("\n"),
-  }, "main.vel");
-  assert.deepEqual(legal.failures, []);
-  assert.deepEqual(projectMessages(legal, "main.vel"), []);
-  // Item 4: nothing is emitted for the declaration, so the module never loads.
-  assert.doesNotMatch(moduleOf(legal, "main.vel").result.code ?? "", /users\.js/u);
-
-  const aliased = await checkProject({
-    "users.vel": usersModule,
-    "main.vel": 'import type {User as Account} from "./users.vel"\n\ndef label(account: Account) -> string:\n    return account.name\n\nprint(label({name: "Ada"}))\n',
-  }, "main.vel");
-  assert.deepEqual(projectMessages(aliased, "main.vel"), []);
-});
-
-test("[MOD-U3] every position needing the validator is answered with the same fix", async () => {
-  const expected = (name: string): string =>
-    `'${name}' comes from a type-only import, so it names a type and has no value here`
-    + `; runtime validation needs the value import — drop 'type' from the import of "./users.vel"`;
-  const cases: readonly (readonly [string, string, readonly string[]])[] = [
-    ["parse", 'print(User.parse({name: "Ada"}).name)\n', [expected("User")]],
-    ["call", "print(load().name)\n", [expected("load")]],
-    ["is", "def read(raw: unknown) -> string:\n    if raw is User:\n        return raw.name\n    return \"\"\n\nprint(read(1))\n", [expected("User")]],
-    ["argument", "def read(value: Type<User>) -> string:\n    return \"x\"\n\nprint(read(User))\n", [expected("User")]],
-    // A narrowed read rechecks against the record's own validator, which the
-    // type-only import never loaded.
-    ["narrowed read", "def read(user: User?) -> string:\n    if user != null:\n        return user.name\n    return \"\"\n\nprint(read(null))\n", [expected("User")]],
-  ];
-  for (const [label, body, messages_] of cases) {
-    const project = await checkProject({
-      "users.vel": usersModule,
-      "main.vel": `import type {User, load} from "./users.vel"\n\n${body}`,
-    }, "main.vel");
-    assert.deepEqual(projectMessages(project, "main.vel").filter((item) => item.includes("type-only import")), messages_, label);
-    assert.equal(moduleOf(project, "main.vel").result.code, null, label);
-  }
-});
-
-test("[MOD-U3] the value-use diagnostic carries the mechanical rewrite that drops 'type'", () => {
-  const source = 'import type {User} from "./users.vel"\n\nprint(User.parse(1))\n';
-  const diagnostics = compile(source).diagnostics;
-  const named = diagnostics.find((item) => item.message.includes("type-only import"));
-  assert.ok(named, diagnostics.map((item) => item.message).join("\n"));
-  assert.equal(named.fix?.title, "Drop 'type' from the import");
-  const fixed = applyMechanicalFixes(source, diagnostics);
-  assert.match(fixed.text, /^import \{User\} from "\.\/users\.vel"/u);
-  // Idempotent: the rewritten source no longer registers the fix.
-  assert.equal(applyMechanicalFixes(fixed.text, compile(fixed.text).diagnostics).applied.length, 0);
-});
-
-test("[MOD-U3] one import line is entirely values or entirely types", () => {
-  assert.deepEqual(messages('import {load, type User} from "./users.vel"\n'), [
-    "An import is entirely values or entirely types; move 'User' to its own 'import type {...} from' line",
-  ]);
-  assert.deepEqual(messages('import type {User, type Status} from "./users.vel"\n'), [
-    "'type' is already declared for this import; drop the inner marker on 'Status'",
-  ]);
-  assert.deepEqual(messages('export {measure, type Shape} from "./text.vel"\n'), [
-    "A re-export is entirely values or entirely types; move 'Shape' to its own 'export type {...} from' line",
-  ]);
-  assert.deepEqual(messages('import type * as Users from "./users.vel"\n'), [
-    'A type-only import names its types explicitly; write import type {Name} from "..." instead of a namespace import',
-  ]);
-  assert.ok(messages('import type Users from "./users.vel"\n')
-    .includes('A type-only import names its types in braces; write import type {Name} from "..."'));
-  assert.deepEqual(messages('import js type {Client} from "sdk"\n'), [
-    "'import js type' is not a spelling: a JavaScript module's types come from an 'extern module' declaration, which is already types-only",
-  ]);
-  // `type` is still a contextual keyword everywhere else.
-  clean('const type = "record"\nprint(type)\n');
-  clean('type Row:\n    name: string\n\nprint(Row.parse({name: "a"}).name)\n');
-});
-
-test("[MOD-U3] a type-only edge does not participate in initialization order", async () => {
-  const modules = (keyword: string): Readonly<Record<string, string>> => ({
-    "alpha.vel": 'import {beta} from "./beta.vel"\n\nexport type Alpha:\n    field: string\n\nexport const alpha: string = "A" + beta\n',
-    "beta.vel": `${keyword} {Alpha} from "./alpha.vel"\n\nexport def describe(value: Alpha) -> string:\n    return value.field\n\nexport const beta: string = "B"\n`,
-  });
-  const valueEdge = await checkProject(modules("import"), "beta.vel");
-  assert.deepEqual(projectMessages(valueEdge, "alpha.vel"), [
-    "Move this read into a function, or extract the shared value into a third module; './beta.vel' has not initialized when this line runs",
-  ]);
-
-  const typeEdge = await checkProject(modules("import type"), "beta.vel");
-  assert.deepEqual(projectMessages(typeEdge, "alpha.vel"), []);
-  assert.deepEqual(projectMessages(typeEdge, "beta.vel"), []);
-  // The type-only importer emits no import of the module it names.
-  assert.doesNotMatch(moduleOf(typeEdge, "beta.vel").result.code ?? "", /alpha\.js/u);
-});
-
-test("[MOD-U3] export type re-exports types and emits nothing for them", async () => {
-  const project = await checkProject({
-    "users.vel": usersModule,
-    "barrel.vel": 'export type {User} from "./users.vel"\n\nexport const tag: string = "barrel"\n',
-    "main.vel": [
-      'import type {User} from "./barrel.vel"',
-      'import {tag} from "./barrel.vel"',
-      "",
-      "def label(user: User) -> string:",
-      "    return user.name + \" \" + tag",
-      "",
-      'print(label({name: "Grace"}))',
+      "print(label(load()))",
+      'print(read(User.parse({name: "Grace"})))',
       "",
     ].join("\n"),
   }, "main.vel");
   assert.deepEqual(project.failures, []);
-  assert.deepEqual(projectMessages(project, "barrel.vel"), []);
   assert.deepEqual(projectMessages(project, "main.vel"), []);
-  const barrel = moduleOf(project, "barrel.vel").result.code ?? "";
-  assert.doesNotMatch(barrel, /export \{ ?User/u);
-  assert.doesNotMatch(barrel, /users\.js/u);
+  // Vel does not erase: the type import is a real module edge.
+  assert.match(moduleOf(project, "main.vel").result.code ?? "", /users\.js/u);
+
+  clean('const type = "record"\nprint(type)\n');
+  clean('type Row:\n    name: string\n\nprint(Row.parse({name: "a"}).name)\n');
+  clean('export type Row:\n    name: string\n');
 });

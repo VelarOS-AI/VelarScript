@@ -1007,12 +1007,8 @@ export class JavaScriptEmitter {
     const indentation = "  ".repeat(depth);
     switch (statement.kind) {
       case "ImportDeclaration":
-        // D38 rule 49: a type-only import names types, not values, so no
-        // runtime import is emitted for it. A module reached only this way
-        // never loads — its validators stay out of the bundle.
-        return statement.typeOnly ? "" : this.emitImport(statement, indentation);
+        return this.emitImport(statement, indentation);
       case "ReExportDeclaration": {
-        if (statement.typeOnly) return "";
         const emittedSource = statement.source.endsWith(".vel") ? `${statement.source.slice(0, -4)}.js` : statement.source;
         const names = statement.specifiers
           .map((specifier) => specifier.imported === specifier.exported ? specifier.imported : `${specifier.imported} as ${specifier.exported}`)

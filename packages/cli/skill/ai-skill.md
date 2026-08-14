@@ -540,14 +540,9 @@ An expected failure is an optional, not a block: `try expression` produces
 ### Modules
 
 Export and import by name; a package's public face is a barrel of explicit
-re-exports — `export {measure, firstLine} from "./text.vel"`. Reach for
-`import type {User} from "./users.vel"` (and `export type {User} from ...`) when
-a module names another's types and never its values: the edge is dropped from
-initialization order, so mutually recursive types across two files are legal,
-and nothing is emitted for it. A Vel type carries a validator, so anything
-needing one at runtime — `User.parse`, `raw is User`, `case User:`, or a
-narrowed read of a `User` — needs the value import; the diagnostic says to drop
-`type` and `velar fix` does it. One import line is all values or all types.
+re-exports — `export {measure, firstLine} from "./text.vel"`. There is no
+`import type`: Vel does not erase types, so a type carries its runtime
+validator and a type import is an ordinary import.
 
 ## When Vel is in your way
 

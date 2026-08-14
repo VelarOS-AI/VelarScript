@@ -231,8 +231,9 @@ export class Parser {
     }
 
     const exported = this.match("export");
-    // D38 rule 49: `export type {Name} from "..."` is the re-export half of the
-    // type-only spelling; `export type Name:` is still a type declaration.
+    // D50 rule 100: `export type {Name} from "..."` is the re-export half of the
+    // TypeScript habit, recognized so it can be taught; `export type Name:` is
+    // still an ordinary exported type declaration.
     if (exported && (this.check("leftBrace") || this.check("star")
       || (this.checkWord("type") && (this.peekKind(1) === "leftBrace" || this.peekKind(1) === "star")))) {
       return this.parseReExport(start);
@@ -609,12 +610,13 @@ export class Parser {
   }
 
   /**
-   * D38 rule 49: `type` is a contextual keyword, so `import type {User} from`
-   * is a type-only import while `import type from "./x.vel"` still reads as a
-   * default import named `type`. The marker is recognized by what follows it:
-   * a brace list, a namespace star, or a name that is not `from`.
+   * D50 rule 100: `type` is a contextual keyword, so `import type {User} from`
+   * is the TypeScript habit while `import type from "./x.vel"` still reads as a
+   * default import named `type`. The habit is recognized by what follows the
+   * word — a brace list, a namespace star, or a name that is not `from` — so
+   * that it can be taught rather than met with a generic parse error.
    */
-  private typeOnlyImportAhead(): boolean {
+  private typeImportMarkerAhead(): boolean {
     if (!this.checkWord("type")) return false;
     const next = this.tokens[this.index + 1];
     if (!next) return false;
@@ -622,22 +624,28 @@ export class Parser {
       || (next.kind === "identifier" && next.value !== "from");
   }
 
+  /**
+   * D50 rule 100 (retiring D38 rule 49): TypeScript needs `import type` because
+   * TypeScript erases types, so a type import can carry no module edge.
+   * VelarScript does not erase: every named type carries its runtime validator,
+   * an enum is a runtime value, and a class is a runtime value — so a type
+   * import is an ordinary import and the marker has nothing left to mean.
+   * Dropping the word is the whole rewrite, which is why `velar fix` applies it.
+   */
+  private rejectTypeImportMarker(marker: Token, form: "import" | "export"): void {
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL2029",
+      "VelarScript does not erase types: a type carries its runtime validator, so a type import is an ordinary import"
+      + ` — drop 'type' and write ${form} {Name} from "..."`,
+      marker.span,
+      mechanicalFix({ start: marker.span.start, end: marker.span.end + 1 }, "", "Drop 'type' from the import"),
+    ));
+  }
+
   private parseImport(start: number): ImportDeclaration | null {
     const javascript = this.match("js");
     const unsafe = javascript && this.match("unsafe");
-    const typeOnly = this.typeOnlyImportAhead();
-    let typeMarkerSpan: Span | null = null;
-    if (typeOnly) {
-      const marker = this.advance();
-      typeMarkerSpan = marker.span;
-      if (javascript) {
-        this.diagnostics.push(diagnostic(
-          "VEL2029",
-          "'import js type' is not a spelling: a JavaScript module's types come from an 'extern module' declaration, which is already types-only",
-          marker.span,
-        ));
-      }
-    }
+    if (this.typeImportMarkerAhead()) this.rejectTypeImportMarker(this.advance(), "import");
     const specifiers: ImportSpecifier[] = [];
 
     if (this.match("star")) {
@@ -645,28 +653,12 @@ export class Parser {
       this.expectWord("as", "Expected 'as' after namespace import");
       const local = this.expect("identifier", "Expected a namespace name");
       specifiers.push({ imported: "*", local: local.value, namespace: true, span: span(star.span.start, local.span.end) });
-      if (typeOnly) {
-        this.diagnostics.push(diagnostic(
-          "VEL2029",
-          "A type-only import names its types explicitly; write import type {Name} from \"...\" instead of a namespace import",
-          star.span,
-        ));
-      }
     } else if (this.match("leftBrace")) {
       if (!this.check("rightBrace")) {
         do {
-          // D38 rule 49: one import declaration is one kind. An inline `type`
-          // marker is a single obvious spelling away from the legal one, so
-          // the guidance names it rather than accepting two kinds per line.
+          // The inline marker is the same habit written per name.
           if (this.checkWord("type") && this.peekKind(1) === "identifier") {
-            const marker = this.advance();
-            this.diagnostics.push(diagnostic(
-              "VEL2029",
-              typeOnly
-                ? `'type' is already declared for this import; drop the inner marker on '${this.current().value}'`
-                : `An import is entirely values or entirely types; move '${this.current().value}' to its own 'import type {...} from' line`,
-              marker.span,
-            ));
+            this.rejectTypeImportMarker(this.advance(), "import");
           }
           const imported = this.expect("identifier", "Expected an imported name");
           const local = this.matchWord("as") ? this.expect("identifier", "Expected a local import name") : imported;
@@ -677,13 +669,6 @@ export class Parser {
     } else {
       const local = this.expect("identifier", "Expected a default import name");
       specifiers.push({ imported: "default", local: local.value, namespace: false, span: local.span });
-      if (typeOnly) {
-        this.diagnostics.push(diagnostic(
-          "VEL2029",
-          "A type-only import names its types in braces; write import type {Name} from \"...\"",
-          local.span,
-        ));
-      }
     }
 
     this.expectWord("from", "Expected 'from' after imports");
@@ -701,21 +686,11 @@ export class Parser {
       this.diagnostics.push(diagnostic("VEL2001", "A module path cannot be empty", source.span));
       return null;
     }
-    return {
-      kind: "ImportDeclaration",
-      source: source.value,
-      sourceSpan: source.span,
-      javascript,
-      unsafe,
-      typeOnly,
-      ...(typeMarkerSpan ? { typeMarkerSpan } : {}),
-      specifiers,
-      span: span(start, source.span.end),
-    };
+    return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
   }
 
   private parseReExport(start: number): ReExportDeclaration | null {
-    const typeOnly = this.matchWord("type");
+    if (this.checkWord("type")) this.rejectTypeImportMarker(this.advance(), "export");
     if (this.match("star")) {
       const star = this.previous();
       if (this.matchWord("as")) this.match("identifier");
@@ -732,14 +707,7 @@ export class Parser {
     if (!this.check("rightBrace")) {
       do {
         if (this.checkWord("type") && this.peekKind(1) === "identifier") {
-          const marker = this.advance();
-          this.diagnostics.push(diagnostic(
-            "VEL2029",
-            typeOnly
-              ? `'type' is already declared for this re-export; drop the inner marker on '${this.current().value}'`
-              : `A re-export is entirely values or entirely types; move '${this.current().value}' to its own 'export type {...} from' line`,
-            marker.span,
-          ));
+          this.rejectTypeImportMarker(this.advance(), "export");
         }
         const imported = this.expect("identifier", "Expected a re-exported name");
         const alias = this.matchWord("as") ? this.expect("identifier", "Expected a re-export alias") : imported;
@@ -763,7 +731,7 @@ export class Parser {
     if (specifiers.length === 0) {
       this.diagnostics.push(diagnostic("VEL2029", "A re-export must name at least one export", span(start, source.span.end)));
     }
-    return { kind: "ReExportDeclaration", source: source.value, sourceSpan: source.span, typeOnly, specifiers, span: span(start, source.span.end) };
+    return { kind: "ReExportDeclaration", source: source.value, sourceSpan: source.span, specifiers, span: span(start, source.span.end) };
   }
 
   private parseExternModule(start: number): ExternModuleDeclaration {
