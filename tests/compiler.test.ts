@@ -6675,8 +6675,6 @@ test("cross-module interfaces no longer carry memo purity markers", async () => 
   const barrelPath = join(directory, "barrel.vel");
   const mainPath = join(directory, "main.vel");
   await writeFile(domainPath, `
-import {normalizeWhitespace, truncate} from "velar/text"
-
 export type Message:
     id: string
     text: string
@@ -6684,7 +6682,7 @@ export type Message:
 export def messagePreview(latest: Message?, limit: number = 48) -> string:
     if latest == null:
         return "No messages yet"
-    return truncate(normalizeWhitespace(latest.text), limit)
+    return Text.truncate(Text.normalizeWhitespace(latest.text), limit)
 
 export def sessionPreview(messages: List<Message>, sessionId: string) -> string:
     return str(messages.size) + sessionId
@@ -10511,12 +10509,12 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/collections", "velar/text", "velar/math", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log",
     "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 281);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 117);
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 282);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 118);
   assert.equal(api.modules["velar/collections"]?.length, 28);
-  assert.equal(api.modules["velar/text"]?.length, 20);
+  assert.equal(api.modules["velar/text"]?.length, 22);
   assert.equal(api.modules["velar/math"]?.length, 30);
-  assert.deepEqual(api.modules["velar/json"], ["clone", "deepEqual", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
+  assert.deepEqual(api.modules["velar/json"], ["clone", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
   assert.deepEqual(api.modules["velar/url"], ["decode", "encode", "isExternal", "join", "normalize", "parse", "parseQuery", "query", "withHash", "withQuery"]);
   assert.deepEqual(api.modules["velar/time"], ["date", "format", "iso", "monotonic", "now", "parse", "parts", "utc"]);
@@ -10535,9 +10533,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   const output = join(directory, "dist");
   await writeFile(entry, `
 import {chunk, compact, enumerate, every, find, flatten, groupBy, join as joinItems, partition, repeat as repeatValue, sortBy, sum, unique, zip} from "velar/collections"
-import {capitalize, chunks, escapeHtml, findMatch, findMatches, lines, lineStarts, matches, normalizeWhitespace, replaceMatches, slug, splitPattern, title, truncate, utf8Size, words} from "velar/text"
 import {clamp, degrees, gcd, lcm, max as maxNumber, min as minNumber, pi, radians} from "velar/math"
-import {deepEqual, tryParse} from "velar/json"
 import {decode, encode, isExternal, join as joinUrl, parse as parseUrl, parseQuery, query, withHash, withQuery} from "velar/url"
 import {iso, parse as parseTime, parts, utc} from "velar/time"
 import {level as logLevel, log, logger, setLevel, useSink} from "velar/log"
@@ -10571,42 +10567,42 @@ print(flatten(chunk(values, 2)).size)
 print(unique([1, 1, 2]).size)
 print(every(values, value => value > 0))
 
-print(capitalize("vELAR"))
-print(title("next_generation web"))
-print(slug("  Velar Web 游戏  "))
-print(truncate("VelarScript", 6))
-print(normalizeWhitespace("  a   b  "))
-print(lines("a\\nb").size)
-print(lineStarts("A😀\\nB\\n").map(offset => str(offset)).join(","))
-print(chunks("A😀游戏B", 2).join("|"))
-print(words("a  b").size)
+print(Text.capitalize("vELAR"))
+print(Text.title("next_generation web"))
+print(Text.slug("  Velar Web 游戏  "))
+print(Text.truncate("VelarScript", 6))
+print(Text.normalizeWhitespace("  a   b  "))
+print(Text.lines("a\\nb").size)
+print(Text.lineStarts("A😀\\nB\\n").map(offset => str(offset)).join(","))
+print(Text.chunks("A😀游戏B", 2).join("|"))
+print(Text.words("a  b").size)
 print("ABC".lower())
 print("abc".upper())
 print("   ".trim().size == 0)
-print(utf8Size("A😀游戏"))
-print(escapeHtml("<velar>"))
-print(matches("Velar 42", "^velar [0-9]+$", {ignoreCase: true}))
-const firstPatternMatch = findMatch("ticket-42", "[0-9]+")
+print(Text.utf8Size("A😀游戏"))
+print(Text.escapeHtml("<velar>"))
+print(Text.matches("Velar 42", "^velar [0-9]+$", {ignoreCase: true}))
+const firstPatternMatch = Text.findMatch("ticket-42", "[0-9]+")
 print(firstPatternMatch?.value ?? "missing")
 print(firstPatternMatch?.index ?? -1)
-print(findMatch("A😀B", "B")?.index ?? -1)
-const patternMatches = findMatches("a1 b22", "([a-z])([0-9]+)")
+print(Text.findMatch("A😀B", "B")?.index ?? -1)
+const patternMatches = Text.findMatches("a1 b22", "([a-z])([0-9]+)")
 print(patternMatches.size)
 print(patternMatches[1].groups[1] ?? "missing")
-print(replaceMatches("a1 b22", "[0-9]+", "#"))
-print(joinItems(splitPattern("a, b; c", " *[,;] *"), "|"))
-print(matches("first\\nlast", "^last$", {multiline: true}))
-print(matches("a\\nb", "^a.b$", {dotAll: true}))
-const optionalPatternMatch = findMatch("b", "(a)?b")
+print(Text.replaceMatches("a1 b22", "[0-9]+", "#"))
+print(joinItems(Text.splitPattern("a, b; c", " *[,;] *"), "|"))
+print(Text.matches("first\\nlast", "^last$", {multiline: true}))
+print(Text.matches("a\\nb", "^a.b$", {dotAll: true}))
+const optionalPatternMatch = Text.findMatch("b", "(a)?b")
 print(optionalPatternMatch?.groups?.[0] ?? "null")
-print(replaceMatches("x1", "[0-9]", "$&"))
-print(joinItems(splitPattern("a1b", "([0-9])"), "|"))
+print(Text.replaceMatches("x1", "[0-9]", "$&"))
+print(joinItems(Text.splitPattern("a1b", "([0-9])"), "|"))
 try:
-    matches("42", "[0-9]+", {sticky: true})
+    Text.matches("42", "[0-9]+", {sticky: true})
 catch error:
     print(error.name)
 try:
-    matches("value", "[")
+    Text.matches("value", "[")
 catch error:
     print(error.name)
 
@@ -10621,11 +10617,11 @@ print(lcm(6, 8))
 const parsed = Json.parse("{\\"name\\":\\"Nova\\",\\"role\\":\\"admin\\"}", User)
 const copied = Json.clone(parsed, User)
 print(copied.name)
-print(tryParse("bad", User)?.name ?? "fallback")
+print(Json.tryParse("bad", User)?.name ?? "fallback")
 print(Json.stableStringify({z: 1, a: 2}))
 print(Json.stringify([1, 2]))
-print(deepEqual(parsed, copied))
-print(deepEqual(parsed, {name: "Nova", role: "member"}))
+print(equals(parsed, copied))
+print(equals(parsed, {name: "Nova", role: "member"}))
 
 async def double(value: number) -> number:
     return value * 2
@@ -11375,9 +11371,12 @@ test("every declared standard-module export exists in the shipped runtime", asyn
   }
 });
 
-test("velar/json deepEqual compares owned structures without recursive graph failure", () => {
-  const source = standardModuleSource("velar/json") ?? "";
+test("the test matcher's data comparison compares owned structures without recursive graph failure", () => {
+  // D50 rule 90 retired Json.deepEqual; the same bounded comparison still backs
+  // velar/test's toEqual, so its hardening is guarded through that owner.
+  const source = standardModuleSource("velar/test") ?? "";
   const execution = executeModule(`${source}
+const deepEqual = __velarDeepEqual;
 import { runInNewContext } from "node:vm";
 const left = { name: "Velar", nested: [1, { ready: true }] };
 const right = { nested: [1, { ready: true }], name: "Velar" };
@@ -14191,15 +14190,14 @@ test("0.5 Core standard library rejects invalid typed calls before runtime", asy
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {flatten, sum} from "velar/collections"
-import {matches} from "velar/text"
 
 const total = sum(["one", "two"])
 const flat = flatten([1, 2])
 const parsed = Json.parse("{}", 42)
 const resolved = await Promise.all([1, 2])
 const mapped = await Promise.map([1, 2], value => value, "many")
-const pattern = matches(42, "[0-9]+")
-const options = matches("42", "[0-9]+", {ignoreCase: "yes"})
+const pattern = Text.matches(42, "[0-9]+")
+const options = Text.matches("42", "[0-9]+", {ignoreCase: "yes"})
 `.trimStart(), "utf8");
 
   const project = await compileProject(entry);

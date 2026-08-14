@@ -141,7 +141,6 @@ try {
 
   await writeFile(join(directory, "main.vel"), `
 import {range, sum} from "velar/collections"
-import {chunks, utf8Size} from "velar/text"
 import {TextBuffer} from "@velarscript/text-buffer"
 import {ScriptDocument, ScriptLanguage} from "@velarscript/script-analysis"
 
@@ -149,8 +148,8 @@ export const answer = sum(range(0, 7)) * 2
 const buffer = TextBuffer("A😀\\nB")
 buffer.insert(buffer.size, "!")
 print(answer)
-print(utf8Size("A😀游戏"))
-print(chunks("A😀游戏", 2).join("|"))
+print(Text.utf8Size("A😀游戏"))
+print(Text.chunks("A😀游戏", 2).join("|"))
 print(f"{str(buffer.size)}:{buffer.lineText(1)}")
 const scriptSource = "const answer = 42\\nprint(answer)\\n"
 const script = ScriptDocument(ScriptLanguage.typescript, scriptSource)
