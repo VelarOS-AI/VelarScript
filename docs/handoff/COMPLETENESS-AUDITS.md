@@ -1013,3 +1013,73 @@ desktop 波的报告已把「让并发门禁运行在单 checkout 下安全」�
 
 **编排纪律（即刻生效）**：并行波各自在 worktree 内跑门禁**仅作自检**；
 **合并后的权威门禁必须在主树串行独跑**，其间不派新波跑测试。
+
+
+---
+
+## 审计十二 —— 马拉松新增表面（2026-08-14，约 600 探针，五路并行 + 交叉复核）
+
+**立项前提得到验证**：实现者自测过的代码，失败模式高度一致 —— **顺路与降级扎实**，
+洞全在**契约解析边缘**与**实现者没理由去的边界**（`any`、子类化、JS 桥、报告
+通道、入口图）。
+
+### DEFECT（编译通过后崩溃或静默错误）
+
+| ID | 现象 | 优先 |
+|---|---|---|
+| **NEW-D1** | **`IndexError` 在每条 CLI 路径上不可达**（编排代理已独立复现：`error.code` 打印 `Error`、退出 0，程序自己的 catch 吞掉了编译器内部的 `ReferenceError` 并对着错误的错误跑恢复；`is` 形式直接崩）。根因：类已定义但漏出 `VELAR_COLLECTION_LOWERING_EXPORTS`，而**所有既有覆盖都在 standalone 路径、每个 CLI 入口都走 sharedRuntimeModules** —— **门禁按构造失明**。回归必须是 CLI/项目级 | 1 |
+| **NEW-D2** | **约 20ms 后的 detached 失败把坏程序变绿**（3/3 确定性复现）：`test-runner.ts:125` 的固定窗口过后，失败落在守卫拆除之后 —— 只进 stderr、不计数、退出 0；而该文件自己的注释承诺「仍会让运行失败」。**这是同一缺陷类第三次被发现** | 2 |
+| **NEW-D3** | **`unknown` 满足每一条类型约束**，直穿隐式转换禁令（经 `<T: Text>` 打印 `[object Object]` 退出 0；另一路驱动到**执行了 toString 钩子**——正是 charter 885-888 存在的理由）。`unifyTypeParameters` 对 unknown 早退留下 null 绑定，违规收集器跳过 null | 3 |
+| **NEW-D4** | **子类的 async `@dispose` 经基类静态类型持有时不被 await**（`disposalContract` 从静态类型向上走，VEL4033 被子类型化击败）；释放抛错时变成杀进程的未处理 rejection | 4 |
+| **NEW-D5** | **`using` 一个 `any` 降级成普通 `const`** —— 无释放、零诊断。`any` 豁免走的是 `contract === null` 分支，于是什么都不注册。**最尖锐的反转**：桥文档教你用的 `unknown` 被正确拒绝，`any` 静默泄漏；且**没有正确替代**——extern class 被 VEL4032 拒绝，而它的指引「声明 `@dispose:` 块」在 extern 块里是解析错误 | 5 |
+| **NEW-D6** | 展开常驻命名空间（`{...Json}`）编译干净、运行 `TypeError: Object spread cannot copy symbol fields` | 7 |
+| **NEW-D7** | Error 子类上 `const name`/`const message`/`const code` 重声明被接受：`const name` **伪造 `code`**、`const message` 静默丢弃构造消息。守卫拒 `let`/`def`/`get` 但不拒 `const`。**证伪 charter 2070「两者永不分歧」，且与账本 156 行「message 不可重声明」矛盾 —— 对不回归契约的回归** | 6 |
+| **NEW-D8** | `velar fix` 改写文件后，后续写失败时**零报告**（已改的文件保留改动、无摘要、退出 1） | 7 |
+| **NEW-D9** | 格式化器吞掉 `[` 前的空格（`for i in [1, 2]:` → `in[1, 2]:`），幂等且 check 干净，于是 `--check` **反过来强制**这个坏形。**存活原因：全仓零处 `for x in [字面量]`——语料盲区** | 7 |
+
+### INCONSISTENT（择要）
+
+**约束名与同名用户类型**：`type Data:` + `def save<T: Data>` **静默指编译器的约束**
+（`save(42)`/`save("...")`/`save([1,2,3])` 全过），而四行之外的 `def useParam<Data>`
+**拒绝**同一碰撞；VEL4021（专为教「约束是编译器自有名字」而存在）**结构上不可能
+触发**。`Data`/`Text` 恰是最可能的用户类型名。 · `code`/`name`/`is` 在 JS 边界三方
+不一致 · **退役指引是保证的两轮循环**（`trimStart` → 教 velar/text → 照做 → 教
+Text. 直用） · **`velar check`/`build`/`fix` 对 `*.test.vel` 失明**（测试模块里
+`const n: number = "not a number"` 过 check 与 build） · Core 测试运行器**零超时**
+（浏览器有两个） · `@cleanup` 拒 `using` 而其拒绝消息**点名 `@cleanup` 作为修法`。
+
+### CHARTER-DRIFT
+
+**`Text ⊂ Data` 包含链是假的**（web 扩展的文本形类型是 Text 但被 Data 拒绝）——
+D41 的链式论证据此需要修订 · **`using` 对 socket/eventStream/terminal 不工作**
+（结构类型无 identity，具名规则永不匹配；诊断把活 WebSocket 叫「记录」）·
+**JSX 属性值里反引号非法而单引号被接受** —— 与全语言恰好相反，且正是简报
+143 行主动引导的位置。
+
+### 待用户裁决（设计题，本代理不擅动）
+
+① 被拥有的资源**逃出作用域**（return/闭包捕获/模块状态）得到已释放的死句柄、
+零诊断 ② 派生 `@dispose` 静默替换基类的，且无链式调用路径 ③ `try` 吞掉
+`AssertionError`/`NarrowingError`/`IndexError` —— 编译器自身的完整性守卫与预期
+失败无从区分 ④ bidi 禁令漏掉 12 个 `Bidi_Control` 中的 3 个（LRM/RLM/ALM，
+CVE-2021-42574 同案点名）⑤ **bidi 控制字符原样进测试报告的判定行** —— 源码
+禁了、报告器照抄，`test "\u{202E}…"` 在 bidi 终端上把失败渲染成通过 ⑥ 命名空间
+是否是一等值（限制为成员访问头可一次关闭五条发现）⑦ `code`/`name` 在 JS 边界
+的分歧。
+
+### DECIDED-AND-CORRECT（完整性凭证，值得直说）
+
+**`using` 的退出路径机器确实扎实 —— 五路代理攻不破**：五种退出及其组合、60 个
+绑定的 LIFO、循环每轮释放、释放失败与在途错误的双向优先级（含 async 变体）、
+获取与释放的 async 分离、六个具名能力句柄、幂等、`@dispose` 语法守卫网格、
+以及最刁的软词碰撞 `using using = Handle()`。**用户类必须显式 `@dispose:`，
+永不自动识别** —— 检测规则最尖的边被这条关死。
+
+同样干净：`try` 的约 25 个位置网格与收窄中立性（与非 try 路径逐字节相同）；
+约束的诊断落点、re-export、跨模块载体、`Type<T>`；`test` 名字网格（unicode/emoji/
+转义/反引号/600 字符/重复/空）与 `.browser.test.vel` 编译与运行双层对等；
+`velar fix` 的字符串/注释惰性、幂等、重叠修复收敛、CRLF 保持、干净文件不碰；
+软化词在 Core 与 Web 的 18 个位置；命名空间各深度遮蔽；五个环境错误类的
+`path`/`code`/兄弟不匹配、深层继承、跨模块与构建后 `code` 稳定；**宿主对象
+携带 `code: "SPOOFED"` 不会漏进 `error.code`**；`\u{...}` 边界网格与 16 种非法
+形；九个被禁 bidi 控制符在 13 个源位置；格式化器定界符归一 43 例含两处平手。
