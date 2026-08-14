@@ -8,7 +8,7 @@
 | `bdabfeb` | 六条流分析裁定（FLW-N7/N2/S1/N6/S2/N4） |
 | `6117385` | `import type` 按 D38 第 49 条实现 —— **已被下面那条撤销** |
 | `c39ca4a` | 本报告初版 |
-| `ZZZPENDING` | 按 D50 第 100 条撤销 `import type`：只留识别 + 定向拒绝 |
+| `ff2827d` | 按 D50 第 100 条撤销 `import type`：只留识别 + 定向拒绝 |
 
 回归测试全部在 `tests/hardening-wave-z2.test.ts`（27 例）。账本证据是执行级的地方，
 测试也是执行级的：六个流条目里有四个带 `run(...)` 的运行断言，`Text.normalize`
