@@ -26,8 +26,11 @@ function __velarErrorCode(value) {
 
 因此二者**共用同一处真相**（类降级写 `.name` 的那一行），分叉在结构上不可能。
 三个既有内建（ValidationError/NarrowingError/IndexError）和模块类
-（HttpError 等）都在构造函数里写 `this.name`，所以同样命中。跨模块已验证
-（`tests/hardening-wave-r2.test.ts` 的第一个用例跨函数边界传 `Error` 再读）。
+（HttpError 等）都在构造函数里写 `this.name`，所以同样命中。**跨模块已验证**：
+`tests/hardening-wave-r2.test.ts` 用真实项目（`errors.vel` 声明 `PaymentError`、
+`domain.vel` 抛 `ValidationError`、`main.vel` 捕获）经 `velar run` 执行，两者的
+`code`/`name`/`is` 三者一致 —— 因为写 `name` 的只有声明它的那个模块，没有第二处
+可以漂移。
 
 **宿主错误**：原生 `TypeError` 的 `name` 在原型上而非自有属性，因此 `code` 是
 `"Error"` —— 正是裁决表格「无包装则 `Error`」那一格，也正是它在 Vel 里唯一为真
@@ -254,11 +257,38 @@ Checked 76 runtime boundary operations and the shared registry, strict JSON, Web
 
 ### `npm test`
 
-（见文末追加）
+```
+ℹ tests 969
+ℹ pass 969
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+（其后的四个官方示例 `velar check` + `velar test` 逐个通过，尾部：）
+
+```
+✓ src/chart.test.vel :: test_chart_coordinates_are_bounded
+✓ src/chart.test.vel :: test_chart_scale_owns_derived_internal_state
+✓ src/chart.test.vel :: test_chart_scale_constructor_rejects_invalid_values
+
+3 passed, 0 failed
+```
 
 ### `npm run test:browser`
 
-（见文末追加）
+```
+✓ chromium :: src/app.browser.test.vel :: test_dashboard_loads_typed_data_and_real_svg
+✓ chromium :: src/app.browser.test.vel :: test_dashboard_resource_reloads_without_replacing_the_chart_contract
+✓ firefox :: src/app.browser.test.vel :: test_dashboard_loads_typed_data_and_real_svg
+✓ firefox :: src/app.browser.test.vel :: test_dashboard_resource_reloads_without_replacing_the_chart_contract
+✓ webkit :: src/app.browser.test.vel :: test_dashboard_loads_typed_data_and_real_svg
+✓ webkit :: src/app.browser.test.vel :: test_dashboard_resource_reloads_without_replacing_the_chart_contract
+
+6 passed, 0 failed
+Installed VelarScript browser-project acceptance passed
+```
 
 ---
 
