@@ -813,6 +813,20 @@ def label(user: User?) -> string:
     return user.name
 ```
 
+Equality carries a fact back to its subject wherever one literal answers the
+question. `flag == true` and `flag == false` each prove a `bool?` holds a
+`bool`, exactly as `status == Status.done` proves an enum singleton; the
+opposite arm learns nothing, because `flag != true` still admits `false` and an
+absent value. Membership does the same, since a membership probe asks the `==`
+question one element at a time (section 4): `value in names` proves `value` is
+of the container's element or key type, so a `string?` narrows to `string`
+against a `List<string>` but not against a `List<string?>`, where an absent
+value is a legitimate element. The negative arm of a membership probe proves
+nothing — any element could be the one that failed to match. An optional chain
+that produced a value proves every link along it was present, since an absent
+link is exactly what the chain short-circuits on: `if user.profile?.email !=
+null:` narrows `user.profile` as well as the address.
+
 Narrowing is flow-based and deliberately practical. A fact established by a
 check persists across calls, getters, callbacks, `await`, and string
 interpolation. A known assignment to that location (including destructuring or
@@ -855,12 +869,14 @@ Three boundaries remain because they are visible in source:
   any later time, so it re-checks what it needs or receives checked values as
   parameters.
 - A getter is a computed value, not a stable location. Read it into a `const`
-  to narrow the result.
+  to narrow the result. A check written directly on a getter is reported where
+  it stands, because it looks like every other narrowing check and establishes
+  nothing, and a read that would need `?.` names the `const` binding rather
+  than `?.` — the operator would compute the getter a second time.
 - An index or a `Map.get` is a read, not a location either. `values[0]` and
   `lookup.get(key)` compute a result each time they are written, so testing one
   narrows nothing for the next — the collection may hold something else by
   then. Read the value into a `const` and test that; the two reads become one.
-
 An f-string converts each embedded value at its source position under the
 language's one text-conversion contract: conversion accepts `string`,
 `number`, `bool`, enums, and `null` — plus optionals and unions of those —
@@ -1142,6 +1158,14 @@ pair as one character and an unpaired half as one character; no member fails on
 such a value. Source literals stay narrower than the value space on purpose:
 `\u{D800}`–`\u{DFFF}` are rejected (section 3), so a lone surrogate can only
 enter a program across a JavaScript boundary, never from Velar text.
+
+Text equality is code-point-sequence identity, so canonically equivalent text
+is not equal: a word typed with one precomposed accented character and the same
+word read back from a macOS filename as a plain letter plus a combining accent
+render identically, yet they compare unequal, report different `size`, and miss
+each other as Map and Set keys. Normalize at the boundary where such text
+enters the program — `Text.normalize(text)` produces NFC, and `"NFD"`,
+`"NFKC"`, and `"NFKD"` are the other three accepted forms.
 
 Case-insensitive comparison is spelled `a.lower() == b.lower()`, and that is an
 approximation rather than Unicode case folding: `"STRASSE".lower()` is
@@ -1759,7 +1783,14 @@ The two exits differ after the loop. An arm's writes still escape it — `break`
 carries them directly to the code after the loop, and `continue` carries them
 back through the condition — so the after-loop merge sees them either way, and
 a loop that can `break` may exit while its condition still holds, so the
-condition's negated facts do not persist past it. Writes after an unconditional
+condition's negated facts do not persist past it. A loop with no reachable
+`break` of its own is left only by its condition failing, so there those
+negated facts do persist whatever the body does — the fact carried out is what
+the entry test and the back-edge test both prove, because the loop is left
+through whichever of the two failed. Conversely, a literal `while true` has no
+failing condition, so its breaks are its only exits, and the facts every one of
+them proves hold after the loop; one break that proves less carries nothing
+out. Writes after an unconditional
 `return`, `throw`, `break`, or `continue` do not affect reachable flow facts. If
 a loop body can only return or throw, its writes cannot escape to the skipped
 path after the loop. A literal `while true` with no reachable `break` owned by
@@ -2133,6 +2164,17 @@ import {User as Account, loadUser} from "./users.vel"
 
 const user: Account = loadUser()
 ```
+
+There is no separate type import. `import type {User} from "./x.vel"` and
+`export type {User} from "./x.vel"` are recognized — the TypeScript habit is
+frequent enough to be worth teaching — and refused with the reason: VelarScript
+does not erase types. A named type carries its runtime validator, an enum is a
+runtime value, and a class is a runtime value, so a type import is an ordinary
+import and the marker has nothing left to mean. Dropping the word is the whole
+rewrite, so `velar fix` applies it. TypeScript needs the form because TypeScript
+erases: there, a type import can carry no module edge. Here every import of
+every name carries one, which is also why a module imported only for its
+initialization side effects behaves exactly as written.
 
 VelarScript modules have no default export in either direction: every export
 carries a name, `export default` is rejected with that answer, and a default
@@ -3473,7 +3515,7 @@ needs, and a program reaches every one of them without writing an import:
 | --- | --- |
 | `Json.` | `parse`, `tryParse`, `stringify`, `stableStringify`, `clone`, `isSerializable` |
 | `Promise.` | `all`, `race`, `sleep`, `timeout`, `retry`, `map`, `series` |
-| `Text.` | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
+| `Text.` | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
 | `Look.` | the Web builder roster (`rgb`, `spacing`, `border`, and the rest of section 17) |
 
 The prelude adds `print`, `str`, `number`, `equals`, and `range` as bare names.

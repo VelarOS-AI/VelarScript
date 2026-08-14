@@ -232,7 +232,11 @@ export class Parser {
     }
 
     const exported = this.match("export");
-    if (exported && (this.check("leftBrace") || this.check("star"))) {
+    // D50 rule 100: `export type {Name} from "..."` is the re-export half of the
+    // TypeScript habit, recognized so it can be taught; `export type Name:` is
+    // still an ordinary exported type declaration.
+    if (exported && (this.check("leftBrace") || this.check("star")
+      || (this.checkWord("type") && (this.peekKind(1) === "leftBrace" || this.peekKind(1) === "star")))) {
       return this.parseReExport(start);
     }
     // MOD-U2: `export default` is the JavaScript habit; VelarScript modules
@@ -606,9 +610,43 @@ export class Parser {
     return { kind: "ForStatement", asynchronous, pattern, secondPattern, iterable, body, span: span(start, body.at(-1)?.span.end ?? iterable.span.end) };
   }
 
+  /**
+   * D50 rule 100: `type` is a contextual keyword, so `import type {User} from`
+   * is the TypeScript habit while `import type from "./x.vel"` still reads as a
+   * default import named `type`. The habit is recognized by what follows the
+   * word — a brace list, a namespace star, or a name that is not `from` — so
+   * that it can be taught rather than met with a generic parse error.
+   */
+  private typeImportMarkerAhead(): boolean {
+    if (!this.checkWord("type")) return false;
+    const next = this.tokens[this.index + 1];
+    if (!next) return false;
+    return next.kind === "leftBrace" || next.kind === "star"
+      || (next.kind === "identifier" && next.value !== "from");
+  }
+
+  /**
+   * D50 rule 100 (retiring D38 rule 49): TypeScript needs `import type` because
+   * TypeScript erases types, so a type import can carry no module edge.
+   * VelarScript does not erase: every named type carries its runtime validator,
+   * an enum is a runtime value, and a class is a runtime value — so a type
+   * import is an ordinary import and the marker has nothing left to mean.
+   * Dropping the word is the whole rewrite, which is why `velar fix` applies it.
+   */
+  private rejectTypeImportMarker(marker: Token, form: "import" | "export"): void {
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL2029",
+      "VelarScript does not erase types: a type carries its runtime validator, so a type import is an ordinary import"
+      + ` — drop 'type' and write ${form} {Name} from "..."`,
+      marker.span,
+      mechanicalFix({ start: marker.span.start, end: marker.span.end + 1 }, "", "Drop 'type' from the import"),
+    ));
+  }
+
   private parseImport(start: number): ImportDeclaration | null {
     const javascript = this.match("js");
     const unsafe = javascript && this.match("unsafe");
+    if (this.typeImportMarkerAhead()) this.rejectTypeImportMarker(this.advance(), "import");
     const specifiers: ImportSpecifier[] = [];
 
     // MOD-I2 / D50 rule 99: a side-effect import is invisible action. The
@@ -638,6 +676,10 @@ export class Parser {
       const brace = this.previous();
       if (!this.check("rightBrace")) {
         do {
+          // The inline marker is the same habit written per name.
+          if (this.checkWord("type") && this.peekKind(1) === "identifier") {
+            this.rejectTypeImportMarker(this.advance(), "import");
+          }
           const imported = this.expect("identifier", "Expected an imported name");
           const local = this.matchWord("as") ? this.expect("identifier", "Expected a local import name") : imported;
           specifiers.push({ imported: imported.value, local: local.value, namespace: false, span: span(imported.span.start, local.span.end) });
@@ -689,6 +731,7 @@ export class Parser {
   }
 
   private parseReExport(start: number): ReExportDeclaration | null {
+    if (this.checkWord("type")) this.rejectTypeImportMarker(this.advance(), "export");
     if (this.match("star")) {
       const star = this.previous();
       if (this.matchWord("as")) this.match("identifier");
@@ -704,6 +747,9 @@ export class Parser {
     const specifiers: ReExportSpecifier[] = [];
     if (!this.check("rightBrace")) {
       do {
+        if (this.checkWord("type") && this.peekKind(1) === "identifier") {
+          this.rejectTypeImportMarker(this.advance(), "export");
+        }
         const imported = this.expect("identifier", "Expected a re-exported name");
         const alias = this.matchWord("as") ? this.expect("identifier", "Expected a re-export alias") : imported;
         specifiers.push({ imported: imported.value, exported: alias.value, span: span(imported.span.start, alias.span.end) });

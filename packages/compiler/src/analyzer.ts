@@ -134,6 +134,17 @@ interface FlowFactInvalidations {
   readonly storageTypes: ReadonlyMap<Binding, ValueType>;
 }
 
+interface LoopFlowContext {
+  readonly baseline: FlowFactsSnapshot;
+  /** The bindings visible outside the loop, so a break's facts can be stated in their terms. */
+  readonly visible: ReadonlyMap<string, Binding>;
+  readonly carried: FlowFactInvalidations[];
+  readonly backEdges: FlowFactInvalidations[];
+  /** FLW-N6: the facts holding at each `break`, one entry per break edge. */
+  readonly breakFacts: ReadonlyMap<string, ValueType>[];
+  sawBreak: boolean;
+}
+
 interface ReturnContext {
   readonly expected: ValueType;
   readonly inferredReturns: ValueType[] | null;
@@ -543,6 +554,10 @@ const textNamespaceMembers: ReadonlyMap<string, ValueType> = new Map([
   ["chunks", textFunction(["value", "size"], [stringType, numberType], listOfString)],
   ["words", textFunction(["value"], [stringType], listOfString)],
   ["slug", textFunction(["value"], [stringType], stringType)],
+  // TXT-U3: equality is code-point-sequence identity, so canonically
+  // equivalent text is not equal. `normalize` is the boundary tool that makes
+  // it equal — macOS filenames arrive NFD while typed text is usually NFC.
+  ["normalize", textFunction(["value", "form"], [stringType, stringType], stringType, 1)],
   ["truncate", textFunction(["value", "length", "suffix"], [stringType, numberType, stringType], stringType, 2)],
   ["indent", textFunction(["value", "prefix"], [stringType, stringType], stringType, 1)],
   ["dedent", textFunction(["value"], [stringType], stringType)],
@@ -763,12 +778,7 @@ export class Analyzer implements TypeEnvironment {
   private loopDepth = 0;
   private finallyLoopDepths: number[] = [];
   private unreachableDiagnosticDepth = 0;
-  private readonly loopFlowContexts: {
-    readonly baseline: FlowFactsSnapshot;
-    readonly carried: FlowFactInvalidations[];
-    readonly backEdges: FlowFactInvalidations[];
-    sawBreak: boolean;
-  }[] = [];
+  private readonly loopFlowContexts: LoopFlowContext[] = [];
   private loopCaptureFloor = 0;
   private currentClass: string | null = null;
   private superMemberContext: "instance" | "static" | null = null;
@@ -2554,7 +2564,7 @@ export class Analyzer implements TypeEnvironment {
           }
         }
         const baseline = this.snapshotFlowFacts();
-        this.loopFlowContexts.push({ baseline, carried: [], backEdges: [], sawBreak: false });
+        this.loopFlowContexts.push({ baseline, visible: this.visibleBindings(), carried: [], backEdges: [], breakFacts: [], sawBreak: false });
         const diagnosticStart = this.diagnostics.length;
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.enterScope();
@@ -2579,7 +2589,7 @@ export class Analyzer implements TypeEnvironment {
           ...(!this.blockAlwaysExits(statement.body) ? [bodyInvalidations] : []),
           ...loopFlow.backEdges,
         ];
-        this.reanalyzeLoopBackEdge(baseline, backEdges, statement.body, diagnosticStart, () => {
+        this.reanalyzeLoopBackEdge(baseline, loopFlow.visible, backEdges, statement.body, diagnosticStart, () => {
           this.enterScope();
           try {
             this.declarePattern(statement.pattern, false, first);
@@ -2607,7 +2617,7 @@ export class Analyzer implements TypeEnvironment {
         const truthy = this.narrowingFor(statement.condition, condition);
         const falsy = this.negativeNarrowingFor(statement.condition, condition);
         const baseline = this.snapshotFlowFacts();
-        this.loopFlowContexts.push({ baseline, carried: [], backEdges: [], sawBreak: false });
+        this.loopFlowContexts.push({ baseline, visible: this.visibleBindings(), carried: [], backEdges: [], breakFacts: [], sawBreak: false });
         const diagnosticStart = this.diagnostics.length;
         const bodyInvalidations = this.analyzeIsolatedFlow(baseline, () => {
           this.loopDepth += 1;
@@ -2619,11 +2629,15 @@ export class Analyzer implements TypeEnvironment {
           ...(!this.blockAlwaysExits(statement.body) ? [bodyInvalidations] : []),
           ...loopFlow.backEdges,
         ];
-        this.reanalyzeLoopBackEdge(baseline, backEdges, statement.body, diagnosticStart, () => {
+        // FLW-S1: a loop the body can re-enter tests its condition again in
+        // the back-edge state, so the exit fact is what both tests agree on.
+        let repeatedFalsy: ReadonlyMap<string, ValueType> | null = null;
+        const repeatedFlow = this.reanalyzeLoopBackEdge(baseline, loopFlow.visible, backEdges, statement.body, diagnosticStart, () => {
           this.clearCachedFlowTypesInSpan(statement.condition.span);
           const repeatedCondition = this.inferExpression(statement.condition);
           this.requireCondition(repeatedCondition, statement.condition);
           const repeatedTruthy = this.narrowingFor(statement.condition, repeatedCondition);
+          repeatedFalsy = this.negativeNarrowingFor(statement.condition, repeatedCondition);
           this.loopDepth += 1;
           this.analyzeBlock(statement.body, repeatedTruthy);
           this.loopDepth -= 1;
@@ -2637,9 +2651,23 @@ export class Analyzer implements TypeEnvironment {
           // The loop can only be left through a captured break/continue arm or
           // by the condition failing, so only the carried writes escape it.
           this.applyFlowInvalidations(loopFlow.carried);
-          if (!loopFlow.sawBreak) this.persistNarrowings(falsy);
         } else {
           this.applyFlowInvalidations([bodyInvalidations, ...loopFlow.carried]);
+        }
+        // FLW-S1 (charter section 9): without a break the only way out is the
+        // condition failing, so its negated fact holds after the loop — for
+        // the common body that neither returns nor breaks, not just the body
+        // that always returns. A break can leave while the condition still
+        // holds, so one break drops the fact entirely.
+        if (!loopFlow.sawBreak) {
+          this.persistNarrowings(repeatedFalsy === null ? falsy : this.joinedNarrowings(falsy, repeatedFalsy));
+        } else if (statement.condition.kind === "LiteralExpression" && statement.condition.value === true) {
+          // FLW-N6: `while true:` has no failing condition, so its breaks are
+          // its only exits, and what every one of them proves holds after the
+          // loop. A loop whose condition can also fail keeps nothing: that
+          // exit proves none of it.
+          const breakFacts = [...loopFlow.breakFacts, ...(repeatedFlow?.breakFacts ?? [])];
+          if (breakFacts.length > 0) this.persistNarrowings(this.commonNarrowings(breakFacts));
         }
         break;
       }
@@ -2655,7 +2683,13 @@ export class Analyzer implements TypeEnvironment {
             const invalidations = this.flowInvalidationsSince(context.baseline);
             context.carried.push(invalidations);
             if (statement.kind === "ContinueStatement") context.backEdges.push(invalidations);
-            if (statement.kind === "BreakStatement") context.sawBreak = true;
+            if (statement.kind === "BreakStatement") {
+              context.sawBreak = true;
+              // FLW-N6: this break is one of the loop's exits, so record what
+              // it proves. The merge after the loop keeps only what every
+              // exit agrees on.
+              context.breakFacts.push(this.narrowingsForVisibleBindings(context.visible));
+            }
           }
         }
         break;
@@ -3971,6 +4005,7 @@ export class Analyzer implements TypeEnvironment {
         // as the location's fact (`x = maybeNull()` establishes nothing —
         // the assigned type must actually refine the declared one).
         if (statement.target.kind === "IdentifierExpression") {
+          this.invalidateShadowedNarrowings(statement.target.name, targetBinding);
           this.establishAssignedFact(statement.target.name, valueType);
         }
       }
@@ -7324,7 +7359,14 @@ export class Analyzer implements TypeEnvironment {
       return finalType;
     }
     if (resolvedOriginal.kind === "optional") {
-      this.typeError(`Use optional access '?.' for ${describeType(original)}`, memberSpan);
+      // FLW-S2: '?.' on a getter would compute it a second time, so the
+      // receiver decides which of the two fixes is the honest one.
+      const getter = this.getterAccessProperty(objectExpression);
+      const text = getter ? this.conditionSubjectText(objectExpression) : null;
+      this.typeError(getter
+        ? `'${getter}' is a getter, so '?.' would compute it a second time`
+          + `; bind it once with 'const ${getter} = ${text ?? `...${getter}`}' and read that name instead`
+        : `Use optional access '?.' for ${describeType(original)}`, memberSpan);
     }
     if (result.kind === "optional") this.optionalMembers.add(spanIdentity(memberSpan));
     return result;
@@ -7934,6 +7976,24 @@ export class Analyzer implements TypeEnvironment {
     if (expression.kind === "UnaryExpression" && expression.operator === "not") {
       return this.conditionNarrowing(expression.operand, !truthy);
     }
+    // FLW-N4: a membership test asks the `==` question one element at a time
+    // (section 4), so a true answer means one element matched — and every
+    // element is of the container's element or key type. The false answer
+    // proves nothing: any element could be the one that failed to match.
+    if (expression.kind === "BinaryExpression"
+      && (expression.operator === "in" || expression.operator === "not in")
+      && (expression.operator === "in") === truthy) {
+      const container = this.inferredExpressionTypes.get(spanIdentity(expression.right.span));
+      const contained = container ? this.membershipElementType(this.expandAliases(container)) : null;
+      const current = this.inferredExpressionTypes.get(spanIdentity(expression.left.span));
+      if (contained && current && this.narrowableLocation(expression.left)) {
+        const narrowedType = this.runtimeCheckedType(current, contained);
+        if (!sameType(narrowedType, this.expandAliases(current))) {
+          this.addLocationNarrowing(narrowed, expression.left, narrowedType);
+        }
+      }
+      return narrowed;
+    }
     if (expression.kind === "BinaryExpression" && (expression.operator === "==" || expression.operator === "!=")) {
       const leftIsNone = expression.left.kind === "LiteralExpression" && expression.left.value === null;
       const rightIsNone = expression.right.kind === "LiteralExpression" && expression.right.value === null;
@@ -7943,6 +8003,15 @@ export class Analyzer implements TypeEnvironment {
         if (candidateType?.kind === "optional") {
           const equalToNone = expression.operator === "==" ? truthy : !truthy;
           this.addLocationNarrowing(narrowed, candidate, equalToNone ? nullType : candidateType.inner);
+          // FLW-N2: an optional chain that produced a non-null value proves
+          // every link along it was present — an absent link is exactly what
+          // the chain short-circuits on. The `== null` arm proves nothing,
+          // because any one absent link produces the same null.
+          if (!equalToNone) {
+            for (const [path, type] of this.optionalExecutionNarrowings(candidate)) {
+              if (!narrowed.has(path)) narrowed.set(path, type);
+            }
+          }
         }
       }
       const leftType = this.inferredExpressionTypes.get(spanIdentity(expression.left.span));
@@ -7958,6 +8027,20 @@ export class Analyzer implements TypeEnvironment {
         const equal = expression.operator === "==" ? truthy : !truthy;
         const narrowedType = this.narrowEnumMember(singleton.current, singleton.singleton, equal);
         if (narrowedType) this.addLocationNarrowing(narrowed, singleton.candidate, narrowedType);
+      }
+      // FLW-N7: `true` and `false` are the two members of bool, so equality
+      // with either literal carries the singleton fact back to its owner
+      // exactly as an enum member does. Only the branch that proves equality
+      // learns anything: `flag != true` still admits both `false` and an
+      // absent value, which is the same reason `if flag:` teaches its else
+      // arm nothing.
+      const leftIsBoolean = expression.left.kind === "LiteralExpression" && typeof expression.left.value === "boolean";
+      const rightIsBoolean = expression.right.kind === "LiteralExpression" && typeof expression.right.value === "boolean";
+      if (leftIsBoolean !== rightIsBoolean && (expression.operator === "==") === truthy) {
+        const candidate = leftIsBoolean ? expression.right : expression.left;
+        const candidateType = leftIsBoolean ? rightType : leftType;
+        const narrowedType = candidateType ? this.narrowToBoolean(candidateType) : null;
+        if (narrowedType) this.addLocationNarrowing(narrowed, candidate, narrowedType);
       }
       return narrowed;
     }
@@ -8000,6 +8083,14 @@ export class Analyzer implements TypeEnvironment {
       }
     }
     return narrowed;
+  }
+
+  /** What one element of a membership probe's container is, matching the `in` operand rules. */
+  private membershipElementType(container: ValueType): ValueType | null {
+    if (container.kind === "list" || container.kind === "set") return container.element;
+    if (container.kind === "map") return container.key;
+    if (container.kind === "record" || container.kind === "string") return stringType;
+    return null;
   }
 
   /** The concrete checked value behind `Kind.is(value)`, when Kind is a runtime validator. */
@@ -8082,6 +8173,20 @@ export class Analyzer implements TypeEnvironment {
       return remaining.length > 0 ? unionOf(remaining) : null;
     }
     return null;
+  }
+
+  /**
+   * FLW-N7: the fact a boolean-literal comparison proves about its owner.
+   * A location already typed `bool` learns nothing, so no fact is recorded
+   * for it — a needless fact would only buy a runtime recheck on every later
+   * read.
+   */
+  private narrowToBoolean(current: ValueType): ValueType | null {
+    const source = this.expandAliases(current);
+    if (source.kind === "optional") return this.expandAliases(source.inner).kind === "bool" ? boolType : null;
+    if (source.kind !== "union") return null;
+    const matching = source.members.filter((member) => this.expandAliases(member).kind === "bool");
+    return matching.length > 0 && matching.length < source.members.length ? boolType : null;
   }
 
   private narrowDiscriminatedOwner(owner: ValueType, property: string, narrowedField: ValueType): ValueType | null {
@@ -8190,6 +8295,7 @@ export class Analyzer implements TypeEnvironment {
   // truthiness would judge 0 and "" false, which breaks the owner's ruling
   // that a condition judges only bool; validate the boundary value first.
   protected requireCondition(type: ValueType, condition: Expression): void {
+    this.checkGetterNarrowingTest(condition);
     if (isInvalidType(type)) return;
     const expanded = this.expandAliases(type);
     if (expanded.kind === "bool") return;
@@ -8215,6 +8321,73 @@ export class Analyzer implements TypeEnvironment {
       return;
     }
     this.typeError(`Condition must be bool, received ${describeType(type)}`, condition.span);
+  }
+
+  /**
+   * FLW-S2: a getter is a computed value, not a stable location, so a check on
+   * one establishes no fact — the guard reads exactly like every other
+   * narrowing check and silently does nothing. Say so where it is written,
+   * and name the one spelling that works: bind the getter to a `const` and
+   * check that. Following `?.` instead would compute the getter twice.
+   */
+  private checkGetterNarrowingTest(condition: Expression): void {
+    const subject = this.narrowingSubjectExpression(condition);
+    if (!subject) return;
+    const property = this.getterAccessProperty(subject);
+    if (!property) return;
+    const subjectType = this.inferredExpressionTypes.get(spanIdentity(subject.span));
+    if (!subjectType) return;
+    // Only a shape a check could have narrowed is worth naming. A getter
+    // returning one concrete type is tested, not narrowed, and stays silent.
+    const shape = this.expandAliases(subjectType).kind;
+    if (shape !== "optional" && !(shape === "union" && subject !== condition)) return;
+    const text = this.conditionSubjectText(subject);
+    this.typeError(
+      `'${property}' is a getter, so it is computed again on every read and this check narrows nothing`
+      + `; bind it once with 'const ${property} = ${text ?? `...${property}`}' and check that name instead`,
+      condition.span,
+    );
+  }
+
+  /** The location a condition would narrow, for the forms that narrow one. */
+  private narrowingSubjectExpression(condition: Expression): Expression | null {
+    if (condition.kind === "UnaryExpression" && condition.operator === "not") {
+      return this.narrowingSubjectExpression(condition.operand);
+    }
+    if (condition.kind === "IsExpression") return condition.value;
+    if (condition.kind === "MemberExpression") return condition;
+    if (condition.kind !== "BinaryExpression") return null;
+    if (condition.operator === "in" || condition.operator === "not in") return condition.left;
+    if (condition.operator !== "==" && condition.operator !== "!=") return null;
+    // The literal forms that carry a fact back: a null test and, since `true`
+    // and `false` are the two members of bool, a boolean-literal comparison.
+    const narrowingLiteral = (side: Expression): boolean => side.kind === "LiteralExpression"
+      && (side.value === null || typeof side.value === "boolean");
+    const leftIsLiteral = narrowingLiteral(condition.left);
+    const rightIsLiteral = narrowingLiteral(condition.right);
+    return leftIsLiteral === rightIsLiteral ? null : leftIsLiteral ? condition.right : condition.left;
+  }
+
+  /** The property name when an expression reads a getter rather than a stored field. */
+  private getterAccessProperty(expression: Expression): string | null {
+    if (expression.kind !== "MemberExpression" || expression.optional) return null;
+    const inferred = this.inferredExpressionTypes.get(spanIdentity(expression.object.span))
+      ?? (expression.object.kind === "IdentifierExpression" ? this.lookup(expression.object.name)?.type : null);
+    if (!inferred) return null;
+    const owner = nonOptional(this.expandAliases(inferred));
+    if (owner.kind === "class") {
+      const key = owner.identity ?? owner.name;
+      const found = this.findGetter(key, expression.property) !== null
+        || (this.privateGetters.get(this.currentClass ?? "")?.has(expression.property) ?? false);
+      return found ? expression.property : null;
+    }
+    if (owner.kind === "classConstructor") {
+      const key = owner.identity ?? owner.name;
+      const found = this.findStaticGetter(key, expression.property) !== null
+        || (this.privateStaticGetters.get(this.currentClass ?? "")?.has(expression.property) ?? false);
+      return found ? expression.property : null;
+    }
+    return null;
   }
 
   // Presence guidance names the exact spelling to write whenever the condition
@@ -10140,6 +10313,27 @@ export class Analyzer implements TypeEnvironment {
     return matching.length === 1 ? matching[0]! : null;
   }
 
+  /**
+   * A check that narrows a location installs a shadow of the binding in the
+   * scope it entered, so nested checks leave one shadow per enclosing scope.
+   * Clearing only the innermost shadow lets an outer scope keep a fact this
+   * write just falsified — visible after a `while` whose condition narrows
+   * the same name its body assigns, where the body's shadow is discarded with
+   * the body scope and the loop's own shadow never learns of the write.
+   */
+  private invalidateShadowedNarrowings(name: string, target: Binding | null): void {
+    if (!target) return;
+    const storage = target.storageBinding ?? target;
+    for (const scope of this.scopes) {
+      const shadow = scope.get(name);
+      if (!shadow || shadow === target || (shadow.storageBinding ?? shadow) !== storage) continue;
+      shadow.storageType = storage.storageType;
+      shadow.type = storage.storageType;
+      shadow.narrowingFrame = null;
+      shadow.assignedFact = false;
+    }
+  }
+
   private establishAssignedFact(name: string, assigned: ValueType): void {
     const binding = this.lookup(name);
     if (!binding) return;
@@ -10501,23 +10695,26 @@ export class Analyzer implements TypeEnvironment {
 
   private reanalyzeLoopBackEdge(
     baseline: FlowFactsSnapshot,
+    visible: ReadonlyMap<string, Binding>,
     backEdges: readonly FlowFactInvalidations[],
     body: readonly Statement[],
     diagnosticStart: number,
     analyze: () => void,
-  ): void {
-    if (!this.flowInvalidationsAffectFacts(backEdges)) return;
+  ): LoopFlowContext | null {
+    if (!this.flowInvalidationsAffectFacts(backEdges)) return null;
     const loopHead = this.flowSnapshotAfterInvalidations(baseline, backEdges);
-    this.loopFlowContexts.push({ baseline: loopHead, carried: [], backEdges: [], sawBreak: false });
+    this.loopFlowContexts.push({ baseline: loopHead, visible, carried: [], backEdges: [], breakFacts: [], sawBreak: false });
     const secondDiagnosticStart = this.diagnostics.length;
     this.clearCachedFlowTypes(body);
+    let repeated: LoopFlowContext | null = null;
     try {
       this.analyzeIsolatedFlow(loopHead, analyze);
       this.deduplicateDiagnostics(diagnosticStart, secondDiagnosticStart);
     } finally {
-      this.loopFlowContexts.pop();
+      repeated = this.loopFlowContexts.pop() ?? null;
       this.restoreFlowFacts(baseline);
     }
+    return repeated;
   }
 
   private flowInvalidationsAffectFacts(invalidations: readonly FlowFactInvalidations[]): boolean {
@@ -10632,6 +10829,24 @@ export class Analyzer implements TypeEnvironment {
       })) common.set(key, type);
     }
     return common;
+  }
+
+  /**
+   * FLW-S1: a `while` is left through the condition test taken either on
+   * entry or after the back edge, so the fact that holds afterwards is the
+   * union of what the two tests prove. A location only one of them names is
+   * dropped, because the other test proves nothing about it.
+   */
+  private joinedNarrowings(
+    first: ReadonlyMap<string, ValueType>,
+    second: ReadonlyMap<string, ValueType>,
+  ): ReadonlyMap<string, ValueType> {
+    const joined = new Map<string, ValueType>();
+    for (const [key, type] of first) {
+      const other = second.get(key);
+      if (other !== undefined) joined.set(key, sameType(other, type) ? type : mergeTypes(type, other));
+    }
+    return joined;
   }
 
   private applyFlowInvalidations(branches: readonly FlowFactInvalidations[], includeBaseline = true): void {

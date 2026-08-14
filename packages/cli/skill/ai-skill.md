@@ -37,8 +37,8 @@ must be imported. Four permanent namespaces carry the pure computation:
 `Json.` (`parse`, `tryParse`, `stringify`, `stableStringify`, `clone`,
 `isSerializable`), `Promise.` (`all`, `race`, `sleep`, `timeout`, `retry`,
 `map`, `series`), `Text.` (`trimStart`, `trimEnd`, `capitalize`, `title`,
-`lines`, `lineStarts`, `chunks`, `words`, `slug`, `truncate`, `indent`,
-`dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`,
+`lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`,
+`indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`,
 `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`,
 `splitPattern`), and Web visual builders under `Look.*`. A string method is a
 core operation; `Text.*` is the extension toolbox, and nothing moves between
@@ -540,7 +540,9 @@ An expected failure is an optional, not a block: `try expression` produces
 ### Modules
 
 Export and import by name; a package's public face is a barrel of explicit
-re-exports — `export {measure, firstLine} from "./text.vel"`.
+re-exports — `export {measure, firstLine} from "./text.vel"`. There is no
+`import type`: Vel does not erase types, so a type carries its runtime
+validator and a type import is an ordinary import.
 
 ## When Vel is in your way
 

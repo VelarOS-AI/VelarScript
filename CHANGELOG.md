@@ -6,6 +6,25 @@ truth for acceptance status.
 
 ## Unreleased
 
+- Narrowing gets six long-standing gaps closed: `flag == true` narrows a
+  `bool?` the way an enum comparison already did, a non-null optional chain
+  proves every link was present, a `while` that cannot `break` keeps its
+  condition's negated facts (as the union of what the entry and back-edge
+  tests prove), facts cross the `break` edge of a `while true:`, a useless
+  check on a getter is reported where it stands and teaches the `const`
+  binding rather than `?.`, and a membership test carries its fact back.
+  A pre-existing soundness gap fell out of the work: a write cleared only
+  the innermost narrowed shadow, so a loop that narrowed a name its body
+  assigned kept a falsified fact past the loop — clean at compile time and
+  a `NarrowingError` at runtime.
+- `Text.normalize` closes the Unicode-normalization trap: two strings that
+  render identically compared unequal, sized differently, and missed each
+  other as Map keys, and macOS filenames arrive decomposed. Equality is
+  code-point-sequence identity, so normalize at the boundary.
+- `import type` is not part of VelarScript and now teaches why: Vel does
+  not erase types — a type carries its runtime validator — so a type
+  import is an ordinary import. The form is recognized and rewritten by
+  `velar fix` rather than met with a parse error.
 - The diagnostic backlog that wave N-3 silently dropped is closed —
   seventeen items including three approved rulings. `self` in a field
   initializer or static method, extending an extern class, `readonly` on a

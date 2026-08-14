@@ -142,9 +142,10 @@ test("[MOD-I1] velar check prints module diagnostics alongside resolution failur
 });
 
 test("[MOD-I1 + BRG-D1] a recovered import never fabricates an empty-source dependency", async () => {
-  // `import type` (not yet a spelling) and `import unsafe` (forgot js) both
-  // died behind "invalid package name ''" while the parser's own diagnostics
-  // were generated and hidden.
+  // `import type` and `import unsafe` (forgot js) both died behind "invalid
+  // package name ''" while the parser's own diagnostics were generated and
+  // hidden. D50 rule 100 later gave `import type` its own teaching, so the two
+  // spellings now differ in message but agree on naming a real module.
   for (const line of ["import type {User} from \"./lib.vel\"", "import unsafe {x} from \"./lib.vel\""]) {
     const result = await runCli({
       "lib.vel": "export const x = 1\n",
@@ -152,10 +153,18 @@ test("[MOD-I1 + BRG-D1] a recovered import never fabricates an empty-source depe
     }, ["check", "<dir>/main.vel"]);
     assert.equal(result.status, 1, result.stdout + result.stderr);
     assert.doesNotMatch(result.stderr, /invalid package name/u);
-    assert.match(result.stderr, /VEL2001/u);
+    assert.match(result.stderr, /VEL20(01|29)/u);
   }
+  // `import type` recovers as the ordinary import the teaching names, so its
+  // dependency is that module — never the empty source.
   const compiled = compile("import type {User} from \"./lib.vel\"\nprint(\"k\")\n");
-  assert.deepEqual(compiled.dependencies, []);
+  assert.deepEqual(compiled.dependencies, [{
+    source: "./lib.vel",
+    javascript: false,
+    unsafe: false,
+    dynamic: false,
+    specifiers: [{ imported: "User", local: "User", namespace: false }],
+  }]);
 });
 
 test("[MOD-I3] assigning an imported binding says imported, names the module, and keeps the reactive rewrite", async () => {
