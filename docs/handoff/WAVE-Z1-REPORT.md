@@ -147,36 +147,43 @@ DECIDED-AND-CORRECT 契约 `tests/hardening-statement-boundary.test.ts:78`
 
 **测试**：`[LOK-I5]` ×4（含余数两种拼写的执行级回归与 Web 侧不回归）。
 
-### 1.8 MOD-I2 —— 副作用导入的被祝福拼写
+### 1.8 MOD-I2 —— 副作用导入：两种拼写都拒绝（D50 第 99 条）
 
 **根因**：`import "./fx.vel"` 被读成缺少默认导入名（`Expected a default import
 name` + `Expected 'from' after imports`），而 `import {} from "./fx.vel"` 却编译
-干净、跑副作用、格式化器祝福 —— 两个候选形互相矛盾，没有一个被祝福。
+干净、跑副作用、格式化器祝福 —— 两个候选形互相矛盾，且其中一个是**隐形动作**。
 
-**修复**（按 `COMPLETENESS-AUDITS.md:593` 的定案：祝福裸字符串形，`import {}`
-拒绝并教学）：
+**⚠ 本条经历了一次裁决反转，最终实现 = 双拒绝。** 先按任务书与
+`COMPLETENESS-AUDITS.md:593` 的旧定案实现了「祝福裸字符串形」（并上报了它与
+D31 第 28.3 条「维持不支持」的冲突）；上报后用户以 **D50 第 99 条** 推翻旧定案：
+副作用导入是隐形动作，读者看到那一行无法知道发生了什么，与 D43 第 68 条排除
+用户自定义装饰器**同源**（任何机制都不得把行为藏在代码主人看不见的地方）；
+「双亲都有」从来不是无条件理由 —— Vel 已删掉双亲都有的真值判断、`==` 强转、
+`switch`。D31 第 28.3 条的原意由此兑现。
 
-- `parser.ts` `parseImport`：`import` 后直接是字符串 → 零 specifier 的
-  `ImportDeclaration`（`import js "pkg"` 同形亦可）。
-- `import {} from "./fx.vel"` → `recoveredDiagnostic` `VEL2029`
-  `Use 'import "./fx.vel"' for a side-effect import; empty braces bind no names`，
-  并**注册机械改写**（删掉 `{} from ` 连同其后空白）。`velar fix` 实测一次到位、
-  重跑无残留。
-- `emitter.ts`：零 specifier 的导入发射 `import "./fx.js";`（原先发
-  `import {  } from ...`，语义相同但拼写不是被祝福的那个）。
-- charter §12 记录该拼写与被拒的等价形（gate 编译的 fence）。
+**最终修复**：
 
-`velar format` 视 `import "./fx.vel"` 为已格式化；Web 项目同形编译干净。
+- `parser.ts` `parseImport`：`import` 后直接是字符串 → 报 `VEL2029` 并返回 null；
+  空花括号形解析出源之后同样报同一条、同样返回 null。**一条消息，两种拼写**：
+  `A module's effects must be visible where they happen; export a function and call it — import {install} from "./fx.vel", then install()`
+- **不注册机械改写**：要导出并调用哪个函数是作者的决定，不是拼写变换
+  （D38 第 48 条的机械修复只覆盖诊断已知唯一答案的情形）。
+- 返回 null ⇒ 被拒的导入**不产生依赖边**，模块不存在时也不会在那条消息上再叠一条
+  `VEL6xxx`（同 MOD-I1/BRG-D1 的纪律）。零 specifier 的 `ImportDeclaration` 因此
+  不再可能产生，先前为它加的 emitter 分支**已回退**，不留死代码。
+- `import css unsafe "./x.css" before look` **不受影响**（已裁决的资源边界，
+  且 CSS 没有可调用的等价物），有回归测试钉住。
+- charter §12 改写为该规则本身 + 可见形的 fence 示例（`import {installFormats}`
+  再 `installFormats()`）+ 例外说明；连带把上一段「unused import」的措辞收紧为
+  「导入一个名字仍会初始化它所属的模块」，以免读成对副作用导入的祝福。
 
-**⚠ 规格冲突（已上报，未擅自改设计）**：`D31-STRUCTURAL-AUDIT.md` 第 28 条第 3 项
-写的是「副作用导入**维持不支持**」，定向消息为
-`Side-effect imports are not part of VelarScript; import a name, or move the
-effect into an exported function`。该项从未实施，且被更晚的
-`COMPLETENESS-AUDITS.md` MOD-I2 行与本波任务书（「the bare-string form is what
-both parents use」）推翻。本波按后者实施。若裁决另有意，此处是唯一需要回退的
-语义改动。
+**迁移落地**：仓库内无需迁移 —— 逐一扫过 `.vel` 源、`examples/**`、
+`packages/create` 模板、stdlib、测试与文档 fence，`import {} from` 与裸字符串
+导入的出现处只有本波自己写的那几处（已改），以及 handoff 记录（属历史记载，不动）。
 
-**测试**：`[MOD-I2]` ×4（含发射产物、机械改写逐字、CLI 端到端副作用执行）。
+**测试**：`[MOD-I2]` ×6（裸字符串拒绝 / 空花括号同一条消息 / 无 fix 无 recovered /
+不产生依赖边 / 具名与命名空间导入不受影响 / 可见形 CLI 端到端执行 +
+`import css unsafe` 豁免）。
 
 ### 1.9 MOD-U7 —— 普通 import 一个 JS-only 包
 
@@ -328,28 +335,35 @@ raise，且它们经 §11 的归一化以 `Error` 抵达 catch 绑定，但顺�
 
 1. `tests/readonly-class.test.ts:39` —— CLS-I5 新文本。
 2. `tests/compiler.test.ts:18611-18613` —— CLS-I5 新文本（extern getter + method 两条）。
-3. 其余 1086 例既有测试逐字不变，含 `hardening-statement-boundary.test.ts` 的
+3. 其余既有测试逐字不变，含 `hardening-statement-boundary.test.ts` 的
    Core 余数契约（见 1.7）与 Web 侧百分比契约。
-4. 无 `.vel` 源、示例、模板、stdlib 需要迁移：仓库里没有 `import {} from`、没有
-   紧贴的 `%` 算术、没有 `readonly def`/`readonly get`、没有无类型 extern 形参。
+4. 无 `.vel` 源、示例、模板、stdlib 需要迁移：逐一扫过 `examples/**`、
+   `packages/create` 模板、stdlib、`.vel` 源与文档 fence —— 仓库里没有
+   `import {} from`、没有裸字符串导入、没有紧贴的 `%` 算术、没有
+   `readonly def`/`readonly get`、没有无类型 extern 形参。
 
 ## 5. 上报清单（规格 vs 代码）
 
-1. **D31 第 28 条第 3 项与本波任务书直接冲突**（副作用导入），见 1.8。按更晚的
-   定案实施，冲突已记档。
+1. **MOD-I2 的规格冲突已上报并由用户反转**：`D31-STRUCTURAL-AUDIT.md` 第 28.3 条
+   （维持不支持）与审计账本 MOD-I2 行（祝福裸字符串形）互相矛盾。上报后用户以
+   **D50 第 99 条**裁定**两种拼写都拒绝**，账本 MOD-I2 决案作废。本波已按第 99 条
+   重做（见 1.8），先前实现的「祝福」连同为它加的 emitter 分支一并回退。
+   `COMPLETENESS-AUDITS.md:593` 那一行的决案文本现已过期，建议在账本上盖
+   SUPERSEDED-by-D50-99。
 2. **D38 第 47 条的现状证据已过期**（静默丢弃 → 静默接受降级），见 1.10。
 3. **LOK-I5 第一版实现撞既有 DECIDED-AND-CORRECT 契约**，已按 ops 纪律第 6 条
    收窄，见 1.7。
-4. **一条工单外缺陷已修**（extern 类名标注解析），见第 3 节，附回退点。
-5. 无「待用户裁决」项：本波 17 条的语义都由 D38/D45/D47 或账本定案给定。
+4. **一条工单外缺陷已修**（extern 类名标注解析），见第 3 节。D50 第 99 条的附带
+   确认已追认该越界为正确（「教出去的路必须走得通」），回退点仍记在第 3 节。
+5. 无「待用户裁决」项：本波 17 条的语义都由 D38/D45/D47/D50 或账本定案给定。
 
 ---
 
 ## 门禁（逐字尾部）
 
-三道门禁在最终树上按序跑完（每道各自持 `gate-lock`，运行期间未触碰工作树）；
-`tests/hardening-wave-z1.test.ts` 36 例含在其中，全绿。同期 sibling worktree
-`wave/z2` 也在跑，未观察到 fd 串扰。
+三道门禁在 D50 第 99 条反转落地后的最终树上按序重跑（每道各自持 `gate-lock`，
+运行期间未触碰工作树）；`tests/hardening-wave-z1.test.ts` 38 例含在其中，全绿。
+同期 sibling worktree `wave/z2` 也在跑，未观察到 fd 串扰。
 
 ### `npm run check`（exit 0）
 
@@ -373,8 +387,8 @@ Checked 77 runtime boundary operations and the shared registry, strict JSON, Web
 ### `npm test`（exit 0）
 
 ```
-ℹ tests 1089
-ℹ pass 1089
+ℹ tests 1091
+ℹ pass 1091
 ℹ fail 0
 ```
 

@@ -611,18 +611,21 @@ export class Parser {
     const unsafe = javascript && this.match("unsafe");
     const specifiers: ImportSpecifier[] = [];
 
-    // MOD-I2: `import "./effects.vel"` is the blessed side-effect import.
-    // Both parents spell it this way — Python's `import x`, JavaScript's
-    // `import "./x"` — and it used to be read as a missing default-import
-    // name, while the empty-brace form quietly worked. One spelling runs the
-    // module for its effects; the other now teaches it.
+    // MOD-I2 / D50 rule 99: a side-effect import is invisible action. The
+    // reader sees the line and cannot tell what happened, which is the same
+    // reason D43 rule 68 excludes user-defined decorators: no mechanism may
+    // hide behavior from the owner of the code. Both parents spell this, and
+    // that has never been sufficient on its own — Vel already removed
+    // truthiness, coercive equality, and `switch`. Both spellings are refused,
+    // and both get the one message that names the visible form.
     if (this.check("string")) {
       const source = this.advance();
       if (source.value === "") {
         this.diagnostics.push(diagnostic("VEL2001", "A module path cannot be empty", source.span));
         return null;
       }
-      return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
+      this.reportSideEffectImport(span(start, source.span.end), source.value);
+      return null;
     }
 
     let emptyBraces: Span | null = null;
@@ -663,16 +666,26 @@ export class Parser {
       this.diagnostics.push(diagnostic("VEL2001", "A module path cannot be empty", source.span));
       return null;
     }
+    // Empty braces bind no names either, so this is the same side-effect
+    // import wearing a binding list. One rule, one message, both spellings.
     if (emptyBraces) {
-      const spelling = `import ${JSON.stringify(source.value)}`;
-      this.diagnostics.push(recoveredDiagnostic(
-        "VEL2029",
-        `Use '${spelling}' for a side-effect import; empty braces bind no names`,
-        emptyBraces,
-        mechanicalFix(span(emptyBraces.start, source.span.start), "", `Use '${spelling}'`),
-      ));
+      this.reportSideEffectImport(span(start, source.span.end), source.value);
+      return null;
     }
     return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
+  }
+
+  /**
+   * D50 rule 99: the effects of a module have to be visible at the place they
+   * happen. There is no mechanical rewrite here — naming the function to
+   * export and call is the author's decision, not a spelling change.
+   */
+  private reportSideEffectImport(importSpan: Span, source: string): void {
+    this.diagnostics.push(diagnostic(
+      "VEL2029",
+      `A module's effects must be visible where they happen; export a function and call it — import {install} from ${JSON.stringify(source)}, then install()`,
+      importSpan,
+    ));
   }
 
   private parseReExport(start: number): ReExportDeclaration | null {

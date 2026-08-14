@@ -1273,9 +1273,6 @@ export class JavaScriptEmitter {
   private emitImport(statement: ImportDeclaration, indentation: string): string {
     const source = statement.source;
     const emittedSource = source.endsWith(".vel") ? `${source.slice(0, -4)}.js` : source;
-    // MOD-I2: a side-effect import binds nothing, and JavaScript spells it the
-    // same way VelarScript does.
-    if (statement.specifiers.length === 0) return `${indentation}import ${JSON.stringify(emittedSource)};`;
     const first = statement.specifiers[0];
     if (first?.namespace) {
       return `${indentation}import * as ${first.local} from ${JSON.stringify(emittedSource)};`;

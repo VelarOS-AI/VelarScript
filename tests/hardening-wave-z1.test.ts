@@ -348,50 +348,88 @@ test("[LOK-I5] a Web project keeps its units and its own abutting-number guidanc
 });
 
 // ---------------------------------------------------------------------------
-// MOD-I2: the blessed side-effect import.
+// MOD-I2 (D50 rule 99): both side-effect import spellings are refused.
 // ---------------------------------------------------------------------------
 
-test("[MOD-I2] `import \"./module.vel\"` is the side-effect spelling and runs the module", () => {
+const SIDE_EFFECT_IMPORT = "A module's effects must be visible where they happen; export a function and call it — import {install} from \"./effects.vel\", then install()";
+
+test("[MOD-I2] the bare-string side-effect import is refused with the visible form", () => {
+  // D50 rule 99 reversed the ledger's earlier decision to bless this spelling:
+  // a side-effect import is invisible action, which is exactly what D43 rule 68
+  // excludes decorators for. "Both parents have it" was never sufficient — the
+  // language already removed truthiness, coercive equality, and `switch`.
   const result = compile("import \"./effects.vel\"\n\nprint(\"main\")\n");
-  assert.deepEqual(result.diagnostics, []);
-  assert.match(result.code!, /^import "\.\/effects\.js";$/mu);
+  assert.deepEqual(result.diagnostics.map((item) => item.message), [SIDE_EFFECT_IMPORT]);
+  assert.equal(result.diagnostics[0]?.code, "VEL2029");
+  assert.equal(result.code, null);
 });
 
-test("[MOD-I2] `import {} from` teaches the blessed spelling and registers the rewrite", () => {
+test("[MOD-I2] empty braces are the same import and get the same one message", () => {
   const result = compile("import {} from \"./effects.vel\"\n\nprint(\"main\")\n");
-  assert.deepEqual(result.diagnostics.map((item) => item.message), [
-    "Use 'import \"./effects.vel\"' for a side-effect import; empty braces bind no names",
-  ]);
-  const [item] = result.diagnostics;
-  assert.equal(item?.code, "VEL2029");
-  assert.equal(item?.recovered, true);
-  assert.equal(item?.fix?.title, "Use 'import \"./effects.vel\"'");
-  assert.equal(item?.fix?.edits.length, 1);
-  assert.equal(item?.fix?.edits[0]?.text, "");
-  const source = "import {} from \"./effects.vel\"\n\nprint(\"main\")\n";
-  const edit = item!.fix!.edits[0]!;
-  assert.equal(`${source.slice(0, edit.span.start)}${edit.text}${source.slice(edit.span.end)}`.split("\n")[0], "import \"./effects.vel\"");
+  assert.deepEqual(result.diagnostics.map((item) => item.message), [SIDE_EFFECT_IMPORT]);
+  assert.equal(result.diagnostics[0]?.code, "VEL2029");
+  // No mechanical rewrite: naming the function to export and call is the
+  // author's decision, not a spelling change.
+  assert.equal(result.diagnostics[0]?.fix, undefined);
+  assert.equal(result.diagnostics[0]?.recovered, undefined);
+});
+
+test("[MOD-I2] the refusal never fabricates a dependency on the module it refused", () => {
+  // A rejected import contributes no edge, so a missing module cannot pile a
+  // resolution failure on top of the one message that matters (MOD-I1/BRG-D1).
+  for (const source of ["import \"./effects.vel\"\n", "import {} from \"./effects.vel\"\n"]) {
+    assert.equal(compile(source).diagnostics.length, 1);
+  }
 });
 
 test("[MOD-I2] the named import forms are untouched", () => {
   assert.deepEqual(messages("import {name} from \"./effects.vel\"\n\nprint(name)\n"), []);
+  assert.deepEqual(messages("import * as effects from \"./effects.vel\"\n"), []);
   // The default-name expectation still stands for anything that is neither a
-  // name nor the side-effect string.
+  // name nor the refused side-effect string.
   assert.deepEqual(messages("import 3 from \"./effects.vel\"\n").slice(0, 1), ["Expected a default import name"]);
 });
 
-test("[MOD-I2] a side-effect import runs its module's effects end to end", async () => {
+test("[MOD-I2] the visible form the message teaches runs the module's effects end to end", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-z1-effects-"));
   try {
     await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel" }), "utf8");
-    await writeFile(join(directory, "register.vel"), "print(\"registered\")\n", "utf8");
-    await writeFile(join(directory, "main.vel"), "import \"./register.vel\"\n\nprint(\"ready\")\n", "utf8");
+    await writeFile(join(directory, "register.vel"), `
+export def install() -> null:
+    print("registered")
+`.trimStart(), "utf8");
+    await writeFile(join(directory, "main.vel"), `
+import {install} from "./register.vel"
+
+install()
+print("ready")
+`.trimStart(), "utf8");
     const result = spawnSync(process.execPath, [cliPath, "run", directory], { encoding: "utf8", timeout: 120_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, "registered\nready\n");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("[MOD-I2] the refusal is a project-level check too, and `import css unsafe` is exempt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-z1-refuse-"));
+  try {
+    await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel" }), "utf8");
+    await writeFile(join(directory, "register.vel"), "export const name = \"a\"\n", "utf8");
+    await writeFile(join(directory, "main.vel"), "import \"./register.vel\"\n\nprint(\"ready\")\n", "utf8");
+    const result = spawnSync(process.execPath, [cliPath, "check", directory], { encoding: "utf8", timeout: 120_000 });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout + result.stderr, /VEL2029: A module's effects must be visible where they happen/u);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+  // The one exempt resource boundary: a stylesheet is not an action, and it has
+  // no callable equivalent.
+  assert.deepEqual(
+    compileWeb("import css unsafe \"./theme.css\" before look\n\nconst width: Length = 16px\n").diagnostics.map((item) => item.message),
+    [],
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -2144,20 +2144,29 @@ An unused import is not an error and produces no warning. The language has no
 warning level, so an error on a name the author is about to use would shout in
 the middle of an edit. `velar fix` does not remove one either: it applies only
 the rewrites a diagnostic registered, and there is no diagnostic here to
-register one. The import still runs the module, so a module imported only for
-its initialization side effects behaves exactly as written.
+register one. Importing a name still initializes the module it comes from,
+whether or not the name is ever read.
 
-A module imported *only* for its effects says so by naming nothing:
+An import that binds *nothing* is a different matter, and both of its spellings
+are refused: `import "./register-formats.vel"` and
+`import {} from "./register-formats.vel"`. A side-effect import is invisible
+action — the reader sees the line and has to go open the module to learn what it
+did. No mechanism in VelarScript may hide behavior from the owner of the code,
+which is the same rule that keeps user-defined decorators out (section 19). Both
+parent languages spell this, and that has never been sufficient on its own: the
+language has already removed truthiness, coercive equality, and `switch`, which
+both parents also have. Export a function and call it, so the effect appears
+where it happens:
 
 ```velar fragment
-import "./register-formats.vel"
+import {installFormats} from "./register-formats.vel"
+
+installFormats()
 ```
 
-That is the spelling both parents already use — Python's `import x`,
-JavaScript's `import "./x"` — and it is the one to write when there is no name
-to bind. `import {} from "./register-formats.vel"` runs the same module through
-empty braces; it is rejected with that rewrite, because a form that binds
-nothing should not be spelled as a binding list.
+One resource boundary is deliberately exempt, because it has no callable
+equivalent: `import css unsafe "./theme.css" before look` (section 17) names a
+stylesheet rather than an action.
 
 An imported name is read-only in the receiving module, but an `export let`
 remains a live ES-module value: the exporting module can reassign it between
