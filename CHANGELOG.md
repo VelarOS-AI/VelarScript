@@ -6,6 +6,19 @@ truth for acceptance status.
 
 ## Unreleased
 
+- The diagnostic backlog that wave N-3 silently dropped is closed —
+  seventeen items including three approved rulings. `self` in a field
+  initializer or static method, extending an extern class, `readonly` on a
+  method, a setter, an optional-field annotation, unit spellings in a Core
+  file, and a plain import of a JavaScript-only package each get one
+  directed message instead of a cascade or a wrong suggestion. Override
+  invariance, the injected field-read guards, `unknown` as the end of
+  static promises, extern arguments being read-only, and the re-validation
+  cost of a narrowed read are now written down.
+- Side-effect imports are rejected in both spellings: a module's effects
+  must be visible where they happen, so export a function and call it. An
+  import that hides what it does is the same problem as a decorator that
+  changes what a declaration means.
 - `toEqual` in `velar/test` is now the language's own `equals`, not a second
   implementation that disagreed with it on NaN and on Sets of records — an
   assertion that answers differently from the language it tests is the worst

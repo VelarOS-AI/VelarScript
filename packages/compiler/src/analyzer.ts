@@ -613,6 +613,16 @@ function contractOrigin(type: ValueType): string | null {
 // that declarations of the same JavaScript class from different modules can
 // be compared for agreement. Parameter names are intentionally excluded:
 // extern constructors take positional arguments only.
+/**
+ * A class declared in an `extern module` block carries the `js:` identity
+ * scheme; a VelarScript class carries `velar:`. The prefix is the only thing
+ * that separates "this name is not a class" from "this class lives on the
+ * other side of the bridge" (CLS-I4).
+ */
+function isExternClassIdentity(identity: string | null): boolean {
+  return identity !== null && identity.startsWith("js:");
+}
+
 function externClassContract(info: ClassInfo): string {
   const fieldEntries = (fields: ReadonlyMap<string, ClassField>): readonly string[] =>
     [...fields].map(([name, field]) => `${name}\0${field.mutable ? "let" : "const"}\0${semanticTypeIdentity(field.type)}`).sort();
@@ -2898,6 +2908,17 @@ export class Analyzer implements TypeEnvironment {
         // would dilute what a caught ValidationError/NarrowingError/IndexError
         // proves. Extend Error for custom hierarchies.
         this.typeError(`The builtin error type '${baseName}' cannot be extended; extend Error and declare your own fields`, statement.base!.span);
+      } else if (baseBinding?.type.kind === "classConstructor" && !this.classes.has(baseName)
+        && isExternClassIdentity(baseBinding.type.identity ?? null)) {
+        // D45 rule 78 (CLS-I4): the name resolves perfectly well — it is an
+        // extern class, and extending one would need a construction chain
+        // across the JavaScript bridge. Section 19 lists the absence; the
+        // author needs the shape that does work, not "Unknown base class",
+        // which reads as a typo.
+        this.typeError(
+          `Extern class '${baseName}' cannot be extended; wrap the instance by composition — hold it in a field and expose the behavior as methods or functions`,
+          statement.base!.span,
+        );
       } else if (baseBinding?.type.kind !== "classConstructor" || !this.classes.has(baseName)) {
         this.typeError(`Unknown base class '${baseName}'`, statement.base!.span);
       } else if (baseName === statement.name || this.isSubclassOf(baseName, statement.name)) {
@@ -4042,6 +4063,25 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  /**
+   * CLS-I1: the positions where `self` does not exist, and why. A field
+   * initializer runs while the instance is still being assembled, so there is
+   * no complete `self` to read; a static member belongs to the class and has
+   * no instance at all. Outside a class the word is simply an unknown name and
+   * keeps the ordinary message.
+   */
+  private unavailableSelfGuidance(): string | null {
+    // A static field initializer is both positions at once; "no instance" is
+    // the reason that keeps being true no matter when the initializer runs.
+    if (this.superMemberContext === "static" && this.currentClass) {
+      return `'self' is available in constructor, method, and getter bodies; a static member has no instance — reach class-owned members through the class name, as in '${this.currentClass}.member'`;
+    }
+    if (this.classFieldInitializerDepth > 0) {
+      return "'self' is available in constructor, method, and getter bodies; a field initializer runs before the instance is complete, so assign this field in the constructor instead";
+    }
+    return null;
+  }
+
   private inferExpressionType(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     const extensionType = this.inferExtensionExpression(expression, contextualType);
     if (extensionType) return extensionType;
@@ -4060,6 +4100,16 @@ export class Analyzer implements TypeEnvironment {
         const lexical = this.lookup(expression.name);
         const binding = lexical ?? this.builtin(expression.name);
         if (!binding) {
+          // CLS-I1: `self` is not an unknown name — it is a name with a
+          // position rule, and the two positions where it does not exist each
+          // have a reason worth saying. The invalid type stops the two
+          // cascades ("cannot access 'x' on unknown", "cannot assign unknown
+          // to T") that used to bury the one message that mattered.
+          const selfGuidance = expression.name === "self" ? this.unavailableSelfGuidance() : null;
+          if (selfGuidance) {
+            this.diagnostics.push(diagnostic("VEL3001", selfGuidance, expression.span));
+            return invalidType;
+          }
           const guidance = this.globalGuidance.get(expression.name);
           this.diagnostics.push(diagnostic(guidance ? "VEL3008" : "VEL3001", guidance ?? `Unknown name '${expression.name}'`, expression.span));
           return unknownType;
@@ -4100,7 +4150,9 @@ export class Analyzer implements TypeEnvironment {
         return binding.type;
       }
       case "SuperExpression":
-        this.typeError("'super' must be followed by a base method name", expression.span);
+        // CLS-C2: `super` reaches base methods and getters, and the message
+        // that names what may follow it must name both.
+        this.typeError("'super' must be followed by a base method or getter name", expression.span);
         return unknownType;
       case "DynamicImportExpression":
         return { kind: "promise", value: this.dynamicImports.get(expression.source) ?? unknownType };
@@ -8644,6 +8696,16 @@ export class Analyzer implements TypeEnvironment {
           ...(imported.identity ? { identity: imported.identity } : {}),
         };
       }
+      // CLS-I4, found while checking that the composition the diagnostic
+      // recommends actually works: the extern type import records the class
+      // type itself, not its constructor, so this branch used to fall through
+      // and a class field or record field annotated with an extern class froze
+      // into a structural named type. The declaration looked fine and the
+      // member read failed with "has no field", which is the same silent
+      // degradation the bridge is not allowed to have. Only the extern table
+      // may answer with a `class` type — a local binding that merely holds an
+      // instance must never become a type name.
+      if (imported && imported === this.externTypeImports.get(type.name) && imported.kind === "class") return imported;
     }
     if (type.kind === "named" && this.classes.has(type.name)) {
       const info = this.classes.get(type.name);

@@ -51,6 +51,7 @@ import { declarationKeywordGuidance, sourceTypeNameGuidance } from "./language-g
 import { Lexer } from "./lexer.ts";
 import { span, type Span } from "./source.ts";
 import { keywordKinds, type Token, type TokenKind } from "./token.ts";
+import { formatTypeSyntax } from "./types.ts";
 
 const memberNameKinds = new Set<TokenKind>(["identifier", ...Object.values(keywordKinds)]);
 // Token kinds that begin a statement but can never begin a record field or
@@ -610,18 +611,39 @@ export class Parser {
     const unsafe = javascript && this.match("unsafe");
     const specifiers: ImportSpecifier[] = [];
 
+    // MOD-I2 / D50 rule 99: a side-effect import is invisible action. The
+    // reader sees the line and cannot tell what happened, which is the same
+    // reason D43 rule 68 excludes user-defined decorators: no mechanism may
+    // hide behavior from the owner of the code. Both parents spell this, and
+    // that has never been sufficient on its own — Vel already removed
+    // truthiness, coercive equality, and `switch`. Both spellings are refused,
+    // and both get the one message that names the visible form.
+    if (this.check("string")) {
+      const source = this.advance();
+      if (source.value === "") {
+        this.diagnostics.push(diagnostic("VEL2001", "A module path cannot be empty", source.span));
+        return null;
+      }
+      this.reportSideEffectImport(span(start, source.span.end), source.value);
+      return null;
+    }
+
+    let emptyBraces: Span | null = null;
     if (this.match("star")) {
       const star = this.previous();
       this.expectWord("as", "Expected 'as' after namespace import");
       const local = this.expect("identifier", "Expected a namespace name");
       specifiers.push({ imported: "*", local: local.value, namespace: true, span: span(star.span.start, local.span.end) });
     } else if (this.match("leftBrace")) {
+      const brace = this.previous();
       if (!this.check("rightBrace")) {
         do {
           const imported = this.expect("identifier", "Expected an imported name");
           const local = this.matchWord("as") ? this.expect("identifier", "Expected a local import name") : imported;
           specifiers.push({ imported: imported.value, local: local.value, namespace: false, span: span(imported.span.start, local.span.end) });
         } while (this.match("comma") && !this.check("rightBrace"));
+      } else {
+        emptyBraces = span(brace.span.start, this.current().span.end);
       }
       this.expect("rightBrace", "Expected '}' after imports");
     } else {
@@ -644,7 +666,26 @@ export class Parser {
       this.diagnostics.push(diagnostic("VEL2001", "A module path cannot be empty", source.span));
       return null;
     }
+    // Empty braces bind no names either, so this is the same side-effect
+    // import wearing a binding list. One rule, one message, both spellings.
+    if (emptyBraces) {
+      this.reportSideEffectImport(span(start, source.span.end), source.value);
+      return null;
+    }
     return { kind: "ImportDeclaration", source: source.value, sourceSpan: source.span, javascript, unsafe, specifiers, span: span(start, source.span.end) };
+  }
+
+  /**
+   * D50 rule 99: the effects of a module have to be visible at the place they
+   * happen. There is no mechanical rewrite here — naming the function to
+   * export and call is the author's decision, not a spelling change.
+   */
+  private reportSideEffectImport(importSpan: Span, source: string): void {
+    this.diagnostics.push(diagnostic(
+      "VEL2029",
+      `A module's effects must be visible where they happen; export a function and call it — import {install} from ${JSON.stringify(source)}, then install()`,
+      importSpan,
+    ));
   }
 
   private parseReExport(start: number): ReExportDeclaration | null {
@@ -733,6 +774,7 @@ export class Parser {
       const name = this.expect("identifier", "Expected an extern function name");
       const typeParameters = this.parseTypeParameters();
       const parameters = this.parseParameters();
+      this.reportUntypedExternParameters(parameters);
       const parameterListEnd = this.previous().span.end;
       const returnType = this.match("arrow") ? this.parseTypeReference() : null;
       functions.push({
@@ -744,6 +786,10 @@ export class Parser {
         signatureSpan: span(declarationStart, returnType?.span.end ?? parameterListEnd),
         span: span(declarationStart, returnType?.span.end ?? this.previous().span.end),
       });
+      if (this.reportExternDeclarationBody()) {
+        this.consumeNewlines();
+        continue;
+      }
       this.expectStatementEnd();
       this.consumeNewlines();
     }
@@ -797,6 +843,7 @@ export class Parser {
       if (this.check("identifier") && this.current().value === "constructor") {
         this.advance();
         const constructorParameters = this.parseParameters();
+        this.reportUntypedExternParameters(constructorParameters);
         if (constructorSeen) {
           this.diagnostics.push(diagnostic("VEL2022", `Extern class '${name.value}' has more than one constructor`, span(memberStart, this.previous().span.end)));
         } else {
@@ -810,17 +857,19 @@ export class Parser {
       let static_ = false;
       let asynchronous = false;
       let scanningModifiers = true;
+      // CLS-I5: reported once the member kind is known — see the source class
+      // body; an extern getter or method has no read-only contract either.
+      let readonlyModifier: Token | null = null;
       while (scanningModifiers) {
         if (this.match("static")) static_ = true;
         else if (this.match("async")) asynchronous = true;
-        else if (this.check("identifier") && this.current().value === "readonly") {
-          const modifier = this.advance();
-          this.diagnostics.push(diagnostic("VEL2010", "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field", modifier.span));
-        } else scanningModifiers = false;
+        else if (this.check("identifier") && this.current().value === "readonly") readonlyModifier = this.advance();
+        else scanningModifiers = false;
       }
       const mutable = this.match("let");
       const readonly = !mutable && this.match("const");
       if (mutable || readonly) {
+        this.reportClassMemberReadonly(readonlyModifier, "field", "VEL2010");
         if (asynchronous) this.diagnostics.push(diagnostic("VEL2010", "Extern class fields cannot be async", this.previous().span));
         const fieldName = this.expectMemberName("Expected an extern class field name");
         this.expect("colon", "Expected ':' after an extern class field name");
@@ -832,6 +881,7 @@ export class Parser {
       }
       if (this.check("identifier") && this.current().value === "get") {
         this.advance();
+        this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2010");
         const getterName = this.expectMemberName("Expected an extern class getter name");
         this.expect("leftParen", "Expected '(' after an extern getter name");
         if (!this.check("rightParen")) {
@@ -853,9 +903,11 @@ export class Parser {
         continue;
       }
       if (this.match("def")) {
+        this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2010");
         const methodName = this.expectMemberName("Expected an extern class method name");
         const typeParameters = this.parseTypeParameters();
         const methodParameters = this.parseParameters();
+        this.reportUntypedExternParameters(methodParameters);
         const parameterListEnd = this.previous().span.end;
         const returnType = this.match("arrow") ? this.parseTypeReference() : null;
         methods.push({
@@ -868,6 +920,10 @@ export class Parser {
           signatureSpan: span(memberStart, returnType?.span.end ?? parameterListEnd),
           span: span(memberStart, returnType?.span.end ?? this.previous().span.end),
         });
+        if (this.reportExternDeclarationBody()) {
+          this.consumeNewlines();
+          continue;
+        }
         this.expectStatementEnd();
         this.consumeNewlines();
         continue;
@@ -1364,21 +1420,23 @@ export class Parser {
       let methodPrivate = false;
       let asynchronous = false;
       let scanningModifiers = true;
+      // CLS-I5: `readonly` is reported once the member kind is known, because
+      // the advice differs — a field has `const`, while an executable member
+      // has no read-only contract at all.
+      let readonlyModifier: Token | null = null;
       while (scanningModifiers) {
         if (this.match("abstract")) methodAbstract = true;
         else if (this.match("override")) methodOverride = true;
         else if (this.match("static")) methodStatic = true;
         else if (this.match("private")) methodPrivate = true;
-        else if (this.check("identifier") && this.current().value === "readonly") {
-          const modifier = this.advance();
-          this.diagnostics.push(diagnostic("VEL2021", "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field", modifier.span));
-        }
+        else if (this.check("identifier") && this.current().value === "readonly") readonlyModifier = this.advance();
         else if (this.match("async")) asynchronous = true;
         else scanningModifiers = false;
       }
       if (this.check("identifier") && (this.current().value === "constructor" || this.current().value === "init")) {
         const constructorName = this.current();
         this.advance();
+        this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2021");
         if (constructorName.value === "init") {
           this.diagnostics.push(diagnostic("VEL2022", "Use 'constructor(...)' for class construction; the separate 'init:' block was removed", constructorName.span));
         }
@@ -1402,16 +1460,33 @@ export class Parser {
       }
       if (this.check("const") || this.check("let")) {
         const binding = this.advance().kind as "const" | "let";
+        this.reportClassMemberReadonly(readonlyModifier, "field", "VEL2021");
         if (methodAbstract || methodOverride || asynchronous) {
           this.diagnostics.push(diagnostic("VEL2021", "Class fields support only the 'private' and 'static' modifiers; use 'const' for a read-only field", this.previous().span));
         }
         const fieldName = this.expectMemberName("Expected a class field name");
+        // CLS-U7: `let name?: T` is the TypeScript optional-property shape.
+        // The type here is explicit, so the missing-type message was simply
+        // wrong; VelarScript has no optional-field syntax at all — the field
+        // carries an optional type instead.
+        const optionalMarker = this.check("question") ? this.advance() : null;
         let type: TypeReference;
         if (this.match("colon")) {
           type = this.parseTypeReference();
+        } else if (optionalMarker) {
+          type = { syntax: { kind: "NamedTypeSyntax", name: "unknown", span: fieldName.span }, span: fieldName.span };
         } else {
           this.diagnostics.push(diagnostic("VEL2021", "Class fields require an explicit type", fieldName.span));
           type = { syntax: { kind: "NamedTypeSyntax", name: "unknown", span: fieldName.span }, span: fieldName.span };
+        }
+        if (optionalMarker) {
+          const written = formatTypeSyntax(type.syntax);
+          const optional = written === "unknown" ? "T?" : written.endsWith("?") ? written : `${written}?`;
+          this.diagnostics.push(diagnostic(
+            "VEL2021",
+            `VelarScript has no optional-field syntax; a field carries an optional type instead — write '${binding} ${fieldName.value}: ${optional} = null'`,
+            span(fieldName.span.start, optionalMarker.span.end),
+          ));
         }
         const initializer = this.match("assign") ? this.parseExpression() : null;
         fields.push({
@@ -1429,11 +1504,34 @@ export class Parser {
       }
       if (this.check("identifier") && this.current().value === "get") {
         this.advance();
+        this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2021");
         getters.push(this.parseClassGetter(methodStart, methodAbstract, methodOverride, methodStatic, methodPrivate, asynchronous));
         this.consumeNewlines();
         continue;
       }
+      // D45 rule 79 (CLS-U1): `set name(value):` is the JavaScript accessor
+      // shape. VelarScript has no setters (section 19), and the shape used to
+      // fall through to three generic cascades that never said so. `get` has
+      // its own parse path, so `set` gets the matching recognition — used only
+      // to teach the rejection. `def set(...)` and a field named `set` are
+      // other shapes and stay legal.
+      if (this.check("identifier") && this.current().value === "set"
+        && this.peekKind(1) === "identifier" && this.peekKind(2) === "leftParen") {
+        const keyword = this.advance();
+        const setterName = this.advance();
+        this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2021");
+        const method = `set${setterName.value.slice(0, 1).toUpperCase()}${setterName.value.slice(1)}`;
+        this.diagnostics.push(diagnostic(
+          "VEL2007",
+          `VelarScript classes have no setters; assign the field directly, or declare a method such as 'def ${method}(value: T)'`,
+          span(keyword.span.start, setterName.span.end),
+        ));
+        this.skipMistypedDeclaration();
+        this.consumeNewlines();
+        continue;
+      }
       if (!this.match("def")) {
+        this.reportClassMemberReadonly(readonlyModifier, "field", "VEL2021");
         if (this.match("pass")) {
           this.expectStatementEnd();
           this.consumeNewlines();
@@ -1462,6 +1560,7 @@ export class Parser {
         this.consumeNewlines();
         continue;
       }
+      this.reportClassMemberReadonly(readonlyModifier, "executable", "VEL2021");
       const method = this.parseClassMethod(methodStart, asynchronous, methodAbstract, methodOverride, methodStatic, methodPrivate);
       methods.push(method);
       this.consumeNewlines();
@@ -3244,6 +3343,67 @@ export class Parser {
     while (!this.check("eof") && !this.check("newline") && !this.check("dedent")) {
       this.advance();
     }
+  }
+
+  /**
+   * D38 rule 47 (BRG-D2): an extern signature is the entire contract — there
+   * is no body to infer from — so a parameter without a type used to degrade
+   * to `unknown` and accept every argument silently. The escape hatch may
+   * never lose air quietly: the missing type is reported at the parameter
+   * itself, and the member keeps its place in the module contract so the use
+   * site is not blamed for a declaration defect.
+   */
+  protected reportUntypedExternParameters(parameters: readonly Parameter[]): void {
+    for (const parameter of parameters) {
+      if (parameter.type) continue;
+      this.diagnostics.push(diagnostic(
+        "VEL2010",
+        `Extern parameter '${parameter.name}' requires an explicit type; there is no body to infer from`,
+        parameter.span,
+      ));
+    }
+  }
+
+  /**
+   * D38 rule 47, second half: the rejection of a body on an extern declaration
+   * lands in the right place already, but "Expected the end of a statement"
+   * never said why a body cannot be there.
+   */
+  protected reportExternDeclarationBody(): boolean {
+    // Both spellings of "here comes a body" reach here: the VelarScript block
+    // colon, and the brace a TypeScript declaration habit produces. Neither can
+    // legally follow an extern signature.
+    if (!this.check("colon") && !this.check("leftBrace")) return false;
+    this.diagnostics.push(diagnostic(
+      "VEL2010",
+      "Extern declarations have no body; the JavaScript package provides it",
+      this.current().span,
+    ));
+    if (this.check("leftBrace")) {
+      let depth = 0;
+      do {
+        if (this.check("leftBrace")) depth += 1;
+        else if (this.check("rightBrace")) depth -= 1;
+        this.advance();
+      } while (depth > 0 && !this.check("eof"));
+      return true;
+    }
+    this.skipMistypedDeclaration();
+    return true;
+  }
+
+  /**
+   * CLS-I5: `readonly` marks a data type, never a class member. A field's
+   * read-only spelling is `const`; a method, getter, or constructor is
+   * executable, so there is no read-only contract for the modifier to state
+   * and pointing the author at `const` was advice they cannot take.
+   */
+  protected reportClassMemberReadonly(modifier: Token | null, member: "field" | "executable", code: string): void {
+    if (!modifier) return;
+    this.diagnostics.push(diagnostic(code, member === "field"
+      ? "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field"
+      : "'readonly' is a data-type modifier, not a class member modifier; a method, getter, or constructor is executable and has no readonly contract — mark the data it works with, as in 'readonly List<number>'",
+      modifier.span));
   }
 
   // After a mistyped declaration keyword is reported, consume the rest of the

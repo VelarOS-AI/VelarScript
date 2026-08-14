@@ -429,6 +429,15 @@ export async function compileProjectEntries(
           importOrigins.set(package_.entryPath, { importer: inputPath, source: dependency.source });
           enqueue({ inputPath: package_.entryPath, package: package_ });
         } catch (error) {
+          if (error instanceof JavaScriptOnlyPackageError) {
+            recordResolution(
+              inputPath,
+              dependency.source,
+              "VEL6002",
+              `'${dependency.source}' is a JavaScript package, not a VelarScript package; reach it across the bridge — import js {name} from ${JSON.stringify(dependency.source)}, and declare 'extern module ${JSON.stringify(dependency.source)}:' when you want the contract checked`,
+            );
+            continue;
+          }
           recordResolution(inputPath, dependency.source, "VEL6002", `Cannot resolve VelarScript package import '${dependency.source}': ${hostErrorMessage(error)}`);
         }
         continue;
@@ -1404,6 +1413,15 @@ function resolvedModuleInterface(
   return resolved;
 }
 
+/**
+ * MOD-U7: the package is installed and its manifest reads fine — it is simply
+ * a JavaScript package. That is the mirror image of BRG-U2 (a VelarScript
+ * package reached through `import js`), and it earns the same
+ * reverse-direction teaching instead of a manifest-field complaint that never
+ * mentions the bridge the author actually needs.
+ */
+class JavaScriptOnlyPackageError extends Error {}
+
 async function resolveVelarSourcePackage(source: string, importerPath: string): Promise<VelarSourcePackage> {
   const name = packageNameOf(source);
   if (source !== name) throw new Error("package subpaths are not supported; import the package entry by name");
@@ -1417,7 +1435,7 @@ async function resolveVelarSourcePackage(source: string, importerPath: string): 
       };
       if (manifest.name !== undefined && manifest.name !== name) throw new Error(`package name is '${String(manifest.name)}', expected '${name}'`);
       const entry = manifest.velar?.entry;
-      if (typeof entry !== "string" || entry.length === 0) throw new Error("package.json must declare 'velar.entry'");
+      if (typeof entry !== "string" || entry.length === 0) throw new JavaScriptOnlyPackageError("package.json must declare 'velar.entry'");
       if (isAbsolute(entry)) throw new Error("'velar.entry' must be relative to the package root");
       const entryPath = resolve(root, entry);
       if (escapesRoot(relative(root, entryPath))) throw new Error("'velar.entry' cannot escape the package root");

@@ -590,7 +590,7 @@ TXT-D1 + I1/I2/I3 → **N-2b**；U3/U4 决案可否决随 N-2b；U5-U9 → N-3 �
 | ID | 现象 | 处置 |
 |---|---|---|
 | **MOD-I1（毒化全局的那条）** | **check 在存在解析失败时吞掉全部模块诊断**（run 却两者都打）；叠加 parser 恢复路径捏造空 source 依赖 → 荒谬的 `invalid package name ''` 是作者唯一能看见的东西，而**真正优秀的解析诊断被生成后藏起来**。`import type`（D38 待实施）今天的体验因此极度恶劣 | 修（两个小管道修复，独立于 D38 先落）：恢复路径不发空 source 依赖；check 与 run 一样并打失败与诊断 |
-| MOD-I2 | **副作用导入无既定拼写且两候选形互相矛盾**：`import "./fx.vel"` 误析成默认导入（报 nonsense）；`import {} from` 却合法、跑副作用、格式化器祝福 | 定案（可否决，双亲一致）：祝福裸字符串形 `import "./x.vel"`（父 Python `import x`、母 JS `import "./x"` 同款），`import {}` 拒绝并教学 |
+| MOD-I2 | **【已被 D50 第 99 条取代 —— 两种拼写都拒绝】** 副作用导入无既定拼写且两候选形互相矛盾：`import "./fx.vel"` 误析成默认导入（报 nonsense）；`import {} from` 却合法、跑副作用、格式化器祝福 | 定案（可否决，双亲一致）：祝福裸字符串形 `import "./x.vel"`（父 Python `import x`、母 JS `import "./x"` 同款），`import {}` 拒绝并教学 |
 | MOD-I3 | 只读导入教学只有 `state` 有：普通 `let` 导入赋值报 **事实错误的** "Cannot assign to const binding" | 修：导入绑定统一措辞 |
 | MOD-I4 | 导入/本地冲突永远怪 `const` 且不点名导入来源（后声明者在 1 行时错误指向写它时还没错的行） | 修：怪后声明者、点名先声明者来源 |
 | MOD-I5 | **模块失败通道无码无位置**：整层解析消息（.vel 扩展名、no export named、ENOENT…）全是 `path: message` 裸打 —— 全语言其余处处有码有 span | 修：解析失败获得诊断码 + import 语句 span |
