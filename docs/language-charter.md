@@ -803,6 +803,20 @@ def label(user: User?) -> string:
     return user.name
 ```
 
+Equality carries a fact back to its subject wherever one literal answers the
+question. `flag == true` and `flag == false` each prove a `bool?` holds a
+`bool`, exactly as `status == Status.done` proves an enum singleton; the
+opposite arm learns nothing, because `flag != true` still admits `false` and an
+absent value. Membership does the same, since a membership probe asks the `==`
+question one element at a time (section 4): `value in names` proves `value` is
+of the container's element or key type, so a `string?` narrows to `string`
+against a `List<string>` but not against a `List<string?>`, where an absent
+value is a legitimate element. The negative arm of a membership probe proves
+nothing — any element could be the one that failed to match. An optional chain
+that produced a value proves every link along it was present, since an absent
+link is exactly what the chain short-circuits on: `if user.profile?.email !=
+null:` narrows `user.profile` as well as the address.
+
 Narrowing is flow-based and deliberately practical. A fact established by a
 check persists across calls, getters, callbacks, `await`, and string
 interpolation. A known assignment to that location (including destructuring or
@@ -837,7 +851,10 @@ Two boundaries remain because they are visible in source:
   any later time, so it re-checks what it needs or receives checked values as
   parameters.
 - A getter is a computed value, not a stable location. Read it into a `const`
-  to narrow the result.
+  to narrow the result. A check written directly on a getter is reported where
+  it stands, because it looks like every other narrowing check and establishes
+  nothing, and a read that would need `?.` names the `const` binding rather
+  than `?.` — the operator would compute the getter a second time.
 
 An f-string converts each embedded value at its source position under the
 language's one text-conversion contract: conversion accepts `string`,
@@ -1745,7 +1762,14 @@ The two exits differ after the loop. An arm's writes still escape it — `break`
 carries them directly to the code after the loop, and `continue` carries them
 back through the condition — so the after-loop merge sees them either way, and
 a loop that can `break` may exit while its condition still holds, so the
-condition's negated facts do not persist past it. Writes after an unconditional
+condition's negated facts do not persist past it. A loop with no reachable
+`break` of its own is left only by its condition failing, so there those
+negated facts do persist whatever the body does — the fact carried out is what
+the entry test and the back-edge test both prove, because the loop is left
+through whichever of the two failed. Conversely, a literal `while true` has no
+failing condition, so its breaks are its only exits, and the facts every one of
+them proves hold after the loop; one break that proves less carries nothing
+out. Writes after an unconditional
 `return`, `throw`, `break`, or `continue` do not affect reachable flow facts. If
 a loop body can only return or throw, its writes cannot escape to the skipped
 path after the loop. A literal `while true` with no reachable `break` owned by

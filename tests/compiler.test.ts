@@ -10534,11 +10534,12 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
     "velar/test", "velar/serve", "velar/fs", "velar/env", "velar/host", "velar/terminal", "velar/path", "velar/process", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
   // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
-  // velar/look retired the unreachable Opacity name: the total is unchanged.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 281);
-  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 118);
+  // velar/look retired the unreachable Opacity name; TXT-U3 then added
+  // Text.normalize, the one name the total has moved for since.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 282);
+  assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
-  assert.equal(api.modules["velar/text"]?.length, 22);
+  assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 30);
   assert.deepEqual(api.modules["velar/json"], ["clone", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
@@ -23983,6 +23984,8 @@ def label(box: Box) -> string:
 
   // A getter itself is still not a narrowable location: each read may produce
   // a different value, so checking box.current cannot guard a second read.
+  // FLW-S2: both the useless check and the read now name the const binding
+  // instead of teaching '?.', which would compute the getter a second time.
   const repeatedGetter = compile(`
 type User:
     name: string
@@ -24000,7 +24003,13 @@ def invalid(box: Box) -> string:
         return box.current.name
     return "missing"
 `.trimStart());
-  assert.equal(repeatedGetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 1);
+  assert.equal(repeatedGetter.diagnostics.filter((item) => /optional access/u.test(item.message)).length, 0);
+  assert.deepEqual(repeatedGetter.diagnostics.map((item) => item.message), [
+    "'current' is a getter, so it is computed again on every read and this check narrows nothing"
+    + "; bind it once with 'const current = box.current' and check that name instead",
+    "'current' is a getter, so '?.' would compute it a second time"
+    + "; bind it once with 'const current = box.current' and read that name instead",
+  ]);
 
   // Extern declarations are trusted ABI contracts: a member declared as a
   // field is a stable narrowing location, exactly like a local class field.
