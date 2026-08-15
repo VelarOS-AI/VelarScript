@@ -1313,7 +1313,6 @@ await fs.appendText(file, " two");
 const text = await fs.readText(file);
 const names = await fs.list(root);
 const info = await fs.info(file);
-const blob = await fs.readBlob(file);
 const missing = await fs.exists(root + "/missing.txt");
 const watcher = await fs.watchFiles(root, true);
 const pendingWatch = watcher.next();
@@ -1336,7 +1335,7 @@ setTimeout(retriggerWatch, 250);
 const watchBatch = await pendingWatch;
 watchReported = true;
 await watcher.close();
-const observed = [text, names[0], info?.kind, String(blob instanceof fs.Blob), String(missing), String(watchBatch?.paths.length > 0), String(poisonCalls)].join("|");
+const observed = [text, names[0], info?.kind, String(missing), String(watchBatch?.paths.length > 0), String(poisonCalls)].join("|");
 
 nativeDefine(Array, "isArray", originals.arrayIsArray);
 nativeDefine(Array.prototype, "sort", originals.arraySort);
@@ -1371,7 +1370,7 @@ nativeApply(nativeWrite, process.stdout, [observed + "\\n"]);
       process.env,
     );
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "one two|driver.mjs|file|true|false|true|0\n");
+    assert.equal(result.stdout, "one two|driver.mjs|file|false|true|0\n");
     assert.equal(result.stderr, "");
   } finally {
     await rm(directory, { recursive: true, force: true });

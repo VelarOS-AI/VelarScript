@@ -1,3 +1,4 @@
+import { CORE_VOCABULARY_NAMES } from "./core-vocabulary.ts";
 import { VELAR_HOST_ERROR_NAMES } from "./error-runtime.ts";
 import { keywordKinds, type TokenKind } from "./token.ts";
 
@@ -43,8 +44,14 @@ export const forbiddenSourceIdentifiers: ReadonlyMap<string, ForbiddenSourceIden
 ]);
 
 const coreReservedBindings = new Set([
-  "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "RangeError", "Reflect", "Set", "String",
-  "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "number", "print", "queueMicrotask", "self", "str",
+  // D57 rule 135: Core's own vocabulary is *derived* from its roster, never
+  // restated here. The list below is only the JavaScript spellings a generated
+  // module reaches for; when it also carried the Vel names, `Math` was
+  // protected purely because it is a JavaScript global too and
+  // `Json`/`Promise`/`Text`/`equals`/`range` were not protected at all.
+  ...CORE_VOCABULARY_NAMES,
+  "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "NarrowingError", "Number", "Object", "RangeError", "Reflect", "Set", "String",
+  "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "queueMicrotask", "self",
   // D50 rule 89: the capability error classes are nameable everywhere a
   // `catch` can see them, so a bare reference is always the builtin.
   ...VELAR_HOST_ERROR_NAMES,

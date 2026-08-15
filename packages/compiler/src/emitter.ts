@@ -630,7 +630,7 @@ export class JavaScriptEmitter {
   }
 
   // The compiler-owned observer behind the 'async <expression>' statement
-  // (docs/runtime-boundary.md, B-DETACHED-ASYNC). The Promise and Reflect
+  // (docs/contributing/runtime-boundary.md, B-DETACHED-ASYNC). The Promise and Reflect
   // operations and the console channel are captured at module initialization;
   // rejection is normalized to Error and reported on the host error channel
   // without ending the process. Hosts with their own error chain override
@@ -1281,7 +1281,7 @@ export class JavaScriptEmitter {
       case "AsyncStatement":
         // Detached execution never floats: the compiler-owned observer
         // adopts the Promise, normalizes rejection to Error, and reports it
-        // through the host error channel (see docs/runtime-boundary.md,
+        // through the host error channel (see docs/contributing/runtime-boundary.md,
         // B-DETACHED-ASYNC). The expression takes the same Promise
         // normalization every other Promise consumer applies, so a foreign
         // thenable or an `undefined` from an extern boundary fails as an owned

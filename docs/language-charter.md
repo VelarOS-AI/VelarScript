@@ -55,7 +55,7 @@ for example, records retain JavaScript reference identity while construction,
 validation, and foreign entry use separate controlled boundaries.
 
 This reference owns all user-observable semantics. The
-[runtime and JavaScript boundary ledger](runtime-boundary.md) maps those
+[runtime and JavaScript boundary ledger](contributing/runtime-boundary.md) maps those
 semantics to boundary classes, implementation owners, runtime ABI, failure
 phase, and proof tests. The ledger and implementation may not add behavior that
 is absent from or contradicts this reference.

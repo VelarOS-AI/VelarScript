@@ -40,7 +40,9 @@ export { VELAR_EXTENSION_PROTOCOL_VERSION } from "./extension.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerDependencyContext, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind } from "./semantic.ts";
 export { analysisTypeIdentity, describeType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "./types.ts";
+export { permanentNamespaceCoveringModule } from "./analyzer.ts";
 export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead } from "./analyzer.ts";
+export { CORE_PRELUDE_NAMES, CORE_VOCABULARY_NAMES, PERMANENT_NAMESPACE_NAMES, type CorePreludeName, type CoreVocabularyName, type PermanentNamespaceName } from "./core-vocabulary.ts";
 
 export interface CompileOptions {
   readonly path?: string;

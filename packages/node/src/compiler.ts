@@ -104,23 +104,6 @@ const requestBodyTooLargeErrorClass: ClassInfo = {
   staticGetters: new Set(),
   staticMethods: new Map(),
 };
-const blobIdentity = "velar/fs#class:Blob";
-const blobType: ValueType = { kind: "class", name: "Blob", identity: blobIdentity };
-const blobClass: ClassInfo = {
-  identity: blobIdentity,
-  parameters: [],
-  requiredParameters: 0,
-  base: null,
-  abstract: true,
-  fields: new Map(),
-  getters: new Set(),
-  abstractGetters: new Set(),
-  methods: new Map(),
-  abstractMethods: new Set(),
-  staticFields: new Map(),
-  staticGetters: new Set(),
-  staticMethods: new Map(),
-};
 const writeChunkType = functionType(["chunk"], [stringType], promise(nullType));
 const streamProducerType = functionType(["write"], [writeChunkType], promise(nullType));
 const responseHeadersType = stringMapType;
@@ -283,7 +266,6 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
   )],
   ["velar/fs", moduleInterface(
     new Map([
-      ["Blob", { kind: "classConstructor", name: "Blob", identity: blobIdentity }],
       ["FileWatchBatch", { kind: "typeObject", name: "FileWatchBatch" }],
       ["FileWatcher", { kind: "typeObject", name: "FileWatcher" }],
       ["readText", functionType(["path", "maxBytes"], [stringType, numberType], promise(stringType), 1)],
@@ -299,7 +281,6 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
       ["copyFile", functionType(["source", "target", "replace"], [stringType, stringType, boolType], promise(nullType), 2)],
       ["move", functionType(["source", "target", "replace"], [stringType, stringType, boolType], promise(nullType), 2)],
       ["removeFile", functionType(["path"], [stringType], promise(nullType))],
-      ["readBlob", functionType(["path", "maxBytes"], [stringType, numberType], promise(blobType), 1)],
       ["watchFiles", functionType(["path", "recursive"], [stringType, boolType], promise(fileWatcherType), 1)],
     ]),
     new Map([
@@ -310,7 +291,6 @@ export const nodeModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Ma
     ]),
     new Map([["FileWatcher", "velar/fs#type:FileWatcher"]]),
     new Map([["FileWatchBatch", fileWatchBatchType]]),
-    new Map([["Blob", blobClass]]),
   )],
   ["velar/env", moduleInterface(new Map([
     ["get", functionType(["name"], [stringType], optional(stringType))],

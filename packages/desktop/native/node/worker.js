@@ -680,10 +680,6 @@ async function fsOperation(operation, args, owner, activity) {
     const data = await boundedFile(path, maximum, "readText");
     return new TextDecoder("utf-8", { fatal: true }).decode(data);
   }
-  if (operation === "readBlob") {
-    const [path, maximum = MAX_FILE_BYTES] = args;
-    return { base64: (await boundedFile(path, maximum, "readBlob")).toString("base64") };
-  }
   if (operation === "exists") {
     try { await authorizedExisting(args[0]); return true; }
     catch (error) { if (error?.code === "ENOENT") return false; throw error; }

@@ -676,7 +676,7 @@ data and assign the result on the Vel side.
    JavaScript that runs without the toolchain.
 
 The full decision tree, including the honest limits of each hatch, is
-[docs/escape-hatches.md](escape-hatches.md) in the VelarScript repository.
+[docs/escape-hatches.md](https://github.com/VelarOS-AI/VelarScript/blob/main/docs/escape-hatches.md).
 
 ## The meta-rule
 

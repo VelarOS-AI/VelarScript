@@ -23,6 +23,7 @@ import type {
   TypeSyntax,
   UsingDeclaration,
 } from "./ast.ts";
+import { isPermanentNamespaceName, type CoreVocabularyName, type PermanentNamespaceName } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
 import type { CompilerAnalysisExtension, RetiredNamespace } from "./extension.ts";
@@ -329,7 +330,7 @@ export interface LoweringHints {
   readonly extensionLiterals: ReadonlyMap<string, string>;
   readonly extensionCalls: ReadonlyMap<string, string>;
   /** Prelude and permanent-namespace reads, keyed by span so lexical shadows win. */
-  readonly builtinValueReferences: ReadonlyMap<string, "Json" | "Promise" | "Text" | "Math" | "range">;
+  readonly builtinValueReferences: ReadonlyMap<string, PermanentNamespaceName | "range">;
   readonly runtimeNarrowings: ReadonlyMap<string, RuntimeNarrowingGuard>;
   /**
    * Span identities of `==`/`!=` operations (and comparison-chain links)
@@ -668,21 +669,74 @@ const mathNamespaceType: ValueType = {
 };
 
 /**
+ * D57 rule 135: the Core vocabulary's types, keyed by the roster itself. The
+ * `Record<CoreVocabularyName, ValueType>` annotation is the pin — a namespace
+ * or prelude name added to `core-vocabulary.ts` and not given a type here (or
+ * given one here and left off the roster) is a compile error, and the binding
+ * refusal in `source-names.ts` reads the same roster, so the protection can
+ * never lag the vocabulary again.
+ */
+const coreVocabularyTypes: Record<CoreVocabularyName, ValueType> = {
+  number: { kind: "function", parameterNames: ["text"], parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) },
+  // D32 item 29: `str` is compiler-owned text conversion, so its parameter
+  // carries the conversion domain rather than `any`. A bare `str` stays a
+  // legal first-class value, and every indirect call site — `const c = str`,
+  // `values.map(str)` — is checked against the same whitelist the direct
+  // call form uses instead of executing a 'toString' hook.
+  str: { kind: "function", parameterNames: ["value"], parameters: [textConvertibleType], requiredParameters: 1, result: stringType },
+  // `print` inspects any value by contract and keeps the `any` domain.
+  print: { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: nullType },
+  // D47 rule 81: equals(a, b) — deep structural comparison over data.
+  // Pure computation, so it lives in the prelude beside str/print; the
+  // call site owns the domain checks (inferEqualsCall).
+  equals: { kind: "intrinsic", name: "core.equals", parameterNames: ["a", "b"], parameters: [unknownType, unknownType], requiredParameters: 2, result: boolType },
+  range: { kind: "intrinsic", name: "collections.range", parameterNames: ["start", "end", "step"], parameters: [numberType, numberType, numberType], requiredParameters: 1, result: { kind: "list", element: numberType } },
+  Json: jsonNamespaceType,
+  Promise: promiseNamespaceType,
+  Text: textNamespaceType,
+  Math: mathNamespaceType,
+};
+
+function coreVocabularyType(name: string): ValueType | null {
+  return Object.hasOwn(coreVocabularyTypes, name) ? coreVocabularyTypes[name as CoreVocabularyName] : null;
+}
+
+/**
  * D50 rule 90 / D52 rule 116: the modules whose named imports retired, and the
  * prefix that replaced them. `velar/collections` is the odd one — `range` went
  * to the Core prelude rather than to a namespace, so its migration drops the
  * import and adds no prefix at all.
+ *
+ * D57 rule 136: the member sets are read off the namespace types rather than
+ * restated, so this table cannot claim a member the namespace does not carry.
  */
-const permanentNamespaceImportRosters: ReadonlyMap<string, { readonly namespace: string | null; readonly members: ReadonlySet<string> }> = new Map([
-  ["velar/json", { namespace: "Json", members: new Set(["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"]) }],
-  ["velar/async", { namespace: "Promise", members: new Set(["all", "race", "sleep", "timeout", "retry", "map", "series"]) }],
-  ["velar/text", { namespace: "Text", members: new Set(textNamespaceMembers.keys()) }],
-  ["velar/math", { namespace: "Math", members: new Set(mathNamespaceMembers.keys()) }],
+const permanentNamespaceImportRosters: ReadonlyMap<string, { readonly namespace: PermanentNamespaceName | null; readonly members: ReadonlySet<string> }> = new Map([
+  ["velar/json", { namespace: "Json", members: namespaceMemberNames(jsonNamespaceType) }],
+  ["velar/async", { namespace: "Promise", members: namespaceMemberNames(promiseNamespaceType) }],
+  ["velar/text", { namespace: "Text", members: namespaceMemberNames(textNamespaceType) }],
+  ["velar/math", { namespace: "Math", members: namespaceMemberNames(mathNamespaceType) }],
   ["velar/collections", { namespace: null, members: new Set(["range"]) }],
 ]);
 
-function permanentNamespaceImportRoster(source: string): { readonly namespace: string | null; readonly members: ReadonlySet<string> } | null {
+function namespaceMemberNames(namespace: ValueType): ReadonlySet<string> {
+  return new Set(namespace.kind === "object" ? namespace.fields.keys() : []);
+}
+
+function permanentNamespaceImportRoster(source: string): { readonly namespace: PermanentNamespaceName | null; readonly members: ReadonlySet<string> } | null {
   return permanentNamespaceImportRosters.get(source) ?? null;
+}
+
+/**
+ * D57 rule 136: the permanent namespace that reaches every export of a retired
+ * standard module, or null while the module still publishes something of its
+ * own. Derived from the roster VEL3008 rejects imports with, so a diagnostic
+ * cannot list a module as importable after its members moved behind a prefix.
+ */
+export function permanentNamespaceCoveringModule(source: string, exports: Iterable<string>): PermanentNamespaceName | null {
+  const roster = permanentNamespaceImportRosters.get(source);
+  if (!roster?.namespace) return null;
+  for (const name of exports) if (!roster.members.has(name)) return null;
+  return roster.namespace;
 }
 
 function argumentNoun(expected: string): "argument" | "arguments" {
@@ -836,7 +890,7 @@ export class Analyzer implements TypeEnvironment {
   private readonly namedArgumentOrders = new Map<string, readonly number[]>();
   protected readonly extensionLiterals = new Map<string, string>();
   protected readonly extensionCalls = new Map<string, string>();
-  private readonly builtinValueReferences = new Map<string, "Json" | "Promise" | "Text" | "Math" | "range">();
+  private readonly builtinValueReferences = new Map<string, PermanentNamespaceName | "range">();
   private readonly semanticBindingTypes = new Map<string, ValueType>();
   private readonly semanticBindingMembers = new Map<string, ReadonlyMap<string, ValueType>>();
   private readonly semanticMemberCache = new Map<string, ReadonlyMap<string, ValueType>>();
@@ -4565,7 +4619,7 @@ export class Analyzer implements TypeEnvironment {
             this.permanentNamespaceImportReads.push({ local: expression.name, source: origin.source, imported: origin.imported, span: expression.span });
           }
         }
-        if (!lexical && (expression.name === "Json" || expression.name === "Promise" || expression.name === "Text" || expression.name === "Math" || expression.name === "range")) {
+        if (!lexical && (isPermanentNamespaceName(expression.name) || expression.name === "range")) {
           this.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
         }
         // D51 rule 101: every arrow frame this read sits inside captures the
@@ -9823,7 +9877,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   /** A member name to show in the rule 106 guidance, so the fix is concrete. */
-  private firstNamespaceMember(namespace: "Json" | "Promise" | "Text" | "Math"): string {
+  private firstNamespaceMember(namespace: PermanentNamespaceName): string {
     const binding = this.builtin(namespace);
     const type = binding ? this.expandAliases(binding.type) : null;
     if (type?.kind === "object") {
@@ -10312,27 +10366,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private builtin(name: string): Binding | null {
-    const functions = new Map<string, ValueType>([
-      ["number", { kind: "function", parameterNames: ["text"], parameters: [stringType], requiredParameters: 1, result: optionalOf(numberType) }],
-      // D32 item 29: `str` is compiler-owned text conversion, so its parameter
-      // carries the conversion domain rather than `any`. A bare `str` stays a
-      // legal first-class value, and every indirect call site — `const c = str`,
-      // `values.map(str)` — is checked against the same whitelist the direct
-      // call form uses instead of executing a 'toString' hook.
-      ["str", { kind: "function", parameterNames: ["value"], parameters: [textConvertibleType], requiredParameters: 1, result: stringType }],
-      // `print` inspects any value by contract and keeps the `any` domain.
-      ["print", { kind: "function", parameterNames: ["value"], parameters: [anyType], requiredParameters: 1, result: nullType }],
-      // D47 rule 81: equals(a, b) — deep structural comparison over data.
-      // Pure computation, so it lives in the prelude beside str/print; the
-      // call site owns the domain checks (inferEqualsCall).
-      ["equals", { kind: "intrinsic", name: "core.equals", parameterNames: ["a", "b"], parameters: [unknownType, unknownType], requiredParameters: 2, result: boolType }],
-      ["range", { kind: "intrinsic", name: "collections.range", parameterNames: ["start", "end", "step"], parameters: [numberType, numberType, numberType], requiredParameters: 1, result: { kind: "list", element: numberType } }],
-      ["Json", jsonNamespaceType],
-      ["Promise", promiseNamespaceType],
-      ["Text", textNamespaceType],
-      ["Math", mathNamespaceType],
-    ]);
-    const type = this.extensionGlobals.get(name) ?? functions.get(name)
+    const type = this.extensionGlobals.get(name) ?? coreVocabularyType(name)
       ?? (name === "Error" || name === "ValidationError" || name === "NarrowingError" || name === "IndexError"
         || (VELAR_HOST_ERROR_NAMES as readonly string[]).includes(name)
         ? { kind: "classConstructor", name } satisfies ValueType
@@ -10982,7 +11016,7 @@ export class Analyzer implements TypeEnvironment {
     return null;
   }
 
-  protected isBuiltinValueReference(expression: Expression, name: "Json" | "Promise" | "Text" | "Math" | "range"): boolean {
+  protected isBuiltinValueReference(expression: Expression, name: PermanentNamespaceName | "range"): boolean {
     return this.builtinValueReferences.get(spanIdentity(expression.span)) === name;
   }
 

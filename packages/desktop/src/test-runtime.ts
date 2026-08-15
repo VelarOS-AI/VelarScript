@@ -248,17 +248,6 @@ export function desktopBrowserTestInitScript(config: VelarDesktopConfig): string
       if (node.kind !== "file") throw new Error("removeFile requires a file path");
       nodes.delete(path); notifyWatchers(path); return null;
     }
-    if (operation === "readBlob") {
-      const { node } = existing(args[0]);
-      if (node.kind !== "file") throw new Error("readBlob requires a file path");
-      const bytes = new TextEncoder().encode(node.body);
-      const maximum = args[1] ?? maxFileBytes;
-      if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > maxFileBytes) throw new RangeError("readBlob maxBytes is outside its supported bounds");
-      if (bytes.byteLength > maximum) throw new RangeError("readBlob file exceeds maxBytes");
-      let binary = "";
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      return { base64: btoa(binary) };
-    }
     throw new Error("Unsupported Desktop test filesystem operation '" + operation + "'");
   }
 

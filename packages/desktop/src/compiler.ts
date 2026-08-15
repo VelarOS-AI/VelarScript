@@ -770,7 +770,6 @@ export function fromFileUrl(value) {
 
 const DESKTOP_FS_SOURCE = String.raw`
 ${DESKTOP_HOST_ABI_RUNTIME}
-const blobToken = Symbol("velar.desktop.fs.blob");
 const watcherToken = Symbol("velar.desktop.fs.watcher");
 const maxPathCodeUnits = 4096;
 const maxFileBytes = 16 * 1024 * 1024;
@@ -861,13 +860,6 @@ async function mutate(operation, args) {
   const value = await invoke(operation, args);
   if (value !== null) throw new TypeError("Desktop host returned an invalid " + operation + " result");
 }
-export class Blob {
-  constructor(token, base64) {
-    if (token !== blobToken || typeof base64 !== "string") throw new TypeError("Blob values are created only by velar/fs.readBlob");
-    Object.defineProperty(this, "base64", {value: base64, enumerable: false, configurable: false, writable: false});
-    Object.freeze(this);
-  }
-}
 class FileWatcherHandle {
   constructor(token, handle) {
     if (token !== watcherToken || !Number.isSafeInteger(handle) || handle < 1) throw new TypeError("FileWatcher values are created only by velar/fs.watchFiles");
@@ -945,18 +937,6 @@ export async function watchFiles(path, recursive = false) {
   path = pathOf(path, "watchFiles");
   if (typeof recursive !== "boolean") throw new TypeError("watchFiles recursive must be bool");
   return new FileWatcherHandle(watcherToken, await invoke("watchStart", [path, recursive]));
-}
-export async function readBlob(path, maxBytes = maxFileBytes) {
-  maxBytes = byteLimit(maxBytes, "readBlob");
-  const value = recordOf(await invoke("readBlob", [pathOf(path, "readBlob"), maxBytes]), "Desktop Blob", new Set(["base64"]));
-  if (typeof value.base64 !== "string" || value.base64.length > Math.ceil(maxBytes / 3) * 4 + 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value.base64)) {
-    throw new TypeError("Desktop host returned an invalid Blob");
-  }
-  let bytes;
-  try { bytes = atob(value.base64).length; }
-  catch { throw new TypeError("Desktop host returned an invalid Blob"); }
-  if (bytes > maxBytes) throw new RangeError("Desktop Blob exceeds maxBytes");
-  return new Blob(blobToken, value.base64);
 }
 `.trimStart();
 

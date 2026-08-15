@@ -10525,8 +10525,9 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   ]);
   // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
   // velar/look retired the unreachable Opacity name; TXT-U3 then added
-  // Text.normalize, the one name the total has moved for since.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 282);
+  // Text.normalize, and D57 rule 137 retired velar/fs's Blob and readBlob —
+  // the same unreachable-name judgment Opacity was deleted under.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 280);
   assert.equal(Object.values(api.modules).slice(0, 9).reduce((total, exports_) => total + exports_.length, 0), 119);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
@@ -10538,7 +10539,7 @@ test("0.5 Core standard library combines typed ergonomics with explicit platform
   assert.deepEqual(api.modules["velar/id"], ["isUuid", "uuid"]);
   assert.deepEqual(api.modules["velar/log"], ["level", "log", "logger", "setLevel", "useSink"]);
   assert.deepEqual(api.modules["velar/serve"], ["RequestBodyTooLargeError", "ServeRequest", "ServeResponse", "Server", "fileResponse", "serve"]);
-  assert.deepEqual(api.modules["velar/fs"], ["Blob", "FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readBlob", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeText"]);
+  assert.deepEqual(api.modules["velar/fs"], ["FileWatchBatch", "FileWatcher", "appendText", "canonical", "copyFile", "createText", "exists", "info", "list", "makeDirectory", "move", "readText", "removeFile", "replaceTextIfMatches", "watchFiles", "writeText"]);
   assert.deepEqual(api.modules["velar/env"], ["get", "require"]);
   assert.deepEqual(api.modules["velar/host"], ["exit", "onShutdown"]);
   assert.deepEqual(api.modules["velar/terminal"], ["terminal"]);
@@ -11107,7 +11108,7 @@ test("local platform modules are typed Core APIs and refuse browser targets", as
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
 import {RequestBodyTooLargeError, ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
-import {Blob, exists, list, readBlob, readText, writeText} from "velar/fs"
+import {exists, list, readText, writeText} from "velar/fs"
 import {get, require as requireEnv} from "velar/env"
 import {exit, onShutdown} from "velar/host"
 import {terminal} from "velar/terminal"
@@ -11165,10 +11166,8 @@ test("local filesystem and environment modules keep their runtime boundaries bou
   const fsPath = join(runtimeDirectory, "fs.mjs");
   await writeFile(fsPath, fsRuntime, "utf8");
   const fsModule = await import(`${pathToFileURL(fsPath).href}?test=${Date.now()}`) as {
-    readonly Blob: new (...arguments_: unknown[]) => unknown;
     readonly exists: (path: string) => Promise<boolean>;
     readonly list: (path: string) => Promise<readonly string[]>;
-    readonly readBlob: (path: string) => Promise<unknown>;
     readonly readText: (path: string) => Promise<string>;
     readonly writeText: (path: string, text: string) => Promise<null>;
   };
@@ -11177,9 +11176,11 @@ test("local filesystem and environment modules keep their runtime boundaries bou
   assert.equal(await fsModule.exists(textPath), true);
   assert.equal(await fsModule.exists(join(directory, "missing.txt")), false);
   assert.deepEqual(await fsModule.list(directory), ["note.txt"]);
-  const blob = await fsModule.readBlob(textPath);
-  assert.equal(blob instanceof fsModule.Blob, true);
-  assert.throws(() => new fsModule.Blob(), /created only by velar\/fs\.readBlob/u);
+  // D57 rule 137: `Blob` and `readBlob` were retired, so the runtime module the
+  // build ships must stop publishing the names the dead end was reached through.
+  assert.equal(Object.hasOwn(fsModule, "Blob"), false);
+  assert.equal(Object.hasOwn(fsModule, "readBlob"), false);
+  assert.doesNotMatch(fsRuntime, /readBlob|class Blob/u);
   await writeFile(invalidPath, Buffer.from([0xc3, 0x28]));
   await assert.rejects(fsModule.readText(invalidPath), /valid UTF-8/u);
   await assert.rejects(fsModule.readText("x".repeat(4097)), /outside the supported bounds/u);
@@ -27699,7 +27700,11 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.match(JSON.stringify(completed.result), /assert/);
   assert.doesNotMatch(JSON.stringify(completed.result), /"label":"invert"/u);
   assert.match(JSON.stringify(completed.result), /velar\/collections/);
-  assert.match(JSON.stringify(completed.result), /velar\/async/);
+  // D57 rule 136: velar/async retired into the Promise namespace, so completing
+  // it as an import would offer a spelling VEL3008 refuses. The namespace is
+  // what the editor offers now.
+  assert.doesNotMatch(JSON.stringify(completed.result), /"label":"velar\/async"/u);
+  assert.match(JSON.stringify(completed.result), /"label":"Promise","kind":6/u);
   assert.match(JSON.stringify(completed.result), /velar\/time/);
   assert.match(JSON.stringify(completed.result), /velar\/log/);
   assert.match(JSON.stringify(completed.result), /velar\/app/);

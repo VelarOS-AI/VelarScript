@@ -45,7 +45,6 @@ const __velarFsMaxPathCodeUnits = 4096;
 const __velarFsMaxFileBytes = 16 * 1024 * 1024;
 const __velarFsMaxListItems = 100000;
 const __velarFsMaxListCodeUnits = 2 * 1024 * 1024;
-const __velarFsBlobToken = Symbol("velar.fs.blob");
 const __velarFsWatcherToken = Symbol("velar.fs.watcher");
 const __velarFsMaxWatchPaths = 4096;
 
@@ -148,14 +147,6 @@ function __velarFsWatchBatch(value) {
   }]);
 }
 
-export class Blob {
-  constructor(token, data) {
-    if (token !== __velarFsBlobToken) throw new __velarFsNativeTypeError("Blob values are created only by velar/fs.readBlob");
-    __velarFsCall(__velarFsObjectDefineProperty, __velarFsNativeObject, [this, "data", {value: data, enumerable: false, configurable: false, writable: false}]);
-    __velarFsCall(__velarFsObjectFreeze, __velarFsNativeObject, [this]);
-  }
-}
-
 class FileWatcherHandle {
   constructor(token, handle) {
     if (token !== __velarFsWatcherToken || !__velarFsCall(__velarFsNumberIsSafeInteger, __velarFsNativeNumber, [handle]) || handle < 1) {
@@ -206,16 +197,11 @@ export const FileWatchBatch = __velarFsCall(__velarFsObjectFreeze, __velarFsNati
   parse(value) { return __velarFsWatchBatch(value); },
 }]);
 
-async function __velarFsRead(path, operation, maxBytes) {
-  path = __velarFsPath(path, operation);
-  maxBytes = __velarFsByteLimit(maxBytes, operation);
-  const data = __velarFsBytes(await __velarNodeHostInvoke("fs.readFile", [path, maxBytes, operation]), operation);
-  if (__velarFsByteLength(data) > maxBytes) throw new __velarFsNativeRangeError(operation + " file exceeds maxBytes");
-  return data;
-}
-
 export async function readText(path, maxBytes = __velarFsMaxFileBytes) {
-  const data = await __velarFsRead(path, "readText", maxBytes);
+  path = __velarFsPath(path, "readText");
+  maxBytes = __velarFsByteLimit(maxBytes, "readText");
+  const data = __velarFsBytes(await __velarNodeHostInvoke("fs.readFile", [path, maxBytes, "readText"]), "readText");
+  if (__velarFsByteLength(data) > maxBytes) throw new __velarFsNativeRangeError("readText file exceeds maxBytes");
   try { return __velarFsCall(__velarFsTextDecoderDecode, __velarFsDecoder, [data]); }
   catch { throw new __velarFsNativeTypeError("readText requires valid UTF-8 text"); }
 }
@@ -315,9 +301,5 @@ export async function watchFiles(path, recursive = false) {
   if (typeof recursive !== "boolean") throw new __velarFsNativeTypeError("watchFiles recursive must be bool");
   const handle = await __velarNodeHostInvoke("fs.watchStart", [path, recursive]);
   return new FileWatcherHandle(__velarFsWatcherToken, handle);
-}
-
-export async function readBlob(path, maxBytes = __velarFsMaxFileBytes) {
-  return new Blob(__velarFsBlobToken, await __velarFsRead(path, "readBlob", maxBytes));
 }
 `.trimStart();

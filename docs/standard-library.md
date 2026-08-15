@@ -786,7 +786,6 @@ fallback goes through the identical containment and size checks.
 | `copyFile(source, target, replace=false)` | Copies one regular file; replacement is explicit. |
 | `move(source, target, replace=false)` | Moves one path; replacement is explicit. |
 | `removeFile(path)` | Removes one file and never recursively removes a directory. |
-| `readBlob(path, maxBytes=16777216)` | Returns an opaque, non-constructible `Blob` under an explicit byte budget. |
 | `watchFiles(path, recursive=false)` | Creates a bounded, resource-owned invalidation watcher for one existing file or directory. |
 | `FileWatcher.next()` | Pulls one sorted/deduplicated `FileWatchBatch`, permits only one active pull, and returns `null` after release. |
 | `FileWatcher.close()` | Idempotently releases the watcher and settles a pending pull with `null`. |

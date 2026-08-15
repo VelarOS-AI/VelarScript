@@ -3,6 +3,10 @@ type User:
     name: string
     avatar: string?
 
+type Workspace:
+    id: string
+    labels: Record<string>
+
 class Player:
     const name: string
     let score: number
@@ -20,6 +24,9 @@ class Player:
 def activeNames(users: List<User>) -> List<string>:
     return users.map(user => user.name)
 
+def labelFor(labels: Record<string>, key: string) -> string:
+    return labels[key] ?? "unlabelled"
+
 const raw = {
     id: "user-1",
     name: "Ada",
@@ -36,6 +43,10 @@ const namedUserCount = names.map(name => name == "" ? 0 : 1).reduce((total, coun
 const scores = Map()
 scores.set(user.id, 10)
 const savedScore = scores.get(user.id)
+
+const labels: Record<string> = {tier: "gold"}
+const workspace = Workspace.parse({id: "workspace-1", labels: labels})
+print(labelFor(workspace.labels, "tier"))
 
 const player = Player(user.name)
 player.addScore(savedScore ?? 0)

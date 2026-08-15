@@ -6,6 +6,7 @@ import {
   type FrameworkHostExtension,
   type FrameworkStaticDeployment,
 } from "@velarscript/compiler/framework-host";
+import { BROWSER_TEST_SOURCE_SUFFIX } from "./browser-test.ts";
 import { VELAR_WEB_API_VERSION } from "./compiler.ts";
 import type { VelarWebConfig } from "./project-config.ts";
 
@@ -141,7 +142,7 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   createErrorDocument: createWebErrorDocument,
   staticDeployment: webStaticDeployment,
   browserTests: Object.freeze({
-    sourceSuffix: ".browser.test.vel",
+    sourceSuffix: BROWSER_TEST_SOURCE_SUFFIX,
     runtimeKey: "velar.browser.test.v1",
   }),
 });

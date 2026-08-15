@@ -1,6 +1,19 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isAbsolute, relative, resolve } from "node:path";
-import { compile, formatSource, isSourceIdentifierPart, type Diagnostic, type SourceText, type Span } from "@velarscript/compiler";
+import {
+  compile,
+  CORE_PRELUDE_NAMES,
+  formatSource,
+  isSourceIdentifierPart,
+  PERMANENT_NAMESPACE_NAMES,
+  permanentNamespaceCoveringModule,
+  type CorePreludeName,
+  type Diagnostic,
+  type PermanentNamespaceName,
+  type SourceText,
+  type Span,
+} from "@velarscript/compiler";
+import { standardModuleInterfaces } from "./standard-modules.ts";
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
@@ -124,27 +137,53 @@ const builtinTypeDocumentation = new Map<string, string>([
   ["Duration", "A Core duration value written with an ms or s suffix."],
 ]);
 
+// D57 rules 134/136: both halves of this list are derived. The prelude and
+// namespace entries are keyed by the Core vocabulary roster, so a name added
+// there cannot be missing here — the hand-kept version had already lost `Math`
+// and `number`. The module entries are filtered by the migration state, so a
+// completion cannot offer an import VEL3008 refuses on the next keystroke.
+const corePreludeCompletionDetail: Record<CorePreludeName, string> = {
+  number: "number(text) -> number? — text to number, null when the text is not numeric",
+  str: "str(value) -> string",
+  print: "print(value) -> null",
+  equals: "equals(a, b) -> bool — deep structural comparison over data",
+  range: "range(stop) or range(start, stop, step) -> List<number>",
+};
+
+const permanentNamespaceCompletionDetail: Record<PermanentNamespaceName, string> = {
+  Json: "Permanent namespace for parse, tryParse, stringify, stableStringify, clone, and isSerializable",
+  Promise: "Permanent namespace for all, race, sleep, timeout, retry, map, and series",
+  Text: "Permanent namespace for Unicode-aware text normalization, formatting, code points, and patterns",
+  Math: "Permanent namespace for numeric constants, transforms, transcendentals, and random helpers",
+};
+
+const standardModuleCompletionDetail = new Map([
+  ["velar/collections", "Typed collection transforms and Python-style iteration helpers"],
+  ["velar/math", "Numeric constants, transforms, and random helpers"],
+  ["velar/async", "Promise composition, timeout, retry, and concurrency helpers"],
+  ["velar/url", "URL parsing, joining, encoding, and query helpers"],
+  ["velar/time", "Timestamps, ISO values, formatting, and date-part helpers"],
+  ["velar/id", "Secure host UUID generation and validation"],
+  ["velar/log", "Structured leveled logging with scoped loggers and replaceable sinks"],
+  ["velar/test", "Typed deep, collection, error, and Promise assertions"],
+]);
+
+function importableStandardModules(): readonly { readonly label: string; readonly kind: number; readonly detail: string }[] {
+  const interfaces = standardModuleInterfaces();
+  return [...standardModuleCompletionDetail]
+    .filter(([source]) => permanentNamespaceCoveringModule(source, interfaces.get(source)?.exports.keys() ?? []) === null)
+    .map(([label, detail]) => ({ label, kind: 9, detail }));
+}
+
 const coreCompletionItems = [
   ...["const", "let", "readonly", "def", "async", "await", "type", "enum", "abstract", "class", "constructor", "extends", "override", "private", "static", "get", "super", "pass", "return", "throw", "assert", "if", "else", "match", "case", "for", "in", "while", "try", "catch", "finally", "import", "export", "null", "true", "false", "and", "or", "not"].map((label) => ({ label, kind: 14 })),
   ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
-  { label: "str", kind: 3, detail: "str(value) -> string" },
-  { label: "print", kind: 3, detail: "print(value) -> null" },
-  { label: "range", kind: 3, detail: "range(stop) or range(start, stop, step) -> List<number>" },
-  { label: "equals", kind: 3, detail: "equals(a, b) -> bool — deep structural comparison over data" },
-  { label: "Json", kind: 6, detail: "Permanent namespace for parse, tryParse, stringify, stableStringify, clone, and isSerializable" },
-  { label: "Promise", kind: 6, detail: "Permanent namespace for all, race, sleep, timeout, retry, map, and series" },
-  { label: "Text", kind: 6, detail: "Permanent namespace for Unicode-aware text normalization, formatting, code points, and patterns" },
-  { label: "velar/collections", kind: 9, detail: "Typed collection transforms and Python-style iteration helpers" },
-  { label: "velar/math", kind: 9, detail: "Numeric constants, transforms, and random helpers" },
-  { label: "velar/async", kind: 9, detail: "Promise composition, timeout, retry, and concurrency helpers" },
-  { label: "velar/url", kind: 9, detail: "URL parsing, joining, encoding, and query helpers" },
-  { label: "velar/time", kind: 9, detail: "Timestamps, ISO values, formatting, and date-part helpers" },
-  { label: "velar/id", kind: 9, detail: "Secure host UUID generation and validation" },
-  { label: "velar/log", kind: 9, detail: "Structured leveled logging with scoped loggers and replaceable sinks" },
-  { label: "velar/test", kind: 9, detail: "Typed deep, collection, error, and Promise assertions" },
+  ...CORE_PRELUDE_NAMES.map((label) => ({ label, kind: 3, detail: corePreludeCompletionDetail[label] })),
+  ...PERMANENT_NAMESPACE_NAMES.map((label) => ({ label, kind: 6, detail: permanentNamespaceCompletionDetail[label] })),
+  ...importableStandardModules(),
 ];
 
-function completionItemsFor(project: ProjectResult | null): readonly { readonly label: string; readonly kind: number; readonly detail?: string }[] {
+export function completionItemsFor(project: ProjectResult | null): readonly { readonly label: string; readonly kind: number; readonly detail?: string }[] {
   if (!project) return coreCompletionItems;
   return [
     ...coreCompletionItems,

@@ -19,7 +19,6 @@ interface InlineToken {
 }
 
 const multiCharacterOperators = ["...", "?.", "??", "->", "=>", "==", "!=", "<=", ">=", "**", "+=", "-=", "*=", "/=", "%="] as const;
-const genericNames = new Set(["List", "Set", "Map", "Promise", "Function", "Type"]);
 const binaryWords = new Set(["and", "or", "in", "is"]);
 const prefixWords = new Set(["not", "await"]);
 const expressionStatementWords = new Set(["return", "throw", "assert"]);
@@ -451,7 +450,9 @@ function tokenizeInline(
     if (character === "<") {
       const previous = tokens.at(-1);
       const generic = previous?.kind === "word"
-        && (genericNames.has(previous.text) || genericStack.at(-1) === true || beginsTypeBracket(tokens));
+        && (genericStack.at(-1) === true
+          || beginsTypeBracket(tokens)
+          || (opensAnnotatedType(tokens) && closesAsTypeArguments(source, index)));
       if (generic) genericStack.push(true);
       tokens.push({ kind: generic ? "open" : "operator", text: character, generic });
       index += 1;
@@ -477,7 +478,7 @@ function tokenizeInline(
 // declaration or after a type-only operator opens a bracket; every other
 // expression-position '<' stays a comparison.
 const typeBracketDeclarationWords = new Set(["def", "type", "class"]);
-const typeBracketOperators = new Set(["->", "|", "is", "case"]);
+const typeBracketOperators = new Set(["->", "|", "is", "case", "extends"]);
 
 function beginsTypeBracket(tokens: readonly InlineToken[]): boolean {
   const before = tokens.at(-2);
@@ -485,6 +486,85 @@ function beginsTypeBracket(tokens: readonly InlineToken[]): boolean {
   if (before.kind === "word" && typeBracketDeclarationWords.has(before.text)) return true;
   if (before.text === "not" && tokens.at(-3)?.text === "is") return true;
   return typeBracketOperators.has(before.text);
+}
+
+/**
+ * D55 rule 127.2 / D57 rule 134: which '<' opens a type argument list is a
+ * question about position, never about the name in front of it. A whitelist of
+ * generic names — the shape this used to have — is blind to `Record<T>` today
+ * and to every generic a program declares for itself tomorrow, so the two
+ * remaining type positions are read structurally instead.
+ *
+ * The first is the annotation a ':' introduces (`x: Record<string>` as a
+ * parameter, a field, or a `const`), reached by walking back over the words and
+ * dots the type itself owns so modifiers such as `readonly` do not hide it.
+ * The second is the target of a type alias, where everything right of '=' on a
+ * `type` line is type syntax.
+ */
+function opensAnnotatedType(tokens: readonly InlineToken[]): boolean {
+  let index = tokens.length - 2;
+  while (index >= 0) {
+    const token = tokens[index]!;
+    if (token.kind !== "word" && token.kind !== "dot") break;
+    if (typeBracketOperators.has(token.text)) break;
+    index -= 1;
+  }
+  const introducer = tokens[index];
+  if (!introducer) return false;
+  if (introducer.kind === "colon") return true;
+  if (typeBracketOperators.has(introducer.text)) return true;
+  return introducer.text === "=" && isTypeAliasLine(tokens);
+}
+
+function isTypeAliasLine(tokens: readonly InlineToken[]): boolean {
+  const head = tokens[0]?.text;
+  return head === "type" || (head === "export" && tokens[1]?.text === "type");
+}
+
+/**
+ * The annotation position is the one type position a comparison also occupies,
+ * so the bracket has to prove itself: a type argument list closes on this line
+ * with nothing between the brackets but type syntax. `{visible: count < limit}`
+ * never closes, and `{ok: a < b and c > d}` carries a word no type argument
+ * list can hold.
+ */
+function closesAsTypeArguments(source: string, start: number): boolean {
+  let depth = 0;
+  let index = start;
+  while (index < source.length) {
+    const character = source[index]!;
+    if (character === "<") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (character === ">") {
+      // The close is the close whatever follows it: an author may write
+      // `const values: List<number>=[1, 2, 3]` and expect canonical spacing.
+      depth -= 1;
+      index += 1;
+      if (depth === 0) return true;
+      continue;
+    }
+    if (source.startsWith("->", index)) {
+      index += 2;
+      continue;
+    }
+    if (isSourceIdentifierStart(character)) {
+      const wordStart = index;
+      index += 1;
+      while (index < source.length && isSourceIdentifierPart(source[index]!)) index += 1;
+      const word = source.slice(wordStart, index);
+      if (binaryWords.has(word) || prefixWords.has(word)) return false;
+      continue;
+    }
+    if (" \t,.?|()".includes(character)) {
+      index += 1;
+      continue;
+    }
+    return false;
+  }
+  return false;
 }
 
 function formatInterpolatedString(

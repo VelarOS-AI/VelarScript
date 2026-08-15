@@ -203,7 +203,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
           return { name: "note.txt", kind: "file", size: 5, modifiedAt: 0 };
         }
         if (operation === "canonical") return "/project/note.txt";
-        if (operation === "readBlob") return path === "invalid-blob" ? { base64: "%%%" } : { base64: "dmFsdWU=" };
         if (operation === "writeText" && path === "bad-result") return {};
         return null;
       }
@@ -464,7 +463,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     await pendingRead.wait();
 
     const fsRuntime = await runtime<{
-      Blob: new (...args: unknown[]) => unknown;
       readText(path: string, maxBytes?: number): Promise<string>;
       createText(path: string, text: string): Promise<null>;
       replaceTextIfMatches(path: string, expected: string, replacement: string): Promise<boolean>;
@@ -473,7 +471,6 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       list(path: string, maxItems?: number): Promise<string[]>;
       info(path: string): Promise<{ readonly name: string; readonly kind: string } | null>;
       canonical(path: string): Promise<string>;
-      readBlob(path: string, maxBytes?: number): Promise<unknown>;
       watchFiles(path: string, recursive?: boolean): Promise<{
         next(): Promise<{ readonly paths: readonly string[]; readonly rescan: boolean } | null>;
         close(): Promise<null>;
@@ -497,8 +494,11 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.equal(await fsRuntime.canonical("note.txt"), "/project/note.txt");
     assert.equal(await fsRuntime.exists("note.txt"), true);
     await assert.rejects(fsRuntime.exists("invalid-exists"), /invalid file existence/u);
-    assert.ok(await fsRuntime.readBlob("note.txt", 16) instanceof fsRuntime.Blob);
-    await assert.rejects(fsRuntime.readBlob("invalid-blob", 16), /invalid Blob/u);
+    // D57 rule 137: `Blob` and `readBlob` were retired, and the Desktop fs
+    // runtime is reachable through `import js` — so the names have to be gone
+    // from the emitted module, not merely absent from the published interface.
+    assert.equal(Object.hasOwn(fsRuntime, "Blob"), false);
+    assert.equal(Object.hasOwn(fsRuntime, "readBlob"), false);
     await assert.rejects(fsRuntime.writeText("bad-result", "value"), /invalid writeText result/u);
     const watcher = await fsRuntime.watchFiles(".", true);
     const fileWatchBatch = await watcher.next();

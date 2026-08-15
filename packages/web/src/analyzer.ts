@@ -25,6 +25,7 @@ import {
   type TypeReference,
   type ValueType,
 } from "@velarscript/compiler/extension";
+import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestImportGuidance } from "./browser-test.ts";
 import {
   LOOK_ABSENT_MEDIA_SUBJECTS,
   LOOK_ARITHMETIC_HINT,
@@ -739,9 +740,12 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly reportedJsxKeys = new Set<JSXElementExpression>();
   private lookBuilderNames: ReadonlyMap<string, string> = new Map();
   private lookLiteralDepth = 0;
+  /** D57 rule 138: `velar/web-test` is legal only where the browser runner looks. */
+  private readonly webModulePath: string | null;
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
+    this.webModulePath = context.path ?? null;
     this.resources = context.resources ?? new Map();
     this.importedLookStaticValues = new Map(
       [...(context.extensionImports?.get("@velarscript/web") ?? [])]
@@ -753,9 +757,26 @@ export class VelarWebAnalyzer extends Analyzer {
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     this.lookBuilderNames = collectLookBuilderNames(program);
     for (const name of collectDerivedReactiveNames(program)) this.derivedReactiveNames.add(name);
+    this.reportBrowserTestImports(program);
     super.analyze(program);
     this.reportStaticJsxKeys();
     return this.diagnostics;
+  }
+
+  /**
+   * D57 rule 138: `velar/web-test` only has a runtime under `velar test
+   * --browser`, so an import of it anywhere else compiles a call that cannot
+   * succeed. D51 rule 109 puts the refusal at the declaration rather than at the
+   * eventual use, so the error lands on the `import` line — including the
+   * JavaScript-bridge and re-export spellings, which reach the same runtime.
+   */
+  private reportBrowserTestImports(program: Program): void {
+    if ((this.webModulePath ?? "").endsWith(BROWSER_TEST_SOURCE_SUFFIX)) return;
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration" && statement.kind !== "ReExportDeclaration") continue;
+      if (statement.source !== BROWSER_TEST_MODULE) continue;
+      this.diagnostics.push(diagnostic("VEL5062", browserTestImportGuidance(), statement.sourceSpan));
+    }
   }
 
   /**

@@ -1410,7 +1410,10 @@ than formatting a hostile thrown value.
 `.test.vel` files and `test "name":` discovery remain owned by `velar test`.
 
 Browser application tests use a separate `.browser.test.vel` suffix and run
-only through `velar test --browser`:
+only through `velar test --browser`. Because that command is the only place
+`velar/web-test` has a runtime, importing it from any other module — an
+application module, or a plain `.test.vel` — is refused at the `import` line
+rather than left to fail at the call:
 
 ```velar
 import {expect} from "velar/test"

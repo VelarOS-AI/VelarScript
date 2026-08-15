@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectModule } from "@velarscript/compiler";
 import { isNodeOnlyModule } from "@velarscript/node/compiler";
-import { velarCompilerExtension } from "@velarscript/web/compiler";
+import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, velarCompilerExtension } from "@velarscript/web/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -42,10 +42,11 @@ for (const file of files) {
     // the project driver, so both get the same analysis, the same emitter, and
     // the same project-level checks a real source file gets.
     // D39 item 53: `test "name":` is declared in a test module, so an example
-    // that declares one is compiled as the module kind it describes.
-    const entry = join(root, /^test\s+"/mu.test(source)
-      ? ".velar-documentation-example.test.vel"
-      : ".velar-documentation-example.vel");
+    // that declares one is compiled as the module kind it describes. D57 rule
+    // 138 carries that one step further: an example that reaches for the
+    // page-driving module describes a browser test, which is the only module
+    // kind allowed to import it.
+    const entry = join(root, moduleFileName(source));
     const result = await compileProject(entry, new Map([[entry, source]]), {
       sourceRoot: root,
       projectRoot: root,
@@ -73,6 +74,20 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(`Checked ${examples} VelarScript documentation examples (${examples - fragments} complete, ${fragments} fragments), all under full project analysis`);
+}
+
+/**
+ * The module file name an example is compiled under. A documentation example
+ * is checked as the module kind it describes, and two kinds announce
+ * themselves in the source: `test "name":` is a test module, and an import of
+ * the page-driving module is a browser test module — the only place D57 rule
+ * 138 admits that import. Both names are read from their owners rather than
+ * spelled again here.
+ */
+function moduleFileName(source) {
+  const base = ".velar-documentation-example";
+  if (source.includes(JSON.stringify(BROWSER_TEST_MODULE))) return `${base}${BROWSER_TEST_SOURCE_SUFFIX}`;
+  return /^test\s+"/mu.test(source) ? `${base}.test.vel` : `${base}.vel`;
 }
 
 /**

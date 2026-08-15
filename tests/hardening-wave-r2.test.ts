@@ -304,16 +304,20 @@ print(Text.replaceMatches("a1b2", "[0-9]", "#"))
   assert.match(emitted.code ?? "", /__velarTextNamespace\.slug\("a"\)/u);
 });
 
-test("[D50-90] the Text namespace covers every velar/text export and shadows lexically", () => {
+test("[D50-90] the Text namespace covers every velar/text export and cannot be shadowed", () => {
   const exports_ = [...standardModuleInterfaces().get("velar/text")!.exports.keys()].sort();
   assert.deepEqual([...TEXT_NAMESPACE_MEMBERS].sort(), exports_);
 
+  // D57 rule 135 replaces this wave's lexical-shadow clause: the module below
+  // used to compile clean and hand every `Text.` read to a local record.
   const shadowed = compile(`
 const Text = {slug: (value: string) => value}
 print(Text.slug("local"))
 `.trimStart());
-  assert.deepEqual(shadowed.diagnostics, []);
-  assert.doesNotMatch(shadowed.code ?? "", /__velarTextNamespace/u);
+  assert.deepEqual(shadowed.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL3007 'Text' is a reserved Core binding",
+  ]);
+  assert.equal(shadowed.code, null);
 });
 
 test("[D50-90] Text.codePoint and Text.fromCodePoint round-trip and refuse surrogate halves", () => {

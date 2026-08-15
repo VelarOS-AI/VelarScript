@@ -8,6 +8,7 @@ import {
   diagnostic,
   inspectModule,
   optionalOf,
+  permanentNamespaceCoveringModule,
   readonlyViewOf,
   removedStandardFunctionGuidance,
   type AnalysisContext,
@@ -17,6 +18,7 @@ import {
   type Diagnostic,
   type EnumInfo,
   type ModuleInspection,
+  type ModuleInterface,
   type ValueType,
 } from "@velarscript/compiler";
 import type { ResolvedFrameworkHost } from "./config.ts";
@@ -382,13 +384,14 @@ export async function compileProjectEntries(
             failures.push({ path: inputPath, message: migratedStandard });
             continue;
           }
-          const available = [...standardModuleInterfaces(compilerExtensions).keys()].sort();
+          const interfaces = standardModuleInterfaces(compilerExtensions);
+          const available = [...interfaces.keys()].sort();
           const near = nearestName(dependency.source, available);
           recordResolution(
             inputPath,
             dependency.source,
             "VEL6003",
-            `Unknown standard module ${JSON.stringify(dependency.source)}${near ? `; did you mean ${JSON.stringify(near)}?` : ""} The standard modules are: ${available.join(", ")}`,
+            `Unknown standard module ${JSON.stringify(dependency.source)}${near ? `; did you mean ${JSON.stringify(near)}?` : ""} The standard modules are: ${available.map((module) => standardModuleListing(module, interfaces)).join(", ")}`,
           );
           continue;
         }
@@ -668,6 +671,20 @@ async function judgeJavaScriptSpecifier(source: string, importerPath: string): P
     // An unreadable manifest is the package's own problem; the import stands.
   }
   return null;
+}
+
+/**
+ * D57 rule 136: how one standard module appears in the VEL6003 listing. A
+ * module whose every export retired into a permanent namespace is still real —
+ * the capability is there, only the spelling changed — so it stays listed and
+ * says where its members went. Listing it bare sends the author to an import
+ * VEL3008 refuses on the next step, which is the worst kind of diagnostic.
+ * The annotation is derived from the migration roster the compiler rejects
+ * those imports with, so the listing cannot fall behind a future migration.
+ */
+function standardModuleListing(source: string, interfaces: ReadonlyMap<string, ModuleInterface>): string {
+  const namespace = permanentNamespaceCoveringModule(source, interfaces.get(source)?.exports.keys() ?? []);
+  return namespace ? `${source} (its members read as ${namespace}.name and need no import)` : source;
 }
 
 function migratedStandardPackageDiagnostic(source: string): string | null {

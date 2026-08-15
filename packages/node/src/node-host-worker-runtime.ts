@@ -842,7 +842,7 @@ async function dispatch(operation, args) {
     return task ? releaseHttpRequest(task, null) : false;
   }
   if (operation === "fs.readFile") {
-    if (args.length !== 3 || args[2] !== "readText" && args[2] !== "readBlob") throw new TypeError("fs.readFile arguments are invalid");
+    if (args.length !== 3 || args[2] !== "readText") throw new TypeError("fs.readFile arguments are invalid");
     return regularFile(boundedPath(args[0], args[2]), args[2], byteLimit(args[1], args[2]));
   }
   if (operation === "fs.createFile") {

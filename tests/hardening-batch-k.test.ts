@@ -24,7 +24,7 @@ function execute(code: string, web = false) {
   return spawnSync(process.execPath, ["--input-type=module"], { encoding: "utf8", input: linked, timeout: web ? 10_000 : 5_000 });
 }
 
-test("[D35] permanent namespaces and range compile, execute, shadow, and share Promise's type spelling", () => {
+test("[D35] permanent namespaces and range compile, execute, and share Promise's type spelling", () => {
   const result = compile(`
 async def name() -> string:
     await Promise.sleep(1ms)
@@ -45,16 +45,19 @@ print(range(3))
   assert.equal(execution.status, 0, execution.stderr);
   assert.equal(execution.stdout, '{"count":2,"name":"Ada"}\n[ 0, 1, 2 ]\n');
 
+  // D57 rule 135 retires this wave's shadowing clause: a local named after a
+  // permanent namespace or a prelude name used to take the name over silently.
   const shadowed = compile(`
 const Json = {stringify: (value: string) => value}
 const Promise = {all: (value: string) => value}
 const range = (value: number) => [value]
-print(Json.stringify("local"))
-print(Promise.all("owned"))
-print(range(4))
 `.trimStart());
-  assert.deepEqual(shadowed.diagnostics, []);
-  assert.doesNotMatch(shadowed.code ?? "", /__velar(?:Json|Promise)Namespace|__velarRange/u);
+  assert.deepEqual(shadowed.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL3007 'Json' is a reserved Core binding",
+    "VEL3007 'Promise' is a reserved Core binding",
+    "VEL3007 'range' is a reserved Core binding",
+  ]);
+  assert.equal(shadowed.code, null);
 });
 
 test("[D35] Promise.all records preserve per-field types and mixed Lists teach named fields", () => {

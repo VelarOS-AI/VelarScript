@@ -1,6 +1,7 @@
 import { optionalOf as optional, type ClassInfo, type CompilerExtension, type EnumInfo, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, routeContextIdentity, VelarWebAnalyzer } from "./analyzer.ts";
+import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX, browserTestDrivingGuidance } from "./browser-test.ts";
 import { WEB_VOID_ELEMENTS } from "./elements.ts";
 import { WebJavaScriptEmitter } from "./emitter.ts";
 import { velarWebProjectEditorExtension } from "./editor.ts";
@@ -13,6 +14,12 @@ import { LOOK_BUILDERS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_UNIT_T
 import { isWebTypeAssignable, resolveWebTypeSyntax, webComponentConstructor, webNodeType } from "./types.ts";
 
 export const VELAR_WEB_API_VERSION = "0.10";
+
+// D57 rule 138 gave the browser-test boundary teeth, so the two names it is
+// written in are part of the published contract: the framework host hands the
+// suffix to the CLI runner, and tooling that has to name a browser test module
+// reads both from here instead of spelling them again.
+export { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX } from "./browser-test.ts";
 
 const anyType: ValueType = { kind: "any" };
 const nullType: ValueType = { kind: "null" };
@@ -489,7 +496,7 @@ export const webModuleInterfaces: ReadonlyMap<string, ModuleInterface> = new Map
     ["socket", namedFunction(["url", "handlers"], [stringType, socketHandlersType], socketType, 1)],
     ["eventStream", namedFunction(["url", "handlers", "credentials"], [stringType, eventStreamHandlersType, boolType], eventStreamType, 1)],
   ]))],
-  ["velar/web-test", moduleInterface(new Map([
+  [BROWSER_TEST_MODULE, moduleInterface(new Map([
     ["browser", browserTestControllerType],
     ["localStorage", browserTestStorageControllerType],
     ["sessionStorage", browserTestStorageControllerType],
@@ -505,15 +512,6 @@ function moduleInterface(
   enums: ReadonlyMap<string, EnumInfo> = new Map(),
 ): ModuleInterface {
   return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeIdentities, typeAliases: new Map(), enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
-}
-
-/**
- * The one sentence an author standing in a `.browser.test.vel` needs: the body
- * runs in the test process, the application runs in the page, and the surface
- * that reaches across is `velar/web-test`.
- */
-function browserTestDrivingGuidance(name: string): string {
-  return `A browser test drives the running page, so '${name}' is not available in its body; import {browser} from "velar/web-test" and use browser.open("/"), browser.fill(selector, text), browser.click(selector), browser.waitForText(selector, text), and browser.text(selector) — the same module exports localStorage and sessionStorage for the page's storage`;
 }
 
 export const velarCompilerExtension: CompilerExtension = Object.freeze({
@@ -592,7 +590,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     // that already runs the built application, so the DOM globals do not point
     // at velar/browser there: the door is velar/web-test.
     globalGuidanceByPathSuffix: new Map([
-      [".browser.test.vel", new Map([
+      [BROWSER_TEST_SOURCE_SUFFIX, new Map([
         ["document", browserTestDrivingGuidance("document")],
         ["window", browserTestDrivingGuidance("window")],
         ["navigator", browserTestDrivingGuidance("navigator")],
@@ -661,7 +659,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       { label: "velar/browser", kind: 9, detail: "Browser state, cancellable timers, clipboard, media, visibility, layout, and frames" },
       { label: "velar/files", kind: 9, detail: "Cross-browser file selection, reading, and downloads" },
       { label: "velar/realtime", kind: 9, detail: "WebSocket and server-sent event connections" },
-      { label: "velar/web-test", kind: 9, detail: "Restricted browser automation for Web tests" },
+      { label: BROWSER_TEST_MODULE, kind: 9, detail: `Restricted browser automation, imported only from a *${BROWSER_TEST_SOURCE_SUFFIX} module` },
     ]),
   }),
   modules: Object.freeze({

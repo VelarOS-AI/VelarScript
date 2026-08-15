@@ -93,7 +93,8 @@ single published `velar.entry`, a local preview application, a Core contract
 test, a browser rendering test, and `@velarscript/web` as both a development
 dependency and consumer peer contract. Assertions come from `velar/test`.
 Browser automation is a Web extension surface imported from `velar/web-test`
-and runs only through `velar test --browser`.
+and runs only through `velar test --browser`; the import is legal only inside a
+`*.browser.test.vel` module and is refused anywhere else.
 
 `velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]`
 compiles the resolved Core module graph and executes its entry module once on

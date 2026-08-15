@@ -83,8 +83,25 @@ for (const phrase of [
 
 const charter = await readFile(join(root, "docs", "language-charter.md"), "utf8");
 const architecture = await readFile(join(root, "docs", "contributing", "compiler-architecture.md"), "utf8");
-if (!charter.includes("runtime-boundary.md")) failures.push("docs/language-charter.md: missing runtime boundary authority link");
-if (!architecture.includes("runtime-boundary.md")) failures.push("docs/contributing/compiler-architecture.md: missing runtime boundary ownership link");
+// Resolve the link rather than substring-matching the filename: a bare
+// `includes("runtime-boundary.md")` stayed green after the ledger moved into
+// docs/contributing/, so the gate reported a link it could no longer follow.
+for (const [source, document, role] of [
+  ["docs/language-charter.md", charter, "authority"],
+  ["docs/contributing/compiler-architecture.md", architecture, "ownership"],
+]) {
+  const links = [...document.matchAll(/\]\(([^)]*runtime-boundary\.md)\)/gu)].map((match) => match[1]);
+  if (links.length === 0) {
+    failures.push(`${source}: missing runtime boundary ${role} link`);
+    continue;
+  }
+  for (const link of links) {
+    const target = resolve(root, dirname(source), link);
+    if (!await readFile(target, "utf8").then(() => true, () => false)) {
+      failures.push(`${source}: runtime boundary ${role} link '${link}' does not resolve`);
+    }
+  }
+}
 
 const ownedLiteral = JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY);
 const ownedVersion = JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION);
