@@ -447,6 +447,9 @@ export const ProcessOutputChannel = __velarRegisterRuntimeType(__velarProcessFre
     if (!ProcessOutputChannel.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProcessOutputChannel");
     return value;
   },
+  // D60 rule 149: values() is the third name charter section 6 reserves on
+  // every enum, and it returns a fresh mutable List in declaration order.
+  values() { return ["stdout", "stderr"]; },
 }));
 
 function boundedText(value, name, maxCodeUnits = 4096) {

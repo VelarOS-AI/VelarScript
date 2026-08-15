@@ -2087,7 +2087,19 @@ export class HttpAbortError extends Error {
   }
 }
 
-export const HttpTransportPhase = __velarFreezeOptionsValue({request: "request", response: "response"});
+// D60 rule 149: a module-provided enum carries the same runtime face a declared
+// enum does -- charter section 6 reserves is, parse, and values on every enum,
+// and member access alone kept the gap invisible until a call threw.
+export const HttpTransportPhase = __velarRegisterRuntimeType(__velarFreezeOptionsValue({
+  request: "request",
+  response: "response",
+  is(value) { return value === "request" || value === "response"; },
+  parse(value) {
+    if (!HttpTransportPhase.is(value)) throw new TypeError("Value does not match HttpTransportPhase");
+    return value;
+  },
+  values() { return ["request", "response"]; },
+}));
 export class HttpTransportError extends Error {
   constructor(message, phase) {
     message = __velarString(message, "HTTP transport error message");

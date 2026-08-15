@@ -282,13 +282,18 @@ export function standardModuleInterface(source: string, extensions: readonly Com
   return coreModuleInterfaces.get(source) ?? null;
 }
 
-/** The Core comparison, reached for rather than restated (D50 rule 97.2). */
-const collectionLoweringImport = `import { __velarEquals } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;
+/**
+ * The two Core comparisons, reached for rather than restated (D50 rule 97.2,
+ * D59 rule 141): `__velarEquals` is what `equals(a, b)` calls, and
+ * `__velarSameValueZero` is what `==` lowers to.
+ */
+const collectionLoweringImport = `import { __velarEquals, __velarSameValueZero } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;
 
-// Structure walkers shared by the assertion reporter. Content comparison is
-// deliberately absent: D50 rule 97.2 makes `toEqual` call the language's own
-// `equals`, so a second comparison implementation cannot exist here to
-// disagree with it.
+// Structure walkers shared by the assertion reporter. Value and content
+// comparison are both deliberately absent: D50 rule 97.2 makes `toEqual` call
+// the language's own `equals` and D59 rule 141 makes `toBe` call the language's
+// own `==`, so no second comparison implementation can exist here to disagree
+// with either.
 const testDisplayRuntime = String.raw`
 const __velarDeepNativeArray = globalThis.Array;
 const __velarDeepNativeMap = globalThis.Map;
@@ -1969,7 +1974,11 @@ function display(value, state = null) {
 }
 export function expect(actual) {
   return __velarDeepCall(__velarTestFreeze, __velarDeepNativeObject, [{
-    toBe(expected) { if (actual !== expected) throw new __velarTestNativeError("Expected " + display(actual) + " to be " + display(expected)); },
+    // D59 rule 141: the assertion asks the language, so 'toBe' and '==' can
+    // never give different answers. Native '!==' made this the one comparison
+    // in the language that disagreed with the language, and NaN was where it
+    // showed.
+    toBe(expected) { if (!__velarSameValueZero(actual, expected)) throw new __velarTestNativeError("Expected " + display(actual) + " to be " + display(expected)); },
     // D50 rule 97.2: the assertion asks the language, so 'toEqual' and
     // 'equals(a, b)' can never give different answers.
     toEqual(expected) { if (!__velarEquals(actual, expected)) throw new __velarTestNativeError("Expected " + display(actual) + " to deeply equal " + display(expected)); },

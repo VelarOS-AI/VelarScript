@@ -660,8 +660,14 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
       LanguageServer: { is(value: unknown): boolean; parse(value: unknown): unknown };
       languageServer(): Promise<{ send(message: string): Promise<null>; next(): Promise<string | null>; close(): Promise<null> }>;
       ProjectTask: { is(value: unknown): boolean; parse(value: unknown): unknown };
-      ProjectTaskCommand: Readonly<{ check: "check"; test: "test"; build: "build"; run: "run" }>;
-      ProjectTaskOutputChannel: Readonly<{ stdout: "stdout"; stderr: "stderr" }>;
+      ProjectTaskCommand: Readonly<{
+        check: "check"; test: "test"; build: "build"; run: "run";
+        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
+      }>;
+      ProjectTaskOutputChannel: Readonly<{
+        stdout: "stdout"; stderr: "stderr";
+        is(value: unknown): boolean; parse(value: unknown): unknown; values(): string[];
+      }>;
       startProjectTask(command: "check" | "test" | "build" | "run", args?: string[], options?: { timeout?: number; maxOutputBytes?: number }): Promise<{
         pid: number;
         next(): Promise<{ channel: "stdout" | "stderr"; text: string } | null>;
@@ -699,6 +705,19 @@ test("Desktop renderer proxies preserve pull-based process and HTTP streaming", 
     assert.equal(await languageServer.next(), null);
     assert.equal(desktopRuntime.ProjectTaskCommand.check, "check");
     assert.equal(desktopRuntime.ProjectTaskOutputChannel.stderr, "stderr");
+    // D60 rule 149: the two Desktop enums answer all three names charter
+    // section 6 reserves, not only their members. `values` was the gap, and it
+    // threw `is not a function` from code that compiled clean.
+    assert.deepEqual(desktopRuntime.ProjectTaskCommand.values(), ["check", "test", "build", "run"]);
+    assert.deepEqual(desktopRuntime.ProjectTaskOutputChannel.values(), ["stdout", "stderr"]);
+    assert.notEqual(desktopRuntime.ProjectTaskCommand.values(), desktopRuntime.ProjectTaskCommand.values());
+    assert.equal(desktopRuntime.ProjectTaskCommand.is("check"), true);
+    assert.equal(desktopRuntime.ProjectTaskCommand.is("publish"), false);
+    assert.equal(desktopRuntime.ProjectTaskCommand.parse("build"), "build");
+    assert.throws(() => desktopRuntime.ProjectTaskCommand.parse("publish"));
+    assert.equal(desktopRuntime.ProjectTaskOutputChannel.is("stderr"), true);
+    assert.equal(desktopRuntime.ProjectTaskOutputChannel.parse("stdout"), "stdout");
+    assert.throws(() => desktopRuntime.ProjectTaskOutputChannel.parse("both"));
     await assert.rejects(desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, ["--unsafe"]), /Only a run project task accepts/u);
     const projectTask = await desktopRuntime.startProjectTask(desktopRuntime.ProjectTaskCommand.check, [], { timeout: 5000, maxOutputBytes: 65536 });
     assert.equal(projectTask.pid, 720);

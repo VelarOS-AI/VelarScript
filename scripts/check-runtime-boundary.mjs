@@ -1814,14 +1814,19 @@ for (const phrase of [
 if (/\b(?:Date\.now|Number\.isFinite|Math\.abs|Object\.fromEntries)\s*\(|\bPromise\.prototype\.then\b|\bError\.isError\s*\(|\b(?:uuidPattern|String\.prototype)\.(?:test|trim|toLowerCase)\s*\(|\b(?:ranks|sinks)\.(?:get|has|set|add|delete|size|values)\b/u.test(coreLogModuleSource)) {
   failures.push("packages/cli/src/standard-modules.ts: velar/log bypasses its captured clock, collection, Promise, text, console, or Error ABI");
 }
-// D50 rule 97.2: the assertion asks the language for content equality instead
-// of carrying a second implementation that could disagree with it.
-if (!standardModulesSource.includes('const collectionLoweringImport = `import { __velarEquals } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;')) {
-  failures.push("packages/cli/src/standard-modules.ts: velar/test must import the Core __velarEquals rather than restate a comparison");
+// D50 rule 97.2 and D59 rule 141: the assertion asks the language for both of
+// its comparisons -- content equality through `equals` and value equality
+// through `==` -- instead of carrying a second implementation of either that
+// could disagree with it. `toBe` was native `!==` until rule 141, which made it
+// the one comparison in the language that answered differently from the
+// language, and NaN was where that showed.
+if (!standardModulesSource.includes('const collectionLoweringImport = `import { __velarEquals, __velarSameValueZero } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;')) {
+  failures.push("packages/cli/src/standard-modules.ts: velar/test must import the Core __velarEquals and __velarSameValueZero rather than restate a comparison");
 }
 for (const phrase of [
   "${collectionLoweringImport}",
   "if (!__velarEquals(actual, expected))",
+  "if (!__velarSameValueZero(actual, expected))",
   "const __velarTestStringIncludes = __velarDeepGetOwnPropertyDescriptor",
   "const __velarTestArrayJoin = __velarDeepGetOwnPropertyDescriptor",
   "const __velarTestNumberIsSafeInteger = __velarDeepGetOwnPropertyDescriptor",

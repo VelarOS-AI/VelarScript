@@ -11568,7 +11568,11 @@ console.log(await passesAsync(() => expect(hostileThenable).toReject()), thenGet
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.equal(execution.stdout, [
-    "true false", "true false", "true false", "true false", "true", "false",
+    // D59 rule 141: `toBe` is the language's own `==`, so it answers "true" for
+    // both `-0`/`0` and NaN/NaN. It read "true false" while `toBe` was native
+    // `!==` -- the one comparison in the language that disagreed with the
+    // language. `toContain` still compares List members with `===`.
+    "true true", "true false", "true false", "true false", "true", "false",
     "true false", "true false", "true", "true", "false", "false", "false", "false 0", "",
   ].join("\n"));
 

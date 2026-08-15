@@ -286,7 +286,7 @@ an empty List. Stateless pattern operations are `Text.matches`, `Text.findMatch`
 `Text.title` treats separators as word boundaries. `Text.truncate` reserves room
 for its suffix. `Text.slug` lowercases Unicode text, removes punctuation, and
 joins word runs with `-`; it does not transliterate non-Latin text.
-`Text.normalize(text, form = "NFC")` applies one of the four Unicode
+`Text.normalize(text, form="NFC")` applies one of the four Unicode
 normalization forms — `"NFC"`, `"NFD"`, `"NFKC"`, or `"NFKD"`; any other form
 throws `RangeError`. Text equality is code-point-sequence identity, so
 canonically equivalent text is not equal: a precomposed accented character and
@@ -1256,13 +1256,18 @@ test "a profile keeps its declared name and tags":
     expect(profile).toEqual({name: "Ada", tags: ["compiler", "web"]})
 ```
 
-- `toBe` uses exact identity/value equality; `toEqual` **is** the prelude
-  `equals(a, b)` — the same implementation, not a matching one. An assertion
-  that disagreed with the language's own equality would be the worst kind of
-  trap, so there is only one comparison and `toEqual` calls it. It therefore
-  inherits everything `equals` does, including structural Set members and Map
-  keys, `NaN` equal to itself, and a refusal — rather than a quiet `false` —
-  for cyclic or over-deep data.
+- The two comparison matchers do the language's two comparison jobs, and each
+  **is** the operation it names rather than a second implementation of it. An
+  assertion that disagreed with the language's own equality would be the worst
+  kind of trap, so neither one restates a comparison.
+  - `toBe` is value equality: the same SameValueZero comparison `a == b`
+    lowers to. `expect(nan).toBe(nan)` passes for exactly the reason
+    `nan == nan` is `true`, and `0` and `-0` compare equal.
+  - `toEqual` is content equality: the prelude `equals(a, b)`, the same
+    implementation and not a matching one. It therefore inherits everything
+    `equals` does, including structural Set members and Map keys, `NaN` equal
+    to itself, and a refusal — rather than a quiet `false` — for cyclic or
+    over-deep data.
 - `toBeTruthy` and `toBeFalsy` require actual `true` and `false`, rather than
   JavaScript truthiness. `toContain` accepts text or a dense List, and
   `toHaveLength` accepts text or a dense List.

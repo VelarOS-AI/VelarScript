@@ -139,11 +139,16 @@ console.log(reason(() => expect(left).toEqual(right)));
 
 test("[D50-97.2] velar/test carries no second comparison implementation", () => {
   const source = standardModuleSource("velar/test")!;
-  // One source of truth: the module reaches for the Core algorithm and
-  // restates none of it.
-  assert.match(source, /^import \{ __velarEquals \} from "velar\/compiler-runtime-collection-lowering-v1";$/mu);
+  // One source of truth for each of the language's two comparisons: the module
+  // reaches for the Core algorithms and restates neither. D59 rule 141 put
+  // `toBe` under the same rule `toEqual` already answered to, so the import
+  // carries `__velarSameValueZero` -- what `==` lowers to -- beside
+  // `__velarEquals`.
+  assert.match(source, /^import \{ __velarEquals, __velarSameValueZero \} from "velar\/compiler-runtime-collection-lowering-v1";$/mu);
   assert.doesNotMatch(source, /__velarDeepEqual|__velarEqualValue/u);
+  assert.doesNotMatch(source, /actual !== expected/u);
   assert.equal(source.split("__velarEquals").length - 1, 2);
+  assert.equal(source.split("__velarSameValueZero").length - 1, 2);
   // An unbundled target must still materialize what the assertion reaches for.
   assert.ok(standardModuleClosure(["velar/test"]).has(VELAR_COLLECTION_LOWERING_MODULE));
 });

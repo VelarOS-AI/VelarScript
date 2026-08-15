@@ -246,6 +246,9 @@ export const ProjectTaskCommand = __velarRegisterRuntimeType(__velarProcessFreez
     if (!ProjectTaskCommand.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectTaskCommand");
     return value;
   },
+  // D60 rule 149: values() is the third name charter section 6 reserves on
+  // every enum, and it returns a fresh mutable List in declaration order.
+  values() { return ["check", "test", "build", "run"]; },
 }));
 export const ProjectTaskOutputChannel = __velarRegisterRuntimeType(__velarProcessFreeze({
   stdout: "stdout", stderr: "stderr",
@@ -254,6 +257,7 @@ export const ProjectTaskOutputChannel = __velarRegisterRuntimeType(__velarProces
     if (!ProjectTaskOutputChannel.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProjectTaskOutputChannel");
     return value;
   },
+  values() { return ["stdout", "stderr"]; },
 }));
 function projectTaskArguments(value, command) {
   if (value == null) return [];
@@ -962,6 +966,9 @@ export const ProcessOutputChannel = __velarRegisterRuntimeType(__velarProcessFre
     if (!ProcessOutputChannel.is(value)) throw new __velarProcessNativeTypeError("Value does not match ProcessOutputChannel");
     return value;
   },
+  // D60 rule 149: values() is the third name charter section 6 reserves on
+  // every enum, and it returns a fresh mutable List in declaration order.
+  values() { return ["stdout", "stderr"]; },
 }));
 function boundedText(value, name, maxCodeUnits = 4096) {
   if (typeof value !== "string" || value.length === 0) throw new __velarProcessNativeTypeError(name + " must be non-empty text");
@@ -1257,7 +1264,18 @@ export class HttpAbortError extends Error {
     this.name = "HttpAbortError"; this.reason = reason;
   }
 }
-export const HttpTransportPhase = Object.freeze({request: "request", response: "response"});
+// D60 rule 149: a module-provided enum carries the same runtime face a declared
+// enum does -- charter section 6 reserves is, parse, and values on every enum.
+export const HttpTransportPhase = __velarRegisterRuntimeType(Object.freeze({
+  request: "request",
+  response: "response",
+  is(value) { return value === "request" || value === "response"; },
+  parse(value) {
+    if (!HttpTransportPhase.is(value)) throw new TypeError("Value does not match HttpTransportPhase");
+    return value;
+  },
+  values() { return ["request", "response"]; },
+}));
 export class HttpTransportError extends Error {
   constructor(message, phase) {
     if (typeof message !== "string") throw new TypeError("HTTP transport error message must be text");

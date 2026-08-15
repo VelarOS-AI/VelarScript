@@ -13,7 +13,7 @@ export component Counter(start: number = 0):
     state count = start
     const doubled = computed(() => count * 2)
 
-    def increment() -> null:
+    def increment():
         count += 1
 
     watch count as current, previous:

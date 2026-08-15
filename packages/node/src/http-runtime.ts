@@ -360,7 +360,19 @@ export class HttpAbortError extends NativeError {
     this.reason = reason;
   }
 }
-export const HttpTransportPhase = freeze({request: "request", response: "response"});
+// D60 rule 149: a module-provided enum carries the same runtime face a declared
+// enum does -- charter section 6 reserves is, parse, and values on every enum,
+// and this one published members only.
+export const HttpTransportPhase = __velarRegisterRuntimeType(freeze({
+  request: "request",
+  response: "response",
+  is(value) { return value === "request" || value === "response"; },
+  parse(value) {
+    if (!HttpTransportPhase.is(value)) throw new NativeTypeError("Value does not match HttpTransportPhase");
+    return value;
+  },
+  values() { return ["request", "response"]; },
+}));
 export class HttpTransportError extends NativeError {
   constructor(message, phase) {
     if (typeof message !== "string") throw new NativeTypeError("HTTP transport error message must be text");

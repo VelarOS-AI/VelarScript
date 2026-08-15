@@ -1506,9 +1506,10 @@ export class JavaScriptEmitter {
         // An alias of an enum is lowered as the enum object itself, so its
         // check delegates the same way a direct enum name does (ENM-I4).
         if (this.enumAliasTarget(type.name) !== null) return `${type.name}.is(${value})`;
-        return this.typeDeclarations.has(type.name)
-          ? `${this.runtimeTypeCheckName(type.name)}(${value}, ${state})`
-          : `${type.name}.is(${value}, ${state})`;
+        if (this.typeDeclarations.has(type.name)) return `${this.runtimeTypeCheckName(type.name)}(${value}, ${state})`;
+        // D60 rule 148: only a name that actually binds a runtime Type object
+        // may be written into the output. See `runtimeTypeBinding`.
+        return this.runtimeTypeBinding(type.name) ? `${type.name}.is(${value}, ${state})` : "false";
       case "class":
         return `__velarValidationIsInstance(${value}, ${this.builtinErrorRuntimeName(type.name) ?? type.name})`;
       case "enum":
@@ -1538,7 +1539,10 @@ export class JavaScriptEmitter {
 
   protected emitIsCheck(type: ValueType, value: string): string {
     if (type.kind === "named" && type.name === "Duration") return `typeof ${value} === "string" && /^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:ms|s)$/.test(${value})`;
-    return type.kind === "named"
+    // D60 rule 148: a name with no runtime Type object behind it is not a
+    // callable receiver, so the check falls through to the structural form
+    // instead of naming a binding that does not exist.
+    return type.kind === "named" && this.runtimeTypeBinding(type.name)
       ? `${type.name}.is(${value})`
       : this.emitTypeCheck(type, value);
   }
@@ -1564,10 +1568,7 @@ export class JavaScriptEmitter {
         // `is` tests already do. Only names with no runtime Type binding at
         // all — extension host types such as DOM interfaces — degrade to the
         // presence-only check.
-        if (!this.hints.enumNames.has(type.name)
-          && !this.hints.classNames.has(type.name)
-          && !this.typeDeclarations.has(type.name)
-          && !this.hints.runtimeTypeObjectNames.has(type.name)) return `${value} != null`;
+        if (!this.runtimeTypeBinding(type.name)) return `${value} != null`;
         return this.emitTypeCheck(type, value, state);
       case "parameter":
       case "typeObject":
@@ -1583,6 +1584,24 @@ export class JavaScriptEmitter {
 
   private runtimeTypeCheckName(name: string): string {
     return `__velarTypeCheck_${name}`;
+  }
+
+  /**
+   * D60 rule 148: a `named` ValueType carries the type's *display* name, which
+   * is a runtime binding only when this module really has a Type object under
+   * it — a local `type` declaration, an imported one, an enum, or a class. An
+   * unresolved generic formats to type text (`Component<(label: string) ->
+   * WebNode>`) that is not even a JavaScript identifier, and an extension host
+   * scalar (`Color`, `Length`, `WebNode`) has no binding at all. Writing either
+   * into the output is how `velar check` passed and `velar build` then failed
+   * to parse its own emission; the narrowing path (FLW-U1) already asks this
+   * question, and every other check path now asks it too.
+   */
+  protected runtimeTypeBinding(name: string): boolean {
+    return this.hints.enumNames.has(name)
+      || this.hints.classNames.has(name)
+      || this.typeDeclarations.has(name)
+      || this.hints.runtimeTypeObjectNames.has(name);
   }
 
   /** The runtime class behind a nameable builtin error type, marking the runtime it needs. */
