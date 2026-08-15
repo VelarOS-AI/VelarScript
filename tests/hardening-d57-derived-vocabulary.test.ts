@@ -280,12 +280,21 @@ test("[D55-127.2] a comparison that shares the colon position stays a comparison
 
 test("[D55-127.2] the corpus carries the spellings the format gate reads", async () => {
   // D55 rule 127.2: the gate passed only because no .vel file contained
-  // `: Record<`. The example that states the Core language contract now does,
+  // `: Record<`. The module that states the Core language contract now does,
   // in all three positions the defect covered, so the gate sees them.
+  //
+  // The corpus moved out of `examples/` with D56 rule 131 (a corpus is not an
+  // example), and a move is exactly how this coverage would go missing without
+  // anyone noticing — the same shape as D61 rule 156. So the walk root is
+  // asserted here beside the spellings: the file being right is worth nothing
+  // if the gate no longer reaches it.
   const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("../examples/core.vel", import.meta.url), "utf8");
+  const source = await readFile(new URL("../tests/corpus/core.vel", import.meta.url), "utf8");
   assert.match(source, /^ {4}labels: Record<string>$/mu);
   assert.match(source, /^def labelFor\(labels: Record<string>, key: string\) -> string:$/mu);
   assert.match(source, /^const labels: Record<string> = \{tier: "gold"\}$/mu);
   assert.equal(formatSource(source), source);
+
+  const gate = await readFile(new URL("../scripts/check-velar-format.mjs", import.meta.url), "utf8");
+  assert.match(gate, /velarSources\(join\(root, "tests"\)\)/u);
 });

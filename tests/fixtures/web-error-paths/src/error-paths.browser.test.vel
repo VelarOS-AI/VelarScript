@@ -1,8 +1,8 @@
-// The error-path browser suite, moved here from
-// `examples/production-web/src/app.browser.test.vel` (D56 rule 131). The
-// assertions are the ones that were covering the deliberate-failure pages; the
-// application-shaped tests that used to sit beside them are now in
-// `examples/app/src/app.browser.test.vel`, written against real screens.
+// The error-path browser suite, moved here out of the retired Web example's
+// own browser test (D56 rule 131). The assertions are the ones that were
+// covering the deliberate-failure pages; the application-shaped tests that used
+// to sit beside them are now in `examples/app/src/app.browser.test.vel`,
+// written against real screens.
 
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"

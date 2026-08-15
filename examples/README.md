@@ -92,8 +92,3 @@ velar test examples/app
 velar test examples/app --browser all
 velar dev examples/app
 ```
-
----
-
-Every other directory here predates this arrangement and is being removed; read
-`tour/` and `app/` instead.

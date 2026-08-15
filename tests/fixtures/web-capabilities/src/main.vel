@@ -1,0 +1,18 @@
+// A Web application whose only job is to make the browser surface observable.
+//
+// This project is a *test fixture*, not an example (D56 rule 131 — a fixture is
+// not an example). Its pages call `velar/browser`, `velar/http`, `velar/forms`,
+// and `velar/app`'s error reporting, and then write what happened into `data-*`
+// attributes so a browser can be asked about it. That is why it reads like an
+// instrument panel rather than an application; the application that teaches
+// structure is `examples/app`.
+//
+// `tests/browser.acceptance.ts` drives this project in Chromium, Firefox, and
+// WebKit, twice: once against `velar dev` and once against a CSP production
+// build. Its deliberately non-root `web.base` is part of what is under test.
+// The failing routes that used to live beside these pages are their own fixture
+// now, in `tests/fixtures/web-error-paths`.
+
+import {App} from "./app.vel"
+
+mount(<App />, "#app")

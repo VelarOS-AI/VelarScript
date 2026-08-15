@@ -91,7 +91,7 @@ async function runBrowserAcceptance(): Promise<void> {
     const scenario = async (): Promise<void> => {
       const realtimePort = await availablePort();
       realtimeServer = await startRealtimeServer(realtimePort);
-      devServer = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", "examples/production-web", "--port", String(appPort)], {
+      devServer = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", "tests/fixtures/web-capabilities", "--port", String(appPort)], {
         cwd: root,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -122,7 +122,7 @@ async function runBrowserAcceptance(): Promise<void> {
       await stopChild(devServer);
       devServer = null;
 
-      await run(process.execPath, ["packages/cli/src/cli.ts", "build", "examples/production-web", "--out-dir", productionDirectory], activeChildren);
+      await run(process.execPath, ["packages/cli/src/cli.ts", "build", "tests/fixtures/web-capabilities", "--out-dir", productionDirectory], activeChildren);
       const staticPort = await availablePort();
       staticServer = await startStaticServer(productionDirectory, "/app/", staticPort);
       const productionUrl = `http://127.0.0.1:${staticPort}/app/`;
@@ -186,16 +186,16 @@ async function acceptExternalPreview(preview: ProductionPreviewHandle, active: S
     assert.equal(response?.status(), 200);
     assert.match(response?.headers()["content-security-policy"] ?? "", /script-src 'self'/u);
     assert.equal(new URL(page.url()).pathname, "/");
-    assert.equal(await page.locator("h1").textContent(), "VelarScript Release Studio");
-    assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://velar.example/");
-    assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/share.svg");
-    assert.equal((await page.request.get(new URL("share.svg", preview.url).href)).status(), 200);
+    assert.equal(await page.locator("h1").textContent(), "Release board");
+    assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://releases.velar.example/");
+    assert.equal(await page.locator('meta[property="og:image"]').getAttribute("content"), "/mark.svg");
+    assert.equal((await page.request.get(new URL("mark.svg", preview.url).href)).status(), 200);
     assert.equal((await page.request.get(new URL("assets/missing.js", preview.url).href)).status(), 404);
     await page.getByRole("link", { name: "About" }).click();
     await page.waitForURL("**/about");
-    assert.equal(await page.locator("h1").textContent(), "About");
+    assert.equal(await page.locator("h1").textContent(), "About Release Studio");
     await page.reload({ waitUntil: "networkidle" });
-    assert.equal(await page.locator("h1").textContent(), "About");
+    assert.equal(await page.locator("h1").textContent(), "About Release Studio");
     assert.deepEqual(failures, [], `External preview Chromium: ${failures.join("\n")}`);
     process.stdout.write("✓ External preview Chromium\n");
   } finally {
@@ -246,9 +246,9 @@ async function acceptBrowser(
 
     const response = await page.goto(baseUrl, { waitUntil: "networkidle" });
     if (production) assert.match(response?.headers()["content-security-policy"] ?? "", /script-src 'self'/u);
-    assert.equal(await page.locator("h1").textContent(), "VelarScript Release Studio");
+    assert.equal(await page.locator("h1").textContent(), "VelarScript Web capabilities");
     assert.equal(new URL(page.url()).pathname, "/app/");
-    assert.equal(await page.title(), "VelarScript Release Studio");
+    assert.equal(await page.title(), "VelarScript Web capabilities");
     assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "VelarScript 0.10 Web platform application");
     assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://velar.example/app/");
     assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "index,follow");
@@ -347,7 +347,7 @@ async function acceptBrowser(
     await page.getByRole("link", { name: "About" }).click();
     await page.waitForURL("**/app/about");
     assert.equal(await page.locator("h1").textContent(), "About");
-    assert.equal(await page.title(), "About · VelarScript Release Studio");
+    assert.equal(await page.title(), "About · VelarScript Web capabilities");
     assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "About the VelarScript production application");
     assert.equal(await page.evaluate(() => sessionStorage.getItem("cleanup")), '{"label":"continued"}');
     await page.reload({ waitUntil: "networkidle" });

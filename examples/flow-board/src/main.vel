@@ -1,3 +1,0 @@
-import {App} from "./app.vel"
-
-mount(<App />, "#app")

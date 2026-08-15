@@ -6,7 +6,7 @@ import test from "node:test";
 /**
  * D56 rule 131 — a fixture is not an example.
  *
- * `examples/production-web` carried three pages that exist only to fail:
+ * The retired Web example carried three pages that exist only to fail:
  * `broken.vel`, `construction-failure.vel`, and `state-lab.vel`. They were
  * error-path *test fixtures* sitting inside an application, which is the main
  * reason that example did not read like one. They now live in
@@ -37,6 +37,10 @@ test("[D56-131] the web error-path fixtures still hold in a real browser", { tim
 });
 
 test("[D56-131] the error-path fixture project checks like any other", async () => {
+  // Every fixture project checks — that is `tests/fixture-projects.test.ts`,
+  // by discovery. What is pinned here is this one's module count, so a page
+  // dropping out of the graph shows up as a number rather than as a browser
+  // test that quietly stops covering something.
   const output = await runCommand(process.execPath, [cli, "check", fixture]);
   assert.match(output, /Checked 6 modules/u);
 });

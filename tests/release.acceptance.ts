@@ -120,7 +120,7 @@ test("external preview preparation emits a reproducible root Netlify build", asy
     const html = await readFile(join(first, "index.html"), "utf8");
     assert.match(html, /(?:src|href)="\/assets\//u);
     assert.doesNotMatch(html, /(?:src|href)="\/app\/assets\//u);
-    assert.ok(firstResult.manifest.assets.some((asset) => asset.path === "share.svg" && asset.role === "asset"));
+    assert.ok(firstResult.manifest.assets.some((asset) => asset.path === "mark.svg" && asset.role === "asset"));
 
     const unsafe = join(temporary, "not-a-build");
     await mkdir(unsafe);

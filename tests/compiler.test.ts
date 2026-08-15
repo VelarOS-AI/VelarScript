@@ -5396,7 +5396,7 @@ print(iso(0))
   assert.equal(printed.status, 0, printed.stderr);
   assert.equal(printed.stdout, "{\"limit\":10}\n1970-01-01T00:00:00.000Z\n");
 
-  const projectRun = spawnSync(process.execPath, [cli, "run", "examples/modules"], { cwd: process.cwd(), encoding: "utf8" });
+  const projectRun = spawnSync(process.execPath, [cli, "run", "tests/fixtures/modules"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(projectRun.status, 0, projectRun.stderr);
   assert.equal(projectRun.stdout, "Hello, Velar\n");
 
@@ -5506,7 +5506,7 @@ test("dev server exits cleanly after browser requests", async (context) => {
   const child = spawn(process.execPath, [
     "packages/cli/src/cli.ts",
     "dev",
-    "examples/todo",
+    "examples/tour/web",
     "--port",
     "42879",
   ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
@@ -6129,8 +6129,23 @@ mount(<App />, "#app")
 });
 
 test("compiles the Core language contract", async () => {
-  const source = await readFile("examples/core.vel", "utf8");
-  const result = compile(source, { path: "examples/core.vel" });
+  // The corpus moved out of `examples/` with D56 rule 131 — a corpus is not an
+  // example. Its three companions were only ever walked by the format gate, so
+  // every corpus module is checked here too, discovered rather than listed: a
+  // module nothing compiles is a module whose diagnostics nobody would ever
+  // see. They go through the CLI because `standard-library.vel` imports
+  // `velar/*` modules, and resolving those is project analysis, not a bare
+  // `compile()` of one text.
+  const corpus = (await readdir("tests/corpus")).filter((name) => name.endsWith(".vel")).sort();
+  assert.ok(corpus.length >= 4, `expected the corpus modules to be found, saw ${corpus.join(", ")}`);
+  for (const name of corpus) {
+    const path = `tests/corpus/${name}`;
+    const checked = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "check", path], { cwd: process.cwd(), encoding: "utf8" });
+    assert.equal(checked.status, 0, `${path}: ${checked.stdout}${checked.stderr}`);
+  }
+
+  const source = await readFile("tests/corpus/core.vel", "utf8");
+  const result = compile(source, { path: "tests/corpus/core.vel" });
 
   assert.deepEqual(result.diagnostics, []);
   assert.match(result.code ?? "", /const User = __velarRegisterRuntimeType\(__velarValidationFreeze/);
@@ -16608,7 +16623,7 @@ test("CLI checks and builds a multi-module project", async () => {
   const execution = spawnSync(process.execPath, [
     "packages/cli/src/cli.ts",
     "build",
-    "examples/modules/main.vel",
+    "tests/fixtures/modules/main.vel",
     "--out-dir",
     directory,
   ], {
@@ -27240,7 +27255,7 @@ test("CLI emits complete Web application assets", async () => {
   const execution = spawnSync(process.execPath, [
     "packages/cli/src/cli.ts",
     "build",
-    "examples/api-dashboard",
+    "examples/app",
     "--out-dir",
     directory,
   ], { cwd: process.cwd(), encoding: "utf8" });
@@ -27253,14 +27268,14 @@ test("CLI emits complete Web application assets", async () => {
   const assets = await readdir(join(directory, "assets"));
   const stylesheet = assets.find((name) => /^styles-[a-f0-9]+\.css$/u.test(name));
   const javascript = assets.find((name) => /^main-[A-Z0-9]+\.js$/u.test(name));
-  const trafficChunk = assets.find((name) => /^chunk-traffic-bar-[A-Z0-9]+\.js$/u.test(name));
-  assert.ok(stylesheet && javascript && trafficChunk);
+  const aboutChunk = assets.find((name) => /^chunk-about-[A-Z0-9]+\.js$/u.test(name));
+  assert.ok(stylesheet && javascript && aboutChunk);
   assert.match(await readFile(join(directory, "assets", stylesheet), "utf8"), /data-velar-/);
-  assert.match(await readFile(join(directory, "assets", javascript), "utf8"), /Weekly traffic/);
+  assert.match(await readFile(join(directory, "assets", javascript), "utf8"), /Release board/);
+  assert.match(await readFile(join(directory, "assets", aboutChunk), "utf8"), /About Release Studio/);
   assert.ok(assets.includes(`${javascript}.map`));
-  assert.match(await readFile(join(directory, "data/dashboard.json"), "utf8"), /Friday/);
-  assert.match(await readFile(join(directory, "data/metrics-primary.json"), "utf8"), /Visitors/);
-  assert.match(await readFile(join(directory, "data/metrics-secondary.json"), "utf8"), /API latency/);
+  assert.match(await readFile(join(directory, "data/activity.json"), "utf8"), /Parser fuzz run/);
+  assert.match(await readFile(join(directory, "robots.txt"), "utf8"), /User-agent/u);
   const manifest = JSON.parse(await readFile(join(directory, "velar-build.json"), "utf8")) as {
     formatVersion: number;
     kind: string;
@@ -27288,8 +27303,11 @@ test("CLI emits complete Web application assets", async () => {
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
-  assert.equal(manifest.modules.total, 3);
-  assert.equal(manifest.modules.application, 3);
+  // The counts are a relation rather than a literal: the application is the
+  // showcase and may grow a module, but every module it builds must be counted
+  // as its own, and a shrunk graph must still be visible.
+  assert.ok(manifest.modules.total >= 17);
+  assert.equal(manifest.modules.application, manifest.modules.total);
   assert.deepEqual(manifest.modules.packages, []);
   assert.deepEqual(manifest.dependencies, { velar: [], javascript: [] });
   assert.deepEqual(manifest.deployment, { manifest: "velar-deploy.json", fallback: "404.html", contentSecurityPolicy: true, adapter: "neutral" });
@@ -27298,8 +27316,9 @@ test("CLI emits complete Web application assets", async () => {
   assert.ok(manifest.assets.some((asset) => asset.path === "velar-deploy.json" && asset.role === "deployment"));
   assert.ok(manifest.assets.some((asset) => asset.path === `assets/${javascript}` && asset.role === "entry"));
   assert.ok(manifest.assets.some((asset) => asset.path === `assets/${javascript}.map` && asset.role === "source-map"));
-  assert.ok(manifest.assets.some((asset) => asset.path === `assets/${trafficChunk}` && asset.role === "asset"));
-  assert.ok(manifest.assets.some((asset) => asset.path === `assets/${trafficChunk}.map` && asset.role === "source-map"));
+  assert.ok(manifest.assets.some((asset) => asset.path === `assets/${aboutChunk}` && asset.role === "asset"));
+  assert.ok(manifest.assets.some((asset) => asset.path === `assets/${aboutChunk}.map` && asset.role === "source-map"));
+  assert.ok(manifest.assets.some((asset) => asset.path === "data/activity.json" && asset.role === "asset"));
 });
 
 test("workspace text index retains bounded sources and applies exact changes and open overlays", async () => {

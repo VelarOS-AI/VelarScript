@@ -1,9 +1,9 @@
 // A minimal shell whose only job is to host failing routes.
 //
 // This project is a *test fixture*, not an example: every route below exists to
-// make a failure observable. It moved here from `examples/production-web`, where
-// three pages of deliberate failure sat next to application code and made the
-// example unreadable (D56 rule 131 — a fixture is not an example).
+// make a failure observable. It moved here out of the retired Web example,
+// where three pages of deliberate failure sat next to application code and made
+// the example unreadable (D56 rule 131 — a fixture is not an example).
 
 import {onError} from "velar/app"
 import {NavLink, RouteContext, Router, lazy, route} from "velar/web"

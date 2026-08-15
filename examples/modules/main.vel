@@ -1,4 +1,0 @@
-import {greet} from "./lib/greeting.vel"
-
-const message = greet("Velar")
-print(message)

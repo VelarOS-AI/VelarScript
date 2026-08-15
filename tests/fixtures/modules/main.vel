@@ -1,0 +1,9 @@
+// The smallest project with a module graph: an entry, one relative import, one
+// emitted file per module. It is a *fixture*, not an example (D56 rule 131) —
+// `velar run <project>` and unbundled `velar build` are checked against it, so
+// its output is pinned by tests/compiler.test.ts and must stay exactly this.
+
+import {greet} from "./lib/greeting.vel"
+
+const message = greet("Velar")
+print(message)

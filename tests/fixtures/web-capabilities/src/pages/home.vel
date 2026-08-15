@@ -1,0 +1,130 @@
+import {Head} from "velar/web"
+import {publicConfig} from "velar/config"
+import {dark, theme, toggleTheme} from "../store.vel"
+import {projectCount, projects} from "../data.vel"
+import {ActivityFeed} from "../components/activity-feed.vel"
+import {Metrics} from "../components/metrics.vel"
+import {Newsletter} from "../components/newsletter.vel"
+import {Panel, StatusBadge} from "../components/package-widgets.vel"
+import {ProjectList} from "../components/project-list.vel"
+import {WebCapabilities} from "../components/web-capabilities.vel"
+import {animate, border, rgb, spacing} from "velar/look"
+
+type PreviewFeatures:
+    recovery: bool
+
+type PreviewConfig:
+    apiBase: string
+    releaseChannel: string
+    canonicalUrl: string
+    socialImage: string
+    features: PreviewFeatures
+
+const previewConfig = publicConfig(PreviewConfig)
+
+const pageLook = look:
+    display = "grid"
+    gap = 22px
+    width = 100%
+    maxWidth = 1072px
+    marginInline = "auto"
+    padding = spacing(40px, 16px, 64px, 16px)
+
+const headerLook = look:
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
+    gap = 16px
+
+const titleLook = look:
+    margin = 0
+
+const eyebrowLook = look:
+    margin = 0
+    color = rgb(157, 172, 255)
+    fontWeight = 700
+
+const actionsLook = look:
+    display = "flex"
+    alignItems = "center"
+    gap = 12px
+
+const probeSpin = keyframes:
+    from:
+        rotate = 0deg
+    to:
+        rotate = 1turn
+
+const animationProbeLook = look:
+    display = "inline-block"
+    width = 12px
+    height = 12px
+    background = rgb(157, 172, 255)
+    if not motion.reduced:
+        animation = animate(probeSpin, 2s, easing="linear", loop=true)
+
+const animationToggleLook = look:
+    width = 12px
+    height = 12px
+    padding = 0
+    border = border(1px, rgb(157, 172, 255))
+    borderRadius = 12px
+    background = rgb(21, 28, 54)
+
+component AnimationToggle():
+    state active = true
+
+    action toggle():
+        active = not active
+
+    return <button data-animation-toggle aria-label="Toggle animation probe" look={animationToggleLook} on:click={toggle}>
+        <span
+            data-animation-toggle-probe
+            aria-hidden="true"
+            look:animation={active ? animate(probeSpin, 2s, easing = "linear", loop = true) : null}
+        >
+            ↻
+        </span>
+    </button>
+
+def themeButtonLook(active: bool) -> Look:
+    return look:
+        padding = spacing(9px, 12px)
+        border = border(1px, active ? rgb(157, 172, 255) : rgb(82, 99, 165))
+        borderRadius = 9px
+        color = "inherit"
+        background = rgb(21, 28, 54)
+        cursor = "pointer"
+export component Home:
+    return <main class="page" look={pageLook}>
+        <Head
+            title="VelarScript Web capabilities"
+            description="VelarScript 0.10 Web platform application"
+            canonical={previewConfig.canonicalUrl}
+            robots="index,follow"
+            image={previewConfig.socialImage}
+            themeColor="#0b1020"
+        />
+        <header class="header" look={headerLook}>
+            <div>
+                <p class="eyebrow" look={eyebrowLook}>VelarScript 0.10 · Web API 0.10</p>
+                <h1 look={titleLook}>VelarScript Web capabilities</h1>
+            </div>
+            <nav class="actions" look={actionsLook} aria-label="Primary navigation">
+                <span data-animation-probe aria-hidden="true" look={animationProbeLook}></span>
+                <AnimationToggle />
+                <StatusBadge theme={theme} />
+                <button class={dark() ? "active" : null} look={themeButtonLook(dark())} on:click={toggleTheme}>
+                    Toggle theme
+                </button>
+            </nav>
+        </header>
+        <Metrics projects={projectCount()} />
+        <Panel title="Release readiness">
+            <ProjectList items={projects} />
+            <ActivityFeed />
+            <WebCapabilities />
+            <p data-format>Vel value: 42 items · en-US: 1.5 / 2.5 · class number/en-US: 3.5 / 4.5</p>
+            <Newsletter />
+        </Panel>
+    </main>

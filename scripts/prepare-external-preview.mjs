@@ -14,7 +14,7 @@ import { verifyProductionBuild } from "../packages/cli/src/production-verifier.t
 import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const sourceProject = join(root, "examples", "production-web");
+const sourceProject = join(root, "examples", "app");
 const previewManifest = join(sourceProject, "velar.netlify.json");
 const defaultOutput = join(root, "release", "external-preview", "site");
 

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { relative, resolve } from "node:path";
 import test from "node:test";
+import { velarProjects } from "../scripts/velar-projects.mjs";
 
 /**
  * Expands the `npm run` links inside a script so a gate is checked by what it
@@ -51,4 +53,28 @@ test("CI covers platform, browser, and non-publishing provenance gates", async (
   assert.match(externalPreview, /artifact-metadata: write/u);
   assert.match(externalPreview, /actions\/upload-artifact@v5/u);
   assert.doesNotMatch(externalPreview, /netlify deploy|npm publish|secrets\./u);
+});
+
+test("[D61-156] the test gates discover example projects instead of naming them", async () => {
+  // `examples/app` was written with twenty-one tests and no gate ran any of
+  // them, because `gate:test` and `gate:test:browser` each named four projects
+  // by hand and nobody edited those lines. The list is the defect, so what is
+  // pinned here is that there is no list: the gates call the discovery runner,
+  // and no example path is spelled in either of them.
+  const workspace = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
+  const unit = resolveScript(workspace.scripts, "test");
+  const browser = resolveScript(workspace.scripts, "test:browser");
+  assert.match(unit, /scripts\/run-project-gate\.mjs unit/u);
+  assert.match(browser, /scripts\/run-project-gate\.mjs browser/u);
+  assert.doesNotMatch(unit, /examples\//u);
+  assert.doesNotMatch(browser, /examples\//u);
+  assert.match(resolveScript(workspace.scripts, "check"), /scripts\/check-project-builds\.mjs/u);
+
+  // ...and that the discovery reaches the projects a list would have to be
+  // told about, `examples/app` first among them.
+  const root = resolve(new URL("..", import.meta.url).pathname);
+  const discovered = (await velarProjects(resolve(root, "examples"))).map((project: string) => relative(root, project));
+  for (const project of ["examples/app", "examples/tour/core", "examples/tour/desktop", "examples/tour/web"]) {
+    assert.ok(discovered.includes(project), `${project} is not discovered by the project gates; found ${discovered.join(", ")}`);
+  }
 });

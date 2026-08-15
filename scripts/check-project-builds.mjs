@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { velarProjects } from "./velar-projects.mjs";
 
 /**
  * D60 rule 148 — `velar check` passing is a contract, so what checks must build.
@@ -21,9 +22,10 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(root, "packages", "cli", "dist", "cli.js");
-const ignoredDirectories = new Set(["node_modules", "dist", ".velar"]);
 
-const projects = (await projectDirectories(join(root, "examples"))).sort();
+// The same discovery `gate:test` and `gate:test:browser` use (D61 rule 156):
+// one answer to "which projects?", so the three gates cannot disagree.
+const projects = await velarProjects(join(root, "examples"));
 if (projects.length === 0) {
   console.error("No VelarScript example projects were found; this gate cannot pass vacuously.");
   process.exit(1);
@@ -63,21 +65,4 @@ function velar(arguments_) {
 
 function indent(text) {
   return text.split("\n").map((line) => `    ${line}`).join("\n");
-}
-
-async function projectDirectories(directory) {
-  const found = [];
-  let entries;
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch {
-    return found;
-  }
-  if (entries.some((entry) => entry.isFile() && entry.name === "velar.json")) found.push(directory);
-  for (const entry of entries) {
-    if (entry.isDirectory() && !ignoredDirectories.has(entry.name)) {
-      found.push(...await projectDirectories(join(directory, entry.name)));
-    }
-  }
-  return found;
 }

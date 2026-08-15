@@ -1,0 +1,52 @@
+import {NavLink, RouteContext, Router, lazy, route} from "velar/web"
+import {Home} from "./pages/home.vel"
+import {rgb, spacing} from "velar/look"
+
+component RouteLoading:
+    return <main aria-busy="true"><p>Loading page…</p></main>
+
+component RouteFailed(error: Error):
+    return <main role="alert"><h1>Page unavailable</h1><p>{error.message}</p></main>
+
+component RouteNotFound(route: RouteContext):
+    return <main data-route-not-found><h1>Page not found</h1><p>No page matches {route.path}.</p></main>
+
+const About = lazy(() => import("./pages/about.vel"), "About", RouteLoading, RouteFailed)
+
+const routes = [
+    route("/", Home),
+    route("/about", About),
+]
+
+const shellLook = look:
+    minHeight = 100vh
+    color = rgb(232, 236, 255)
+    background = rgb(11, 16, 32)
+    fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
+
+const navLook = look:
+    display = "flex"
+    gap = 8px
+    width = 100%
+    maxWidth = 1072px
+    marginInline = "auto"
+    paddingTop = 18px
+    paddingInline = 16px
+
+const navLinkLook = look:
+    padding = spacing(7px, 10px)
+    borderRadius = 8px
+    color = rgb(189, 199, 255)
+    textDecoration = "none"
+    if @current:
+        color = rgb(255, 255, 255)
+        background = rgb(40, 53, 111)
+
+export component App:
+    return <div class="shell" look={shellLook}>
+        <nav look={navLook} data-capabilities-primary aria-label="Application pages">
+            <NavLink to="/" exact={true} look={navLinkLook}>Home</NavLink>
+            <NavLink to="/about" exact={true} look={navLinkLook}>About</NavLink>
+        </nav>
+        <Router routes={routes} fallback={RouteNotFound} />
+    </div>

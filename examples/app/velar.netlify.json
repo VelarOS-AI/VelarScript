@@ -1,0 +1,29 @@
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "outDir": "dist-netlify",
+  "publicDir": "public",
+  "extensions": ["@velarscript/web"],
+  "web": {
+    "title": "Release Studio",
+    "base": "/",
+    "publicConfig": {
+      "dataBase": "/data",
+      "channel": "preview",
+      "canonicalUrl": "https://releases.velar.example/",
+      "socialImage": "/mark.svg"
+    },
+    "build": {
+      "sourceMaps": false
+    },
+    "security": {
+      "contentSecurityPolicy": true,
+      "connectSources": [],
+      "imageSources": []
+    },
+    "deployment": {
+      "spaFallback": true,
+      "adapter": "netlify"
+    }
+  }
+}
