@@ -6,60 +6,17 @@
 
 [![VelarScript CI](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml/badge.svg)](https://github.com/VelarOS-AI/VelarScript/actions/workflows/ci.yml)
 
-VelarScript is a language AI writes and maintains, and humans read and own.
-The person who owns the product supplies intent and reads the result; the
-model writes the VelarScript and every later change to it; the compiler
-guards each change. Vel is built from the bones of JavaScript and Python —
-the two languages every model already knows best — so a model writes it on
-prior knowledge alone, and the language keeps **one obvious spelling** per
-idea: model output stays uniform, and any Vel codebase reads like any other.
+**A language AI writes and maintains, and humans read and own.**
 
-Where JavaScript would trap a non-programmer owner, the compiler teaches
-instead: every removed or mistaken spelling gets a **diagnostic that names
-the one current spelling**, so a model self-corrects in one round and a
-person learns the language from the compiler — a property measured by blind
-tests, not claimed. And because Vel compiles to legible, source-mapped
-JavaScript, there is no lock-in: if Vel itself ever becomes the obstacle,
-take the emitted JavaScript and keep shipping — an exit enforced by a
-[permanent acceptance gate](tests/package.acceptance.ts), not promised in
-prose. The full mission is written down in
-[Why VelarScript exists](docs/why-velarscript.md).
+You supply the intent and read the result. The model writes the VelarScript
+and every later change to it. The compiler guards each change.
 
-## Compatibility policy
+Vel is built from the bones of JavaScript and Python — the two languages every
+model already knows best — so a model writes it on prior knowledge alone. And
+the language keeps **one obvious spelling per idea**, so model output stays
+uniform and any Vel codebase reads like any other.
 
-VelarScript **never promises backward compatibility**. The language absorbs
-evidence and breaks cleanly: removed spellings get teaching migration
-diagnostics, never silent aliases and never permanent compatibility debt.
-Pin your toolchain version; migrations are guided. Vel currently fits
-products that move fast — prototypes, internal tools, short-lifecycle
-applications. A stable channel for long-lived products is a future
-milestone, earned by evidence, not declared by a version number.
-
-## One language, explicit packages
-
-VelarScript compiles to modern JavaScript and keeps the JavaScript runtime
-model—objects, references, garbage collection, Promises, the event loop, and
-the prototype chain—while replacing JavaScript's source surface with a
-smaller, checked Python/JavaScript blend. Core stays target-neutral; the Web
-framework is an extension package, not hidden compiler behavior:
-
-- `@velarscript/compiler` owns the Core language.
-- `@velarscript/node` adds bounded filesystem, path, process, terminal, server, and HTTP
-  capabilities for local applications without exposing the Node.js ABI.
-- `@velarscript/web` adds components, JSX, reactivity, lifecycle, and Look.
-- `@velarscript/desktop` uses the same Web source model for one native-style
-  project, while a thin system-WebView host provides permission-scoped files,
-  paths, processes, HTTP, and environment capabilities.
-- `@velarscript/cli` owns projects, builds, tests, the development server, and
-  the language server.
-- `create-velar` creates first-class Web, Node, and Desktop applications plus
-  documentation sites, libraries, and component packages.
-
-VelarScript deliberately does not introduce a virtual machine, a second object
-model, TypeScript-style type programming, React effects, CSS Modules hashes, or
-silent JavaScript coercion.
-
-## Create an application
+## Start
 
 ```sh
 npm create velar@latest my-app
@@ -68,31 +25,14 @@ npm install
 npm run dev
 ```
 
-Available templates:
+Other templates: `--template node | desktop | docs | library | component`.
 
-```sh
-npm create velar@latest node-service -- --template node
-npm create velar@latest desktop-app -- --template desktop
-npm create velar@latest docs-site -- --template docs
-npm create velar@latest domain-kit -- --template library
-npm create velar@latest component-kit -- --template component
-```
+Then read [Getting started](docs/getting-started.md), or run `velar skill` to
+print the brief you hand your model.
 
-VelarScript uses npm as its package registry and lockfile authority. The CLI
-adds a project-aware surface without inventing another registry:
-
-```sh
-velar install
-velar add package-name
-velar add package-name --dev
-velar remove package-name
-velar update
-```
-
-## A small example
+## What it looks like
 
 ```velar
-
 import {Head} from "velar/web"
 import {border, color, rgb, spacing} from "velar/look"
 
@@ -126,7 +66,7 @@ export component App:
 
     const remaining = computed(() => tasks.filter(task => not task.done).size)
 
-    def addTask() -> null:
+    def addTask():
         if draft == "":
             return
         tasks = [
@@ -146,148 +86,66 @@ export component App:
     </main>
 ```
 
-The source above produces ordinary JavaScript, DOM operations, and stable,
-readable Look selectors. There is no framework-specific browser runtime beyond
-the explicit `@velarscript/web` package.
+That compiles to ordinary JavaScript and DOM calls, with stable readable CSS
+selectors. There is no framework runtime in the browser beyond the explicit
+`@velarscript/web` package.
 
-## Language in one page
+## What is actually different
 
-- Bindings use `const` and `let`.
-- Blocks use indentation and `:`.
-- Empty values use the Web-native spelling `null`.
-- Records and aliases share one `type` keyword.
-- Optional values use `T?`; small unions use `A | B`.
-- `readonly T` creates a transitive compile-time view of records and collection
-  data without changing runtime identity; `readonly field: T` also protects the
-  field's nested data. Classes, functions, promises, and host objects stay
-  outside this qualifier.
-- Enum members such as `Status.pending` are singleton types and can discriminate
-  record unions across `if`, `assert`, and `match`; an external wire protocol
-  may use `textDelta = "response.output_text.delta"` without losing that nominal
-  member identity.
-- Functions use `def`, and named arguments use `name=value`.
-- `def` functions can declare type parameters, such as `def first<T>(items: List<T>) -> T?`,
-  inferred at each call site and erased at runtime. A parameter may be bounded
-  by one of three closed words — `Comparable`, `Text`, `Data` — and a library
-  cannot invent a fourth.
-- Declaration and `for` binding patterns use checked record fields and exact
-  List shapes; expected shape alternatives belong in `match`.
-- `match` supports literals, enum members, type patterns, nested record/List
-  destructuring, `_`, `...rest`, `as` bindings, and guards.
-- Classes use body fields and an explicit `constructor(...)`. A class that
-  declares `@dispose:` is released by `using`, at the end of the block that
-  owns it.
-- `try expression` turns an expected failure into an optional, so
-  `try readPort() ?? 8080` needs no `try`/`catch` block.
-- `Json.`, `Promise.`, `Math.`, and `Text.` are permanent namespaces that need
-  no import; each one mirrors a namespace-shaped JavaScript global, which is
-  what earns a prefix. Everything else pure — `velar/collections`, `velar/url`,
-  and Web's `velar/look` — is imported by name.
-- Tests are `test "a sentence the owner reads":` blocks in a `.test.vel` file.
-- Public collections are `List`, `Set`, and `Map` with direct APIs such as
-  `append`, `add`, `set`, `remove`, `some`, and `every`.
-- `Record<T>` models JSON objects whose string keys are dynamic, without
-  weakening `Map<K, V>` into a lossy wire-format alias.
-- JSX, components, state, actions, resources, lifecycle, and Look belong to the
-  Web extension.
-- Native JavaScript and native CSS are explicit `unsafe` boundaries.
-- Desktop applications remain one VelarScript project; renderer/main, local
-  ports, and IPC are internal framework boundaries rather than source concepts.
+**The compiler teaches instead of trapping.** Every removed or mistaken
+spelling gets a diagnostic naming the one current spelling, so a model
+self-corrects in a single round and a person learns the language from the
+compiler. This is measured by blind tests, not claimed.
 
-```velar fragment
-match response:
-    case {kind: "success", users: [first, ...rest]}:
-        print(first.name)
-        print(rest.size)
-    case User as user if user.active:
-        print(user.name)
-    case Error as error:
-        throw error
-    case null:
-        print("No response")
-```
+**There is no lock-in.** Vel compiles to legible, source-mapped JavaScript. If
+Vel itself ever becomes the obstacle, take the emitted output and keep
+shipping — an exit enforced by a
+[permanent acceptance gate](tests/package.acceptance.ts), not promised in prose.
 
-```velar fragment
-enum EventKind:
-    text
-    tool
+**It never promises backward compatibility.** The language absorbs evidence and
+breaks cleanly: removed spellings get teaching migration diagnostics, never
+silent aliases and never permanent compatibility debt. Pin your toolchain
+version; migrations are guided and `velar fix` applies the mechanical ones. Vel
+currently fits products that move fast — prototypes, internal tools, short
+lifecycles. A stable channel for long-lived products is a future milestone,
+earned by evidence rather than declared by a version number.
 
-type TextEvent:
-    kind: EventKind.text
-    text: string
-
-type ToolEvent:
-    kind: EventKind.tool
-    toolId: string
-
-type Event = TextEvent | ToolEvent
-```
-
-```velar
-class Session:
-    const id: string
-    let active: bool
-
-    constructor(id: string):
-        self.id = id
-        self.active = true
-
-    def close() -> null:
-        self.active = false
-```
-
-## Commands
-
-```text
-velar check [entry.vel | project-directory]
-velar create <project-directory> [--template <web|node|desktop|docs|library|component>]
-velar install
-velar add <package[@version]>... [--dev]
-velar remove <package>...
-velar update [package...]
-velar dev [entry.vel | project-directory] [--port <port>]
-velar build [entry.vel | project-directory] [--out-dir <directory>]
-velar package [project-directory]
-velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]
-velar test [project-directory | file.test.vel]
-velar test [project-directory] --browser [chromium|firefox|webkit|all]
-velar format [file.vel | project-directory] [--check]
-velar fix [entry.vel | project-directory]
-velar skill
-velar verify [project-directory | build-directory]
-velar preview [project-directory | build-directory] [--port <port>]
-velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]
-velar lsp
-```
+The full reasoning is in [Why VelarScript exists](docs/why-velarscript.md).
 
 ## Documentation
 
-- [Changelog](CHANGELOG.md)
-- [Why VelarScript exists](docs/why-velarscript.md)
-- [Best practices](docs/best-practices.md)
-- [AI skill brief](docs/ai-skill.md) (printed verbatim by `velar skill`)
-- [Escape hatches](docs/escape-hatches.md)
-- [Language reference](docs/language-charter.md)
-- [Standard library](docs/standard-library.md)
-- [Web framework API](docs/web-api.md)
-- [JavaScript boundary](docs/javascript-bridge.md)
-- [Runtime and JavaScript boundary ledger](docs/contributing/runtime-boundary.md)
-- [Project lifecycle](docs/project-lifecycle.md)
-- [Compiler architecture](docs/contributing/compiler-architecture.md)
-- [Workbench integration](docs/contributing/workbench-integration.md)
+**Using the language**
 
-## Repository validation
+- [Getting started](docs/getting-started.md) — install, create, run, test
+- [Best practices](docs/best-practices.md) — the house style, with runnable code
+- [CLI reference](docs/cli.md) — every command, grouped by what you are doing
+- [Language reference](docs/language-charter.md) — the full contract
+- [Standard library](docs/standard-library.md) · [Web framework](docs/web-api.md)
+- [AI skill brief](docs/ai-skill.md) — what `velar skill` prints
+- [Escape hatches](docs/escape-hatches.md) · [JavaScript boundary](docs/javascript-bridge.md)
 
-```sh
-npm run build:packages
-npm run check
-npm test
-npm run test:browser
-npm run test:packages
-```
+**Working on the compiler**
 
-Browser tests require the corresponding Playwright browsers. Release and
-deployment operations remain separate, explicit commands.
+- [Contributing](CONTRIBUTING.md) and [contributor docs](docs/contributing/)
+- [Design decisions](docs/decisions/) — why the language is shaped this way
+
+## Packages
+
+Core stays target-neutral; every target is an explicit package, not hidden
+compiler behavior.
+
+| Package | Owns |
+| --- | --- |
+| `@velarscript/compiler` | the Core language |
+| `@velarscript/node` | filesystem, path, process, terminal, server, HTTP — without exposing the Node.js ABI |
+| `@velarscript/web` | components, JSX, reactivity, lifecycle, Look |
+| `@velarscript/desktop` | the same Web source model over a system-WebView host with permission-scoped capabilities |
+| `@velarscript/cli` | projects, builds, tests, dev server, language server |
+| `create-velar` | project templates |
+
+Vel deliberately has no virtual machine, no second object model, no
+TypeScript-style type programming, no React effects, no CSS-module hashes, and
+no silent JavaScript coercion.
 
 ## License
 
