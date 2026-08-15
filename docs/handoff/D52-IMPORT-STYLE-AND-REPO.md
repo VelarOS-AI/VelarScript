@@ -18,10 +18,13 @@
 | **`Json.`** | **保留** | 镜像 `JSON.stringify` —— 去掉前缀后 `stringify(x)` 单看不知道是 JSON 还是别的格式，**前缀携带信息** |
 | **`Promise.`** | **保留** | `Promise.all` 就是全世界都认识的那个拼写；`all(...)` 更难读，且离母语言更远 |
 
-**分界线一句话**：**前缀镜像母语言的保留**（`Json.`≈`JSON.`、`Promise.`≈`Promise.`）。
-`Look.` 是我们发明且落在全语言最密集的调用位置，取消。`Text.` 按规则本该同去，
-**用户选择保留** —— 记录为所有者的取舍，将来若有人问「为什么 Text 不一样」，
-答案是「他觉得那样更好」，不是某条推导。
+**分界线一句话（用户 2026-08-15 的原话，比编排代理的初版更准）**：
+**`Look` 需要经常写，带命名空间看着难受；其余参照 JS 全局命名空间没什么问题。**
+
+即：判据是**书写频率 × 前缀是否镜像母语言**。`Look.` 落在全语言最密集的调用
+位置（look 块内）且 JS 无对应物 —— 两条都不利，取消。`Json.`/`Promise.`/`Text.`
+保留。`Text.` 按纯镜像规则本该同去，**用户选择保留** —— 记录为所有者的取舍，
+将来若有人问「为什么 Text 不一样」，答案是「他觉得那样更好」，不是某条推导。
 
 ### 与既有裁决的关系（诚实标注）
 
@@ -92,3 +95,53 @@ examples/
 
 一个第一次看到这个仓库的人（或 AI），**从 README 到跑起第一个应用不需要读
 任何内部文档**；想知道「为什么这样设计」时，`docs/decisions/` 在那里等着。
+
+
+---
+
+## 第 116 条 —— 补上 `Math.` 常驻命名空间（唯一真缺口）
+
+用户问「是不是缺了一堆命名空间」。**系统对照 JS 全局后的答案：不是一堆，
+恰好一个。**
+
+### 逐项对照（证据，非猜测）
+
+| JS 全局 | Vel 现状 | 判断 |
+|---|---|---|
+| `JSON.` | `Json.` 常驻 | ✓ |
+| `Promise.` | `Promise.` 常驻 | ✓ |
+| **`Math.`** | **`velar/math` 须 import** | ❌ **缺口** |
+| `Object.` | 记录 + `Record<T>` 成员 | 不需要 |
+| `Array.` | List 方法；`range`/`zip`/`chunk` 属 `velar/collections`（Python itertools 血统，非 JS `Array.`） | 不需要 |
+| `Number.` | 已方法化（`isNaN`/`isFinite`/`isInteger`）+ prelude `number(text)` | 不需要 |
+| `String.` | 字符串方法 + `Text.` | 不需要 |
+| `Date.` | `velar/time` —— **碰时钟属能力面**，必须显式 import | 正确 |
+| `console.` | prelude `print` | 不需要 |
+| `Map`/`Set` | 构造器 | 不需要 |
+| `Symbol`/`Proxy`/`Reflect`/`WeakMap` | charter §19 有意缺席 | 正确 |
+
+### 裁决：`Math.` 成为第四个常驻命名空间
+
+`velar/math` 今天导出的正是 JS `Math.` 的那一套：`pi`、`e`、`tau`、`infinity`、
+`min`、`max`、`clamp`、`sign`、`trunc`、`sqrt`、`cbrt`、`pow`、`exp`、`log`、
+`sin`、`cos`、`tan`…… 而**该方法化的早已方法化走**（`abs`/`round`/`floor`/
+`ceil` 是数字方法，`isFinite`/`isInteger` 亦然，D41 第 63.3 条），
+**剩下的恰好是不适合当方法的那些** —— 常量、多参函数、超越函数。
+
+```
+const radius = Math.sqrt(area / Math.pi)
+const bounded = Math.clamp(value, 0, 100)
+```
+
+理由：`JSON`/`Promise`/`Math` 是 JS 三个最常用的命名空间式全局，我们有前两个
+没第三个 —— **纯属遗漏**，不是设计。`Math.max` 是全世界的肌肉记忆，让作者先
+想起「Vel 里得先 import」是无谓摩擦。
+
+### 落地
+
+- `Math` 加入常驻名册（`Json`/`Promise`/`Text`/`Math`），机制与批次 K 同一套；
+  `velar/math` 的具名导入退役并给迁移诊断，`velar fix` 可机械改写。
+- 第 106 条（命名空间只作成员访问头）**适用于全部四个**。
+- 第 109 条的保留类型名不受影响（`Math` 不是约束名）。
+- 常驻名册**到此为止** —— 上表已系统穷尽 JS 全局；将来新增须先证明它镜像一个
+  母语言全局，「统一好看」不是理由（第 114 条已立此纪律）。
