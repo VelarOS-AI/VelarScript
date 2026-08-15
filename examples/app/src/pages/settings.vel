@@ -1,0 +1,80 @@
+// Settings: the only page that writes preferences, through the only module that
+// talks to storage.
+//
+// The controls are buttons rather than a bound radio group because the stored
+// value is an enum, and a bound group holds the selected input's `value` — a
+// string. Converting at the edge (`str(member)` out, `Appearance.parse` in) is
+// the boundary `state/preferences.vel` owns; a screen never handles the text
+// form.
+
+import {Head} from "velar/web"
+import {Look} from "velar/look"
+import {Appearance, Density, cardLook, controlLook, mutedLook, pageLook, primaryControlLook} from "../look/theme.vel"
+import {appearance, density, setAppearance, setDensity} from "../state/preferences.vel"
+
+const rowLook: Look = look:
+    display = "flex"
+    flexWrap = "wrap"
+    gap = 8px
+
+const headingLook: Look = look:
+    margin = 0
+    fontSize = 1.6rem
+
+// A bool attribute value follows the HTML boolean convention: `true` renders
+// the attribute with an empty value and `false` removes it, which is exactly
+// right for `disabled` and wrong for an ARIA state, whose vocabulary is the
+// literal text "true" and "false". So these two write the text.
+component AppearanceChoice(value: Appearance, label: string):
+    def choose():
+        setAppearance(value)
+
+    return <button
+        type="button"
+        look={appearance == value ? primaryControlLook : controlLook}
+        aria-pressed={appearance == value ? "true" : "false"}
+        on:click={choose}
+        data-appearance={value}
+    >
+        {label}
+    </button>
+
+component DensityChoice(value: Density, label: string):
+    def choose():
+        setDensity(value)
+
+    return <button
+        type="button"
+        look={density == value ? primaryControlLook : controlLook}
+        aria-pressed={density == value ? "true" : "false"}
+        on:click={choose}
+        data-density={value}
+    >
+        {label}
+    </button>
+
+export component SettingsPage:
+    return <main look={pageLook(density)} data-page="settings">
+        <Head title="Settings · Release Studio" description="Reader preferences for Release Studio" />
+        <h1 look={headingLook}>Settings</h1>
+        <section look={cardLook} aria-label="Appearance">
+            <strong>Appearance</strong>
+            <p look={mutedLook}>
+                System follows the reader's operating system; the other two are a choice this application stores.
+            </p>
+            <div look={rowLook}>
+                <AppearanceChoice value={Appearance.system} label="System" />
+                <AppearanceChoice value={Appearance.light} label="Light" />
+                <AppearanceChoice value={Appearance.dark} label="Dark" />
+            </div>
+        </section>
+        <section look={cardLook} aria-label="Density">
+            <strong>Density</strong>
+            <p look={mutedLook}>Compact tightens the page padding on every screen.</p>
+            <div look={rowLook}>
+                <DensityChoice value={Density.comfortable} label="Comfortable" />
+                <DensityChoice value={Density.compact} label="Compact" />
+            </div>
+        </section>
+        <p look={mutedLook} data-stored-preferences>{f"Stored: {appearance} · {density}"}</p>
+    </main>

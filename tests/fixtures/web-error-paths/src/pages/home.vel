@@ -1,0 +1,8 @@
+// The page every error-path test navigates back to. It has to be an ordinary,
+// always-succeeding route so that "the current page survived" is observable.
+
+export component Home:
+    return <main data-home>
+        <h1>Error path fixture</h1>
+        <p>The routes beside this one fail on purpose.</p>
+    </main>

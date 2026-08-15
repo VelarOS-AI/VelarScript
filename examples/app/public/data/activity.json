@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "id": "act-4",
+      "release": "compiler-0-11",
+      "message": "Parser fuzz run finished with no new findings",
+      "at": "2026-08-15T09:12:00Z"
+    },
+    {
+      "id": "act-3",
+      "release": "web-0-11",
+      "message": "Browser matrix passed on Chromium, Firefox, and WebKit",
+      "at": "2026-08-14T17:40:00Z"
+    },
+    {
+      "id": "act-2",
+      "release": "web-0-11",
+      "message": "Look property table reviewed for the release notes",
+      "at": "2026-08-14T11:05:00Z"
+    },
+    {
+      "id": "act-1",
+      "release": "cli-0-10-1",
+      "message": "Patch branch cut from main",
+      "at": "2026-08-13T08:30:00Z"
+    }
+  ]
+}

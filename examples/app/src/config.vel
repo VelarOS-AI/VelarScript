@@ -1,0 +1,17 @@
+// Deployment configuration, validated once.
+//
+// `publicConfig(Target)` checks the manifest's `web.publicConfig` block against
+// a record type when the application starts, so a missing or mistyped key fails
+// in one place with one message instead of surfacing as `null` somewhere in a
+// page. That is the whole reason this is a module of its own: every screen
+// reads `studio.*` and no screen re-declares what the manifest contains.
+
+import {publicConfig} from "velar/config"
+
+export type StudioConfig:
+    dataBase: string
+    channel: string
+    canonicalUrl: string
+    socialImage: string
+
+export const studio = publicConfig(StudioConfig)

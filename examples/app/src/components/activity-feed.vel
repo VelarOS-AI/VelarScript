@@ -1,0 +1,71 @@
+// Server data, owned by the component that shows it.
+//
+// A `resource` is the right shape here and a module `state` is not: the feed is
+// only interesting while this panel is on screen, and a resource is destroyed
+// with its component, so a slow response that lands after the reader has
+// navigated away cannot write into a page that no longer exists.
+//
+// A resource is a *load*, not a formula — it does not re-run because something
+// it read changed. Refreshing is therefore an explicit `reload()` behind a
+// button, which is also the only honest thing to put in front of a reader who
+// wants to know whether the feed is current.
+
+import {http} from "velar/http"
+import {Look} from "velar/look"
+import {studio} from "../config.vel"
+import {cardLook, controlLook, listLook, mutedLook} from "../look/theme.vel"
+
+type ActivityEntry:
+    id: string
+    release: string
+    message: string
+    at: string
+
+type ActivityPayload:
+    entries: List<ActivityEntry>
+
+const headerLook: Look = look:
+    display = "flex"
+    alignItems = "center"
+    justifyContent = "space-between"
+    gap = 12px
+
+const entryLook: Look = look:
+    display = "grid"
+    gap = 2px
+
+async def loadActivity() -> ActivityPayload:
+    return await http.get(f"{studio.dataBase}/activity.json").parse(ActivityPayload)
+
+export component ActivityFeed:
+    resource activity: ActivityPayload = loadActivity()
+
+    def status() -> string:
+        if activity.error != null:
+            return "Activity is unavailable"
+        const payload = activity.value
+        if payload == null:
+            return activity.loading ? "Loading activity…" : "No activity yet"
+        return f"{payload.entries.size} recent events"
+
+    return <section look={cardLook} aria-label="Recent activity" data-activity>
+        <div look={headerLook}>
+            <strong>Activity</strong>
+            <button
+                type="button"
+                look={controlLook}
+                on:click={activity.reload}
+                disabled={activity.loading}
+                data-activity-refresh
+            >
+                Refresh
+            </button>
+        </div>
+        <p look={mutedLook} data-activity-status>{status()}</p>
+        <ul look={listLook} data-activity-list>
+            {(activity.value?.entries ?? []).map(entry => <li key={entry.id} look={entryLook} data-activity-entry={entry.id}>
+                <span data-activity-message>{entry.message}</span>
+                <span look={mutedLook}>{f"{entry.release} · {entry.at}"}</span>
+            </li>)}
+        </ul>
+    </section>

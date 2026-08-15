@@ -1,0 +1,56 @@
+// A minimal shell whose only job is to host failing routes.
+//
+// This project is a *test fixture*, not an example: every route below exists to
+// make a failure observable. It moved here from `examples/production-web`, where
+// three pages of deliberate failure sat next to application code and made the
+// example unreadable (D56 rule 131 — a fixture is not an example).
+
+import {onError} from "velar/app"
+import {NavLink, RouteContext, Router, lazy, route} from "velar/web"
+import {ConstructionFailure} from "./pages/construction-failure.vel"
+import {Home} from "./pages/home.vel"
+import {StateLab} from "./pages/state-lab.vel"
+
+component RouteLoading:
+    return <main aria-busy="true"><p>Loading page…</p></main>
+
+component RouteFailed(error: Error):
+    return <main role="alert"><h1>Page unavailable</h1><p>{error.message}</p></main>
+
+component RouteNotFound(route: RouteContext):
+    return <main data-route-not-found><h1>Page not found</h1><p>No fixture page matches {route.path}.</p></main>
+
+const LazyFailureRoute = lazy(() => import("./pages/lazy-failure.vel"), "LazyFailure", RouteLoading, RouteFailed)
+
+const routes = [
+    route("/", Home),
+    route("/construction-failure", ConstructionFailure),
+    route("/lazy-failure", LazyFailureRoute),
+    route("/state-lab", StateLab),
+]
+
+component App:
+    state runtimeError = "none"
+    let stopReporting: (() -> null)? = null
+
+    def capture(phase: string, message: string):
+        runtimeError = f"{phase}:{message}"
+
+    @mounted:
+        stopReporting = onError(report => capture(report.phase, report.error.message))
+
+    @cleanup:
+        if stopReporting != null:
+            stopReporting()
+
+    return <div>
+        <nav data-fixture-nav aria-label="Fixture pages">
+            <NavLink to="/" exact={true}>Home</NavLink>
+            <NavLink to="/construction-failure" exact={true}>Construction failure</NavLink>
+            <NavLink to="/state-lab" exact={true}>State lab</NavLink>
+        </nav>
+        <span data-runtime-error>{runtimeError}</span>
+        <Router routes={routes} fallback={RouteNotFound} />
+    </div>
+
+mount(<App />, "#app")

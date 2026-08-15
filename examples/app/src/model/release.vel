@@ -1,0 +1,97 @@
+// The domain layer: what a release *is*, and the arithmetic that answers
+// questions about one.
+//
+// Nothing in this module is reactive and nothing here touches a document. That
+// is deliberate — it is what lets `release.test.vel` exercise all of it in the
+// ordinary test runner, with no page and no browser. Everything that has to
+// remember something across a click lives one directory over, in `state/`.
+//
+// Every function takes `readonly` parameters. A component prop arrives as a
+// transitive readonly view, so a helper that only reads its argument has to say
+// so or it cannot be called from the view layer at all.
+
+export enum Stage:
+    planned
+    building
+    verifying
+    released
+
+export type Check:
+    id: string
+    title: string
+    owner: string
+    done: bool
+
+export type Release:
+    id: string
+    name: string
+    version: string
+    stage: Stage
+    target: string
+    checks: List<Check>
+
+export type BoardSummary:
+    tracked: number
+    shipped: number
+    blocked: number
+    readiness: number
+
+// Percent of a release's checklist that is done. An empty checklist is 0 rather
+// than a division by zero, because "nothing planned" is not "ready to ship".
+export def readiness(release: readonly Release) -> number:
+    if release.checks.size == 0:
+        return 0
+    const done = release.checks.filter(check => check.done).size
+    return (done / release.checks.size * 100).round()
+
+export def blockingTitles(release: readonly Release) -> List<string>:
+    return release.checks.filter(check => not check.done).map(check => check.title)
+
+export def isBlocked(release: readonly Release) -> bool:
+    return release.stage != Stage.released and release.checks.some(check => not check.done)
+
+// The stage machine. `nextStage` is total: every member has an answer, and
+// `released` is the fixed point, so a caller never has to ask whether it may
+// advance — it asks what the next stage is and compares.
+export def nextStage(stage: Stage) -> Stage:
+    match stage:
+        case Stage.planned:
+            return Stage.building
+        case Stage.building:
+            return Stage.verifying
+        case Stage.verifying:
+            return Stage.released
+        case Stage.released:
+            return Stage.released
+
+export def stageLabel(stage: Stage) -> string:
+    match stage:
+        case Stage.planned:
+            return "Planned"
+        case Stage.building:
+            return "Building"
+        case Stage.verifying:
+            return "Verifying"
+        case Stage.released:
+            return "Released"
+
+// A release may only leave `verifying` once its checklist is clear. The rule
+// lives here rather than in the store so that a test can state it in one line
+// and the store keeps exactly one job: applying decisions to state.
+export def mayAdvance(release: readonly Release) -> bool:
+    if release.stage == Stage.released:
+        return false
+    if release.stage == Stage.verifying:
+        return not isBlocked(release)
+    return true
+
+export def summarize(releases: readonly List<Release>) -> BoardSummary:
+    const shipped = releases.filter(release => release.stage == Stage.released).size
+    const blocked = releases.filter(release => isBlocked(release)).size
+    const total = releases.map(release => readiness(release)).sum()
+    return {
+        tracked: releases.size,
+        shipped,
+        blocked,
+        readiness: releases.size == 0 ? 0 : (total / releases.size).round(),
+    }

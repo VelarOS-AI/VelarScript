@@ -1,0 +1,70 @@
+// A form, and the state that belongs to it.
+//
+// The two fields are component `state`: a half-typed title is nobody else's
+// business, it must not survive navigating away, and putting it in the store
+// would mean every other reader of the store wakes up on each keystroke. The
+// moment the reader commits, the value leaves for the store and the local cells
+// are cleared.
+//
+// Validation uses `velar/forms` rather than a hand-rolled error record, because
+// `setError` writes the accessible surface — `aria-invalid`, the description
+// wiring, and the message element — that a hand-rolled one always forgets.
+
+import {announce} from "velar/web"
+import {clearError, focusFirstError, setError} from "velar/forms"
+import {Look, spacing, tracks} from "velar/look"
+import {addCheck} from "../state/board.vel"
+import {fieldLook, mutedLook, primaryControlLook} from "../look/theme.vel"
+
+const formLook: Look = look:
+    display = "grid"
+    gridTemplateColumns = tracks(2fr, 1fr, "auto")
+    alignItems = "end"
+    gap = 10px
+
+    if viewport.width <= 720px:
+        gridTemplateColumns = tracks(1fr)
+
+const labelLook: Look = look:
+    display = "grid"
+    gap = 5px
+    fontSize = 0.85rem
+
+const legendLook: Look = look:
+    ...mutedLook
+    gridColumn = "1 / -1"
+    padding = spacing(0px, 0px, 4px, 0px)
+
+export component AddCheckForm(releaseId: string):
+    state title = ""
+    state owner = ""
+    let form: Element? = null
+
+    def add():
+        if form == null:
+            return
+        const cleanTitle = title.trim()
+        if cleanTitle == "":
+            setError(form, "title", "A check needs a title")
+            focusFirstError(form)
+            announce("A check needs a title", "assertive")
+            return
+        clearError(form, "title")
+        const cleanOwner = owner.trim()
+        addCheck(releaseId, cleanTitle, cleanOwner == "" ? "Unassigned" : cleanOwner)
+        announce(f"Added {cleanTitle}")
+        title = ""
+        owner = ""
+
+    return <form ref={form} look={formLook} on:submit.prevent={add} data-add-check>
+        <p look={legendLook}>Add a release check</p>
+        <label look={labelLook}>
+            Title
+            <input look={fieldLook} type="text" name="title" bind:value={title} data-check-input />
+        </label>
+        <label look={labelLook}>
+            Owner
+            <input look={fieldLook} type="text" name="owner" bind:value={owner} data-owner-input />
+        </label>
+        <button type="submit" look={primaryControlLook} data-add-submit>Add</button>
+    </form>

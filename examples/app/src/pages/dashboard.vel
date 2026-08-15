@@ -1,0 +1,52 @@
+// The dashboard: everything the board knows, at a glance.
+//
+// A page is a component like any other. What makes it a page is that it appears
+// in the route table in `app.vel` — nothing about the file says "page", and
+// nothing needs to.
+
+import {Head} from "velar/web"
+import {Look} from "velar/look"
+import {studio} from "../config.vel"
+import {releases, summary} from "../state/board.vel"
+import {density} from "../state/preferences.vel"
+import {ActivityFeed} from "../components/activity-feed.vel"
+import {Metric, MetricGrid} from "../components/metrics.vel"
+import {ReadinessBar} from "../components/readiness.vel"
+import {ReleaseList} from "../components/release-list.vel"
+import {cardLook, mutedLook, pageLook} from "../look/theme.vel"
+
+const headingLook: Look = look:
+    margin = 0
+    fontSize = 1.6rem
+
+// A plain function that reads reactive state is reactive where it is called:
+// `summary()` is read during the render, so the tiles follow the board.
+def metrics() -> List<Metric>:
+    const current = summary()
+    return [
+        {label: "Tracked", value: str(current.tracked)},
+        {label: "Shipped", value: str(current.shipped)},
+        {label: "Blocked", value: str(current.blocked)},
+    ]
+
+export component Dashboard:
+    return <main look={pageLook(density)} data-page="dashboard">
+        <Head
+            title="Release Studio"
+            description="Release readiness for the VelarScript toolchain"
+            canonical={studio.canonicalUrl}
+            image={studio.socialImage}
+            robots="index,follow"
+        />
+        <header>
+            <h1 look={headingLook}>Release board</h1>
+            <p look={mutedLook} data-channel>{f"Channel: {studio.channel}"}</p>
+        </header>
+        <MetricGrid items={metrics()} label="Board metrics" />
+        <section look={cardLook} aria-label="Overall readiness">
+            <strong data-board-readiness>{f"{summary().readiness}% ready overall"}</strong>
+            <ReadinessBar percent={summary().readiness} label="Overall readiness" />
+        </section>
+        <ReleaseList releases={releases} />
+        <ActivityFeed />
+    </main>

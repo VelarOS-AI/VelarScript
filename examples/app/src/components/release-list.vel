@@ -1,0 +1,44 @@
+// The board, as a list of links.
+//
+// The list takes the releases it renders as a prop instead of importing the
+// store. A component that reads the store directly can only ever show the whole
+// board; this one is also used for a filtered view, and it stays testable by
+// handing it a literal list.
+
+import {Link} from "velar/web"
+import {Look, spacing, tracks} from "velar/look"
+import {Release, blockingTitles, readiness} from "../model/release.vel"
+import {cardLook, listLook, mutedLook} from "../look/theme.vel"
+import {ReadinessBar, StagePill} from "./readiness.vel"
+
+const rowLook: Look = look:
+    ...cardLook
+    gridTemplateColumns = tracks(1fr, "auto")
+    alignItems = "center"
+    gap = spacing(8px, 14px)
+
+const titleLook: Look = look:
+    color = "inherit"
+    fontSize = 1.05rem
+    fontWeight = 650
+    textDecoration = "none"
+
+    if @hover:
+        textDecoration = "underline"
+
+const spanLook: Look = look:
+    gridColumn = "1 / -1"
+
+export component ReleaseList(releases: readonly List<Release>):
+    return <ul look={listLook} data-release-list>
+        {releases.map(release => <li key={release.id} look={rowLook} data-release={release.id}>
+            <Link to={f"/releases/{release.id}"} look={titleLook}>{f"{release.name} {release.version}"}</Link>
+            <StagePill stage={release.stage} />
+            <p look={mutedLook} data-release-note>
+                {f"Target {release.target} · {blockingTitles(release).size} open"}
+            </p>
+            <div look={spanLook}>
+                <ReadinessBar percent={readiness(release)} label={f"{release.name} readiness"} />
+            </div>
+        </li>)}
+    </ul>

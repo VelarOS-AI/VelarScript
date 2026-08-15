@@ -1,0 +1,101 @@
+// The shell: one header, one route table, and the three views a router needs
+// for the paths that are not the happy one.
+//
+// Routing is declared in exactly one module. A route table spread across the
+// pages it names reads fine until the day someone asks "what URLs does this
+// application answer?" — so `routes` below is the answer, in ten lines.
+//
+// `RouteLoading`, `RouteFailed`, and `RouteNotFound` are the three views a
+// reader sees when a chunk is still arriving, when it failed to arrive, and
+// when the path matches nothing. They live here because they are the router's
+// vocabulary, not any page's.
+
+import {onError} from "velar/app"
+import {NavLink, RouteContext, Router, lazy, route} from "velar/web"
+import {Look} from "velar/look"
+import {Dashboard} from "./pages/dashboard.vel"
+import {ReleasePage} from "./pages/release.vel"
+import {SettingsPage} from "./pages/settings.vel"
+import {appearance, density} from "./state/preferences.vel"
+import {attention, barLook, cardLook, controlLook, mutedLook, navLinkLook, navLook, pageLook, shellLook} from "./look/theme.vel"
+
+const brandLook: Look = look:
+    fontSize = 1.05rem
+    fontWeight = 700
+
+const alertLook: Look = look:
+    ...cardLook
+    width = 100%
+    maxWidth = 1040px
+    marginInline = "auto"
+    borderColor = attention
+
+component RouteLoading:
+    return <main look={pageLook(density)} aria-busy="true" data-route-loading>
+        <p>Loading this page…</p>
+    </main>
+
+component RouteFailed(error: Error):
+    return <main look={pageLook(density)} role="alert" data-route-failed>
+        <h1>This page could not be loaded</h1>
+        <p look={mutedLook}>{error.message}</p>
+    </main>
+
+component RouteNotFound(route: RouteContext):
+    return <main look={pageLook(density)} data-route-missing>
+        <h1>Page not found</h1>
+        <p look={mutedLook}>{f"No Release Studio page matches {route.path}."}</p>
+    </main>
+
+// The about page is the one route worth splitting out: readers open it rarely,
+// and everything else is on the critical path.
+const AboutRoute = lazy(() => import("./pages/about.vel"), "AboutPage", RouteLoading, RouteFailed)
+
+const routes = [
+    route("/", Dashboard),
+    route("/releases/:id", ReleasePage),
+    route("/settings", SettingsPage),
+    route("/about", AboutRoute),
+]
+
+export component App:
+    state failure = ""
+    let stopReporting: (() -> null)? = null
+
+    def setFailure(phase: string, message: string):
+        failure = f"{phase}: {message}"
+
+    def dismiss():
+        failure = ""
+
+    // One place where a failure nothing else claimed becomes visible. Without
+    // it, a thrown render is a blank region and a line in a console the reader
+    // does not have open.
+    @mounted:
+        stopReporting = onError(report => setFailure(report.phase, report.error.message))
+
+    @cleanup:
+        if stopReporting != null:
+            stopReporting()
+
+    def banner() -> WebNode:
+        if failure == "":
+            return <></>
+        return <div look={alertLook} role="alert" data-app-error>
+            <span>{failure}</span>
+            <button type="button" look={controlLook} on:click={dismiss} data-dismiss-error>Dismiss</button>
+        </div>
+
+    return <div look={shellLook(appearance)} data-app>
+        <header look={barLook}>
+            <img src="/mark.svg" alt="" width="26" height="26" />
+            <strong look={brandLook}>Release Studio</strong>
+            <nav look={navLook} aria-label="Application pages">
+                <NavLink to="/" exact={true} look={navLinkLook}>Board</NavLink>
+                <NavLink to="/settings" exact={true} look={navLinkLook}>Settings</NavLink>
+                <NavLink to="/about" exact={true} look={navLinkLook}>About</NavLink>
+            </nav>
+        </header>
+        {banner()}
+        <Router routes={routes} fallback={RouteNotFound} />
+    </div>

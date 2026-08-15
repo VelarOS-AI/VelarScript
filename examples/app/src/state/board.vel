@@ -1,0 +1,112 @@
+// The release board: the application's one shared store.
+//
+// Module `state` is the right scope for it because the board is a fact about
+// the application rather than about any screen — the dashboard, the detail
+// page, and the header all read the same cell, and a page that unmounts must
+// not take the data with it. Anything that only one component cares about
+// (a half-typed field, an open menu) stays `state` *inside* that component.
+//
+// Everything that changes the board is a `def` exported from here. That is the
+// rule that makes the rest of the application readable: a component that wants
+// something to change calls one of these with identifiers, and never reaches
+// into the data itself. It could not do so anyway — a record that arrives as a
+// component prop is a transitive readonly view — and that refusal is the point:
+// the store is the only writer, so the list of ways the board can change is the
+// list of exports below.
+
+import {uuid} from "velar/id"
+import {BoardSummary, Check, Release, Stage, mayAdvance, nextStage, summarize} from "../model/release.vel"
+
+// The seed is a function rather than a literal so that `resetBoard()` below can
+// build a fresh one. A single shared literal would hand every reset the same
+// records the last one mutated.
+def seed() -> List<Release>:
+    return [
+        {
+            id: "web-0-11",
+            name: "VelarScript Web",
+            version: "0.11.0",
+            stage: Stage.verifying,
+            target: "2026-08-22",
+            checks: [
+                {id: "web-1", title: "Browser matrix green on three engines", owner: "Lin", done: true},
+                {id: "web-2", title: "Look property table reviewed", owner: "Ada", done: true},
+                {id: "web-3", title: "Release notes drafted", owner: "Ada", done: true},
+                {id: "web-4", title: "Upgrade guide published", owner: "Grace", done: false},
+            ],
+        },
+        {
+            id: "compiler-0-11",
+            name: "VelarScript Compiler",
+            version: "0.11.0",
+            stage: Stage.building,
+            target: "2026-08-29",
+            checks: [
+                {id: "compiler-1", title: "Parser fuzz run clean", owner: "Lin", done: true},
+                {id: "compiler-2", title: "Diagnostic wording pass", owner: "Grace", done: false},
+                {id: "compiler-3", title: "Emitter benchmarks recorded", owner: "Lin", done: false},
+            ],
+        },
+        {
+            id: "cli-0-10-1",
+            name: "VelarScript CLI",
+            version: "0.10.1",
+            stage: Stage.released,
+            target: "2026-08-08",
+            checks: [
+                {id: "cli-1", title: "Patch branch cut", owner: "Ada", done: true},
+                {id: "cli-2", title: "Installer smoke test", owner: "Grace", done: true},
+                {id: "cli-3", title: "Announcement sent", owner: "Ada", done: true},
+            ],
+        },
+    ]
+
+export state releases: List<Release> = seed()
+
+// Module state is one cell for the life of the page — which also makes it one
+// cell for the life of a test file. A store that can be put back where it
+// started is a store that can be tested more than once, and an application that
+// signs a reader out needs exactly the same call.
+export def resetBoard():
+    releases = seed()
+
+// An exported `computed` declares its accessor result at the export site. Every
+// reader of `summary()` recomputes together when the board changes, and the
+// arithmetic itself stays in `model/`.
+export const summary: () -> BoardSummary = computed(() => summarize(releases))
+
+export def findRelease(id: string) -> Release?:
+    return releases.find(release => release.id == id)
+
+export def toggleCheck(releaseId: string, checkId: string):
+    const release = findRelease(releaseId)
+    if release == null:
+        return
+    const check = release.checks.find(item => item.id == checkId)
+    if check != null:
+        check.done = not check.done
+
+export def addCheck(releaseId: string, title: string, owner: string) -> Check?:
+    const release = findRelease(releaseId)
+    if release == null:
+        return null
+    const check: Check = {id: uuid(), title, owner, done: false}
+    release.checks.append(check)
+    return check
+
+export def removeCheck(releaseId: string, checkId: string):
+    const release = findRelease(releaseId)
+    if release != null:
+        release.checks = release.checks.filter(check => check.id != checkId)
+
+// The store applies the decision; `model/release.vel` makes it. Splitting them
+// this way is what lets the rule "a release leaves verifying only once its
+// checklist is clear" be tested without constructing a store.
+export def advance(releaseId: string) -> bool:
+    const release = findRelease(releaseId)
+    if release == null:
+        return false
+    if not mayAdvance(release):
+        return false
+    release.stage = nextStage(release.stage)
+    return true

@@ -1,0 +1,17 @@
+// An eagerly routed component that fails while it is constructed. The contract
+// under test is that the current page stays on screen: a route that cannot be
+// built must not blank the document it was going to replace.
+
+import {every} from "velar/browser"
+
+def failIfLeaked():
+    throw Error("Route construction timer leaked")
+
+export component ConstructionFailure:
+    const stopTimer = every(25ms, failIfLeaked)
+
+    @cleanup:
+        stopTimer()
+
+    throw Error("Route construction failed")
+    return <main><h1>This route must not replace the current page</h1></main>

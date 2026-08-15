@@ -1,0 +1,94 @@
+// The error-path browser suite, moved here from
+// `examples/production-web/src/app.browser.test.vel` (D56 rule 131). The
+// assertions are the ones that were covering the deliberate-failure pages; the
+// application-shaped tests that used to sit beside them are now in
+// `examples/app/src/app.browser.test.vel`, written against real screens.
+
+import {expect} from "velar/test"
+import {browser} from "velar/web-test"
+
+test "lazy route failure falls back and keeps failing the same way on retry":
+    await browser.open("/lazy-failure")
+    await browser.waitForText("h1", "Page unavailable")
+    expect(await browser.text(`[role="alert"] p`)).toBe("Lazy route failed")
+    await browser.open("/")
+    await browser.waitForText("h1", "Error path fixture")
+    await browser.open("/lazy-failure")
+    await browser.waitForText("h1", "Page unavailable")
+    expect(await browser.text(`[role="alert"] p`)).toBe("Lazy route failed")
+
+test "route construction failure keeps the current page":
+    await browser.open("/")
+    await browser.waitForText("h1", "Error path fixture")
+    await browser.click(`[data-fixture-nav] a[href="/construction-failure"]`)
+    expect(await browser.currentPath()).toBe("/construction-failure")
+    expect(await browser.text("h1")).toBe("Error path fixture")
+    await browser.waitForText("[data-runtime-error]", "render:Route construction failed")
+    await browser.click(`[data-fixture-nav] a[href="/"]`)
+    await browser.waitForText("h1", "Error path fixture")
+    expect(await browser.currentPath()).toBe("/")
+
+test "repeated navigation releases every route it leaves":
+    await browser.open("/")
+    for index in range(8):
+        await browser.click(`[data-fixture-nav] a[href="/state-lab"]`)
+        await browser.waitForText("h1", "State lab")
+        expect(await browser.currentPath()).toBe("/state-lab")
+        expect(await browser.attribute(`[data-fixture-nav] a[href="/state-lab"]`, "aria-current")).toBe("page")
+        expect(await browser.attribute(`[data-fixture-nav] a[href="/"]`, "aria-current")).toBe(null)
+        await browser.click(`[data-fixture-nav] a[href="/"]`)
+        await browser.waitForText("h1", "Error path fixture")
+        expect(await browser.currentPath()).toBe("/")
+        expect(await browser.attribute(`[data-fixture-nav] a[href="/"]`, "aria-current")).toBe("page")
+
+test "unknown and malformed routes render the typed fallback and recover":
+    await browser.open("/missing-page")
+    await browser.waitForText("[data-route-not-found] h1", "Page not found")
+    expect(await browser.text("[data-route-not-found] p")).toBe("No fixture page matches /missing-page.")
+    expect(await browser.currentPath()).toBe("/missing-page")
+    await browser.open("/%E0%A4%A")
+    await browser.waitForText("[data-route-not-found] h1", "Page not found")
+    expect(await browser.text("[data-route-not-found] p")).toBe("No fixture page matches /%E0%A4%A.")
+    expect(await browser.currentPath()).toBe("/%E0%A4%A")
+    await browser.click(`[data-fixture-nav] a[href="/"]`)
+    await browser.waitForText("h1", "Error path fixture")
+    expect(await browser.currentPath()).toBe("/")
+
+test "reactive props update children in place":
+    await browser.open("/state-lab")
+    // (a) A reactive bool prop flips while a half-typed draft sits in the
+    // child; the child instance must survive with its state intact.
+    await browser.fill("[data-draft-panel='first'] input", "half-typed draft")
+    expect(await browser.text("[data-draft-panel='first'] [data-draft-busy]")).toBe("idle")
+    await browser.click("[data-lab-busy]")
+    await browser.waitForText("[data-draft-panel='first'] [data-draft-busy]", "busy")
+    expect(await browser.text("[data-draft-panel='first'] [data-draft-value]")).toBe("half-typed draft")
+    // (f) The theme-toggle shape: a second bool prop must not destroy the draft
+    // either.
+    await browser.click("[data-lab-theme]")
+    await browser.waitForText("[data-draft-panel='first'] [data-draft-dark]", "dark")
+    expect(await browser.text("[data-draft-panel='first'] [data-draft-value]")).toBe("half-typed draft")
+    // (c) Switching the conditional branch is a genuine unmount: the new child
+    // starts fresh while still seeing the current prop values.
+    await browser.click("[data-lab-branch]")
+    await browser.waitFor("[data-draft-panel='second']")
+    expect(await browser.count("[data-draft-panel='first']")).toBe(0)
+    expect(await browser.text("[data-draft-panel='second'] [data-draft-value]")).toBe("")
+    expect(await browser.text("[data-draft-panel='second'] [data-draft-busy]")).toBe("busy")
+    expect(await browser.text("[data-draft-panel='second'] [data-draft-dark]")).toBe("dark")
+
+test "keyed reorder preserves component instances":
+    await browser.open("/state-lab")
+    // (d) Per-key component state accumulates, then a reorder moves the
+    // instances without resetting any of them.
+    await browser.click("[data-lab-hit='beta']")
+    await browser.click("[data-lab-hit='beta']")
+    await browser.click("[data-lab-hit='gamma']")
+    await browser.waitForText("[data-lab-count='beta']", "2")
+    expect(await browser.text("[data-lab-count='gamma']")).toBe("1")
+    expect(await browser.text("[data-lab-list] li:first-child button")).toBe("alpha")
+    await browser.click("[data-lab-reverse]")
+    await browser.waitForText("[data-lab-list] li:first-child button", "gamma")
+    expect(await browser.text("[data-lab-count='gamma']")).toBe("1")
+    expect(await browser.text("[data-lab-count='beta']")).toBe("2")
+    expect(await browser.text("[data-lab-count='alpha']")).toBe("0")

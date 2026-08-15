@@ -1,0 +1,78 @@
+// One release: its checklist, and the one action that moves it forward.
+//
+// The page reads its identifier from the route rather than from a store, so a
+// deep link and a click from the dashboard arrive at exactly the same state.
+// Because the read happens inside a function that runs during the render, the
+// page also follows the route in place when the identifier changes.
+
+import {Head, Link, RouteContext, announce} from "velar/web"
+import {Look} from "velar/look"
+import {Release, blockingTitles, mayAdvance, readiness, stageLabel} from "../model/release.vel"
+import {advance, findRelease} from "../state/board.vel"
+import {density} from "../state/preferences.vel"
+import {AddCheckForm} from "../components/add-check-form.vel"
+import {CheckList} from "../components/check-list.vel"
+import {Metric, MetricGrid} from "../components/metrics.vel"
+import {ReadinessBar, StagePill} from "../components/readiness.vel"
+import {cardLook, mutedLook, pageLook, primaryControlLook} from "../look/theme.vel"
+
+const headerLook: Look = look:
+    display = "flex"
+    alignItems = "center"
+    gap = 12px
+
+const headingLook: Look = look:
+    margin = 0
+    fontSize = 1.5rem
+
+def metrics(release: readonly Release) -> List<Metric>:
+    return [
+        {label: "Readiness", value: f"{readiness(release)}%"},
+        {label: "Open checks", value: str(blockingTitles(release).size)},
+        {label: "Target", value: release.target},
+    ]
+
+export component ReleasePage(route: RouteContext):
+    def releaseId() -> string:
+        return route.params.get("id") ?? ""
+
+    def advanceRelease():
+        const release = findRelease(releaseId())
+        if release == null:
+            return
+        const previous = stageLabel(release.stage)
+        if advance(releaseId()):
+            announce(f"{release.name} moved on from {previous}")
+
+    def view() -> WebNode:
+        const release = findRelease(releaseId())
+        if release == null:
+            return <section look={cardLook} data-release-missing>
+                <h1 look={headingLook}>No such release</h1>
+                <p look={mutedLook}>{f"Nothing on the board matches {releaseId()}."}</p>
+                <Link to="/">Back to the board</Link>
+            </section>
+        return <>
+            <Head title={f"{release.name} {release.version} · Release Studio"} description="Release readiness detail" />
+            <header look={headerLook}>
+                <h1 look={headingLook} data-release-name>{f"{release.name} {release.version}"}</h1>
+                <StagePill stage={release.stage} />
+                <button
+                    type="button"
+                    look={primaryControlLook}
+                    on:click={advanceRelease}
+                    disabled={not mayAdvance(release)}
+                    data-advance
+                >
+                    {f"Advance from {stageLabel(release.stage)}"}
+                </button>
+            </header>
+            <MetricGrid items={metrics(release)} label="Release metrics" />
+            <ReadinessBar percent={readiness(release)} label={f"{release.name} readiness"} />
+            <section look={cardLook}>
+                <CheckList release={release} />
+                <AddCheckForm releaseId={release.id} />
+            </section>
+        </>
+
+    return <main look={pageLook(density)} data-page="release">{view()}</main>

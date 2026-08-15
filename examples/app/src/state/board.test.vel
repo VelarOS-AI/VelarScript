@@ -1,0 +1,82 @@
+// Unit tests for the store.
+//
+// Two things about a module store show up the moment it is tested, and both are
+// worth knowing before an application is large:
+//
+//   1. it is a singleton. Every test in this file shares one board, so each one
+//      starts with `resetBoard()` rather than trusting the test above it;
+//   2. a state write publishes on the reactive flush, not on the assignment, so
+//      a test that wants to observe a `computed` waits for `await tick()`.
+//
+// The three helpers exist because a lookup answers `Release?` and an optional is
+// narrowed by a guard, never by an assertion operator. Turning "no such
+// release" into a value the test can state keeps every expectation on one line.
+
+import {expect} from "velar/test"
+import {Stage, readiness} from "../model/release.vel"
+import {addCheck, advance, findRelease, releases, removeCheck, resetBoard, summary, toggleCheck} from "./board.vel"
+
+def readinessOf(id: string) -> number:
+    const release = findRelease(id)
+    if release == null:
+        return -1
+    return readiness(release)
+
+def checkCount(id: string) -> number:
+    const release = findRelease(id)
+    if release == null:
+        return -1
+    return release.checks.size
+
+def stageOf(id: string) -> Stage?:
+    return findRelease(id)?.stage
+
+test "the seeded board is what the summary reports":
+    resetBoard()
+    await tick()
+    expect(releases).toHaveLength(3)
+    expect(summary()).toEqual({tracked: 3, shipped: 1, blocked: 2, readiness: 69})
+
+test "toggling a check moves both the release and the board":
+    resetBoard()
+    await tick()
+    expect(readinessOf("web-0-11")).toBe(75)
+    toggleCheck("web-0-11", "web-4")
+    await tick()
+    expect(readinessOf("web-0-11")).toBe(100)
+    expect(summary().blocked).toBe(1)
+
+test "an unknown identifier changes nothing":
+    resetBoard()
+    await tick()
+    toggleCheck("no-such-release", "web-4")
+    toggleCheck("web-0-11", "no-such-check")
+    expect(advance("no-such-release")).toBe(false)
+    await tick()
+    expect(summary()).toEqual({tracked: 3, shipped: 1, blocked: 2, readiness: 69})
+
+test "a check added through the store belongs to its release":
+    resetBoard()
+    await tick()
+    const added = addCheck("compiler-0-11", "Sign the artifacts", "Lin")
+    await tick()
+    expect(added?.done).toBe(false)
+    expect(checkCount("compiler-0-11")).toBe(4)
+    expect(readinessOf("compiler-0-11")).toBe(25)
+    removeCheck("compiler-0-11", added?.id ?? "")
+    await tick()
+    expect(checkCount("compiler-0-11")).toBe(3)
+    expect(readinessOf("compiler-0-11")).toBe(33)
+
+test "a release leaves verifying only after its checklist is clear":
+    resetBoard()
+    await tick()
+    expect(advance("web-0-11")).toBe(false)
+    expect(stageOf("web-0-11")).toBe(Stage.verifying)
+    toggleCheck("web-0-11", "web-4")
+    await tick()
+    expect(advance("web-0-11")).toBe(true)
+    expect(stageOf("web-0-11")).toBe(Stage.released)
+    expect(advance("web-0-11")).toBe(false)
+    await tick()
+    expect(summary().shipped).toBe(2)

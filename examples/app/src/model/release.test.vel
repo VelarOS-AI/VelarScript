@@ -1,0 +1,59 @@
+// Unit tests for the domain layer.
+//
+// These need no page, no store, and no browser: every function under test takes
+// records and returns values. That is the payoff of keeping the arithmetic out
+// of the components — the rules an application is actually about can be stated
+// and checked in the fastest runner available.
+//
+// A `*.test.vel` module is found by `velar test` rather than imported from the
+// entry, which is why nothing in `src/` mentions this file.
+
+import {expect} from "velar/test"
+import {Check, Release, Stage, blockingTitles, isBlocked, mayAdvance, nextStage, readiness, stageLabel, summarize} from "./release.vel"
+
+def check(id: string, done: bool) -> Check:
+    return {id, title: f"Check {id}", owner: "Ada", done}
+
+def sample(stage: Stage, checks: List<Check>) -> Release:
+    return {id: "sample", name: "Sample", version: "1.0.0", stage, target: "2026-09-01", checks}
+
+test "readiness is the share of finished checks, rounded":
+    expect(readiness(sample(Stage.building, []))).toBe(0)
+    expect(readiness(sample(Stage.building, [check("a", true), check("b", false), check("c", false), check("d", true)]))).toBe(50)
+    expect(readiness(sample(Stage.building, [check("a", true), check("b", false), check("c", false)]))).toBe(33)
+    expect(readiness(sample(Stage.released, [check("a", true)]))).toBe(100)
+
+test "the open checks are listed in the order they were added":
+    const release = sample(Stage.building, [check("a", false), check("b", true), check("c", false)])
+    expect(blockingTitles(release)).toEqual(["Check a", "Check c"])
+    expect(blockingTitles(sample(Stage.building, [check("a", true)]))).toHaveLength(0)
+
+test "a released release is never blocked, whatever its checklist says":
+    expect(isBlocked(sample(Stage.building, [check("a", false)]))).toBe(true)
+    expect(isBlocked(sample(Stage.released, [check("a", false)]))).toBe(false)
+    expect(isBlocked(sample(Stage.verifying, [check("a", true)]))).toBe(false)
+
+test "the stage machine is total and ends at released":
+    expect(nextStage(Stage.planned)).toBe(Stage.building)
+    expect(nextStage(Stage.building)).toBe(Stage.verifying)
+    expect(nextStage(Stage.verifying)).toBe(Stage.released)
+    expect(nextStage(Stage.released)).toBe(Stage.released)
+    expect(stageLabel(Stage.planned)).toBe("Planned")
+    expect(stageLabel(Stage.building)).toBe("Building")
+    expect(stageLabel(Stage.verifying)).toBe("Verifying")
+    expect(stageLabel(Stage.released)).toBe("Released")
+
+test "a release leaves verifying only once its checklist is clear":
+    expect(mayAdvance(sample(Stage.planned, [check("a", false)]))).toBe(true)
+    expect(mayAdvance(sample(Stage.building, [check("a", false)]))).toBe(true)
+    expect(mayAdvance(sample(Stage.verifying, [check("a", false)]))).toBe(false)
+    expect(mayAdvance(sample(Stage.verifying, [check("a", true)]))).toBe(true)
+    expect(mayAdvance(sample(Stage.released, [check("a", true)]))).toBe(false)
+
+test "the board summary averages the readiness of what it tracks":
+    const board: List<Release> = [
+        sample(Stage.released, [check("a", true), check("b", true)]),
+        sample(Stage.building, [check("c", true), check("d", false)]),
+    ]
+    expect(summarize(board)).toEqual({tracked: 2, shipped: 1, blocked: 1, readiness: 75})
+    expect(summarize([])).toEqual({tracked: 0, shipped: 0, blocked: 0, readiness: 0})

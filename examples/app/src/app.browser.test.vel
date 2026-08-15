@@ -1,0 +1,147 @@
+// Browser tests: the half of the suite that has to be a real page.
+//
+// `velar/web-test` may only be imported from a `*.browser.test.vel` module, and
+// the runner builds the application, serves the build, and drives it in a real
+// engine — so what is under test here is the compiled application, not a
+// simulated one. `velar test examples/app --browser all` runs the file three
+// times, once per engine.
+//
+// The split with the unit tests is deliberate. Arithmetic and store transitions
+// are checked in `model/release.test.vel` and `state/board.test.vel`, where they
+// run in milliseconds; what lives here is what only a browser can answer:
+// routing, rendering, form validation, and whether a preference actually
+// survives a reload.
+//
+// Every test opens the page it needs. A load builds the store from its seed,
+// so tests do not inherit each other's board — but `localStorage` outlives a
+// reload by design, which is why the preferences test clears it at the end.
+
+import {expect} from "velar/test"
+import {browser, localStorage, network} from "velar/web-test"
+
+test "the board renders what the store holds":
+    await browser.open("/")
+    expect(await browser.text("h1")).toBe("Release board")
+    expect(await browser.text("[data-channel]")).toBe("Channel: preview")
+    expect(await browser.text(`[data-metric="Tracked"] strong`)).toBe("3")
+    expect(await browser.text(`[data-metric="Shipped"] strong`)).toBe("1")
+    expect(await browser.text(`[data-metric="Blocked"] strong`)).toBe("2")
+    expect(await browser.text("[data-board-readiness]")).toBe("69% ready overall")
+    expect(await browser.count("[data-release-list] > li")).toBe(3)
+    expect(await browser.attribute(`[data-release="web-0-11"] [data-stage]`, "data-stage")).toBe("verifying")
+    expect(await browser.text(`[data-release="web-0-11"] [data-release-note]`)).toBe("Target 2026-08-22 · 1 open")
+
+test "the activity feed loads from the site's own data":
+    await browser.open("/")
+    await browser.waitForText("[data-activity-status]", "4 recent events")
+    expect(await browser.count("[data-activity-list] > li")).toBe(4)
+    expect(await browser.text(`[data-activity-entry="act-4"] [data-activity-message]`)).toBe("Parser fuzz run finished with no new findings")
+    await browser.click("[data-activity-refresh]")
+    await browser.waitForText("[data-activity-status]", "4 recent events")
+
+test "a failed feed tells the reader instead of failing quietly":
+    // The network controller answers the page's own request, which is how a
+    // failure path is tested without breaking the application to test it. The
+    // response is a perfectly good 200 whose body is not the payload this page's
+    // record type accepts — the typed parse is the failure that actually reaches
+    // readers when a server quietly changes shape.
+    await network.respond("/data/activity.json", "not the payload this page expects", 200, "application/json")
+    await browser.open("/")
+    await browser.waitForText("[data-activity-status]", "Activity is unavailable")
+    // A failure nothing else claimed reaches the shell's error banner.
+    await browser.waitFor("[data-app-error]")
+    expect(await browser.text("[data-app-error] span")).toMatch("resource")
+    await browser.click("[data-dismiss-error]")
+    expect(await browser.count("[data-app-error]")).toBe(0)
+    // ... and the rest of the board is unaffected by it.
+    expect(await browser.text("[data-board-readiness]")).toBe("69% ready overall")
+    await network.clear()
+
+test "a release opens from the board and from a deep link":
+    await browser.open("/")
+    await browser.click(`[data-release="web-0-11"] a`)
+    expect(await browser.currentPath()).toBe("/releases/web-0-11")
+    await browser.waitForText("[data-release-name]", "VelarScript Web 0.11.0")
+    expect(await browser.count("[data-checklist] > li")).toBe(4)
+    await browser.open("/releases/compiler-0-11")
+    await browser.waitForText("[data-release-name]", "VelarScript Compiler 0.11.0")
+    expect(await browser.text(`[data-metric="Open checks"] strong`)).toBe("2")
+
+test "an unknown release and an unknown path each explain themselves":
+    await browser.open("/releases/not-a-release")
+    await browser.waitForText("[data-release-missing] h1", "No such release")
+    expect(await browser.text("[data-release-missing] p")).toBe("Nothing on the board matches not-a-release.")
+    await browser.open("/nowhere")
+    await browser.waitForText("[data-route-missing] h1", "Page not found")
+    expect(await browser.text("[data-route-missing] p")).toBe("No Release Studio page matches /nowhere.")
+    await browser.click(`nav a[href="/"]`)
+    await browser.waitForText("h1", "Release board")
+    expect(await browser.currentPath()).toBe("/")
+
+test "ticking a check republishes every reader of the board":
+    await browser.open("/releases/web-0-11")
+    await browser.waitForText("[data-release-name]", "VelarScript Web 0.11.0")
+    expect(await browser.text(`[data-metric="Readiness"] strong`)).toBe("75%")
+    expect(await browser.attribute("[data-release-name] ~ [data-stage]", "data-stage")).toBe("verifying")
+    await browser.click(`[data-check-toggle="web-4"]`)
+    await browser.waitForText(`[data-metric="Readiness"] strong`, "100%")
+    expect(await browser.text(`[data-metric="Open checks"] strong`)).toBe("0")
+    // The store outlives the page that changed it: navigating back shows the
+    // board recomputed, not the seed.
+    await browser.click(`nav a[href="/"]`)
+    await browser.waitForText("[data-board-readiness]", "78% ready overall")
+    expect(await browser.text(`[data-metric="Blocked"] strong`)).toBe("1")
+
+test "a release advances only once its checklist is clear":
+    await browser.open("/releases/web-0-11")
+    await browser.waitForText("[data-release-name]", "VelarScript Web 0.11.0")
+    expect(await browser.attribute("[data-advance]", "disabled")).toBe("")
+    await browser.click(`[data-check-toggle="web-4"]`)
+    await browser.waitForText(`[data-metric="Readiness"] strong`, "100%")
+    expect(await browser.attribute("[data-advance]", "disabled")).toBe(null)
+    await browser.click("[data-advance]")
+    await browser.waitForText("[data-stage]", "Released")
+    expect(await browser.attribute("[data-advance]", "disabled")).toBe("")
+
+test "the add-check form refuses an empty title and keeps its own draft":
+    await browser.open("/releases/compiler-0-11")
+    await browser.waitForText("[data-release-name]", "VelarScript Compiler 0.11.0")
+    await browser.click("[data-add-submit]")
+    expect(await browser.attribute("[data-check-input]", "aria-invalid")).toBe("true")
+    expect(await browser.count("[data-checklist] > li")).toBe(3)
+    await browser.fill("[data-check-input]", "Sign the artifacts")
+    await browser.fill("[data-owner-input]", "Lin")
+    await browser.click("[data-add-submit]")
+    await browser.waitFor("[data-checklist] > li:nth-child(4)")
+    expect(await browser.text("[data-checklist] > li:nth-child(4) [data-check-title]")).toBe("Sign the artifacts")
+    expect(await browser.text("[data-checklist] > li:nth-child(4) [data-check-owner]")).toBe("Lin")
+    expect(await browser.text(`[data-metric="Readiness"] strong`)).toBe("25%")
+    expect(await browser.attribute("[data-check-input]", "aria-invalid")).toBe(null)
+
+test "a preference survives a reload because the store wrote it down":
+    // A storage controller reaches into the page's own store, so the page has
+    // to exist first: clearing before the first `open` has no document to
+    // clear.
+    await browser.open("/settings")
+    await localStorage.clear()
+    await browser.reload()
+    expect(await browser.attribute(`[data-density="comfortable"]`, "aria-pressed")).toBe("true")
+    await browser.click(`[data-density="compact"]`)
+    await browser.waitForText("[data-stored-preferences]", "Stored: system · compact")
+    await browser.click(`[data-appearance="dark"]`)
+    await browser.waitForText("[data-stored-preferences]", "Stored: dark · compact")
+    expect(await localStorage.get("release-studio:preferences")).toBe(`{"appearance":"dark","density":"compact"}`)
+    await browser.reload()
+    await browser.waitForText("[data-stored-preferences]", "Stored: dark · compact")
+    expect(await browser.attribute(`[data-appearance="dark"]`, "aria-pressed")).toBe("true")
+    await localStorage.clear()
+    await browser.reload()
+    await browser.waitForText("[data-stored-preferences]", "Stored: system · comfortable")
+
+test "the about page arrives in its own chunk":
+    await browser.open("/")
+    await browser.click(`nav a[href="/about"]`)
+    await browser.waitForText("h1", "About Release Studio")
+    expect(await browser.currentPath()).toBe("/about")
+    expect(await browser.attribute(`nav a[href="/about"]`, "aria-current")).toBe("page")
+    expect(await browser.attribute(`nav a[href="/"]`, "aria-current")).toBe(null)

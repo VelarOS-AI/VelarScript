@@ -1,0 +1,18 @@
+// A lazily loaded route whose module initializes and then fails while the
+// component is constructed. The timer is the leak probe: if the runtime does not
+// run `@cleanup` for a component that failed during construction, `failIfLeaked`
+// keeps firing after the route is gone and the failure surfaces in a later test.
+
+import {every} from "velar/browser"
+
+def failIfLeaked():
+    throw Error("Lazy route timer leaked")
+
+export component LazyFailure:
+    const stopTimer = every(25ms, failIfLeaked)
+
+    @cleanup:
+        stopTimer()
+
+    throw Error("Lazy route failed")
+    return <main><h1>This route must not render</h1></main>

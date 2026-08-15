@@ -1,0 +1,47 @@
+// Two presentational components. They take values and return markup: no store
+// import, no state, nothing to clean up. Both the dashboard and the detail page
+// render them, which is the reason they are a module rather than a private
+// helper inside one page.
+
+import {Look, alpha, border, color, spacing} from "velar/look"
+import {Stage, stageLabel} from "../model/release.vel"
+import {accent, attention, positive} from "../look/theme.vel"
+
+const trackLook: Look = look:
+    height = 6px
+    overflow = "hidden"
+    borderRadius = 999px
+    background = alpha(color("currentColor"), 0.14)
+
+def fillLook(percent: number) -> Look:
+    return look:
+        width = percent * 1%
+        height = 100%
+        background = percent == 100 ? positive : accent
+
+def pillLook(stage: Stage) -> Look:
+    const tone = stage == Stage.released ? positive : stage == Stage.verifying ? attention : accent
+    return look:
+        padding = spacing(2px, 9px)
+        border = border(1px, alpha(tone, 0.55))
+        borderRadius = 999px
+        color = tone
+        fontSize = 0.76rem
+        fontWeight = 650
+        whiteSpace = "nowrap"
+
+export component ReadinessBar(percent: number, label: string):
+    return <div
+        data-readiness={percent}
+        look={trackLook}
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={percent}
+    >
+        <div look={fillLook(percent)}></div>
+    </div>
+
+export component StagePill(stage: Stage):
+    return <span data-stage={stage} look={pillLook(stage)}>{stageLabel(stage)}</span>

@@ -1,0 +1,18 @@
+{
+  "formatVersion": 2,
+  "entry": "src/main.vel",
+  "outDir": "dist",
+  "extensions": ["@velarscript/web"],
+  "web": {
+    "title": "Web error paths",
+    "base": "/",
+    "security": {
+      "contentSecurityPolicy": true,
+      "connectSources": [],
+      "imageSources": []
+    },
+    "deployment": {
+      "spaFallback": true
+    }
+  }
+}

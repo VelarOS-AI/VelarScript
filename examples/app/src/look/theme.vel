@@ -1,0 +1,172 @@
+// The visual layer: one module owns the palette and the shared Look values, and
+// every component imports from here instead of writing its own colours.
+//
+// A `look:` literal is built once where it is written and cannot read reactive
+// state, so an application that lets the reader choose an appearance cannot
+// express that choice inside a single literal. The shape that does work is the
+// one below: a literal per appearance, and a plain function that picks between
+// them. The choosing happens on the element — `look={shellLook(appearance)}` —
+// which is a reactive read like any other.
+//
+// The two enums live here rather than in `state/` because they are presentation
+// vocabulary. `state/preferences.vel` imports them to store the reader's answer.
+
+import {Color, Look, alpha, border, color, minmax, repeat, rgb, spacing, tracks, transition} from "velar/look"
+
+export enum Appearance:
+    system
+    light
+    dark
+
+export enum Density:
+    comfortable
+    compact
+
+// Two ramps. Only the shell paints a background and a text colour; everything
+// below it is built from `currentColor` and `alpha`, so one card look and one
+// control look serve both appearances instead of being written twice.
+const lightInk: Color = rgb(23, 27, 41)
+const lightPaper: Color = rgb(246, 247, 252)
+
+const darkInk: Color = rgb(232, 236, 255)
+const darkPaper: Color = rgb(11, 16, 32)
+
+export const accent: Color = rgb(101, 124, 255)
+export const positive: Color = rgb(46, 164, 116)
+export const attention: Color = rgb(214, 132, 44)
+
+const bodyFont = "Inter, ui-sans-serif, system-ui, sans-serif"
+
+const lightShell: Look = look:
+    minHeight = 100vh
+    color = lightInk
+    background = lightPaper
+    fontFamily = bodyFont
+
+const darkShell: Look = look:
+    minHeight = 100vh
+    color = darkInk
+    background = darkPaper
+    fontFamily = bodyFont
+
+// "System" is the honest default: no stored choice, follow the operating
+// system. It is the one appearance that is a media condition rather than a
+// value the application holds.
+const systemShell: Look = look:
+    ...lightShell
+
+    if scheme.dark:
+        color = darkInk
+        background = darkPaper
+
+export def shellLook(appearance: Appearance) -> Look:
+    match appearance:
+        case Appearance.light:
+            return lightShell
+        case Appearance.dark:
+            return darkShell
+        case Appearance.system:
+            return systemShell
+
+export def pageLook(density: Density) -> Look:
+    const tight = density == Density.compact
+    return look:
+        display = "grid"
+        gap = tight ? 14px : 24px
+        width = 100%
+        maxWidth = 1040px
+        marginInline = "auto"
+        padding = tight ? spacing(20px, 16px, 40px, 16px) : spacing(36px, 16px, 72px, 16px)
+
+export const barLook: Look = look:
+    display = "flex"
+    alignItems = "center"
+    gap = 10px
+    width = 100%
+    maxWidth = 1040px
+    marginInline = "auto"
+    paddingInline = 16px
+    paddingBlock = 18px
+
+export const navLook: Look = look:
+    display = "flex"
+    gap = 4px
+    marginInlineStart = "auto"
+
+export const navLinkLook: Look = look:
+    padding = spacing(7px, 11px)
+    borderRadius = 9px
+    color = "inherit"
+    textDecoration = "none"
+    transition = transition("background-color", 120ms)
+
+    if @hover:
+        background = alpha(color("currentColor"), 0.08)
+    if @current:
+        color = accent
+        background = alpha(accent, 0.14)
+
+export const cardLook: Look = look:
+    display = "grid"
+    gap = 12px
+    padding = 18px
+    border = border(1px, alpha(color("currentColor"), 0.18))
+    borderRadius = 14px
+
+export const gridLook: Look = look:
+    display = "grid"
+    gridTemplateColumns = repeat(3, minmax(0px, 1fr))
+    gap = 12px
+
+    if viewport.width <= 720px:
+        gridTemplateColumns = tracks(1fr)
+
+export const listLook: Look = look:
+    display = "grid"
+    gap = 10px
+    margin = 0
+    padding = 0
+    listStyle = "none"
+
+export const mutedLook: Look = look:
+    color = alpha(color("currentColor"), 0.68)
+    fontSize = 0.88rem
+
+export const controlLook: Look = look:
+    padding = spacing(8px, 12px)
+    border = border(1px, alpha(color("currentColor"), 0.28))
+    borderRadius = 9px
+    color = "inherit"
+    background = "transparent"
+    fontSize = 0.95rem
+    cursor = "pointer"
+
+    if @hover:
+        borderColor = accent
+    if @disabled:
+        opacity = 0.45
+        cursor = "not-allowed"
+
+export const primaryControlLook: Look = look:
+    ...controlLook
+    color = rgb(255, 255, 255)
+    background = accent
+    borderColor = accent
+
+export const fieldLook: Look = look:
+    minWidth = 0
+    padding = spacing(8px, 11px)
+    border = border(1px, alpha(color("currentColor"), 0.28))
+    borderRadius = 9px
+    color = "inherit"
+    background = "transparent"
+
+    if @invalid:
+        borderColor = attention
+
+// A `Look` value has reference identity, so the two callers below share one
+// rule rather than emitting two identical ones.
+export def selectedRowLook(selected: bool) -> Look:
+    return look:
+        ...cardLook
+        borderColor = selected ? accent : alpha(color("currentColor"), 0.18)

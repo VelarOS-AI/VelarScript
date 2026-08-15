@@ -1,0 +1,32 @@
+// The one route that is loaded on demand.
+//
+// `lazy(...)` in `app.vel` splits this module into its own chunk, which is worth
+// doing for a page a reader rarely opens and not worth doing for the dashboard.
+// A lazily imported module is still part of the checked module graph: the
+// dynamic import is an edge in it, not an escape from it.
+
+import {Head, Link} from "velar/web"
+import {Look} from "velar/look"
+import {studio} from "../config.vel"
+import {density} from "../state/preferences.vel"
+import {cardLook, mutedLook, pageLook} from "../look/theme.vel"
+
+const headingLook: Look = look:
+    margin = 0
+    fontSize = 1.6rem
+
+export component AboutPage:
+    return <main look={pageLook(density)} data-page="about">
+        <Head title="About · Release Studio" description="What Release Studio is and how it is put together" />
+        <h1 look={headingLook}>About Release Studio</h1>
+        <section look={cardLook}>
+            <p>
+                Release Studio tracks what the VelarScript toolchain is shipping: one card per release, a checklist
+                per card, and one rule about when a release may move on.
+            </p>
+            <p look={mutedLook}>
+                {f"Built from the {studio.channel} channel. Every screen here is a VelarScript component compiled to JavaScript."}
+            </p>
+            <Link to="/">Back to the board</Link>
+        </section>
+    </main>

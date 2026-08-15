@@ -1,0 +1,12 @@
+// The entry module: two lines of work, in the order they have to happen.
+//
+// Restoring preferences before the first mount is why it is a call and not
+// something a module does when it is imported. A side-effect import is not part
+// of the language, and this is the reason it is not missed: startup that
+// matters belongs on a line a reader can see and a test can call.
+
+import {App} from "./app.vel"
+import {restorePreferences} from "./state/preferences.vel"
+
+restorePreferences()
+mount(<App />, "#app")

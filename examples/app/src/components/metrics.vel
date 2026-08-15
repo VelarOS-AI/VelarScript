@@ -1,0 +1,31 @@
+// A metric grid that knows nothing about releases.
+//
+// It is reused by the dashboard (board-wide numbers) and by the detail page
+// (one release's numbers), which is only possible because its props are a list
+// of label/value pairs rather than a `BoardSummary`. Presentational components
+// that name a domain type tend to end up with one caller.
+
+import {Look, alpha, color} from "velar/look"
+import {cardLook, gridLook, mutedLook} from "../look/theme.vel"
+
+export type Metric:
+    label: string
+    value: string
+
+const tileLook: Look = look:
+    ...cardLook
+    gap = 4px
+    padding = 14px
+    background = alpha(color("currentColor"), 0.03)
+
+const valueLook: Look = look:
+    fontSize = 1.55rem
+    fontWeight = 700
+
+export component MetricGrid(items: readonly List<Metric>, label: string):
+    return <section look={gridLook} aria-label={label} data-metrics>
+        {items.map(item => <article key={item.label} look={tileLook} data-metric={item.label}>
+            <span look={mutedLook}>{item.label}</span>
+            <strong look={valueLook}>{item.value}</strong>
+        </article>)}
+    </section>

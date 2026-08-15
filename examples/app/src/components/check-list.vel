@@ -1,0 +1,66 @@
+// The checklist — and the one shape worth reading closely in this application.
+//
+// `release` arrives as a component prop, which makes it a *transitive readonly
+// view*: `check.done = not check.done` inside this module is a compile error,
+// and so is `release.checks.append(...)`. That is not an obstacle to work
+// around with a copy; it is the design. A view renders, and asks the store to
+// change things by identifier:
+//
+//     toggleCheck(release.id, check.id)
+//
+// The store owns the data, so it also owns every way the data can change, and
+// this component cannot invent a twelfth one at three in the morning.
+//
+// The row is a component of its own so that each check keeps its own identity
+// across a reorder — `key={check.id}` on a component invocation preserves the
+// instance rather than re-creating it.
+
+import {Look, alpha, border, color, spacing, tracks} from "velar/look"
+import {Check, Release} from "../model/release.vel"
+import {removeCheck, toggleCheck} from "../state/board.vel"
+import {controlLook, listLook, mutedLook} from "../look/theme.vel"
+
+const rowLook: Look = look:
+    display = "grid"
+    gridTemplateColumns = tracks(1fr, "auto", "auto")
+    alignItems = "center"
+    gap = 12px
+    padding = spacing(10px, 12px)
+    border = border(1px, alpha(color("currentColor"), 0.14))
+    borderRadius = 11px
+
+const labelLook: Look = look:
+    display = "flex"
+    alignItems = "center"
+    gap = 10px
+    cursor = "pointer"
+
+const doneLook: Look = look:
+    color = alpha(color("currentColor"), 0.55)
+    textDecoration = "line-through"
+
+const pendingLook: Look = look:
+    fontWeight = 500
+
+component CheckRow(releaseId: string, check: readonly Check):
+    def toggle():
+        toggleCheck(releaseId, check.id)
+
+    def remove():
+        removeCheck(releaseId, check.id)
+
+    return <li look={rowLook} data-check={check.id}>
+        <label look={labelLook}>
+            <input type="checkbox" checked={check.done} on:change={toggle} data-check-toggle={check.id} />
+            <span look={check.done ? doneLook : pendingLook} data-check-title>{check.title}</span>
+        </label>
+        <span look={mutedLook} data-check-owner>{check.owner}</span>
+        <button type="button" look={controlLook} on:click={remove} aria-label={f"Remove {check.title}"}>
+            Remove
+        </button>
+    </li>
+
+export component CheckList(release: readonly Release):
+    return <ul look={listLook} data-checklist>
+        {release.checks.map(check => <CheckRow key={check.id} releaseId={release.id} check={check} />)}
+    </ul>

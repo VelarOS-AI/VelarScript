@@ -1,0 +1,59 @@
+// Reader preferences: the second, much smaller store.
+//
+// It is a separate module from `board.vel` because it answers a different
+// question — how this reader wants the application to look, rather than what
+// the team is shipping — and because it is the only module that talks to
+// `velar/storage`. Persistence stays in one place: no component writes a key.
+//
+// The shape of a store that survives a reload is always these four parts:
+//
+//   1. one namespace, taken once (`storage.scope`), so keys cannot collide
+//      with another application on the same origin;
+//   2. a record type for what is on disk, kept separate from the in-memory
+//      value, because storage holds text that a reader or an older version of
+//      this application may have written;
+//   3. a typed `get` with a fallback, which is what makes a half-written or
+//      outdated key harmless;
+//   4. one `persist()` that every setter calls, so "saved" is not something a
+//      caller can forget.
+
+import {storage} from "velar/storage"
+import {Appearance, Density} from "../look/theme.vel"
+
+const preferences = storage.scope("release-studio")
+
+type StoredPreferences:
+    appearance: string
+    density: string
+
+const fallback: StoredPreferences = {appearance: "system", density: "comfortable"}
+
+// Both cells are annotated: without the annotation the initializer would fix
+// the type at the *member* `Appearance.system`, which is a discriminant, not
+// the enum, and no other member could be stored in it.
+export state appearance: Appearance = Appearance.system
+export state density: Density = Density.comfortable
+
+// Called once from `main.vel`, before the first mount. Reading storage is an
+// effect, and an effect that runs because a module was imported is invisible;
+// this one is a call, on a line a reader can see.
+export def restorePreferences():
+    const stored = preferences.get("preferences", StoredPreferences, fallback)
+    // An enum converts one way only, and the text in storage is untrusted, so
+    // the parse is attempted rather than assumed. An unknown value falls back
+    // instead of throwing on startup.
+    const storedAppearance = try Appearance.parse(stored.appearance)
+    const storedDensity = try Density.parse(stored.density)
+    appearance = storedAppearance ?? Appearance.system
+    density = storedDensity ?? Density.comfortable
+
+def persist():
+    preferences.set("preferences", {appearance: str(appearance), density: str(density)})
+
+export def setAppearance(next: Appearance):
+    appearance = next
+    persist()
+
+export def setDensity(next: Density):
+    density = next
+    persist()
