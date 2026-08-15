@@ -21,13 +21,13 @@ AI 简报双份逐字节一致。
 
 ## 必读规格
 
-1. `docs/handoff/D35-PARALLEL-ASYNC-AND-NAMESPACES.md` —— Promise.all(记录) 与
+1. `docs/decisions/D35-PARALLEL-ASYNC-AND-NAMESPACES.md` —— Promise.all(记录) 与
    常驻命名空间 Json. / Promise. / Look. 的裁决（零发明名册）；range 进 prelude
    的既批项（**先核实现状**，已落地则跳过并在报告注明）
-2. `docs/handoff/D39-ADDITIONS.md` 第 52 条（sleep Duration）与第 55 条
+2. `docs/decisions/D39-ADDITIONS.md` 第 52 条（sleep Duration）与第 55 条
    （stdlib 错误码约定）
-3. `docs/handoff/D41-BOUNDS-AND-POP.md` 第 63.3 条（velar/math 双拼写清理）
-4. `docs/handoff/COMPLETENESS-AUDITS.md` —— ASY-D1（组合子输家）、
+3. `docs/decisions/D41-BOUNDS-AND-POP.md` 第 63.3 条（velar/math 双拼写清理）
+4. `docs/decisions/archive/COMPLETENESS-AUDITS.md` —— ASY-D1（组合子输家）、
    裁判迁移节的 MIG-1(ii) 与 MIG-2
 
 ## 任务项
@@ -67,5 +67,5 @@ AI 简报双份逐字节一致。
 
 worktree 内三门禁全绿（含 desktop-worker 抖动协议）；新测试进
 `tests/hardening-batch-k.test.ts`；报告写到分支内
-`docs/handoff/CODEX-REPORT-K.md`（逐项、双拼写取舍呈报、门禁尾部）；
+`docs/decisions/archive/CODEX-REPORT-K.md`（逐项、双拼写取舍呈报、门禁尾部）；
 向用户回报分支名与提交列表。

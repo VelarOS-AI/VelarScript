@@ -19,12 +19,12 @@ git -C /Users/mac/Documents/VelarScript worktree add ../velar-batch-i -b codex/b
 
 ## 必读规格
 
-1. `docs/handoff/D49-KEYFRAMES.md` —— keyframes 完整规格（形态/规则/诊断/回归全列）
-2. `docs/handoff/COMPLETENESS-AUDITS.md` 审计十 —— LOK-U1（属性表）、
+1. `docs/decisions/D49-KEYFRAMES.md` —— keyframes 完整规格（形态/规则/诊断/回归全列）
+2. `docs/decisions/archive/COMPLETENESS-AUDITS.md` 审计十 —— LOK-U1（属性表）、
    已排队项状态核对（D37-42 / 42-补 的现状数据）；审计九 —— WEB-U12（元素名表）
-3. `docs/handoff/D37-WEB-SURFACE-QUALITY.md` 第 42 条与 42-补 —— 关键字值收紧
+3. `docs/decisions/D37-WEB-SURFACE-QUALITY.md` 第 42 条与 42-补 —— 关键字值收紧
    与 grid-template 注册缺口的既批规格
-4. `docs/handoff/D41-BOUNDS-AND-POP.md` 第 63.2 条 + `docs/handoff/D40-PERCENT-AND-UNITS.md`
+4. `docs/decisions/D41-BOUNDS-AND-POP.md` 第 63.2 条 + `docs/decisions/D40-PERCENT-AND-UNITS.md`
    第 60 条 —— 扩展文本钩子（方向已批：单位值可进 f-string）
 
 ## 任务项
@@ -68,5 +68,5 @@ Animation/List 且字符串形拒绝、`@keyframes` CSS 稳定生成名走既有
 ## 门禁与交付
 
 worktree 内三门禁全绿；charter fences 全编译；简报双份逐字节一致。
-报告写到分支内 `docs/handoff/CODEX-REPORT-I.md`：逐项、属性表的收录/排除
+报告写到分支内 `docs/decisions/archive/CODEX-REPORT-I.md`：逐项、属性表的收录/排除
 统计、迁移清单、门禁尾部。向用户回报分支名与提交列表。

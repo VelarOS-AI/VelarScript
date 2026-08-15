@@ -4,7 +4,7 @@ Status: required architecture ledger for VelarScript 0.10
 
 This document classifies how observable VelarScript semantics cross the generated
 JavaScript and host-runtime boundary. It does not define a second language. The
-[language charter](language-charter.md) remains the authority for source-level and
+[language charter](../language-charter.md) remains the authority for source-level and
 user-observable behavior. If this ledger, an implementation note, or a test
 conflicts with the charter, the charter wins and the other artifact must change.
 

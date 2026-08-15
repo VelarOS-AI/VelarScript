@@ -1,7 +1,7 @@
 # D44 — 完整性审计的五条裁决（已批准，待实施）
 
 用户于 2026-08-12 逐条听取详细说明后**五条全部批准**。来源是
-`docs/handoff/COMPLETENESS-AUDITS.md` 的两个审计（类系统约 140 探针、
+`docs/decisions/archive/COMPLETENESS-AUDITS.md` 的两个审计（类系统约 140 探针、
 收窄与流分析约 190 探针）中划为「语义设计、待用户裁决」的条目。
 
 判据同 D28-D43。全部现状均为实测。

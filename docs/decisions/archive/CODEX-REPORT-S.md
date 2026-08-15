@@ -74,8 +74,8 @@ script-analysis 的精确依赖。
 
 - `docs/standard-library.md` 开头加入第 86 条成员规则，删除两个模块章节。
 - `docs/language-charter.md` 在 §19 前成文同一封闭词汇与领域包边界。
-- 同步 `docs/runtime-boundary.md`、`docs/compiler-architecture.md`、
-  `docs/package-distribution.md`、`docs/continuous-integration.md`、
+- 同步 `docs/contributing/runtime-boundary.md`、`docs/contributing/compiler-architecture.md`、
+  `docs/package-distribution.md`、`docs/contributing/continuous-integration.md`、
   `docs/best-practices.md` 与 `packages/cli/README.md`。
 
 ## 测试迁移前后对照

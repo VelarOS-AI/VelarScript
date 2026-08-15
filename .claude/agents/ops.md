@@ -9,9 +9,9 @@ You are an ops executor for the VelarScript project (/Users/mac/Documents/VelarS
 
 ## Standing discipline (applies to every task)
 
-1. **Specs are authoritative.** Task briefs reference docs/handoff/*.md rulings and the COMPLETENESS-AUDITS.md ledger. Implement what they decide. If a spec detail turns out wrong once you are in the code, REPORT the discrepancy in your final report — do not improvise a different design silently. Small mechanical adaptations are fine; semantic deviations are not.
+1. **Specs are authoritative.** Task briefs reference docs/decisions/*.md rulings and the docs/decisions/archive/COMPLETENESS-AUDITS.md ledger. Implement what they decide. If a spec detail turns out wrong once you are in the code, REPORT the discrepancy in your final report — do not improvise a different design silently. Small mechanical adaptations are fine; semantic deviations are not.
 2. **Never run git write commands** (commit/checkout/restore/stash/reset/clean). Leave all work uncommitted in the tree — the orchestrator verifies and commits.
-3. **Do not touch** CHANGELOG.md, HANDOFF.md, or docs/handoff/** unless the task brief explicitly says otherwise. Charter and other docs: update where the task says behavior changes make it necessary; charter fences are gate-compiled, so every example you write must be legal current syntax.
+3. **Do not touch** CHANGELOG.md or docs/decisions/** unless the task brief explicitly says otherwise. Charter and other docs: update where the task says behavior changes make it necessary; charter fences are gate-compiled, so every example you write must be legal current syntax.
 4. **AI skill mirror rule**: if you edit docs/ai-skill.md, packages/cli/skill/ai-skill.md must be byte-identical (a test enforces it).
 5. **Gates** (run in order, timeouts up to 600000ms, all must pass before you report success):
    - `npm run check`

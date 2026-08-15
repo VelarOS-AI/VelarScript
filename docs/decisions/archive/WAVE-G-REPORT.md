@@ -269,7 +269,7 @@ D30 自己为 `enum` 写下的理由（「产物必须是合法 JS」）逐字�
 - `docs/language-charter.md` —— §3 新增「上下文关键字」与「`@name`」两条 + 一段门禁编译示例；
   §13 词表改「十个上下文关键字 + 两个生命周期钩子」并列 `@mounted`/`@cleanup`；
   §16 全节改 `@` 拼写；§19 保留词理由改写（`enum` 因 JS 保留、五词软化）；§3/§18 前缀收敛。
-- `docs/web-api.md`（16 处）、`docs/compiler-architecture.md`（2 处）、`docs/standard-library.md`（2 处）。
+- `docs/web-api.md`（16 处）、`docs/contributing/compiler-architecture.md`（2 处）、`docs/standard-library.md`（2 处）。
 - `docs/ai-skill.md` + `packages/cli/skill/ai-skill.md`（逐字节相同，测试强制）——
   陷阱表新增两行（「不要为了避开关键字改名」「`mounted:` → `@mounted:`」），
   组件章新增生命周期 fence。

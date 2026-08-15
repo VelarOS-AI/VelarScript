@@ -200,8 +200,8 @@ null-prototype record          equals=true             deepEqual=true
 - `docs/ai-skill.md` + `packages/cli/skill/ai-skill.md` —— 常驻段落改写（四命名
   空间 + Text 全员 + 方法/工具箱一句话 + prelude 含 `equals`）；错误段新增判别
   一行与可命名类名单。两份**逐字节相同**（测试强制）。
-- `docs/best-practices.md`、`docs/web-api.md`、`docs/compiler-architecture.md`、
-  `docs/runtime-boundary.md` —— 清掉全部 `velar/json.deepEqual` / `velar/text.*`
+- `docs/best-practices.md`、`docs/web-api.md`、`docs/contributing/compiler-architecture.md`、
+  `docs/contributing/runtime-boundary.md` —— 清掉全部 `velar/json.deepEqual` / `velar/text.*`
   的过期指称。
 - `scripts/check-runtime-boundary.mjs` —— Web 共享错误规范化的导入断言随
   `errorCode` 同步。

@@ -55,8 +55,8 @@ browser 全部通过（普适计算或能力原语）；**velar/javascript 与 v
 - `packages/cli/stdlib/*.vel` 迁出、`standard-modules.ts` 注册表删两行；
 - `official-script-language-service.ts` 改内部引用；
 - 引用清单（已 grep）：tests/compiler.test.ts、tests/performance.test.ts、
-  tests/package.acceptance.ts、docs/standard-library.md、docs/runtime-boundary.md、
-  docs/compiler-architecture.md、packages/cli/README.md、HANDOFF.md；
+  tests/package.acceptance.ts、docs/standard-library.md、docs/contributing/runtime-boundary.md、
+  docs/contributing/compiler-architecture.md、packages/cli/README.md、HANDOFF.md；
 - **best-practices §10 的措辞**：「stdlib 自己的 text-buffer 模块是参考样本」→
   样本地位保留、出处改为库（或换一个 stdlib 内的新样本 —— 实现层决定）；
 - AI 简报若列 stdlib 模块清单则同步缩减（镜像规则照旧）。

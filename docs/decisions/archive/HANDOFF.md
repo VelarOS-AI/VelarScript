@@ -1,7 +1,7 @@
 # 交接书 —— Claude → Codex（2026-08-09）
 
 用户指令：后续全部任务由 Codex 负责。本文是完整交接：现状、决策日志、待办队列、
-工作纪律。设计规格在 `docs/handoff/`。撞墙账本在
+工作纪律。设计规格在 `docs/decisions/`。撞墙账本在
 `/Users/mac/Documents/VelarOS-Lite/LEDGER.md`（30 面墙全档案 + S4 性能结案）。
 
 ## 一、现状快照
@@ -52,7 +52,7 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
   不进入语言表面，Web 只定向拒绝 Node-only 模块，共享的 `velar/http` 由显式目标
   扩展接管。Lite 服务端已删光平台 `extern`/`import js`。
 - **D25'→D26**：深层响应式为唯一默认 —— 完整设计与验收记录见
-  docs/handoff/D26-DEEP-REACTIVITY.md，**已实施并打败 Lite S4 memo 基线**。
+  docs/decisions/D26-DEEP-REACTIVITY.md，**已实施并打败 Lite S4 memo 基线**。
 - 有意不做（各有存档理由，勿翻案除非新证据）：match 表达式化、真值条件、List `+`、
   generators/`yield`/JavaScript `Symbol.asyncIterator` 与 `for await`、`.toString()`、
   for-else、标签 break。真实 ChunkStream 证据已推翻“完全不做异步迭代”的旧结论，
@@ -159,7 +159,7 @@ D=可发现性 / N=正常成本），修语言不修应用是默认方向。
 1. **已完成：收尾**：芯片成果（TDZ 自引用遮蔽 + component 泛型头诊断）提交为
    `53edca6`；剔除了一个会倒退 D26 深层响应式文案的并行残留，最终 574+/1-、7 文件。
    `npm run check` + 389 tests + `npm run test:browser` 全绿。
-2. **已完成：第四期盲测（发版闸门）**：协议见 `docs/handoff/BLIND-TEST-LEDGER.md`（三期完整
+2. **已完成：第四期盲测（发版闸门）**：协议见 `docs/decisions/archive/BLIND-TEST-LEDGER.md`（三期完整
    记录与评分法）。**只测第三期之后改动的表面**：字符串/数字方法链、双槽 `for`、
    `range`、集合构造、**布局字符串**（无先例语法，风险最高）、深层 state 直接突变。
    干净盲写者、无文档、≤3 轮、真实编译器裁判。产出：(a) 发版前的最后一道证据；
@@ -226,7 +226,7 @@ npm publish（四个包，需登录态与组织权限）
 用户在发布前叫停：「现在语法什么的还不确定有没有 bug 之类的」。据此做了一轮
 **六路对抗性缺陷搜捕**（380+ 探针程序，真编译真运行，每条发现再对抗性复核，
 默认立场是驳回）。结果：48 条原始发现，**41 条确认为真** —— blocker 4、
-major 29、minor 8。完整清单含复现：`docs/handoff/HARDENING-DEFECTS.md`。
+major 29、minor 8。完整清单含复现：`docs/decisions/archive/HARDENING-DEFECTS.md`。
 
 **本地 tag `v0.10.0` 已删除**，第六节的 `git push origin v0.10.0` 与 npm publish
 **在硬化完成前不得执行**。仓库从未推送，所以没有已发布的破损版本需要撤回。
@@ -274,14 +274,14 @@ major 29、minor 8。完整清单含复现：`docs/handoff/HARDENING-DEFECTS.md`
 重做 —— 未验证的半成品比重做更贵，尤其是三路的 `tests/compiler.test.ts` 改动交织
 在一起，无法按路拆分。若选择接着改，必须先逐文件读懂再跑全量门禁，不要假设它是对的。
 
-缺陷清单（`docs/handoff/HARDENING-DEFECTS.md`，41 条含最小复现）与本节的分波编排
+缺陷清单（`docs/decisions/archive/HARDENING-DEFECTS.md`，41 条含最小复现）与本节的分波编排
 都已提交，不受这堆半成品影响。
 
 ### 硬化完成状态
 
 - 接手时按建议丢弃了 8 个未验证文件的半成品，从干净基线重新按两波实现。
 - 41 条确认缺陷已全部关闭，永久回归分布在五个 `tests/hardening-*.test.ts` 文件；
-  详细映射与复搜捕结果见 `docs/handoff/HARDENING-DEFECTS.md` 顶部。
+  详细映射与复搜捕结果见 `docs/decisions/archive/HARDENING-DEFECTS.md` 顶部。
 - 两波合并后重跑六路对抗性搜捕，结果为 **blocker 0 / new major 0**；复搜捕发现的
   #9、#15/#20、#28 变形也已关闭并再次独立复核。
 - 最终门禁全绿：格式、文档、TypeScript 与四包构建；425/425 测试；包消费者验收；
@@ -3123,7 +3123,7 @@ real-server smoke、45-case 三浏览器矩阵、production build 与独立包�
    `!= null`，9 处加括号三元恢复免括号形态。详见 D30 第 22 条（含溯源：最初
    裁决原话即 `!=null`，中途经 `not null` 提案绕道，本条回归并成文防第三次摇摆）。
 
-**已批准规格（docs/handoff/，实施者不需重新决策）**：
+**已批准规格（docs/decisions/，实施者不需重新决策）**：
 
 - **D28 拼写统一**：match 兜底只留 `case _:`；「渲染空」唯一拼写 `null` +
   `-> WebNode?`（不把 null 并入 WebNode）；撤 `invert` 放开 `x = not x`。
@@ -3342,9 +3342,9 @@ velar/javascript（36KB JS 分析）与 velar/text-buffer（22KB）带进 stdlib
 （比 stdlib 特权公民更好的裁判）。归新增波 S，排 N-2b 后。
 
 **Codex 并行任务（2026-08-13 用户调度 —— Codex 额度富余，两份任务书已备）**：
-① `docs/handoff/CODEX-TASK-S-STDLIB-EVICTION.md` —— 波 S（D48 迁出）交 Codex
+① `docs/decisions/archive/CODEX-TASK-S-STDLIB-EVICTION.md` —— 波 S（D48 迁出）交 Codex
 执行，**禁区已写明**（packages/web 与 packages/compiler 在途，不得触碰；git
-写命令禁止，工作留树由编排方验收提交）。② `docs/handoff/CODEX-TASK-BLINDTEST-
+写命令禁止，工作留树由编排方验收提交）。② `docs/decisions/archive/CODEX-TASK-BLINDTEST-
 PILOT.md` —— 盲测试点（路线图第三阶段首次实弹）：Codex 作为盲测对象，只凭
 `velar skill` 简报 + 诊断写三个递增复杂度的项目，撞墙记录本身是产出；在仓库外
 目录进行，零撞车。**编排方跟进**：Codex 报告落地后，S 波由编排方验收提交；
@@ -3360,7 +3360,7 @@ count/loop 互斥；实参含字面量编译期检查）。停靠点体复用 Lo
 `if not motion.reduced:` 是官方搭配且必须进简报示例。归批次 I。
 
 **Codex 第二单（2026-08-13）**：批次 E/F 词法大波交 Codex ——
-`docs/handoff/CODEX-TASK-EF-LEXICAL.md`。含反引号（D46）、`\u{...}` + 双向禁令
+`docs/decisions/archive/CODEX-TASK-EF-LEXICAL.md`。含反引号（D46）、`\u{...}` + 双向禁令
 （D47-82）、数字分隔符/前导零/T-6 消息批、**纯表达式语句拒绝**（D30-17）、
 **比较链限定**（D30-20 + GRM-A1/A2 —— 杀最高风险歧义）、块注释（D36-40.1）。
 **协调协议**：packages/web 永久禁区（N-2c 在途）；charter/web-api/skill/
@@ -3368,20 +3368,20 @@ compiler.test.ts/examples 等共享文件按「树干净才动、否则列 Defer
 规则延迟 —— 编排方在 N-2c 落地后合流验收。
 
 **Codex 第三单（2026-08-13）**：VelarOS-Lite 迁移到马拉松 HEAD ——
-`docs/handoff/CODEX-TASK-LITE-MIGRATION.md`。裁判上场：钉住提交 `db629df`
+`docs/decisions/archive/CODEX-TASK-LITE-MIGRATION.md`。裁判上场：钉住提交 `db629df`
 worktree 构建（不碰活树），把约三十项破坏性收紧全量吃一遍，**每条诊断记录
 「是否一步教会」**（MIGRATION-NOTES.md）—— 教学质量的真实 KPI 数据；同时完成
 D48 的编辑器侧收尾（改用 @velarscript/script-analysis 与 text-buffer 包）。
 VelarScript 仓库零改动、零撞车。
 
 **Codex 第四单（2026-08-13）**：批次 I Web 词汇大波 ——
-`docs/handoff/CODEX-TASK-I-WEB-VOCAB.md`。**分支隔离**：worktree + 专属分支
+`docs/decisions/archive/CODEX-TASK-I-WEB-VOCAB.md`。**分支隔离**：worktree + 专属分支
 `codex/batch-i`（基线 44c3eaa），自行提交到分支、不碰 main —— 主树正在跑
 E/F 合流。内容：D49 keyframes 全套、LOK-U1 属性表发布与系统补录（~55 缺席
 属性逐个判定收录/排除）、D37-42+42-补 关键字值收紧、WEB-U12 元素名表、
 D41-63.2 扩展文本钩子。编排方在词法合流落地后 merge 分支并解 charter 冲突。
 
-**Codex 第五单（2026-08-13）**：批次 K —— `docs/handoff/CODEX-TASK-K-ASYNC-
+**Codex 第五单（2026-08-13）**：批次 K —— `docs/decisions/archive/CODEX-TASK-K-ASYNC-
 NAMESPACES.md`（Promise.all 记录形、常驻命名空间名册、ASY-D1 输家上报、
 MIG-1(ii) validator-is 收窄、MIG-2 导出边界诊断、sleep/错误码/math 清理）。
 分支 codex/batch-k，基线须含批次 I 合并。两处规格洞呈报不擅裁（命名空间双拼写

@@ -75,8 +75,7 @@ Each extern export, constructor, or method has exactly one declared
 signature. JavaScript APIs built on overloads — or on event names that
 change the listener's shape, such as `on("data", ...)` versus
 `on("close", ...)` — cannot be declared per-variant today. This is the known
-narrow spot of the hatch, tracked as W-23/W-25 in the project backlog
-([HANDOFF.md](../HANDOFF.md)). The two honest current solutions:
+narrow spot of the hatch. The two honest current solutions:
 
 - **Cross with `unknown` and narrow at runtime.** Declare the payload as
   `unknown`, then validate per event where the shape is known:

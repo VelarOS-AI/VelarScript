@@ -2,7 +2,7 @@
 
 用户于 2026-08-12 对完整性审计剩余的五条设计问题裁决「**你决策**」——
 编排代理按已呈报的推荐定案如下。全部现状均为审计实测
-（`docs/handoff/COMPLETENESS-AUDITS.md`）。
+（`docs/decisions/archive/COMPLETENESS-AUDITS.md`）。
 
 ---
 

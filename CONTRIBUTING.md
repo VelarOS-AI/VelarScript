@@ -43,9 +43,9 @@ npm run test:browser
 
 The browser gate installs and exercises Chromium, Firefox, and WebKit. A change
 that touches packaging or delivery should also run the non-publishing release
-rehearsal documented in `docs/release-process.md`. Editor-facing changes must
-be checked through a packed toolchain in the independent Workbench gate; do not
-link compiler source into the editor.
+rehearsal documented in `docs/contributing/release-process.md`. Editor-facing
+changes must be checked through a packed toolchain in the independent Workbench
+gate; do not link compiler source into the editor.
 
 Gates in one checkout run one at a time. Every gate rebuilds `packages/*/dist`
 through a clean step, binds fixed test ports, and writes sandboxes under

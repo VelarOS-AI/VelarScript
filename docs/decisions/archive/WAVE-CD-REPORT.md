@@ -260,7 +260,7 @@ Look builder 散文、web-api 221–222 的两行空白）**同一个成因** �
 
 ---
 
-## 6. 账本对账（`docs/handoff/COMPLETENESS-AUDITS.md`）
+## 6. 账本对账（`docs/decisions/archive/COMPLETENESS-AUDITS.md`）
 
 方法：在 `5a64a7c` 的独立 `git worktree` 里单独构建，重跑所有以 ID 命名的回归套件
 （219 例，0 失败：audit-core/-semantics/-class/-runtime 130；batch-k/lexical/

@@ -4,7 +4,7 @@
 
 ## 必读（按序）
 
-1. `docs/handoff/D48-STDLIB-BOUNDARY.md` —— 本任务的完整裁决与迁移清单
+1. `docs/decisions/D48-STDLIB-BOUNDARY.md` —— 本任务的完整裁决与迁移清单
 2. `HANDOFF.md` 顶部的协调区 —— 当前在途波次与禁区
 3. `docs/standard-library.md`、`packages/cli/src/standard-modules.ts`
 
@@ -34,7 +34,7 @@
    `tests/package.acceptance.ts` 中引用这两个模块的用例——改为经包导入
    （这正好把「安装包→导入→运行」的通道纳入门禁，是本任务的隐藏收益）。
 5. **文档迁移**：`docs/standard-library.md` 删两模块条目并在开头加 D48 第 86 条
-   的成员规则一段；`docs/runtime-boundary.md`、`docs/compiler-architecture.md`、
+   的成员规则一段；`docs/contributing/runtime-boundary.md`、`docs/contributing/compiler-architecture.md`、
    `packages/cli/README.md` 中的引用同步。`docs/best-practices.md` §10 的
    「stdlib 自己的 text-buffer 模块」措辞改为指向包（样本地位保留）。
 6. **AI 简报**：若 `docs/ai-skill.md` 列出这两个模块则删除，并同步
@@ -56,6 +56,6 @@ npm run test:browser
 
 ## 交付
 
-工作留在工作树未提交 + 写报告到 `docs/handoff/CODEX-REPORT-S.md`：改动清单、
+工作留在工作树未提交 + 写报告到 `docs/decisions/archive/CODEX-REPORT-S.md`：改动清单、
 两包的最终命名与形状、测试迁移前后对照、门禁三段原样输出尾部、任何规格与代码
 冲突之处（报告，不要自行裁决）。

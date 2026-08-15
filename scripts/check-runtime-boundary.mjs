@@ -50,7 +50,7 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
-const ledgerPath = join(root, "docs", "runtime-boundary.md");
+const ledgerPath = join(root, "docs", "contributing", "runtime-boundary.md");
 const ledger = await readFile(ledgerPath, "utf8");
 const ids = new Set();
 const classes = new Set();
@@ -59,17 +59,17 @@ const row = /^\| (B-[A-Z0-9-]+) \| ([A-Z+]+) \|/gmu;
 
 for (const match of ledger.matchAll(row)) {
   const id = match[1];
-  if (ids.has(id)) failures.push(`docs/runtime-boundary.md: duplicate boundary id '${id}'`);
+  if (ids.has(id)) failures.push(`docs/contributing/runtime-boundary.md: duplicate boundary id '${id}'`);
   ids.add(id);
   for (const value of match[2].split("+")) {
-    if (!allowedClasses.has(value)) failures.push(`docs/runtime-boundary.md: boundary '${id}' uses unknown class '${value}'`);
+    if (!allowedClasses.has(value)) failures.push(`docs/contributing/runtime-boundary.md: boundary '${id}' uses unknown class '${value}'`);
     classes.add(value);
   }
 }
 
-if (ids.size < 20) failures.push(`docs/runtime-boundary.md: expected at least 20 classified boundary operations, found ${ids.size}`);
+if (ids.size < 20) failures.push(`docs/contributing/runtime-boundary.md: expected at least 20 classified boundary operations, found ${ids.size}`);
 for (const value of allowedClasses) {
-  if (!classes.has(value)) failures.push(`docs/runtime-boundary.md: boundary class '${value}' has no ledger row`);
+  if (!classes.has(value)) failures.push(`docs/contributing/runtime-boundary.md: boundary class '${value}' has no ledger row`);
 }
 for (const phrase of [
   "remains the authority for source-level",
@@ -78,13 +78,13 @@ for (const phrase of [
   "Required feature decision record",
   "Verification gate",
 ]) {
-  if (!ledger.includes(phrase)) failures.push(`docs/runtime-boundary.md: missing required contract phrase '${phrase}'`);
+  if (!ledger.includes(phrase)) failures.push(`docs/contributing/runtime-boundary.md: missing required contract phrase '${phrase}'`);
 }
 
 const charter = await readFile(join(root, "docs", "language-charter.md"), "utf8");
-const architecture = await readFile(join(root, "docs", "compiler-architecture.md"), "utf8");
+const architecture = await readFile(join(root, "docs", "contributing", "compiler-architecture.md"), "utf8");
 if (!charter.includes("runtime-boundary.md")) failures.push("docs/language-charter.md: missing runtime boundary authority link");
-if (!architecture.includes("runtime-boundary.md")) failures.push("docs/compiler-architecture.md: missing runtime boundary ownership link");
+if (!architecture.includes("runtime-boundary.md")) failures.push("docs/contributing/compiler-architecture.md: missing runtime boundary ownership link");
 
 const ownedLiteral = JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY);
 const ownedVersion = JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION);

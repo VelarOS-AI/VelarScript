@@ -925,7 +925,7 @@ T2/T3/T4 + 字面量故事 + A4/A5 文档 → **N-3**；软关键字网格 + fro
 
 ### 波 S（Codex）验收状态
 
-工作**未提交**、无 git 写操作（守约）。报告在 `docs/handoff/CODEX-REPORT-S.md`。
+工作**未提交**、无 git 写操作（守约）。报告在 `docs/decisions/archive/CODEX-REPORT-S.md`。
 门禁在**混合树**上通过（N-2b-1 在途编辑 analyzer.ts 与之共存 —— Codex 已正确
 隔离并声明）。**验收安排**：等 N-2b-1 交回 → 组合树全门禁 → 按文件归属分两个
 提交（波 S：包目录 + cli + 其文档；N-2b-1：compiler + 其测试；共触文件按 hunk

@@ -5,12 +5,12 @@
 
 ## 必读规格（按序）
 
-1. `docs/handoff/D46-BACKTICK-STRINGS.md` —— 反引号字符串完整规格
-2. `docs/handoff/D47-MORNING-RULINGS.md` 第 82 条 —— `\u{...}` 转义 + 双向字符禁令
-3. `docs/handoff/D30-LEXICAL-AUDIT.md` —— 第 17 条（纯表达式语句）、第 18.4
+1. `docs/decisions/D46-BACKTICK-STRINGS.md` —— 反引号字符串完整规格
+2. `docs/decisions/D47-MORNING-RULINGS.md` 第 82 条 —— `\u{...}` 转义 + 双向字符禁令
+3. `docs/decisions/D30-LEXICAL-AUDIT.md` —— 第 17 条（纯表达式语句）、第 18.4
    条（前导零）、第 20 条（比较链限定）、数字分隔符
-4. `docs/handoff/D36-CHAIN-ATTRS-BIDI.md` 第 40.1 条 —— `/* */` 块注释
-5. `docs/handoff/COMPLETENESS-AUDITS.md` 审计六（TXT-I3）与审计十一（GRM-A1/
+4. `docs/decisions/D36-CHAIN-ATTRS-BIDI.md` 第 40.1 条 —— `/* */` 块注释
+5. `docs/decisions/archive/COMPLETENESS-AUDITS.md` 审计六（TXT-I3）与审计十一（GRM-A1/
    A2/D2/D3、T-6）—— 期望行为的实测口径
 
 ## 协调（关键，先看这个）
@@ -81,6 +81,6 @@
 
 ## 交付
 
-工作留树未提交 + 报告写到 `docs/handoff/CODEX-REPORT-EF.md`：逐项修复与测试名、
+工作留树未提交 + 报告写到 `docs/decisions/archive/CODEX-REPORT-EF.md`：逐项修复与测试名、
 迁移清单、**Deferred shared-file edits 一节**（若适用）、规格与代码出入
 （报告不擅裁）、门禁三段原样尾部。

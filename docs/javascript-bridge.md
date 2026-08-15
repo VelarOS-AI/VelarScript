@@ -3,7 +3,7 @@
 Status: deliberately limited in VelarScript 0.10
 
 This bridge is the checked and unsafe foreign-code portion of the
-[runtime and JavaScript boundary ledger](runtime-boundary.md). The language
+[runtime and JavaScript boundary ledger](contributing/runtime-boundary.md). The language
 charter owns observable semantics; this document defines the deliberately
 limited declaration shapes and adaptations that implement that boundary.
 
