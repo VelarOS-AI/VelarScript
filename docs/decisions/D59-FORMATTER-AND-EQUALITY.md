@@ -188,6 +188,25 @@ VEL4001: JSON accepts only records, Lists, enums, primitives, and optionals;
 
 ---
 
+### 第 141.1 条 —— `toContain` 同判（实施波上报，裁决）
+
+第 141 条落地后，`toContain` 成了**新的唯一一个不按语言自己的相等来比的比较**：
+
+```
+expect([nan]).toContain(nan)   →  false
+values.has(nan)                →  true      （List.has 降级为 __velarSameValueZero）
+```
+
+它的 List 分支走的是原生 `===`。
+
+**裁决：List 分支改走 `__velarSameValueZero`，与 `List.has` / `in` 一致。**
+文本分支不动 —— `String.includes` 本来就是码点同一性。
+
+理由就是第 141 条那句话原样再说一遍：本条的表里只有两件活
+（`==` 值相等、`equals` 内容相等），**`toContain` 没有第三件活可做**。
+我在第 141 条只裁了 `toBe`，是因为当时只看见了 `toBe` ——
+**论证从来不止于被举报的那一个**。
+
 ---
 
 ## 本文四处不准确（实施波实测更正，2026-08-15）
