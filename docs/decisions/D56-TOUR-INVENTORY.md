@@ -123,7 +123,7 @@ node 有 `secretHeader`，web 有 `formBody`，其余 16 项共享。
 
 | 族 | 豁免理由 |
 |---|---|
-| charter §19「刻意缺席」全表、`forbiddenSourceIdentifiers`(15)、web `forbiddenIdentifiers`(4) | **反向语料** —— 只在拒绝里可观察，编译得过的展示写不出来。归 `tests/corpus/` |
+| charter §19「刻意缺席」全表、`forbiddenSourceIdentifiers`(14)、web `forbiddenIdentifiers`(4) | **反向语料** —— 只在拒绝里可观察，编译得过的展示写不出来。归 `tests/corpus/` |
 | 4×3 授予表的「无约束」行 | `boundGrants(null, …)` 恒 false，只在报错里可见 |
 | Look 的 36 个被排除属性 + 10 个被排除媒体主语 | 同上 |
 | 枚举/类的保留成员名（`is`/`parse`/`values`/`pass`/`constructor`） | 同上 |
