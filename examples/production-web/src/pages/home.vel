@@ -74,7 +74,7 @@ const animationToggleLook = look:
 component AnimationToggle():
     state active = true
 
-    action toggle() -> null:
+    action toggle():
         active = not active
 
     return <button data-animation-toggle aria-label="Toggle animation probe" look={animationToggleLook} on:click={toggle}>

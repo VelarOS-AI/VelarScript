@@ -26,7 +26,7 @@ test("[D39 51] a failure becomes null and a success keeps its value", () => {
 type User:
     name: string
 
-def main() -> null:
+def main():
     const parsed = try User.parse({ name: "ada" })
     const rejected = try User.parse(5)
     print(parsed?.name ?? "none")
@@ -44,7 +44,7 @@ def measure(text: string) -> number:
         throw Error("empty")
     return text.size
 
-def main() -> null:
+def main():
     const good = try measure("abcd").toFixed(1)
     const failed = try measure("").toFixed(1)
     print(good ?? "none")
@@ -62,7 +62,7 @@ async def load(fail: bool) -> string:
         throw Error("nope")
     return "loaded"
 
-async def main() -> null:
+async def main():
     print(try await load(false) ?? "none")
     print(try await load(true) ?? "none")
 
@@ -103,7 +103,7 @@ test("[D39 51] a bare 'try' statement is rejected: a swallow needs a visible con
 type User:
     name: string
 
-def main() -> null:
+def main():
     try User.parse(5)
 `);
   assert.equal(reported.length, 1);
@@ -116,16 +116,16 @@ test("[D39 51] 'try try' and a null-producing attempt are each rejected", () => 
 type User:
     name: string
 
-def main() -> null:
+def main():
     const value = try try User.parse(5)
     print(value?.name ?? "x")
 `).some((item) => /^VEL4034 'try try' says nothing the first 'try' has not already said/u.test(item)));
 
   assert.ok(diagnostics(`
-def act() -> null:
+def act():
     pass
 
-def main() -> null:
+def main():
     const value = try act()
     print("x")
 `).some((item) => /^VEL4034 This expression produces null on success/u.test(item)));
@@ -136,7 +136,7 @@ test("[D39 51] a Promise-valued attempt is directed to 'try await'", () => {
 async def load() -> string:
     return "x"
 
-async def main() -> null:
+async def main():
     const value = try load()
     print(value ?? "none")
 `);
@@ -145,7 +145,7 @@ async def main() -> null:
 
 test("[D39 51] the statement 'try' block keeps its meaning", () => {
   const output = run(`
-def main() -> null:
+def main():
     try:
         throw Error("boom")
     catch error:
@@ -165,7 +165,7 @@ def measure(text: string) -> number:
         throw Error("empty")
     return text.size
 
-def main() -> null:
+def main():
     const value = try measure("") ?? -1
     print(f"{value}")
 
@@ -181,7 +181,7 @@ def measure(text: string) -> number:
         throw Error("empty")
     return text.size
 
-def main() -> null:
+def main():
     let seen = 0
     for text in ["a", "", "abc"]:
         const size = try measure(text)

@@ -89,7 +89,7 @@ extern module "event-source":
 
 import js {on} from "event-source"
 
-def handleMessage(payload: unknown) -> null:
+def handleMessage(payload: unknown):
     const message = MessagePayload.parse(payload)
     print(message.text)
 

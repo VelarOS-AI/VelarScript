@@ -162,13 +162,13 @@ type Handle:
 component Panel(label: string) exposes Handle:
     state count = 0
     resource title: string = loadTitle()
-    action bump() -> null:
+    action bump():
         count = count + 1
 
     watch count:
         print("changed")
 
-    def reset() -> null:
+    def reset():
         count = 0
 
     expose {reset: reset}
@@ -376,10 +376,10 @@ test("[wave G] the lifecycle hooks are '@mounted' and '@cleanup', and coexist wi
 component Panel:
     state ready = false
 
-    def mounted() -> null:
+    def mounted():
         ready = true
 
-    def cleanup() -> null:
+    def cleanup():
         ready = false
 
     @mounted:

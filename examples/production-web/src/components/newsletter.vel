@@ -28,7 +28,7 @@ export component Newsletter:
     state email = ""
     let form: Element? = null
 
-    action submit() -> null:
+    action submit():
         if form != null:
             const currentForm = form
             const domain = Text.findMatch(email, "@([a-z0-9-]+(?:[.][a-z0-9-]+)+)$", {ignoreCase: true})?.groups?.[0]

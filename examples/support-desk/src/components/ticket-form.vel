@@ -59,7 +59,7 @@ const submitLook = look:
 export component TicketForm:
     let form: Element? = null
 
-    def submit() -> null:
+    def submit():
         if form != null:
             const currentForm = form
             clearErrors(currentForm)

@@ -173,6 +173,7 @@ interface AnalyzableFunctionDeclaration {
   readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: FunctionDeclaration["parameters"];
   readonly returnType: FunctionDeclaration["returnType"];
+  readonly resultAnnotationSpan?: FunctionDeclaration["resultAnnotationSpan"];
   readonly signatureSpan: FunctionDeclaration["signatureSpan"];
   readonly body: FunctionDeclaration["body"];
   readonly span: Span;
@@ -4083,6 +4084,31 @@ export class Analyzer implements TypeEnvironment {
     return [...missing].sort();
   }
 
+  /**
+   * D58 rule 139: `-> null` is the one result annotation that names nothing a
+   * caller can use — a caller that ignores a result already knows as much — so
+   * where a body infers exactly that, the annotation is two spellings of one
+   * declaration and the written one is refused. `extern` declarations,
+   * abstract methods, and function types have no body to infer from and keep
+   * declaring it (VEL4023, VEL2001), and a getter's result is the property's
+   * type, which the parser requires outright (VEL2023).
+   *
+   * Deleting an annotation the compiler would infer identically is provably
+   * equivalent, so it is a mechanical fix under D50 rule 95.
+   */
+  private reportInferredNullResult(statement: AnalyzableFunctionDeclaration, declarationKind: string): void {
+    const reference = statement.returnType;
+    if (!reference || reference.syntax.kind !== "NamedTypeSyntax" || reference.syntax.name !== "null") return;
+    if ("accessor" in statement) return;
+    const deletion = statement.resultAnnotationSpan;
+    this.diagnostics.push(diagnostic(
+      "VEL4037",
+      `${declarationKind} '${statement.name}' infers '-> null' from its body; delete the annotation, and write it only where 'extern', 'abstract', or a function type leaves no body to infer`,
+      reference.span,
+      deletion ? mechanicalFix(deletion, "", "Delete the inferred '-> null'") : undefined,
+    ));
+  }
+
   protected analyzeFunctionDeclaration(
     statement: AnalyzableFunctionDeclaration,
     className: string | null,
@@ -4123,6 +4149,7 @@ export class Analyzer implements TypeEnvironment {
       if (asynchronous) this.reportPromiseResolutionHazard(declaredReturn, statement.returnType.span);
       else this.reportPromiseCarrierHazard(declaredReturn, statement.returnType.span);
     }
+    this.reportInferredNullResult(statement, declarationKind);
     const expectedReturn = returnValid
       ? asynchronous ? this.resolvedAsyncResult(declaredReturn) : declaredReturn
       : invalidType;

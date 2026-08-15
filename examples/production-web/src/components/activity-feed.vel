@@ -23,7 +23,7 @@ const buttonLook = look:
 export component ActivityFeed:
     state message = "Activity has not been refreshed"
 
-    action refresh() -> null:
+    action refresh():
         const activity = await http.get("data/activity.json").parse(ActivityPayload)
         message = activity.message
 

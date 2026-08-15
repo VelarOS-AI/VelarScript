@@ -227,14 +227,14 @@ else:
 
 test("bare returns preserve null at direct JavaScript and asynchronous boundaries", () => {
   const result = compileCore(`
-def stop() -> null:
+def stop():
     return
 
-async def stopLater() -> null:
+async def stopLater():
     return
 
 class Controller:
-    def stop() -> null:
+    def stop():
         return
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -267,17 +267,17 @@ const label = describe(excited=true, name=mark("name"), count=2)
   assert.equal(signature, undefined);
 
   const unknown = compileCore(`
-def greet(name: string, count: number = 1) -> null:
+def greet(name: string, count: number = 1):
     print(name)
 
 greet(missing="Velar")
 `.trimStart());
   assert.match(unknown.diagnostics.map((item) => item.message).join("\n"), /Unknown named argument 'missing'/u);
-  const duplicate = compileCore(`def greet(name: string) -> null:\n    print(name)\n\ngreet(name="Velar", name="Again")\n`);
+  const duplicate = compileCore(`def greet(name: string):\n    print(name)\n\ngreet(name="Velar", name="Again")\n`);
   assert.match(duplicate.diagnostics.map((item) => item.message).join("\n"), /more than once/u);
-  const positional = compileCore(`def greet(name: string, count: number = 1) -> null:\n    print(name)\n\ngreet(name="Velar", 2)\n`);
+  const positional = compileCore(`def greet(name: string, count: number = 1):\n    print(name)\n\ngreet(name="Velar", 2)\n`);
   assert.match(positional.diagnostics.map((item) => item.message).join("\n"), /Positional arguments must appear before named arguments/u);
-  const colon = compileCore(`def greet(name: string) -> null:\n    print(name)\n\ngreet(name: "Velar")\n`);
+  const colon = compileCore(`def greet(name: string):\n    print(name)\n\ngreet(name: "Velar")\n`);
   assert.match(colon.diagnostics.map((item) => item.message).join("\n"), /Write '=' between the name and value for named argument 'name'/u);
 });
 
@@ -501,7 +501,7 @@ print(typeTestReads)
   assert.equal(execution.stdout, "text:velar\nnumber:5\nyes\n5\n10\n0\nfalse\n1\n");
 
   const unsafeContinuation = compile(`
-def invalid(value: string | number) -> null:
+def invalid(value: string | number):
     if value is string:
         print(value)
     print(value + 1)
@@ -843,7 +843,7 @@ test("a JavaScript statement block after '=>' receives one expression-arrow diag
   // The reflexive JavaScript shape: braces holding statements after '=>'.
   // One targeted diagnostic replaces the record-literal error cascade.
   const multiStatement = compile(`
-def register(handler: () -> null) -> null:
+def register(handler: () -> null):
     pass
 
 register(() => {
@@ -998,7 +998,7 @@ test("Promises reject statically known callable then result shapes before JavaSc
     `type Box:\n    then: () -> number\n\nextern module "host":\n    export def load() -> Promise<Box>\n`,
     `type Box:\n    then: () -> number\n\nclass Loader:\n    def forward(value: Promise<Box>) -> Promise<Box>:\n        return value\n`,
     `type Box:\n    then: () -> number\n\ntype LaterBox = Promise<Box>\n`,
-    `type Box:\n    then: () -> number\n\ndef consume(value: Promise<Box>) -> null:\n    return null\n`,
+    `type Box:\n    then: () -> number\n\ndef consume(value: Promise<Box>):\n    return null\n`,
     `async def load() -> unknown:\n    return {then: () => 7}\n`,
     `class Base:\n    def value() -> number:\n        return 1\n\nclass Hazard extends Base:\n    def then() -> number:\n        return 7\n\nasync def load() -> Base:\n    return Hazard()\n`,
     `class Loader:\n    async def load() -> unknown:\n        return {then: () => 7}\n`,
@@ -1220,9 +1220,9 @@ export async def metricValue(id: string) -> number:
 
 test("rest parameters fail closed on ambiguous declarations and invalid calls", () => {
   for (const [source, message] of [
-    ["def collect(...values) -> null:\n    pass\n", /requires an element type/u],
-    ["def collect(...values: number = [1]) -> null:\n    pass\n", /cannot have a default value/u],
-    ["def collect(...values: number, label: string) -> null:\n    pass\n", /must be the final parameter/u],
+    ["def collect(...values):\n    pass\n", /requires an element type/u],
+    ["def collect(...values: number = [1]):\n    pass\n", /cannot have a default value/u],
+    ["def collect(...values: number, label: string):\n    pass\n", /must be the final parameter/u],
     ["component Items(...values: string):\n    return <p>Items</p>\n", /Components use named props/u],
     ["class Items(...values: string):\n    pass\n", /Class constructors do not support/u],
   ] as const) {
@@ -1261,7 +1261,7 @@ abstract class Reporter:
     abstract def report(...values: string)
 
 class NumberReporter extends Reporter:
-    override def report(...values: number) -> null:
+    override def report(...values: number):
         pass
 `.trimStart());
   assert.ok(incompatibleOverride.diagnostics.some((item) => /must keep the base method signature/u.test(item.message)));
@@ -1275,7 +1275,7 @@ component Choice(label: string, onChoose: (string) -> null):
 component App:
     state selected = "null"
 
-    def choose(label: string) -> null:
+    def choose(label: string):
         selected = label
         return null
 
@@ -1462,7 +1462,7 @@ const unsafeSpread: Outer = {...aliasedOuter}
 
 test("callable compatibility accepts safe optional and rest parameter domains", () => {
   const valid = compile(`
-def collect(...values: number) -> null:
+def collect(...values: number):
     return null
 
 def format(value: string, suffix: string = "") -> string:
@@ -1479,7 +1479,7 @@ print(basic("ready"))
   assert.equal(execution.stdout, "ready\n");
 
   const invalid = compile(`
-def one(value: number) -> null:
+def one(value: number):
     return null
 
 const variadic: (...number) -> null = one
@@ -1880,7 +1880,7 @@ test("type parameter declarations fail closed", () => {
     ["def repeat<T, T>(value: T) -> T:\n    return value\n", "VEL4021", /declared more than once/u],
     ["type User:\n    name: string\n\ndef load<User>(value: User) -> User:\n    return value\n", "VEL4021", /shadows an existing type name/u],
     ["def outer<T>(value: T) -> T:\n    def inner(other: T) -> T:\n        return other\n    return value\n", "VEL4021", /belongs to the enclosing function; declare '<T>' on this def/u],
-    ["def broken<>() -> null:\n    return null\n", "VEL2025", /requires at least one name/u],
+    ["def broken<>():\n    return null\n", "VEL2025", /requires at least one name/u],
     ["type Pair<T>:\n    left: number\n", "VEL2025", /only 'def' functions take '<T>'/u],
     ["class Holder<T>:\n    pass\n", "VEL2025", /only 'def' functions take '<T>'/u],
     ["class Panel:\n    get title<T>() -> string:\n        return \"top\"\n", "VEL2023", /cannot declare type parameters/u],
@@ -1933,7 +1933,7 @@ test("generic declarations format idiomatically without touching comparisons", (
   const canonical = "def first<T>(items: List<T>) -> T?:\n    return items.get(0)\n";
   assert.equal(formatSource(canonical), canonical);
   assert.equal(formatSource("def first < T > (items: List<T>) -> T?:\n    return items.get(0)\n"), canonical);
-  const multiple = "def swap<T, U>(a: T, b: U) -> null:\n    return null\n";
+  const multiple = "def swap<T, U>(a: T, b: U):\n    return null\n";
   assert.equal(formatSource(multiple), multiple);
   const runtimeType = "def decode<T>(value: unknown, target: Type<T>) -> T:\n    return target.parse(value)\n";
   assert.equal(formatSource("def decode < T > (value: unknown, target: Type < T >) -> T:\n    return target.parse(value)\n"), runtimeType);
@@ -2149,13 +2149,13 @@ test("inline strings recover at newlines while layout strings recover at dedent"
 
 test("explicit null results end naturally while omitted results are inferred", () => {
   const result = compile(`
-export def record(value: string) -> null:
+export def record(value: string):
     print(value)
 
 component SaveButton:
     state saved = false
 
-    action save() -> null:
+    action save():
         saved = true
 
     return <button type="button" on:click={save}>{saved ? "Saved" : "Save"}</button>
@@ -2187,7 +2187,7 @@ def answer():
   assert.equal(inferredValueResult.semanticIndex.symbols.find((item) => item.name === "answer")?.type, "() -> number");
 
   const asynchronous = compile(`
-async def save() -> null:
+async def save():
     print("saved")
 `.trimStart());
   assert.deepEqual(asynchronous.diagnostics, []);
@@ -2581,7 +2581,7 @@ def message() -> string:
     print("message-evaluated")
     return "unused"
 
-def submit(draft: Draft) -> null:
+def submit(draft: Draft):
     assert draft.estimate != null else "Estimate is required"
     assert draft.label != null
     assert draft.enabled
@@ -2766,10 +2766,10 @@ type User:
     meta: Meta
     tags: List<Meta>
 
-def mutate(user: User) -> null:
+def mutate(user: User):
     user.meta.label = "changed"
 
-def reject(user: readonly User, users: readonly List<User>, lookup: readonly Map<string, User>, selected: readonly Set<User>, records: readonly Record<User>) -> null:
+def reject(user: readonly User, users: readonly List<User>, lookup: readonly Map<string, User>, selected: readonly Set<User>, records: readonly Record<User>):
     user.id = "x"
     user.meta.label = "x"
     user.tags.append({label: "x"})
@@ -2815,7 +2815,7 @@ type User:
 def read(user: readonly User) -> string:
     return user.name
 
-def mutate(user: User) -> null:
+def mutate(user: User):
     user.name = "x"
 
 const reader: (User) -> string = read
@@ -2854,7 +2854,7 @@ def leak<T>(value: readonly T) -> T:
 def first<T>(items: readonly List<T>) -> T?:
     return items.get(0)
 
-def inspect<T>(items: readonly List<T>, visit: (T) -> null) -> null:
+def inspect<T>(items: readonly List<T>, visit: (T) -> null):
     items.map(item => visit(item))
 `.trimStart());
   assert.equal(generic.diagnostics.filter((item) => /T is outside that boundary/u.test(item.message)).length, 4);
@@ -2869,13 +2869,13 @@ class Box:
     constructor(title: string):
         self.title = title
 
-    def retitle() -> null:
+    def retitle():
         self.title = "method"
 
 type Wrapper:
     box: Box
 
-def allowed(boxes: readonly List<Box>, wrapper: readonly Wrapper) -> null:
+def allowed(boxes: readonly List<Box>, wrapper: readonly Wrapper):
     boxes[0].title = "field"
     boxes[0].retitle()
     wrapper.box.title = "nested"
@@ -2983,7 +2983,7 @@ type User:
 def optional(user: readonly User?) -> string?:
     return user?.name
 
-def either(user: readonly User | string) -> null:
+def either(user: readonly User | string):
     print(user)
 
 const owned: User = {name: "Ada"}
@@ -3003,10 +3003,10 @@ type Locked:
 type User:
     name: string
 
-def writeDeclared(value: Open | Locked) -> null:
+def writeDeclared(value: Open | Locked):
     value.name = "blocked"
 
-def writeView(value: User | readonly User) -> null:
+def writeView(value: User | readonly User):
     value.name = "blocked"
 
 const owned: User = {name: "Ada"}
@@ -3530,7 +3530,7 @@ print(animalKind(Dog()))
   assert.equal(execution.stdout, "ready text\n1\nAda\ndog\n");
 
   const impossible = compile(`
-def inspect(value: number) -> null:
+def inspect(value: number):
     match value:
         case string as text:
             print(text)
@@ -3768,7 +3768,7 @@ type User:
 type Box:
     user: User?
 
-def invalid(box: Box, kind: string) -> null:
+def invalid(box: Box, kind: string):
     assert box.user != null
     match kind:
         case "drop":
@@ -4022,7 +4022,7 @@ type Left:
 type Right:
     right: number
 
-def inspect(value: Left | Right) -> null:
+def inspect(value: Left | Right):
     match value:
         case {left, right}:
             print(left, right)
@@ -4045,7 +4045,7 @@ type Payload:
     name: string
     scores: List<number>
 
-def inspect(payload: Payload) -> null:
+def inspect(payload: Payload):
     match payload:
         case {name, scores: [first, ...rest]} as whole:
             print(name)
@@ -4072,7 +4072,7 @@ type Left:
 type Right:
     right: number
 
-def inspect(value: Left | Right) -> null:
+def inspect(value: Left | Right):
     match value:
         case {left} as selectedLeft:
             print(left)
@@ -4129,7 +4129,7 @@ def label(status: TaskStatus) -> string:
         case TaskStatus.done:
             return "Done"
 
-def persist(value: string) -> null:
+def persist(value: string):
     print(value)
     return null
 
@@ -4379,7 +4379,7 @@ type ToolEvent:
 
 type Event = TextEvent | ToolEvent
 
-def flip(event: Event) -> null:
+def flip(event: Event):
     event.kind = EventKind.tool
     return null
 
@@ -4734,7 +4734,7 @@ test("compiler host capabilities stay protected while extension conveniences fol
   assert.deepEqual(compileCore("const mount = 1\n").diagnostics, []);
   assert.deepEqual(compile("const color = \"brand\"\ntype Node:\n    id: string\n").diagnostics, []);
 
-  for (const source of ["const __velarIndex = 1\n", "def run(__velarScope: number) -> null:\n    pass\n", "type __VelarRecord:\n    id: string\n", "const __velarRoot = 1\n"]) {
+  for (const source of ["const __velarIndex = 1\n", "def run(__velarScope: number):\n    pass\n", "type __VelarRecord:\n    id: string\n", "const __velarRoot = 1\n"]) {
     const result = compile(source);
     assert.ok(result.diagnostics.some((item) => item.code === "VEL3007" && /reserved compiler prefix/u.test(item.message)));
   }
@@ -4893,14 +4893,14 @@ print(payload.arguments)
 test("guides mistyped declaration keywords to the current spelling", () => {
   const cases = new Map([
     ["fn addTask(tasks: List<number>, title: string) -> List<number>:\n    return tasks\n", /Use 'def'.*'def name\(\.\.\.\)'/u],
-    ["func helper() -> null:\n    pass\n", /Use 'def'/u],
+    ["func helper():\n    pass\n", /Use 'def'/u],
     ["function addTask(value: number) -> number:\n    return value\n", /Use 'def'/u],
     ["record Task(id: string, title: string, done: bool)\n", /Use 'type'.*'type Name:'/u],
     ["record Task:\n    id: string\n    title: string\n", /Use 'type'/u],
     ["struct Point:\n    x: number\n", /Use 'type'/u],
     ["interface Task:\n    id: string\n", /Use 'type'/u],
     ["schema Task:\n    id: string\n", /Use 'type'/u],
-    ["class Player:\n    fn jump() -> null:\n        pass\n", /Use 'def'/u],
+    ["class Player:\n    fn jump():\n        pass\n", /Use 'def'/u],
   ]);
 
   for (const [source, message] of cases) {
@@ -4989,7 +4989,7 @@ test("recovered guidance programs still fail compilation and never emit", () => 
     "const value = 1 if true else 2\n",
     "const accent = #f0f0f0\n",
     "const values: number[] = []\n",
-    "fn helper() -> null:\n    pass\n",
+    "fn helper():\n    pass\n",
     "record Task:\n    id: string\n",
   ];
   for (const source of sources) {
@@ -5148,7 +5148,7 @@ test("guides camelCase event attributes and bare bind to the Web directive spell
 component App:
     state draft = ""
 
-    def send() -> null:
+    def send():
         print(draft)
 
     return <div>
@@ -5217,7 +5217,7 @@ name = "Other"
 });
 
 test("enforces parameter, condition, coercion, and object-shape contracts", () => {
-  const parameter = compile("def change(value: number) -> null:\n    value = 2\n");
+  const parameter = compile("def change(value: number):\n    value = 2\n");
   assert.ok(parameter.diagnostics.some((item) => item.code === "VEL3002"));
 
   const truthiness = compile("if 1:\n    print(1)\n");
@@ -5242,7 +5242,7 @@ test("reports unknown names", () => {
 
 test("reports indentation that does not match an outer block", () => {
   const result = compile(`
-def value() -> null:
+def value():
     const first = 1
   return first
 `.trimStart());
@@ -5434,7 +5434,7 @@ test("CLI run forwards termination to the compiled program and closes inherited 
   await writeFile(entry, `
 import {onShutdown} from "velar/host"
 
-async def shutdown() -> null:
+async def shutdown():
     print("stopping")
 
 onShutdown(shutdown)
@@ -6336,7 +6336,7 @@ test("module state, computed values, and watches form a reactive module", () => 
 export state count: number = 0
 export const doubled: () -> number = computed(() => count * 2)
 
-export def increment() -> null:
+export def increment():
     count += 1
 
 watch count as current, previous:
@@ -6356,7 +6356,7 @@ component Counter:
   assert.match(result.code ?? "", /__velarWatch\(\(\) => count\.get\(\)/);
 
   const asynchronousWatch = compile(`
-async def later() -> null:
+async def later():
     return null
 
 state ready = false
@@ -6496,15 +6496,15 @@ const previews = computed(() => buildEntries(sessions, messages))
 watch previews() as current, previous:
     print(f"previews:{current.join("|")}")
 
-export def appendChunk(replyId: string, chunk: string) -> null:
+export def appendChunk(replyId: string, chunk: string):
     const message = messages.find(item => item.id == replyId)
     if message != null:
         message.text += chunk
 
-export def removeSession(id: string) -> null:
+export def removeSession(id: string):
     sessions = sessions.filter(session => session.id != id)
 
-export def restoreSession(session: Session) -> null:
+export def restoreSession(session: Session):
     sessions.append(session)
 `.trimStart());
   assert.deepEqual(store.diagnostics, []);
@@ -6558,7 +6558,7 @@ watch previews() as current, previous:
 export def snapshot() -> List<string>:
     return items.map(previewOf)
 
-export def touchFirst() -> null:
+export def touchFirst():
     items[0].text += "!"
 `.trimStart());
   assert.deepEqual(direct.diagnostics, []);
@@ -6624,7 +6624,7 @@ const labels = computed(() => items.map(label))
 def shout(value: string) -> string:
     return value + "!"
 
-async def sideEffect() -> null:
+async def sideEffect():
     return null
 
 def label(value: string) -> string:
@@ -6671,7 +6671,7 @@ def polish(value: string) -> string:
 state items: List<string> = []
 state output: List<string> = []
 
-export def commit() -> null:
+export def commit():
     output = items.map(polish)
 `.trimStart(), "non-derivation context");
 
@@ -6752,31 +6752,31 @@ const total = computed(() => sumOf(left, right))
 watch total() as current, previous:
     print(f"total:{current}")
 
-export def commitBurst() -> null:
+export def commitBurst():
     left = left + 1
     print(f"fresh:{left}")
     right = right + 1
     left = left + 1
 
-def nestedCommit() -> null:
+def nestedCommit():
     right = right + 1
 
-export def deepBurst() -> null:
+export def deepBurst():
     left = left + 1
     nestedCommit()
 
-export async def spreadBurst() -> null:
+export async def spreadBurst():
     left = left + 1
     await tick()
     right = right + 1
     await tick()
     left = left + 1
 
-def throwingCommit() -> null:
+def throwingCommit():
     left = left + 100
     throw Error("burst failed")
 
-export def throwingBurst() -> null:
+export def throwingBurst():
     throwingCommit()
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -6842,10 +6842,10 @@ watch tasks as current, previous:
 watch session as current, previous:
     print("session:" + str(current.meta.count) + ":same=" + str(current == previous))
 
-def mark(task: Task) -> null:
+def mark(task: Task):
     task.done = true
 
-export async def exercise() -> null:
+export async def exercise():
     const alias = tasks
     alias.append({label: "second", done: false})
     await tick()
@@ -6886,7 +6886,7 @@ type Task:
     done: bool
 
 component Child(task: Task, tasks: List<Task>):
-    def mutate() -> null:
+    def mutate():
         task.done = true
         tasks.append(task)
     return <button type="button" on:click={mutate}>change</button>
@@ -6936,7 +6936,7 @@ watch alpha() as current, previous:
 watch beta() as current, previous:
     print("beta:" + str(current))
 
-export async def exercise() -> null:
+export async def exercise():
     pair.left += 1
     await tick()
     scores.set("alpha", 7)
@@ -7013,7 +7013,7 @@ export def makeTotal() -> () -> number:
 watch total() as current, previous:
     print("total:" + str(current))
 
-export async def exercise() -> null:
+export async def exercise():
     count = 1
     model.value = 2
     await tick()
@@ -7085,7 +7085,7 @@ state quantity = 3
 state capturedTotal = price * quantity
 state $updates = 0
 
-export async def exercise() -> null:
+export async def exercise():
     tasks.insert(0, {label: "new"})
     price = 4
     $updates += 1
@@ -7145,7 +7145,7 @@ const selected = computed(selectValue)
 watch selected() as current, previous:
     print("watch:" + str(current))
 
-export async def exercise() -> null:
+export async def exercise():
     left = 3
     await tick()
     useLeft = false
@@ -7177,7 +7177,7 @@ const parity = computed(() => count % 2)
 watch parity() as current, previous:
     print("watch:" + str(current))
 
-export async def exercise() -> null:
+export async def exercise():
     count = 2
     print("sync:" + str(parity()))
     await tick()
@@ -7198,7 +7198,7 @@ const pages = computed(() => count() > 1 ? count() : 1)
 watch pages() as current, previous:
     print("watch:" + str(current))
 
-export async def exercise() -> null:
+export async def exercise():
     items = [1, 2]
     page = page < pages() ? page : pages()
     print("sync:" + str(page))
@@ -7227,7 +7227,7 @@ const doubled = computed(() => base() * 2)
 watch doubled() as current, previous:
     print("watch:" + str(current))
 
-export async def exercise() -> null:
+export async def exercise():
     shouldFail = true
     await tick()
     shouldFail = false
@@ -7278,7 +7278,7 @@ const selected = computed(() => scores.get(active))
 watch selected() as current, previous:
     print(str(current))
 
-export async def switchKey() -> null:
+export async def switchKey():
     active = "b"
     await tick()
 `.trimStart());
@@ -7317,7 +7317,7 @@ watch second() as current, previous:
 watch keys() as current, previous:
     print("keys:" + current)
 
-export async def exercise() -> null:
+export async def exercise():
     items.insert(0, 5)
     lookup.set("a", 2)
     await tick()
@@ -7357,7 +7357,7 @@ watch hasValue() as current, previous:
 watch recordValue() as current, previous:
     print("record:" + str(current))
 
-export async def exercise() -> null:
+export async def exercise():
     lookup.clear()
     selected.clear()
     fields.clear()
@@ -7376,7 +7376,7 @@ type Model:
 
 export state model: Model = {value: 1}
 
-export def replace() -> null:
+export def replace():
     model = {value: 2}
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -7399,7 +7399,7 @@ test("reactive module imports lower reads and reject ambiguous access", async ()
   await writeFile(storePath, `
 export state count = 0
 export const doubled = computed(() => count * 2)
-export def increment() -> null:
+export def increment():
     count += 1
 `.trimStart(), "utf8");
   await writeFile(mainPath, `
@@ -7538,7 +7538,7 @@ class Counter:
     let value: number = 0
 
     /// Adds one checked amount.
-    def add(amount: number) -> null:
+    def add(amount: number):
         self.value += amount
 `.trimStart(), { path: "/tmp/documented.vel" });
   assert.deepEqual(direct.diagnostics, []);
@@ -7576,7 +7576,7 @@ export class Meter:
     let total: number = 0
 
     /// Records one completed operation.
-    def add() -> null:
+    def add():
         self.total += 1
 `.trimStart();
   const mainSource = `
@@ -8060,18 +8060,18 @@ component App:
     const dark = media("(prefers-color-scheme: dark)")
     const headingId = domId("heading")
 
-    def compose(event: CompositionEvent) -> null:
+    def compose(event: CompositionEvent):
         print(event.data)
 
-    def paste(event: ClipboardEvent) -> null:
+    def paste(event: ClipboardEvent):
         event.preventDefault()
         print(clipboardText(event))
 
-    def copy(event: ClipboardEvent) -> null:
+    def copy(event: ClipboardEvent):
         event.preventDefault()
         setClipboardText(event, "copied")
 
-    def inspect() -> null:
+    def inspect():
         if form != null:
             const currentForm = form
             const typed = read(currentForm, FormDraft)
@@ -8375,14 +8375,14 @@ def readName(form: Element) -> string:
 def canvasContext(canvas: CanvasElement) -> unknown:
     return canvas.getContext(kind="2d")
 
-def useElement(element: Element) -> null:
+def useElement(element: Element):
     element.focus()
 
-def usePrimitiveSubtypes(input: InputElement, keyboard: KeyboardEvent) -> null:
+def usePrimitiveSubtypes(input: InputElement, keyboard: KeyboardEvent):
     useElement(input)
     const event: Event = keyboard
 
-async def prepare() -> null:
+async def prepare():
     const config = publicConfig(target=User)
     const itemRoute = route(view=Page, path="/items")
     navigate(options={scroll: false}, to=itemRoute.path)
@@ -8429,14 +8429,14 @@ http.get(path="/items")
 scrollTo(left=10, top=20)
 mount(<main>invalid</main>, 42)
 
-async def inspectBlob() -> null:
+async def inspectBlob():
     const binary = await http.get("/data").blob()
     print(binary.size)
 
 const forged: Blob = {}
 const forgedElement: Element = {focus: () => null, remove: () => null}
 
-def inspectCanvas(canvas: CanvasElement) -> null:
+def inspectCanvas(canvas: CanvasElement):
     canvas.getContext(kind="2d").fillRect(0, 0, 1, 1)
 `.trimStart(), "utf8");
   const invalid = await compileProject(invalidPath);
@@ -8460,7 +8460,7 @@ import {pick, readText} from "velar/files"
 type Attachment:
     file: File
 
-async def inspect() -> null:
+async def inspect():
     const selected = await pick()
     if selected.size > 0:
         const file = selected[0]
@@ -8469,7 +8469,7 @@ async def inspect() -> null:
         await readText(file)
         const checked = Attachment.parse({file: file})
 
-def edit(input: InputElement, canvas: CanvasElement) -> null:
+def edit(input: InputElement, canvas: CanvasElement):
     input.value = "ready"
     input.checked = true
     canvas.width = 640
@@ -8497,7 +8497,7 @@ const forged = Attachment.parse({file: {name: "fake.txt", size: 1, type: "text/p
   const invalid = compile(`
 const forged: File = {name: "fake.txt", size: 1, type: "text/plain", modified: 0}
 
-def overwrite(file: File, event: KeyboardEvent, element: Element, input: InputElement) -> null:
+def overwrite(file: File, event: KeyboardEvent, element: Element, input: InputElement):
     file.name = "changed.txt"
     event.key = "Enter"
     element.focus = () => null
@@ -9733,7 +9733,7 @@ state count = 0
 watch count as current, previous:
     print(f"watch:{current}:{previous}")
 
-export def commit() -> null:
+export def commit():
     count = count + 1
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -10245,7 +10245,7 @@ type NestedValue:
 type UnsupportedForm:
     nested: NestedValue
 
-def numericMessage(value: number) -> null:
+def numericMessage(value: number):
     print(value)
 
 component WrongRoute(route: number, required: string):
@@ -10263,12 +10263,12 @@ component BrokenRouterFallbacks:
 component WrongDialog:
     let dialog: DialogElement? = null
     let form: Element? = null
-    def inspect() -> null:
+    def inspect():
         if form != null:
             const unsupported = read(form, UnsupportedForm)
     return <div ref={dialog}>Not a dialog</div>
 
-def openWrongDialog(element: Element) -> null:
+def openWrongDialog(element: Element):
     showDialog(element)
 
 const response = await http.get("/items").parse(42)
@@ -10351,7 +10351,7 @@ import {read} from "velar/forms"
 
 component Signup:
     let form: Element? = null
-    def submit() -> null:
+    def submit():
         if form != null:
             const draft = read(form, SignupForm)
             print(draft.name)
@@ -10417,7 +10417,7 @@ export type Properties = Record<Property>
 export def propertyAt(properties: Properties, key: string) -> Property?:
     return properties[key]
 
-export def putProperty(properties: Properties, key: string, value: Property) -> null:
+export def putProperty(properties: Properties, key: string, value: Property):
     properties[key] = value
 
 const properties: Properties = {
@@ -11125,7 +11125,7 @@ async def handle(request: ServeRequest) -> ServeResponse:
             throw error
     return fileResponse(root="dist", path=request.path, fallback="index.html")
 
-async def cleanup() -> null:
+async def cleanup():
     return null
 
 onShutdown(cleanup)
@@ -11218,7 +11218,7 @@ import {onShutdown} from "velar/host"
 type Body:
     text: string
 
-async def chunks(write: (chunk: string) -> Promise<null>) -> null:
+async def chunks(write: (chunk: string) -> Promise<null>):
     await write("first")
     await Promise.sleep(40ms)
     await write("second")
@@ -11250,11 +11250,11 @@ async def handle(request: ServeRequest) -> ServeResponse:
 
 const server = await serve(handle, port=0)
 
-async def firstCleanup() -> null:
+async def firstCleanup():
     print("cleanup:first")
     return null
 
-async def stopServer() -> null:
+async def stopServer():
     print("cleanup:server")
     await server.stop()
     return null
@@ -14331,7 +14331,7 @@ def counter(start: number) -> () -> number:
         return count
     return next
 
-export def exercise() -> null:
+export def exercise():
     const left = counter(0)
     const right = counter(10)
     print(str(left()) + ":" + str(left()) + ":" + str(right()))
@@ -14355,7 +14355,7 @@ def localShadow() -> bool:
     dark = not dark
     return dark
 
-def toggle() -> null:
+def toggle():
     dark = not dark
 
 const labels = [true, false].map(dark => darkLabel(dark))
@@ -14388,7 +14388,7 @@ component App:
     def echo(title: string) -> string:
         return title
 
-    action toggle() -> null:
+    action toggle():
         open = not open
 
     return <p>{describe(open)} {echo(title())}</p>
@@ -14617,7 +14617,7 @@ test("a for-loop iterable cannot reference the name its own loop binding declare
   reports(`
 const items = [1, 2, 3]
 
-def f() -> null:
+def f():
     for items in items:
         print(items)
 
@@ -14627,7 +14627,7 @@ f()
   // The loop binding shadows from its own head, so an iterable read that
   // resolves to the immediately enclosing scope breaks the same way.
   reports(`
-def f() -> null:
+def f():
     const items = [1, 2, 3]
     for items in items:
         print(items)
@@ -14637,14 +14637,14 @@ def f() -> null:
   reports(`
 const pairs = [[1, 2]]
 
-def f() -> null:
+def f():
     for [first, ...pairs] in pairs:
         print(first)
 `, loopDirective("pairs"));
   reports(`
 const rows = [{id: 1, tag: "a"}]
 
-def f() -> null:
+def f():
     for {id, ...rows} in rows:
         print(id)
 `, loopDirective("rows"));
@@ -14658,7 +14658,7 @@ const items = [1, 2]
 def pick(choose: () -> List<number>) -> List<number>:
     return choose()
 
-def f() -> null:
+def f():
     for items in pick(() => items):
         print(items)
 `, loopDirective("items"));
@@ -14686,7 +14686,7 @@ print(f())
   const hoisted = compile(`
 const items = [1, 2, 3]
 
-def f() -> null:
+def f():
     const source = items
     for items in source:
         print(items)
@@ -14702,7 +14702,7 @@ f()
   const renamed = compile(`
 const items = [1, 2, 3]
 
-def f() -> null:
+def f():
     for item in items:
         print(item)
 
@@ -14715,7 +14715,7 @@ f()
 
   // Without an outer binding the read is an ordinary unknown name.
   const unknown = compile(`
-def f() -> null:
+def f():
     for x in x:
         print(x)
 `.trimStart());
@@ -14929,7 +14929,7 @@ class Worker:
     get label() -> string:
         return "ready"
 
-    def stop() -> null:
+    def stop():
         pass
 
 extern module "host-sdk":
@@ -14939,7 +14939,7 @@ extern module "host-sdk":
         def close() -> null
 
 component App:
-    action save() -> null:
+    action save():
         pass
 
     return <p>App</p>
@@ -16245,7 +16245,7 @@ component App:
     state age = 1
     state enabled = true
 
-    def submit() -> null:
+    def submit():
         print(name)
 
     return <>
@@ -16299,7 +16299,7 @@ type User:
 
 const user: User = {name: "Ada"}
 
-def callback() -> null:
+def callback():
     return null
 
 component Broken:
@@ -17026,7 +17026,7 @@ const second: number = extended[0]
 
 component Values:
     state values: List<number> = []
-    def addValues() -> null:
+    def addValues():
         values = [...values, 1, 2, 3]
     return <div>{values.map(value => <span key={value}>{value + 1}</span>)}</div>
 
@@ -17165,7 +17165,7 @@ previous.append("independent")
 type Bucket:
     values: List<unknown>
 
-def share(values: List<unknown>) -> null:
+def share(values: List<unknown>):
     print(values.size)
 
 const objectValues = []
@@ -17331,7 +17331,7 @@ type Payload:
 
 state payload: Payload = {value: 1}
 
-export def probe() -> null:
+export def probe():
     print(seesRaw(payload) == true ? "raw" : "proxy")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
@@ -17367,7 +17367,7 @@ test("collection reactivity resolves through captured bridge operations after mo
   const result = compile(`
 state total = 0
 
-export def exercise(items: List<number>) -> null:
+export def exercise(items: List<number>):
     items.append(2)
     total = items.size
     print("items:" + str(total))
@@ -17679,7 +17679,7 @@ test("project compilation shares flow-narrowing errors without publishing their 
   const source = `
 let current: number? = 1
 
-def clear() -> null:
+def clear():
     current = null
 
 export def stale() -> number:
@@ -17709,7 +17709,7 @@ try { stale(); } catch (error) { console.log(error.name); }
   const entryPath = join(directory, "main.vel");
   await writeFile(dependencyPath, `
 let value: number? = 1
-def clear() -> null:
+def clear():
     value = null
 export def dependency() -> number:
     assert value != null
@@ -17719,7 +17719,7 @@ export def dependency() -> number:
   await writeFile(entryPath, `
 import {dependency} from "./dependency.vel"
 let value: number? = 2
-def clear() -> null:
+def clear():
     value = null
 def entry() -> number:
     assert value != null
@@ -18211,7 +18211,7 @@ console.log(poisonCalls);
 
 test("project compilation shares collection lowering without sharing application collections", async () => {
   const source = `
-export def exercise() -> null:
+export def exercise():
     const values = [3, 1]
     values.append(2)
     values[-1] = 2
@@ -19490,7 +19490,7 @@ class Pull:
     async def next() -> string?:
         return null
 
-def drain(source: Pull) -> null:
+def drain(source: Pull):
     async for value in source:
         print(value)
 `.trimStart());
@@ -19804,9 +19804,14 @@ def choose(flag: bool) -> number:
 });
 
 test("formatter is syntax-aware and idempotent", () => {
-  const source = "type ChooseHandler=(string)->null  \r\ncomponent App:  \r\n\t// keep me\r\n\tresource label:string=loadLabel()   \r\n\tconst values:List<number>=[1,2,3]\r\n\tconst choose:ChooseHandler=value=>null\r\n\tconst result=ready?values[0]:null\r\n\taction refresh()->null:\r\n\t\tawait label.reload()\r\n\t\treturn null\r\n\treturn <main>{label.value}</main>\r\n";
+  // The action keeps a written result so the fixture still covers '->' inside a
+  // declaration line followed by the block colon. It is not '-> null': D58 rule
+  // 139 refuses that spelling where a body infers it, and the corpus an author
+  // reads should not model a spelling the compiler rejects. The type alias on
+  // the first line keeps '-> null' covered where it is still written.
+  const source = "type ChooseHandler=(string)->null  \r\ncomponent App:  \r\n\t// keep me\r\n\tresource label:string=loadLabel()   \r\n\tconst values:List<number>=[1,2,3]\r\n\tconst choose:ChooseHandler=value=>null\r\n\tconst result=ready?values[0]:null\r\n\taction refresh()->string:\r\n\t\tawait label.reload()\r\n\t\treturn \"done\"\r\n\treturn <main>{label.value}</main>\r\n";
   const formatted = formatSource(source, webFormatOptions);
-  assert.equal(formatted, "type ChooseHandler = (string) -> null\ncomponent App:\n    // keep me\n    resource label: string = loadLabel()\n    const values: List<number> = [1, 2, 3]\n    const choose: ChooseHandler = value => null\n    const result = ready ? values[0] : null\n    action refresh() -> null:\n        await label.reload()\n        return null\n    return <main>{label.value}</main>\n");
+  assert.equal(formatted, "type ChooseHandler = (string) -> null\ncomponent App:\n    // keep me\n    resource label: string = loadLabel()\n    const values: List<number> = [1, 2, 3]\n    const choose: ChooseHandler = value => null\n    const result = ready ? values[0] : null\n    action refresh() -> string:\n        await label.reload()\n        return \"done\"\n    return <main>{label.value}</main>\n");
   assert.equal(formatSource(formatted, webFormatOptions), formatted);
 });
 
@@ -19893,7 +19898,7 @@ component App:
 test("CLI format supports write and check modes", async () => {
   const directory = await makeTemporaryDirectory("velar-format-");
   const sourcePath = join(directory, "main.vel");
-  await writeFile(sourcePath, "def main() -> null:  \n  return null  \n", "utf8");
+  await writeFile(sourcePath, "def main():  \n  return null  \n", "utf8");
 
   const before = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "format", sourcePath, "--check"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(before.status, 1);
@@ -19901,7 +19906,7 @@ test("CLI format supports write and check modes", async () => {
   assert.equal(write.status, 0, write.stderr);
   const after = spawnSync(process.execPath, ["packages/cli/src/cli.ts", "format", sourcePath, "--check"], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(after.status, 0, after.stderr);
-  assert.equal(await readFile(sourcePath, "utf8"), "def main() -> null:\n    return null\n");
+  assert.equal(await readFile(sourcePath, "utf8"), "def main():\n    return null\n");
 });
 
 test("documentation example checker rejects invalid complete examples", async () => {
@@ -20019,7 +20024,7 @@ export type User:
 export let current: User? = {name: "Ada"}
 export const fixed: User? = {name: "Lin"}
 
-export def clear() -> null:
+export def clear():
     current = null
 `.trimStart(), "utf8");
   await writeFile(entryPath, `
@@ -20045,7 +20050,7 @@ export type User:
 
 export state current: User? = {name: "Mira"}
 
-export def clear() -> null:
+export def clear():
     current = null
 `.trimStart(), "utf8");
   await writeFile(reactiveEntryPath, `
@@ -20106,7 +20111,7 @@ component App:
 `.trimStart(), "utf8");
   await writeFile(invalidPath, `
 import {Item} from "./item.vel"
-def choose(value: number) -> null:
+def choose(value: number):
     return null
 component App:
     return <Item label="Velar" onChoose={choose} />
@@ -20360,7 +20365,7 @@ export type Profile:
 export def observe(profile: readonly Profile) -> readonly Profile:
     return profile
 
-export def mutate(profile: Profile) -> null:
+export def mutate(profile: Profile):
     profile.meta.label = "changed"
 `.trimStart(), "utf8");
   await writeFile(api, 'export {Profile as UserProfile, observe as inspect, mutate} from "./model.vel"\n', "utf8");
@@ -20545,7 +20550,7 @@ test("same-named record types from different modules use their structural contra
 export type Item:
     label: string
 
-export def consume(value: Item) -> null:
+export def consume(value: Item):
     print(value.label)
 `.trimStart(), "utf8");
   await writeFile(producerPath, `
@@ -21161,7 +21166,7 @@ class Invalid:
 
 test("constructors initialize fields once after the base constructor and preserve bound methods", () => {
   const result = compile(`
-def invoke(callback: () -> null) -> null:
+def invoke(callback: () -> null):
     callback()
 
 class Base:
@@ -21182,7 +21187,7 @@ class Child extends Base:
         assert value > 0 else "Value must be positive"
         invoke(self.record)
 
-    def record() -> null:
+    def record():
         self.steps.append(f"value:{self.doubled}")
 
 const steps: List<string> = []
@@ -21300,7 +21305,7 @@ class Ledger:
         self.label = label
         self.display = f"{label} ledger"
 
-    def add(value: number) -> null:
+    def add(value: number):
         self.entries.append(value)
         self.total += value
 
@@ -21457,7 +21462,7 @@ class Base:
     constructor():
         self.validate()
 
-    def validate() -> null:
+    def validate():
         pass
 
 class Child extends Base:
@@ -21467,7 +21472,7 @@ class Child extends Base:
         super()
         self.name = "Ada"
 
-    override def validate() -> null:
+    override def validate():
         print(self.name)
 
 Child()
@@ -21480,7 +21485,7 @@ Child()
 class Score:
     let value: number = 2
 
-    def add(amount: number) -> null:
+    def add(amount: number):
         self.value += amount
 
 const score = Score()
@@ -22013,7 +22018,7 @@ export class ScoreCard:
         self.label = label
         assert self.label != "" else "ScoreCard label cannot be empty"
 
-    def add(value: number) -> null:
+    def add(value: number):
         self.history.append(value)
         self.total += value
 
@@ -22102,7 +22107,7 @@ test("class inheritance rejects unsafe or incomplete object contracts", () => {
   const incompatibleOverride = compile("class Base:\n    def label(value: string) -> string:\n        return value\n\nclass Child extends Base:\n    override def label(value: number) -> string:\n        return str(value)\n");
   assert.ok(incompatibleOverride.diagnostics.some((item) => /must keep the base method signature/.test(item.message)));
 
-  const inheritedConst = compile("class Base:\n    const id: string\n\n    constructor(id: string):\n        self.id = id\n\nclass Child extends Base:\n    constructor():\n        super(\"fixed\")\n\n    def change() -> null:\n        self.id = \"other\"\n");
+  const inheritedConst = compile("class Base:\n    const id: string\n\n    constructor(id: string):\n        self.id = id\n\nclass Child extends Base:\n    constructor():\n        super(\"fixed\")\n\n    def change():\n        self.id = \"other\"\n");
   assert.ok(inheritedConst.diagnostics.some((item) => /Cannot assign to const field 'id'/.test(item.message)));
 
   const localFieldMethodCollision = compile("class User:\n    const name: string\n\n    constructor(name: string):\n        self.name = name\n\n    def name() -> string:\n        return self.name\n");
@@ -22463,8 +22468,8 @@ class Counter:
     constructor(value: number):
         self.value = value
 
-    def show() -> null:
-        def nested() -> null:
+    def show():
+        def nested():
             print(self.value)
         nested()
 
@@ -22482,14 +22487,14 @@ test("rejects await in sync functions and loop control crossing function boundar
 async def request() -> number:
     return 1
 
-def load() -> null:
+def load():
     const response = await request()
 `.trimStart());
   assert.ok(awaitResult.diagnostics.some((item) => item.code === "VEL4007"));
 
   const breakResult = compile(`
 while true:
-    def stop() -> null:
+    def stop():
         break
     break
 `.trimStart());
@@ -22918,7 +22923,7 @@ print(returningMutation(ada, true))
 type User:
     name: string
 
-def invalid(initial: User?, change: bool) -> null:
+def invalid(initial: User?, change: bool):
     let user = initial
     assert user != null
     if change:
@@ -23082,7 +23087,7 @@ type User:
 type Box:
     user: User?
 
-def invalid(box: Box) -> null:
+def invalid(box: Box):
     assert box.user != null
     try:
         box.user = null
@@ -23130,7 +23135,7 @@ type User:
 type Box:
     user: User?
 
-def invalid(box: Box, values: List<number>) -> null:
+def invalid(box: Box, values: List<number>):
     assert box.user != null
     for value in values:
         box.user = null
@@ -23181,7 +23186,7 @@ class Box:
     def observe() -> string:
         return self.user?.name ?? "missing"
 
-    def clear() -> null:
+    def clear():
         self.user = null
 
 def safe(box: Box) -> string:
@@ -23253,7 +23258,7 @@ type User:
 type Box:
     user: User?
 
-def clear(box: Box) -> null:
+def clear(box: Box):
     box.user = null
 
 def label(left: Box, right: Box) -> string:
@@ -23275,7 +23280,7 @@ type Holder:
     box: Box?
     values: List<string>?
 
-def clear(box: Box) -> null:
+def clear(box: Box):
     box.user = null
 
 def label(holder: Holder) -> string:
@@ -23302,7 +23307,7 @@ type User:
 type Box:
     user: User?
 
-def clear(box: Box) -> null:
+def clear(box: Box):
     box.user = null
 
 def label(box: Box) -> string:
@@ -23327,7 +23332,7 @@ type User:
 type Box:
     user: User?
 
-def clear(box: Box) -> null:
+def clear(box: Box):
     box.user = null
 
 def label(box: Box) -> string:
@@ -23346,7 +23351,7 @@ type User:
 def label(initial: User?) -> string:
     let user = initial
 
-    def clear() -> null:
+    def clear():
         user = null
 
     assert user != null
@@ -23387,7 +23392,7 @@ type Box:
 def label(box: Box) -> string:
     assert box.user != null
 
-    def clearLater() -> null:
+    def clearLater():
         print("later")
         box.user = null
 
@@ -23410,7 +23415,7 @@ type Box:
 def label(box: Box) -> string:
     assert box.user != null
 
-    def clearLater() -> null:
+    def clearLater():
         box.user = null
 
     clearLater()
@@ -23428,23 +23433,23 @@ type User:
 let user: User? = {name: "Ada"}
 let other: User? = {name: "Lin"}
 
-def clear() -> null:
+def clear():
     user = null
 
-def forward() -> null:
+def forward():
     later()
 
-def later() -> null:
+def later():
     clear()
 
-def run(callback: () -> null) -> null:
+def run(callback: () -> null):
     callback()
 
 def makeClearer() -> () -> null:
     return clear
 
 class Worker:
-    def touch() -> null:
+    def touch():
         clear()
 
     get value() -> string:
@@ -23538,10 +23543,10 @@ export type State:
 export let user: User? = {name: "Ada"}
 export const storeState: State = {user: {name: "Lin"}}
 
-export def clear() -> null:
+export def clear():
     user = null
 
-export def clearState() -> null:
+export def clearState():
     storeState.user = null
 `.trimStart(), "utf8");
   await writeFile(directPath, `
@@ -23560,7 +23565,7 @@ export type State:
 
 export const storeState: State = {user: {name: "Lin"}}
 
-export def clearState() -> null:
+export def clearState():
     storeState.user = null
 `.trimStart(), "utf8");
   await writeFile(namespacePath, `
@@ -24532,7 +24537,7 @@ component Counter(start: number = 0):
     state count = start
     const doubled = computed(() => count * 2)
 
-    def increment() -> null:
+    def increment():
         count += 1
 
     watch count as current, previous:
@@ -24737,10 +24742,10 @@ const editorLook = look:
 component Editor(initial: string = "draft") exposes EditorHandle:
     state text = initial
 
-    def focusEditor() -> null:
+    def focusEditor():
         pass
 
-    def reset() -> null:
+    def reset():
         text = initial
 
     def value() -> string:
@@ -24770,7 +24775,7 @@ type Handle:
     run: () -> null
 
 component AfterReturn exposes Handle:
-    def run() -> null:
+    def run():
         pass
     return <div>Ready</div>
     expose {run}
@@ -24794,7 +24799,7 @@ type HandledView = Component<() -> WebNode, Handle>
 type InvalidView = Component<() -> WebNode, string>
 
 component Controlled exposes Handle:
-    def run() -> null:
+    def run():
         pass
     expose {run}
     return <button>Run</button>
@@ -24806,13 +24811,13 @@ component Missing exposes Handle:
     return <div>Missing</div>
 
 component Undeclared:
-    def run() -> null:
+    def run():
         pass
     expose {run}
     return <div>Undeclared</div>
 
 component Duplicate exposes Handle:
-    def run() -> null:
+    def run():
         pass
     expose {run}
     expose {run}
@@ -24884,10 +24889,10 @@ export type DialogHandle:
 export type DialogView = Component<(title: string) -> WebNode, DialogHandle>
 
 export component Dialog(title: string) exposes DialogHandle:
-    def open() -> null:
+    def open():
         print("open:" + title)
 
-    def close() -> null:
+    def close():
         print("close:" + title)
 
     expose {open, close}
@@ -24942,7 +24947,7 @@ let selectedCounter: CounterHandle? = null
 component Counter exposes CounterHandle:
     state count = 0
 
-    def increment() -> null:
+    def increment():
         count += 1
 
     def value() -> number:
@@ -24958,7 +24963,7 @@ component Counter exposes CounterHandle:
 component Alternate exposes CounterHandle:
     state count = 10
 
-    def increment() -> null:
+    def increment():
         count += 1
 
     def value() -> number:
@@ -25959,7 +25964,7 @@ component App:
         label = "ready"
         return label
 
-    async def runRefresh() -> null:
+    async def runRefresh():
         try:
             await refresh()
         catch error:
@@ -26041,8 +26046,8 @@ catch (error) { console.log(error.message + ":" + pending.length); }
 
 test("actions reject nested ownership, bad returns, and unknown state fields", () => {
   const nested = compile(`
-def prepare() -> null:
-    action save() -> null:
+def prepare():
+    action save():
         return null
 `.trimStart());
   assert.ok(nested.diagnostics.some((item) => item.code === "VEL3013" && /only valid at module or component scope/u.test(item.message)));
@@ -26173,7 +26178,7 @@ component App:
   assert.ok(nested.diagnostics.length > 0);
 
   const asynchronousMount = compile(`
-async def prepare() -> null:
+async def prepare():
     return null
 
 component App:
@@ -26185,7 +26190,7 @@ component App:
   assert.match(asynchronousMount.code ?? "", /async \(\) => \{[\s\S]*await __velarNormalizePromiseValue\(prepare\(\)\)/u);
 
   const asynchronousCleanup = compile(`
-async def dispose() -> null:
+async def dispose():
     return null
 
 component App:
@@ -26236,7 +26241,7 @@ let childInstances = 0
 component Workspace:
     childInstances += 1
     state viewportStart = 0
-    def scroll() -> null:
+    def scroll():
         viewportStart += 1
     childUpdate = scroll
     @mounted:
@@ -26336,7 +26341,7 @@ let activeHandles = 0
 
 def acquireHandle() -> () -> null:
     activeHandles += 1
-    def stop() -> null:
+    def stop():
         activeHandles -= 1
     return stop
 
@@ -26524,16 +26529,16 @@ def isClipboardPayload(value: unknown) -> bool:
     return value is ClipboardEvent
 
 component Controls:
-    def handleAny(event: Event) -> null:
+    def handleAny(event: Event):
         print(event.type)
 
-    def handleKey(event: KeyboardEvent) -> null:
+    def handleKey(event: KeyboardEvent):
         print(event.key)
 
-    def handleComposition(event: CompositionEvent) -> null:
+    def handleComposition(event: CompositionEvent):
         print(event.data)
 
-    def handleClipboard(event: ClipboardEvent) -> null:
+    def handleClipboard(event: ClipboardEvent):
         event.preventDefault()
 
     return <main>
@@ -26583,7 +26588,7 @@ type Detailed:
     label: string
     count: number
 
-def show(value: Summary) -> null:
+def show(value: Summary):
     print(value.label)
 
 const detail: Detailed = {label: "ready", count: 1}
@@ -26593,10 +26598,10 @@ show(detail)
 
   const invalid = compile(`
 component Broken:
-    def pointerOnly(event: PointerEvent) -> null:
+    def pointerOnly(event: PointerEvent):
         print(event.clientX)
 
-    def tooMany(first: Event, second: Event) -> null:
+    def tooMany(first: Event, second: Event):
         print(first.type)
 
     return <main>
@@ -27550,7 +27555,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.ok(fixes.every((item) => item.kind === "quickfix" && item.isPreferred));
 
   const namedFixUri = pathToFileURL(join(directory, "named-fix.vel")).href;
-  const namedFixText = "def greet(name: string) -> null:\n    pass\n\ngreet(name: \"Ada\")\n";
+  const namedFixText = "def greet(name: string):\n    pass\n\ngreet(name: \"Ada\")\n";
   send({
     jsonrpc: "2.0",
     method: "textDocument/didOpen",
@@ -28106,7 +28111,7 @@ print(measure(null))
   assert.ok(trailing.diagnostics.some((item) => item.code === "VEL2001"), JSON.stringify(trailing.diagnostics));
 
   // A block header ending with ':' never joins with a dot line.
-  const header = compile("def broken() -> null:\n    .run()\n");
+  const header = compile("def broken():\n    .run()\n");
   assert.ok(header.diagnostics.length > 0);
 });
 
@@ -28313,7 +28318,7 @@ export type Report:
 
 export let counter = 0
 
-export def bump() -> null:
+export def bump():
     counter += 1
 
 export def greet(name: string) -> string:

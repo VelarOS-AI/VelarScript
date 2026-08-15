@@ -40,14 +40,14 @@ component Child(row: Row):
     harmless(row)
     return <span>{row.title}</span>
 
-def overwrite(row: Row) -> null:
+def overwrite(row: Row):
     row.title = "helper"
 
-def harmless(row: readonly Row) -> null:
-    def nested(row: Row) -> null:
+def harmless(row: readonly Row):
+    def nested(row: Row):
         row.title = "nested-only"
 
-def mutateThroughArrow(items: List<string>) -> null:
+def mutateThroughArrow(items: List<string>):
     [0].map(_ => items.append("captured"))
 
 component ListChild(items: List<string>):
@@ -101,10 +101,10 @@ type NestedRow:
     title: string
     inner: Inner
 
-def mutateTransitively(value: NestedRow) -> null:
+def mutateTransitively(value: NestedRow):
     mutateDirectly(value)
 
-def mutateDirectly(value: NestedRow) -> null:
+def mutateDirectly(value: NestedRow):
     value.title = "helper"
 
 def identity(value: readonly NestedRow) -> readonly NestedRow:
@@ -193,13 +193,13 @@ class Box:
     constructor(title: string):
         self.title = title
 
-    def retitle() -> null:
+    def retitle():
         self.title = "method"
 
     def label() -> string:
         return self.title
 
-def retitle(box: Box) -> null:
+def retitle(box: Box):
     box.title = "helper"
 
 component ClassChild(box: Box, boxes: List<Box>, pending: Promise<User>):
@@ -211,7 +211,7 @@ component ClassChild(box: Box, boxes: List<Box>, pending: Promise<User>):
     const selected = boxes.get(0)
     if selected != null:
         selected.title = "method result"
-    action change() -> null:
+    action change():
         const user = await pending
         user.name = "resolved"
     return <span>{box.label()}</span>
@@ -228,7 +228,7 @@ component ClassChild(box: Box, boxes: List<Box>, pending: Promise<User>):
   assert.ok(result.diagnostics.some((diagnostic) => /mutating method 'append' through readonly List<Box>/u.test(diagnostic.message)));
 
   const hostAnnotation = compile(`
-def inspect(element: readonly CanvasElement) -> null:
+def inspect(element: readonly CanvasElement):
     return null
 `.trimStart());
   assert.ok(hostAnnotation.diagnostics.some((diagnostic) => /CanvasElement is outside that boundary/u.test(diagnostic.message)));
@@ -315,7 +315,7 @@ type Key:
 
 state renderError = ""
 
-def captureRenderError(phase: string, message: string) -> null:
+def captureRenderError(phase: string, message: string):
     renderError = phase + ":" + message
 
 onError(report => captureRenderError(report.phase, report.error.message))
@@ -388,46 +388,46 @@ component App:
     state revision = 0
     let held: Row? = null
 
-    def addEmpty() -> null:
+    def addEmpty():
         emptyList.append("L")
         emptySet.add("S")
         emptyMap.set("M", "1")
 
-    def addPair() -> null:
+    def addPair():
         pairs.set("b", "2")
 
-    def clearPairs() -> null:
+    def clearPairs():
         pairs.clear()
 
-    def editObjectKey() -> null:
+    def editObjectKey():
         for key, value in objectKeys:
             key.name = "changed"
 
-    def flipPatterns() -> null:
+    def flipPatterns():
         box.done = true
 
-    def updateJson() -> null:
+    def updateJson():
         root.inner.done = true
         jsonItems.append("b")
 
-    def addArrival() -> null:
+    def addArrival():
         arriving.append("first")
 
-    def takeRow() -> null:
+    def takeRow():
         held = rows.pop()
         const taken = held
         if taken != null:
             rows.append(taken)
 
-    def editHeld() -> null:
+    def editHeld():
         const taken = held
         if taken != null:
             taken.title = "EDITED"
 
-    def churn() -> null:
+    def churn():
         revision += 1
 
-    def editRow() -> null:
+    def editRow():
         rows[0].title = "BOUND"
 
     return <main>

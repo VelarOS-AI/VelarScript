@@ -68,10 +68,10 @@ type EditorHandle:
 component Editor(initial: string = "draft") exposes EditorHandle:
     state text = initial
 
-    def focusEditor() -> null:
+    def focusEditor():
         pass
 
-    def reset() -> null:
+    def reset():
         text = initial
 
     def value() -> string:
@@ -524,7 +524,7 @@ is what counts. Render and watch observers are still notified only after the
 recomputed public result actually changes.
 
 ```velar fragment
-def commitSend(userMessage: Message, reply: Message) -> null:
+def commitSend(userMessage: Message, reply: Message):
     messages = [...messages, userMessage]
     messages = [...messages, reply]
     streamingMessageId = reply.id
@@ -574,7 +574,7 @@ dense-List validation intentionally reads raw descriptors.
 state messagesById: Map<string, Message> = Map()
 state latestBySession: Map<string, Message> = Map()
 
-def appendChunk(replyId: string, chunk: string) -> null:
+def appendChunk(replyId: string, chunk: string):
     const reply = messagesById.get(replyId)
     if reply:
         reply.text += chunk
@@ -601,12 +601,12 @@ import {onError, reportError} from "velar/app"
 component RuntimeStatus:
     state message = "ready"
 
-    def capture(phase: string, detail: string) -> null:
+    def capture(phase: string, detail: string):
         message = phase + ":" + detail
 
     const stopErrors = onError(report => capture(report.phase, report.error.message))
 
-    def failDeliberately() -> null:
+    def failDeliberately():
         reportError(Error("Manual failure"), "manual", "diagnostic action")
 
     @cleanup:
@@ -904,7 +904,7 @@ Incremental text bodies do not require buffering the whole response:
 
 ```velar fragment
 const request = http.get("/api/events", {timeout: 120000})
-async def consumeEventChunk(chunk: string) -> null:
+async def consumeEventChunk(chunk: string):
     print(chunk)
     return null
 await request.streamText(consumeEventChunk)
@@ -1030,7 +1030,7 @@ component PreferencesPanel:
     const settings = preferences.get("settings", Settings, {theme: "system"}, 262144)
     const cache = database("release-studio")
 
-    async def save() -> null:
+    async def save():
         preferences.set("settings", settings, 262144)
         await cache.set("settings", settings, 262144)
 

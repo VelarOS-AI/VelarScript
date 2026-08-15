@@ -1,6 +1,6 @@
 import {every} from "velar/browser"
 
-def failIfLeaked() -> null:
+def failIfLeaked():
     throw Error("Construction timer leaked")
 
 export component Broken:

@@ -13,7 +13,7 @@ class Box:
 `.trimStart());
 
   const invalidGeneric = compile(`
-def generic<T>(value: readonly T) -> null:
+def generic<T>(value: readonly T):
     return null
 `.trimStart());
 
@@ -21,12 +21,12 @@ def generic<T>(value: readonly T) -> null:
 class Box:
     pass
 
-def inspect(box: readonly Box) -> null:
+def inspect(box: readonly Box):
     return null
 `.trimStart());
 
   const invalidPromise = compile(`
-def inspect(pending: readonly Promise<List<number>>) -> null:
+def inspect(pending: readonly Promise<List<number>>):
     return null
 `.trimStart());
 
@@ -56,10 +56,10 @@ type User:
 def expose(user: User) -> readonly User:
     return user
 
-def mutateField(user: User) -> null:
+def mutateField(user: User):
     user.profile.tags.append("blocked")
 
-def mutateView(user: readonly User) -> null:
+def mutateView(user: readonly User):
     user.profile.tags.append("blocked")
 `.trimStart());
 
@@ -88,7 +88,7 @@ type User:
 type Box:
     user: User?
 
-def clear(box: Box) -> null:
+def clear(box: Box):
     box.user = null
 
 def read(box: Box) -> string:

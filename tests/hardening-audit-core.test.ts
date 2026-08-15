@@ -121,7 +121,7 @@ test("[CLS-D2] export class in a block no longer reaches emission as invalid Jav
   // This emitted `export class` inside a function body, which Node refuses
   // to parse. The module-scope rule now rejects it before emission.
   rejects(`
-def install() -> null:
+def install():
     export class Widget:
         const id: number = 1
     return null
@@ -265,7 +265,7 @@ test("[CLS-D5] a narrowed factory value constructs through the recheck wrapper",
 class P:
     const n: number = 1
 
-def touch() -> null:
+def touch():
     return null
 
 const registry = Map()
@@ -482,7 +482,7 @@ export type User:
 export type Slot:
     value: User | Error
 
-export def replace(slot: Slot) -> null:
+export def replace(slot: Slot):
     slot.value = Error("boom")
     return null
 `.trimStart(),
@@ -512,7 +512,7 @@ export type User:
 export type Holder:
     payload: unknown
 
-export def swap(h: Holder) -> null:
+export def swap(h: Holder):
     h.payload = 5
     return null
 `.trimStart(),
@@ -539,7 +539,7 @@ export type User:
 export type Bag:
     items: unknown
 
-export def corrupt(b: Bag) -> null:
+export def corrupt(b: Bag):
     b.items = [5]
     return null
 `.trimStart(),
@@ -566,7 +566,7 @@ export type User:
 export type Holder:
     payload: unknown
 
-export def swap(h: Holder) -> null:
+export def swap(h: Holder):
     h.payload = 5
     return null
 `.trimStart(),
@@ -600,7 +600,7 @@ export enum Mode:
 export type Cell:
     value: unknown
 
-export def wipe(c: Cell) -> null:
+export def wipe(c: Cell):
     c.value = "gone"
     return null
 `.trimStart();
@@ -642,7 +642,7 @@ export type User:
 export type Holder:
     payload: unknown
 
-export def leave(h: Holder) -> null:
+export def leave(h: Holder):
     return null
 `.trimStart(),
     "main.vel": `

@@ -15,7 +15,7 @@ class Handle:
     constructor(const label: string):
         pass
 
-    def close() -> null:
+    def close():
         print(f"release {self.label}")
 
     @dispose:
@@ -41,7 +41,7 @@ function diagnostics(source: string, web = false): readonly string[] {
 
 test("[D43 69] every scope exit releases, in reverse declaration order", () => {
   const output = run(`${handle}
-def normal() -> null:
+def normal():
     using first = Handle("normal-1")
     using second = Handle("normal-2")
     print("normal body")
@@ -51,19 +51,19 @@ def early() -> number:
     using second = Handle("return-2")
     return 7
 
-def breaking() -> null:
+def breaking():
     for index in [1, 2]:
         using owned = Handle(f"break-{index}")
         if index == 2:
             break
         print("iteration")
 
-def continuing() -> null:
+def continuing():
     for index in [1, 2]:
         using owned = Handle(f"continue-{index}")
         continue
 
-def failing() -> null:
+def failing():
     using owned = Handle("throw")
     throw Error("boom")
 
@@ -96,7 +96,7 @@ catch error:
 
 test("[D43 69] a loop body releases on every iteration, not once at the end", () => {
   const output = run(`${handle}
-def drain() -> null:
+def drain():
     for index in [1, 2, 3]:
         using owned = Handle(f"pass-{index}")
         print(f"work {index}")
@@ -111,7 +111,7 @@ test("[D43 69] a release is idempotent, so an explicit close before scope exit i
 class Handle:
     let closed: bool = false
 
-    def close() -> null:
+    def close():
         if self.closed:
             print("already closed")
             return null
@@ -121,7 +121,7 @@ class Handle:
     @dispose:
         self.close()
 
-def main() -> null:
+def main():
     using owned = Handle()
     owned.close()
     print("body")
@@ -137,11 +137,11 @@ class Fragile:
     @dispose:
         throw Error("release failed")
 
-def withError() -> null:
+def withError():
     using owned = Fragile()
     throw Error("original")
 
-def withoutError() -> null:
+def withoutError():
     using owned = Fragile()
     print("clean body")
 
@@ -163,7 +163,7 @@ catch error:
 test("[D43 69] an awaiting release needs an async scope, and acquisition stays ordinary async", () => {
   const asynchronous = `
 class Handle:
-    async def close() -> null:
+    async def close():
         print("released")
 
     @dispose:
@@ -171,7 +171,7 @@ class Handle:
 `.trimStart();
 
   const rejected = diagnostics(`${asynchronous}
-def main() -> null:
+def main():
     using owned = Handle()
     print("body")
 `);
@@ -182,7 +182,7 @@ def main() -> null:
 async def open() -> Handle:
     return Handle()
 
-async def main() -> null:
+async def main():
     using owned = await open()
     print("body")
 
@@ -197,13 +197,13 @@ class Handle:
     def dispose() -> string:
         return "ordinary method"
 
-    def close() -> null:
+    def close():
         print("released")
 
     @dispose:
         self.close()
 
-def main() -> null:
+def main():
     using owned = Handle()
     print(owned.dispose())
 
@@ -216,7 +216,7 @@ class Handle:
     @dispose:
         print("released")
 
-def main() -> null:
+def main():
     const owned = Handle()
     owned["__velar:dispose"]()
 `);
@@ -268,7 +268,7 @@ test("[D43 69] a record is data and cannot be owned", () => {
 type Session:
     close: () -> null
 
-def main() -> null:
+def main():
     const value: Session = { close: () => null }
     using owned = value
     print("x")
@@ -280,7 +280,7 @@ def main() -> null:
 
 test("[D43 69] 'using' stays an ordinary name everywhere it is not the statement head", () => {
   const output = run(`
-def main() -> null:
+def main():
     const using = 3
     print(f"{using}")
 
@@ -293,7 +293,7 @@ class Handle:
     @dispose:
         pass
 
-def main() -> null:
+def main():
     using owned: Handle = Handle()
     print("x")
 `);
@@ -308,19 +308,19 @@ import {watchFiles} from "velar/fs"
 import {start} from "velar/process"
 import {serve, ServeRequest, ServeResponse} from "velar/serve"
 
-async def watch(path: string) -> null:
+async def watch(path: string):
     using watcher = await watchFiles(path)
     async for batch in watcher:
         print(f"{batch.paths.size}")
 
-async def build() -> null:
+async def build():
     using task = await start("node", ["--version"])
     print(f"{task.pid}")
 
 async def respond(request: ServeRequest) -> ServeResponse:
     return { status: 200, text: "ok" }
 
-async def host() -> null:
+async def host():
     using server = await serve(respond, 0)
     print(f"{server.port}")
 
@@ -337,7 +337,7 @@ async def host() -> null:
   const unawaited = await compileProject(entry, new Map([[entry, `
 import {watchFiles} from "velar/fs"
 
-def missingAwait(path: string) -> null:
+def missingAwait(path: string):
     using watcher = watchFiles(path)
     print("no")
 `.trimStart()]]), { sourceRoot: directory, projectRoot: directory, extensions: [velarNodeCompilerExtension] });
@@ -353,7 +353,7 @@ test("[D43 69] the release contract crosses a module boundary with its class", a
   const project = await compileProject(entry, new Map([
     [helper, `
 export class Handle:
-    def close() -> null:
+    def close():
         print("released")
 
     @dispose:
@@ -362,7 +362,7 @@ export class Handle:
     [entry, `
 import {Handle} from "./handle.vel"
 
-def main() -> null:
+def main():
     using owned = Handle()
     print("body")
 `.trimStart()],
@@ -381,7 +381,7 @@ class Handle:
 
 const owned = "outer"
 
-def main() -> null:
+def main():
     print(owned)
     using owned = Handle()
 `);
@@ -391,7 +391,7 @@ def main() -> null:
 test("[D43 69] an inherited release contract still runs", () => {
   const output = run(`
 class Base:
-    def close() -> null:
+    def close():
         print("base released")
 
     @dispose:
@@ -400,7 +400,7 @@ class Base:
 class Derived extends Base:
     pass
 
-def main() -> null:
+def main():
     using owned = Derived()
     print("body")
 

@@ -121,7 +121,7 @@ import {limit as importedLimit} from "./store.vel"
 
 importedLimit = 2
 
-def local_control() -> null:
+def local_control():
     const importedLimit = 3
     importedLimit = 4
 `.trimStart(), "utf8");

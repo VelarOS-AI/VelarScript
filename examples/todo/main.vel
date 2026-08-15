@@ -83,21 +83,21 @@ component TodoApp:
     let nextId = 3
     const remaining = computed(() => todos.filter(todo => not todo.done).size)
 
-    def addTodo() -> null:
+    def addTodo():
         if draft != "":
             todos = [...todos, {id: nextId, title: draft, done: false}]
             nextId += 1
             draft = ""
 
-    def addTodoOnKey(event: KeyboardEvent) -> null:
+    def addTodoOnKey(event: KeyboardEvent):
         if event.key == "Enter":
             event.preventDefault()
             addTodo()
 
-    def toggleTodo(id: number) -> null:
+    def toggleTodo(id: number):
         todos = todos.map(todo => todo.id == id ? {...todo, done: not todo.done} : todo)
 
-    def removeTodo(id: number) -> null:
+    def removeTodo(id: number):
         todos = todos.filter(todo => todo.id != id)
 
     return <main look={pageLook}><section class="todo-app" look={cardLook}>

@@ -741,7 +741,7 @@ contract directly:
 def inspect(profile: readonly Profile) -> string:
     return profile.id
 
-def update(profile: Profile) -> null:
+def update(profile: Profile):
     profile.details.label = "Updated"
 ```
 
@@ -1058,17 +1058,22 @@ def formatUser(user: User, prefix: string = "@") -> string:
 A body-backed function, method, or Web action may omit its result annotation.
 The compiler infers the union of its reachable returned values and includes
 `null` when control can reach the end; a function with no value result therefore
-infers `-> null`, while a partial `T` return infers `-> T?`. An explicit `-> T`
-remains a checked contract and a non-null contract must return on every
-reachable path. An async declaration infers or annotates its resolved value,
-while its call type remains `Promise<T>`. Recursive result dependencies are
-solved to a fixed point; a recursive group whose result cannot converge must add
-an explicit annotation. Extern functions and abstract methods have no body to
-infer and therefore always declare their result. Components retain their
-dedicated render result, class constructors retain their non-returning
-construction contract, getters retain their explicit property result, and
-contextually typed arrows may infer their result from the surrounding function
-type.
+infers `-> null`, while a partial `T` return infers `-> T?`. Where the inferred
+result is `null`, omitting is required rather than a matter of style: `-> null`
+is the one annotation that names nothing a caller can use — a caller that
+ignores a result already knows as much — so writing it on a body-backed
+declaration is rejected and `velar fix` deletes it. Every other annotation names
+something the caller can use and stays the author's to write or omit. An
+explicit `-> T` remains a checked contract and a non-null contract must return
+on every reachable path. An async declaration infers or annotates its resolved
+value, while its call type remains `Promise<T>`. Recursive result dependencies
+are solved to a fixed point; a recursive group whose result cannot converge must
+add an explicit annotation. Extern functions and abstract methods have no body
+to infer and therefore always declare their result, and a function type always
+writes one, `-> null` included. Components retain their dedicated render result,
+class constructors retain their non-returning construction contract, getters
+retain their explicit property result, and contextually typed arrows may infer
+their result from the surrounding function type.
 
 Calls support positional and named arguments:
 
@@ -1837,7 +1842,7 @@ usually delegates to the verb the class already publishes:
 
 ```velar fragment
 class Terminal:
-    def close() -> null:
+    def close():
         releaseHandle()
 
     @dispose:
@@ -1913,7 +1918,7 @@ class Session:
     get label() -> string:
         return self.active ? self.id : f"{self.id} (closed)"
 
-    def close() -> null:
+    def close():
         self.active = false
 ```
 
@@ -2590,10 +2595,10 @@ type DialogHandle:
 type DialogView = Component<(title: string) -> WebNode, DialogHandle>
 
 component Dialog(title: string) exposes DialogHandle:
-    def open() -> null:
+    def open():
         print("open:" + title)
 
-    def close() -> null:
+    def close():
         print("close:" + title)
 
     expose {open, close}
@@ -2756,7 +2761,7 @@ export component Profile(userId: string):
     action save() -> User:
         return await saveUser(profile.value)
 
-    def toggleExpanded() -> null:
+    def toggleExpanded():
         expanded = not expanded
 
     return <section>
@@ -2777,7 +2782,7 @@ through ordinary functions; helpers can mutate the owned value directly.
 tasks.append(task)
 tasks[0].done = true
 
-def retitle(task: Task, title: string) -> null:
+def retitle(task: Task, title: string):
     task.title = title
 
 retitle(tasks[0], "Ready")
@@ -2805,7 +2810,7 @@ assigned into state directly:
 const restored = loadSnapshot()
 state model = restored.model
 
-def replaceModel(next: Model) -> null:
+def replaceModel(next: Model):
     model = next
 ```
 

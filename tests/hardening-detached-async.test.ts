@@ -20,7 +20,7 @@ function executeModule(code: string): ReturnType<typeof spawnSync> {
 
 test("a floating Promise expression statement is intercepted with both current spellings", () => {
   const result = compile(`
-async def boom() -> null:
+async def boom():
     throw Error("background failure")
 
 boom()
@@ -39,7 +39,7 @@ test("member calls and Promise-carrying optionals and unions are intercepted too
 type Client:
     push: () -> Promise<null>
 
-def use(client: Client) -> null:
+def use(client: Client):
     client.push()
 `.trimStart());
   assert.equal(member.diagnostics.length, 1, member.diagnostics.map((item) => item.message).join("\n"));
@@ -47,7 +47,7 @@ def use(client: Client) -> null:
   assert.match(member.diagnostics[0]?.message ?? "", /'await client\.push\(\)' to wait for it, or 'async client\.push\(\)'/u);
 
   const union = compile(`
-async def tick() -> null:
+async def tick():
     pass
 
 def pick(flag: bool) -> Promise<null> | null:
@@ -59,7 +59,7 @@ pick(true)
   assert.equal(union.diagnostics[0]?.code, FLOATING);
 
   const held = compile(`
-async def tick() -> null:
+async def tick():
     pass
 
 const pending: Promise<null>? = tick()
@@ -71,16 +71,16 @@ pending
 
 test("'await boom()' and 'async boom()' are both legal, at module scope and inside bodies", () => {
   const result = compile(`
-async def boom() -> null:
+async def boom():
     pass
 
 await boom()
 async boom()
 
-def fire() -> null:
+def fire():
     async boom()
 
-async def sequence() -> null:
+async def sequence():
     await boom()
     async boom()
 `.trimStart());
@@ -107,7 +107,7 @@ async loadUser("u1")
 
 test("a non-Promise expression cannot detach", () => {
   const result = compile(`
-def plain() -> null:
+def plain():
     pass
 
 async plain()
@@ -119,7 +119,7 @@ async plain()
 
 test("the async statement is statement-position only", () => {
   const result = compile(`
-async def boom() -> null:
+async def boom():
     pass
 
 const held = async boom()
@@ -136,7 +136,7 @@ test("a bare 'async' names all three continuations", () => {
 
 test("Node: a detached failure is reported on stderr and the process does not die", () => {
   const result = compile(`
-async def boom() -> null:
+async def boom():
     throw Error("detached failure")
 
 async boom()
@@ -151,7 +151,7 @@ print("after the call")
 
 test("Node: a foreign non-Error rejection is normalized to Error before the report", () => {
   const result = compile(`
-async def tick() -> null:
+async def tick():
     pass
 
 async tick()
@@ -169,7 +169,7 @@ print("still running")
 
 test("Node: a resolved detached task reports nothing", () => {
   const result = compile(`
-async def tick() -> null:
+async def tick():
     pass
 
 async tick()
@@ -189,7 +189,7 @@ test("Web output routes a detached failure through the velar/app chain with the 
   const result = compile(`
 state ready = true
 
-async def boom() -> null:
+async def boom():
     throw Error("web detached failure")
 
 async boom()
@@ -220,7 +220,7 @@ test("Web output without an error handler keeps a detached failure loud and the 
   const result = compile(`
 state ready = true
 
-async def boom() -> null:
+async def boom():
     throw Error("pre-runtime failure")
 
 async boom()
@@ -284,18 +284,18 @@ import {onError} from "velar/app"
 state detachedReport = "none"
 state clicks = 0
 
-def capture(phase: string, message: string) -> null:
+def capture(phase: string, message: string):
     detachedReport = phase + ":" + message
 
 onError(report => capture(report.phase, report.error.message))
 
-async def boom() -> null:
+async def boom():
     throw Error("detached boom")
 
-def fire() -> null:
+def fire():
     async boom()
 
-def bump() -> null:
+def bump():
     clicks += 1
 
 component App:

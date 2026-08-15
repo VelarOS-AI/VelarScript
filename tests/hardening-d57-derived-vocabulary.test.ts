@@ -74,11 +74,11 @@ test("[D57-135] every Core vocabulary name is refused as a binding, from the ros
 test("[D57-135] the refusal reaches every binding position, not only module const", () => {
   const positions = (name: string): readonly string[] => [
     `let ${name} = 1\n`,
-    `def ${name}() -> null:\n    return null\n`,
-    `def take(${name}: number) -> null:\n    return null\n`,
+    `def ${name}():\n    return null\n`,
+    `def take(${name}: number):\n    return null\n`,
     `for ${name} in [1, 2]:\n    print(1)\n`,
-    `class Holder:\n    def method(${name}: number) -> null:\n        return null\n`,
-    `def outer() -> null:\n    const ${name} = 1\n    return null\n`,
+    `class Holder:\n    def method(${name}: number):\n        return null\n`,
+    `def outer():\n    const ${name} = 1\n    return null\n`,
   ];
   for (const name of CORE_VOCABULARY_NAMES) {
     for (const source of positions(name)) {
@@ -223,7 +223,7 @@ test("[D57-134] the editor's own vocabulary list is derived from the same two au
 
 test("[D55-127.2] a colon-introduced annotation formats generics for any type name", () => {
   for (const name of ["Record", "List", "Map", "Ledger", "MyOwnBox"]) {
-    const parameter = `def take(x: ${name}<string>) -> null:\n    return null\n`;
+    const parameter = `def take(x: ${name}<string>):\n    return null\n`;
     const field = `type Node:\n    kids: ${name}<string>\n`;
     const binding = `const x: ${name}<string> = {}\n`;
     const alias = `type Alias = ${name}<string>\n`;
@@ -239,7 +239,7 @@ test("[D55-127.2] a colon-introduced annotation formats generics for any type na
 
 test("[D55-127.2] type modifiers and nesting keep the annotation position", () => {
   for (const canonical of [
-    "def inspect(pending: readonly Promise<List<number>>) -> null:\n    return null\n",
+    "def inspect(pending: readonly Promise<List<number>>):\n    return null\n",
     "const table: Map<string, Record<List<number>>> = {}\n",
     "const handler: List<() -> Record<string>> = []\n",
     "const optional: Record<string>? = null\n",

@@ -240,7 +240,7 @@ import {onError} from "velar/app"
 state reports: List<string> = []
 const stop = onError(report => reports.append(f"{report.phase}/{report.detail}: {report.error.message}"))
 
-action fires(tag: string, delay: Duration) -> null:
+action fires(tag: string, delay: Duration):
     await Promise.sleep(delay)
     throw Error(f"bang {tag}")
 

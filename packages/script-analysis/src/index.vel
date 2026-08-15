@@ -229,10 +229,10 @@ def sourceText(source: ScriptCharacters, start: number, end: number) -> string:
         cursor += count
     return output.join("")
 
-def appendToken(output: List<ScriptToken>, characters: ScriptCharacters, kind: ScriptTokenKind, start: number, end: number, base: number) -> null:
+def appendToken(output: List<ScriptToken>, characters: ScriptCharacters, kind: ScriptTokenKind, start: number, end: number, base: number):
     output.append({kind, start: base + start, end: base + end, text: sourceText(characters, start, end)})
 
-def appendDiagnostic(output: List<ScriptDiagnostic>, code: string, message: string, start: number, end: number, base: number = 0) -> null:
+def appendDiagnostic(output: List<ScriptDiagnostic>, code: string, message: string, start: number, end: number, base: number = 0):
     output.append({code, message, severity: ScriptDiagnosticSeverity.error, start: base + start, end: base + end})
 
 def tokenText(token: ScriptToken) -> string:
@@ -506,7 +506,7 @@ def declarationType(tokens: List<ScriptToken>, nameIndex: number) -> string:
         cursor += 1
     return "unknown"
 
-def declareParameters(tokens: List<ScriptToken>, structure: ScriptStructure, openIndex: number, closeIndex: number, scopeId: number, symbols: List<ScriptSymbol>, names: List<Map<string, number>>, declarations: Set<number>, diagnostics: List<ScriptDiagnostic>) -> null:
+def declareParameters(tokens: List<ScriptToken>, structure: ScriptStructure, openIndex: number, closeIndex: number, scopeId: number, symbols: List<ScriptSymbol>, names: List<Map<string, number>>, declarations: Set<number>, diagnostics: List<ScriptDiagnostic>):
     let index = openIndex + 1
     let expectName = true
     while index < closeIndex:

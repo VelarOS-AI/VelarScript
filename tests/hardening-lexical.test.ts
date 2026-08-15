@@ -193,7 +193,7 @@ not true
 
   const effects = compile(`
 let x = 1
-def touch() -> null:
+def touch():
     x += 1
 touch()
 x = 3

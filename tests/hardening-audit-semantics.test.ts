@@ -191,8 +191,8 @@ test("[ENM-I5] parenthesized singleton patterns credit enum member coverage", ()
 });
 
 test("[ENM-I6] an optional enum subject carries the same exhaustiveness contract", () => {
-  rejects(`${STATUS}def f(v: Status?) -> null:\n    match v:\n        case Status.pending:\n            print("p")\n    return null\nf(Status.pending)\n`, /Match on Status\? is missing: done, null/u);
-  rejects(`${STATUS}def f(v: Status?) -> null:\n    match v:\n        case Status.pending:\n            pass\n        case Status.done:\n            pass\n    return null\nf(null)\n`, /Match on Status\? is missing: null/u);
+  rejects(`${STATUS}def f(v: Status?):\n    match v:\n        case Status.pending:\n            print("p")\n    return null\nf(Status.pending)\n`, /Match on Status\? is missing: done, null/u);
+  rejects(`${STATUS}def f(v: Status?):\n    match v:\n        case Status.pending:\n            pass\n        case Status.done:\n            pass\n    return null\nf(null)\n`, /Match on Status\? is missing: null/u);
   assert.equal(run(`${STATUS}def f(v: Status?) -> string:\n    match v:\n        case Status.pending:\n            return "p"\n        case Status.done:\n            return "d"\n        case null:\n            return "none"\nprint(f(null))\nprint(f(Status.done))\n`), "none\nd\n");
 });
 
@@ -260,7 +260,7 @@ test("[ENM-U4 + COL-U5] the builtin error types are nameable and ValidationError
   assert.equal(run(`
 type User:
     name: string
-def f(value: unknown) -> null:
+def f(value: unknown):
     try:
         const user = User.parse(value)
     catch error:
@@ -321,7 +321,7 @@ test("[GRM-D1] nested `is` operands parenthesize, and a bool subject is a consta
 
 test("[ASY-U2] awaiting `any` is rejected toward validation", () => {
   rejects(
-    "import js unsafe {mystery} from \"node:process\"\nasync def f() -> null:\n    await mystery\ndef g() -> null:\n    async f()\ng()\n",
+    "import js unsafe {mystery} from \"node:process\"\nasync def f():\n    await mystery\ndef g():\n    async f()\ng()\n",
     /Cannot await any; validate the value into a checked Promise first/u,
   );
 });
@@ -358,7 +358,7 @@ catch error:
 
 test("[ENM-I9] namespace type-position misuse teaches import-by-name", () => {
   rejects(
-    "import * as m from \"./other.vel\"\ndef f(u: m.User) -> null:\n    return null\n",
+    "import * as m from \"./other.vel\"\ndef f(u: m.User):\n    return null\n",
     /Namespace members cannot be written in type positions; import 'User' by name/u,
   );
 });

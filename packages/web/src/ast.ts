@@ -50,6 +50,8 @@ export interface WebActionDeclaration {
   readonly name: string;
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
+  /** The deletable ` -> T` region; see `FunctionDeclaration.resultAnnotationSpan`. */
+  readonly resultAnnotationSpan?: Span;
   readonly signatureSpan: Span;
   readonly body: readonly Statement[];
   readonly span: Span;

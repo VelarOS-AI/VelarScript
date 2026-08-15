@@ -63,7 +63,7 @@ test("collections, functions, class instances, unknown, and any are all outside 
     ['const pairs = Map([["a", 1]])\nprint(f"{pairs}")', "Map<string, number>"],
     ['const bag = Set(["a"])\nprint(f"{bag}")', "Set<string>"],
     ['const record: Record<number> = {a: 1}\nprint(f"{record}")', "Record<number>"],
-    ['def helper() -> null:\n    pass\nprint(f"{helper}")', "() -> null"],
+    ['def helper():\n    pass\nprint(f"{helper}")', "() -> null"],
     ['class Ticket:\n    pass\nconst ticket = Ticket()\nprint(f"{ticket}")', "Ticket"],
     ['def show(value: unknown) -> string:\n    return f"{value}"', "unknown"],
   ];

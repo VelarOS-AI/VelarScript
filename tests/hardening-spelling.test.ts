@@ -182,13 +182,13 @@ state panel: Panel = {visible: false}
 state flags: List<bool> = [false]
 
 component App:
-    def toggleBusy() -> null:
+    def toggleBusy():
         busy = not busy
 
-    def togglePanel() -> null:
+    def togglePanel():
         panel.visible = not panel.visible
 
-    def toggleFlag() -> null:
+    def toggleFlag():
         flags[0] = not flags[0]
 
     def localFlip() -> string:

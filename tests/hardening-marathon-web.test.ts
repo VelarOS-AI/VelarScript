@@ -67,10 +67,10 @@ let changes = 0
 watch settings.theme.mode:
     changes += 1
 
-def replace(label: string) -> null:
+def replace(label: string):
     settings = {...settings, label: label}
 
-def touch(mode: string) -> null:
+def touch(mode: string):
     settings.theme.mode = mode
 `;
 
@@ -158,10 +158,10 @@ type Form:
 
 state form: Form = {one: "", two: "", three: "", four: "", five: "", six: "", seven: "", eight: "", section: {label: "start"}}
 
-def typeInto(value: string) -> null:
+def typeInto(value: string):
     form.one = value
 
-def replaceSection(label: string) -> null:
+def replaceSection(label: string):
     form.section = {label: label}
 `;
 
@@ -210,13 +210,13 @@ let seen = ""
 watch useLeft ? left : right:
     seen += useLeft ? "l" : "r"
 
-def choose(next: bool) -> null:
+def choose(next: bool):
     useLeft = next
 
-def writeLeft(value: string) -> null:
+def writeLeft(value: string):
     left = value
 
-def writeRight(value: string) -> null:
+def writeRight(value: string):
     right = value
 
 def report() -> string:
@@ -255,7 +255,7 @@ type Row:
 
 state row: Row = {label: "start"}
 
-def label(value: string) -> null:
+def label(value: string):
     row.label = value
 `, `
 const __probeRuntime = globalThis[Symbol.for("velar.runtime.v1")];
@@ -278,7 +278,7 @@ console.log(JSON.stringify({
 
 test("[alpha-4] a module without Web syntax keeps the Core detached-task contract", () => {
   const dataOnly = compiled(`
-async def boom() -> null:
+async def boom():
     throw Error("data module failure")
 
 async boom()
@@ -298,7 +298,7 @@ print("still running")
   const webModule = compiled(`
 state ready = true
 
-async def boom() -> null:
+async def boom():
     throw Error("web failure")
 
 async boom()
@@ -443,7 +443,7 @@ component App:
     state count = 0
     const label = computed(() => f"count is {count}")
 
-    def bump() -> null:
+    def bump():
         count += 1
 
     return <div>
@@ -483,7 +483,7 @@ state right = 0
 state failure = ""
 state independent = 0
 
-def capture(phase: string, message: string) -> null:
+def capture(phase: string, message: string):
     failure = phase + ":" + message
 
 onError(report => capture(report.phase, report.error.message))
@@ -494,10 +494,10 @@ watch left:
 watch right:
     left += 1
 
-def start() -> null:
+def start():
     left += 1
 
-def bump() -> null:
+def bump():
     independent += 1
 
 component App:
@@ -541,11 +541,11 @@ state rows: List<Row> = [{id: "a", label: "Alpha"}, {id: "b", label: "Beta"}, {i
 state blurs = 0
 state renders = 0
 
-def rerender(event: KeyboardEvent) -> null:
+def rerender(event: KeyboardEvent):
     rows = rows.map(row => row)
     renders += 1
 
-def countBlur(event: Event) -> null:
+def countBlur(event: Event):
     blurs += 1
 
 component App:

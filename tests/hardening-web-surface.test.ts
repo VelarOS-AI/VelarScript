@@ -161,7 +161,7 @@ component App:
   assert.match(reported, /^VEL5037 CSS imports are module-level; move 'import css unsafe' to the top of the module/u);
 
   const nested = only(`
-def install() -> null:
+def install():
     import css unsafe "./card.css" before look
 
 mount(<div>x</div>, "#app")
@@ -631,7 +631,7 @@ test("[D47-84] reading target or value off an event teaches the bind spelling on
   for (const body of ["event.target.value", "event.currentTarget.value", "event.value"]) {
     assert.match(only(`
 component App:
-    def onInput(event: InputEvent) -> null:
+    def onInput(event: InputEvent):
         print(${body})
         return null
 
@@ -882,15 +882,15 @@ component App:
     let text: Element? = null
     let field: InputElement? = null
 
-    def flip() -> null:
+    def flip():
         wide = not wide
 
-    def rename() -> null:
+    def rename():
         profile.name = "written"
 
     // One reading covers every layout question: the composed Look, the
     // look: directive, an unitless lineHeight, and the bound input's DOM value.
-    def sample() -> null:
+    def sample():
         const first = composed
         const second = directive
         const third = text

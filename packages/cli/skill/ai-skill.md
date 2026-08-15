@@ -48,12 +48,15 @@ JavaScript global, so there are exactly four and the list is closed:
 operation; `Text.*` is the extension toolbox, and nothing moves between them.
 Web visual builders are named imports from `velar/look` — there is no `Look`
 global in JavaScript, so there is no `Look.` prefix here either. These names
-need no import and may be shadowed by a lexical binding.
-`print`, `str`, `equals`, and `range` are likewise in the Core prelude —
-`equals(a, b)` is the one spelling of content comparison. Capability modules
-such as `velar/http`, `velar/storage`, and `velar/browser` remain explicit
-imports. Core durations use `ms` or `s`, so write `await Promise.sleep(250ms)`,
-not a bare number.
+need no import and cannot be shadowed: `const Text = 1` is rejected. `print`,
+`str`, `number`, `equals`, and `range` are likewise in the Core prelude —
+`equals(a, b)` is the one spelling of content comparison. One roster both
+grants these nine names and protects them, so the protection is never a stale
+copy: adding a name to Core refuses it as a binding with no list to edit, and
+protecting a name the compiler has no type for fails the build. Capability
+modules such as `velar/http`, `velar/storage`, and `velar/browser` remain
+explicit imports. Core durations use `ms` or `s`, so write
+`await Promise.sleep(250ms)`, not a bare number.
 
 ## Project setup
 
@@ -143,6 +146,12 @@ test "adding a link shows it in the list":
 `visible`, `waitFor`, `currentPath`, and `viewport`; `localStorage` and
 `sessionStorage` read and write the page's raw storage. Any unhandled error —
 in the page or in the test process — fails the test.
+
+`velar/web-test` may be imported **only** from a `*.browser.test.vel` module.
+Reaching for it from application code, from a plain `*.test.vel`, through
+`import js`, or through a re-export is rejected on the import line — rename the
+module or move the browser test into one of its own. Application code that
+needs the page reaches it through `velar/browser` instead.
 
 ## The traps your reflexes will hit
 
@@ -254,7 +263,7 @@ class Session:
     constructor(const id: string):
         pass
 
-    def close() -> null:
+    def close():
         self.active = false
 
     @dispose:
@@ -284,10 +293,10 @@ component Counter(label: string):
     state count = 0
     const caption = computed(() => f"{label}: {count}")
 
-    action reset() -> null:
+    action reset():
         count = 0
 
-    def bump() -> null:
+    def bump():
         count += 1
 
     return <section>
@@ -497,7 +506,7 @@ component TicketPanel(id: string):
     resource ticket: Ticket = loadTicket(id)
     const heading = computed(() => ticket.value?.title ?? "Loading")
 
-    action save() -> null:
+    action save():
         await saveDraft(id, draft)
 
     watch id:

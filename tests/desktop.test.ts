@@ -72,7 +72,7 @@ component GenerationProbe:
 component App:
     state detail = platform()
 
-    action inspectHost() -> null:
+    action inspectHost():
         const selected = await selectedProjectDirectory()
         if selected == "":
             await selectProjectDirectory()
@@ -88,7 +88,7 @@ component App:
         const second = await run("git", ["--version"])
         detail = await readText(probe) + ":" + (get("LANG") ?? "") + streamed + git.stdout + second.stdout
 
-    action checkProject() -> null:
+    action checkProject():
         const task = await startProjectTask(ProjectTaskCommand.check, [], {timeout: 120000, maxOutputBytes: 1048576})
         let output = ""
         async for chunk in task:
@@ -97,7 +97,7 @@ component App:
         const result = await task.wait()
         detail = output + result.stderr
 
-    action openShell() -> null:
+    action openShell():
         const session = await openTerminal({columns: 100, rows: 30})
         await session.resize(120, 40)
         await session.write("echo VelarScript terminal\\n")
@@ -267,7 +267,7 @@ test("Desktop project task diagnostics keep commands finite", async () => {
     await writeFile(sourcePath, `
 import {startProjectTask} from "velar/desktop"
 
-async def invalidCommand() -> null:
+async def invalidCommand():
     await startProjectTask("shell")
 `.trimStart(), "utf8");
     const invalidCommand = spawnSync(process.execPath, [cli, "check", directory], { encoding: "utf8" });
@@ -276,7 +276,7 @@ async def invalidCommand() -> null:
     await writeFile(sourcePath, `
 import {openTerminal} from "velar/desktop"
 
-async def invalidTerminal() -> null:
+async def invalidTerminal():
     await openTerminal({columns: "wide", rows: 24})
 `.trimStart(), "utf8");
     const invalidTerminal = spawnSync(process.execPath, [cli, "check", directory], { encoding: "utf8" });

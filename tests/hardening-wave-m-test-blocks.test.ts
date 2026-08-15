@@ -89,7 +89,7 @@ test "loading resolves to its value":
 test("[D39 53] the unowned-error stance applies to a block: a detached failure fails its test", async () => {
   const execution = await runProject(new Map([
     ["src/main.vel", `
-export async def failLater() -> null:
+export async def failLater():
     await Promise.sleep(1ms)
     throw Error("detached failure")
 `.trimStart()],
@@ -124,7 +124,7 @@ test "a name":
 `, "src/app.vel"), ["VEL3019 Tests live in a '*.test.vel' module, which is where the runner looks; move this test beside the code it specifies"]);
 
   assert.ok(diagnostics(`
-def main() -> null:
+def main():
     test "inner":
         print("x")
 `).some((item) => /^VEL3019 A test is declared at module top level/u.test(item)));
@@ -147,7 +147,7 @@ test "same":
 
 test("[D39 53] 'def test_*' discovery is retired and points at the block", () => {
   const reported = diagnostics(`
-def test_chart_scale_rejects_invalid_values() -> null:
+def test_chart_scale_rejects_invalid_values():
     print("x")
 `);
   assert.equal(reported.length, 1);

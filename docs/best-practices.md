@@ -214,7 +214,7 @@ component TicketPanel(id: string):
     resource ticket: Ticket = loadTicket(id)
     const heading = computed(() => ticket.value?.title ?? "Loading")
 
-    action save() -> null:
+    action save():
         await saveDraft(id, draft)
 
     return <section>
@@ -244,7 +244,7 @@ forget — an early `return`, a `break` out of a pull loop, a throw from three
 frames down:
 
 ```velar fragment
-async def tail(path: string) -> null:
+async def tail(path: string):
     using watcher = await watchFiles(path)
     async for batch in watcher:
         if batch.rescan:

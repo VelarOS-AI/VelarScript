@@ -454,6 +454,7 @@ export class VelarWebParser extends Parser {
       name: name.value,
       parameters,
       returnType,
+      ...(returnType ? { resultAnnotationSpan: span(parameterListEnd, returnType.span.end) } : {}),
       signatureSpan: span(start, returnType?.span.end ?? parameterListEnd),
       body,
       span: span(start, end),

@@ -307,7 +307,7 @@ let setInsertSamples = ""
 let setLookupSamples = ""
 let rangeIndexSamples = ""
 
-def warmUp() -> null:
+def warmUp():
     const values = buildList(size)
     sink += readList(values, size)
     sink += values.map(value => value + 1).size

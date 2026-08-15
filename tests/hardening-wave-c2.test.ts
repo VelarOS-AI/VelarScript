@@ -97,7 +97,7 @@ async function cliProject(files: Readonly<Record<string, string>>, web = false):
 test("[NEW-D1] a project build reaches IndexError, which every CLI entry compiles through shared runtime modules", async () => {
   const project = await cliProject({
     "src/main.vel": `
-def main() -> null:
+def main():
     const values: List<number> = [1, 2, 3]
     try:
         print(str(values[9]))
@@ -129,11 +129,11 @@ test("[NEW-D1] the shared collection lowering module exports every runtime name 
 
 test("[NEW-D3] an unknown argument is rejected by a bounded type parameter at the call site", () => {
   const reported = messages(`
-def show<T: Text>(value: T) -> null:
+def show<T: Text>(value: T):
     print(str(value))
     return null
 
-def probe(raw: unknown) -> null:
+def probe(raw: unknown):
     show(raw)
     return null
 `.trimStart());
@@ -145,11 +145,11 @@ def probe(raw: unknown) -> null:
 
 test("[NEW-D3] an unknown-typed contract is rejected where a bounded generic is used as a value", () => {
   const reported = messages(`
-def show<T: Text>(value: T) -> null:
+def show<T: Text>(value: T):
     print(str(value))
     return null
 
-def apply(handler: (unknown) -> null, raw: unknown) -> null:
+def apply(handler: (unknown) -> null, raw: unknown):
     handler(raw)
     return null
 
@@ -164,7 +164,7 @@ test("[NEW-D3] a concrete argument still solves the parameter when another argum
 def pick<T: Text>(first: T, second: T) -> string:
     return f"{first}{second}"
 
-def probe(raw: number) -> null:
+def probe(raw: number):
     print(pick(1, raw))
     return null
 `.trimStart());
@@ -192,7 +192,7 @@ class DerivedHandle extends BaseHandle:
     @dispose:
         print("derived " + self.label)
 
-def main() -> null:
+def main():
     using owned = DerivedHandle("report")
     print("body")
     return null
@@ -212,7 +212,7 @@ class DerivedHandle extends BaseHandle:
     @dispose:
         throw Error("derived release failed")
 
-def main() -> null:
+def main():
     using owned = DerivedHandle()
     print("body")
     return null
@@ -254,7 +254,7 @@ class DerivedHandle extends BaseHandle:
     @dispose:
         print("derived")
 
-def main() -> null:
+def main():
     using owned = DerivedHandle()
     return null
 `.trimStart());
@@ -274,7 +274,7 @@ test("[NEW-D5] 'using' over an unsafe JavaScript value is rejected instead of de
     "src/main.vel": `
 import js unsafe {openHandle} from "handle-sdk"
 
-def main() -> null:
+def main():
     using handle = openHandle("report")
     print("body")
     return null
@@ -310,7 +310,7 @@ extern module "handle-sdk":
 
 import js {openHandle} from "handle-sdk"
 
-def main() -> null:
+def main():
     using handle = openHandle("report")
     return null
 
@@ -334,7 +334,7 @@ class OwnedHandle:
     @dispose:
         self.handle.close()
 
-def main() -> null:
+def main():
     using owned = OwnedHandle("report")
     print("body")
     return null
@@ -449,7 +449,7 @@ print(str(a.size + c.size))
 
 test("[NEW-D9] a list literal after a keyword keeps its space, and an index access still has none", () => {
   const source = `
-def main() -> null:
+def main():
     const values: List<number> = [1, 2, 3]
     for i in [1, 2]:
         print(str(i))
@@ -487,7 +487,7 @@ def borrow(handle: Handle) -> bool:
   for (const body of [
     "def escape() -> Handle:\n    using handle = Handle()\n    return handle\n",
     "def escape() -> Handle:\n    using handle = Handle()\n    const alias = handle\n    return alias\n",
-    "def escape() -> null:\n    using handle = Handle()\n    leaked = handle\n    return null\n",
+    "def escape():\n    using handle = Handle()\n    leaked = handle\n    return null\n",
     "def escape() -> () -> bool:\n    using handle = Handle()\n    return () => handle.open\n",
     "def escape() -> List<Handle>:\n    using handle = Handle()\n    return [handle]\n",
   ]) {
@@ -530,7 +530,7 @@ def legalLocal() -> bool:
 
 test("[rule 103] IndexError passes through a 'try' expression instead of becoming null", () => {
   const result = compile(`
-def main() -> null:
+def main():
     const values: List<number> = [1, 2, 3]
     print(str(try values[0]))
     print(str(try values[9]))
@@ -561,7 +561,7 @@ print(str(try guard(0)))
 
 test("[rule 103] a 'catch' block still receives all three, because a catch is explicit", () => {
   const output = run(`
-def main() -> null:
+def main():
     const values: List<number> = [1]
     try:
         print(str(values[9]))
@@ -581,7 +581,7 @@ async def broken() -> number:
     const values: List<number> = [1]
     return values[5]
 
-async def main() -> null:
+async def main():
     try:
         print(str(await Promise.retry(broken, 3, 1ms)))
     catch error:
@@ -669,7 +669,7 @@ class TimeoutError extends Error:
     constructor(message: string):
         super(message)
 
-def main() -> null:
+def main():
     try:
         boom()
     catch error:
@@ -730,7 +730,7 @@ test("[rule 109] a user type, class, enum, alias, or type parameter cannot take 
     ["type Text = string\n", "Text", "type"],
     ["class Comparable:\n    pass\n", "Comparable", "class"],
     ["enum Data:\n    one\n", "Data", "enum"],
-    ["def save<Data>(value: Data) -> null:\n    return null\n", "Data", "type parameter"],
+    ["def save<Data>(value: Data):\n    return null\n", "Data", "type parameter"],
   ] as const) {
     const reported = messages(source);
     assert.ok(
@@ -849,7 +849,7 @@ test("[audit 12] 'using' works on the structurally declared capability handles",
     "src/main.vel": `
 import {terminal} from "velar/terminal"
 
-async def main() -> null:
+async def main():
     using session = terminal
     await session.write("owned\\n")
     return null
@@ -894,7 +894,7 @@ test("[audit 12] a user record with a close() is still never detected as ownable
 type Fake:
     close: () -> null
 
-def own(value: Fake) -> null:
+def own(value: Fake):
     using handle = value
     return null
 `.trimStart());

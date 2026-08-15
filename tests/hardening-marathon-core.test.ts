@@ -119,7 +119,7 @@ print(rows.map(str).size)
 
 test("[alpha-3/NEW-1] a rejection whose stack getter throws is reported, not fatal", () => {
   const result = compile(`
-async def tick() -> null:
+async def tick():
     pass
 
 async tick()
@@ -143,7 +143,7 @@ print("still running")
 
 test("[alpha-3/NEW-1] a rejection with no readable message still reports without ending the process", () => {
   const result = compile(`
-async def tick() -> null:
+async def tick():
     pass
 
 async tick()
@@ -285,7 +285,7 @@ test("[alpha-8] a cycle reachable only through a dynamic import is checked", asy
   // Dynamic references were dropped from the ordering, so the cycle behind an
   // `await import(...)` had no position at all and every read in it passed.
   const project = await compileProject(join(projectRoot, "main.vel"), projectSources({
-    "main.vel": 'async def load() -> null:\n    const loaded = await import("./a.vel")\n    return null\n\nasync load()\n',
+    "main.vel": 'async def load():\n    const loaded = await import("./a.vel")\n    return null\n\nasync load()\n',
     "a.vel": 'import {b} from "./b.vel"\nexport const a = "A"\nprint(b)\n',
     "b.vel": 'import {a} from "./a.vel"\nexport const b = "B" + a\n',
   }), {});

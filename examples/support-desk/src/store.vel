@@ -15,10 +15,10 @@ export const selectedTickets: () -> List<Ticket> = computed(() => selectTickets(
 export const visibleTickets: () -> List<Ticket> = computed(() => pageTickets(selectedTickets(), page, pageSize))
 export const totalPages: () -> number = computed(() => Math.max(1, (selectedTickets().size / pageSize).ceil()))
 
-def persist() -> null:
+def persist():
     deskStorage.set("desk", {tickets})
 
-def clampPage() -> null:
+def clampPage():
     page = Math.min(Math.max(1, page), totalPages())
 
 export async def loadTickets() -> List<Ticket>:
@@ -30,27 +30,27 @@ export async def loadTickets() -> List<Ticket>:
     persist()
     return tickets
 
-export def addTicket(draft: TicketDraft) -> null:
+export def addTicket(draft: TicketDraft):
     tickets.append(createTicket(draft))
     page = 1
     persist()
 
-export def resolveTicket(id: string) -> null:
+export def resolveTicket(id: string):
     resolveInList(tickets, id)
     persist()
 
 export def ticketById(id: string) -> Ticket?:
     return findInList(tickets, id)
 
-export def nextPage() -> null:
+export def nextPage():
     if page < totalPages():
         page += 1
 
-export def previousPage() -> null:
+export def previousPage():
     if page > 1:
         page -= 1
 
-export def setPage(next: number) -> null:
+export def setPage(next: number):
     if not next.isInteger() or next < 1:
         page = 1
     else:

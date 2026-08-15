@@ -200,7 +200,7 @@ mount(<App />, "#app")
     "straggler.browser.test.vel": `
 import {expect} from "velar/test"
 
-async def late() -> null:
+async def late():
     await Promise.sleep(1200ms)
     throw Error("a straggler started by the browser test")
 
@@ -231,7 +231,7 @@ export def hello() -> string:
     "late.test.vel": `
 import {expect} from "velar/test"
 
-async def late() -> null:
+async def late():
     await Promise.sleep(300ms)
     throw Error("started by the first test")
 
@@ -261,7 +261,7 @@ export def hello() -> string:
     "mapped.test.vel": `
 import {expect} from "velar/test"
 
-async def late() -> null:
+async def late():
     await Promise.sleep(50ms)
     throw Error("a mapped failure")
 

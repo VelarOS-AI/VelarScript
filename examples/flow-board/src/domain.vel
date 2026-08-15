@@ -67,7 +67,7 @@ export def advanceStatus(status: TaskStatus) -> TaskStatus:
         case TaskStatus.done:
             return TaskStatus.todo
 
-export def moveTask(tasks: List<Task>, id: string) -> null:
+export def moveTask(tasks: List<Task>, id: string):
     const timestamp = now()
     const task = tasks.find(candidate => candidate.id == id)
     if task != null:

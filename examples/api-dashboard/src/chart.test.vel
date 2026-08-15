@@ -19,10 +19,10 @@ test "chart scale owns derived internal state":
     expect(scale.heightFor(50)).toBe(25)
     expect(scale.yFor(50)).toBe(105)
 
-def construct_invalid_scale() -> null:
+def construct_invalid_scale():
     ChartScale(0)
 
-def construct_oversized_scale() -> null:
+def construct_oversized_scale():
     ChartScale(1000001)
 
 test "chart scale constructor rejects invalid values":

@@ -104,7 +104,7 @@ type Wrap:
 type Holder:
     wrap: Wrap
 
-def look(h: readonly Holder) -> null:
+def look(h: readonly Holder):
     return null
 `, "VEL4001", /'Holder\.wrap\.scale' is class 'Scale'/u);
 
@@ -116,7 +116,7 @@ class Scale:
 type Holder:
     items: List<Scale>
 
-def look(h: readonly Holder) -> null:
+def look(h: readonly Holder):
     return null
 `, "VEL4001", /'Holder\.items\[element\]' is class 'Scale'/u);
 
@@ -141,7 +141,7 @@ type Plain:
 type Holder:
     slot: Plain | Scale
 
-def look(h: readonly Holder) -> null:
+def look(h: readonly Holder):
     return null
 `, "VEL4001", /'Holder\.slot' is class 'Scale'/u);
 });
@@ -159,7 +159,7 @@ def keep<T>(items: readonly List<T>) -> number:
 type Carrier:
     raw: unknown
 
-def look(c: readonly Carrier) -> null:
+def look(c: readonly Carrier):
     return null
 `);
   assert.deepEqual(unknownMember.diagnostics, []);
@@ -201,7 +201,7 @@ type Node:
     next: Node?
     scale: Scale
 
-def look(n: readonly Node) -> null:
+def look(n: readonly Node):
     return null
 `, "VEL4001", /'Node\.scale' is class 'Scale'/u);
 
@@ -219,7 +219,7 @@ type Right:
     left: Left?
     scale: Scale
 
-def look(l: readonly Left) -> null:
+def look(l: readonly Left):
     return null
 `, "VEL4001", /'Left\.right\.scale' is class 'Scale'/u);
 });
@@ -451,7 +451,7 @@ print(await drain())
 test("[D45-75] the five value positions reject a class name with the arrow-factory teaching", () => {
   const positions = [
     "const factory = P\n",
-    "def hold(value: unknown) -> null:\n    return null\n\nhold(P)\n",
+    "def hold(value: unknown):\n    return null\n\nhold(P)\n",
     "const items = [P]\n",
     "def pick() -> unknown:\n    return P\n",
     "print(P)\n",
@@ -564,7 +564,7 @@ class Base:
 class Sub extends Base:
     let m: number = 2
 
-def check(b: Base) -> null:
+def check(b: Base):
     match b:
         case Sub:
             print("sub")
@@ -576,7 +576,7 @@ test("[D45-77] guarded cases do not count toward exhaustiveness", () => {
 class Base:
     let n: number = 1
 
-def check(b: Base) -> null:
+def check(b: Base):
     match b:
         case Base if b.n > 0:
             print("positive")
@@ -641,7 +641,7 @@ extern module "sdk":
 
 import js {Remote} from "sdk"
 
-def check(value: Remote) -> null:
+def check(value: Remote):
     match value:
         case Remote:
             print("remote")
@@ -654,7 +654,7 @@ enum Status:
     pending
     done
 
-def check(s: Status) -> null:
+def check(s: Status):
     match s:
         case Status.pending:
             print("p")

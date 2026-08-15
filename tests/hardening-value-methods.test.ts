@@ -208,7 +208,7 @@ def sideEffect() -> number:
 
 sideEffect()
 
-async def background() -> null:
+async def background():
     return
 
 await background()

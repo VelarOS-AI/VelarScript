@@ -190,7 +190,7 @@ def replaceNode(root: RopeNode?, start: number, end: number, inserted: string) -
     const suffix = splitNode(prefix.right, end - start)
     return joinNodes(joinNodes(prefix.left, ropeFromText(inserted)), suffix.right)
 
-def appendNodeSlice(node: RopeNode?, start: number, end: number, output: List<string>) -> null:
+def appendNodeSlice(node: RopeNode?, start: number, end: number, output: List<string>):
     if node == null or start >= end:
         return null
     const text = node.text
@@ -386,18 +386,18 @@ export class TextBuffer:
         assert root != null else "TextBuffer line is outside the document"
         return lineStartIn(root, line)
 
-    private def requireOffset(offset: number) -> null:
+    private def requireOffset(offset: number):
         assert offset.floor() == offset and offset >= 0 and offset <= self.size else "TextBuffer offset is outside the document"
 
-    private def requireRange(start: number, end: number) -> null:
+    private def requireRange(start: number, end: number):
         self.requireOffset(start)
         self.requireOffset(end)
         assert start <= end else "TextBuffer range start must not exceed its end"
 
-    private def requireLine(line: number) -> null:
+    private def requireLine(line: number):
         assert line.floor() == line and line >= 0 and line < self.lineCount else "TextBuffer line is outside the document"
 
-    private def requireLineBoundary(line: number) -> null:
+    private def requireLineBoundary(line: number):
         assert line.floor() == line and line >= 0 and line <= self.lineCount else "TextBuffer line boundary is outside the document"
 
 /// Bounded undo and redo ownership for one TextBuffer, including IME edit groups.
@@ -450,7 +450,7 @@ export class TextHistory:
         return transaction
 
     /// Starts a group whose edits remain individually committed but undo as one command.
-    def begin(beforeSelection: TextSelection? = null) -> null:
+    def begin(beforeSelection: TextSelection? = null):
         self.requireAttached()
         assert self.groupSteps == null else "TextHistory already has an active group"
         self.requireSelection(beforeSelection, self.buffer.size)
@@ -459,7 +459,7 @@ export class TextHistory:
         self.groupAfterSelection = copySelection(beforeSelection)
 
     /// Commits the active group as one bounded history entry.
-    def commit(afterSelection: TextSelection? = null) -> null:
+    def commit(afterSelection: TextSelection? = null):
         self.requireAttached()
         const steps = self.groupSteps
         assert steps != null else "TextHistory has no active group"
@@ -510,34 +510,34 @@ export class TextHistory:
         return copySelection(entry.afterSelection)
 
     /// Drops history while keeping attachment to the current buffer revision.
-    def clear() -> null:
+    def clear():
         self.requireReady()
         self.undoEntries = []
         self.redoEntries = []
         self.undoBytes = 0
 
-    private def revertSteps(steps: List<HistoryStep>) -> null:
+    private def revertSteps(steps: List<HistoryStep>):
         let index = steps.size
         while index > 0:
             index -= 1
             const transaction = self.buffer.apply(steps[index].inverse)
             self.expectedRevision = transaction.afterRevision
 
-    private def pushUndo(entry: HistoryEntry) -> null:
+    private def pushUndo(entry: HistoryEntry):
         self.undoEntries.append(entry)
         self.undoBytes += entry.bytes
         while self.undoEntries.size > self.entryLimit or self.undoBytes > self.byteLimit:
             const removed = self.undoEntries.pop(0)
             self.undoBytes -= removed.bytes
 
-    private def requireAttached() -> null:
+    private def requireAttached():
         assert self.buffer.revision == self.expectedRevision else "TextHistory buffer revision changed outside this history"
 
-    private def requireReady() -> null:
+    private def requireReady():
         self.requireAttached()
         assert self.groupSteps == null else "TextHistory cannot undo, redo, or clear an active group"
 
-    private def requireSelection(selection: TextSelection?, size: number) -> null:
+    private def requireSelection(selection: TextSelection?, size: number):
         if selection == null:
             return null
         assert selection.anchor.floor() == selection.anchor and selection.anchor >= 0 and selection.anchor <= size else "TextHistory selection anchor is outside the document"

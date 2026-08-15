@@ -325,6 +325,14 @@ export interface FunctionDeclaration {
   readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: readonly Parameter[];
   readonly returnType: TypeReference | null;
+  /**
+   * The written result annotation together with the `->` and the space before
+   * it — exactly the text a deletion removes, running from the end of the
+   * parameter list to the end of the annotation. Present only where a result
+   * was written after a parameter list, which is what makes the D58 rule 139
+   * removal of an inferred `-> null` a mechanical fix.
+   */
+  readonly resultAnnotationSpan?: Span;
   readonly signatureSpan: Span;
   readonly body: readonly Statement[];
   readonly span: Span;

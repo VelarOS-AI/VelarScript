@@ -85,17 +85,17 @@ export component TicketDetail(route: RouteContext):
     const ticket = computed(() => ticketById(id))
     const loadFailure = computed(() => catalog.error)
 
-    def askResolve() -> null:
+    def askResolve():
         if confirmDialog != null:
             showDialog(confirmDialog)
 
-    def cancelResolve() -> null:
+    def cancelResolve():
         if confirmDialog != null:
             closeDialog(confirmDialog, "cancelled")
         if resolveButton != null:
             focus(resolveButton, true)
 
-    async def confirmResolve() -> null:
+    async def confirmResolve():
         resolveTicket(id)
         if confirmDialog != null:
             const currentDialog = confirmDialog

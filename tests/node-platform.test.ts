@@ -130,7 +130,7 @@ import {ServeRequest} from "velar/serve"
 type User:
     name: string
 
-async def consume(chunk: string) -> null:
+async def consume(chunk: string):
     print(chunk)
     return null
 

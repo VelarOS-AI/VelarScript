@@ -236,7 +236,7 @@ async def classify(task: () -> Promise<null>) -> string:
             return f"{error.code}:{error.path != null}"
         return f"{error.code}:unclassified"
 
-async def main() -> null:
+async def main():
     const root = ${JSON.stringify(directory)}
     print(await classify(async () => print(await readText(root + "/absent.txt"))))
     print(await classify(async () => print(await list(root + "/file.txt"))))

@@ -1,7 +1,7 @@
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def reset() -> null:
+async def reset():
     await browser.open("/")
     await browser.click("[data-reset-board]")
     await browser.waitForText("[data-results]", "3 of 3 tasks shown")

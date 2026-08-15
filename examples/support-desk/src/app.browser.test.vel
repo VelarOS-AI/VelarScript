@@ -1,7 +1,7 @@
 import {expect} from "velar/test"
 import {browser} from "velar/web-test"
 
-async def openDesk() -> null:
+async def openDesk():
     await browser.open("/")
     await browser.waitForText("[data-support-desk]", "Cannot sign in after password reset")
     expect(await browser.attribute("[data-primary] a", "aria-current")).toBe("page")

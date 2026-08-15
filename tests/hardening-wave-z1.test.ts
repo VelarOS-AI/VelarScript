@@ -395,7 +395,7 @@ test("[MOD-I2] the visible form the message teaches runs the module's effects en
   try {
     await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel" }), "utf8");
     await writeFile(join(directory, "register.vel"), `
-export def install() -> null:
+export def install():
     print("registered")
 `.trimStart(), "utf8");
     await writeFile(join(directory, "main.vel"), `
@@ -572,11 +572,11 @@ class Derived extends Base:
   // Parameter names are the override's own.
   assert.deepEqual(messages(`
 class Base:
-    def take(value: number) -> null:
+    def take(value: number):
         return null
 
 class Derived extends Base:
-    override def take(amount: number) -> null:
+    override def take(amount: number):
         return null
 `.trimStart()), []);
 });
